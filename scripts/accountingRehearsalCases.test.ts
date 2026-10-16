@@ -1976,13 +1976,24 @@ function makeBackend(defects: Defects = {}) {
             fee.actualAmountMinor !== args.expectedAmountMinor) {
           return { ok: false as const, error: "This cost cannot be paid directly." };
         }
+        // SCRUM-54: a bank method names an active same-org bank in the cost's currency,
+        // validated before any write. `legacyBackend` models the pre-bank CONFIRM-
+        // DISBURSEMENT contract the FD1 probe must report, so it ignores the field here.
+        const paidBankId = args.bankAccountId ? String(args.bankAccountId) : undefined;
+        if (!defects.legacyBackend) {
+          if (!paidBankId) return { ok: false as const, error: "Select the bank account this payment was made from. Nothing has been recorded." };
+          const paidBank = bankAccounts.get(paidBankId);
+          if (!paidBank || paidBank.orgId !== String(args.orgId) || !paidBank.isActive || paidBank.currency !== fee.currency) {
+            return { ok: false as const, error: "The selected bank account is not an active account in this cost's currency." };
+          }
+        }
         if (!defects.financeDirectPaymentSkipped) {
           fee.directPayment = { amountMinor: args.expectedAmountMinor, method: args.method, paidAt: args.paidAt };
         }
         if (!defects.financeDirectPaymentPostingSkipped) {
           post("HANDOVER_COST_PAID_DIRECT", "financeDealFees", String(args.feeId), [
             { key: "OWNERSHIP_TRANSFER_EXPENSE", debitMinor: args.expectedAmountMinor },
-            { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor },
+            { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor, bankAccountId: paidBankId },
           ]);
         }
         return { ok: true as const, value: fee._id };

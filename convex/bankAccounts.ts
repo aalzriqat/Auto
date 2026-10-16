@@ -281,7 +281,8 @@ async function resolveBankControlAccount(
   }
   const active = accounts.filter((a) => a.active);
   const candidates = active.length > 0 ? active : accounts;
-  const account = candidates.reduce((oldest, a) => (a._creationTime < oldest._creationTime ? a : oldest));
+  // `accounts` is non-empty (checked above), so `candidates` is too and its first row is a valid seed.
+  const account = candidates.reduce((oldest, a) => (a._creationTime < oldest._creationTime ? a : oldest), candidates[0]);
   if (!account.active) {
     throw new ConvexError(`System account "${systemKey}" is inactive.`);
   }

@@ -95,6 +95,8 @@ interface Faults {
   feeRefused?: boolean;
   /** The product refuses the direct payment of the admin fee. */
   feePaymentRefused?: boolean;
+  /** The product refuses to create the bank the admin-fee payment names. */
+  bankCreateRefused?: boolean;
   /** The fee list reads back something other than one reconciled dealership-paid fee line. */
   feeReadback?: "wrongAmount" | "twoLines" | "deducted" | "notReconciled" | "otherApplication" | "empty" | "unpaid";
   /** finalizeDeal answers with a sale of another organization. */
@@ -143,6 +145,7 @@ class World {
   private handedOver = false;
   private forwarded = false;
   private feePaid = false;
+  private paidFromBankId: string | null = null;
   private depositHeld = false;
   private readonly seeded = { vehicle: "", customer: "", application: "" };
 
@@ -298,12 +301,21 @@ class World {
         if (this.faults.feeReconcileRefused) throw new ConvexError("The fee has changed since it was reviewed.");
         if (a.expectedActualAmountMinor !== plan.adminFee) throw new ConvexError("reconciled amount is not the fee's");
         return null;
+      case "bankAccounts:create":
+        if (actor !== "owner") throw new ConvexError("the bank is created by the primary seat");
+        if (this.faults.bankCreateRefused) throw new ConvexError("You do not have permission to manage finance.");
+        if (a.currency !== "JOD" || a.openingBalanceMinor !== 0) throw new ConvexError("the bank is not a zero-balance account in the organization's currency");
+        this.paidFromBankId = this.id("bank");
+        return this.paidFromBankId;
       case "financeDealCosts:recordDirectFeePayment":
         if (this.faults.feePaymentRefused) throw new ConvexError("This cost cannot be paid directly.");
         if (
           actor !== "owner" ||
           a.feeId !== this.feeId ||
           a.method !== "BANK_TRANSFER" ||
+          // SCRUM-54: the payment names the bank the scenario created, never a defaulted one.
+          this.paidFromBankId === null ||
+          a.bankAccountId !== this.paidFromBankId ||
           a.expectedAmountMinor !== plan.adminFee ||
           typeof a.paidAt !== "number" ||
           a.paidAt > Date.now() ||
@@ -648,6 +660,10 @@ describe("SCRUM-350 MONEY_BOUNDARY handler: product answers that disagree with t
     expect(result.oracle.passed).toBe(true);
     const pay = h.world.argsOf.find((entry) => entry.name === "financeDealCosts:recordDirectFeePayment");
     expect(pay?.args).toMatchObject({ method: "BANK_TRANSFER", expectedAmountMinor: 300_000 });
+    // SCRUM-54: the payment names a bank the mission created for it, before paying.
+    expect(h.world.calls.indexOf("owner:bankAccounts:create")).toBeGreaterThanOrEqual(0);
+    expect(h.world.calls.indexOf("owner:bankAccounts:create")).toBeLessThan(h.world.calls.indexOf("owner:financeDealCosts:recordDirectFeePayment"));
+    expect(pay?.args.bankAccountId).toEqual(expect.any(String));
     // The money oracle ran: the judged sale reached a verdict with its ledger read in full, not merely no throw.
     expect(h.world.calls).toContain("owner:applications:finalizeDeal");
     expect(h.evidence[0]).toMatchObject({ ledger: { complete: true }, violations: [] });
@@ -655,6 +671,14 @@ describe("SCRUM-350 MONEY_BOUNDARY handler: product answers that disagree with t
 
   it("is INCONCLUSIVE, and never forwards, when the product refuses the direct payment of the admin fee", async () => {
     const h = await inconclusive({ feePaymentRefused: true }, /refused the direct payment of the dealership-paid admin fee of 300000: This cost cannot be paid directly/);
+    expect(h.world.calls).not.toContain("manager:financeCompanyForward:recordFinanceCompanyForward");
+    expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
+  });
+
+  it("is INCONCLUSIVE, and never pays, forwards or finalizes, when the product refuses to create the bank the admin-fee payment names", async () => {
+    const h = await inconclusive({ bankCreateRefused: true }, /refused to create the bank the dealership-paid admin fee leaves/);
+    expect(h.world.calls).toContain("owner:bankAccounts:create");
+    expect(h.world.calls).not.toContain("owner:financeDealCosts:recordDirectFeePayment");
     expect(h.world.calls).not.toContain("manager:financeCompanyForward:recordFinanceCompanyForward");
     expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
   });

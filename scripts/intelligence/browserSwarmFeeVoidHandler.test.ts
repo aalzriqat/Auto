@@ -53,6 +53,8 @@ interface Faults {
   feeRefused?: boolean;
   reconcileRefused?: boolean;
   payRefused?: boolean;
+  /** The product refuses to create the bank the payments name. */
+  bankCreateRefused?: boolean;
   /** The product refuses the first void. */
   voidRefused?: boolean;
   noSettings?: boolean;
@@ -152,6 +154,8 @@ class World {
     if (f.originalRewritten) this.journals.set(original.journalEntryId, lines.map((entry) => ({ ...entry, debitMinor: entry.debitMinor + (entry.debitMinor > 0 ? 1 : 0), creditMinor: entry.creditMinor + (entry.creditMinor > 0 ? 1 : 0) })));
   }
 
+  private paidFromBankId: string | null = null;
+
   private listed(): Record<string, unknown>[] {
     return [...this.fees.entries()]
       .filter(([, fee]) => !fee.voided || this.faults.voidedLineStays)
@@ -210,9 +214,17 @@ class World {
         if (f.reconcileRefused) throw new ConvexError("The fee has changed since it was reviewed.");
         if (a.expectedActualAmountMinor !== this.fees.get(String(a.feeId))?.amount) throw new ConvexError("reconciled amount is not the cost's");
         return null;
+      case "bankAccounts:create":
+        if (actor !== "owner") throw new ConvexError("the bank is created by the primary seat");
+        if (f.bankCreateRefused) throw new ConvexError("You do not have permission to manage finance.");
+        if (a.currency !== "JOD" || a.openingBalanceMinor !== 0) throw new ConvexError("the bank is not a zero-balance account in the organization's currency");
+        this.paidFromBankId = this.id("bank");
+        return this.paidFromBankId;
       case "financeDealCosts:recordDirectFeePayment": {
         const fee = this.fees.get(String(a.feeId));
         if (f.payRefused) throw new ConvexError("The chart of accounts has not been initialized.");
+        // SCRUM-54: the payment names the bank the scenario created, never a defaulted one.
+        if (this.paidFromBankId === null || a.bankAccountId !== this.paidFromBankId) throw new ConvexError("Select the bank account this payment was made from.");
         if (!fee || a.method !== "BANK_TRANSFER" || a.expectedAmountMinor !== fee.amount) throw new ConvexError("the payment is not the cost's at the pinned amount");
         fee.paid = true;
         this.post(String(a.feeId), fee.amount);
@@ -382,6 +394,11 @@ describe("SCRUM-350 LIFE-1 fee void handler: the discriminating scenario", () =>
     const pays = h.world.argsOf.filter((entry) => entry.name === "financeDealCosts:recordDirectFeePayment");
     expect(pays.map((entry) => entry.args.expectedAmountMinor)).toEqual([50_000, 20_000]);
     expect(pays.every((entry) => entry.args.method === "BANK_TRANSFER")).toBe(true);
+    // SCRUM-54: both payments name the one bank the mission created first.
+    expect(h.world.calls.filter((call) => call === "owner:bankAccounts:create")).toHaveLength(1);
+    expect(h.world.calls.indexOf("owner:bankAccounts:create")).toBeLessThan(h.world.calls.indexOf("owner:financeDealCosts:recordDirectFeePayment"));
+    expect(new Set(pays.map((entry) => entry.args.bankAccountId)).size).toBe(1);
+    expect(pays[0].args.bankAccountId).toEqual(expect.any(String));
     const fees = h.world.argsOf.filter((entry) => entry.name === "financeDealCosts:recordDealFee");
     expect(fees.map((entry) => entry.args.actualAmountMinor)).toEqual([50_000, 20_000]);
     expect(h.world.calls.filter((call) => /sales|finalizeDeal|deposits:/.test(call))).toEqual([]);
@@ -438,6 +455,10 @@ describe("SCRUM-350 LIFE-1 fee void handler: never a pass without a judged trans
     await inconclusive({ feeRefused: true }, /the product refused the dealership-paid voided cost of 50000: A paid date is required/);
     await inconclusive({ reconcileRefused: true }, /the product refused to reconcile the voided cost of 50000/);
     await inconclusive({ payRefused: true }, /the product refused the direct payment of the voided cost of 50000/);
+    // SCRUM-54: no bank, no payment - and nothing downstream (payment, void) is attempted.
+    const noBank = await inconclusive({ bankCreateRefused: true }, /the product refused to create the bank the dealership-paid costs leave/);
+    expect(noBank.world.calls).toContain("owner:bankAccounts:create");
+    expect(noBank.world.calls.filter((call) => /recordDirectFeePayment|voidDealFee/.test(call))).toEqual([]);
     await inconclusive({ voidRefused: true }, /the product refused to void the directly paid cost: Removing a cost that has been reconciled/);
   });
 

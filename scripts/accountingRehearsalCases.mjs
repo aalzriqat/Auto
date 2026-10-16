@@ -2865,12 +2865,26 @@ export async function runRehearsalCases(ctx) {
         expectedCurrency: denom.currency,
       });
       await reconcileFee({ orgId, applicationId, feeId, notes: "Matched.", expectedActualAmountMinor: dealerCost });
+      // A BANK_TRANSFER names the physical bank it left or reached: a zero-balance,
+      // same-org, active bank in the deal's denomination, created through the
+      // authorized public command; no existing bank is ever selected. It is made
+      // here, before the dealer's handover payment, because that payment (SCRUM-54)
+      // and the later finance-company receipt both name a bank.
+      const receiptBankAccountId = await ownerMust("mutation", "bankAccounts:create", {
+        orgId,
+        name: `Rehearsal receiving bank ${stamp}`,
+        currency: denom.currency,
+        openingBalanceMinor: 0,
+        openingBalanceDate: Date.now(),
+      });
+      if (!receiptBankAccountId) fail("bankAccounts:create returned no id for the receiving bank");
       // The full finance-company transfer does not pay this dealer-borne
       // handover cost. Record its separate bank payment before closing.
       await ownerMust("mutation", "financeDealCosts:recordDirectFeePayment", {
         orgId,
         feeId,
         method: "BANK_TRANSFER",
+        bankAccountId: receiptBankAccountId,
         paidAt: fd1DirectPaymentTime(bookkeeping.openedAt),
         expectedAmountMinor: dealerCost,
         idempotencyKey: `rehearsal-fd1-direct-payment-${stamp}`,
@@ -2891,6 +2905,9 @@ export async function runRehearsalCases(ctx) {
         ],
         { currency: denom.currency, decimals: denom.decimals, what: "the dealer-paid handover cost posting" }
       );
+      const costBankLines = costPayment.lines.filter((l) => keyOf.get(String(l.accountId)) === "BANK_ACCOUNT");
+      expectEqual(costBankLines.length, 1, "BANK_ACCOUNT lines on the dealer-paid handover cost posting");
+      expectEqual(String(costBankLines[0].bankAccountId), String(receiptBankAccountId), "the bank identity on the handover cost's BANK_ACCOUNT journal line");
       // SCRUM-407: no manual classification step — finalizeDeal checks the
       // deal's closing readiness itself.
       const saleId = await ownerMust("mutation", "applications:finalizeDeal", {
@@ -2973,18 +2990,6 @@ export async function runRehearsalCases(ctx) {
         fail("the tested source and deployed backend both lack the SCRUM-54 bank contract on confirmDisbursement (the bank feature is absent)");
       }
       await expectNothingWritten("the contract probe");
-
-      // A BANK_TRANSFER receipt names the physical bank it reached: a zero-balance,
-      // same-org, active bank in the deal's denomination, created through the
-      // authorized public command; no existing bank is ever selected.
-      const receiptBankAccountId = await ownerMust("mutation", "bankAccounts:create", {
-        orgId,
-        name: `Rehearsal receiving bank ${stamp}`,
-        currency: denom.currency,
-        openingBalanceMinor: 0,
-        openingBalanceDate: Date.now(),
-      });
-      if (!receiptBankAccountId) fail("bankAccounts:create returned no id for the receiving bank");
 
       // The correct amount with NO bank, while a valid bank exists, is refused for
       // the missing bank - never defaulted to the one bank there is - and writes nothing.

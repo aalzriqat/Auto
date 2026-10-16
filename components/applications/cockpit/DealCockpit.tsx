@@ -1463,6 +1463,13 @@ export function DealCockpit({
    * idempotent by construction (a set and a void) and the server takes no
    * identity for them.
    */
+  // SCRUM-54: banks a bank-method handover payment may name, in the deal's cost currency.
+  const directPaymentBankOptions = useQuery(
+    api.financeDealCosts.listDirectPaymentBankOptions,
+    app && deal && canConfirmFinanceDisbursement
+      ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
+      : "skip"
+  );
   const handoverCosts =
     app && deal
       ? {
@@ -1733,6 +1740,7 @@ export function DealCockpit({
           // caller who may confirm a finance disbursement is offered it (R1);
           // the server refuses anyone else regardless.
           canRecordDirectPayment: canConfirmFinanceDisbursement,
+          directPaymentBankOptions,
           // The reconcile mutation checks the same permission (confirm:finance_disbursement).
           canReconcile: canConfirmFinanceDisbursement,
           onRecordDirectPayment: async (feeId: string, values: DirectHandoverPayment) => {
@@ -1742,6 +1750,8 @@ export function DealCockpit({
                 orgId,
                 feeId: feeId as Id<"financeDealFees">,
                 method: values.method,
+                // SCRUM-54: the physical bank, frozen in the form's attempt so a replay sends the same one.
+                ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                 paidAt: values.paidAt,
                 // The amount the operator saw when they chose to pay: the
                 // server refuses if the line has changed since (R1).

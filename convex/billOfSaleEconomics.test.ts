@@ -11,6 +11,7 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex runtime.
  */
 import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { seedBank } from "../test-utils/bankFixture";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { expectQuoteEconomicsDrifted } from "../test-utils/quoteEconomicsDrifted";
 import { expectAppError } from "../test-utils/expectAppError";
@@ -619,7 +620,8 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
       });
       await s.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Execution fee reconciled.", expectedActualAmountMinor: 100 * SCALE, expectedActualEvidenceRevision: 0 });
       await s.as.mutation(api.financeDealCosts.recordDirectFeePayment, {
-        orgId: s.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: 100 * SCALE,
+        orgId: s.orgId, feeId, method: "BANK_TRANSFER", bankAccountId: await seedBank(s.t, s.orgId),
+        paidAt: Date.now(), expectedAmountMinor: 100 * SCALE,
         idempotencyKey: crypto.randomUUID(),
       });
       const saleId = (await finalizePaid(s, applicationId)) as Id<"sales">;

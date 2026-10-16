@@ -3578,6 +3578,8 @@ export async function hookHandoverCostPaidDirect(
     version: number;
     amountMinor: number;
     paymentMethod: string;
+    /** SCRUM-54: the physical bank, set exactly when `cashKey` is the bank control account. */
+    bankAccountId?: Id<"bankAccounts">;
     expenseKey: SystemKey;
     cashKey: SystemKey;
     actorId: Id<"users">;
@@ -3608,6 +3610,7 @@ export async function hookHandoverCostPaidDirect(
       amountMinor: args.amountMinor,
       currency: args.fee.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }

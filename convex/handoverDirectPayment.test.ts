@@ -1,6 +1,7 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { ConvexError } from "convex/values";
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { seedBank } from "../test-utils/bankFixture";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -136,12 +137,19 @@ type Method = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
 async function payDirect(
   seed: Seed,
   feeId: Id<"financeDealFees">,
-  extra: Partial<{ method: Method; paidAt: number; reference: string; idempotencyKey: string; as: Seed["asUser"]; expected: number }> = {}
+  extra: Partial<{
+    method: Method; paidAt: number; reference: string; idempotencyKey: string; as: Seed["asUser"]; expected: number;
+    /** A bank to name; `null` names none even for a bank method (the refusal cases). Default: the org's bank for bank methods. */
+    bankAccountId: Id<"bankAccounts"> | null;
+  }> = {}
 ) {
   const expectedAmountMinor =
     extra.expected ?? (await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)))?.actualAmountMinor ?? 0;
+  const method = extra.method ?? "BANK_TRANSFER";
+  const bankAccountId =
+    extra.bankAccountId === null ? undefined : extra.bankAccountId ?? (method === "CASH" ? undefined : await seedBank(seed.t, seed.orgId));
   return await (extra.as ?? seed.asUser).mutation(api.financeDealCosts.recordDirectFeePayment, {
-    orgId: seed.orgId, feeId, method: extra.method ?? "BANK_TRANSFER",
+    orgId: seed.orgId, feeId, method, bankAccountId,
     paidAt: extra.paidAt ?? Date.now() - DAY, reference: extra.reference,
     expectedAmountMinor,
     idempotencyKey: extra.idempotencyKey ?? crypto.randomUUID(),
@@ -215,6 +223,104 @@ describe("the credit is the OUTBOUND account of the method the dealership paid w
     }
     expect(await directEvents(seed)).toHaveLength(1);
     expect((await directEvents(seed))[0].status).toBe("POSTED");
+  });
+});
+
+describe("SCRUM-54: a bank-method direct payment names the physical bank it left", () => {
+  const NOT_FOUND = "The selected bank account was not found in this organization.";
+  const insertBank = (seed: Seed, orgId: Id<"organizations">, over: { currency?: string; isActive?: boolean; isDeleted?: boolean } = {}) =>
+    seed.t.run((ctx) =>
+      ctx.db.insert("bankAccounts", {
+        orgId, name: "Bank", currency: over.currency ?? "JOD", openingBalanceMinor: 0, openingBalanceDate: Date.now(),
+        isActive: over.isActive ?? true, isReconciliationTarget: false, createdBy: seed.userId,
+        createdAt: Date.now(), updatedAt: Date.now(), isDeleted: over.isDeleted,
+      })
+    );
+  /** Everything a refused payment must not touch. */
+  const effects = async (seed: Seed, feeId: Id<"financeDealFees">) => ({
+    journals: await journalCount(seed),
+    events: (await directEvents(seed)).length,
+    fee: await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)),
+  });
+
+  test.each(["BANK_TRANSFER", "CARD", "CHEQUE"] as const)("%s without a bank is refused and writes nothing", async (method) => {
+    const seed = await seedDeal(`nobank-${method}`);
+    const feeId = await dealerFee(seed, jod(40));
+    const before = await effects(seed, feeId);
+    await expect(payDirect(seed, feeId, { method, bankAccountId: null })).rejects.toThrow(
+      "Select the bank account this payment was made from."
+    );
+    expect(await effects(seed, feeId)).toEqual(before);
+  });
+
+  test.each([
+    ["foreign organization", NOT_FOUND],
+    ["deleted", NOT_FOUND],
+    ["inactive", "The selected bank account is inactive."],
+    ["wrong currency", "denominated in USD, but this cost is in JOD."],
+  ] as const)("a %s bank is refused and writes nothing", async (kind, message) => {
+    const seed = await seedDeal(`bad-${kind.replace(" ", "-")}`);
+    const feeId = await dealerFee(seed, jod(40));
+    const bankAccountId =
+      kind === "foreign organization" ? await insertBank(seed, seed.otherOrgId)
+      : kind === "deleted" ? await insertBank(seed, seed.orgId, { isDeleted: true })
+      : kind === "inactive" ? await insertBank(seed, seed.orgId, { isActive: false })
+      : await insertBank(seed, seed.orgId, { currency: "USD" });
+    const before = await effects(seed, feeId);
+    await expect(payDirect(seed, feeId, { bankAccountId })).rejects.toThrow(message);
+    expect(await effects(seed, feeId)).toEqual(before);
+  });
+
+  test("a bank on a CASH payment is refused and writes nothing", async () => {
+    const seed = await seedDeal("cash-with-bank");
+    const feeId = await dealerFee(seed, jod(40));
+    const bankAccountId = await insertBank(seed, seed.orgId);
+    const before = await effects(seed, feeId);
+    await expect(payDirect(seed, feeId, { method: "CASH", bankAccountId })).rejects.toThrow("applies only to a bank transfer, card or cheque");
+    expect(await effects(seed, feeId)).toEqual(before);
+  });
+
+  test("Bank A is on the posted BANK_ACCOUNT credit line, and on no other line", async () => {
+    const seed = await seedDeal("bank-a");
+    const feeId = await dealerFee(seed, jod(40));
+    const bankA = await insertBank(seed, seed.orgId);
+    await insertBank(seed, seed.orgId); // Bank B: offered, not chosen
+    await payDirect(seed, feeId, { bankAccountId: bankA });
+    const lines = await seed.t.run(async (ctx) => {
+      const out: Array<{ systemKey: string | undefined; creditMinor: number; bankAccountId: Id<"bankAccounts"> | undefined }> = [];
+      for (const l of await ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", seed.orgId)).collect()) {
+        out.push({ systemKey: (await ctx.db.get(l.accountId))?.systemKey, creditMinor: l.creditMinor, bankAccountId: l.bankAccountId });
+      }
+      return out;
+    });
+    const named = lines.filter((l) => l.bankAccountId !== undefined);
+    expect(named).toHaveLength(1);
+    expect(named[0]).toMatchObject({ systemKey: SYSTEM_KEYS.BANK_ACCOUNT, creditMinor: jod(40), bankAccountId: bankA });
+    expect((await directEvents(seed))[0].payload).toMatchObject({ bankAccountId: String(bankA) });
+  });
+
+  test("CASH names no bank anywhere", async () => {
+    const seed = await seedDeal("cash-no-bank");
+    const feeId = await dealerFee(seed, jod(40));
+    await payDirect(seed, feeId, { method: "CASH" });
+    const named = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", seed.orgId)).collect()).filter((l) => l.bankAccountId !== undefined)
+    );
+    expect(named).toHaveLength(0);
+    expect(cash(await ledger(seed))).toBe(-jod(40));
+  });
+
+  test("the same key with a different bank is a different instruction, not a replay", async () => {
+    const seed = await seedDeal("bank-replay");
+    const feeId = await dealerFee(seed, jod(40));
+    const bankA = await insertBank(seed, seed.orgId);
+    const bankB = await insertBank(seed, seed.orgId);
+    const args = { paidAt: Date.now() - DAY, idempotencyKey: "scrum54-bank-key" };
+    await payDirect(seed, feeId, { ...args, bankAccountId: bankA });
+    await expect(payDirect(seed, feeId, { ...args, bankAccountId: bankB })).rejects.toThrow(
+      "Idempotency key reused with different request content."
+    );
+    expect(await payDirect(seed, feeId, { ...args, bankAccountId: bankA })).toBe(feeId);
   });
 });
 
@@ -1198,7 +1304,7 @@ describe("v5: the direct-payment proof is bounded by the writers' caps, read by 
     console.info(`measured stored HANDOVER_COST_PAID_DIRECT event (reversed, all links present): ${size} bytes`);
     expect(size).toBeLessThanOrEqual(MAX_DIRECT_EVENT_DOC_BYTES);
     expect(Object.keys(event.payload as object).sort()).toEqual(
-      ["accountingTreatment", "amountMinor", "applicationId", "currency", "feeId", "feeType", "paymentMethod", "vehicleId"].sort()
+      ["accountingTreatment", "amountMinor", "applicationId", "bankAccountId", "currency", "feeId", "feeType", "paymentMethod", "vehicleId"].sort()
     );
     expect(JSON.stringify(event)).not.toMatch(/FREE-TEXT/);
   });

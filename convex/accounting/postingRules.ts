@@ -3119,6 +3119,12 @@ export interface HandoverCostPaidDirectPayload {
   currency: string;
   /** How the money left: REQUIRED, never defaulted — see the rule. */
   paymentMethod: string;
+  /**
+   * SCRUM-54: the physical bank the money left from. Optional only so an event queued
+   * before this field existed still drains; the command requires it for every new
+   * payment that credits the bank control account.
+   */
+  bankAccountId?: string;
 }
 
 /**
@@ -3149,10 +3155,13 @@ export function ruleHandoverCostPaidDirect(p: HandoverCostPaidDirectPayload): Ru
   }
   const expense = custodyFeeExpenseKey(p.accountingTreatment);
   if (expense.systemKey === null) throw new Error(expense.refusal);
+  const cashKey = disbursementAccountKey(p.paymentMethod);
   return {
     lines: [
       line(expense.systemKey, p.amountMinor, 0, `Handover cost (${p.feeType}) paid directly by the dealership`, { vehicleId: p.vehicleId }),
-      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Handover cost paid by the dealership"),
+      // SCRUM-54: only the bank control line names the bank.
+      line(cashKey, 0, p.amountMinor, "Handover cost paid by the dealership",
+        cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Handover cost paid directly by the dealership",
     category: "SYSTEM",

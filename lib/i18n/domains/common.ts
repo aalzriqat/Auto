@@ -1376,6 +1376,13 @@ export const commonEn = {
   CloseCashDrawerDesc: "Enter the counted cash. The system computes the variance before approval.",
   CashDrawerClosed: "Cash drawer closed for approval.",
   ApproveCashDrawer: "Approve Cash Drawer",
+  DirectPaymentBankLabel: "Bank account paid from",
+  DirectPaymentBankChoose: "Select the bank account this was paid from",
+  DirectPaymentBankRequired: "Select the bank account this payment was made from.",
+  DirectPaymentNoBank:
+    "There is no active bank account in this currency. Add one under Bank Accounts before recording a bank transfer, card or cheque payment.",
+  DirectPaymentTooManyBanks:
+    "This currency has too many active bank accounts to list here, so a bank payment cannot be recorded from this screen. Deactivate the accounts that are no longer used, then try again.",
   ReceiptBankAccount: "Bank account received into",
   ReceiptSelectBank: "Select the bank account that received this payment",
   ReceiptNoBank:
@@ -2392,6 +2399,13 @@ export const commonAr = {
   CloseCashDrawerDesc: "أدخل النقد المعدود. سيحسب النظام الفرق قبل الموافقة.",
   CashDrawerClosed: "تم إغلاق صندوق النقد للموافقة.",
   ApproveCashDrawer: "اعتماد صندوق النقد",
+  DirectPaymentBankLabel: "الحساب المصرفي المدفوع منه",
+  DirectPaymentBankChoose: "اختر الحساب المصرفي الذي دُفع منه",
+  DirectPaymentBankRequired: "اختر الحساب المصرفي الذي تم الدفع منه.",
+  DirectPaymentNoBank:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل تسجيل دفعة تحويل مصرفي أو بطاقة أو شيك.",
+  DirectPaymentTooManyBanks:
+    "عدد الحسابات المصرفية النشطة بهذه العملة أكبر من أن يُعرض هنا، لذا لا يمكن تسجيل دفعة مصرفية من هذه الشاشة. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
   ReceiptBankAccount: "الحساب المصرفي المستلم",
   ReceiptSelectBank: "اختر الحساب المصرفي الذي استلم هذه الدفعة",
   ReceiptNoBank:

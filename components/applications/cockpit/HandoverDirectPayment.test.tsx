@@ -9,16 +9,18 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
-import { commonEn } from "@/lib/i18n/domains/common";
+import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import {
   HandoverCostAttemptError,
   HandoverCostsPanel,
   type DirectHandoverPayment,
+  type DirectPaymentBankOptions,
   type HandoverCostLine,
   type HandoverCostsData,
   type DealStopped,
 } from "./HandoverCostsPanel";
 import { closingReasonText } from "./DealClosingReadinessList";
+import type { Id } from "@/convex/_generated/dataModel";
 
 const dictionary = { ...(commonEn as Record<string, string>), ...(salesEn as Record<string, string>) };
 const t = (key: string) => dictionary[key] ?? key;
@@ -73,6 +75,16 @@ function checklistFor(feeId: string, expectedAmountMinor = 90_000): HandoverCost
   };
 }
 
+const BANK_A = "bankA" as Id<"bankAccounts">;
+const BANK_B = "bankB" as Id<"bankAccounts">;
+const BANKS: NonNullable<DirectPaymentBankOptions> = {
+  banks: [
+    { _id: BANK_A, name: "Bank A", currency: "JOD" },
+    { _id: BANK_B, name: "Bank B", currency: "JOD" },
+  ],
+  truncated: false,
+};
+
 function renderPanel(lines: HandoverCostLine[], props: PanelProps = {}) {
   const view = render(panelElement(lines, props));
   return {
@@ -84,6 +96,7 @@ function renderPanel(lines: HandoverCostLine[], props: PanelProps = {}) {
 
 type PanelProps = {
   canRecordDirectPayment?: boolean;
+  directPaymentBankOptions?: DirectPaymentBankOptions;
   canManage?: boolean;
   expected?: HandoverCostsData["expected"];
   canReconcile?: boolean;
@@ -115,6 +128,7 @@ function panelElement(lines: HandoverCostLine[], props: PanelProps) {
       onRecordActual={async () => {}}
       onVoid={async () => {}}
       canRecordDirectPayment={props.canRecordDirectPayment}
+      directPaymentBankOptions={props.directPaymentBankOptions ?? BANKS}
       canReconcile={props.canReconcile}
       onReconcile={props.onReconcile}
       onRecordDirectPayment={props.onRecordDirectPayment}
@@ -146,6 +160,7 @@ function panelWith(
       onRecordActual={async () => {}}
       onVoid={async () => {}}
       canRecordDirectPayment={true}
+      directPaymentBankOptions={BANKS}
       onRecordDirectPayment={onRecord}
     />
   );
@@ -167,6 +182,7 @@ describe("the direct-payment action", () => {
 
     fireEvent.change(screen.getByLabelText(salesEn.DirectPaymentMethodLabel), { target: { value: "BANK_TRANSFER" } });
     fireEvent.change(screen.getByLabelText(salesEn.ReceiptReferenceLabel), { target: { value: "TRX-9" } });
+    fireEvent.change(screen.getByLabelText(commonEn.DirectPaymentBankLabel), { target: { value: BANK_A } });
     expect(save).toHaveProperty("disabled", false);
     fireEvent.click(save);
 
@@ -174,6 +190,7 @@ describe("the direct-payment action", () => {
     const [feeId, values] = onRecord.mock.calls[0] as unknown as [string, DirectHandoverPayment];
     expect(feeId).toBe("fee1");
     expect(values.method).toBe("BANK_TRANSFER");
+    expect(values.bankAccountId).toBe(BANK_A);
     expect(values.reference).toBe("TRX-9");
     // The amount SENT is the amount on the screen: the line's rendered actual.
     expect(values.expectedAmountMinor).toBe(90_000);
@@ -235,6 +252,7 @@ describe("the direct-payment action", () => {
     renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: onRecord });
     fireEvent.click(screen.getByRole("button", { name: salesEn.RecordDirectPayment }));
     fireEvent.change(screen.getByLabelText(salesEn.DirectPaymentMethodLabel), { target: { value: "CARD" } });
+    fireEvent.change(screen.getByLabelText(commonEn.DirectPaymentBankLabel), { target: { value: BANK_A } });
     fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
     await screen.findByText("Choose another period.");
     // Still editable.
@@ -242,6 +260,92 @@ describe("the direct-payment action", () => {
     fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
     await waitFor(() => expect(onRecord).toHaveBeenCalledTimes(2));
     expect(onRecord.mock.calls[1][1].intentId).not.toBe(onRecord.mock.calls[0][1].intentId);
+  });
+});
+
+describe("SCRUM-54: a bank-method direct payment names the physical bank it left", () => {
+  const open = () => fireEvent.click(screen.getByRole("button", { name: salesEn.RecordDirectPayment }));
+  const pick = (method: string) =>
+    fireEvent.change(screen.getByLabelText(salesEn.DirectPaymentMethodLabel), { target: { value: method } });
+  const bankPicker = () => screen.queryByLabelText(commonEn.DirectPaymentBankLabel);
+
+  test.each(["BANK_TRANSFER", "CARD", "CHEQUE"])("%s: Save without a bank is refused and nothing is sent", async (method) => {
+    const onRecord = vi.fn(async () => {});
+    renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: onRecord });
+    open();
+    pick(method);
+    fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+    await screen.findByText(commonEn.DirectPaymentBankRequired);
+    expect(onRecord).not.toHaveBeenCalled();
+  });
+
+  test("the picker offers exactly the banks it was given, and the chosen one is what is sent", async () => {
+    const onRecord = vi.fn(async () => {});
+    renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: onRecord });
+    open();
+    pick("CHEQUE");
+    const select = bankPicker() as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value).filter(Boolean)).toEqual([BANK_A, BANK_B]);
+    fireEvent.change(select, { target: { value: BANK_B } });
+    fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+    await waitFor(() => expect(onRecord).toHaveBeenCalledTimes(1));
+    expect((onRecord.mock.calls[0] as unknown as [string, DirectHandoverPayment])[1].bankAccountId).toBe(BANK_B);
+  });
+
+  test("cash shows no picker and sends no bank, even after a bank was picked for another method", async () => {
+    const onRecord = vi.fn(async () => {});
+    renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: onRecord });
+    open();
+    pick("BANK_TRANSFER");
+    fireEvent.change(bankPicker() as HTMLSelectElement, { target: { value: BANK_A } });
+    pick("CASH");
+    expect(bankPicker()).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+    await waitFor(() => expect(onRecord).toHaveBeenCalledTimes(1));
+    expect((onRecord.mock.calls[0] as unknown as [string, DirectHandoverPayment])[1]).not.toHaveProperty("bankAccountId");
+  });
+
+  test("an organisation with no eligible bank is told so and cannot save a bank method", async () => {
+    const onRecord = vi.fn(async () => {});
+    renderPanel([line()], {
+      canRecordDirectPayment: true,
+      onRecordDirectPayment: onRecord,
+      directPaymentBankOptions: { banks: [], truncated: false },
+    });
+    open();
+    pick("BANK_TRANSFER");
+    expect(screen.getByText(commonEn.DirectPaymentNoBank)).toBeTruthy();
+    expect(bankPicker()).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+    // The refusal is visible before the absence of a call means anything.
+    await screen.findByText(commonEn.DirectPaymentBankRequired);
+    expect(onRecord).not.toHaveBeenCalled();
+  });
+
+  test("a lost response freezes the bank and the retry replays the SAME bank and identity", async () => {
+    const onRecord = vi
+      .fn<(feeId: string, values: DirectHandoverPayment) => Promise<void>>()
+      .mockRejectedValueOnce(new HandoverCostAttemptError("network dropped", "UNKNOWN"))
+      .mockResolvedValueOnce(undefined);
+    renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: onRecord });
+    open();
+    pick("BANK_TRANSFER");
+    fireEvent.change(bankPicker() as HTMLSelectElement, { target: { value: BANK_A } });
+    fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+    await screen.findByText("network dropped");
+    // Frozen: the operator cannot swap the bank under an attempt that may have committed.
+    expect(bankPicker()).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: salesEn.RetryHandoverCost }));
+    await waitFor(() => expect(onRecord).toHaveBeenCalledTimes(2));
+    expect(onRecord.mock.calls[1][1].bankAccountId).toBe(BANK_A);
+    expect(onRecord.mock.calls[1][1]).toEqual(onRecord.mock.calls[0][1]);
+  });
+
+  test("the bank copy exists in both languages", () => {
+    for (const key of ["DirectPaymentBankLabel", "DirectPaymentBankChoose", "DirectPaymentBankRequired", "DirectPaymentNoBank", "DirectPaymentTooManyBanks"] as const) {
+      expect(commonEn[key]).toBeTruthy();
+      expect(commonAr[key]).toMatch(/[؀-ۿ]/);
+    }
   });
 });
 
@@ -283,6 +387,7 @@ describe("the amount sent is the amount the approver saw", () => {
     const view = renderPanel([line({ actualAmountMinor: 50_000 })], { canRecordDirectPayment: true, onRecordDirectPayment: onRecord });
     fireEvent.click(screen.getByRole("button", { name: salesEn.RecordDirectPayment }));
     fireEvent.change(screen.getByLabelText(salesEn.DirectPaymentMethodLabel), { target: { value: "CARD" } });
+    fireEvent.change(screen.getByLabelText(commonEn.DirectPaymentBankLabel), { target: { value: BANK_A } });
     fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
     await screen.findByText("The amount of this cost changed to 65 JOD.");
     // The live query delivers the edited line; the form shows it and pays THAT.
