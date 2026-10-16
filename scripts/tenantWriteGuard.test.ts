@@ -678,12 +678,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-766 PR-B: + customerFinanceCompanyPayments.confirmPayment/voidPayment (+2) - 528 -> 530 total,
   // 354 -> 356 analysed (re-measured FROM THE ANALYSER). Each takes `orgId`, runs requireTenantAuth and reads
   // the application and (for void) the evidence row through requireOwnedRow before its only write.
+  // SCRUM-807: + crons.deliverTaskAlarmToManagers (+1) - 530 -> 531 total, 159 -> 160 skippedNoOrgId,
+  // `analysed` unchanged at 356 (re-measured FROM THE ANALYSER). An internalMutation with no public entry
+  // point whose only arg is `deliveryId`, so the analyser skips it for lacking an `orgId` arg. Its tenant
+  // scope comes from the delivery row it loads: every read and notification uses `delivery.orgId`, it stops
+  // on a permanent `orgEconomicLifecycleBlock`, and it re-reads the task by `delivery.taskId` before sending.
+  // It writes only its own delivery row and the notifications of that org's managers.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 530,
+      totalMutations: 531,
       analysed: 356,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 159,
+      skippedNoOrgId: 160,
     });
   });
 });
