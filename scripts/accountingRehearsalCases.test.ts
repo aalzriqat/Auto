@@ -22,6 +22,7 @@ import {
   CURRENCY_SCALES,
   DEFAULT_ORG_CURRENCY,
   assertBothAttemptsExecuted,
+  candidateNamesReceiptBank,
   createVehicleForRehearsal,
   REQUIRED_REHEARSAL_CASE_IDS,
   fd1DirectPaymentTime,
@@ -445,6 +446,24 @@ type Defects = {
   financeDeductedCloseMutatesThenRefuses?: boolean;
   /** A short finance-company receipt is refused for an unrelated reason. */
   financeReceiptWrongRefusalReason?: boolean;
+  /** SCRUM-54: the backend implements the physical-bank receipt contract (main does not yet). */
+  bankContract?: boolean;
+  /** Bank contract: a receipt that names no bank is accepted and silently defaulted. */
+  bankDefaultedWhenMissing?: boolean;
+  /** Bank contract: the bank-less receipt is refused only AFTER it marked the application disbursed. */
+  bankMissingWritesBeforeRefusing?: boolean;
+  /** Bank contract: the receipt posts, but its BANK_ACCOUNT line loses the named bank. */
+  bankIdentityDroppedFromJournal?: boolean;
+  /** Bank contract: a short receipt that names a valid bank is accepted. */
+  bankShortReceiptAccepted?: boolean;
+  /** Bank contract: the malformed-id contract probe is accepted. */
+  bankProbeAccepted?: boolean;
+  /** Bank contract: the probe is refused, but in a way that names neither contract. */
+  bankProbeUnrecognisedRefusal?: boolean;
+  /** Bank contract: the probe marks the application disbursed before it is refused. */
+  bankProbeWritesBeforeRefusing?: boolean;
+  /** Bank contract: the bank-less correct-amount receipt is refused for an unrelated reason. */
+  bankMissingWrongReason?: boolean;
   /** The clock crosses UTC month-end after the accounting period opens. */
   clockRolloverAfterBookOpen?: boolean;
   /** Observe the external direct-payment request without claiming every later posting succeeded. */
@@ -550,6 +569,8 @@ function makeBackend(defects: Defects = {}) {
   /** Mirrors orgCustomerStatuses.seed/list closely enough for FD1/FD2 to exercise the real eligibility precondition. */
   const customerStatusesByOrg = new Map<string, Array<Record<string, any>>>();
   const disbursementByKey = new Map<string, string>();
+  /** SCRUM-54: the physical banks created through bankAccounts:create. */
+  const bankAccounts = new Map<string, { orgId: string; currency: string; isActive: boolean }>();
   const accountIdOf = (key: string) => {
     const hit = CHART.find((a) => a.systemKey === key);
     if (!hit) throw new Error(`fake chart has no ${key}`);
@@ -563,7 +584,7 @@ function makeBackend(defects: Defects = {}) {
   let seq = 0;
   const id = (p: string) => `${p}_${++seq}`;
 
-  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string; vehicleId?: string; financeCompanyId?: string; salespersonId?: string };
+  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string; vehicleId?: string; financeCompanyId?: string; salespersonId?: string; bankAccountId?: string };
   /** One economic occurrence: an event, its entry, its lines — all linked. */
   function post(
     eventType: string,
@@ -609,6 +630,7 @@ function makeBackend(defects: Defects = {}) {
         vehicleId: l.vehicleId,
         financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
+        bankAccountId: l.bankAccountId,
       }))
     );
     return { eventId, entryId };
@@ -2146,7 +2168,33 @@ function makeBackend(defects: Defects = {}) {
         }
         return { ok: true as const, value: [] };
       }
+      case "bankAccounts:create": {
+        const bankId = id("bank");
+        bankAccounts.set(bankId, { orgId: String(args.orgId), currency: String(args.currency), isActive: true });
+        return { ok: true as const, value: bankId };
+      }
       case "applications:confirmDisbursement": {
+        // Argument validation runs before any handler. A pre-SCRUM-54 validator has no
+        // bankAccountId and refuses the unknown field; a SCRUM-54 validator refuses a
+        // value that is not a bankAccounts id.
+        if (args.bankAccountId !== undefined) {
+          if (!defects.bankContract) {
+            return { ok: false as const, error: "ArgumentValidationError: Object contains extra field `bankAccountId` that is not in the validator." };
+          }
+          if (!bankAccounts.has(String(args.bankAccountId))) {
+            if (defects.bankProbeAccepted) return { ok: true as const, value: null };
+            if (defects.bankProbeWritesBeforeRefusing) {
+              const probed = financeApps.get(String(args.applicationId));
+              if (probed) probed.disbursedAt = Date.now();
+            }
+            return {
+              ok: false as const,
+              error: defects.bankProbeUnrecognisedRefusal
+                ? "Server Error: something unrelated went wrong."
+                : "ArgumentValidationError: Value does not match validator. Path: .bankAccountId Validator: v.id(\"bankAccounts\")",
+            };
+          }
+        }
         const app = financeApps.get(String(args.applicationId));
         if (!app) return { ok: false as const, error: "Application not found." };
         if (app.status !== "CLOSED") return { ok: false as const, error: "Disbursement can only be confirmed on a closed application." };
@@ -2165,13 +2213,26 @@ function makeBackend(defects: Defects = {}) {
           if (defects.financeReceiptWrongRefusalReason) {
             return { ok: false as const, error: "A receipt was refused for an unrelated reason." };
           }
-          if (!defects.financeReceiptClipsToOutstanding) {
+          if (!defects.financeReceiptClipsToOutstanding && !defects.bankShortReceiptAccepted) {
             return {
               ok: false as const,
               error: `The amount received (${amount}) is not what this financing company owes the dealership on this deal (${net}).`,
             };
           }
           amount = Math.min(amount, net);
+        }
+        let receiptBankId: string | undefined = args.bankAccountId ? String(args.bankAccountId) : undefined;
+        if (defects.bankContract) {
+          if (!receiptBankId) {
+            if (defects.bankDefaultedWhenMissing) receiptBankId = [...bankAccounts.keys()][0];
+            else {
+              if (defects.bankMissingWritesBeforeRefusing) app.disbursedAt = Date.now();
+              return {
+                ok: false as const,
+                error: defects.bankMissingWrongReason ? "The receipt could not be recorded." : "Select the bank account the finance company's payment was received into.",
+              };
+            }
+          }
         }
         const currency = defects.financeReceiptInDifferentCurrency ? "USD" : receivable.currency;
         disbursementByKey.set(key, app._id);
@@ -2180,7 +2241,7 @@ function makeBackend(defects: Defects = {}) {
         app.settlementStatus = "FULLY_SETTLED";
         const posted = defects.financeReceiptPostsWrongAmount ? amount + 1 : amount;
         post("FINANCE_CASH_RECEIVED", "financeApplications", `disbursement_${app._id}`, [
-          { key: "BANK_ACCOUNT", debitMinor: posted },
+          { key: "BANK_ACCOUNT", debitMinor: posted, bankAccountId: defects.bankIdentityDroppedFromJournal ? undefined : receiptBankId },
           { key: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", creditMinor: posted },
         ]);
         const paymentId = id("cpay");
@@ -2244,11 +2305,13 @@ const recordCase = (
       });
     });
 
-async function runAgainst(defects: Defects = {}) {
+async function runAgainst(defects: Defects = {}, source: { declaresBank?: boolean; requireBank?: boolean } = { declaresBank: !!defects.bankContract }) {
   const backend = makeBackend(defects);
   const results: Array<Record<string, unknown>> = [];
   await runRehearsalCases({
     results,
+    candidateFinanceReceiptNamesBank: source.declaresBank,
+    requireFinanceReceiptBankContract: source.requireBank,
     orgId: "org_1",
     config: { convexUrl: "https://x.convex.cloud" },
     tokens: { sales: "t-sales", approver: "t-approver" },
@@ -3008,6 +3071,116 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
     expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
+  });
+
+  describe("FD1 bank contract (SCRUM-54) — the trusted controller holds main and the candidate to their own contracts", () => {
+    const fd1Detail = (results: Array<Record<string, unknown>>) =>
+      (results.find((r) => r.id === "FD1")?.detail ?? {}) as { bankContract?: string; receiptBankAccountId?: string | null };
+
+    test.each([
+      ["a contract probe that is accepted", { bankProbeAccepted: true }, /probe .* was accepted/],
+      ["a probe refused in a way that names neither contract", { bankProbeUnrecognisedRefusal: true }, /identifies neither contract/],
+      ["a probe that writes before refusing", { bankProbeWritesBeforeRefusing: true }, /contract probe still marked the application disbursed/],
+      ["a bank-less correct-amount receipt refused for the wrong reason", { bankMissingWrongReason: true }, /bank-less receipt was refused for the wrong reason/],
+    ] as Array<[string, Defects, RegExp]>)("%s fails FD1 rather than passing", async (_name, defect, expected) => {
+      const results = await runAgainst({ bankContract: true, ...defect });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(expected);
+    });
+
+    test("legacy main passes the strict economics and sends no bank", async () => {
+      const results = await runAgainst({});
+      expect(statusOf(results, "FD1")).toBe("PASS");
+      expect(fd1Detail(results).bankContract).toBe("legacy-no-bank");
+      expect(fd1Detail(results).receiptBankAccountId).toBeNull();
+    });
+
+    test("a SCRUM-54 candidate passes with a named same-org bank carried onto the BANK_ACCOUNT line", async () => {
+      const results = await runAgainst({ bankContract: true });
+      expect(statusOf(results, "FD1")).toBe("PASS");
+      expect(fd1Detail(results).bankContract).toBe("named-bank");
+      expect(fd1Detail(results).receiptBankAccountId).toMatch(/^bank/);
+    });
+
+    test("legacy economics are still strict: a short receipt accepted on legacy main fails", async () => {
+      const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
+    });
+
+    test("source declares a bank but the deployed backend is legacy: FAIL, never a quiet legacy pass", async () => {
+      const results = await runAgainst({}, { declaresBank: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/absent or not deployed/);
+    });
+
+    test("deployed backend takes a bank but the source does not declare one: FAIL", async () => {
+      const results = await runAgainst({ bankContract: true }, { declaresBank: false });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/does not declare one/);
+    });
+
+    // One-off trusted expectation for PR #602 (workflow-derived PR_NUMBER). Removed
+    // with requireFinanceReceiptBankContract when #602 merges its strict controller.
+    test("PR #602 expectation: source AND backend both legacy is FAIL, not a legacy PASS", async () => {
+      const results = await runAgainst({}, { declaresBank: false, requireBank: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/requires the SCRUM-54 bank contract/);
+    });
+
+    test("PR #602 expectation: an unreadable source stays UNPROVEN, and a real bank candidate passes", async () => {
+      expect(statusOf(await runAgainst({}, { declaresBank: undefined, requireBank: true }), "FD1")).toBe("UNPROVEN");
+      expect(statusOf(await runAgainst({ bankContract: true }, { declaresBank: true, requireBank: true }), "FD1")).toBe("PASS");
+    });
+
+    test("without the #602 expectation, ordinary legacy main still passes", async () => {
+      expect(statusOf(await runAgainst({}, { declaresBank: false, requireBank: false }), "FD1")).toBe("PASS");
+    });
+
+    test("an unreadable candidate source leaves FD1 UNPROVEN, not PASS", async () => {
+      const results = await runAgainst({}, { declaresBank: undefined });
+      expect(statusOf(results, "FD1")).toBe("UNPROVEN");
+    });
+
+    test("a bank-less receipt that is accepted and defaulted to the only bank fails", async () => {
+      const results = await runAgainst({ bankContract: true, bankDefaultedWhenMissing: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/named no bank was accepted/);
+    });
+
+    test("a bank-less receipt refused only after writing fails", async () => {
+      const results = await runAgainst({ bankContract: true, bankMissingWritesBeforeRefusing: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/still marked the application disbursed/);
+    });
+
+    test("a short receipt that names a valid bank and is accepted fails", async () => {
+      const results = await runAgainst({ bankContract: true, bankShortReceiptAccepted: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
+    });
+
+    test("a journal whose BANK_ACCOUNT line loses the named bank fails", async () => {
+      const results = await runAgainst({ bankContract: true, bankIdentityDroppedFromJournal: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/bank identity on the BANK_ACCOUNT journal line/);
+    });
+
+    test("candidateNamesReceiptBank reads the command's own args block only", () => {
+      const withBank = "export const confirmDisbursement = mutation({\n  args: {\n    orgId: v.id(\"organizations\"),\n    bankAccountId: v.optional(v.id(\"bankAccounts\")),\n  },\n  handler: async () => {},\n});";
+      const withoutBank = "export const other = mutation({ args: { bankAccountId: v.id(\"bankAccounts\") }, handler: async () => {} });\nexport const confirmDisbursement = mutation({\n  args: {\n    // bankAccountId: not yet\n    orgId: v.id(\"organizations\"),\n  },\n  handler: async () => {},\n});";
+      expect(candidateNamesReceiptBank(withBank)).toBe(true);
+      expect(candidateNamesReceiptBank(withoutBank)).toBe(false);
+      // Shared args (no inline block) cannot be read, and a LATER export's bankAccountId
+      // must never be attributed to the target: unknown, not true.
+      const sharedArgs = "export const confirmDisbursement = mutation({\n  args: sharedArgs,\n  handler: async () => {},\n});\nexport const later = mutation({\n  args: {\n    bankAccountId: v.id(\"bankAccounts\"),\n  },\n  handler: async () => {},\n});";
+      expect(candidateNamesReceiptBank(sharedArgs)).toBeUndefined();
+      // ...including a later NON-exported top-level declaration, which `^export` would not stop at.
+      const sharedArgsThenHelper = "export const confirmDisbursement = mutation({\n  args: sharedArgs,\n  handler: async () => {},\n});\n\nconst helper = internalMutation({\n  args: {\n    bankAccountId: v.id(\"bankAccounts\"),\n  },\n  handler: async () => {},\n});";
+      expect(candidateNamesReceiptBank(sharedArgsThenHelper)).toBeUndefined();
+      expect(candidateNamesReceiptBank("export const nothing = 1;")).toBeUndefined();
+      expect(candidateNamesReceiptBank(undefined)).toBeUndefined();
+    });
   });
 
   test("FD1 catches a short receipt refused for the wrong reason", async () => {
