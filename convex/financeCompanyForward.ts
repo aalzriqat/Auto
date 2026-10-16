@@ -6,6 +6,8 @@ import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { runWithIdempotency } from "./utils/idempotency";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { disbursementAccountKey } from "./accounting/postingRules";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { hookFinanceCompanyForwardPaid, hookFinanceCompanyForwardReversed } from "./accounting/workflowHooks";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { directPaymentMethodValidator } from "./utils/handoverCostPayment";
@@ -168,6 +170,19 @@ async function depositSlicesFor(
 }
 
 /**
+ * SCRUM-54: the banks a forward can leave, for the form's required picker. Gated
+ * by the SAME permissions as the payment itself (a manager may hold them without
+ * MANAGE_FINANCE), and read-only: it never creates or selects a bank.
+ */
+export const listForwardBankOptions = query({
+  args: { orgId: v.id("organizations"), currency: v.string() },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, NEEDS_FORWARD_PERMS);
+    return await listEligibleBanks(ctx, args.orgId, args.currency);
+  },
+});
+
+/**
  * Records that the dealership paid the deposit and the contribution to the
  * finance company. Posts Dr AP-Finance / Cr cash-or-bank, dated at the true
  * `paidAt` when its period is open; a closed period is refused for an
@@ -178,6 +193,12 @@ export const recordFinanceCompanyForward = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     method: directPaymentMethodValidator,
+    /**
+     * SCRUM-54: the physical bank a bank-account method (transfer, card, cheque) left.
+     * Required for those, refused for cash. Optional in the validator only so a
+     * missing bank is a clear refusal, not a schema error.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     paidAt: v.number(),
     /** The total the payer SAW and pinned; the payment posts only when it is still the amount due. */
     expectedAmountMinor: v.number(),
@@ -187,6 +208,11 @@ export const recordFinanceCompanyForward = mutation({
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId, NEEDS_FORWARD_PERMS);
     const app = await loadV2Application(ctx, args.orgId, args.applicationId);
+    const cashKey = disbursementAccountKey(args.method);
+    const paidFromBank = cashKey === SYSTEM_KEYS.BANK_ACCOUNT;
+    if (args.bankAccountId && !paidFromBank) {
+      throw new ConvexError("A bank account applies only to a bank transfer, card or cheque payment. Nothing has been recorded.");
+    }
     if (!isMinorAmount(args.expectedAmountMinor)) {
       throw new ConvexError("The amount must be a whole number of minor units. Nothing has been recorded.");
     }
@@ -209,6 +235,7 @@ export const recordFinanceCompanyForward = mutation({
         fingerprint: JSON.stringify({
           applicationId: args.applicationId,
           method: args.method,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           paidAt: args.paidAt,
           reference: reference ?? null,
           expectedAmountMinor: args.expectedAmountMinor,
@@ -262,6 +289,17 @@ export const recordFinanceCompanyForward = mutation({
           throw new ConvexError("This deal has been paid and taken back too many times. An accountant reviews the deal. Nothing has been recorded.");
         }
         const currency = await resolveDealCurrency(ctx, app, "recording this payment");
+        // SCRUM-54: a bank-account method names an active same-org bank in the deal's
+        // currency, judged before the first write (a caught exception would commit).
+        const bankAccountId = paidFromBank
+          ? await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId,
+              bankAccountId: args.bankAccountId,
+              currency,
+              missingMessage: "Select the bank account this payment was made from. Nothing has been recorded.",
+              currencySubject: "deal",
+            })
+          : undefined;
         // SCRUM-27: exactly ONE payer identity - the configured company, or the
         // manual company's name frozen on the application. Neither is refused.
         const manualPayer = manualPayerOf(app);
@@ -320,7 +358,8 @@ export const recordFinanceCompanyForward = mutation({
           amountMinor: proof.dueMinor,
           currency,
           paymentMethod: args.method,
-          cashKey: disbursementAccountKey(args.method),
+          cashKey,
+          bankAccountId,
           actorId: auth.user._id,
           occurredAt: args.paidAt,
         });

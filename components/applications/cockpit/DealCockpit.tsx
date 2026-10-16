@@ -163,6 +163,7 @@ import {
 import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialog";
 import {
   RecordForwardToFinanceCompanyDialog,
+  type ForwardConfirmOutcome,
   type ForwardPaymentValues,
 } from "../RecordForwardToFinanceCompanyDialog";
 import { ForwardCorrectionDialog, type ForwardCorrectionKind } from "../ForwardCorrectionDialog";
@@ -185,6 +186,7 @@ import {
   type ExpectedHandoverRow,
   type ActualHandoverCost,
   type DirectHandoverPayment,
+  type DirectPaymentBankOptions,
   type HandoverCostsData,
   type HandoverCostSource,
   type NewHandoverCost,
@@ -1998,6 +2000,15 @@ export function DealCockpit({
       : preFinalizeForward?.state === "UNPAID" && preFinalizeForward.mayRecord
         ? preFinalizeForward.money
         : null;
+  // SCRUM-54: banks a bank-method forward may name. The query needs the SAME pair of
+  // permissions as the payment (a manager can hold both without MANAGE_FINANCE), so
+  // it is asked only for a caller who holds both.
+  const forwardBankOptions = useQuery(
+    api.financeCompanyForward.listForwardBankOptions,
+    forwardPayment && canConfirmFinanceDisbursement && hasPermission(PERMISSIONS.VIEW_FINANCE)
+      ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
+      : "skip"
+  );
   /**
    * The payment the take-back / report-returned control acts on. A finalized
    * deal's comes from the cockpit; before the close, from the server's status of
@@ -3628,22 +3639,27 @@ export function DealCockpit({
                   ? {
                       confirming: recordingForward,
                       submitting: forwardSubmitting,
+                      dueMinor: forwardPayment.dueMinor,
                       totalLabel: formatEconomics(forwardPayment.dueMinor),
                       depositLabel: formatEconomics(forwardPayment.depositMinor),
                       contributionLabel: formatEconomics(forwardPayment.contributionMinor),
+                      bankOptions: forwardBankOptions,
                       onOpenChange: setRecordingForward,
-                      onConfirm: async (values) => {
-                        const dueMinor = forwardPayment.dueMinor;
+                      onConfirm: async (values): Promise<ForwardConfirmOutcome> => {
+                        // The amount pinned with the first attempt, never the live due: a retry
+                        // after a lost response must be byte-identical (same key, same args).
+                        const dueMinor = values.expectedAmountMinor;
                         if (!dueMinor) return;
                         setForwardSubmitting(true);
                         // One key per attempt: a retry after a lost response is the
-                        // SAME command, and a changed input is a new one.
-                        const intent = `record-forward:${applicationId}:${dueMinor}:${values.method}:${values.paidAt}:${values.reference ?? ""}`;
+                        // SAME command, and a changed input (the bank included) is a new one.
+                        const intent = `record-forward:${applicationId}:${dueMinor}:${values.method}:${values.bankAccountId ?? ""}:${values.paidAt}:${values.reference ?? ""}`;
                         try {
                           await recordFinanceCompanyForward({
                             orgId,
                             applicationId,
                             method: values.method,
+                            ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                             paidAt: values.paidAt,
                             expectedAmountMinor: dueMinor,
                             reference: values.reference,
@@ -3653,8 +3669,10 @@ export function DealCockpit({
                           toast.success(t("ForwardRecordedSuccess"));
                           setRecordingForward(false);
                         } catch (error) {
-                          if (isConvexError(error)) commandId.retire(intent);
                           toast.error(getErrorMessage(error));
+                          // The server's own answer committed nothing; anything else may have.
+                          if (isConvexError(error)) commandId.retire(intent);
+                          else return "UNKNOWN";
                         } finally {
                           setForwardSubmitting(false);
                         }
@@ -5149,11 +5167,13 @@ export function DealCockpitView({
     forward?: {
       confirming: boolean;
       submitting: boolean;
+      dueMinor: number;
       totalLabel: string;
       depositLabel: string;
       contributionLabel: string;
+      bankOptions: DirectPaymentBankOptions;
       onOpenChange: (open: boolean) => void;
-      onConfirm: (values: ForwardPaymentValues) => void | Promise<void>;
+      onConfirm: (values: ForwardPaymentValues) => ForwardConfirmOutcome | Promise<ForwardConfirmOutcome>;
     };
     supplier: {
       confirming: boolean;
@@ -7647,9 +7667,11 @@ export function DealCockpitView({
             <RecordForwardToFinanceCompanyDialog
               open={disbursement.forward.confirming}
               submitting={disbursement.forward.submitting}
+              dueMinor={disbursement.forward.dueMinor}
               totalLabel={disbursement.forward.totalLabel}
               depositLabel={disbursement.forward.depositLabel}
               contributionLabel={disbursement.forward.contributionLabel}
+              bankOptions={disbursement.forward.bankOptions}
               t={t}
               onOpenChange={disbursement.forward.onOpenChange}
               onConfirm={disbursement.forward.onConfirm}

@@ -16,6 +16,11 @@ import {
 import { describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { seedBank } from "../test-utils/bankFixture";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
+import schema from "./schema";
+import { ruleFinanceCompanyForwardPaid } from "./accounting/postingRules";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
 import { deriveForwardState, isReportedReturn } from "./utils/financeCompanyForward";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
@@ -92,17 +97,24 @@ async function dueDeal(tag: string) {
   return { s, applicationId, forwardId: forwardId! };
 }
 
-const record = (
+const record = async (
   s: Seeded,
   applicationId: Id<"financeApplications">,
-  over: Partial<{ paidAt: number; expectedAmountMinor: number; idempotencyKey: string; method: "CASH" | "BANK_TRANSFER" }> = {},
+  over: Partial<{
+    paidAt: number; expectedAmountMinor: number; idempotencyKey: string; method: "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE";
+    /** `null` sends no bank at all; omitted = the org's seeded bank for a bank method (never for cash). */
+    bankAccountId: Id<"bankAccounts"> | null;
+  }> = {},
   as = s.owner.as
-) =>
-  as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId: s.orgId, applicationId, method: over.method ?? "BANK_TRANSFER",
+) => {
+  const method = over.method ?? "BANK_TRANSFER";
+  const bankAccountId = over.bankAccountId === undefined ? (method === "CASH" ? null : await seedBank(s.t, s.orgId)) : over.bankAccountId;
+  return await as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+    orgId: s.orgId, applicationId, method, ...(bankAccountId ? { bankAccountId } : {}),
     paidAt: over.paidAt ?? Date.now(), expectedAmountMinor: over.expectedAmountMinor ?? FORWARD,
     idempotencyKey: over.idempotencyKey ?? crypto.randomUUID(),
   });
+};
 
 const confirmTransfer = (s: Seeded, applicationId: Id<"financeApplications">, amount = G) =>
   insertReceiptBank(s).then((bankAccountId) =>
@@ -312,7 +324,7 @@ describe("SCRUM-435 - record: idempotency, pins, periods, tenancy", () => {
     expect(
       await refusalOf(
         asOther.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-          orgId: other.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+          orgId: other.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: await seedBank(other.t, other.orgId), paidAt: Date.now(),
           expectedAmountMinor: FORWARD, idempotencyKey: crypto.randomUUID(),
         })
       )
@@ -837,6 +849,138 @@ describe("SCRUM-435 - a reported return with an unposted reversal keeps the exce
     expect(proof.returnedExceptionOpen).toBe(true);
   });
 });
+describe("SCRUM-54 - the forward names the physical bank it left", () => {
+  const NOT_FOUND = "The selected bank account was not found in this organization.";
+  const insertBank = (s: Seeded, orgId: Id<"organizations">, over: { currency?: string; isActive?: boolean; isDeleted?: boolean } = {}) =>
+    s.t.run((ctx) =>
+      ctx.db.insert("bankAccounts", {
+        orgId, name: "Bank", currency: over.currency ?? "JOD", openingBalanceMinor: 0, openingBalanceDate: Date.now(),
+        isActive: over.isActive ?? true, isReconciliationTarget: false, createdBy: s.owner.userId,
+        createdAt: Date.now(), updatedAt: Date.now(), isDeleted: over.isDeleted,
+      })
+    );
+  /** The journal lines of every forward payment event, with the account each hit and the bank it names. */
+  const forwardLines = (s: Seeded) =>
+    s.t.run(async (ctx) => {
+      const events = (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()).filter(
+        (e) => e.eventType === "FINANCE_COMPANY_FORWARD_PAID"
+      );
+      const out: Array<{ systemKey: string | undefined; debitMinor: number; creditMinor: number; bankAccountId: Id<"bankAccounts"> | undefined }> = [];
+      const orgEntries = await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+      for (const event of events) {
+        for (const entry of orgEntries.filter((e) => e.accountingEventId === event._id)) {
+          const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)).collect();
+          for (const l of lines) {
+            out.push({
+              systemKey: (await ctx.db.get(l.accountId))?.systemKey,
+              debitMinor: l.debitMinor, creditMinor: l.creditMinor, bankAccountId: l.bankAccountId,
+            });
+          }
+        }
+      }
+      return { events, lines: out };
+    });
+  const everything = (s: Seeded) => dbSnapshot(s.t, Object.keys(schema.tables));
+
+  test.each([
+    ["foreign organization", NOT_FOUND],
+    ["deleted", NOT_FOUND],
+    ["inactive", "The selected bank account is inactive."],
+    ["wrong currency", "denominated in USD"],
+  ] as const)("a %s bank is refused and nothing is written", async (kind, message) => {
+    const { s, applicationId } = await approvedDeal(`bad-${kind.replace(" ", "-")}`);
+    const foreignOrg = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() }));
+    const bankAccountId =
+      kind === "foreign organization" ? await insertBank(s, foreignOrg)
+      : kind === "deleted" ? await insertBank(s, s.orgId, { isDeleted: true })
+      : kind === "inactive" ? await insertBank(s, s.orgId, { isActive: false })
+      : await insertBank(s, s.orgId, { currency: "USD" });
+    const before = await everything(s);
+    expect(await refusalOf(record(s, applicationId, { bankAccountId }))).toContain(message);
+    expect(await everything(s)).toEqual(before);
+    expect((await forwardLines(s)).events).toHaveLength(0);
+  });
+
+  test.each(["BANK_TRANSFER", "CARD", "CHEQUE"] as const)("%s without a bank is refused and nothing is written", async (method) => {
+    const { s, applicationId } = await approvedDeal(`none-${method}`);
+    await seedBank(s.t, s.orgId); // a bank exists: it must still be CHOSEN, never defaulted
+    const before = await everything(s);
+    expect(await refusalOf(record(s, applicationId, { method, bankAccountId: null }))).toContain("Select the bank account");
+    expect(await everything(s)).toEqual(before);
+  });
+
+  test("CASH with a bank is refused and nothing is written; CASH alone credits the cash drawer and names no bank", async () => {
+    const { s, applicationId } = await approvedDeal("cash");
+    const bankAccountId = await seedBank(s.t, s.orgId);
+    const before = await everything(s);
+    expect(await refusalOf(record(s, applicationId, { method: "CASH", bankAccountId }))).toContain("applies only to a bank transfer, card or cheque");
+    expect(await everything(s)).toEqual(before);
+
+    await record(s, applicationId, { method: "CASH" });
+    const { lines, events } = await forwardLines(s);
+    expect(lines.find((l) => l.systemKey === SYSTEM_KEYS.CASH_ON_HAND)).toMatchObject({ creditMinor: FORWARD });
+    expect(lines.some((l) => l.systemKey === SYSTEM_KEYS.BANK_ACCOUNT)).toBe(false);
+    expect(lines.filter((l) => l.bankAccountId !== undefined)).toEqual([]);
+    expect(events[0].payload).not.toHaveProperty("bankAccountId");
+  });
+
+  test("a valid Bank A is named on the BANK_ACCOUNT credit only - Bank B is never attributed", async () => {
+    const { s, applicationId } = await approvedDeal("attrib");
+    const bankA = await insertBank(s, s.orgId);
+    const bankB = await insertBank(s, s.orgId);
+    await record(s, applicationId, { bankAccountId: bankA });
+    const { lines, events } = await forwardLines(s);
+    const named = lines.filter((l) => l.bankAccountId !== undefined);
+    expect(named).toHaveLength(1);
+    expect(named[0]).toMatchObject({ systemKey: SYSTEM_KEYS.BANK_ACCOUNT, creditMinor: FORWARD, debitMinor: 0, bankAccountId: bankA });
+    expect(lines.some((l) => l.bankAccountId === bankB)).toBe(false);
+    expect(lines.find((l) => l.systemKey === SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES)?.bankAccountId).toBeUndefined();
+    expect(events[0].payload).toMatchObject({ bankAccountId: String(bankA) });
+  });
+
+  test("the same key with a different bank is a different instruction, not a replay; the same bank replays", async () => {
+    const { s, applicationId } = await approvedDeal("replay");
+    const bankA = await insertBank(s, s.orgId);
+    const bankB = await insertBank(s, s.orgId);
+    const key = crypto.randomUUID();
+    const paidAt = Date.now() - 1000;
+    const first = await record(s, applicationId, { idempotencyKey: key, paidAt, bankAccountId: bankA });
+    expect(await refusalOf(record(s, applicationId, { idempotencyKey: key, paidAt, bankAccountId: bankB }))).toContain(
+      "Idempotency key reused with different request content."
+    );
+    expect(await record(s, applicationId, { idempotencyKey: key, paidAt, bankAccountId: bankA })).toEqual(first);
+    const { lines } = await forwardLines(s);
+    expect(lines.filter((l) => l.bankAccountId !== undefined)).toHaveLength(1);
+  });
+
+  test("an event queued BEFORE the bank existed still drains: it posts the credit unnamed (the book balance withholds on it)", () => {
+    // A finance-company posting always names its payer; a queued event carried one and simply no bank.
+    const legacy = ruleFinanceCompanyForwardPaid({
+      forwardId: "f", applicationId: "a", payerNameSnapshot: "Legacy Finance Co", amountMinor: FORWARD, currency: "JOD", paymentMethod: "BANK_TRANSFER",
+    });
+    const credit = legacy.lines.find((l) => l.accountSystemKey === SYSTEM_KEYS.BANK_ACCOUNT);
+    expect(credit).toMatchObject({ creditMinor: FORWARD, debitMinor: 0 });
+    expect(credit?.bankAccountId).toBeUndefined();
+    expect(legacy.lines.filter((l) => l.bankAccountId !== undefined)).toEqual([]);
+    // Cash never carries a bank, even if a payload did.
+    const cash = ruleFinanceCompanyForwardPaid({
+      forwardId: "f", applicationId: "a", payerNameSnapshot: "Legacy Finance Co", amountMinor: FORWARD, currency: "JOD", paymentMethod: "CASH", bankAccountId: "stray",
+    });
+    expect(cash.lines.filter((l) => l.bankAccountId !== undefined)).toEqual([]);
+  });
+
+  test("the bank list is served to the forward's own permission pair and to nobody without it", async () => {
+    const { s } = await approvedDeal("list");
+    const bank = await insertBank(s, s.orgId);
+    await insertBank(s, s.orgId, { currency: "USD" });
+    const owner = await s.owner.as.query(api.financeCompanyForward.listForwardBankOptions, { orgId: s.orgId, currency: "JOD" });
+    expect(owner.banks.map((b: { _id: Id<"bankAccounts"> }) => b._id)).toEqual([bank]);
+    // The default manager holds neither view:finance nor manage:finance: it cannot read the list or create a bank.
+    expect(await refusalOf(s.manager.as.query(api.financeCompanyForward.listForwardBankOptions, { orgId: s.orgId, currency: "JOD" }))).not.toBeNull();
+    expect(await refusalOf(s.sales.as.query(api.financeCompanyForward.listForwardBankOptions, { orgId: s.orgId, currency: "JOD" }))).not.toBeNull();
+  });
+});
+
 describe("SCRUM-435 - isReportedReturn (pure)", () => {
   test("a RETURNED intent counts in every unposted-or-posted state, never once settled or absent", () => {
     for (const state of ["RETURNED", "REVERSAL_PENDING", "NEEDS_REPAIR"] as const) {

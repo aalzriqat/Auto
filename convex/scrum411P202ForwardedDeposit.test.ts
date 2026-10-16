@@ -21,6 +21,7 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex runtime.
  */
 import { C, H, SCALE, payForwardAsOwner, finalizeAsOwner, readyDeal, refusalDataOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -261,7 +262,7 @@ describe("P2-02 - the payment pins which deposit it carries, in the same transac
     // Called directly: the fixture's payer reads a refused plan as "nothing owed" and never reaches the mutation.
     const refusal = await refusalDataOf(
       s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-        orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+        orgId: s.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: await seedBank(s.t, s.orgId), paidAt: Date.now(),
         expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
       })
     );
@@ -275,8 +276,9 @@ describe("P2-02 - the payment pins which deposit it carries, in the same transac
     const { applicationId } = await readyDeal(s);
     // One `paidAt` for every call: the server fingerprints the request, so a replay must be identical.
     const paidAt = Date.now();
+    const bankAccountId = await seedBank(s.t, s.orgId);
     const args = (key: string) => ({
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER" as const, paidAt,
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER" as const, bankAccountId, paidAt,
       expectedAmountMinor: H + C, idempotencyKey: key,
     });
     const key = crypto.randomUUID();

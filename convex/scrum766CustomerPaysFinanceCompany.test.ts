@@ -21,6 +21,7 @@ import schema from "./schema";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { finalizeAsOwner, newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 import { deriveManagementProfit } from "./utils/financingEconomics";
 import { FORWARD_VERSIONS_ONLY, deriveForwardState, forwardPostKey } from "./utils/financeCompanyForward";
 
@@ -695,9 +696,9 @@ describe("SCRUM-766 PR-B review: one transfer is one confirmation", () => {
  */
 describe("SCRUM-766 Q2 x SCRUM-411 P2-01: the customer's payment cannot change while the showroom's payment is live", () => {
   type AppId = Id<"financeApplications">;
-  const payForward = (s: Seeded, applicationId: AppId, expected: number) =>
+  const payForward = async (s: Seeded, applicationId: AppId, expected: number) =>
     s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: await seedBank(s.t, s.orgId), paidAt: Date.now(),
       expectedAmountMinor: jod(expected), idempotencyKey: crypto.randomUUID(),
     });
   const takeBackForward = (s: Seeded, applicationId: AppId, forwardId: Id<"financeCompanyForwards">) =>

@@ -10,6 +10,7 @@
  */
 import { describe, expect, test, vi } from "vitest";
 import { insertReceiptBank, seedFinancedDealership, newApplication } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
@@ -294,7 +295,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     // is on the books.
     const paidAt = Date.now();
     const forwardArgs = {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER" as const, paidAt,
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER" as const, bankAccountId: await seedBank(s.t, s.orgId), paidAt,
       expectedAmountMinor: 1_575_000, reference: "CERT-FORWARD",
       idempotencyKey: "s486-financed-held-forward",
     };
@@ -495,10 +496,12 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
   test("owned configured financier × foreign application ID: neither tenant's forward or receipt changes", async () => {
     const { s, applicationId } = await ownedFinancedOpening("s486foreignfinanced");
     const other = await authorizedOtherTenant(s, "s486foreignfinanced");
+    // The victim's own bank: the foreign application must be refused before any bank is judged.
+    const victimBank = await seedBank(s.t, s.orgId);
     const before = await dbSnapshot(s.t, Object.keys(schema.tables));
 
     await expect(other.owner.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: other.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+      orgId: other.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: victimBank, paidAt: Date.now(),
       expectedAmountMinor: 0, idempotencyKey: "s486-foreign-forward-denied",
     })).rejects.toThrow(/Finance application not found in this organization/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);

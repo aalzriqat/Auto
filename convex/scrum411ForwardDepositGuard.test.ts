@@ -19,6 +19,7 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex runtime.
  */
 import { C, H, readyDeal, refusalDataOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -60,9 +61,9 @@ async function seed(tag: string) {
 type Seeded = Awaited<ReturnType<typeof seed>>;
 type AppId = Id<"financeApplications">;
 
-const payForward = (s: Seeded, applicationId: AppId) =>
+const payForward = async (s: Seeded, applicationId: AppId) =>
   s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: await seedBank(s.t, s.orgId), paidAt: Date.now(),
     expectedAmountMinor: FORWARD, idempotencyKey: crypto.randomUUID(),
   });
 const voidForward = (s: Seeded, applicationId: AppId, forwardId: Id<"financeCompanyForwards">) =>

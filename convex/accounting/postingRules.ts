@@ -3178,6 +3178,12 @@ export interface FinanceCompanyForwardPaidPayload {
   currency: string;
   /** How the money left: REQUIRED, never defaulted. */
   paymentMethod: string;
+  /**
+   * SCRUM-54: the physical bank a BANK_ACCOUNT payment left. Optional only so
+   * events queued before it existed still drain; they post unnamed, and the
+   * book balance withholds itself while any unnamed bank line exists.
+   */
+  bankAccountId?: string;
 }
 
 /**
@@ -3199,10 +3205,17 @@ export function ruleFinanceCompanyForwardPaid(p: FinanceCompanyForwardPaidPayloa
       `FINANCE_COMPANY_FORWARD_PAID carries a payment method that is not CASH, BANK_TRANSFER, CHEQUE or CARD (${String(p.paymentMethod)}) - refusing to post.`
     );
   }
+  const cashKey = disbursementAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES, p.amountMinor, 0, "Forwarded to the finance company", financePayerDims(p)),
-      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Paid to the finance company"),
+      line(
+        cashKey,
+        0,
+        p.amountMinor,
+        "Paid to the finance company",
+        cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined
+      ),
     ],
     memo: "Deposit and dealership contribution forwarded to the finance company",
     category: "SYSTEM",

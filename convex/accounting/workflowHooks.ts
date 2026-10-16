@@ -3668,6 +3668,8 @@ export async function hookFinanceCompanyForwardPaid(
     currency: string;
     paymentMethod: string;
     cashKey: SystemKey;
+    /** SCRUM-54: the physical bank a BANK_ACCOUNT payment left; absent for cash. */
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -3695,6 +3697,7 @@ export async function hookFinanceCompanyForwardPaid(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }

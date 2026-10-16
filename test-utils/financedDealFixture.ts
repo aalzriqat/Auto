@@ -140,6 +140,27 @@ interface ForwardPayerSeed {
   orgId: Id<"organizations">;
 }
 
+/**
+ * SCRUM-54: the organization's one active, live JOD bank for a bank-method forward payment, created on first use
+ * and reused after (the same find-or-create as `seedBank`, typed to this seed's narrower `t`).
+ */
+async function activeJodBank(s: ForwardPayerSeed): Promise<Id<"bankAccounts">> {
+  return await s.t.run(async (ctx) => {
+    const existing = await ctx.db
+      .query("bankAccounts")
+      .withIndex("by_org_active_currency", (q) => q.eq("orgId", s.orgId).eq("isActive", true).eq("currency", "JOD"))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .first();
+    if (existing) return existing._id;
+    const createdBy = (await ctx.db.query("users").first())!._id;
+    const now = Date.now();
+    return await ctx.db.insert("bankAccounts", {
+      orgId: s.orgId, name: "Operating bank", currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: now,
+      isActive: true, isReconciliationTarget: false, createdBy, createdAt: now, updatedAt: now,
+    });
+  });
+}
+
 export async function newApplication(s: DealSeed, opts: { gapMinor?: number } = {}) {
   const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
@@ -265,7 +286,7 @@ export async function payForwardBeforeFinalize(
   const expectedAmountMinor = await prospectiveForwardDueMinor(s, applicationId);
   if (expectedAmountMinor <= 0) return null;
   return await payer.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: await activeJodBank(s), paidAt: Date.now(),
     expectedAmountMinor, idempotencyKey: crypto.randomUUID(),
   });
 }
