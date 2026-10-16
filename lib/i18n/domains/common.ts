@@ -1376,6 +1376,12 @@ export const commonEn = {
   CloseCashDrawerDesc: "Enter the counted cash. The system computes the variance before approval.",
   CashDrawerClosed: "Cash drawer closed for approval.",
   ApproveCashDrawer: "Approve Cash Drawer",
+  ReceiptBankAccount: "Bank account received into",
+  ReceiptSelectBank: "Select the bank account that received this payment",
+  ReceiptNoBank:
+    "There is no active bank account in this currency. Add one under Bank Accounts before recording a bank transfer or card payment.",
+  ReceiptTooManyBanks:
+    "This currency has too many active bank accounts to list here, so a bank transfer or card payment cannot be recorded from this screen. Deactivate the accounts that are no longer used, then try again.",
   CashDrawerDepositBank: "Deposit bank account",
   CashDrawerSelectBank: "Select the bank account receiving this cash",
   CashDrawerLoadingBanks: "Loading bank accounts...",
@@ -2386,6 +2392,12 @@ export const commonAr = {
   CloseCashDrawerDesc: "أدخل النقد المعدود. سيحسب النظام الفرق قبل الموافقة.",
   CashDrawerClosed: "تم إغلاق صندوق النقد للموافقة.",
   ApproveCashDrawer: "اعتماد صندوق النقد",
+  ReceiptBankAccount: "الحساب المصرفي المستلم",
+  ReceiptSelectBank: "اختر الحساب المصرفي الذي استلم هذه الدفعة",
+  ReceiptNoBank:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل تسجيل دفعة تحويل مصرفي أو بطاقة.",
+  ReceiptTooManyBanks:
+    "عدد الحسابات المصرفية النشطة بهذه العملة أكبر من أن يُعرض هنا، لذا لا يمكن تسجيل دفعة تحويل مصرفي أو بطاقة من هذه الشاشة. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
   CashDrawerDepositBank: "الحساب المصرفي للإيداع",
   CashDrawerSelectBank: "اختر الحساب المصرفي الذي سيستلم هذا النقد",
   CashDrawerLoadingBanks: "جاري تحميل الحسابات المصرفية...",

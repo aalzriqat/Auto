@@ -9,6 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { postReceiptOccurrence, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, hookReceivableCancelled, hookReceiptCreditApplied, findPostedReceiptOccurrence, getOrgCurrency, revokeReceiptOccurrence, revokeReceiptApplicationOccurrence } from "./accounting/workflowHooks";
 import { directCollectionReceipt, rehydrateReceiptOccurrence } from "./accounting/receiptOccurrence";
 import {
@@ -1463,6 +1464,18 @@ export const createInstallmentPlan = mutation({
   },
 });
 
+/**
+ * SCRUM-54: the banks a bank-bound receipt may name - active banks in the organization
+ * currency, id/name/currency only. Same permission as `recordPayment`.
+ */
+export const listReceiptBankOptions = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
 export const recordPayment = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1474,6 +1487,11 @@ export const recordPayment = mutation({
     invoiceSaleId: v.optional(v.id("sales")),
     amount: v.number(),
     method: paymentMethodValidator,
+    /**
+     * SCRUM-54: the physical bank a BANK_TRANSFER / CARD receipt reached. Required for
+     * those methods (never defaulted or inferred), refused for the others.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     paymentDate: v.number(),
     reference: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -1481,6 +1499,10 @@ export const recordPayment = mutation({
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const receiptReachesBank = args.method === "BANK_TRANSFER" || args.method === "CARD";
+    if (args.bankAccountId && !receiptReachesBank) {
+      throw new ConvexError("A bank account applies only to bank transfer or card receipts.");
+    }
     // SCRUM-724 Sol 6 Q1: a receipt bound to a sale invoice is a new claim on
     // 2110 credit. Refused before anything else and before the idempotency
     // wrapper; a plain receipt (no invoiceSaleId) is the existing door.
@@ -1556,6 +1578,7 @@ export const recordPayment = mutation({
           invoiceSaleId: args.invoiceSaleId ?? null,
           amount: args.amount,
           method: args.method,
+          bankAccountId: args.bankAccountId ?? null,
           paymentDate: args.paymentDate,
           reference: args.reference?.trim() || null,
         }),
@@ -1659,6 +1682,16 @@ export const recordPayment = mutation({
         }
 
         const currency = await getOrgCurrency(ctx, args.orgId);
+        // SCRUM-54: a receipt that reaches a bank names it; checked before the first write.
+        const bankAccountId = receiptReachesBank
+          ? await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId,
+              bankAccountId: args.bankAccountId,
+              currency,
+              missingMessage: "Select the bank account this payment was received into.",
+              currencySubject: "organization",
+            })
+          : undefined;
         const now = Date.now();
         const paymentId = await ctx.db.insert("collectionPayments", {
           orgId: args.orgId,
@@ -1770,6 +1803,7 @@ export const recordPayment = mutation({
             currency,
             customerId: customerId.toString(),
             paymentMethod: args.method,
+            ...(bankAccountId ? { bankAccountId: bankAccountId.toString() } : {}),
           },
         });
 

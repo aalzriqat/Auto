@@ -571,6 +571,12 @@ export interface CollectionPaymentPayload {
   currency: string;
   customerId: string;
   paymentMethod?: string;
+  /**
+   * SCRUM-54: the physical bank a BANK_TRANSFER / CARD receipt reached. Optional only
+   * so an event queued before this field existed still drains; `recordPayment`
+   * requires it for every new bank receipt. Never set for CASH or CHEQUE.
+   */
+  bankAccountId?: string;
 }
 
 /**
@@ -1869,7 +1875,13 @@ function assertReceiptSplit(p: CollectionPaymentPayload): void {
 export function ruleCollectionPayment(p: CollectionPaymentPayload): RuleResult {
   assertReceiptSplit(p);
   const cashKey = cashAccountKey(p.paymentMethod);
-  const lines = [line(cashKey, p.receivedMinor, 0, "Payment received", { customerId: p.customerId })];
+  const lines = [
+    line(cashKey, p.receivedMinor, 0, "Payment received", {
+      customerId: p.customerId,
+      // SCRUM-54: only the bank control line names the bank.
+      ...(cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}),
+    }),
+  ];
   if (p.appliedMinor > 0) {
     lines.push(
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.appliedMinor, "AR settled", { customerId: p.customerId })

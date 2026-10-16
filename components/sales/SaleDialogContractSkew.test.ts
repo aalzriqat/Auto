@@ -95,7 +95,8 @@ const PANEL = ["components", "applications", "cockpit", "DealInvoiceReceiptsPane
 const SECTION = ["components", "accounting", "RetainedCreditRefundsSection.tsx"];
 const DEAL_CLIENT = ["app", "(dashboard)", "[orgId]", "sales", "[saleId]", "deal", "client.tsx"];
 const COLLECTIONS_TAB = ["components", "accounting", "CollectionsTab.tsx"];
-const MOUNTED_MONEY_UI = [PANEL, SECTION, DEAL_CLIENT, COLLECTIONS_TAB];
+const RECEIPT_BANK_SELECT = ["components", "accounting", "ReceiptBankSelect.tsx"];
+const MOUNTED_MONEY_UI = [PANEL, SECTION, DEAL_CLIENT, COLLECTIONS_TAB, RECEIPT_BANK_SELECT];
 
 /**
  * The arguments each mounted money mutation is sent by the panel / queue. Every
@@ -103,7 +104,7 @@ const MOUNTED_MONEY_UI = [PANEL, SECTION, DEAL_CLIENT, COLLECTIONS_TAB];
  * money UI must add its row here (the completeness check below enforces it).
  */
 const SENT_ARGS: Record<string, string[]> = {
-  "collections:recordPayment": ["orgId", "customerId", "invoiceSaleId", "amount", "method", "paymentDate", "reference", "idempotencyKey"],
+  "collections:recordPayment": ["orgId", "customerId", "invoiceSaleId", "amount", "method", "bankAccountId", "paymentDate", "reference", "idempotencyKey"],
   "collections:reserveSaleInvoiceReceipt": ["orgId", "saleId", "receiptMovementId", "amountMinor", "idempotencyKey"],
   "collections:activateSaleInvoiceReceipt": ["orgId", "applicationId", "amountMinor", "idempotencyKey"],
   "collections:registerSaleInvoiceCheque": ["orgId", "saleId", "bank", "chequeNumber", "chequeDate", "amountMinor"],
