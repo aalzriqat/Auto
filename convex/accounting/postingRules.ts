@@ -2238,6 +2238,13 @@ export interface FinanceCashReceivedPayload {
    * its canonical payment. Absent on events emitted before SCRUM-599.
    */
   paymentMethod?: FinanceReceiptMethod;
+  /**
+   * SCRUM-54: the physical bank a BANK_TRANSFER / CHEQUE receipt reached.
+   * Optional only so an event queued before this field existed still drains;
+   * `confirmDisbursement` requires it for every new bank receipt. Never set for
+   * CASH, which is cash on hand.
+   */
+  bankAccountId?: string;
 }
 
 /** How a finance company's disbursement can reach the dealership. */
@@ -2272,11 +2279,16 @@ export function ruleFinanceDisbursed(p: FinanceDisbursedPayload): RuleResult {
 }
 
 export function ruleFinanceCashReceived(p: FinanceCashReceivedPayload): RuleResult {
+  const receiptKey = financeReceiptAccountKey(p.paymentMethod);
   return {
     lines: [
       // Actual receipt of funds from the finance company settles their receivable,
-      // debited to wherever the money landed (SCRUM-599).
-      line(financeReceiptAccountKey(p.paymentMethod), p.amountMinor, 0, "Finance company disbursement received", financePayerDims(p)),
+      // debited to wherever the money landed (SCRUM-599). Only the bank control
+      // line names the bank (SCRUM-54) - cash on hand is not a bank.
+      line(receiptKey, p.amountMinor, 0, "Finance company disbursement received", {
+        ...financePayerDims(p),
+        ...(receiptKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}),
+      }),
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance company receivable settled", { ...financePayerDims(p), customerId: p.customerId }),
     ],
     memo: "Finance company disbursement received",

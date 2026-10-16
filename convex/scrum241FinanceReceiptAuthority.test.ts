@@ -24,6 +24,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { insertReceiptBank } from "../test-utils/financedDealFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -138,6 +139,9 @@ async function seedDealership(tag: string) {
 }
 
 type Seeded = Awaited<ReturnType<typeof seedDealership>>;
+
+/** SCRUM-54: the physical bank a BANK_TRANSFER receipt names, seeded explicitly per call site. */
+const receiptBank = (s: Seeded) => insertReceiptBank({ t: s.t, orgId: s.orgId, owner: { userId: s.userId } });
 
 /** Walks a through-dealership financed deal to APPROVED with its economics PINNED (JOD). */
 async function approvedDealWithPinnedEconomics(s: Seeded) {
@@ -331,6 +335,7 @@ describe("SCRUM-241 — finance-company receipt settles the exact recorded recei
       applicationId,
       disbursedAmountMinor: closed!.financedSaleNetReceivableMinor!,
       idempotencyKey: "s241-ctrl",
+      bankAccountId: await receiptBank(s),
     });
 
     const after = await economicDelta(s, applicationId);
@@ -416,6 +421,7 @@ describe("SCRUM-241 — finance-company receipt settles the exact recorded recei
       applicationId,
       disbursedAmountMinor: closed!.financedSaleNetReceivableMinor!,
       idempotencyKey: "s241-pre-back",
+      bankAccountId: await receiptBank(s),
     });
     const after = await economicDelta(s, applicationId);
     expect(after.receivable).toMatchObject({ currency: "JOD", status: "PAID" });
@@ -454,6 +460,7 @@ describe("SCRUM-241 — finance-company receipt settles the exact recorded recei
       applicationId,
       disbursedAmountMinor: closed!.financedSaleNetReceivableMinor!,
       idempotencyKey: "s241-post-raw",
+      bankAccountId: await receiptBank(s),
     });
 
     // Same-currency settlement of the existing debt: nothing is relabelled
@@ -586,6 +593,7 @@ describe("SCRUM-241 — finance-company receipt settles the exact recorded recei
       applicationId,
       disbursedAmountMinor: closed!.financedSaleNetReceivableMinor!,
       idempotencyKey: "s241-replay",
+      bankAccountId: await receiptBank(s),
     };
     await s.asUser.mutation(api.applications.confirmDisbursement, args);
     const once = await economicDelta(s, applicationId);
@@ -647,6 +655,7 @@ describe("SCRUM-557: finance-company receipt guard allocation status", () => {
 
     await s.asUser.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: receiptMinor, idempotencyKey: "s557-rev",
+      bankAccountId: await receiptBank(s),
     });
 
     expect((await app(s, applicationId))?.disbursedAmountMinor).toBe(receiptMinor);
@@ -660,6 +669,7 @@ describe("SCRUM-557: finance-company receipt guard allocation status", () => {
     await expect(
       s.asUser.mutation(api.applications.confirmDisbursement, {
         orgId: s.orgId, applicationId, disbursedAmountMinor: receiptMinor, idempotencyKey: "s557-act",
+        bankAccountId: await receiptBank(s),
       })
     ).rejects.toThrow(SETTLED_REFUSAL);
 

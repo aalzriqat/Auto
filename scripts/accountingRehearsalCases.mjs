@@ -2894,29 +2894,64 @@ export async function runRehearsalCases(ctx) {
       expectEqual(receivable.scale, denom.decimals, "the receivable's minor-unit scale");
       expectEqual(receivable.status, "OPEN", "the receivable's status before the receipt");
 
+      // SCRUM-54: a BANK_TRANSFER receipt names the physical bank it reached. A
+      // zero-balance, same-org, active bank in the deal's denomination is created
+      // through the authorized public command; no existing bank is ever selected.
+      const receiptBankAccountId = await ownerMust("mutation", "bankAccounts:create", {
+        orgId,
+        name: `Rehearsal receiving bank ${stamp}`,
+        currency: denom.currency,
+        openingBalanceMinor: 0,
+        openingBalanceDate: Date.now(),
+      });
+      if (!receiptBankAccountId) fail("bankAccounts:create returned no id for the receiving bank");
+
+      // A refused receipt leaves no application settlement, allocation or receipt event.
+      const expectNothingWritten = async (what) => {
+        const after = await ownerMust("query", "applications:get", { orgId, applicationId });
+        if (after?.disbursedAt !== undefined) fail(`${what} still marked the application disbursed`);
+        const allocations = await ownerMust("query", "subledger:listAllocations", { orgId, receivableDocumentId: receivable._id });
+        expectEqual((allocations ?? []).length, 0, `allocations after ${what}`);
+        const events = await ownerMust("query", "accountingLedger:listAccountingEvents", {
+          orgId,
+          sourceType: "financeApplications",
+          sourceId: `disbursement_${applicationId}`,
+          limit: 50,
+        });
+        expectEqual((events ?? []).length, 0, `FINANCE_CASH_RECEIVED events after ${what}`);
+      };
+
+      // SCRUM-54 negative control: a BANK_TRANSFER receipt with the correct amount but NO bank,
+      // while a valid bank exists, is refused for the missing bank - never defaulted to the one
+      // bank there is - and writes nothing.
+      const noBank = await ownerCall("mutation", "applications:confirmDisbursement", {
+        orgId,
+        applicationId,
+        disbursedAmountMinor: net,
+        idempotencyKey: `rehearsal-fd1-nobank-${stamp}`,
+      });
+      if (noBank.ok) fail("a BANK_TRANSFER receipt that named no bank was accepted (a bank must never be defaulted)");
+      if (!/Select the bank account the finance company's payment was received into/i.test(String(noBank.error ?? ""))) {
+        fail(`the bank-less receipt was refused for the wrong reason: ${String(noBank.error ?? "").slice(0, 200)}`);
+      }
+      await expectNothingWritten("the bank-less receipt");
+
       // A remittance short by the dealer's own cost is not what the company owes:
-      // refused, with no application settlement, allocation or receipt event.
+      // refused, with no application settlement, allocation or receipt event. It
+      // names the valid bank too, so the ONLY thing wrong with it is the amount -
+      // a backend that wrongly accepted it would not hide behind a missing bank.
       const wrongAmount = await ownerCall("mutation", "applications:confirmDisbursement", {
         orgId,
         applicationId,
         disbursedAmountMinor: net - dealerCost,
         idempotencyKey: `rehearsal-fd1-short-${stamp}`,
+        bankAccountId: receiptBankAccountId,
       });
       if (wrongAmount.ok) fail("a SHORT receipt (net of the dealer's own cost) was accepted on a deal where the company transfers the full approved amount");
       if (!/not what this financing company owes/i.test(String(wrongAmount.error ?? ""))) {
         fail(`the short receipt was refused for the wrong reason: ${String(wrongAmount.error ?? "").slice(0, 200)}`);
       }
-      const afterRefusal = await ownerMust("query", "applications:get", { orgId, applicationId });
-      if (afterRefusal?.disbursedAt !== undefined) fail("the refused receipt still marked the application disbursed");
-      const allocationsAfterRefusal = await ownerMust("query", "subledger:listAllocations", { orgId, receivableDocumentId: receivable._id });
-      expectEqual((allocationsAfterRefusal ?? []).length, 0, "allocations after the refused receipt");
-      const eventsAfterRefusal = await ownerMust("query", "accountingLedger:listAccountingEvents", {
-        orgId,
-        sourceType: "financeApplications",
-        sourceId: `disbursement_${applicationId}`,
-        limit: 50,
-      });
-      expectEqual((eventsAfterRefusal ?? []).length, 0, "FINANCE_CASH_RECEIVED events after the refused receipt");
+      await expectNothingWritten("the refused receipt");
 
       // The actual remittance: accepted once, and it replays to the same outcome.
       const confirmArgs = {
@@ -2924,6 +2959,7 @@ export async function runRehearsalCases(ctx) {
         applicationId,
         disbursedAmountMinor: net,
         idempotencyKey: `rehearsal-fd1-receipt-${stamp}`,
+        bankAccountId: receiptBankAccountId,
       };
       await ownerMust("mutation", "applications:confirmDisbursement", confirmArgs);
       await ownerMust("mutation", "applications:confirmDisbursement", confirmArgs);
@@ -2986,7 +3022,7 @@ export async function runRehearsalCases(ctx) {
           "financingEconomics.recordSubmittedQuotation", "financingEconomics.approveDealerPurchaseAmount",
           "applications.registerVehicleHandover", "applications.registerExpectedPayment",
           "financeDealCosts.recordLegalInvoice", "financeDealCosts.recordDealFee", "financeDealCosts.voidDealFee", "financeDealCosts.reconcileDealFee", "financeDealCosts.recordDirectFeePayment",
-          "applications.finalizeDeal", "applications.confirmDisbursement",
+          "applications.finalizeDeal", "bankAccounts.create", "applications.confirmDisbursement",
         ],
       };
     }

@@ -2559,6 +2559,8 @@ export async function hookFinanceCashReceived(
      * canonical payment in the same transaction. Picks the debited account.
      */
     paymentMethod: FinanceReceiptMethod;
+    /** SCRUM-54: the physical bank, already validated by the caller. Bank receipts only. */
+    bankAccountId?: Id<"bankAccounts">;
   }
 ) {
   const keys = financeDisbursementKeys(args.applicationId, args.disbursementVersion);
@@ -2583,6 +2585,7 @@ export async function hookFinanceCashReceived(
       currency: args.currency,
       customerId: args.customerId?.toString(),
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }

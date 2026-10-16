@@ -138,6 +138,7 @@ import {
   voidCanonicalPayment,
 } from "./subledger";
 import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
+import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { summarizeFees } from "./financeDealCosts";
 import {
   consignedSettlementRoute,
@@ -221,6 +222,23 @@ async function ensureFinanceCompanyReceivable(
 }
 
 /**
+ * The canonical receivable a finalized financed deal opened for the company's
+ * remittance, by its source index. Shared by the receipt authority proof and the
+ * receipt-bank picker so both read the same record the same way.
+ */
+async function findFinanceReceivable(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">
+): Promise<Doc<"receivableDocuments"> | null> {
+  return await ctx.db
+    .query("receivableDocuments")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", app.orgId).eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE).eq("sourceId", app._id)
+    )
+    .unique();
+}
+
+/**
  * The ONE figure a finance-company receipt may settle, proven from the deal's
  * own records before anything is written (SCRUM-241).
  *
@@ -248,12 +266,7 @@ async function proveFinanceReceiptAuthority(
   }
 ): Promise<{ receivable: Doc<"receivableDocuments">; receiptMinor: number; currency: string }> {
   const { app, quote } = args;
-  const receivable = await ctx.db
-    .query("receivableDocuments")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", app.orgId).eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE).eq("sourceId", app._id)
-    )
-    .unique();
+  const receivable = await findFinanceReceivable(ctx, app);
   if (!receivable) {
     throw new ConvexError(
       "No finance-company receivable is recorded for this deal, so there is nothing for this payment to settle. The deal must be finalized, with its receivable opened, before the company's payment can be received."
@@ -5298,6 +5311,47 @@ export const finalizeDeal = mutation({
   },
 });
 
+/** SCRUM-54: the most active banks the receipt picker will read before it refuses to guess. */
+const DISBURSEMENT_BANK_OPTIONS_LIMIT = 100;
+
+/**
+ * SCRUM-54: what the confirm-receipt dialog needs to name the physical bank.
+ * `needsBank` is the server's own answer (the registered method is not CASH);
+ * `banks` are this org's live, active banks in the receivable's currency - the
+ * same test `confirmDisbursement` applies. Only id, name and currency are
+ * returned, never IBAN or account numbers.
+ */
+export const listDisbursementBankOptions = query({
+  args: { orgId: v.id("organizations"), applicationId: v.id("financeApplications") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId, "Application not found.");
+    const needsBank = app.expectedPaymentMethod !== "CASH";
+    // CASH needs no bank and never reads the receivable.
+    if (!needsBank) return { needsBank, banks: [], truncated: false, receivableMissing: false };
+    // The receivable fixes the currency a bank must match. Without it the eligible set is
+    // unknowable, so this is its own state - never an empty list that reads as "no bank".
+    const receivable = await findFinanceReceivable(ctx, app);
+    if (!receivable) return { needsBank, banks: [], truncated: false, receivableMissing: true };
+    const page = await ctx.db
+      .query("bankAccounts")
+      .withIndex("by_org_active", (q) => q.eq("orgId", args.orgId).eq("isActive", true))
+      .take(DISBURSEMENT_BANK_OPTIONS_LIMIT + 1);
+    // Fail closed on truncation: the active-bank index is not keyed by currency, so a
+    // page that was cut short cannot say whether an eligible bank lies beyond it. An
+    // empty list would then claim "no eligible bank" falsely; report truncation instead.
+    if (page.length > DISBURSEMENT_BANK_OPTIONS_LIMIT) return { needsBank, banks: [], truncated: true, receivableMissing: false };
+    return {
+      needsBank,
+      truncated: false,
+      receivableMissing: false,
+      banks: page
+        .filter((bank) => !bank.isDeleted && bank.currency === receivable.currency)
+        .map((bank) => ({ _id: bank._id, name: bank.name, currency: bank.currency })),
+    };
+  },
+});
+
 /**
  * Records actual receipt of disbursement funds from the finance company.
  * Only valid after finalizeDeal has been called and only once per application.
@@ -5311,6 +5365,9 @@ export const confirmDisbursement = mutation({
     // SCRUM-239 round 3: the disbursement version the confirmer OBSERVED. The
     // server refuses a mismatch before the idempotency probe and any write.
     expectedDisbursementVersion: v.optional(v.number()),
+    // SCRUM-54: the physical bank a BANK_TRANSFER / CHEQUE receipt reached.
+    // Required for those methods, refused for CASH; never defaulted.
+    bankAccountId: v.optional(v.id("bankAccounts")),
   },
   handler: async (ctx, args) => {
     // The expected-amount comparison further down is skipped whenever the quote
@@ -5357,6 +5414,8 @@ export const confirmDisbursement = mutation({
           applicationId: args.applicationId,
           disbursedAmountMinor: args.disbursedAmountMinor,
           ...(version > 1 ? { disbursementVersion: version } : {}),
+          // Only when named, so a historical (bank-less) fingerprint is unchanged.
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
         }),
         // Only a later version can be stale; a version-1 conflict is a plain
         // key reuse with different content and keeps the default refusal.
@@ -5365,8 +5424,7 @@ export const confirmDisbursement = mutation({
           : {}),
       },
       async () => {
-        const app = await ctx.db.get(args.applicationId);
-        if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
+        const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId, "Application not found.");
         // SCRUM-693: no new disbursement while the deal is being unwound.
         await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
         if (app.status !== "CLOSED") throw new ConvexError("Disbursement can only be confirmed on a closed application.");
@@ -5442,6 +5500,33 @@ export const confirmDisbursement = mutation({
           quote,
           callerAmountMinor: args.disbursedAmountMinor,
         });
+
+        // The method of record — registered before finalization
+        // (registerExpectedPayment) instead of assuming bank transfer. ONE
+        // value feeds the bank rule below, the posting (SCRUM-599: CASH debits
+        // 1100, not 1110) and the canonical payment, so they cannot disagree.
+        const disbursementMethod =
+          app.expectedPaymentMethod === "CASH" || app.expectedPaymentMethod === "CHEQUE"
+            ? app.expectedPaymentMethod
+            : "BANK_TRANSFER";
+
+        // SCRUM-54: money that reached a bank names WHICH bank, explicitly -
+        // never defaulted to the only one. CASH is cash on hand and names none.
+        // Refused here, before the first write.
+        let receiptBankAccountId: Id<"bankAccounts"> | undefined;
+        if (disbursementMethod === "CASH") {
+          if (args.bankAccountId) {
+            throw new ConvexError("A cash receipt is cash on hand and cannot name a bank account.");
+          }
+        } else {
+          receiptBankAccountId = await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId,
+            bankAccountId: args.bankAccountId,
+            currency,
+            missingMessage: "Select the bank account the finance company's payment was received into.",
+            currencySubject: "disbursement",
+          });
+        }
 
         // registerExpectedPayment always opens a HELD postDatedCheques row when
         // the registered method is CHEQUE — link this confirmation to it so the
@@ -5521,14 +5606,6 @@ export const confirmDisbursement = mutation({
         // Post the actual receipt of funds: DR bank or cash on hand / CR Accounts Receivable —
         // Finance Companies. Without this the finance-company receivable opened
         // at finalizeDeal stays open forever even after the money arrives.
-        // The method of record — registered before finalization
-        // (registerExpectedPayment) instead of assuming bank transfer. ONE
-        // value feeds both the posting (SCRUM-599: CASH debits 1100, not
-        // 1110) and the canonical payment below, so they cannot disagree.
-        const disbursementMethod =
-          app.expectedPaymentMethod === "CASH" || app.expectedPaymentMethod === "CHEQUE"
-            ? app.expectedPaymentMethod
-            : "BANK_TRANSFER";
         await hookFinanceCashReceived(ctx, {
           orgId: args.orgId,
           applicationId: args.applicationId,
@@ -5544,6 +5621,7 @@ export const confirmDisbursement = mutation({
           occurredAt: now,
           disbursementVersion,
           paymentMethod: disbursementMethod,
+          bankAccountId: receiptBankAccountId,
         });
 
         // Record the money in the canonical subledger and settle the

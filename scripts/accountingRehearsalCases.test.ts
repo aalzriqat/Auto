@@ -445,6 +445,8 @@ type Defects = {
   financeDeductedCloseMutatesThenRefuses?: boolean;
   /** A short finance-company receipt is refused for an unrelated reason. */
   financeReceiptWrongRefusalReason?: boolean;
+  /** A BANK_TRANSFER finance-company receipt that names no bank is accepted instead of refused (SCRUM-54). */
+  acceptsReceiptWithoutBank?: boolean;
   /** The clock crosses UTC month-end after the accounting period opens. */
   clockRolloverAfterBookOpen?: boolean;
   /** Observe the external direct-payment request without claiming every later posting succeeded. */
@@ -550,6 +552,8 @@ function makeBackend(defects: Defects = {}) {
   /** Mirrors orgCustomerStatuses.seed/list closely enough for FD1/FD2 to exercise the real eligibility precondition. */
   const customerStatusesByOrg = new Map<string, Array<Record<string, any>>>();
   const disbursementByKey = new Map<string, string>();
+  /** SCRUM-54: the physical banks created through bankAccounts:create. */
+  const bankAccounts = new Map<string, { orgId: string; currency: string; isActive: boolean }>();
   const accountIdOf = (key: string) => {
     const hit = CHART.find((a) => a.systemKey === key);
     if (!hit) throw new Error(`fake chart has no ${key}`);
@@ -2146,6 +2150,11 @@ function makeBackend(defects: Defects = {}) {
         }
         return { ok: true as const, value: [] };
       }
+      case "bankAccounts:create": {
+        const bankId = id("bank");
+        bankAccounts.set(bankId, { orgId: String(args.orgId), currency: String(args.currency), isActive: true });
+        return { ok: true as const, value: bankId };
+      }
       case "applications:confirmDisbursement": {
         const app = financeApps.get(String(args.applicationId));
         if (!app) return { ok: false as const, error: "Application not found." };
@@ -2172,6 +2181,17 @@ function makeBackend(defects: Defects = {}) {
             };
           }
           amount = Math.min(amount, net);
+        }
+        // Mirrors the real order: the amount is proven first, then the named bank is validated
+        // (present, same org, active, in the receivable's currency) before any write.
+        if (!args.bankAccountId && !defects.acceptsReceiptWithoutBank) {
+          return { ok: false as const, error: "Select the bank account the finance company's payment was received into." };
+        }
+        if (args.bankAccountId) {
+          const bank = bankAccounts.get(String(args.bankAccountId));
+          if (!bank || bank.orgId !== String(args.orgId) || !bank.isActive || bank.currency !== receivable.currency) {
+            return { ok: false as const, error: "The selected bank account is not an active account in this deal's currency." };
+          }
         }
         const currency = defects.financeReceiptInDifferentCurrency ? "USD" : receivable.currency;
         disbursementByKey.set(key, app._id);
@@ -3008,6 +3028,12 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
     expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
+  });
+
+  test("FD1 catches a bank receipt accepted with no bank named", async () => {
+    const results = await runAgainst({ acceptsReceiptWithoutBank: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/named no bank was accepted/);
   });
 
   test("FD1 catches a short receipt refused for the wrong reason", async () => {

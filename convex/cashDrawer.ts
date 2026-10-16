@@ -13,6 +13,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { assertDifferentActors } from "./utils/financialGuards";
+import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { hookCashDrawerDeposited, getOrgCurrency } from "./accounting/workflowHooks";
 
 const movementTypeValidator = v.union(
@@ -60,22 +61,13 @@ async function requireDepositBank(
   bankAccountId: Id<"bankAccounts"> | undefined,
   currency: string
 ): Promise<Id<"bankAccounts">> {
-  if (!bankAccountId) {
-    throw new ConvexError("Select the bank account this cash drawer deposit goes into.");
-  }
-  const bank = await ctx.db.get(bankAccountId);
-  if (!bank || bank.orgId !== orgId || bank.isDeleted) {
-    throw new ConvexError("The selected bank account was not found in this organization.");
-  }
-  if (!bank.isActive) {
-    throw new ConvexError("The selected bank account is inactive.");
-  }
-  if (bank.currency !== currency) {
-    throw new ConvexError(
-      `The selected bank account is denominated in ${bank.currency}, but this cash drawer is in ${currency}.`
-    );
-  }
-  return bankAccountId;
+  return await requireActiveBankInCurrency(ctx, {
+    orgId,
+    bankAccountId,
+    currency,
+    missingMessage: "Select the bank account this cash drawer deposit goes into.",
+    currencySubject: "cash drawer",
+  });
 }
 
 export const open = mutation({

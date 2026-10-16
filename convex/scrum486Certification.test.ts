@@ -9,7 +9,7 @@
  * literals here and import no production accounting calculations.
  */
 import { describe, expect, test, vi } from "vitest";
-import { seedFinancedDealership, newApplication } from "../test-utils/financedDealFixture";
+import { insertReceiptBank, seedFinancedDealership, newApplication } from "../test-utils/financedDealFixture";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
@@ -379,6 +379,9 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       "4180|JOD": 1_375_000,
       "5100|JOD": 10_000_000,
     });
+    // SCRUM-54: the finance company's transfer names the physical bank it reached. Seeded
+    // before the snapshot so the zero-write refusal checks below still compare like with like.
+    const receiptBankAccountId = await insertReceiptBank(s);
     const afterForwardSnapshot = await dbSnapshot(s.t, Object.keys(schema.tables));
     await s.approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, forwardArgs);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterForwardSnapshot);
@@ -395,6 +398,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const receiptArgs = {
       orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000,
       idempotencyKey: "s486-financed-held-receipt",
+      bankAccountId: receiptBankAccountId,
     };
     await expect(s.actors.salesperson.as.mutation(api.applications.confirmDisbursement, {
       ...receiptArgs,

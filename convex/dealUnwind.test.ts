@@ -12,7 +12,7 @@
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
 import {
-  C, G, H, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership,
+  C, G, H, finalizeAsOwner, insertReceiptBank, readyDeal, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
@@ -106,8 +106,11 @@ async function paidDeal(
   // SCRUM-411 P2-01: finalizeAsOwner records the H + D payment to the company BEFORE it closes the deal.
   await finalizeAsOwner(s, applicationId);
   if (method === "CASH") await s.t.run((ctx) => ctx.db.patch(applicationId, { expectedPaymentMethod: "CASH" }));
+  // SCRUM-54: a bank receipt names its physical bank; CASH is cash on hand and names none.
+  const bankAccountId = method === "CASH" ? undefined : await insertReceiptBank(s);
   await s.owner.as.mutation(api.applications.confirmDisbursement, {
     orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+    ...(bankAccountId ? { bankAccountId } : {}),
   });
   return { s, applicationId };
 }

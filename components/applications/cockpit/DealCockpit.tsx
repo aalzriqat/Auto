@@ -1288,8 +1288,22 @@ export function DealCockpit({
   // `app` is undefined while loading or reconnecting and null if not found: no
   // version is observed then, and `?? 1` above must not read as "moved to v1".
   const appObserved = app != null;
+  // SCRUM-54: the physical bank a BANK_TRANSFER / CHEQUE receipt reached, named
+  // by the operator on every open - never preselected, never carried over. The
+  // kept confirm key is bound to the bank it was minted for (like the version):
+  // a different bank is a different command, and the server's already-confirmed
+  // refusal keeps a changed bank from double-posting after a lost response.
+  const [disbursementBankId, setDisbursementBankId] = useState("");
+  const confirmDisbursementKeyBankRef = useRef("");
+  const disbursementBankOptions = useQuery(
+    api.applications.listDisbursementBankOptions,
+    confirmingDisbursement && canConfirmFinanceDisbursement ? { orgId, applicationId } : "skip"
+  );
   const setConfirmingDisbursementObserved = (open: boolean) => {
-    if (open) setConfirmObservedVersion(observedDisbursementVersion);
+    if (open) {
+      setConfirmObservedVersion(observedDisbursementVersion);
+      setDisbursementBankId("");
+    }
     setConfirmingDisbursement(open);
   };
   useEffect(() => {
@@ -3452,9 +3466,26 @@ export function DealCockpit({
                 confirming: confirmingDisbursement,
                 submitting: disbursementSubmitting,
                 amountLabel: expectedDisbursementLabel,
+                // Only a receipt that reached a bank names one; the server's own
+                // answer (CASH needs none) decides, not a guess made here.
+                bank:
+                  disbursementBankOptions?.needsBank === false
+                    ? undefined
+                    : {
+                        options: disbursementBankOptions?.banks,
+                        value: disbursementBankId,
+                        onChange: setDisbursementBankId,
+                        truncated: disbursementBankOptions?.truncated === true,
+                        receivableMissing: disbursementBankOptions?.receivableMissing === true,
+                      },
                 onOpenChange: setConfirmingDisbursementObserved,
                 onConfirm: async () => {
                   if (!expectedDisbursementMinor) return;
+                  // The bank this request is for, fixed at click time. Absent
+                  // for CASH; a bank receipt cannot be sent without one.
+                  const bankAccountId =
+                    disbursementBankOptions?.needsBank === false ? "" : disbursementBankId;
+                  if (disbursementBankOptions?.needsBank !== false && bankAccountId === "") return;
                   // The version captured when the dialog OPENED, not the one the
                   // screen shows now (the dialog closes itself if that moves).
                   // Held in the closure so this request's answer, however late,
@@ -3491,10 +3522,14 @@ export function DealCockpit({
                   const generation = confirmGenerationRef.current;
                   const superseded = () => confirmGenerationRef.current !== generation;
                   try {
-                    if (confirmDisbursementKeyVersionRef.current !== observedVersion) {
+                    if (
+                      confirmDisbursementKeyVersionRef.current !== observedVersion ||
+                      confirmDisbursementKeyBankRef.current !== bankAccountId
+                    ) {
                       confirmDisbursementKeyRef.current = null;
                     }
                     confirmDisbursementKeyVersionRef.current = observedVersion;
+                    confirmDisbursementKeyBankRef.current = bankAccountId;
                     confirmDisbursementKeyRef.current ??= `confirm-disbursement:${crypto.randomUUID()}`;
                     const disbursementKey = confirmDisbursementKeyRef.current;
                     // Sent: until the server answers, the outcome is unknown here.
@@ -3513,6 +3548,7 @@ export function DealCockpit({
                           // argument, so a v1 confirm must look exactly like the old
                           // call. The server already refuses an omitted value at v2+.
                           ...(observedVersion > 1 ? { expectedDisbursementVersion: observedVersion } : {}),
+                          ...(bankAccountId !== "" ? { bankAccountId: bankAccountId as Id<"bankAccounts"> } : {}),
                         }),
                       "DisbursementConfirmedSuccess",
                       { reflectedWhen: financeDisbursementReflected }
@@ -5094,6 +5130,8 @@ export function DealCockpitView({
       confirming: boolean;
       submitting: boolean;
       amountLabel: string;
+      /** SCRUM-54: present while the receipt must name its bank (not CASH). */
+      bank?: React.ComponentProps<typeof DisbursementConfirmationDialog>["bank"];
       onOpenChange: (open: boolean) => void;
       onConfirm: () => void | Promise<void>;
     };
@@ -7613,6 +7651,7 @@ export function DealCockpitView({
             disabled={disbursement.financeCompany.submitting}
             submitting={disbursement.financeCompany.submitting}
             amountLabel={disbursement.financeCompany.amountLabel}
+            bank={disbursement.financeCompany.bank}
             t={t}
             onOpenChange={disbursement.financeCompany.onOpenChange}
             onConfirm={disbursement.financeCompany.onConfirm}

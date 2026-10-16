@@ -10,7 +10,7 @@
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
 import {
-  C, G, H, downgradeToV1, downgradeToV2, finalizeAsOwner, finalizeThenTakeForwardBack, payForwardAsOwner, readyDeal,
+  C, G, H, downgradeToV1, downgradeToV2, finalizeAsOwner, finalizeThenTakeForwardBack, insertReceiptBank, payForwardAsOwner, readyDeal,
   refusalDataOf, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
@@ -105,9 +105,11 @@ const record = (
   });
 
 const confirmTransfer = (s: Seeded, applicationId: Id<"financeApplications">, amount = G) =>
-  s.owner.as.mutation(api.applications.confirmDisbursement, {
-    orgId: s.orgId, applicationId, disbursedAmountMinor: amount, idempotencyKey: crypto.randomUUID(),
-  });
+  insertReceiptBank(s).then((bankAccountId) =>
+    s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: amount, idempotencyKey: crypto.randomUUID(), bankAccountId,
+    })
+  );
 
 const refusalOf = refusalMessageOf;
 
