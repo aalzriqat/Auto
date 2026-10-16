@@ -10,6 +10,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { BOOK_BALANCE_READ_BUDGET, computeBookBalance } from "./bankAccounts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 
@@ -434,5 +435,258 @@ describe("bankAccounts.getBookBalance", () => {
     expect(before).toMatchObject({ status: "OK", balanceMinor: 200_000 });
     const after = await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId, asOf: now + 120_000 });
     expect(after).toMatchObject({ status: "OK", balanceMinor: 250_000 });
+  });
+
+  // SCRUM-54 (CodeRabbit Major): getBookBalance read every control-account line and
+  // entry. One shared read budget now covers periods, snapshots, lines and entry
+  // lookups; running out withholds the balance as BALANCE_HISTORY_INCOMPLETE.
+  // convex-test enforces no Convex read limit, so these tests prove the budget
+  // logic only, not platform behaviour.
+  const asOfBalance = (fx: Fixture, asOf: number, budgetDocs: number) =>
+    fx.t.run((ctx) => computeBookBalance(ctx, fx.orgId, asOf, budgetDocs));
+
+  async function multiPeriodMultiBank(fx: Fixture) {
+    const bankA = await createBank(fx, "Bank A", true);
+    const bankB = await createBank(fx, "Bank B", false);
+    await seedBankLine(fx, { debitMinor: 500_000, bankAccountId: bankA, period: "prior" });
+    await seedBankLine(fx, { debitMinor: 300_000, bankAccountId: bankB, period: "prior" });
+    await seedBankLine(fx, { debitMinor: 100_000, bankAccountId: bankA });
+    await seedBankLine(fx, { creditMinor: 40_000, bankAccountId: bankB });
+    return { bankA, bankB };
+  }
+
+  test("a small multi-period, multi-bank history keeps its correct balance under the default budget", async () => {
+    const fx = await seedDealer();
+    const { bankA } = await multiPeriodMultiBank(fx);
+
+    const viaQuery = await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId });
+    expect(viaQuery).toMatchObject({ status: "OK", bankAccountId: bankA, balanceMinor: 600_000, unmatchedMinor: 0 });
+    expect(await asOfBalance(fx, Date.now(), BOOK_BALANCE_READ_BUDGET)).toMatchObject({ status: "OK", balanceMinor: 600_000 });
+  });
+
+  test("multi-period, multi-bank history over the budget is withheld as incomplete, never OK", async () => {
+    const fx = await seedDealer();
+    await multiPeriodMultiBank(fx);
+
+    const result = await asOfBalance(fx, Date.now(), 3);
+    expect(result).toMatchObject({
+      status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null, unmatchedMinor: null, unattributedLineCount: null,
+    });
+  });
+
+  test("the budget is shared: entry lookups count even when the lines alone fit", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    for (let i = 0; i < 40; i++) await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankA });
+
+    // asOf is after every entry and none is later-dated, so the period is served from its
+    // snapshot: no entry was read by the control, none is cached, and each of the 40 lines
+    // needs its own charged entry lookup. Everything else costs at most 54 documents (40
+    // lines plus banks, chart row, periods, the probe and at most 8 snapshot shards), so
+    // only the lookups can push the total past 60.
+    expect(await asOfBalance(fx, Date.now(), 60)).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
+    expect(await asOfBalance(fx, Date.now(), 200)).toMatchObject({ status: "OK", balanceMinor: 40_000 });
+  });
+
+  test("a partial period reads each entry once: the control's entry reads are not charged again by attribution", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const now = Date.now();
+    const entries = 10;
+    // No snapshots (so no random shard count) and one later-dated entry, which forces the
+    // control to be measured from the period's entries rather than its snapshot.
+    for (let i = 0; i < entries; i++) {
+      await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankA, accountingDate: now - 1_000 - i, snapshot: false });
+    }
+    await seedBankLine(fx, { debitMinor: 5_000, bankAccountId: bankA, accountingDate: now + 600_000, snapshot: false });
+
+    // Fixed cost: bank, chart row, period, future-entry probe = 4. Then per counted entry:
+    // the entry (control), its 2 lines (control) and its bank line (attribution) = 4, so
+    // 4 + 4 * 10 = 44. Re-charging each entry for its status would need 4 + 5 * 10 = 54.
+    expect(await asOfBalance(fx, now, 4 * entries)).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
+    expect(await asOfBalance(fx, now, 4 + 4 * entries + entries / 2)).toMatchObject({ status: "OK", balanceMinor: 10_000 });
+  });
+
+  test("duplicate control-account chart mappings spend the budget and keep the earliest active mapping", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    await seedBankLine(fx, { debitMinor: 100_000, bankAccountId: bankA });
+    // Two newer rows with the control account's systemKey, as dirty legacy data can carry.
+    const { bank } = await refs(fx);
+    await fx.t.run(async (ctx) => {
+      const { _id, _creationTime, ...copy } = bank;
+      void _id;
+      void _creationTime;
+      await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 1" });
+      await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 2" });
+    });
+
+    // The earliest active row is still the one the lines were posted to.
+    expect(await asOfBalance(fx, Date.now(), BOOK_BALANCE_READ_BUDGET)).toMatchObject({ status: "OK", balanceMinor: 100_000 });
+  });
+
+  test("an unbounded chart lookup cannot hide from the budget: three mappings exhaust a budget one mapping fits", async () => {
+    const fx = await seedDealer();
+    await createBank(fx, "Bank A", true);
+    // No history: one bank + one chart row + one period + the future-entry probe = 4 documents.
+    expect(await asOfBalance(fx, Date.now(), 4)).toMatchObject({ status: "OK", balanceMinor: 0 });
+
+    const { bank } = await refs(fx);
+    await fx.t.run(async (ctx) => {
+      const { _id, _creationTime, ...copy } = bank;
+      void _id;
+      void _creationTime;
+      await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 1" });
+      await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 2" });
+    });
+    // Three chart rows now cost 3, so the same history needs 6; 5 must be withheld, never OK.
+    expect(await asOfBalance(fx, Date.now(), 5)).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
+    expect(await asOfBalance(fx, Date.now(), 6)).toMatchObject({ status: "OK", balanceMinor: 0 });
+  });
+
+  // Control for a partial period selects ENTRIES (period + entry date <= asOf) and then their
+  // lines; attribution selects LINES by line date. Where the two disagree the balance is
+  // withheld - never OK. A later-dated entry in the period forces that partial-period path.
+  async function seedSplitDated(
+    fx: Fixture,
+    opts: {
+      entryDate: number; lineDate: number; debitMinor?: number; creditMinor?: number;
+      bankAccountId: Id<"bankAccounts">; entryPeriod?: "prior";
+    }
+  ) {
+    const debitMinor = opts.debitMinor ?? 0;
+    const creditMinor = opts.creditMinor ?? 0;
+    const { bank, equity, current } = await refs(fx);
+    const period = opts.entryPeriod === "prior" ? await priorPeriod(fx) : current;
+    const tag = `${++seedSeq}`;
+    await fx.t.run(async (ctx) => {
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId: fx.orgId, periodId: period._id, journalNumber: `T-${tag}`, accountingDate: opts.entryDate,
+        sourceType: "test", sourceId: `test-${tag}`, category: "SYSTEM", memo: "split dated",
+        status: "POSTED", currency: "JOD", postedBy: fx.userId, postedAt: opts.entryDate, createdAt: opts.entryDate,
+      });
+      const base = { orgId: fx.orgId, journalEntryId, currency: "JOD", scale: 3, accountingDate: opts.lineDate };
+      await ctx.db.insert("journalLines", {
+        ...base, lineNumber: 1, accountId: bank._id, debitMinor, creditMinor, bankAccountId: opts.bankAccountId,
+      });
+      await ctx.db.insert("journalLines", {
+        ...base, lineNumber: 2, accountId: equity._id, debitMinor: creditMinor, creditMinor: debitMinor,
+      });
+    });
+  }
+
+  async function splitDatedBalance(
+    entryOffsetMs: number,
+    lineOffsetMs: number,
+    entryPeriod?: "prior"
+  ) {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const now = Date.now();
+    await seedSplitDated(fx, {
+      entryDate: now + entryOffsetMs, lineDate: now + lineOffsetMs, debitMinor: 50_000, bankAccountId: bankA, entryPeriod,
+    });
+    // A later-dated entry in the period: the period total cannot be used for this asOf.
+    await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankA, accountingDate: now + 600_000 });
+    return await asOfBalance(fx, now, BOOK_BALANCE_READ_BUDGET);
+  }
+
+  test("a partial period whose entry and line dates agree is OK, measured from entries and their lines", async () => {
+    expect(await splitDatedBalance(-30_000, -30_000)).toMatchObject({ status: "OK", balanceMinor: 50_000, unmatchedMinor: 0 });
+  });
+
+  // A line that disagrees with its entry's date or period is unverifiable, whatever the net.
+  const HISTORY_UNVERIFIABLE = {
+    status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null, unmatchedMinor: null, unattributedLineCount: null,
+  };
+
+  test("entry dated on or before asOf but its line dated after: control sees it, attribution does not -> withheld, not OK 0", async () => {
+    expect(await splitDatedBalance(-30_000, 30_000)).toMatchObject(HISTORY_UNVERIFIABLE);
+  });
+
+  test("line dated on or before asOf but its entry dated after: attribution sees it, control does not -> withheld", async () => {
+    expect(await splitDatedBalance(30_000, -30_000)).toMatchObject(HISTORY_UNVERIFIABLE);
+  });
+
+  test("a line dated in the containing period whose entry belongs to another period -> withheld", async () => {
+    expect(await splitDatedBalance(-30_000, -30_000, "prior")).toMatchObject(HISTORY_UNVERIFIABLE);
+  });
+
+  test("a line dated at or before asOf whose entry is dated later is withheld even when another entry cancels its net", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const bankB = await createBank(fx, "Bank B", false);
+    const now = Date.now();
+    // Attribution reads both lines (+50,000 / -50,000, net 0); the control reads neither entry.
+    await seedSplitDated(fx, { entryDate: now + 30_000, lineDate: now - 30_000, debitMinor: 50_000, bankAccountId: bankA });
+    await seedSplitDated(fx, { entryDate: now + 30_000, lineDate: now - 30_000, creditMinor: 50_000, bankAccountId: bankB });
+    expect(await asOfBalance(fx, now, BOOK_BALANCE_READ_BUDGET)).toMatchObject(HISTORY_UNVERIFIABLE);
+  });
+
+  test("entries the control counts whose bank lines all post after asOf cannot net to a false OK 0 for the target bank", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const bankB = await createBank(fx, "Bank B", false);
+    const now = Date.now();
+    // Both entries are dated on or before asOf, so the entry-based control counts them (+50,000
+    // and -50,000 = 0); both bank lines are dated after asOf, so attribution reads neither.
+    // Control 0 == identified 0 with no unattributed line, yet bank A's posted receipt is +50,000.
+    await seedSplitDated(fx, { entryDate: now - 30_000, lineDate: now + 30_000, debitMinor: 50_000, bankAccountId: bankA });
+    await seedSplitDated(fx, { entryDate: now - 30_000, lineDate: now + 30_000, creditMinor: 50_000, bankAccountId: bankB });
+    // A later-dated entry: the period total cannot be used, so the control comes from entries.
+    await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankA, accountingDate: now + 600_000 });
+
+    // The two sources disagree about which lines are in scope, so the balance must be withheld.
+    // Current code returns { status: "OK", balanceMinor: 0 } for bank A.
+    expect(await asOfBalance(fx, now, BOOK_BALANCE_READ_BUDGET)).toMatchObject(HISTORY_UNVERIFIABLE);
+  });
+
+  test("a POSTED bank line whose entry has no periodId has no period to bound it -> withheld", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const { bank, equity } = await refs(fx);
+    const now = Date.now();
+    await fx.t.run(async (ctx) => {
+      const date = now - 30_000;
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId: fx.orgId, journalNumber: "T-NOPERIOD", accountingDate: date, sourceType: "test", sourceId: "test-noperiod",
+        category: "SYSTEM", memo: "no period", status: "POSTED", currency: "JOD", postedBy: fx.userId, postedAt: date, createdAt: date,
+      });
+      const base = { orgId: fx.orgId, journalEntryId, currency: "JOD", scale: 3, accountingDate: date };
+      await ctx.db.insert("journalLines", {
+        ...base, lineNumber: 1, accountId: bank._id, debitMinor: 50_000, creditMinor: 0, bankAccountId: bankA,
+      });
+      await ctx.db.insert("journalLines", { ...base, lineNumber: 2, accountId: equity._id, debitMinor: 0, creditMinor: 50_000 });
+    });
+
+    expect(await asOfBalance(fx, now, BOOK_BALANCE_READ_BUDGET)).toMatchObject(HISTORY_UNVERIFIABLE);
+  });
+
+  test("period bounds are inclusive: a line at the exact endDate is OK, one millisecond past it is withheld", async () => {
+    const atEnd = await seedDealer();
+    const bankAtEnd = await createBank(atEnd, "Bank A", true);
+    const { endDate } = await priorPeriod(atEnd);
+    await seedBankLine(atEnd, { debitMinor: 50_000, bankAccountId: bankAtEnd, period: "prior", accountingDate: endDate });
+    expect(await asOfBalance(atEnd, Date.now(), BOOK_BALANCE_READ_BUDGET)).toMatchObject({ status: "OK", balanceMinor: 50_000 });
+
+    const pastEnd = await seedDealer();
+    const bankPastEnd = await createBank(pastEnd, "Bank A", true);
+    const { endDate: pastEndDate } = await priorPeriod(pastEnd);
+    await seedBankLine(pastEnd, { debitMinor: 50_000, bankAccountId: bankPastEnd, period: "prior", accountingDate: pastEndDate + 1 });
+    expect(await asOfBalance(pastEnd, Date.now(), BOOK_BALANCE_READ_BUDGET)).toMatchObject(HISTORY_UNVERIFIABLE);
+  });
+
+  test("a mid-period asOf is exact within the budget and withheld, not guessed, beyond it", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const now = Date.now();
+    await seedBankLine(fx, { debitMinor: 500_000, bankAccountId: bankA, period: "prior" });
+    await seedBankLine(fx, { debitMinor: 200_000, bankAccountId: bankA, accountingDate: now - 60_000 });
+    await seedBankLine(fx, { debitMinor: 50_000, bankAccountId: bankA, accountingDate: now + 60_000 });
+
+    // The period snapshot already holds the later entry, so a mid-period asOf must be
+    // measured from lines; it must not read the period total.
+    expect(await asOfBalance(fx, now, BOOK_BALANCE_READ_BUDGET)).toMatchObject({ status: "OK", balanceMinor: 700_000 });
+    expect(await asOfBalance(fx, now, 3)).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
   });
 });

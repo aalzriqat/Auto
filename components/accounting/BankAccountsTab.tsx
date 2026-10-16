@@ -98,10 +98,14 @@ export function BankAccountsTab() {
 
       {bookBalance && (
         <div className="rounded-md border border-border bg-muted/50 p-4">
-          <p className="text-sm text-muted-foreground">{t("BookBalanceFor" as any)}: <strong>{bookBalance.name}</strong></p>
-          {bookBalance.balanceMinor === null ? (
+          <p className="text-sm text-muted-foreground">{t("BookBalanceFor" as any)}: <strong>{bookBalance.name ?? ""}</strong></p>
+          {bookBalance.balanceMinor === null || bookBalance.currency === null ? (
             <p className="text-sm text-foreground" role="status">
-              {t("BookBalanceUnavailableNoBankAttribution")}
+              {t(
+                bookBalance.status === "BALANCE_HISTORY_INCOMPLETE"
+                  ? "BookBalanceUnavailableHistoryIncomplete"
+                  : "BookBalanceUnavailableNoBankAttribution"
+              )}
             </p>
           ) : (
             <p className="text-2xl font-semibold text-foreground">
@@ -132,7 +136,7 @@ export function BankAccountsTab() {
         }
       />
 
-      {bookBalance && (
+      {bookBalance && bookBalance.bankAccountId && bookBalance.currency && (
         <ReconciliationPanel
           orgId={activeOrgId}
           bankAccountId={bookBalance.bankAccountId}
