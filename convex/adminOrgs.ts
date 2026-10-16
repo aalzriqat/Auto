@@ -232,6 +232,11 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // because the order is pinned; the index leads with orgId, so the read is a
   // prefix scan, and nothing references these rows.
   { kind: "orgRows", table: "financeCompanyForwardSlices", index: "by_org_forward" },
+  // SCRUM-807: task-alarm manager deliveries. Appended last because the order is
+  // pinned. A delivery page that runs after the purge marker is stamped deletes its
+  // own row; this removes the ones no page will visit again (a parked FAILED one),
+  // which keep the task title and the assignee's name.
+  { kind: "orgRows", table: "taskAlarmDeliveries", index: "by_org" },
 ];
 
 async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {

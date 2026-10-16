@@ -561,4 +561,130 @@ describe("expireStaleRequests", () => {
     expect((await t.run((ctx) => ctx.db.get(staleId)))?.status).toBe("EXPIRED");
     expect((await t.run((ctx) => ctx.db.get(freshId)))?.status).toBe("OPEN");
   });
+
+  // SCRUM-807 — the sweep must read only the requests that are actually due.
+  type Status = "OPEN" | "MATCHED" | "OFFERS_RECEIVED";
+  const seedRequest = (
+    status: Status,
+    expiresAt: number,
+    extra: { bodyType?: string } = {}
+  ) => ({
+    status,
+    buyerFirstName: "Buyer",
+    buyerPhone: "+962700000009",
+    buyerCity: "Amman",
+    paymentType: "CASH" as const,
+    buyerTimeframe: "JUST_LOOKING" as const,
+    buyerIntent: "COLD" as const,
+    consentAcceptedAt: 1,
+    clientFingerprint: "fp-scrum807",
+    expiresAt,
+    createdAt: 1,
+    ...extra,
+  });
+  const countByStatus = async (
+    t: ReturnType<typeof convexTestWithComponents<typeof schema>>
+  ) => {
+    const rows = await t.run((ctx) => ctx.db.query("marketplaceRequests").collect());
+    const counts: Record<string, number> = {};
+    for (const row of rows) counts[row.status] = (counts[row.status] ?? 0) + 1;
+    return counts;
+  };
+
+  test("a stale cohort larger than one batch is processed in bounded batches and still fully drained", async () => {
+    vi.useFakeTimers();
+    try {
+      const NOW = 1_800_000_000_000;
+      vi.setSystemTime(NOW);
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+      // 101 per status: one more than the 100-row batch, so a single hop cannot
+      // finish either status.
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 101; i++) {
+          await ctx.db.insert("marketplaceRequests", seedRequest("OPEN", NOW - 1 - i));
+          await ctx.db.insert("marketplaceRequests", seedRequest("MATCHED", NOW - 1 - i));
+        }
+        await ctx.db.insert("marketplaceRequests", seedRequest("OPEN", NOW + 60_000));
+      });
+
+      await t.mutation(internal.marketplaceRequests.expireStaleRequests, {});
+
+      // One hop: at most one batch per status. The remainder waits for the
+      // continuation rather than being read into the same transaction.
+      expect(await countByStatus(t)).toEqual({ EXPIRED: 200, OPEN: 2, MATCHED: 1 });
+
+      // The sweep drains itself through its own continuation (no second cron tick).
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      expect(await countByStatus(t)).toEqual({ EXPIRED: 202, OPEN: 1 });
+
+      const fresh = await t.run((ctx) =>
+        ctx.db.query("marketplaceRequests").withIndex("by_status", (q) => q.eq("status", "OPEN")).collect()
+      );
+      expect(fresh.map((r) => r.expiresAt)).toEqual([NOW + 60_000]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("expiry is strictly before now, for OPEN and MATCHED only", async () => {
+    vi.useFakeTimers();
+    try {
+      const NOW = 1_800_000_000_000;
+      vi.setSystemTime(NOW);
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+      const ids = await t.run(async (ctx) => ({
+        openAtNow: await ctx.db.insert("marketplaceRequests", seedRequest("OPEN", NOW)),
+        openJustPast: await ctx.db.insert("marketplaceRequests", seedRequest("OPEN", NOW - 1)),
+        matchedAtNow: await ctx.db.insert("marketplaceRequests", seedRequest("MATCHED", NOW)),
+        matchedJustPast: await ctx.db.insert("marketplaceRequests", seedRequest("MATCHED", NOW - 1)),
+        // Not swept by this cron today; pinned so a change is deliberate.
+        offersStale: await ctx.db.insert("marketplaceRequests", seedRequest("OFFERS_RECEIVED", NOW - 1)),
+      }));
+
+      await t.mutation(internal.marketplaceRequests.expireStaleRequests, {});
+
+      const status = async (id: (typeof ids)[keyof typeof ids]) =>
+        (await t.run((ctx) => ctx.db.get(id)))?.status;
+      expect(await status(ids.openAtNow)).toBe("OPEN");
+      expect(await status(ids.openJustPast)).toBe("EXPIRED");
+      expect(await status(ids.matchedAtNow)).toBe("MATCHED");
+      expect(await status(ids.matchedJustPast)).toBe("EXPIRED");
+      expect(await status(ids.offersStale)).toBe("OFFERS_RECEIVED");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("live requests are not read: a large fresh backlog stays under the platform read ceiling", async () => {
+    // convex-test enforces the ceilings but exposes no usage counters, so
+    // "resolves" is the signal. ~4,500 x 4 KB of fresh OPEN requests is ~18 MiB,
+    // past the 16 MiB read ceiling; a full-status `.collect()` cannot finish.
+    const FAT = "x".repeat(4_000);
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"), {
+      transactionLimits: true,
+    });
+    const now = Date.now();
+    for (let chunk = 0; chunk < 10; chunk++) {
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 450; i++) {
+          await ctx.db.insert("marketplaceRequests", seedRequest("OPEN", now + 86_400_000, { bodyType: FAT }));
+        }
+      });
+    }
+    const staleId = await t.run((ctx) =>
+      ctx.db.insert("marketplaceRequests", seedRequest("OPEN", now - 1_000))
+    );
+
+    await t.mutation(internal.marketplaceRequests.expireStaleRequests, {});
+
+    // Asserted with bounded reads: the fat backlog itself is past the ceiling.
+    const expired = await t.run((ctx) =>
+      ctx.db.query("marketplaceRequests").withIndex("by_status", (q) => q.eq("status", "EXPIRED")).take(2)
+    );
+    expect(expired.map((r) => r._id)).toEqual([staleId]);
+    const stillOpen = await t.run((ctx) =>
+      ctx.db.query("marketplaceRequests").withIndex("by_status", (q) => q.eq("status", "OPEN")).take(5)
+    );
+    expect(stillOpen).toHaveLength(5);
+  }, 120_000);
 });
