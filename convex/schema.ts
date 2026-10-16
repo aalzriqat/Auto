@@ -396,9 +396,21 @@ export default defineSchema({
     scheduledFunctionId: v.optional(v.id("_scheduled_functions")),
     /** When this row next becomes selectable. Absent = immediately due. */
     nextActionAt: v.optional(v.number()),
+    /**
+     * SCRUM-807 — set only while the row is HELD waiting for an accounting
+     * period to cover `accountingDate`. It lets a period opening find exactly
+     * the rows it unblocks by index. Absent for every other hold, for failures
+     * in backoff, and for rows written before this field existed (the cron
+     * simply re-offers those, as before).
+     */
+    holdKind: v.optional(v.literal("PERIOD")),
+    /** Consecutive period holds; drives the capped exponential re-offer delay. */
+    holdStreak: v.optional(v.number()),
   })
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
+    // SCRUM-807 — the period-held rows a period now covers, in date order.
+    .index("by_org_hold_date", ["orgId", "holdKind", "accountingDate"])
     // SCRUM-222 — the due-work index, mirroring `commitmentAuthorityWork`'s
     // `by_status_next_action`. One index serves both selector ranges:
     // unclaimed work (`dispatchState` absent) and claimed work awaiting

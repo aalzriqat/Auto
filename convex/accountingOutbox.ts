@@ -418,6 +418,7 @@ async function markEntryPosted(
     ...(resultEventId ? { resultEventId } : {}),
     attempts: p.attempts + 1,
     ...CLEARED_CLAIM,
+    ...CLEARED_HOLD,
     nextActionAt: undefined,
   });
 
@@ -1306,6 +1307,32 @@ const OUTBOX_OBSERVE_DELAY_MS = 60_000;
  */
 const OUTBOX_HOLD_DELAY_MS = 60_000;
 
+/**
+ * SCRUM-807 — a row held for a missing/unopened PERIOD backs off exponentially
+ * instead of being re-claimed (two mutations) every minute for ever.
+ *
+ * ⚠️ THE CAP KEEPS EVENTUAL POSTING INDEPENDENT OF THE WAKE. Opening a period
+ * wakes the rows it covers (`wakePeriodHeldRows`), but a lost or missing wake
+ * must cost latency only, never liveness: the cron still re-offers the row once
+ * the delay elapses. Other holds (dependencies, org lifecycle) have no wake
+ * route and keep the flat delay.
+ */
+const OUTBOX_PERIOD_HOLD_MAX_DELAY_MS = 60 * 60_000;
+
+function periodHoldDelayFor(streak: number): number {
+  return Math.min(
+    OUTBOX_HOLD_DELAY_MS * 2 ** Math.max(0, streak - 1),
+    OUTBOX_PERIOD_HOLD_MAX_DELAY_MS
+  );
+}
+
+/**
+ * Clears the period-hold marker. Every transition that is not a fresh period
+ * hold must clear it, or a later period opening would release a row that is in
+ * failure backoff (or already finished).
+ */
+const CLEARED_HOLD = { holdKind: undefined, holdStreak: undefined } as const;
+
 /** Exponential, capped. Mirrors `authorityBackoffFor`. */
 function outboxBackoffFor(generation: number): number {
   return Math.min(2 ** Math.max(0, generation - 1) * 30_000, 30 * 60_000);
@@ -1395,6 +1422,7 @@ export async function reviveFailedEntry(
     // the revived row is PENDING-but-claimed: invisible to the unclaimed
     // selector range, and therefore never picked up again.
     ...CLEARED_CLAIM,
+    ...CLEARED_HOLD,
     // A fresh generation guarantees that if the ancient worker ever did
     // arrive, it loses.
     generation: (current.generation ?? 0) + 1,
@@ -1403,6 +1431,69 @@ export async function reviveFailedEntry(
   });
   return true;
 }
+
+/** Rows examined per wake page; each page schedules its own continuation. */
+const PERIOD_WAKE_PAGE_SIZE = 100;
+
+/**
+ * SCRUM-807 — WAKE THE ROWS A PERIOD NOW COVERS, AND ONLY THOSE.
+ *
+ * Scheduled by `accountingPeriods.open` and by `create` with `openImmediately`,
+ * the two doors through which a period hold's blocker (no period / a FUTURE
+ * period) resolves. It releases rows indexed `holdKind = PERIOD` whose
+ * `accountingDate` lies inside the period, so a long backoff costs one scheduler
+ * hop of latency instead of up to the cap. It is NOT a generic drain: other
+ * orgs, other dates, failures in backoff and rows in flight are untouched.
+ *
+ * Releasing only clears `nextActionAt` and schedules the normal
+ * `claimOutboxRow`; the claim and the worker re-prove every condition, so a wake
+ * can never post what the worker would not have posted. A row that raced the
+ * cron or was woken twice is stopped by the `dispatchState` / generation guards:
+ * one journal.
+ *
+ * Paginated by cursor: a released row keeps `holdKind` until it posts, so
+ * re-reading from the start would loop. Each page schedules the next.
+ */
+export const wakePeriodHeldRows = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    startDate: v.number(),
+    endDate: v.number(),
+    limit: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(args.limit ?? PERIOD_WAKE_PAGE_SIZE, PERIOD_WAKE_PAGE_SIZE);
+    const page = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_hold_date", (q) =>
+        q
+          .eq("orgId", args.orgId)
+          .eq("holdKind", "PERIOD")
+          .gte("accountingDate", args.startDate)
+          .lte("accountingDate", args.endDate)
+      )
+      .paginate({ cursor: args.cursor ?? null, numItems: limit });
+
+    let woken = 0;
+    for (const row of page.page) {
+      if (row.status !== "PENDING" || row.dispatchState === "DISPATCHED") continue;
+      await ctx.db.patch(row._id, { nextActionAt: undefined });
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.claimOutboxRow, {
+        rowId: row._id,
+      });
+      woken += 1;
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.wakePeriodHeldRows, {
+        ...args,
+        cursor: page.continueCursor,
+      });
+    }
+    return { woken, done: page.isDone };
+  },
+});
 
 /**
  * SCRUM-222 — LIVENESS. A fixed tick over `nextActionAt`, never accounting
@@ -1507,15 +1598,25 @@ export const claimOutboxRow = internalMutation({
 async function holdOutboxRow(
   ctx: MutationCtx,
   row: Doc<"pendingAccountingEvents">,
-  reason: string
+  reason: string,
+  kind?: "PERIOD"
 ): Promise<{ outcome: "HELD" }> {
+  // Only a period hold backs off (it has a wake route); every other hold keeps
+  // the flat delay and drops any stale period marker. `holdStreak` is only ever
+  // set together with `holdKind`, so it alone carries the running count.
+  const streak = (row.holdStreak ?? 0) + 1;
+  const hold =
+    kind === "PERIOD"
+      ? { marker: { holdKind: kind, holdStreak: streak }, delay: periodHoldDelayFor(streak) }
+      : { marker: CLEARED_HOLD, delay: OUTBOX_HOLD_DELAY_MS };
   await ctx.db.patch(row._id, {
     ...CLEARED_CLAIM,
+    ...hold.marker,
     lastError: `Waiting to post: ${reason}.`,
     // ⚠️ ZERO ATTEMPTS BURNED. An entry waiting on someone else's blocker is
     // not failing, and routing it through the attempt counter would
     // dead-letter a perfectly valid entry.
-    nextActionAt: Date.now() + OUTBOX_HOLD_DELAY_MS,
+    nextActionAt: Date.now() + hold.delay,
   });
   return { outcome: "HELD" as const };
 }
@@ -1546,6 +1647,7 @@ async function failOutboxRow(
   const attempts = row.attempts + 1;
   await ctx.db.patch(row._id, {
     ...CLEARED_CLAIM,
+    ...CLEARED_HOLD,
     attempts,
     lastError: message,
     ...(attempts >= MAX_ATTEMPTS
@@ -1691,7 +1793,7 @@ export const postOutboxRow = internalMutation({
 
     const periodCheck = await checkPostingAllowed(ctx, row.orgId, row.accountingDate);
     if (!periodCheck.ok && periodCheck.waiting) {
-      return await holdOutboxRow(ctx, row, periodCheck.reason);
+      return await holdOutboxRow(ctx, row, periodCheck.reason, "PERIOD");
     }
 
     if (row.kind === "POST") {
@@ -1796,6 +1898,7 @@ export const observeOutboxAttempt = internalMutation({
 
     await ctx.db.patch(row._id, {
       ...CLEARED_CLAIM,
+      ...CLEARED_HOLD,
       attempts,
       lastError: scheduled
         ? "this posting attempt did not complete"
