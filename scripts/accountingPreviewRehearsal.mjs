@@ -51,6 +51,7 @@
  * canonical payments, ledger effects, remaining balance — and asserts on that.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { isPreviewDeployKey } from "./e2ePreviewBootstrap.mjs";
@@ -493,6 +494,29 @@ export function summarize(results) {
   };
 }
 
+/**
+ * FD1's SCRUM-54 bank-contract inputs, from trusted provenance only.
+ *
+ * The tested merge is checked out BESIDE this trusted checkout (`../candidate`) and
+ * read as data; an unreadable source is `undefined`, which leaves FD1 UNPROVEN.
+ *
+ * `requireBankContract` is a ONE-OFF: PR_NUMBER is the job env the trusted workflow
+ * derives from github.event.workflow_run after verifying the exact head and merge,
+ * and #602 is the SCRUM-54 bank-feature PR. For it a legacy-looking source+backend
+ * pair must not pass FD1. REMOVE this expectation (and
+ * requireFinanceReceiptBankContract in accountingRehearsalCases.mjs) in #602's own
+ * merge, where the strict candidate controller makes the contract unconditional.
+ */
+export function fd1BankContractInputs({ env, cwd, readText = (file) => readFileSync(file, "utf8") }) {
+  let candidateSource;
+  try {
+    candidateSource = readText(path.join(cwd, "..", "candidate", "convex", "applications.ts"));
+  } catch {
+    candidateSource = undefined;
+  }
+  return { candidateSource, requireBankContract: env.PR_NUMBER === "602" };
+}
+
 /* c8 ignore start — the orchestration below only runs inside CI against a preview. */
 export async function main(env = process.env) {
   const config = assertRehearsalEnv(env);
@@ -570,8 +594,11 @@ export async function main(env = process.env) {
   evidence.orgId = orgId;
 
   const results = evidence.cases;
-  const { runRehearsalCases } = await import("./accountingRehearsalCases.mjs");
+  const { runRehearsalCases, candidateNamesReceiptBank } = await import("./accountingRehearsalCases.mjs");
+  const fd1Bank = fd1BankContractInputs({ env, cwd: process.cwd() });
   await runRehearsalCases({
+    candidateFinanceReceiptNamesBank: candidateNamesReceiptBank(fd1Bank.candidateSource),
+    requireFinanceReceiptBankContract: fd1Bank.requireBankContract,
     results,
     orgId,
     config,
