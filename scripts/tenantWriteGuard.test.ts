@@ -678,10 +678,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-766 PR-B: + customerFinanceCompanyPayments.confirmPayment/voidPayment (+2) - 528 -> 530 total,
   // 354 -> 356 analysed (re-measured FROM THE ANALYSER). Each takes `orgId`, runs requireTenantAuth and reads
   // the application and (for void) the evidence row through requireOwnedRow before its only write.
+  // SCRUM-807: + collections.processReminderRange (+1) - 530 -> 531 total, 356 -> 357 analysed (re-measured FROM
+  // THE ANALYSER). An internalMutation child of the daily reminder sweep that takes `orgId` and a native
+  // pagination cursor, with no caller-supplied document id. It reads only that org's index ranges and its
+  // writes are new collectionReminders for those rows plus scheduled sends/continuations; it patches no
+  // receivable or cheque it read. The unguarded-write audit stays empty. Skipped counts unchanged.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 530,
-      analysed: 356,
+      totalMutations: 531,
+      analysed: 357,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 159,
     });
