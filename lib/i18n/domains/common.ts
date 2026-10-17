@@ -381,6 +381,18 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Choose the account the refund was received into.",
     "اختر الحساب الذي استُلم فيه المبلغ المسترد.",
   ],
+  ServerError_COST_CORRECTION_BANK_INVALID: [
+    "Select an active bank account in the vehicle currency for this correction.",
+    "اختر حساباً مصرفياً نشطاً بعملة المركبة لهذا التصحيح.",
+  ],
+  ServerError_COST_CORRECTION_BANK_NOT_APPLICABLE: [
+    "Remove the bank account for a correction that does not move money through a bank.",
+    "احذف الحساب المصرفي لتصحيح لا يحرك أموالاً عبر البنك.",
+  ],
+  ServerError_COST_CORRECTION_HELD_CHEQUE_UNSUPPORTED: [
+    "A received supplier cheque cannot be recorded here until its custody and clearing can be tracked. Record a bank or cash refund only after that money is actually received.",
+    "لا يمكن تسجيل شيك مورد مستلم هنا حتى يمكن تتبع حيازته وتحصيله. سجّل استرداداً بنكياً أو نقدياً فقط بعد استلام المال فعلياً.",
+  ],
   // SCRUM-725 (D-44 c). The EN text equals the server message.
   ServerError_COST_CORRECTION_RESTATEMENT_PERIOD_OPEN: [
     "Restating a purchase cost through retained earnings is only available when the purchase was recorded in a closed accounting period. This purchase is still in an open period, so choose another correction type.",

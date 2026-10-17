@@ -18,6 +18,7 @@ import { postAccountingEvent } from "./accounting/postingEngine";
 import { IMPORT_BULK_MAX_POSTING_ROWS } from "./vehicles";
 import { drainEntries } from "./accountingOutbox";
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
+import { seedBank } from "../test-utils/bankFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -2278,6 +2279,7 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
 
   test("CASH_REFUND routes through the selected cash/bank account and requires a payment method", async () => {
     const { t, orgId, asOwner } = await seedDealer("ri5d");
+    const bankAccountId = await seedBank(t, orgId);
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
@@ -2291,7 +2293,7 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
 
     await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId, vehicleId, newCost: 9000, reason: "Supplier refunded the overcharge",
-      correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER",
+      correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER", bankAccountId,
     });
 
     const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");

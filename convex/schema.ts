@@ -1289,6 +1289,7 @@ export default defineSchema({
   vehicleCostCorrections: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     previousCost: v.number(),
     newCost: v.number(),
     reason: v.string(),

@@ -2544,6 +2544,7 @@ export interface VehicleAcquisitionCostCorrectedPayload {
   correctionType?: AcquisitionCorrectionType;
   /** Only meaningful (and required by the caller) when correctionType is CASH_REFUND. */
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 /**
@@ -2566,6 +2567,9 @@ export interface VehicleAcquisitionCostCorrectedPayload {
  * stale figure instead of only the GL being corrected.
  */
 export function ruleVehicleAcquisitionCostCorrected(p: VehicleAcquisitionCostCorrectedPayload): RuleResult {
+  if (p.correctionType === "CASH_REFUND" && p.paymentMethod === "CHEQUE" && p.deltaMinor < 0) {
+    throw new ConvexError("A received supplier cheque needs a tracked custody and clearing flow.");
+  }
   const amountMinor = Math.abs(p.deltaMinor);
   const counterKey = ((): SystemKey => {
     switch (p.correctionType) {
@@ -2573,19 +2577,28 @@ export function ruleVehicleAcquisitionCostCorrected(p: VehicleAcquisitionCostCor
       case "VENDOR_CREDIT":
         return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
       case "CASH_REFUND":
-        return p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
+        return p.paymentMethod === "CHEQUE"
+          ? p.deltaMinor < 0 ? SYSTEM_KEYS.CHEQUES_IN_HAND : SYSTEM_KEYS.BANK_ACCOUNT
+          : cashAccountKey(p.paymentMethod);
       case "PRIOR_PERIOD_RESTATEMENT":
       default:
         return SYSTEM_KEYS.RETAINED_EARNINGS;
     }
   })();
+  if (counterKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new ConvexError("Select the physical bank for this purchase cost correction.");
+  }
+  if (counterKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new ConvexError("A physical bank does not apply to this purchase cost correction.");
+  }
+  const counterDims = { vehicleId: p.vehicleId, ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}) };
   const lines: LineSpec[] = p.deltaMinor > 0
     ? [
         line(SYSTEM_KEYS.VEHICLE_INVENTORY, amountMinor, 0, "Acquisition cost corrected upward", { vehicleId: p.vehicleId }),
-        line(counterKey, 0, amountMinor, "Acquisition cost correction", { vehicleId: p.vehicleId }),
+        line(counterKey, 0, amountMinor, "Acquisition cost correction", counterDims),
       ]
     : [
-        line(counterKey, amountMinor, 0, "Acquisition cost correction", { vehicleId: p.vehicleId }),
+        line(counterKey, amountMinor, 0, "Acquisition cost correction", counterDims),
         line(SYSTEM_KEYS.VEHICLE_INVENTORY, 0, amountMinor, "Acquisition cost corrected downward", { vehicleId: p.vehicleId }),
       ];
   return { lines, memo: "Vehicle acquisition cost corrected", category: "ADJUSTMENT" };

@@ -14,6 +14,7 @@ import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { costCorrectionCounterKey } from "./vehicles";
+import { seedBank } from "../test-utils/bankFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -217,6 +218,52 @@ describe("SCRUM-650 correctAcquisitionCost — cash acquisition", () => {
     expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
   });
 
+  test("bank refund refuses a missing physical bank without changing the vehicle or ledger", async () => {
+    const d = await seedDealer("bank-refusal");
+    const vehicleId = await createCashVehicle(d);
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+    const data = await refusalOf(d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier refund",
+      correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER",
+    }));
+    expect(data?.code).toBe("COST_CORRECTION_BANK_INVALID");
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+  });
+
+  test("bank refund identifies the receiving bank on its audit row and journal line", async () => {
+    const d = await seedDealer("bank-positive");
+    const vehicleId = await createCashVehicle(d);
+    const bankAccountId = await seedBank(d.t, d.orgId);
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier refund",
+      correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER", bankAccountId,
+    });
+    const correction = await d.t.run((ctx) => ctx.db.query("vehicleCostCorrections").first());
+    expect(correction?.bankAccountId).toBe(bankAccountId);
+    const event = await d.t.run((ctx) => ctx.db.query("accountingEvents")
+      .withIndex("by_org_eventType", (q) => q.eq("orgId", d.orgId).eq("eventType", "VEHICLE_ACQUISITION_COST_CORRECTED")).first());
+    expect((event?.payload as { bankAccountId?: string })?.bankAccountId).toBe(bankAccountId);
+    const bankAccount = await d.t.run((ctx) => ctx.db.query("chartOfAccounts")
+      .withIndex("by_org_systemKey", (q) => q.eq("orgId", d.orgId).eq("systemKey", "BANK_ACCOUNT")).unique());
+    const line = await d.t.run((ctx) => ctx.db.query("journalLines")
+      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!))
+      .filter((q) => q.eq(q.field("accountId"), bankAccount!._id)).first());
+    expect(line?.bankAccountId).toBe(bankAccountId);
+    expect(line?.debitMinor).toBe(2_700_000);
+  });
+
+  test("a received supplier cheque refuses before writes because this flow has no clearing record", async () => {
+    const d = await seedDealer("supplier-cheque");
+    const vehicleId = await createCashVehicle(d);
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+    const data = await refusalOf(d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier sent a cheque",
+      correctionType: "CASH_REFUND", paymentMethod: "CHEQUE",
+    }));
+    expect(data?.code).toBe("COST_CORRECTION_HELD_CHEQUE_UNSUPPORTED");
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+  });
+
   test("input refusals carry their codes (reason, amount)", async () => {
     const d = await seedDealer("c2c");
     const vehicleId = await createCashVehicle(d);
@@ -345,6 +392,7 @@ describe("SCRUM-650 correctAcquisitionCost — ON_ACCOUNT acquisition", () => {
 
   test("CASH_REFUND on a PAID ON_ACCOUNT car is allowed and leaves the payable alone", async () => {
     const d = await seedDealer("a5b");
+    const bankAccountId = await seedBank(d.t, d.orgId);
     const vehicleId = await createOnAccountVehicle(d, 12500);
     const payable = await payableOf(d.t, vehicleId);
     await d.asOwner.mutation(api.sourcingPayables.markPaid, {
@@ -352,7 +400,7 @@ describe("SCRUM-650 correctAcquisitionCost — ON_ACCOUNT acquisition", () => {
     });
     await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier refunded the difference",
-      correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER",
+      correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER", bankAccountId,
     });
     expect((await payableOf(d.t, vehicleId))?.amountDue).toBe(12500);
     expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.purchasePrice).toBe(9800);
@@ -702,6 +750,7 @@ describe("SCRUM-650 batch 2 A4: the cashbook projection of a cash correction", (
 
   test("batch 3 C1: a refund on a PAID on-account car posts the GL but no cashbook row, and P&L cost is never negative", async () => {
     const d = await seedDealer("b3c1");
+    const bankAccountId = await seedBank(d.t, d.orgId);
     const vehicleId = await createOnAccountVehicle(d, 12500);
     const payable = await payableOf(d.t, vehicleId);
     await d.asOwner.mutation(api.sourcingPayables.markPaid, {
@@ -710,7 +759,7 @@ describe("SCRUM-650 batch 2 A4: the cashbook projection of a cash correction", (
     const rowsBefore = (await listAll(d)).page;
     const inventoryBefore = await balanceMinor(d.t, d.orgId, "VEHICLE_INVENTORY");
     await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
-      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier refunded", correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER",
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier refunded", correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER", bankAccountId,
     });
     // GL posted in full, vehicle cost moved.
     expect(await balanceMinor(d.t, d.orgId, "VEHICLE_INVENTORY")).toBe(inventoryBefore - 2700 * 1000);
@@ -949,25 +998,33 @@ describe("SCRUM-650 batch 2 A12: the counter-account mirror matches what the led
     }
     // SCRUM-725: the restatement is only accepted for a purchase in a closed period.
     if (c.type === "PRIOR_PERIOD_RESTATEMENT") await bookAcquisitionInClosedPeriod(d, vehicleId);
-    // Both directions: down, then up.
-    for (const newCost of [9800, 11000]) {
+    const bankAccountId = await seedBank(d.t, d.orgId);
+    // A received supplier cheque has no custody/clearing record in this flow;
+    // only the issued-cheque upward correction can post.
+    const predicted: string[] = [];
+    let previousCost = 12500;
+    const newCosts = c.method === "CHEQUE" ? [13000] : [9800, 11000];
+    for (const newCost of newCosts) {
+      const counterKey = costCorrectionCounterKey(c.type, c.method, newCost - previousCost);
+      predicted.push(counterKey);
       await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
         orgId: d.orgId, vehicleId, newCost, reason: "parity", correctionType: c.type,
         ...(c.method ? { paymentMethod: c.method } : {}),
+        ...(counterKey === "BANK_ACCOUNT" ? { bankAccountId } : {}),
       });
+      previousCost = newCost;
     }
-    const predicted = costCorrectionCounterKey(c.type, c.method);
     const entries = await d.t.run((ctx) =>
       ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).collect()
     );
     const corrections = entries.filter((e) => e.sourceType === "vehicleCostCorrections");
-    expect(corrections).toHaveLength(2);
-    for (const entry of corrections) {
+    expect(corrections).toHaveLength(newCosts.length);
+    for (const [index, entry] of corrections.entries()) {
       const lines = await d.t.run((ctx) =>
         ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)).collect()
       );
       const keys = await Promise.all(lines.map(async (l) => (await d.t.run((ctx) => ctx.db.get(l.accountId)))?.systemKey));
-      expect(keys.sort()).toEqual(["VEHICLE_INVENTORY", predicted].sort());
+      expect(keys.sort()).toEqual(["VEHICLE_INVENTORY", predicted[index]].sort());
     }
   });
 });

@@ -1623,6 +1623,7 @@ export async function hookVehicleAcquisitionCostCorrected(
     currency: string;
     correctionType?: AcquisitionCorrectionType;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -1642,6 +1643,7 @@ export async function hookVehicleAcquisitionCostCorrected(
       currency: args.currency,
       correctionType: args.correctionType,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }

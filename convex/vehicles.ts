@@ -31,6 +31,7 @@ import { throwAppError, AppErrorCode } from "./utils/errors";
 import { SYSTEM_KEYS, type SystemKey } from "./utils/defaultChart";
 import { disbursementAccountKey } from "./accounting/postingRules";
 import { isSystemAccountMapped } from "./chartOfAccounts";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 
 /** The stock kinds `getAgingBuckets` sums over, in key order. */
 const STOCK_KINDS = [OWN_STOCK, SOURCED];
@@ -1895,18 +1896,33 @@ function allowedAcquisitionCorrectionTypes(
 /** The account the correction's counter-line posts to — mirrors ruleVehicleAcquisitionCostCorrected. */
 export function costCorrectionCounterKey(
   correctionType: AcquisitionCostCorrectionType,
-  paymentMethod: string | undefined
+  paymentMethod: string | undefined,
+  deltaMinor?: number
 ): SystemKey {
   switch (correctionType) {
     case "SUPPLIER_INVOICE_ERROR":
     case "VENDOR_CREDIT":
       return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
     case "CASH_REFUND":
+      // A cheque received back from a supplier is held until cleared. An
+      // extra amount we pay out by cheque leaves our bank.
+      if (paymentMethod === "CHEQUE" && deltaMinor !== undefined && deltaMinor < 0) {
+        return SYSTEM_KEYS.CHEQUES_IN_HAND;
+      }
       return disbursementAccountKey(paymentMethod);
     case "PRIOR_PERIOD_RESTATEMENT":
       return SYSTEM_KEYS.RETAINED_EARNINGS;
   }
 }
+
+export const listAcquisitionCorrectionBankOptions = query({
+  args: { orgId: v.id("organizations"), vehicleId: v.id("vehicles") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, COST_CORRECTION_PERMISSIONS);
+    await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+  },
+});
 
 /**
  * Corrects a vehicle's acquisition cost after VEHICLE_ACQUIRED has already
@@ -1938,6 +1954,7 @@ export const correctAcquisitionCost = mutation({
     ),
     /** Required when correctionType is CASH_REFUND — which cash/bank account actually moved. Ignored otherwise. */
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
   },
   handler: async (ctx, args) => {
     // Both: the correction rewrites a figure that VIEW_COST_PRICE exists to withhold, and the
@@ -2021,6 +2038,13 @@ export const correctAcquisitionCost = mutation({
         "The new purchase cost is the same as the current cost, so there is nothing to correct."
       );
     }
+    // A supplier cheque RECEIVED needs a cheque-custody and clearing record,
+    // which this correction flow cannot create. Never book it directly to the
+    // bank or leave an untracked CHEQUES_IN_HAND balance.
+    if (args.correctionType === "CASH_REFUND" && args.paymentMethod === "CHEQUE" && deltaMinor < 0) {
+      throwAppError(AppErrorCode.COST_CORRECTION_HELD_CHEQUE_UNSUPPORTED,
+        "A received supplier cheque cannot be recorded here until its custody and clearing can be tracked. Record a bank or cash refund only after that money is actually received.");
+    }
 
     // ── The correction-type matrix, enforced from the ORIGINAL payment method.
     const { row, count: payableCount } = await loadAcquisitionPayable(ctx, vehicle);
@@ -2064,7 +2088,16 @@ export const correctAcquisitionCost = mutation({
     // ── It posts now or not at all. Both halves are checked BEFORE the first
     // write, so a refusal leaves the vehicle, the payable and the ledger as they were.
     const now = Date.now();
-    const counterKey = costCorrectionCounterKey(args.correctionType, args.paymentMethod);
+    const counterKey = costCorrectionCounterKey(args.correctionType, args.paymentMethod, deltaMinor);
+    if (counterKey === SYSTEM_KEYS.BANK_ACCOUNT) {
+      await requireActiveBankInCurrency(ctx, {
+        orgId: args.orgId, bankAccountId: args.bankAccountId, currency,
+        missingMessage: "Select the physical bank for this purchase cost correction.",
+        currencySubject: "vehicle cost correction", errorCode: AppErrorCode.COST_CORRECTION_BANK_INVALID,
+      });
+    } else if (args.bankAccountId) {
+      throwAppError(AppErrorCode.COST_CORRECTION_BANK_NOT_APPLICABLE, "A physical bank does not apply to this purchase cost correction.");
+    }
     const [counterMapped, inventoryMapped] = await Promise.all([
       isSystemAccountMapped(ctx, args.orgId, counterKey),
       isSystemAccountMapped(ctx, args.orgId, SYSTEM_KEYS.VEHICLE_INVENTORY),
@@ -2092,6 +2125,7 @@ export const correctAcquisitionCost = mutation({
       newCost: args.newCost,
       reason,
       correctionType: args.correctionType,
+      bankAccountId: args.bankAccountId,
       // What the supplier balance was before this correction rewrote it, so the audit trail can
       // reconstruct the payable from the correction row alone.
       ...(payableToAdjust
@@ -2132,6 +2166,7 @@ export const correctAcquisitionCost = mutation({
       currency,
       correctionType: args.correctionType,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId,
       actorId: user._id,
       occurredAt: now,
     });
