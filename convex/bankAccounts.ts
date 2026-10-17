@@ -211,7 +211,28 @@ export const getBookBalance = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    return await computeBookBalance(ctx, args.orgId, args.asOf ?? Date.now(), BOOK_BALANCE_READ_BUDGET);
+    const asOf = args.asOf ?? Date.now();
+    try {
+      return await computeBookBalance(ctx, args.orgId, asOf, BOOK_BALANCE_READ_BUDGET);
+    } catch (error) {
+      console.error("Failed to read the bank book balance", error);
+      return incompleteBankBalance(asOf);
+    }
+  },
+});
+
+/** One bounded result per visible physical bank for the bank accounts table. */
+export const listBookBalances = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const asOf = Date.now();
+    try {
+      return (await computeBankBalances(ctx, args.orgId, asOf, BOOK_BALANCE_READ_BUDGET)).rows;
+    } catch (error) {
+      console.error("Failed to read bank book balances", error);
+      return [incompleteBankBalance(asOf)];
+    }
   },
 });
 
@@ -317,14 +338,49 @@ async function resolveBankControlAccount(
  * certified and has no later-dated entry, otherwise from its own entries and
  * their lines.
  */
-export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number, budgetDocs: number) {
+type BankBalanceRow = {
+  bankAccountId: Id<"bankAccounts"> | null;
+  name: string | null;
+  currency: string | null;
+  isDeleted: boolean;
+  asOf: number;
+  status: "OK" | "UNATTRIBUTED_GL_ACTIVITY" | "BALANCE_HISTORY_INCOMPLETE";
+  balanceMinor: number | null;
+  unmatchedMinor: number | null;
+  unattributedLineCount: number | null;
+};
+
+function incompleteBankBalance(asOf: number): BankBalanceRow {
+  return {
+    bankAccountId: null,
+    name: null,
+    currency: null,
+    isDeleted: false,
+    asOf,
+    status: "BALANCE_HISTORY_INCOMPLETE",
+    balanceMinor: null,
+    unmatchedMinor: null,
+    unattributedLineCount: null,
+  };
+}
+
+async function computeBankBalances(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  asOf: number,
+  budgetDocs: number,
+  targetOnly = false
+): Promise<{ targetBankId: Id<"bankAccounts"> | null; rows: BankBalanceRow[] }> {
   const budget = { remaining: budgetDocs };
-  let target: Doc<"bankAccounts"> | undefined;
+  let accounts: Doc<"bankAccounts">[] = [];
+  let targetBankId: Id<"bankAccounts"> | null = null;
   try {
-    const accounts = await takeWithinBudget(budget, ctx.db.query("bankAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)));
-    target = accounts.find((a) => a.isReconciliationTarget && !a.isDeleted);
-    if (!target) return null;
-    const currency = target.currency;
+    accounts = await takeWithinBudget(budget, ctx.db.query("bankAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)));
+    const targetBank = accounts.find((bank) => bank.isReconciliationTarget && !bank.isDeleted);
+    targetBankId = targetBank?._id ?? null;
+    const reportBanks = targetOnly ? (targetBank ? [targetBank] : []) : accounts;
+    if (reportBanks.length === 0) return { targetBankId, rows: [] };
+    const currencies = new Set(reportBanks.map((bank) => bank.currency));
 
     const bankChartAccountId = await resolveBankControlAccount(ctx, orgId, budget);
 
@@ -351,17 +407,23 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
     }
 
     // Authoritative control total (BANK_ACCOUNT is a DEBIT-normal asset).
-    const snapshots = await takeWithinBudget(
-      budget,
-      ctx.db
-        .query("accountBalanceSnapshots")
-        .withIndex("by_org_account_currency_period_shard", (q) =>
-          q.eq("orgId", orgId).eq("accountId", bankChartAccountId).eq("currency", currency)
-        )
-    );
-    let controlNetMinor = 0;
-    for (const s of snapshots) {
-      if (snapshotPeriodIds.has(s.periodId)) controlNetMinor += s.runningDebitMinor - s.runningCreditMinor;
+    const controlNetByCurrency = new Map<string, number>();
+    for (const currency of currencies) {
+      const snapshots = await takeWithinBudget(
+        budget,
+        ctx.db
+          .query("accountBalanceSnapshots")
+          .withIndex("by_org_account_currency_period_shard", (q) =>
+            q.eq("orgId", orgId).eq("accountId", bankChartAccountId).eq("currency", currency)
+          )
+      );
+      let controlNetMinor = 0;
+      for (const snapshot of snapshots) {
+        if (snapshotPeriodIds.has(snapshot.periodId)) {
+          controlNetMinor += snapshot.runningDebitMinor - snapshot.runningCreditMinor;
+        }
+      }
+      controlNetByCurrency.set(currency, controlNetMinor);
     }
     // Draft/validated entries are not ledger activity; REVERSED originals are
     // (their reversal is a separate entry). Each entry's status, date and period are
@@ -394,10 +456,10 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
           ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
         );
         for (const l of entryLines) {
-          if (l.accountId !== bankChartAccountId || l.currency !== currency) continue;
+          if (l.accountId !== bankChartAccountId || !currencies.has(l.currency)) continue;
           // Withheld whatever the net: offsetting entries must not cancel a date disagreement.
           assertLineMatchesEntry(l.accountingDate, entry.accountingDate, containing);
-          controlNetMinor += l.debitMinor - l.creditMinor;
+          controlNetByCurrency.set(l.currency, (controlNetByCurrency.get(l.currency) ?? 0) + l.debitMinor - l.creditMinor);
         }
       }
     }
@@ -420,13 +482,13 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
             .lte("accountingDate", asOf)
         )
     );
-    let targetNetMinor = 0;
-    let identifiedNetMinor = 0;
+    const netByBankId = new Map<string, number>();
+    const identifiedNetByCurrency = new Map<string, number>();
     // Counted by line, not by net: equal-and-opposite unidentified lines net
     // to zero but are still activity with no physical bank behind it.
-    let unattributedLineCount = 0;
+    const unattributedCountByCurrency = new Map<string, number>();
     for (const line of lines) {
-      if (line.currency !== currency) continue;
+      if (!currencies.has(line.currency)) continue;
       let facts = entryFactsById.get(line.journalEntryId);
       if (facts === undefined) {
         chargeDocs(budget, 1);
@@ -441,37 +503,49 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
         facts.periodId ? periodsById.get(facts.periodId) : undefined
       );
       if (!line.bankAccountId || bankCurrencyById.get(line.bankAccountId) !== line.currency) {
-        unattributedLineCount += 1;
+        unattributedCountByCurrency.set(line.currency, (unattributedCountByCurrency.get(line.currency) ?? 0) + 1);
         continue;
       }
       const netMinor = line.debitMinor - line.creditMinor;
-      identifiedNetMinor += netMinor;
-      if (line.bankAccountId === target._id) targetNetMinor += netMinor;
+      identifiedNetByCurrency.set(line.currency, (identifiedNetByCurrency.get(line.currency) ?? 0) + netMinor);
+      netByBankId.set(line.bankAccountId, (netByBankId.get(line.bankAccountId) ?? 0) + netMinor);
     }
 
-    const base = { bankAccountId: target._id, name: target.name, currency, asOf };
-    const unmatchedMinor = controlNetMinor - identifiedNetMinor;
-    if (unmatchedMinor !== 0 || unattributedLineCount > 0) {
-      return {
-        ...base,
-        status: "UNATTRIBUTED_GL_ACTIVITY" as const,
-        balanceMinor: null,
-        unmatchedMinor,
-        unattributedLineCount,
-      };
-    }
-    return { ...base, status: "OK" as const, balanceMinor: targetNetMinor, unmatchedMinor: 0, unattributedLineCount: 0 };
+    const rows: BankBalanceRow[] = reportBanks.map((bank) => {
+      const base = { bankAccountId: bank._id, name: bank.name, currency: bank.currency, isDeleted: bank.isDeleted === true, asOf };
+      const unmatchedMinor = (controlNetByCurrency.get(bank.currency) ?? 0) -
+        (identifiedNetByCurrency.get(bank.currency) ?? 0);
+      const unattributedLineCount = unattributedCountByCurrency.get(bank.currency) ?? 0;
+      if (unmatchedMinor !== 0 || unattributedLineCount > 0) {
+        return { ...base, status: "UNATTRIBUTED_GL_ACTIVITY", balanceMinor: null, unmatchedMinor, unattributedLineCount };
+      }
+      return { ...base, status: "OK", balanceMinor: netByBankId.get(bank._id) ?? 0, unmatchedMinor: 0, unattributedLineCount: 0 };
+    });
+    return { targetBankId, rows: rows.filter((row) => !row.isDeleted || row.status !== "OK" || row.balanceMinor !== 0) };
   } catch (error) {
     if (!(error instanceof ReadBudgetExhausted || error instanceof InconsistentHistory)) throw error;
-    return {
-      bankAccountId: target?._id ?? null,
-      name: target?.name ?? null,
-      currency: target?.currency ?? null,
+    if (accounts.length === 0) {
+      return { targetBankId: null, rows: [incompleteBankBalance(asOf)] };
+    }
+    const rows: BankBalanceRow[] = accounts
+      .filter((bank) => !targetOnly || bank._id === targetBankId)
+      .map((bank) => ({
+      bankAccountId: bank._id,
+      name: bank.name,
+      currency: bank.currency,
+      isDeleted: bank.isDeleted === true,
       asOf,
-      status: "BALANCE_HISTORY_INCOMPLETE" as const,
+      status: "BALANCE_HISTORY_INCOMPLETE",
       balanceMinor: null,
       unmatchedMinor: null,
       unattributedLineCount: null,
-    };
+    }));
+    return { targetBankId, rows };
   }
+}
+
+export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number, budgetDocs: number) {
+  const { targetBankId, rows } = await computeBankBalances(ctx, orgId, asOf, budgetDocs, true);
+  if (!targetBankId) return rows.find((row) => row.bankAccountId === null) ?? null;
+  return rows.find((row) => row.bankAccountId === targetBankId) ?? null;
 }

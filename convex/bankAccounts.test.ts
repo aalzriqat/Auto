@@ -13,6 +13,7 @@ import { api } from "./_generated/api";
 import { BOOK_BALANCE_READ_BUDGET, computeBookBalance } from "./bankAccounts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
+import { scaleForCurrency } from "./utils/money";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -235,7 +236,7 @@ describe("bankAccounts.getBookBalance", () => {
         status, currency, postedBy: fx.userId, postedAt: accountingDate, createdAt: accountingDate,
         ...(opts.reversalOfEntryId ? { reversalOfJournalEntryId: opts.reversalOfEntryId } : {}),
       });
-      const base = { orgId: fx.orgId, journalEntryId, currency, scale: 3, accountingDate };
+      const base = { orgId: fx.orgId, journalEntryId, currency, scale: scaleForCurrency(currency), accountingDate };
       await ctx.db.insert("journalLines", {
         ...base, lineNumber: 1, accountId: bank._id, debitMinor, creditMinor,
         ...(opts.bankAccountId ? { bankAccountId: opts.bankAccountId } : {}),
@@ -271,6 +272,79 @@ describe("bankAccounts.getBookBalance", () => {
     expect(balance).toMatchObject({
       status: "OK", bankAccountId: bankId, balanceMinor: 200_000, unmatchedMinor: 0, unattributedLineCount: 0,
     });
+  });
+
+  test("bank table shows each physical bank's own GL amount and withholds both when attribution is incomplete", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const bankB = await createBank(fx, "Bank B", false);
+    await seedBankLine(fx, { debitMinor: 700_000, bankAccountId: bankA });
+    await seedBankLine(fx, { debitMinor: 300_000, bankAccountId: bankB });
+
+    const balances = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
+    expect(balances).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bankAccountId: bankA, status: "OK", balanceMinor: 700_000 }),
+      expect.objectContaining({ bankAccountId: bankB, status: "OK", balanceMinor: 300_000 }),
+    ]));
+
+    await seedBankLine(fx, { debitMinor: 50_000 });
+    const incomplete = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
+    expect(incomplete).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bankAccountId: bankA, status: "UNATTRIBUTED_GL_ACTIVITY", balanceMinor: null }),
+      expect.objectContaining({ bankAccountId: bankB, status: "UNATTRIBUTED_GL_ACTIVITY", balanceMinor: null }),
+    ]));
+  });
+
+  test("bank table keeps currencies separate and preserves a deleted bank's historical attribution", async () => {
+    const fx = await seedDealer();
+    const jodBank = await createBank(fx, "JOD Bank", true);
+    const usdBank = await createBank(fx, "USD Bank", false, "USD");
+    await seedBankLine(fx, { debitMinor: 700_000, bankAccountId: jodBank });
+    await seedBankLine(fx, { debitMinor: 30_000, bankAccountId: usdBank, currency: "USD" });
+
+    const balances = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
+    expect(balances).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bankAccountId: jodBank, currency: "JOD", status: "OK", balanceMinor: 700_000 }),
+      expect.objectContaining({ bankAccountId: usdBank, currency: "USD", status: "OK", balanceMinor: 30_000 }),
+    ]));
+
+    await fx.asOwner.mutation(api.bankAccounts.deactivate, { orgId: fx.orgId, bankAccountId: usdBank });
+    const afterDeletion = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
+    expect(afterDeletion).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bankAccountId: jodBank, status: "OK", balanceMinor: 700_000 }),
+      expect.objectContaining({ bankAccountId: usdBank, isDeleted: true, status: "OK", balanceMinor: 30_000 }),
+    ]));
+  });
+
+  test("unattributed USD activity withholds USD without hiding a verified JOD bank", async () => {
+    const fx = await seedDealer();
+    const jodBank = await createBank(fx, "JOD Bank", true);
+    const usdBank = await createBank(fx, "USD Bank", false, "USD");
+    await seedBankLine(fx, { debitMinor: 700_000, bankAccountId: jodBank });
+    await seedBankLine(fx, { debitMinor: 30_000, bankAccountId: usdBank, currency: "USD" });
+    await seedBankLine(fx, { debitMinor: 5_000, currency: "USD" });
+
+    const balances = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
+    expect(balances).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bankAccountId: jodBank, status: "OK", balanceMinor: 700_000 }),
+      expect.objectContaining({ bankAccountId: usdBank, status: "UNATTRIBUTED_GL_ACTIVITY", balanceMinor: null, unmatchedMinor: 5_000 }),
+    ]));
+  });
+
+  test("elapsed-period snapshots and current lines stay separate for JOD and USD banks", async () => {
+    const fx = await seedDealer();
+    const jodBank = await createBank(fx, "JOD Bank", true);
+    const usdBank = await createBank(fx, "USD Bank", false, "USD");
+    await seedBankLine(fx, { debitMinor: 700_000, bankAccountId: jodBank, period: "prior" });
+    await seedBankLine(fx, { debitMinor: 30_000, bankAccountId: usdBank, currency: "USD", period: "prior" });
+    await seedBankLine(fx, { debitMinor: 100_000, bankAccountId: jodBank });
+    await seedBankLine(fx, { debitMinor: 5_000, bankAccountId: usdBank, currency: "USD" });
+
+    const balances = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
+    expect(balances).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bankAccountId: jodBank, status: "OK", balanceMinor: 800_000 }),
+      expect.objectContaining({ bankAccountId: usdBank, status: "OK", balanceMinor: 35_000 }),
+    ]));
   });
 
   test("an opening balance already posted to the GL is not double counted", async () => {
