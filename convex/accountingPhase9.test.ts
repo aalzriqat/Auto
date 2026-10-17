@@ -82,8 +82,13 @@ async function seedDealer(tag = "p9", openPeriod = true) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Test", lastName: "Customer" })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
-  return { t, orgId, userId, roleId, period, asUser, customerId };
+  return { t, orgId, userId, roleId, period, asUser, customerId, bankAccountId };
 }
 
 /** Maps an event's journal lines to { accountCode -> { debit, credit } }. */
@@ -542,7 +547,7 @@ describe("Phase 9 — manual journal reviewer authority", () => {
 
 describe("Phase 9 — cheque GL posting", () => {
   test("clearing a cheque posts DR Bank / CR AR, and return-after-clearing reverses it", async () => {
-    const { orgId, asUser, customerId } = await seedDealer("chq");
+    const { orgId, asUser, customerId, bankAccountId } = await seedDealer("chq");
 
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -556,7 +561,7 @@ describe("Phase 9 — cheque GL posting", () => {
     });
 
     const paymentId = await asUser.mutation(api.collections.clearCheque, {
-      orgId, chequeId, idempotencyKey: `clear_${chequeId}`,
+      orgId, chequeId, bankAccountId, idempotencyKey: `clear_${chequeId}`,
     });
 
     // Clearing posted a COLLECTION_PAYMENT to the GL (DR Bank 1110 / CR AR 1200).
@@ -569,6 +574,7 @@ describe("Phase 9 — cheque GL posting", () => {
     // Return after clearing reverses the clearing event and posts the bank fee.
     await asUser.mutation(api.collections.returnClearedCheque, {
       orgId, chequeId, returnReason: "NSF", bankFeeMinor: 5000,
+      bankFeeBankAccountId: bankAccountId,
       idempotencyKey: `return_${chequeId}`,
     });
 

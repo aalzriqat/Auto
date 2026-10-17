@@ -1428,6 +1428,7 @@ export async function hookExpensePosted(
     currency: string;
     category?: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
     vehicleId?: Id<"vehicles">;
@@ -1478,6 +1479,7 @@ export async function hookExpensePosted(
       currency: args.currency,
       category: args.category,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
       vehicleId: args.vehicleId?.toString(),
       capitalizeToInventory: args.capitalizeToInventory,
       isPrepaid: prepaid,

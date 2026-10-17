@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { format } from "date-fns";
 import {
@@ -29,6 +29,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -50,6 +51,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { toast } from "@/components/ui/sonner";
 import { ReceiptBankSelect, useReceiptBankOptions } from "./ReceiptBankSelect";
+import { ClearChequeBankDialog } from "./ClearChequeBankDialog";
 import { CashDrawerPanel } from "./collections/CashDrawerPanel";
 import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
@@ -128,6 +130,7 @@ export function CollectionsTab() {
   const [approvalTarget, setApprovalTarget] = useState<{ receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null>(null);
   const [replaceTarget, setReplaceTarget] = useState<ChequeRow | null>(null);
   const [returnTarget, setReturnTarget] = useState<ChequeRow | null>(null);
+  const [clearTarget, setClearTarget] = useState<ChequeRow | null>(null);
   const [reconcileOpen, setReconcileOpen] = useState(false);
   const [receivablesView, setReceivablesView] = useState<"list" | "calendar">("list");
 
@@ -173,38 +176,20 @@ export function CollectionsTab() {
   const reconciliations = useQuery(api.collections.listReconciliations, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const depositCheque = useMutation(api.collections.depositCheque);
-  const clearCheque = useMutation(api.collections.clearCheque);
   const respondApproval = useMutation(api.collections.respondToApproval);
   const reviewReconciliation = useMutation(api.collections.reviewCashierReconciliation);
   const commandId = useCommandIdentity();
-  const [busyChequeAction, setBusyChequeAction] = useState<{ id: string; action: "deposit" | "clear" } | null>(null);
+  const [busyChequeAction, setBusyChequeAction] = useState<{ id: string; action: "deposit" } | null>(null);
 
   if (!activeOrgId) return null;
 
-  async function runChequeAction(action: "deposit" | "clear", cheque: ChequeRow) {
-    const confirmed = window.confirm(
-      action === "deposit"
-        ? t("ConfirmChequeDeposit" as any)
-        : t("ConfirmChequeClear" as any)
-    );
+  async function runChequeAction(cheque: ChequeRow) {
+    const confirmed = window.confirm(t("ConfirmChequeDeposit" as any));
     if (!confirmed) return;
-    setBusyChequeAction({ id: cheque._id, action });
+    setBusyChequeAction({ id: cheque._id, action: "deposit" });
     try {
-      if (action === "deposit") {
-        await depositCheque({ orgId: activeOrgId!, chequeId: cheque._id });
-        toast.success(t("CollectionToastChequeDeposited" as any));
-      } else {
-        // Clearing a cheque moves money, so it carries an identity that is
-        // stable per cheque across retries and retired only once it lands.
-        const intent = `clear-cheque:${cheque._id}`;
-        await clearCheque({
-          orgId: activeOrgId!,
-          chequeId: cheque._id,
-          idempotencyKey: commandId.for(intent),
-        });
-        commandId.retire(intent);
-        toast.success(t("CollectionToastChequeCleared" as any));
-      }
+      await depositCheque({ orgId: activeOrgId!, chequeId: cheque._id });
+      toast.success(t("CollectionToastChequeDeposited" as any));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -433,7 +418,6 @@ export function CollectionsTab() {
                       <TableCell className="text-right">
                         {canManage && (() => {
                           const isDepositing = busyChequeAction?.id === cheque._id && busyChequeAction?.action === "deposit";
-                          const isClearing = busyChequeAction?.id === cheque._id && busyChequeAction?.action === "clear";
                           const isChequeBusy = busyChequeAction?.id === cheque._id;
                           return (
                             <div className="flex flex-col items-end gap-1">
@@ -442,7 +426,7 @@ export function CollectionsTab() {
                                 size="sm"
                                 variant="outline"
                                 disabled={cheque.status !== "HELD" || isChequeBusy}
-                                onClick={() => runChequeAction("deposit", cheque)}
+                                onClick={() => runChequeAction(cheque)}
                               >
                                 {isDepositing && <Loader2 className="me-1 h-3.5 w-3.5 animate-spin" />}
                                 {t("Deposit" as any)}
@@ -452,9 +436,8 @@ export function CollectionsTab() {
                                 size="sm"
                                 variant="outline"
                                 disabled={(cheque.status !== "HELD" && cheque.status !== "DEPOSITED") || isChequeBusy}
-                                onClick={() => runChequeAction("clear", cheque)}
+                                onClick={() => setClearTarget(cheque)}
                               >
-                                {isClearing && <Loader2 className="me-1 h-3.5 w-3.5 animate-spin" />}
                                 {t("Clear" as any)}
                               </Button>
                               )}
@@ -697,7 +680,12 @@ export function CollectionsTab() {
         <ChequeDialog receivable={chequeTarget} onOpenChange={(open) => !open && setChequeTarget(null)} />
         <KeyedApprovalRequestDialog target={approvalTarget} onOpenChange={(open) => !open && setApprovalTarget(null)} />
         <ReplaceChequeDialog cheque={replaceTarget} onOpenChange={(open) => !open && setReplaceTarget(null)} />
-        <ReturnChequeDialog cheque={returnTarget} onOpenChange={(open) => !open && setReturnTarget(null)} />
+        <ReturnChequeDialog key={returnTarget?._id ?? "closed"} cheque={returnTarget}
+          onOpenChange={(open) => !open && setReturnTarget(null)} />
+        <ClearChequeBankDialog orgId={activeOrgId} chequeId={clearTarget?._id ?? null}
+          chequeLabel={clearTarget ? `${clearTarget.bank} #${clearTarget.chequeNumber}` : ""}
+          onClose={() => setClearTarget(null)}
+          onCleared={() => toast.success(t("CollectionToastChequeCleared" as any))} />
         <ReconciliationDialog open={reconcileOpen} onOpenChange={setReconcileOpen} />
       </>}
     </div>
@@ -1246,11 +1234,15 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
   const returnClearedCheque = useMutation(api.collections.returnClearedCheque);
   const [reason, setReason] = useState("");
   const [bankFeeMinor, setBankFeeMinor] = useState("");
+  const [bankFeeBankAccountId, setBankFeeBankAccountId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const idempotencyKeyRef = useRef<string | null>(null);
+  const feeNeedsBank = cheque?.status === "CLEARED" && Number(bankFeeMinor) > 0;
+  const feeBankOptions = useReceiptBankOptions(activeOrgId ?? undefined, feeNeedsBank, bankFeeBankAccountId);
 
   async function submit() {
     if (!activeOrgId || !cheque) return;
+    if (feeNeedsBank && !feeBankOptions.chosenOffered) return;
     setSubmitting(true);
     try {
       if (cheque.status === "CLEARED") {
@@ -1260,6 +1252,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
           chequeId: cheque._id,
           returnReason: reason || undefined,
           bankFeeMinor: bankFeeMinor ? Number(bankFeeMinor) : undefined,
+          bankFeeBankAccountId: feeNeedsBank ? bankFeeBankAccountId as Id<"bankAccounts"> : undefined,
           idempotencyKey: idempotencyKeyRef.current,
         });
         idempotencyKeyRef.current = null;
@@ -1270,6 +1263,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
       onOpenChange(false);
       setReason("");
       setBankFeeMinor("");
+      setBankFeeBankAccountId("");
     } catch (error) {
       // The server says this key already belongs to a request with different
       // content: it is dead for what is on screen, so the next attempt is a new
@@ -1307,6 +1301,11 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
             placeholder={t("BankFeeMinorOptional" as any)}
           />
         )}
+        {feeNeedsBank && <div className="space-y-2">
+          <Label htmlFor="cheque-return-fee-bank">{t("ChequeReturnFeeBank" as any)}</Label>
+          <ReceiptBankSelect id="cheque-return-fee-bank" ariaLabel={t("ChequeReturnFeeBank" as any)} value={bankFeeBankAccountId}
+            onChange={setBankFeeBankAccountId} bankOptions={feeBankOptions} disabled={submitting} />
+        </div>}
         <DialogFooter>
           <Button
             variant="outline"
@@ -1317,7 +1316,9 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
           >
             {t("Cancel" as any)}
           </Button>
-          <Button onClick={submit} disabled={submitting}>{submitting ? t("Saving" as any) : t("Return" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || (feeNeedsBank && !feeBankOptions.chosenOffered)}>
+            {submitting ? t("Saving" as any) : t("Return" as any)}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

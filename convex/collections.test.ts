@@ -105,12 +105,18 @@ async function seedFinanceMember(t: ReturnType<typeof convexTestWithComponents>)
       phone: "+962790000000",
     })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Collection bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
   return {
     orgId,
     userId,
     approverId,
     customerId,
+    bankAccountId,
     asFinance: t.withIdentity({ subject: "collections_user", clerkId: "collections_user" }),
     asApprover: t.withIdentity({ subject: "collections_approver", clerkId: "collections_approver" }),
   };
@@ -289,7 +295,7 @@ describe("Collections", () => {
 
   test("cleared_cheque_pays_receivable_and_posts_cheque_payment", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -311,7 +317,7 @@ describe("Collections", () => {
       amount: 500,
     });
 
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
 
     await t.run(async (ctx) => {
       const cheque = await ctx.db.get(chequeId);
@@ -371,7 +377,7 @@ describe("Collections", () => {
 
   test("return_cleared_cheque_rejects_invalid_bank_fee_minor_units", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -392,7 +398,7 @@ describe("Collections", () => {
       chequeDate: Date.now() + 3 * 24 * 60 * 60 * 1000,
       amount: 500,
     });
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
 
     await expect(
       asFinance.mutation(api.collections.returnClearedCheque, {
@@ -1364,7 +1370,7 @@ describe("Collections", () => {
     // the scheduler on the real clock and runAllTimers with nothing to fire.
     vi.useFakeTimers();
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, bankAccountId, asFinance } = await seedFinanceMember(t);
     const { vehicleId, saleId, quoteId, applicationId } = await seedVehicleQuoteSaleAndApplication(t, {
       orgId,
       customerId,
@@ -1698,6 +1704,7 @@ describe("Collections", () => {
     await expect(asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId: returnedChequeId,
+      bankAccountId,
     })).rejects.toThrow("Only held or deposited cheques can be cleared");
 
     const smallReceivableId = await insertReceivable(t, {
@@ -1725,6 +1732,7 @@ describe("Collections", () => {
     await expect(asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId: oversizedChequeId,
+      bankAccountId,
     })).rejects.toThrow("Cheque amount cannot exceed");
     await expect(asFinance.mutation(api.collections.returnClearedCheque, {
       orgId,
@@ -1979,7 +1987,7 @@ describe("Collections", () => {
 
   test("return_cleared_cheque_defers_reversal_when_no_open_period_exists", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     await t.run((ctx) =>
       ctx.db.insert("subscriptions", {
@@ -2020,7 +2028,7 @@ describe("Collections", () => {
       chequeDate: Date.now(),
       amount: 250,
     });
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
     await asFinance.mutation(api.accountingPeriods.close, { orgId, periodId: period._id });
 
     await asFinance.mutation(api.collections.returnClearedCheque, {

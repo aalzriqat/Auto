@@ -5,7 +5,7 @@
  * DEPOSITED FC cheque keeps Return (returnCheque supports it). A customer's
  * cheque keeps Return. The Collections row says where the FC cheque is handled.
  */
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ConvexError } from "convex/values";
 import type { Doc } from "@/convex/_generated/dataModel";
@@ -52,6 +52,13 @@ vi.mock("convex/react", async () => {
 
 import { CollectionsTab } from "./CollectionsTab";
 
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = () => {};
+});
+
 const cheque = (over: Record<string, unknown>) =>
   ({
     _id: "c1",
@@ -88,6 +95,73 @@ async function openChequesTab() {
 }
 
 describe("Collections, Cheques tab: Return", () => {
+  test("clearance requires choosing its destination bank, even when only one is offered", async () => {
+    stubs.queryResults.set("collections:listReceiptBankOptions", {
+      banks: [{ _id: "bank1", name: "Operating bank", currency: "JOD" }], truncated: false,
+    });
+    const clearCheque = vi.fn().mockResolvedValue("payment1");
+    stubs.mutations.set("collections:clearCheque", clearCheque);
+    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "DEPOSITED" })]);
+    await openChequesTab();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    const dialog = await screen.findByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: "Clear" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    const trigger = within(dialog).getByRole("combobox", { name: "ReceiptBankAccount" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: /Operating bank/ }));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(clearCheque).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: "org1", chequeId: "c1", bankAccountId: "bank1",
+    })));
+  });
+
+  test("a positive return fee asks which bank paid that fee", async () => {
+    stubs.queryResults.set("collections:listReceiptBankOptions", {
+      banks: [{ _id: "fee-bank", name: "Fee bank", currency: "JOD" }], truncated: false,
+    });
+    const returnClearedCheque = vi.fn().mockResolvedValue(undefined);
+    stubs.mutations.set("collections:returnClearedCheque", returnClearedCheque);
+    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "CLEARED" })]);
+    await openChequesTab();
+    fireEvent.click(screen.getByRole("button", { name: "Return" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByPlaceholderText("BankFeeMinorOptional"), { target: { value: "500" } });
+    const confirm = within(dialog).getAllByRole("button", { name: "Return" }).at(-1) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    const trigger = within(dialog).getByRole("combobox", { name: "ChequeReturnFeeBank" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: /Fee bank/ }));
+    fireEvent.click(confirm);
+    await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: "org1", chequeId: "c1", bankFeeMinor: 500, bankFeeBankAccountId: "fee-bank",
+    })));
+  });
+
+  test("canceling one return does not prefill another cheque's fee or bank", async () => {
+    stubs.queryResults.set("collections:listReceiptBankOptions", {
+      banks: [{ _id: "fee-bank", name: "Fee bank", currency: "JOD" }], truncated: false,
+    });
+    stubs.paginated.set("collections:listCheques", [
+      cheque({ _id: "c1", isFinanceCompanyCheque: false }),
+      cheque({ _id: "c2", chequeNumber: "009999", isFinanceCompanyCheque: false }),
+    ]);
+    await openChequesTab();
+    fireEvent.click(screen.getAllByRole("button", { name: "Return" })[0]);
+    const firstDialog = await screen.findByRole("dialog");
+    fireEvent.change(within(firstDialog).getByPlaceholderText("BankFeeMinorOptional"), { target: { value: "500" } });
+    const trigger = within(firstDialog).getByRole("combobox", { name: "ChequeReturnFeeBank" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: /Fee bank/ }));
+    fireEvent.click(within(firstDialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Return" })[1]);
+    const nextDialog = await screen.findByRole("dialog");
+    expect((within(nextDialog).getByPlaceholderText("BankFeeMinorOptional") as HTMLInputElement).value).toBe("");
+    expect(within(nextDialog).queryByRole("combobox", { name: "ChequeReturnFeeBank" })).toBeNull();
+  });
+
   test.each(["HELD", "DEPOSITED"])(
     "a %s finance-company cheque keeps an enabled Return (returnCheque supports pre-clear FC bounces)",
     async (status) => {

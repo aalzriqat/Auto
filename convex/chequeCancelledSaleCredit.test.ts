@@ -65,6 +65,11 @@ async function seed(suffix: string) {
   const customerId = (await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Cust", lastName: suffix, createdAt: Date.now() })
   )) as Id<"customers">;
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "USD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
   const mkActor = async (name: string, permissions: string[]) => {
     const actorId = await t.run(async (ctx) => {
@@ -80,7 +85,7 @@ async function seed(suffix: string) {
   const approver = await mkActor("approver", ["view:sales", "edit:sales", "approve:requests", "manage:finance", "view:finance"]);
   const financeOnly = await mkActor("finance", ["manage:finance", "view:finance"]);
   const viewOnly = await mkActor("viewer", ["view:finance"]);
-  return { t, asOwner, orgId, userId, customerId, approver, financeOnly, viewOnly };
+  return { t, asOwner, orgId, userId, customerId, bankAccountId, approver, financeOnly, viewOnly };
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
@@ -110,7 +115,7 @@ async function registerCheque(s: Seeded, saleId: Id<"sales">, no: string, amount
 const deposit = (s: Seeded, chequeId: Id<"postDatedCheques">) =>
   s.asOwner.mutation(api.collections.depositCheque, { orgId: s.orgId, chequeId });
 const clear = (s: Seeded, chequeId: Id<"postDatedCheques">, key = crypto.randomUUID()) =>
-  s.asOwner.mutation(api.collections.clearCheque, { orgId: s.orgId, chequeId, idempotencyKey: key });
+  s.asOwner.mutation(api.collections.clearCheque, { orgId: s.orgId, chequeId, bankAccountId: s.bankAccountId, idempotencyKey: key });
 
 async function movementOf(t: TestHarness, orgId: Id<"organizations">, paymentId: Id<"collectionPayments">) {
   return (await t.run((ctx) => ctx.db.query("receiptMovements")

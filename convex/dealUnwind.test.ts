@@ -129,8 +129,9 @@ async function paidDealWithActiveCustomerReceipt(tag: string) {
     orgId: s.orgId, customerId: s.customerId, bank: "Customer bank",
     chequeNumber: `S723-${tag}`, chequeDate: Date.now(), amount: 10,
   });
+  const bankAccountId = await insertReceiptBank(s);
   const collectionId = await s.owner.as.mutation(api.collections.clearCheque, {
-    orgId: s.orgId, chequeId, idempotencyKey: crypto.randomUUID(),
+    orgId: s.orgId, chequeId, bankAccountId, idempotencyKey: crypto.randomUUID(),
   });
   const movement = await s.t.run((ctx) => ctx.db.query("receiptMovements")
     .withIndex("by_org_payment", (q) => q.eq("orgId", s.orgId).eq("collectionPaymentId", collectionId))

@@ -133,7 +133,12 @@ async function seedOrg(suffix: string) {
   const customerId = (await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Cust", lastName: suffix, createdAt: Date.now() })
   )) as Id<"customers">;
-  return { t, asAdmin, orgId, userId, customerId };
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "USD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  return { t, asAdmin, orgId, userId, customerId, bankAccountId };
 }
 
 /**
@@ -611,7 +616,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
   });
 
   test("SCRUM-724: customer cheque is held, deposited, cleared, then becomes posted retained credit", async () => {
-    const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s724cheque");
+    const { t, asAdmin, orgId, userId, customerId, bankAccountId } = await seedOrg("s724cheque");
     registerRateLimiter(t);
     await seedRetainedCreditAccount(t, orgId);
     const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "CHEQUE");
@@ -631,7 +636,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     await asAdmin.mutation(api.collections.depositCheque, { orgId, chequeId });
     expect((await list()).page).toMatchObject([{ chequeId, status: "DEPOSITED" }]);
     const clearArgs = {
-      orgId, chequeId, idempotencyKey: crypto.randomUUID(),
+      orgId, chequeId, bankAccountId, idempotencyKey: crypto.randomUUID(),
     };
     const paymentId = await asAdmin.mutation(api.collections.clearCheque, clearArgs);
     expect(await asAdmin.mutation(api.collections.clearCheque, clearArgs)).toBe(paymentId);
@@ -675,7 +680,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
   });
 
   test("SCRUM-724: a HELD cheque on a really-cancelled sale is refused; a DEPOSITED one clears into customer credit", async () => {
-    const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s724deadcheque");
+    const { t, asAdmin, orgId, userId, customerId, bankAccountId } = await seedOrg("s724deadcheque");
     registerRateLimiter(t);
     const vehicleId = await t.run((ctx) => ctx.db.insert("vehicles", {
       orgId, vin: "VIN-S724-DEAD", make: "Kia", model: "Rio", year: 2021,
@@ -716,7 +721,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
 
     // DEPOSITED: clears into unapplied customer credit with lineage.
     const paymentId = await asAdmin.mutation(api.collections.clearCheque, {
-      orgId, chequeId: depositedId, idempotencyKey: crypto.randomUUID(),
+      orgId, chequeId: depositedId, bankAccountId, idempotencyKey: crypto.randomUUID(),
     });
     expect((await t.run((ctx) => ctx.db.get(depositedId)))?.status).toBe("CLEARED");
     const movement = await movementFor(t, orgId, paymentId as Id<"collectionPayments">);
@@ -1927,7 +1932,7 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
     })) as Id<"postDatedCheques">;
     const paymentId = (await seeded.asAdmin.mutation(api.collections.clearCheque, {
       idempotencyKey: crypto.randomUUID(),
-      orgId: seeded.orgId, chequeId,
+      orgId: seeded.orgId, chequeId, bankAccountId: seeded.bankAccountId,
     })) as Id<"collectionPayments">;
     const movement = (await movementFor(seeded.t, seeded.orgId, paymentId))!;
     return { ...seeded, chequeId, movement };

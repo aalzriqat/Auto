@@ -102,8 +102,13 @@ async function rehearseFreshDealership(suffix: string) {
   const customerId = (await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Rehearsal", lastName: suffix, createdAt: Date.now() })
   )) as Id<"customers">;
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "USD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
-  return { t, asAdmin, orgId, userId, customerId, periodId: period._id };
+  return { t, asAdmin, orgId, userId, customerId, bankAccountId, periodId: period._id };
 }
 
 /** A debt of exactly `amount`, created through the real receivable writer. */
@@ -508,7 +513,7 @@ describe("R5 — refusals hold on a fully-set-up organization", () => {
 
 describe("R7 — reversal symmetry", () => {
   test("a returned cheque unwinds its receipt exactly and reopens the debt by its own amount", async () => {
-    const { t, asAdmin, orgId, customerId } = await rehearseFreshDealership("r7");
+    const { t, asAdmin, orgId, customerId, bankAccountId } = await rehearseFreshDealership("r7");
     const receivableId = await debtOf(asAdmin, orgId, customerId, 400);
 
     // The debt is named at REGISTRATION, not at clearing: `clearCheque` takes
@@ -523,7 +528,7 @@ describe("R7 — reversal symmetry", () => {
 
     await asAdmin.mutation(api.collections.clearCheque, {
       idempotencyKey: crypto.randomUUID(),
-      orgId, chequeId,
+      orgId, chequeId, bankAccountId,
     });
 
     const afterClear = await ledgerLines(t, orgId);

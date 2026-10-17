@@ -27,9 +27,11 @@ export function ReceiptBankSelect({
   onChange,
   bankOptions,
   disabled = false,
+  ariaLabel,
 }: Readonly<{
   id?: string;
   disabled?: boolean;
+  ariaLabel?: string;
   value: string;
   onChange: (bankAccountId: string) => void;
   bankOptions: ReturnType<typeof useReceiptBankOptions>;
@@ -39,7 +41,7 @@ export function ReceiptBankSelect({
   return (
     <div className="space-y-2">
       <Select value={chosenOffered ? value : ""} onValueChange={onChange} disabled={disabled || loading || noEligible || truncated}>
-        <SelectTrigger id={id} aria-label={t("ReceiptBankAccount" as any)}>
+        <SelectTrigger id={id} aria-label={ariaLabel ?? t("ReceiptBankAccount" as any)}>
           <SelectValue placeholder={t((loading ? "CashDrawerLoadingBanks" : "ReceiptSelectBank") as any)} />
         </SelectTrigger>
         <SelectContent className="max-h-72">

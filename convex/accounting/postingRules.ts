@@ -637,6 +637,8 @@ export interface ExpensePostedPayload {
   taxMinor?: number;
   currency: string;
   paymentMethod?: string;
+  /** Physical account used when a validated expense payment reaches the bank. */
+  bankAccountId?: string;
   category?: string;
   /** Present when this expense reconditions a specific in-stock vehicle. */
   vehicleId?: string;
@@ -1993,12 +1995,14 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
         "A supplier-borne EXPENSE_POSTED must be vehicle-linked, untaxed and neither capitalized nor prepaid. Refusing to post it."
       );
     }
+    const paymentKey = disbursementAccountKey(p.paymentMethod);
     return {
       lines: [
         line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, p.amountMinor, 0, "Supplier-borne vehicle cost recoverable", { vehicleId: p.vehicleId }),
         // Outbound: a CHEQUE here is one the dealership ISSUED, so it credits
         // the bank — never Cheques in Hand, which holds customers' cheques.
-        line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash payment"),
+        line(paymentKey, 0, p.amountMinor, "Cash payment",
+          paymentKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
       ],
       memo: "Supplier-borne vehicle cost paid — recoverable from the supplier",
       category: "SYSTEM",
@@ -2026,7 +2030,9 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   if (p.taxMinor && p.taxMinor > 0) {
     lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, p.taxMinor, 0, "Input VAT paid"));
   }
-  lines.push(line(cashAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash payment"));
+  const paymentKey = cashAccountKey(p.paymentMethod);
+  lines.push(line(paymentKey, 0, p.amountMinor, "Cash payment",
+    paymentKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined));
   return {
     lines,
     memo: capitalize

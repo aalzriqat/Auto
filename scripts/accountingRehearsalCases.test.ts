@@ -655,6 +655,7 @@ function makeBackend(defects: Defects = {}) {
         vehicleId: l.vehicleId,
         financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
+        bankAccountId: l.bankAccountId,
       })),
       { category: "REVERSAL" }
     );
@@ -953,8 +954,8 @@ function makeBackend(defects: Defects = {}) {
   }
 
   /** A customer receipt: cash in, against AR (allocated) or 2110 (on account). */
-  function postReceipt(paymentId: string, customerId: string, amountMinor: number, allocatedMinor: number, cashKey: string) {
-    const lines: Line[] = [{ key: cashKey, debitMinor: amountMinor, customerId }];
+  function postReceipt(paymentId: string, customerId: string, amountMinor: number, allocatedMinor: number, cashKey: string, bankAccountId?: string) {
+    const lines: Line[] = [{ key: cashKey, debitMinor: amountMinor, customerId, bankAccountId }];
     if (allocatedMinor > 0) lines.push({ key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: allocatedMinor, customerId });
     const unapplied = amountMinor - allocatedMinor;
     if (unapplied > 0) {
@@ -1270,6 +1271,10 @@ function makeBackend(defects: Defects = {}) {
         if (!canManageFinance) {
           return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
         }
+        const clearingBank = bankAccounts.get(String(args.bankAccountId ?? ""));
+        if (!clearingBank || clearingBank.orgId !== String(args.orgId) || !clearingBank.isActive || clearingBank.currency !== ORG_CURRENCY) {
+          return { ok: false as const, error: "Select an active bank account in this organization and currency." };
+        }
         const made = replayableCreate("clr", args, true);
         if (made) return made;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("clr"));
@@ -1279,13 +1284,19 @@ function makeBackend(defects: Defects = {}) {
         const paymentId = id("pay");
         collectionPayments.push({ _id: paymentId, direction: "IN", method: "CHEQUE", amount: cheque.amount, chequeId: cheque._id, receivableId: cheque.receivableId });
         settle(cheque.receivableId, cheque.amount);
-        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT");
+        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT", String(args.bankAccountId));
         cheque.clearingEventId = eventId;
         return { ok: true as const, value: null };
       }
       case "collections:returnClearedCheque": {
         if (!canManageFinance) {
           return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
+        }
+        if (Number(args.bankFeeMinor ?? 0) > 0) {
+          const feeBank = bankAccounts.get(String(args.bankFeeBankAccountId ?? ""));
+          if (!feeBank || feeBank.orgId !== String(args.orgId) || !feeBank.isActive || feeBank.currency !== ORG_CURRENCY) {
+            return { ok: false as const, error: "Select an active bank account to pay the return fee." };
+          }
         }
         const made = replayableCreate("ret", args, true);
         if (made) return made;
@@ -1308,6 +1319,12 @@ function makeBackend(defects: Defects = {}) {
             r.outstandingAmount += cheque.amount;
             r.status = r.outstandingAmount >= r.originalAmount ? "OPEN" : "PARTIALLY_PAID";
           }
+        }
+        if (Number(args.bankFeeMinor ?? 0) > 0) {
+          post("EXPENSE_POSTED", "expenses", id("expense"), [
+            { key: "GENERAL_EXPENSE", debitMinor: Number(args.bankFeeMinor) },
+            { key: "BANK_ACCOUNT", creditMinor: Number(args.bankFeeMinor), bankAccountId: String(args.bankFeeBankAccountId) },
+          ]);
         }
         return { ok: true as const, value: null };
       }
