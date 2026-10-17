@@ -296,6 +296,17 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(arText).not.toMatch(/قيد يدوي|يومية يدوية/);
   });
 
+  it("SCRUM-54 bank reference seed refusal directs users to the GL in both languages", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { BANK_OPENING_BALANCE_VIA_GL_MESSAGE: serverText } = await import("../convex/bankAccounts");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: AppErrorCode.BANK_OPENING_BALANCE_VIA_GL, message: serverText });
+    expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
+    expect(getLocalizedErrorMessage(error, ar)).toMatch(/[؀-ۿ]/);
+  });
+
   it("SCRUM-650 purchase-cost correction refusals resolve to Arabic in ar and the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const { AppErrorCode } = await import("../convex/utils/errors");

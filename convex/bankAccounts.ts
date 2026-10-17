@@ -6,8 +6,9 @@
  * account (see convex/utils/defaultChart.ts). Only one bank account per org
  * may be the reconciliation target; its "book balance" is derived from the
  * GL at query time (see getBookBalance), never posted as a journal entry, so
- * this file never touches the posting engine. `openingBalanceMinor` is
- * reference metadata only.
+ * this file never touches the posting engine. The legacy
+ * `openingBalanceMinor` field is reference metadata only; new nonzero values
+ * are refused so a starting amount cannot be mistaken for a posted balance.
  */
 import { v, ConvexError } from "convex/values";
 import { query, MutationCtx, QueryCtx } from "./_generated/server";
@@ -17,6 +18,16 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { NO_ACCOUNTING_DATE_SENTINEL } from "./accountingReports";
+import { AppErrorCode, throwAppError } from "./utils/errors";
+
+export const BANK_OPENING_BALANCE_VIA_GL_MESSAGE =
+  "This bank form cannot set a book balance. For initial setup, create every bank before posting the one-time opening journal in Accounting Setup.";
+
+function refuseReferenceOpeningBalance(amount: number | undefined): void {
+  if (amount !== undefined && amount !== 0) {
+    throwAppError(AppErrorCode.BANK_OPENING_BALANCE_VIA_GL, BANK_OPENING_BALANCE_VIA_GL_MESSAGE);
+  }
+}
 
 export const list = query({
   args: { orgId: v.id("organizations") },
@@ -38,8 +49,8 @@ export const create = mutation({
     iban: v.optional(v.string()),
     accountNumber: v.optional(v.string()),
     currency: v.string(),
-    openingBalanceMinor: v.number(),
-    openingBalanceDate: v.number(),
+    openingBalanceMinor: v.optional(v.number()),
+    openingBalanceDate: v.optional(v.number()),
     isReconciliationTarget: v.optional(v.boolean()),
     notes: v.optional(v.string()),
   },
@@ -47,9 +58,11 @@ export const create = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const now = Date.now();
 
-    if (!Number.isFinite(args.openingBalanceMinor) || !Number.isFinite(args.openingBalanceDate)) {
+    if ((args.openingBalanceMinor !== undefined && !Number.isFinite(args.openingBalanceMinor)) ||
+      (args.openingBalanceDate !== undefined && !Number.isFinite(args.openingBalanceDate))) {
       throw new ConvexError("Opening balance and date must be valid numbers.");
     }
+    refuseReferenceOpeningBalance(args.openingBalanceMinor);
 
     if (args.isReconciliationTarget) {
       await clearOtherReconciliationTargets(ctx, args.orgId);
@@ -62,8 +75,8 @@ export const create = mutation({
       iban: args.iban,
       accountNumber: args.accountNumber,
       currency: args.currency,
-      openingBalanceMinor: args.openingBalanceMinor,
-      openingBalanceDate: args.openingBalanceDate,
+      openingBalanceMinor: 0,
+      openingBalanceDate: args.openingBalanceDate ?? now,
       isActive: true,
       isReconciliationTarget: args.isReconciliationTarget ?? false,
       notes: args.notes,
@@ -98,13 +111,15 @@ export const update = mutation({
     if (args.openingBalanceDate !== undefined && !Number.isFinite(args.openingBalanceDate)) {
       throw new ConvexError("Opening balance date must be a valid number.");
     }
+    if (args.openingBalanceMinor !== undefined) {
+      throwAppError(AppErrorCode.BANK_OPENING_BALANCE_VIA_GL, BANK_OPENING_BALANCE_VIA_GL_MESSAGE);
+    }
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.name !== undefined) patch.name = args.name;
     if (args.bankName !== undefined) patch.bankName = args.bankName;
     if (args.iban !== undefined) patch.iban = args.iban;
     if (args.accountNumber !== undefined) patch.accountNumber = args.accountNumber;
-    if (args.openingBalanceMinor !== undefined) patch.openingBalanceMinor = args.openingBalanceMinor;
     if (args.openingBalanceDate !== undefined) patch.openingBalanceDate = args.openingBalanceDate;
     if (args.notes !== undefined) patch.notes = args.notes;
 

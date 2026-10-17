@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -51,6 +52,7 @@ export function CreateBankAccountDialog({
       <DialogContent className="max-w-lg max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t("CreateBankAccount" as any)}</DialogTitle>
+          <DialogDescription>{t("BankStartingBalanceInSetup")}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5 sm:col-span-2">
@@ -72,23 +74,6 @@ export function CreateBankAccountDialog({
           <div className="space-y-1.5">
             <Label>{t("AccountNumber" as any)} ({t("Optional" as any)})</Label>
             <Input value={form.accountNumber} onChange={(e) => update({ accountNumber: e.target.value })} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>{t("OpeningBalance" as any)}</Label>
-            <Input
-              type="number"
-              step="0.01"
-              value={form.openingBalance}
-              onChange={(e) => update({ openingBalance: e.target.value })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>{t("OpeningBalanceDate" as any)}</Label>
-            <Input
-              type="date"
-              value={form.openingBalanceDate}
-              onChange={(e) => update({ openingBalanceDate: e.target.value })}
-            />
           </div>
           <div className="space-y-1.5 sm:col-span-2">
             <Label>{t("Notes" as any)} ({t("Optional" as any)})</Label>
