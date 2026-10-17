@@ -7,7 +7,9 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { hookSupplierPaymentSettled } from "./accounting/workflowHooks";
 import { fromMinorUnits, toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { isConsignedAgentSale } from "./utils/vehicleOwnership";
 import { getActiveDepositHolds } from "./utils/depositHelpers";
 
 export const list = query({
@@ -207,6 +209,30 @@ export const get = query({
   },
 });
 
+/**
+ * SCRUM-781 (owner ruling, SCRUM-773 c22401): a consigned car is the supplier's,
+ * not a purchase, so its settlement carries no input VAT the dealership can
+ * reclaim. Only an OWNED vehicle bought on account may reclassify VAT.
+ *
+ * A sale-linked payable is refused on that fact alone: the only writer of one
+ * is the consigned branch of sale completion. Otherwise the vehicle decides,
+ * and a vehicle that cannot be read in this org cannot vouch for a reclass.
+ * Applies only when VAT is entered — a gross settlement needs no vehicle.
+ */
+async function assertPayableCarriesReclaimableVat(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  payable: Doc<"vehicleSupplierPayables">
+): Promise<void> {
+  const refusal =
+    "A consigned vehicle's supplier payable carries no reclaimable VAT. Settle it without a VAT amount.";
+  if (payable.saleId != null) throw new ConvexError(refusal);
+  const vehicle = await ctx.db.get(payable.vehicleId);
+  if (!vehicle || vehicle.orgId !== orgId || isConsignedAgentSale(vehicle)) {
+    throw new ConvexError(refusal);
+  }
+}
+
 export const markPaid = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -271,6 +297,9 @@ export const markPaid = mutation({
           throw new ConvexError(
             "VAT amount cannot exceed the amount still outstanding on this payable."
           );
+        }
+        if (args.taxAmount !== undefined && args.taxAmount > 0) {
+          await assertPayableCarriesReclaimableVat(ctx, args.orgId, payable);
         }
 
         const now = Date.now();
