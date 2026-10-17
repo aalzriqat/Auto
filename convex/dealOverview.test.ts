@@ -1,10 +1,12 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
+import { financedDealOverview, type FinancedDealOverview } from "./dealOverview";
+import type { QueryCtx } from "./_generated/server";
 
 type TestConvex = ConvexTestInstance<typeof schema>;
 type AuthenticatedTestConvex = ReturnType<TestConvex["withIdentity"]>;
@@ -956,6 +958,76 @@ describe("dealOverview.financedDealOverview", () => {
     const sales = await callerWith(s, "sales", [PERMISSIONS.VIEW_SALES]);
     const view = await sales.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
     expect(view).toEqual({ financialSummary: null, vehicleCostBasis: null, dealerPreparation: null });
+  });
+
+  test("view:sales alone avoids the nested cockpit read", async () => {
+    const s = await seed("4short");
+    const applicationId = await insertApplication(s);
+    const sales = await callerWith(s, "salesShort", [PERMISSIONS.VIEW_SALES]);
+    const nestedQuery = vi.fn(async () => {
+      throw new Error("The withheld overview must not run the full cockpit query");
+    });
+    // Convex's runtime wrapper exposes the handler; its public type hides it.
+    // Run it with the harness's real database/auth context and a guarded
+    // nested-query seam so this test proves the read is absent.
+    const directHandler = financedDealOverview as unknown as {
+      _handler: (
+        ctx: QueryCtx,
+        args: { orgId: Id<"organizations">; applicationId: Id<"financeApplications"> },
+      ) => Promise<FinancedDealOverview | null>;
+    };
+
+    const view = await sales.run(async (ctx) =>
+      directHandler._handler(
+        { ...ctx, runQuery: nestedQuery } as unknown as QueryCtx,
+        { orgId: s.orgId, applicationId },
+      ),
+    );
+    expect(view).toEqual({ financialSummary: null, vehicleCostBasis: null, dealerPreparation: null });
+
+    const foreignApplicationId = await insertApplication(s, s.otherOrgId);
+    const foreignView = await sales.run(async (ctx) =>
+      directHandler._handler(
+        { ...ctx, runQuery: nestedQuery } as unknown as QueryCtx,
+        { orgId: s.orgId, applicationId: foreignApplicationId },
+      ),
+    );
+    expect(foreignView).toBeNull();
+    expect(nestedQuery).not.toHaveBeenCalled();
+  });
+
+  test("overview money visibility stays aligned with the authoritative cockpit", async () => {
+    const s = await seed("4parity");
+    const applicationId = await insertApplication(s);
+    const permissionSets = [
+      [PERMISSIONS.VIEW_SALES],
+      ...ALL_PERMISSIONS.filter((permission) => permission !== PERMISSIONS.VIEW_SALES)
+        .map((permission) => [PERMISSIONS.VIEW_SALES, permission]),
+    ];
+
+    for (const [index, permissions] of permissionSets.entries()) {
+      const caller = await callerWith(s, `parity${index}`, permissions);
+      const cockpit = await caller.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+      const overview = await caller.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(cockpit).not.toBeNull();
+      expect(overview).not.toBeNull();
+      expect(overview!.financialSummary !== null).toBe(cockpit!.money !== null);
+    }
+
+    // A system owner is authorized by the role marker even when its stored
+    // permission array is empty; neither query may require VIEW_FINANCE here.
+    await s.t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", s.orgId).eq("userId", s.userId))
+        .unique();
+      if (!membership) throw new Error("Owner membership missing");
+      await ctx.db.patch(membership.roleId, { permissions: [] });
+    });
+    const ownerCockpit = await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    const ownerOverview = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    expect(ownerCockpit?.money ?? null).not.toBeNull();
+    expect(ownerOverview?.financialSummary ?? null).not.toBeNull();
   });
 
   test("the cockpit's vehicle card follows view:vehicles, not view:sales (PR #338)", async () => {
