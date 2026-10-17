@@ -2775,6 +2775,7 @@ export async function hookAssetCapitalized(
     costMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2784,6 +2785,7 @@ export async function hookAssetCapitalized(
     payload: {
       costMinor: args.costMinor,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -3333,6 +3335,7 @@ export async function hookAssetDisposed(
     costMinor: number;
     accumulatedDepreciationMinor: number;
     proceedsMinor: number;
+    bankAccountId?: Id<"bankAccounts">;
     currency: string;
     actorId: Id<"users">;
     occurredAt: number;
@@ -3344,6 +3347,7 @@ export async function hookAssetDisposed(
       costMinor: args.costMinor,
       accumulatedDepreciationMinor: args.accumulatedDepreciationMinor,
       proceedsMinor: args.proceedsMinor,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }

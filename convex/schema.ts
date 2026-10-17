@@ -5336,6 +5336,7 @@ export default defineSchema({
   fixedAssetEvents: defineTable({
     orgId: v.id("organizations"),
     assetId: v.id("fixedAssets"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     type: v.union(
       v.literal("CAPITALIZE"),
       v.literal("DEPRECIATE"),

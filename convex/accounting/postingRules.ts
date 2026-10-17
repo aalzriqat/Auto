@@ -2671,6 +2671,7 @@ export interface AssetCapitalizedPayload {
   costMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 export interface DepreciationPostedPayload {
@@ -2691,6 +2692,7 @@ export interface AssetDisposedPayload {
   accumulatedDepreciationMinor: number;
   proceedsMinor: number;
   currency: string;
+  bankAccountId?: string;
 }
 
 export function ruleAssetCapitalized(p: AssetCapitalizedPayload): RuleResult {
@@ -2700,10 +2702,16 @@ export function ruleAssetCapitalized(p: AssetCapitalizedPayload): RuleResult {
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
     : cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new ConvexError("Select the physical bank used to pay for this asset.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new ConvexError("A physical bank does not apply to this cash asset purchase.");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.FIXED_ASSETS, p.costMinor, 0, "Asset capitalized"),
-      line(cashKey, 0, p.costMinor, "Payment for asset"),
+      line(cashKey, 0, p.costMinor, "Payment for asset", p.bankAccountId ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Fixed asset capitalized",
     category: "SYSTEM",
@@ -2772,6 +2780,12 @@ export function ruleAssetImpaired(p: AssetImpairedPayload): RuleResult {
  * zero contribution can't unbalance the entry either way.
  */
 export function ruleAssetDisposed(p: AssetDisposedPayload): RuleResult {
+  if (p.proceedsMinor > 0 && !p.bankAccountId) {
+    throw new ConvexError("Select the physical bank receiving the disposal proceeds.");
+  }
+  if (p.proceedsMinor === 0 && p.bankAccountId) {
+    throw new ConvexError("A physical bank does not apply to a disposal without proceeds.");
+  }
   const netBookValue = p.costMinor - p.accumulatedDepreciationMinor;
   const gainOrLoss = p.proceedsMinor - netBookValue;
 
@@ -2780,7 +2794,7 @@ export function ruleAssetDisposed(p: AssetDisposedPayload): RuleResult {
     lines.push(line(SYSTEM_KEYS.ACCUMULATED_DEPRECIATION, p.accumulatedDepreciationMinor, 0, "Remove accumulated depreciation"));
   }
   if (p.proceedsMinor > 0) {
-    lines.push(line(SYSTEM_KEYS.BANK_ACCOUNT, p.proceedsMinor, 0, "Disposal proceeds"));
+    lines.push(line(SYSTEM_KEYS.BANK_ACCOUNT, p.proceedsMinor, 0, "Disposal proceeds", { bankAccountId: p.bankAccountId }));
   }
   lines.push(line(SYSTEM_KEYS.FIXED_ASSETS, 0, p.costMinor, "Remove asset cost"));
   if (gainOrLoss > 0) {
