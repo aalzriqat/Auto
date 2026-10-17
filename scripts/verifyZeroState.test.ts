@@ -378,7 +378,7 @@ describe("diagnostic tables are read back in full and validated — the shell is
     const bounded = r.commands.filter((c) => c[0] === "data" && c.includes("--format"));
     expect(bounded.map((c) => c[1]).sort()).toEqual(["cronHeartbeats", "webhookLogs"]);
     for (const c of bounded) {
-      // Each table is read at its own retention-derived bound + 1, so an overflow is observable without sampling.
+      // Each table is read at its own fresh-launch bound + 1, so an overflow is observable without sampling.
       expect(c.slice(2, 6)).toEqual(["--limit", String(DIAGNOSTIC_ROW_BOUNDS[c[1]] + 1), "--format", "jsonl"]);
       expect(c.slice(-2)).toEqual(["--deployment", DEPLOYMENT]);
     }
