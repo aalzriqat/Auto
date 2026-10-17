@@ -176,7 +176,9 @@ export const add = mutation({
           partnerName: args.partnerName.trim(),
           openingContributionMinor: args.openingContributionMinor ?? null,
           paymentMethod: args.paymentMethod ?? null,
-          bankAccountId: args.bankAccountId ?? null,
+          // Omit an absent bank so keys issued before bank attribution keep
+          // their original fingerprint across this deployment.
+          bankAccountId: args.bankAccountId,
         }),
       },
       async () => {
@@ -320,7 +322,7 @@ export const recordEquityMovement = mutation({
           type: args.type,
           amountMinor: args.amountMinor,
           paymentMethod: args.paymentMethod ?? null,
-          bankAccountId: args.bankAccountId ?? null,
+          bankAccountId: args.bankAccountId,
           occurredAt: args.occurredAt ?? null,
         }),
       },

@@ -164,6 +164,48 @@ describe("Phase 12 — capital contribution", () => {
     expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(500_000);
   });
 
+  test("a completed bank contribution replays after the bank is deactivated", async () => {
+    const { t, orgId, asOwner } = await seedEquityDealer();
+    const bankAccountId = await createPhysicalBank(asOwner, orgId, "Replay Bank");
+    const args = {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Replay Partner",
+      openingContributionMinor: 100_000, paymentMethod: "BANK_TRANSFER" as const, bankAccountId,
+    };
+    const first = await asOwner.mutation(api.partnerEquity.add, args);
+    await asOwner.mutation(api.bankAccounts.deactivate, { orgId, bankAccountId });
+    expect(await asOwner.mutation(api.partnerEquity.add, args)).toBe(first);
+    expect(await eventsOfType(t, orgId, "CAPITAL_CONTRIBUTED")).toHaveLength(1);
+  });
+
+  test("a bank-method opening contribution needs a bank and a positive amount", async () => {
+    const { t, orgId, asOwner } = await seedEquityDealer();
+    const bankAccountId = await createPhysicalBank(asOwner, orgId, "Opening Bank");
+    await expect(asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Missing Bank",
+      openingContributionMinor: 100_000, paymentMethod: "BANK_TRANSFER",
+    })).rejects.toThrow(/physical bank/i);
+    await expect(asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Zero Bank",
+      openingContributionMinor: 0, paymentMethod: "BANK_TRANSFER", bankAccountId,
+    })).rejects.toThrow(/positive opening contribution/i);
+    expect(await eventsOfType(t, orgId, "CAPITAL_CONTRIBUTED")).toHaveLength(0);
+  });
+
+  test("a closed period rolls back both partner creation and opening contribution", async () => {
+    const { t, orgId, asOwner } = await seedEquityDealer();
+    const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
+    await t.run((ctx) => ctx.db.patch(period._id, { status: "CLOSED" }));
+    await expect(asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Closed Partner",
+      openingContributionMinor: 100_000, paymentMethod: "CASH",
+    })).rejects.toThrow(/period/i);
+    const partners = await asOwner.query(api.partnerEquity.list, {
+      orgId, paginationOpts: { numItems: 100, cursor: null },
+    });
+    expect(partners.page.find((partner) => partner.partnerName === "Closed Partner")).toBeUndefined();
+    expect(await eventsOfType(t, orgId, "CAPITAL_CONTRIBUTED")).toHaveLength(0);
+  });
+
   test("rejects an unsupported payment method", async () => {
     const { orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
@@ -368,6 +410,8 @@ describe("Phase 12 — partner draw", () => {
     })).rejects.toThrow(/period/i);
     expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(400_000);
     expect(await eventsOfType(t, orgId, "PARTNER_DREW")).toHaveLength(0);
+    const pending = await t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect());
+    expect(pending.filter((event) => event.orgId === orgId)).toHaveLength(0);
   });
 
   test("a draw exceeding the partner's balance is rejected", async () => {

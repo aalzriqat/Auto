@@ -305,7 +305,7 @@ function AddPartnerDialog({
     const requiresBank = openingMinor > 0 && partnerEquityNeedsBank("CONTRIBUTION", values.paymentMethod);
     const bank = requiresBank ? selectedBank(bankOptions, values.bankAccountId) : undefined;
     if (requiresBank && !bank) {
-      form.setError("bankAccountId", { message: t("DirectPaymentBankRequired") });
+      form.setError("bankAccountId", { message: t("ReceiptSelectBank") });
       return;
     }
     await submitWithFeedback(async () => {
@@ -470,7 +470,7 @@ function MovementDialog({
     const requiresBank = partnerEquityNeedsBank(type, values.paymentMethod);
     const bank = requiresBank ? selectedBank(bankOptions, values.bankAccountId) : undefined;
     if (requiresBank && !bank) {
-      form.setError("bankAccountId", { message: t("DirectPaymentBankRequired") });
+      form.setError("bankAccountId", { message: t(type === "CONTRIBUTION" ? "ReceiptSelectBank" : "DirectPaymentBankRequired") });
       return;
     }
     await submitWithFeedback(async () => {

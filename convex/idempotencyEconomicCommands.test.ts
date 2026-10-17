@@ -434,6 +434,8 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
   ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor", "bankAccountId"]],
   // SCRUM-435: how the forward was paid selects the account it leaves, and the amount the payer saw is pinned.
   ["convex/financeCompanyForward.ts", "financeCompanyForward.recordFinanceCompanyForward", ["method", "bankAccountId", "expectedAmountMinor"]],
+  ["convex/partnerEquity.ts", "partnerEquity.add", ["paymentMethod", "bankAccountId"]],
+  ["convex/partnerEquity.ts", "partnerEquity.recordEquityMovement", ["paymentMethod", "bankAccountId"]],
 ];
 
 describe("SCRUM-57 — fields whose omission was a reproduced defect stay hashed", () => {
