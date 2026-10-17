@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { ConvexError } from "convex/values";
-import { getErrorMessage, getLocalizedErrorMessage, GENERIC_ERROR_MESSAGE } from "./errors";
+import { getCodedErrorMessage, getErrorMessage, getLocalizedErrorMessage, GENERIC_ERROR_MESSAGE } from "./errors";
 
 /** Mirrors what the browser client hands a `catch` block for a server throw. */
 function convexWrapped(inner: string, kind: "Error" | "ConvexError" = "Error"): string {
@@ -281,6 +281,21 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     }
   });
 
+  it("SCRUM-850 opening-balance-after-ledger-activity refusal resolves to Arabic in ar and keeps the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const { POSTED_LEDGER_ACTIVITY_MESSAGE: serverText } = await import("../convex/accountingCutover");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const error = new ConvexError({ code: AppErrorCode.OPENING_BALANCE_AFTER_LEDGER_ACTIVITY, message: serverText });
+    const arText = getLocalizedErrorMessage(error, ar);
+    expect(arText).toMatch(/[؀-ۿ]/);
+    expect(arText).not.toBe(serverText);
+    expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
+    // Must not point at the Manual Journal flow, which cannot correct system cash/bank accounts.
+    expect(arText).not.toMatch(/قيد يدوي|يومية يدوية/);
+  });
+
   it("SCRUM-650 purchase-cost correction refusals resolve to Arabic in ar and the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const { AppErrorCode } = await import("../convex/utils/errors");
@@ -465,9 +480,101 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(forwardCancelRefusal(proofOf([], "SETTLED"))).toBeNull();
   });
 
+  it("SCRUM-411 P2-01 every forward finalize/transfer refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { forwardGateRefusal } = await import("../convex/utils/financeCompanyForward");
+    const ar = dictionaries.ar as Record<string, string>;
+    const en = dictionaries.en as Record<string, string>;
+    const finalizeBlocks = ["UNPAID", "STALE", "POSTING_PENDING", "POSTING_FAILED", "REVERSAL_PENDING", "NEEDS_REPAIR"] as const;
+    const seen = new Set<string>();
+    for (const [gate, blocks] of [
+      ["FINALIZE", finalizeBlocks],
+      ["TRANSFER", finalizeBlocks.filter((block) => block !== "STALE")],
+    ] as const) {
+      for (const block of blocks) {
+        const refusal = forwardGateRefusal(block, gate);
+        expect(refusal.code).toBe(`FORWARD_${gate}_${block}`);
+        expect(seen.has(refusal.code)).toBe(false);
+        seen.add(refusal.code);
+        expect(en[`ServerError_${refusal.code}`]).toBe(refusal.message);
+        expect(ar[`ServerError_${refusal.code}`]).toMatch(/[؀-ۿ]/);
+        const error = new ConvexError({ code: refusal.code, message: refusal.message });
+        expect(getLocalizedErrorMessage(error, (k: string) => ar[k] ?? k)).toBe(ar[`ServerError_${refusal.code}`]);
+      }
+    }
+    // The transfer gate has no plan to compare, so a stale judgment there is the books-mismatch refusal.
+    expect(forwardGateRefusal("STALE", "TRANSFER").code).toBe("FORWARD_TRANSFER_NEEDS_REPAIR");
+    expect(seen.size).toBe(11);
+  });
+
+  it("SCRUM-411 P2-03 the unfunded first payment refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { FIRST_PAYMENT_UNFUNDED_MESSAGE } = await import("../convex/utils/financedSaleRecognition");
+    const ar = dictionaries.ar as Record<string, string>;
+    expect((dictionaries.en as Record<string, string>).ServerError_FIRST_PAYMENT_UNFUNDED).toBe(FIRST_PAYMENT_UNFUNDED_MESSAGE);
+    expect(ar.ServerError_FIRST_PAYMENT_UNFUNDED).toMatch(/[؀-ۿ]/);
+  });
+
+  it.each([
+    ["SCRUM-411 P2-02 deposit-already-paid-onward", "DEPOSIT_PAID_ONWARD_REFUSAL", "DEPOSIT_PAID_ONWARD_TO_FINANCE_COMPANY"],
+    ["SCRUM-411 P2-02 forward-deposit-provenance", "FORWARD_DEPOSIT_PROVENANCE_REFUSAL", "FORWARD_DEPOSIT_PROVENANCE_UNCLEAR"],
+    ["SCRUM-411 P2-01 customer-payment-while-forward-live", "CUSTOMER_PAYMENT_FORWARD_LIVE_REFUSAL", "CUSTOMER_PAYMENT_FORWARD_LIVE"],
+    ["SCRUM-411 P2-01 economics-change-while-forward-live", "DEAL_ECONOMICS_FORWARD_LIVE_REFUSAL", "DEAL_ECONOMICS_FORWARD_LIVE"],
+  ] as const)("%s: the refusal has an AR entry, its EN equals the server message, and it carries no amount", async (_label, constant, code) => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const refusal = (await import("../convex/utils/financeCompanyForward"))[constant];
+    const ar = dictionaries.ar as Record<string, string>;
+    expect(refusal.code).toBe(code);
+    expect((dictionaries.en as Record<string, string>)[`ServerError_${code}`]).toBe(refusal.message);
+    expect(ar[`ServerError_${code}`]).toMatch(/[؀-ۿ]/);
+    const error = new ConvexError({ code, message: refusal.message });
+    expect(getLocalizedErrorMessage(error, (k: string) => ar[k] ?? k)).toBe(ar[`ServerError_${code}`]);
+    // The finance tier's figures are never echoed: no digit at all in either language's text.
+    expect(refusal.message).not.toMatch(/\d/);
+    expect(ar[`ServerError_${code}`]).not.toMatch(/[\d٠-٩]/);
+  });
+
   it("the English dictionary text equals the server's message for both codes", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{orgCurrency}");
+  });
+});
+
+describe("getCodedErrorMessage - SCRUM-724 CR-1: a coded refusal or nothing, never raw server text", () => {
+  const table: Record<string, string> = { ServerError_SOME_CODE: "ترجمة {amount}" };
+  const t = (key: string) => table[key] ?? key;
+
+  it("returns the placeholder-filled translation for a coded refusal with a dictionary entry", () => {
+    expect(getCodedErrorMessage(new ConvexError({ code: "SOME_CODE", message: "English", amount: 5 }), t)).toBe("ترجمة 5");
+  });
+
+  it("returns null - not the server's English - for everything without a translation", () => {
+    expect(getCodedErrorMessage(new ConvexError({ code: "UNKNOWN_CODE", message: "English" }), t)).toBeNull();
+    expect(getCodedErrorMessage(new ConvexError("Cheque not found."), t)).toBeNull();
+    expect(getCodedErrorMessage(new ConvexError({ code: 42, message: "Numeric" }), t)).toBeNull();
+    expect(getCodedErrorMessage(new Error("boom"), t)).toBeNull();
+    expect(getCodedErrorMessage(undefined, t)).toBeNull();
+    expect(getCodedErrorMessage(new ConvexError({ code: "SOME_CODE", message: "x" }), () => { throw new Error("no provider"); })).toBeNull();
+  });
+
+  it("getLocalizedErrorMessage is unchanged: the coded translation, else the cleaned server message", () => {
+    expect(getLocalizedErrorMessage(new ConvexError({ code: "SOME_CODE", message: "English", amount: 5 }), t)).toBe("ترجمة 5");
+    expect(getLocalizedErrorMessage(new ConvexError("Cheque not found."), t)).toBe("Cheque not found.");
+  });
+
+  it("the SCRUM-724 deal-panel refusal codes have EN and AR entries that differ", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    for (const code of ["RETAINED_CREDIT_UNAVAILABLE", "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+      "CHEQUE_INVOICE_UNCOVERED_HELD", "CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER", "CUSTOMER_CREDIT_PAYOUT_DISABLED"]) {
+      const error = new ConvexError({ code, message: "server text" });
+      const enText = getCodedErrorMessage(error, en);
+      const arText = getCodedErrorMessage(error, ar);
+      expect(enText, code).toBeTruthy();
+      expect(arText, code).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe(enText);
+    }
   });
 });

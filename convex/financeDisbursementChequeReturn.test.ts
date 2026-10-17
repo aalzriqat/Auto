@@ -22,6 +22,7 @@ import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { salesAr, salesEn } from "../lib/i18n/domains/sales";
 import { getLocalizedErrorMessage } from "../lib/errors";
 import { ConvexError } from "convex/values";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -147,7 +148,7 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
     feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
     deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
   });
-  await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched." });
+  await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
   if (opts.forward) {
     await s.t.run(async (ctx) => {
       await ctx.db.insert("deposits", {
@@ -158,6 +159,8 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
       await ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C });
     });
   }
+  // SCRUM-411 P2-01: H + C is paid to the finance company BEFORE finalizing (null when nothing is owed).
+  const forwardId = await payForwardBeforeFinalize(s, s.owner.as, applicationId);
   await s.owner.as.mutation(api.applications.finalizeDeal, {
     idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
   });
@@ -180,15 +183,7 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
       orgId: s.orgId, applicationId, chequeId, returnReason: over.reason ?? "Bank returned: insufficient funds",
       idempotencyKey: over.key ?? crypto.randomUUID(),
     });
-  const recordForward = async () => {
-    const due = await s.t.run(async (ctx) => (await ctx.db.get(applicationId))?.financeCompanyForwardDueMinor ?? 0);
-    if (due <= 0) return null;
-    return await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-      expectedAmountMinor: due, idempotencyKey: crypto.randomUUID(),
-    });
-  };
-  return { s, quoteId, applicationId, registerCheque, confirm, cheques, app, giveBack, recordForward };
+  return { s, quoteId, applicationId, registerCheque, confirm, cheques, app, giveBack, forwardId };
 }
 
 function codeOf(error: unknown): string | null {
@@ -564,7 +559,7 @@ describe("SCRUM-239 - the forward is a separate fact", () => {
   test("g) plan-v2 deal whose forward was reported returned: the return succeeds and forward state is byte-identical", async () => {
     const d = await finalizedChequeDeal("g1", "OPEN_YEAR", { forward: true });
     const { s, applicationId } = d;
-    const forwardId = await d.recordForward();
+    const forwardId = d.forwardId;
     expect(forwardId).not.toBeNull();
     await d.confirm();
     await s.owner.as.mutation(api.financeCompanyForward.reportFinanceCompanyForwardReturned, {

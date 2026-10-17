@@ -216,6 +216,8 @@ async function finalize(s: Seeded, applicationId: Id<"financeApplications">) {
   });
   await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
     orgId: s.orgId, feeId, notes: "Nothing to match.",
+    expectedActualAmountMinor: 0,
+    expectedActualEvidenceRevision: 0,
   });
   // SCRUM-407: no manual classification step - finalization checks readiness itself.
   return await s.asUser.mutation(api.applications.finalizeDeal, {

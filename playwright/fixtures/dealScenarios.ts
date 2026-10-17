@@ -44,7 +44,6 @@ export type FinancedScenario = {
   approved: number;
   deposit?: { amount: number; method: DepositMethod };
   expectedPayment: ExpectedPaymentMethod;
-  legalInvoice: number;
   forwardMethod?: ForwardMethod;
   /** How an approval below the quotation is settled; absent = the dealership absorbs it. */
   gap?: GapAgreement;
@@ -274,12 +273,13 @@ export async function recordApproved(managerPage: Page, dealUrl: string, amount:
 
 /**
  * Who covers the net shortfall (SCRUM-766), in major units. The customer's part
- * is placed on the dealership-bound destinations that must add up to it
- * (ResolveGapDialog): cash or instalments. Paying the finance company is refused
- * until SCRUM-766 PR-B, so it is not a scenario input. The dealership-bound part
- * becomes a customer receivable (1200) at close and is billed on the legal
- * invoice (financedSalePostingPlan v2: legal invoice = approved + customer's
- * dealership-bound part).
+ * is placed on the destinations that must add up to it (ResolveGapDialog): cash
+ * or instalments to the dealership, or paid straight to the finance company. The
+ * dealership-bound part becomes a customer receivable (1200) at close and is
+ * billed on the legal invoice (financedSalePostingPlan v2: legal invoice =
+ * approved + customer's dealership-bound part). The finance-company part is not
+ * the dealership's money: it lowers the contribution the dealership forwards by
+ * the same amount (SCRUM-766 PR-B).
  */
 export type GapAgreement =
   | { mode: "DEALER_ABSORBS" }
@@ -289,6 +289,8 @@ export type GapAgreement =
       customerShare?: number;
       cash: number;
       installments: number;
+      /** Paid by the customer straight to the finance company (SCRUM-766 PR-B); 0 when absent. */
+      toFinanceCompany?: number;
     };
 
 const GAP_MODE_LABEL = {
@@ -321,10 +323,45 @@ export async function resolveAppraisalGap(
     }
     await dialog.locator("#gap-cash").fill(String(agreement.cash));
     await dialog.locator("#gap-installments").fill(String(agreement.installments));
+    await dialog.locator("#gap-financier").fill(String(agreement.toFinanceCompany ?? 0));
   }
   await dialog.locator("#gap-notes").fill(`QA TEST: net shortfall settled as ${agreement.mode}.`);
   await dialog.getByRole("button", { name: "Resolve the shortfall" }).click();
   await expect(dialog).not.toBeVisible();
+
+  // The agreement to pay the finance company is a promise: the contribution drops, and the
+  // deal can close, only after the payment is CONFIRMED with its reference (SCRUM-766 PR-B).
+  if (agreement.mode !== "DEALER_ABSORBS" && (agreement.toFinanceCompany ?? 0) > 0) {
+    await confirmCustomerPaymentToFinanceCompany(managerPage, agreement.toFinanceCompany ?? 0);
+  }
+}
+
+/** The number in a rendered money figure ("400 JOD", "1,250.500 JOD" -> 1250.5). */
+function renderedAmount(text: string | null): number {
+  return Number((text ?? "").replace(/[^0-9.]/g, ""));
+}
+
+/**
+ * Confirms, from the cockpit's payment card, that the customer paid the finance company the
+ * whole amount still awaiting confirmation (the dialog opens pre-filled with it), then checks
+ * the figures as numbers: `toContainText("0")` would also pass "400 JOD".
+ */
+export async function confirmCustomerPaymentToFinanceCompany(
+  managerPage: Page,
+  expectedConfirmedMajor: number,
+): Promise<void> {
+  const card = managerPage.getByTestId("customer-finance-company-payment-card");
+  await card.getByRole("button", { name: "Confirm payment" }).click();
+  const dialog = managerPage.getByRole("dialog");
+  await dialog.locator("#cust-fc-pay-reference").fill(`QA TEST TRF-${testDataSuffix()}`);
+  await dialog.getByRole("button", { name: "Confirm payment" }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect
+    .poll(async () => renderedAmount(await card.getByTestId("customer-finance-company-awaiting").textContent()))
+    .toBe(0);
+  await expect
+    .poll(async () => renderedAmount(await card.getByTestId("customer-finance-company-confirmed").textContent()))
+    .toBe(expectedConfirmedMajor);
 }
 
 export async function resolveAppraisalGapDealerAbsorbs(managerPage: Page, dealUrl: string): Promise<void> {
@@ -386,22 +423,9 @@ export async function closeFinancedDeal(
   await costs.getByRole("button", { name: "Confirm reconciliation" }).click();
   await expect(costs.getByRole("button", { name: "Reconcile fee" })).toHaveCount(0);
 
-  const checklist = managerPage.getByTestId("deal-closing-checklist");
-  await checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED").click();
-  const invoice = managerPage.getByRole("dialog");
-  await invoice.locator("#legal-invoice-amount").fill(String(s.legalInvoice));
-  await invoice.locator("#legal-invoice-number").fill(`INV-QA-${testDataSuffix()}`);
-  const invoiceDate = invoice.locator("#legal-invoice-date");
-  const latestDay = await invoiceDate.getAttribute("max");
-  expect(latestDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  await invoiceDate.fill(latestDay!);
-  await invoice.getByRole("button", { name: "Save Legal Invoice" }).click();
-  await expect(invoice).not.toBeVisible();
-  await expect(checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED")).toHaveAttribute(
-    "data-status",
-    "READY",
-  );
-
+  // SCRUM-411: no legal invoice is recorded. The server derives the sale from the
+  // approved amount, the contribution and the customer's gap, so a deal with no
+  // real invoice closes once the other prerequisites are met.
   const close = nextStep.getByRole("button", { name: "Close the deal", exact: true });
   await expect(close).toBeVisible();
   await close.click();

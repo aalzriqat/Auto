@@ -21,6 +21,7 @@ import * as financingEconomicsModule from "./financingEconomics";
 import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { payInvoice, seedSaleCompletedPosting } from "../test-utils/saleInvoiceFixtures";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -194,6 +195,36 @@ async function legacyCancelSaleThroughSalesDoor(s: Seeded, saleId: unknown) {
 }
 
 /**
+ * SCRUM-411 P2-01: a deal whose deposit and contribution were paid onward to the
+ * finance company before the sale cannot be cancelled while that payment is on the
+ * books (`cancelApplication` refuses until it is reversed or reported returned).
+ * Takes every live payment on the deal back through the real mutation, as a manager
+ * would, and returns how many it reversed. A no-op for a deal that never owed one,
+ * so it is safe before any cancellation.
+ */
+async function takeForwardBack(s: Seeded, applicationId: unknown): Promise<number> {
+  const live = (
+    await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())
+  ).filter(
+    (f) =>
+      f.orgId === s.orgId &&
+      f.applicationId === applicationId &&
+      f.reversedAt === undefined &&
+      f.reversalRequestedAt === undefined
+  );
+  for (const forward of live) {
+    await s.asUser.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+      orgId: s.orgId,
+      applicationId: applicationId as Id<"financeApplications">,
+      forwardId: forward._id,
+      reason: "Deal is being cancelled; the payment to the finance company is taken back.",
+      idempotencyKey: crypto.randomUUID(),
+    });
+  }
+  return live.length;
+}
+
+/**
  * Walks a deal to APPROVED and, unless told otherwise, finalizes it.
  *
  * `downPayment` is the customer's own money in the deal; `totalFinancedAmount`
@@ -280,8 +311,6 @@ async function runDeal(
     };
     /** Runs after the route is chosen and before the vehicle goes out. */
     beforeHandover?: (applicationId: Id<"financeApplications">) => Promise<void>;
-    /** The legal invoice's date — THE recognition date (`financedSaleRecognitionDate`). Defaults to now. */
-    legalInvoiceDate?: number;
     /** Runs after every prerequisite is on the record and immediately before `finalizeDeal`. */
     beforeFinalize?: (applicationId: Id<"financeApplications">) => Promise<void>;
   } = {}
@@ -435,21 +464,13 @@ async function runDeal(
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
 
-  // The legal invoice the car was sold under, and the deal's costs settled and
-  // checked. Together they are what finalization's automatic readiness check
-  // requires (SCRUM-407 retired the manual classification step). The single cost line carries a
+  // The deal's costs settled and checked - what finalization's automatic readiness
+  // check requires (SCRUM-407 retired the manual classification step; SCRUM-411
+  // retired the manual legal invoice, so none is recorded here). The single cost line carries a
   // zero actual and is NOT deducted from the settlement — the shape the refusal
   // message itself suggests for a deal the dealership bore no costs on — so the
   // remittance stays the whole approval and these tests keep testing the supplier.
   if (throughRouteNeedsEconomics) {
-    await s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: s.orgId,
-      applicationId,
-      legalInvoiceAmountMinor: VEHICLE_PRICE * SCALE,
-      legalInvoiceNumber: `INV-${applicationId}`,
-      legalInvoiceDate: opts.legalInvoiceDate ?? Date.now(),
-      issuedTo: "FINANCE_COMPANY",
-    });
     const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, { expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -463,6 +484,8 @@ async function runDeal(
     });
     await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: s.orgId, feeId, notes: "Nothing to match.",
+      expectedActualAmountMinor: 0,
+      expectedActualEvidenceRevision: 0,
     });
   }
 
@@ -498,6 +521,22 @@ async function runDeal(
   }
 
   await opts.beforeFinalize?.(applicationId);
+  // SCRUM-411 P2-01: the deposit (H) and the contribution (D) are paid to the finance
+  // company BEFORE the sale, and `finalizeDeal` refuses until that payment is on the
+  // books. A no-op when nothing is owed. Skipped when the operator's deposit choice is
+  // anything but "apply it to this purchase": the payment is judged against the plan
+  // finalize will freeze, which then carries no H, so paying H here would only leave a
+  // stale payment behind (and add accounting events the refusal cases forbid).
+  const depositIsApplied =
+    opts.depositResolution === undefined ||
+    opts.depositResolution.treatment === "APPLY_TO_TRANSACTION_SETTLEMENT";
+  // Also skipped when `beforeFinalize` already closed the deal itself: the payment is
+  // only recordable (and only needed) before the sale exists, and the finalize below
+  // then just replays the stored sale.
+  const beforeSale = await s.t.run((ctx) => ctx.db.get(applicationId));
+  if (depositIsApplied && beforeSale?.status === "APPROVED" && beforeSale.finalizedSaleId === undefined) {
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
+  }
   const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
     orgId: s.orgId,
     applicationId,
@@ -806,29 +845,26 @@ describe("THROUGH_DEALERSHIP is unchanged by any of this", () => {
  * that was wrong rather than by the shape of its fix.
  */
 describe("a reservation deposit on the direct route", () => {
-  test("the route is refused while the deposit is unresolved, at the point of choosing", async () => {
+  test("a held deposit does not refuse the route: plan v3 forwards it to the finance company", async () => {
     const s = await seedDealership("dep0");
     const { applicationId } = await runDeal(s, { deposit: 3_000, finalize: false });
 
-    // Refused HERE rather than at finalization. On this route the dealership
-    // bills the customer nothing for the car, so the deposit always exceeds
-    // what it billed — and the treatments available are genuinely constrained:
-    // applying it to the settlement is refused once it exceeds the margin
-    // (ordinary, since deposits run 5-10% of price and consignment margins are
-    // often smaller), and refunding needs a method, the deposit permission and
-    // a different approver from whoever took it.
-    //
-    // Failing closed where the operator is choosing leaves them somewhere to
-    // go. Failing at finalization left them holding a deal they could neither
-    // complete nor unwind — which is what an earlier version of this PR did.
+    // SCRUM-407 c21033 / SCRUM-411: the route used to be refused while a deposit
+    // was held, because the direct route bills the customer nothing for the car
+    // and the deposit had nowhere to land. Plan v3 gives it somewhere: the
+    // deposit is discharged at the sale and owed onward to the finance company
+    // (H), exactly as on the through route. So the payer alone decides, and both
+    // the screen's answer and the server's answer are "yes".
+    const view = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
+    expect(view?.canSettleDirectToSupplier).toBe(true);
+
     await expect(
       s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
         orgId: s.orgId, applicationId, route: "DIRECT_TO_SUPPLIER",
       })
-    ).rejects.toThrow(/reservation deposit/i);
+    ).resolves.toBeDefined();
 
-    // The other route is unaffected: the customer is billed the gross there, so
-    // the deposit is simply absorbed by what they owe.
+    // And the other route is unaffected.
     await expect(
       s.asUser.mutation(api.applications.setSupplierSettlementRoute, {
         orgId: s.orgId, applicationId, route: "THROUGH_DEALERSHIP",
@@ -836,28 +872,41 @@ describe("a reservation deposit on the direct route", () => {
     ).resolves.toBeDefined();
   });
 
-  test("a deposit taken AFTER the route was chosen is refused at finalization, in the same terms", async () => {
+  test("a deposit taken AFTER the route was chosen is paid onward to the finance company and the deal finalizes", async () => {
     const s = await seedDealership("dep2");
 
-    // The route-time guard cannot see this ordering: at the moment the route was
-    // chosen there was no deposit to refuse. `deposits.create` needs only
-    // VIEW_SALES and the vehicle is RESERVED rather than SOLD, so nothing stops
-    // one being taken afterwards.
-    //
-    // Without the matching guard at finalization the operator hit
-    // `resolveReservationDeposits`, whose message names five treatments — and
-    // this PR deleted the only UI that could supply any of them. That is exactly
-    // the stranding the route-time refusal exists to prevent, reached by the
-    // other door.
-    await expect(
-      runDeal(s, { route: "DIRECT_TO_SUPPLIER", depositAfterRoute: 3_000 })
-      // Pinned to wording unique to the FINALIZATION refusal. Two looser
-      // regexes both pass for the wrong reason: `/reservation deposit/i` also
-      // matches the pre-existing `resolveReservationDeposits` message, so it
-      // passes without the guard at all; and `/resolve the deposit/i` also
-      // matches the route-time refusal, so it would pass if this test's
-      // deposit were ever created before the route instead of after.
-    ).rejects.toThrow(/then finalize/i);
+    // `deposits.create` needs only VIEW_SALES and the vehicle is RESERVED rather
+    // than SOLD, so a deposit can still be taken after the route was chosen. The
+    // down payment equals it, because the deposit may not exceed the customer's
+    // first payment (DEPOSIT_EXCEEDS_FIRST_PAYMENT). `runDeal` records the
+    // payment to the finance company (H) before it finalizes, as finalize requires.
+    const { applicationId, saleId } = await runDeal(s, {
+      route: "DIRECT_TO_SUPPLIER",
+      downPayment: 3_000,
+      depositAfterRoute: 3_000,
+    });
+    expect(saleId).toBeTruthy();
+
+    // One payment, for exactly the deposit; no contribution is recorded on this deal.
+    const forwards = (await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).filter(
+      (row) => row.orgId === s.orgId && row.applicationId === applicationId
+    );
+    expect(forwards).toHaveLength(1);
+    expect(forwards[0]!.amountMinor).toBe(3_000 * SCALE);
+    expect(forwards[0]!.depositPortionMinor).toBe(3_000 * SCALE);
+    expect(forwards[0]!.contributionPortionMinor).toBe(0);
+
+    // The hold is consumed once, as consideration for the car.
+    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    expect(deposits.some((d) => d.orgId === s.orgId && d.status === "HELD")).toBe(false);
+
+    // The sale owes the finance company H (Cr AP-Finance) and the payment cleared
+    // it (Dr AP-Finance), so the account nets to nothing; the company still owes
+    // the dealership nothing, because it paid the supplier.
+    const posted = await ledgerBySystemKey(s);
+    expect(posted[SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
+    expect(posted[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(0);
+    expect(posted[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe(MARGIN * SCALE);
   });
 
   test("a deposit reduces what the financier owes, and never becomes customer debt", async () => {
@@ -1035,6 +1084,9 @@ describe("cancelling a direct-settled financed deal", () => {
     const s = await seedDealership("can1");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER" });
 
+    // SCRUM-411 P2-01: a payment onward to the finance company would block the cancel;
+    // this deal holds no deposit and owes none, so there is nothing to take back.
+    expect(await takeForwardBack(s, applicationId)).toBe(0);
     await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, applicationId, reason: "Customer withdrew",
     });
@@ -1219,11 +1271,10 @@ describe("the screen's answer and the server's answer are the same answer", () =
     { name: "a lease", opts: { mode: "LEASE" as const }, direct: false },
     { name: "an internal installment", opts: { mode: "INTERNAL_INSTALLMENT" as const }, direct: false },
     { name: "a legacy deal with no mode but a finance company", opts: { omitMode: true }, direct: true },
-    // The payer is not the only thing that refuses this route. A held عربون
-    // does too, because the direct route bills the customer nothing for the car
-    // and the deposit has nowhere to land — so a screen that asks only "who
-    // pays?" offers an option the server rejects.
-    { name: "a deal holding a reservation deposit", opts: { deposit: 3_000 }, direct: false },
+    // A held عربون no longer refuses this route: plan v3 forwards it to the
+    // finance company with the contribution, so the payer alone decides and the
+    // screen and the server both say yes.
+    { name: "a deal holding a reservation deposit", opts: { deposit: 3_000 }, direct: true },
   ];
 
   for (const [index, c] of cases.entries()) {
@@ -1551,6 +1602,7 @@ describe("the deal cockpit query", () => {
     // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
     await settleShortfallAsDealerAbsorbs(s, applicationId);
 
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
@@ -3061,9 +3113,8 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
    */
   test("a foreign-currency deposit is not summed into the customer's total", async () => {
     const s = await seedDealership("foreignDeposit");
-    // THROUGH_DEALERSHIP because the direct route refuses to be chosen while an
-    // unresolved reservation deposit is held — and the deposit is the point of
-    // this test. It is also the route the mockup depicts.
+    // THROUGH_DEALERSHIP: the route the mockup depicts, and the one this
+    // deposit-reading test was written against.
     const { applicationId } = await runDeal(s, {
       route: "THROUGH_DEALERSHIP",
       finalize: false,
@@ -3156,6 +3207,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
 
   test("a supplier paid exactly his entitlement owes nothing, and no claim is opened", async () => {
     const { s, applicationId } = await directDealApprovedAt("s30Exact", SUPPLIER_ENTITLEMENT);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     // He received 15,000 and was owed 15,000. A claim for anything at all would
@@ -3172,6 +3224,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("a supplier paid 3,000 above his entitlement owes exactly 3,000, not the 5,000 dealer margin", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Excess", APPROVED);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     // The excess that genuinely reached him.
@@ -3204,6 +3257,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
         customerGapInstallmentToDealerMinor: 800 * SCALE,
       });
     });
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     // Unmoved by the customer's payment. This is the case that shows the old
@@ -3231,6 +3285,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("a dealership contribution moves its own profit, never the supplier's debt", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Contribution", APPROVED);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     const before = await claimDueOf(s);
@@ -3261,6 +3316,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("a receipt above the corrected claim is refused — the old claim was 2,000 larger", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Overpay", APPROVED);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     const claim = (await supplierClaimsOf(s)).find((r) => r.status !== "CANCELLED")!;
@@ -3289,6 +3345,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("a partial receipt leaves the remainder outstanding, against the corrected claim", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Partial", APPROVED);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
     const claim = (await supplierClaimsOf(s)).find((r) => r.status !== "CANCELLED")!;
@@ -3308,6 +3365,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("cancelling the deal reverses the corrected claim in both the GL and the subledger", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Cancel", APPROVED);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -3335,6 +3393,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
   test("the cockpit reports the same economic state the subledger and the GL hold", async () => {
     const APPROVED = 18_000;
     const { s, applicationId } = await directDealApprovedAt("s30Reconcile", APPROVED);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
@@ -3738,6 +3797,7 @@ describe("automatic commission is based on recognized earnings, not the commerci
     });
     // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
     await settleShortfallAsDealerAbsorbs(s, applicationId);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -3858,6 +3918,7 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
     });
     // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
     await settleShortfallAsDealerAbsorbs(s, applicationId);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     return s;
   }
@@ -3982,6 +4043,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     });
     // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
     await settleShortfallAsDealerAbsorbs(s, applicationId);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -4157,7 +4219,9 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     // dashboard was publishing a confident 5,000 for it.
     const { s, saleId } = await financedDirectSale("s30DashUnknown", 18_000);
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      // Both records of the earning: the plan-v3 completion also freezes the
+      // ledger's own net, and a legacy row never carried it.
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
     });
 
     const dash = (await s.asUser.query(api.dashboard.stats, {
@@ -4220,6 +4284,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       await ctx.db.patch(saleId, {
         saleDate: Date.now() - FORTY_FIVE_DAYS,
         consignedMarginMinor: undefined,
+        financedNetRevenue: undefined,
       });
     });
 
@@ -4273,11 +4338,12 @@ describe("financed direct evidence that has gone missing fails closed", () => {
           supplierSettlementRoute: undefined,
           consignedMarginMinor: undefined,
           consignedMarginCurrency: undefined,
+          financedNetRevenue: undefined,
         } as never);
       }
 
       // The state the fallback is reached from: no recorded earning at all.
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
     });
 
     // MONTH, deliberately, and not ALL_TIME: with no lower bound the query
@@ -4336,13 +4402,14 @@ describe("financed direct evidence that has gone missing fails closed", () => {
           supplierSettlementRoute: undefined,
           consignedMarginMinor: undefined,
           consignedMarginCurrency: undefined,
+          financedNetRevenue: undefined,
         } as never);
       };
 
       // The deal user: 1,000 of complete earnings, plus one deal whose earning
       // cannot be established at all.
       await ownedSale(1_000, s.userId, "A");
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
       // The approver: 900, and every dinar of it accounted for.
       await ownedSale(900, s.approverId, "B");
 
@@ -4498,7 +4565,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
   test("the sales report withholds the profit it cannot establish instead of publishing 5,000", async () => {
     const { s, saleId } = await financedDirectSale("s30ReportErased", 18_000);
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
     });
 
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
@@ -4524,7 +4591,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
   test("salesperson performance does not rank a rep on an earning nobody can substantiate", async () => {
     const { s, saleId } = await financedDirectSale("s30PerfErased", 18_000);
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
     });
 
     const perf = await s.asUser.query(api.reports.getSalespersonPerformance, {
@@ -4600,6 +4667,7 @@ describe("a settlement advice that contradicts the approval", () => {
     });
     // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
     await settleShortfallAsDealerAbsorbs(s, applicationId);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     const saleId = await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -5176,6 +5244,7 @@ describe("a settlement advice that contradicts the approval", () => {
         await settleShortfallAsDealerAbsorbs(s, id);
       },
     });
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
@@ -5932,6 +6001,7 @@ describe("amending one field of a settlement advice", () => {
     });
     // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
     await settleShortfallAsDealerAbsorbs(s, applicationId);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     // The advice as it actually arrived: wrong amount, but a real cheque number
     // and a real date, both of which are the evidence.
@@ -6055,6 +6125,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
     });
     // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
     await settleShortfallAsDealerAbsorbs(s, applicationId);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     const saleId = (await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -6222,7 +6293,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
   test("a turnover shortened by an unknown earning says so on the flag the UI reads", async () => {
     const { s, saleId } = await financedDirectDeal("s30TurnFlag");
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
     });
 
     const dash = (await s.asUser.query(api.dashboard.stats, {
@@ -6373,6 +6444,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
     });
     // SCRUM-116: approved below the quotation; the shortfall is the dealership's here.
     await settleShortfallAsDealerAbsorbs(s, applicationId);
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
     return { s, applicationId };
   }
@@ -6755,10 +6827,13 @@ describe("deposit authority — whose money, and was it actually applied (c16213
     // version of this applied every held deposit on a planned sale regardless of
     // what the operator asked for, which would have silently consumed money
     // somebody had just decided to give back.
+    // SCRUM-411 P2-03: no first payment is agreed here (down payment 0). A refunded
+    // deposit on a deal whose agreed first payment it founded is refused instead
+    // (scrum411ForwardOrdering), because that payment would be funded by nothing.
     const { applicationId } = await runDeal(s, {
       route: "THROUGH_DEALERSHIP",
       deposit: 3_000,
-      downPayment: 3_000,
+      downPayment: 0,
       depositTakenBy: "approver",
       depositResolution: { treatment: "REFUND_TO_CUSTOMER", refundMethod: "CASH" },
     });
@@ -6916,14 +6991,22 @@ describe("the closing matrix c16216 requires", () => {
 
     const after = await ledgerBySystemKey(s);
 
-    // Finalization moved no cash at all, by any tender.
-    for (const key of [
-      SYSTEM_KEYS.CASH_ON_HAND,
-      SYSTEM_KEYS.BANK_ACCOUNT,
-      SYSTEM_KEYS.CHEQUES_IN_HAND,
-    ]) {
+    // Finalization moved no cash at all, by any tender. The one movement since
+    // the snapshot is the SCRUM-411 P2-01 payment of the deposit onward to the
+    // finance company, recorded BEFORE the sale (by bank transfer in this
+    // harness): it leaves the bank, and nothing else.
+    const forwarded = (
+      await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())
+    )
+      .filter((f) => f.reversedAt === undefined)
+      .reduce((sum, f) => sum + f.amountMinor, 0);
+    expect(forwarded).toBeGreaterThanOrEqual(3_000 * SCALE);
+    for (const key of [SYSTEM_KEYS.CASH_ON_HAND, SYSTEM_KEYS.CHEQUES_IN_HAND]) {
       expect((after[key] ?? 0) - (atHandover![key] ?? 0)).toBe(0);
     }
+    expect((after[SYSTEM_KEYS.BANK_ACCOUNT] ?? 0) - (atHandover![SYSTEM_KEYS.BANK_ACCOUNT] ?? 0)).toBe(
+      -forwarded
+    );
 
     // What it did instead: released the liability, exactly to zero.
     expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
@@ -7038,6 +7121,12 @@ describe("the closing matrix c16216 requires", () => {
       deposit: 3_000,
       downPayment: 3_000,
     });
+
+    // SCRUM-411 P2-01: the deposit was paid onward to the finance company before
+    // the sale, and `cancelApplication` refuses a deal with that payment on the
+    // books. Taking it back is its own reversal (not part of the sale's unwind),
+    // so it is done here and the entry count below starts after it.
+    expect(await takeForwardBack(s, applicationId)).toBe(1);
 
     const entriesBefore = await s.t.run((ctx) =>
       ctx.db.query("journalEntries").collect()
@@ -7286,10 +7375,11 @@ describe("the closing matrix c16216 requires", () => {
     // c16216 §6, and its wording correction. "Not H" is a statement about the
     // SETTLEMENT, not about the money sitting still: the refund runs its own
     // rule and really does pay out.
+    // No first payment is agreed (down payment 0): see the SCRUM-411 P2-03 note above.
     const { applicationId } = await runDeal(s, {
       route: "THROUGH_DEALERSHIP",
       deposit: 3_000,
-      downPayment: 3_000,
+      downPayment: 0,
       depositTakenBy: "approver",
       depositResolution: { treatment: "REFUND_TO_CUSTOMER", refundMethod: "CASH" },
     });
@@ -7325,10 +7415,11 @@ describe("the closing matrix c16216 requires", () => {
   test("a forfeited deposit leaves the financier owing everything, and becomes income exactly once", async () => {
     const s = await seedDealership("c16216forfeit");
 
+    // No first payment is agreed (down payment 0): see the SCRUM-411 P2-03 note above.
     const { applicationId } = await runDeal(s, {
       route: "THROUGH_DEALERSHIP",
       deposit: 3_000,
-      downPayment: 3_000,
+      downPayment: 0,
       depositTakenBy: "approver",
       depositResolution: { treatment: "FORFEITED" },
     });
@@ -7436,6 +7527,10 @@ describe("a reversal reads back the identity it was recorded under (Sonnet MAX)"
       })
     );
 
+    // The deposit's onward payment to the finance company is taken back first
+    // (a cancellation is refused while it is on the books). It is its own entry
+    // and event, so it cannot touch the decoy.
+    expect(await takeForwardBack(s, applicationId)).toBe(1);
     await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -7496,6 +7591,11 @@ describe("a deposit released inside a sale journal stays locked until that journ
       deposit: 3_000,
       downPayment: 3_000,
     });
+
+    // The deposit's onward payment to the finance company is taken back while the
+    // period is still open: a cancellation is refused while it is on the books, and
+    // the refusal under test below is the period's, not that one.
+    expect(await takeForwardBack(s, applicationId)).toBe(1);
 
     // The sale posted while the period was open. Close it, so the cancellation's
     // reversal cannot post — the ordinary month-end shape, not an exotic one.
@@ -7569,6 +7669,10 @@ describe("a deposit released inside a sale journal stays locked until that journ
     );
     expect(applicationsBefore.length).toBeGreaterThan(1);
 
+    // Taken back while the period is open; see the sibling test above. Two deposits
+    // are still one payment onward to the finance company.
+    expect(await takeForwardBack(s, applicationId)).toBe(1);
+
     await s.t.run(async (ctx) => {
       for (const period of await ctx.db.query("accountingPeriods").collect()) {
         await ctx.db.patch(period._id, { status: "CLOSED" as const });
@@ -7612,6 +7716,11 @@ describe("a deposit released inside a sale journal stays locked until that journ
     // cancellation succeeds while doing nothing sale-owned. Catching a
     // destructive call is strictly worse than not making it, so the assertion
     // moved with the behaviour rather than being relaxed to fit it.
+    //
+    // SCRUM-411 P2-01: the deposit's onward payment to the finance company is
+    // taken back first (the period is still open); `cancelApplication` refuses
+    // while it is on the books, which is not what this test is about.
+    expect(await takeForwardBack(s, applicationId)).toBe(1);
     await s.t.run(async (ctx) => {
       for (const period of await ctx.db.query("accountingPeriods").collect()) {
         await ctx.db.patch(period._id, { status: "CLOSED" as const });
@@ -7651,6 +7760,10 @@ describe("a deposit released inside a sale journal stays locked until that journ
       deposit: 3_000,
       downPayment: 3_000,
     });
+
+    // The deposit's onward payment to the finance company is taken back while the
+    // period is open; a cancellation is refused while it is on the books.
+    expect(await takeForwardBack(s, applicationId)).toBe(1);
 
     // Refused while closed…
     await s.t.run(async (ctx) => {
@@ -7734,6 +7847,9 @@ describe("a stale finance application cannot tear down the sale that replaced it
       downPayment: 3_000,
     });
 
+    // SCRUM-411 P2-01: this deal holds no deposit, so nothing was paid onward to the
+    // finance company and there is nothing to take back before the later cancel.
+    expect(await takeForwardBack(s, applicationId)).toBe(0);
     await legacyCancelSaleThroughSalesDoor(s, saleId!);
 
     // The precondition of the whole defect, asserted rather than assumed:
@@ -7849,6 +7965,9 @@ describe("a stale finance application cannot tear down the sale that replaced it
       downPayment: 3_000,
     });
 
+    // The deposit's onward payment to the finance company is taken back, so the
+    // later `cancelApplication` is not refused for it.
+    expect(await takeForwardBack(s, applicationId)).toBe(1);
     await legacyCancelSaleThroughSalesDoor(s, saleId!);
 
     // Cancelling the sale reinstated the hold: that is the legitimate,
@@ -7926,6 +8045,8 @@ describe("a stale finance application cannot tear down the sale that replaced it
 
     // The positive control for the application door. A fix that simply stopped
     // tearing anything down would pass every test above and break the product.
+    // (This deal holds no deposit, so no payment onward to the finance company exists - SCRUM-411 P2-01.)
+    expect(await takeForwardBack(s, applicationId)).toBe(0);
     await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       applicationId,
@@ -8058,6 +8179,8 @@ describe("DIRECT_TO_SUPPLIER: the finance company's configured fees gate finaliz
     await recordActual(s, { applicationId, templateIndex: 1, feeType: "COMMISSION", actualAmountMinor: 0 });
     await plantLegacyClassified(s, applicationId);
 
+    // SCRUM-411 P2-01: a no-op unless a deposit or contribution is owed onward.
+    await payForwardBeforeFinalize(s, s.asUser, applicationId);
     const saleId = await finalize(s, applicationId);
     expect(saleId).toBeTruthy();
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
@@ -8098,18 +8221,14 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
       orgId: s.orgId, applicationId, approvedAmountMinor: VEHICLE_PRICE * SCALE, basis: "MANUAL", notes: "Approved at the quotation.",
     });
   };
-  /** The legal invoice and a reconciled cost as `runDeal` records them, plus a legacy stamp the finalize door must ignore. */
+  /** A reconciled cost as `runDeal` records it, plus a legacy stamp the finalize door must ignore. */
   const invoiceAndClassify = async (s: Seeded, applicationId: Id<"financeApplications">) => {
-    await s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: VEHICLE_PRICE * SCALE,
-      legalInvoiceNumber: `INV-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
-    });
     const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
       expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
       feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
       deductedFromSettlement: false, actualAmountMinor: 0, description: "The dealership bore no closing costs on this deal.",
     });
-    await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match." });
+    await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
     // A LEGACY stamp, planted raw: SCRUM-407 retired the command that wrote it,
     // and these cases prove finalization never trusts one.
     await s.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
@@ -8256,7 +8375,7 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
           orgId: s.orgId, applicationId: id, templateIndex: 0, feeType: "APPRAISAL_FEE",
           expectedCurrency: "JOD", actualAmountMinor: 80 * SCALE, idempotencyKey: crypto.randomUUID(),
         });
-        await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "matched" });
+        await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "matched", expectedActualAmountMinor: 80 * SCALE, expectedActualEvidenceRevision: 0 });
       },
     });
     await invoiceAndClassify(s, applicationId);
@@ -8274,15 +8393,15 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
 });
 
 /**
- * ONE recognition date (owner-proxy finding on f1cca, AF-80).
+ * ONE recognition date (owner-proxy finding on f1cca, AF-80; SCRUM-411).
  *
- * `legalInvoiceDate` has always been documented as "the date, which decides the
- * period revenue lands in", and `recordLegalInvoice` audits a date-only change
- * for exactly that reason — while `finalizeDeal` dated the sale at the wall
- * clock. `financedSaleRecognitionDate` is now the single rule, and these prove
- * the sale, its journal and its period follow the invoice, not the click.
+ * `financedSaleRecognitionDate` is the single rule. Plans v1/v2 followed the
+ * typed legal-invoice date; plan v3 (SCRUM-411) follows the evidenced vehicle
+ * HANDOVER, so no employee types the date revenue lands under. These prove the
+ * sale, its journal and its period follow the handover, not the click, and that
+ * a handover in a period nobody can post to is refused before anything is written.
  */
-describe("the legal invoice's date is THE recognition date", () => {
+describe("the vehicle handover date is THE recognition date", () => {
   const DAY = 24 * 60 * 60 * 1000;
 
   /**
@@ -8306,17 +8425,22 @@ describe("the legal invoice's date is THE recognition date", () => {
         ...(opts.closeEarlier ? { closedAt: Date.now(), closedBy: s.userId } : {}),
         createdAt: Date.now(),
       });
-      return { earlierPeriodId: earlier, currentPeriodId: seeded._id, invoiceDate: boundary - 5 * DAY };
+      return { earlierPeriodId: earlier, currentPeriodId: seeded._id, handoverDate: boundary - 5 * DAY };
     });
   }
 
-  test("an invoice dated in an earlier OPEN period recognizes the sale IN that period, on that date", async () => {
+  /** The handover as an evidenced server fact, moved the way a backdated handover would be. */
+  const handedOverOn = (s: Seeded, handoverDate: number) => async (applicationId: Id<"financeApplications">) => {
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: handoverDate }));
+  };
+
+  test("a handover dated in an earlier OPEN period recognizes the sale IN that period, on that date", async () => {
     const s = await seedDealership("recog-open", { sourceType: "STOCK" });
-    const { earlierPeriodId, invoiceDate } = await splitPeriods(s, { closeEarlier: false });
-    const { saleId } = await runDeal(s, { legalInvoiceDate: invoiceDate });
+    const { earlierPeriodId, handoverDate } = await splitPeriods(s, { closeEarlier: false });
+    const { saleId } = await runDeal(s, { beforeFinalize: handedOverOn(s, handoverDate) });
 
     const sale = await s.t.run((ctx) => ctx.db.get(saleId!));
-    expect(sale?.saleDate).toBe(invoiceDate);
+    expect(sale?.saleDate).toBe(handoverDate);
 
     const saleEntries = await s.t.run(async (ctx) =>
       (await ctx.db.query("journalEntries").collect()).filter(
@@ -8324,39 +8448,29 @@ describe("the legal invoice's date is THE recognition date", () => {
       )
     );
     expect(saleEntries).toHaveLength(1);
-    expect(saleEntries[0]?.accountingDate).toBe(invoiceDate);
+    expect(saleEntries[0]?.accountingDate).toBe(handoverDate);
     expect(saleEntries[0]?.periodId).toBe(earlierPeriodId);
     expect(saleEntries[0]?.status).toBe("POSTED");
-    // Revenue really landed: the legal invoice, in the invoice's own period.
+    // Revenue really landed, in the handover's own period.
     const ledger = await ledgerBySystemKey(s);
     expect(ledger[SYSTEM_KEYS.SALES_REVENUE]).toBe(-VEHICLE_PRICE * SCALE);
   });
 
-  test("an invoice dated in a CLOSED period queues the sale for THAT period rather than recognizing it today", async () => {
+  test("a handover dated in a CLOSED period REFUSES finalization before anything is written (no sale, no queued posting)", async () => {
     const s = await seedDealership("recog-closed", { sourceType: "STOCK" });
-    const { invoiceDate } = await splitPeriods(s, { closeEarlier: true });
-    const { saleId } = await runDeal(s, { legalInvoiceDate: invoiceDate });
+    const { handoverDate } = await splitPeriods(s, { closeEarlier: true });
+    await expect(runDeal(s, { beforeFinalize: handedOverOn(s, handoverDate) })).rejects.toThrow(/accounting period/i);
 
-    const sale = await s.t.run((ctx) => ctx.db.get(saleId!));
-    expect(sale?.saleDate).toBe(invoiceDate);
-
-    // Nothing posted into the open period under the sale's name, and the
-    // closed month was not written into either: the event waits in the
-    // outbox, dated to the invoice, for a human to reopen the period.
-    const saleEntries = await s.t.run(async (ctx) =>
-      (await ctx.db.query("journalEntries").collect()).filter(
-        (e) => e.orgId === s.orgId && e.sourceType === "sales" && e.sourceId === String(saleId)
-      )
-    );
-    expect(saleEntries).toEqual([]);
+    // Judged by readiness before any write: no sale exists, nothing waits in the
+    // outbox under the sale's name, and the closed month was never written into.
+    const sales = await s.t.run(async (ctx) => (await ctx.db.query("sales").collect()).filter((row) => row.orgId === s.orgId));
+    expect(sales).toEqual([]);
     const queued = await s.t.run(async (ctx) =>
       (await ctx.db.query("pendingAccountingEvents").collect()).filter(
-        (r) => r.orgId === s.orgId && r.kind === "POST" && r.idempotencyKey === `sale_completed_${saleId}`
+        (r) => r.orgId === s.orgId && r.idempotencyKey.startsWith("sale_completed_")
       )
     );
-    expect(queued).toHaveLength(1);
-    expect(queued[0]?.status).toBe("PENDING");
-    expect(queued[0]?.accountingDate).toBe(invoiceDate);
+    expect(queued).toEqual([]);
     const ledger = await ledgerBySystemKey(s);
     expect(ledger[SYSTEM_KEYS.SALES_REVENUE] ?? 0).toBe(0);
   });
@@ -8384,17 +8498,17 @@ describe("the legal invoice's date is THE recognition date", () => {
     expect(app?.legalInvoiceDate).toBeUndefined();
   });
 
-  test("a legacy invoice date that is not a usable timestamp REFUSES finalization rather than silently dating the sale today (Codex AF-CUST-08)", async () => {
+  test("a handover that is not a usable past instant REFUSES finalization rather than silently dating the sale today (Codex AF-CUST-08)", async () => {
     for (const bad of [-1, 1.5, Number.NaN, Date.now() + 3 * DAY]) {
       const s = await seedDealership(`recog-legacy-${String(bad).replace(/[^a-z0-9]/gi, "")}`, { sourceType: "STOCK" });
       await expect(
         runDeal(s, {
           beforeFinalize: async (applicationId) => {
             // Written around the validating writer, as a legacy or raw-edited row would be.
-            await s.t.run((ctx) => ctx.db.patch(applicationId, { legalInvoiceDate: bad }));
+            await s.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: bad }));
           },
         })
-      ).rejects.toThrow(/legal invoice (date is not a real timestamp|is dated in the future)/);
+      ).rejects.toThrow(/handed over|handover/i);
       const sales = await s.t.run(async (ctx) => (await ctx.db.query("sales").collect()).filter((row) => row.orgId === s.orgId));
       expect(sales).toEqual([]);
       const ledger = await ledgerBySystemKey(s);
@@ -8402,13 +8516,20 @@ describe("the legal invoice's date is THE recognition date", () => {
     }
   });
 
-  test("the pure rule: absent falls back to finalization, present must be a real non-future instant", () => {
+  test("the pure rule: v1/v2 follow the invoice date (absent = finalization), v3 follows the handover", () => {
     const now = Date.now();
+    // Historical two-argument callers keep the invoice-date rule (default plan 2).
     expect(financedSaleRecognitionDate({ legalInvoiceDate: undefined }, now)).toBe(now);
     expect(financedSaleRecognitionDate({ legalInvoiceDate: now - DAY }, now)).toBe(now - DAY);
     expect(financedSaleRecognitionDate({ legalInvoiceDate: 0 }, now)).toBe(0);
     for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, now + 3 * DAY]) {
       expect(() => financedSaleRecognitionDate({ legalInvoiceDate: bad }, now)).toThrow();
+    }
+    // v3: the evidenced handover dates the sale; a typed invoice date never does.
+    expect(financedSaleRecognitionDate({ vehicleHandoverAt: now - 2 * DAY, legalInvoiceDate: now - DAY }, now, 3)).toBe(now - 2 * DAY);
+    expect(() => financedSaleRecognitionDate({ legalInvoiceDate: now - DAY }, now, 3)).toThrow(/handover/i);
+    for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, now + 3 * DAY]) {
+      expect(() => financedSaleRecognitionDate({ vehicleHandoverAt: bad }, now, 3)).toThrow(/handover/i);
     }
   });
 
@@ -8534,6 +8655,10 @@ describe("SCRUM-407: automatic closing readiness", () => {
         await clearStamp(through, id);
         refusedAsSales = await finalizeAs(salesMember, through, id).then(() => null, (error: unknown) => error);
         expect(await salesOf(through)).toEqual([]);
+        // SCRUM-411 P2-01: the payment to the finance company is on the books before
+        // the accountant closes the deal (a no-op when nothing is owed). Recorded only
+        // AFTER the SALES refusal above, which is judged before any forward check.
+        await payForwardBeforeFinalize(through, through.asUser, id);
         await finalizeAs(accountantMember, through, id);
       },
     }).catch((error: unknown) => ({ saleId: error }));
@@ -8632,7 +8757,7 @@ describe("SCRUM-407: automatic closing readiness", () => {
         feeType: "COMMISSION", paidBy: "DEALER", paidTo: "FINANCE_COMPANY", accountingTreatment: "REFUNDABLE_DEPOSIT",
         deductedFromSettlement: true, actualAmountMinor: 120 * SCALE,
       });
-      await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched." });
+      await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 120 * SCALE, expectedActualEvidenceRevision: 0 });
 
       const readiness = await s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
       const costs = readiness.checks.find((check) => check.key === "COSTS_CLOSABLE");

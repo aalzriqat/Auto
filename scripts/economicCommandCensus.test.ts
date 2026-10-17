@@ -88,6 +88,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "cashDrawer.recordMovement": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "chartOfAccounts.initialize": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain once the chart exists; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency, so a repeat initialize posts nothing twice" },
   "chartOfAccounts.repairMissingSystemAccounts": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain after restoring system accounts; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency" },
+  "collections.activateSaleInvoiceReceipt": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "collections.applyRetainedCredit": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "collections.clearCheque": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "collections.createInstallmentPlan": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -97,6 +98,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "collections.registerCheque": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "collections.replaceCheque": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "collections.respondToApproval": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
+  "collections.registerSaleInvoiceCheque": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "collections.reserveSaleInvoiceReceipt": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "collections.returnCheque": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "collections.returnClearedCheque": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "collections.reviewCashierReconciliation": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
@@ -130,6 +133,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "financeDealCosts.bindExecutionFeeLine": { bucket: "NON_ECONOMIC", mechanism: "sets the executionFeeBinding marker on one identified existing fee line; no posting call is reachable, the only downstream write is the derived-economics recompute (a projection patch, deducted lines only), and re-linking the line already linked returns early (SCRUM-690)" },
   "financeDealCosts.unbindExecutionFeeLine": { bucket: "NON_ECONOMIC", mechanism: "clears the executionFeeBinding marker on one identified fee line and is refused while the line carries a custody posting or direct payment; no posting call is reachable, and an already-unlinked line returns early (SCRUM-690)" },
   "financeCompanyForward.recordFinanceCompanyForward": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, method, paid date, reference and the expectedAmountMinor the payer saw; the FINANCE_COMPANY_FORWARD_PAID posting is keyed on the application id plus a stored version and every state check (finalized, transfer not yet confirmed, proof is DUE, amount unchanged, closed period) is inside the section" },
+  "customerFinanceCompanyPayments.confirmPayment": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, amount, paid date and reference; the open-deal check, the not-the-salesperson check and the cap of what the agreement still leaves unconfirmed are all inside the section, and the contribution is re-derived from the evidence rows, never decremented" },
+  "customerFinanceCompanyPayments.voidPayment": { bucket: "STATE_GUARDED", mechanism: "refuses unless the evidence row is CONFIRMED and the deal is still open, so a replay is refused rather than applied twice; the contribution is re-derived from the remaining CONFIRMED rows, never incremented" },
   "financeCompanyForward.reverseFinanceCompanyForward": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, forward and reason; reverses the pinned forward version through reverseEventIfPosted, keyed on the stored version, and refuses a forward already being taken back" },
   "financeCompanyForward.reportFinanceCompanyForwardReturned": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, forward and reason; reverses the pinned ON_BOOKS forward version through reverseEventIfPosted, keyed on the stored version" },
   "financeDealCosts.recordLegalInvoice": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
@@ -171,6 +176,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "prepaidExpenses.redriveScheduleEvents": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 (was NON_ECONOMIC, which was false: reviveFailedEntry returns a FAILED row to PENDING and drainEntries schedules claimOutboxRow, which posts): revives only FAILED non-retired rows, drainEntries skips rows that are not PENDING or already dispatched, claimOutboxRow refuses an already-claimed row, and the worker posts under the idempotencyKey stored on the row, deduped by_org_idempotency" },
   "prepaidExpenses.runAmortizationNow": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 public ACTION: one runMutation(catchUpScheduleMutation) per schedule; amortizeScheduleForMonth refuses a month <= lastRecognizedYearMonth and a month with nothing due, and advances that cursor in the SAME transaction as hookPrepaidExpenseAmortized, keyed `prepaid_amort_${scheduleId}_${yearMonth}`, so a re-run after partial success re-posts no month" },
   "prepaidExpenses.retryAmortizationFailure": { bucket: "STATE_GUARDED", mechanism: "hookPrepaidExpenseAmortized keys on `prepaid_amort_${scheduleId}_${yearMonth}` — both pre-existing/deterministic, which is precisely what makes a RETRY endpoint safe" },
+  "retainedCreditRefunds.executeRetainedCreditRefund": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "sales.completeDraft": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "sales.completeFromQuote": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "sales.create": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -661,7 +667,10 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // accountingOutbox.redrive, accountingMigration.backfillVehicleInventoryOpeningBalances and
     // the action prepaidExpenses.runAmortizationNow. accountingPeriods.lock is NOT among them:
     // its only edge was `reopen()` written in a comment.
-    expect(population).toHaveLength(143);
+    // 143 -> 147 (SCRUM-724): `collections.registerSaleInvoiceCheque`, `.reserveSaleInvoiceReceipt`,
+    // `.activateSaleInvoiceReceipt` and `retainedCreditRefunds.executeRetainedCreditRefund`.
+    // 147 -> 149: `customerFinanceCompanyPayments.confirmPayment` and `.voidPayment` (SCRUM-766 PR-B confirmed payment evidence).
+    expect(population).toHaveLength(149);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

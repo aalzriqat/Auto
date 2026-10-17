@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 
 /**
  * SCRUM-258 Gate B: the Bill of Sale print page in every economics state,
@@ -124,7 +125,7 @@ async function paint(page: Page, v: Variant) {
 
 for (const v of VARIANTS) {
   test(`bill-of-sale · ${v.state.name} · ${v.locale} · ${v.tag}`, async ({ browser }) => {
-    const context = await browser.newContext({
+    const context = await newContainedContext(browser, {
       viewport: { width: v.width, height: v.height },
       colorScheme: v.theme,
     });

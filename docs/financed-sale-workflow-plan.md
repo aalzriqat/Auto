@@ -160,6 +160,21 @@ customerGapCashToDealer + customerGapInstallmentToDealer + customerGapToFinanceC
   = customerGapShare
 ```
 
+The portion paid to the finance company is not dealership money: it never becomes
+profit. Agreeing to it is only a promise. Once a person with finance authority
+(not the deal's salesperson) records that the customer really paid it, with the
+payment's reference (`customerFinanceCompanyPayments`, confirmed evidence rows),
+(SCRUM-766 PR-B) it lowers the contribution the showroom puts in by the confirmed
+amount, up to the agreement and never below zero. Until then the contribution is
+unchanged, the profit is the unreduced figure, and the closing check
+`CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED` refuses to finalize. A confirmation
+can be taken back (with a reason) before the deal closes; after close, neither
+confirming nor taking back is possible, because the contribution is then frozen
+into the posted plan. The stored `dealerContributionMinor` is the reduced figure,
+so the ledger, the remittance and the profit read it. The commissionable margin
+deliberately does not: it uses the contribution before the credit, so commission
+is the same wherever the customer's money goes.
+
 If the two sides cannot agree, the deal fails: no sale, no handover, the vehicle
 returns to its pre-sale state.
 

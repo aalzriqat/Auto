@@ -34,20 +34,13 @@ function parseMajor(value: string, scale: number): number | null {
 }
 
 /**
- * The legal invoice date is a DOCUMENT date — the one printed on the paper —
- * so, unlike a movement date, it is never pre-filled with the ledger's UTC day
- * when that differs from the operator's own day: at 01:30 in Amman on
- * 1 October that would silently file an invoice dated 1 October under
- * 30 September, i.e. in the previous period (SCRUM-596). The server refuses a
+ * The legal invoice date is a DOCUMENT date — the one printed on the paper — so
+ * it is never pre-filled (SCRUM-411: nothing here may look real before a person
+ * enters it; the sale no longer needs this invoice at all). The server refuses a
  * day its clock has not reached, so the latest pickable day is the earlier of
- * the two calendars, and while the operator's day has not begun on the ledger
- * nothing is pre-filled and the operator must pick the paper's date.
+ * the operator's calendar and the ledger's (SCRUM-596).
  */
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-
-function untouchedDefault(bounds: { localDayNotOpen: boolean; latestDay: string }) {
-  return bounds.localDayNotOpen ? "" : bounds.latestDay;
-}
 
 function invoiceDayBounds() {
   const localDay = todayDateInput();
@@ -75,6 +68,9 @@ export type RecordLegalInvoiceValues = {
   legalInvoiceDate: number;
   issuedTo: IssuedTo;
   issuedToOther?: string;
+  /** A consigned car's invoice is its supplier's or importer's, never the dealership's. */
+  issuedBy: "DEALERSHIP" | "THIRD_PARTY";
+  issuerName?: string;
 };
 
 type RecordLegalInvoiceDialogProps = {
@@ -83,12 +79,15 @@ type RecordLegalInvoiceDialogProps = {
   error: string | null;
   scale: number;
   currency: string;
+  /** The car belongs to a supplier/importer: the issuer is then a named third party. */
+  vehicleIsConsigned?: boolean;
   existing?: {
     amountMinor?: number;
     number?: string;
     date?: number;
     issuedTo?: string;
     issuedToOther?: string;
+    issuerName?: string;
   };
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
@@ -101,6 +100,7 @@ export function RecordLegalInvoiceDialog({
   error,
   scale,
   currency,
+  vehicleIsConsigned = false,
   existing,
   t,
   onOpenChange,
@@ -113,11 +113,6 @@ export function RecordLegalInvoiceDialog({
   // A stored date was accepted by the server, so it stays saveable even
   // where it is past this operator's local day (an editor behind UTC).
   const [storedDay] = useState(() => (existing?.date ? msToDateInput(existing.date) : null));
-  // The pre-fill is offered only for the day the form opened on. If the day
-  // changes while it is open, neither the old day nor the new one is assumed:
-  // a pick of the shown day fires no change event, so "untouched" cannot be
-  // told from "confirmed" (Sol 6 SCRUM-596-3) and the operator picks again.
-  const [openedDefault] = useState(() => untouchedDefault(invoiceDayBounds()));
   const [pickedDay, setPickedDay] = useState<string | null>(null);
   const [issuedTo, setIssuedTo] = useState<IssuedTo>(() =>
     existing?.issuedTo === "CUSTOMER" || existing?.issuedTo === "OTHER"
@@ -125,19 +120,13 @@ export function RecordLegalInvoiceDialog({
       : "FINANCE_COMPANY"
   );
   const [issuedToOther, setIssuedToOther] = useState(() => existing?.issuedToOther ?? "");
+  const [issuerName, setIssuerName] = useState(() => existing?.issuerName ?? "");
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const bounds = invoiceDayBounds();
-  const { localDayNotOpen, latestDay, nextLedgerDayAt, nextBoundaryAt } = bounds;
-  const dayChangedWhileOpen = (current: typeof bounds) =>
-    pickedDay === null && storedDay === null && untouchedDefault(current) !== openedDefault;
-  const dayChanged = dayChangedWhileOpen(bounds);
-  const date = pickedDay ?? storedDay ?? (dayChanged ? "" : openedDefault);
-  const dateHintId = localDayNotOpen
-    ? "legal-invoice-date-hint"
-    : dayChanged
-      ? "legal-invoice-date-changed"
-      : undefined;
+  const { localDayNotOpen, latestDay, nextLedgerDayAt, nextBoundaryAt } = invoiceDayBounds();
+  // Nothing is assumed: the date is the stored one or the one the operator picks.
+  const date = pickedDay ?? storedDay ?? "";
+  const dateHintId = localDayNotOpen ? "legal-invoice-date-hint" : undefined;
   // The bounds follow both clocks, so re-render when the local or the ledger's
   // day turns over, and when the tab regains focus or visibility in case its
   // timer was suspended. The operator's pick is state and survives.
@@ -160,17 +149,12 @@ export function RecordLegalInvoiceDialog({
     amountMinor === null ||
     !number.trim() ||
     !date ||
-    (issuedTo === "OTHER" && !issuedToOther.trim());
+    (issuedTo === "OTHER" && !issuedToOther.trim()) ||
+    (vehicleIsConsigned && !issuerName.trim());
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (submitting || isInvalid) return;
-    if (!dayChanged && dayChangedWhileOpen(invoiceDayBounds())) {
-      // The refresh lands just after midnight (or late, after sleep): the
-      // pre-fill of a day that has ended is withdrawn rather than sent.
-      refreshBounds((n) => n + 1);
-      return;
-    }
 
     setLocalError(null);
     try {
@@ -182,6 +166,8 @@ export function RecordLegalInvoiceDialog({
         legalInvoiceDate: economicDateInputToMs(date),
         issuedTo,
         issuedToOther: issuedTo === "OTHER" ? issuedToOther.trim() : undefined,
+        issuedBy: vehicleIsConsigned ? "THIRD_PARTY" : "DEALERSHIP",
+        issuerName: vehicleIsConsigned ? issuerName.trim() : undefined,
       });
     } catch (caught) {
       setLocalError(caught instanceof Error ? caught.message : t("UnexpectedError"));
@@ -219,6 +205,7 @@ export function RecordLegalInvoiceDialog({
                 {t(parseTypedAmount(amount, scale).tooPrecise ? "AmountTooPrecise" : "CustodyAmountInvalid")}
               </p>
             )}
+            <p className="text-xs text-muted-foreground">{t("LegalInvoiceAmountHint")}</p>
           </div>
 
           <div className="space-y-1.5">
@@ -263,12 +250,6 @@ export function RecordLegalInvoiceDialog({
                   )}
               </p>
             )}
-            {dateHintId === "legal-invoice-date-changed" && (
-              <p id="legal-invoice-date-changed" className="text-xs text-muted-foreground">
-                {/* Opened blank before the ledger's day: only the ledger moved. */}
-                {t(openedDefault === "" ? "LegalInvoiceDateNowOpen" : "LegalInvoiceDateDayChanged")}
-              </p>
-            )}
           </div>
 
           <div className="space-y-1.5">
@@ -294,6 +275,22 @@ export function RecordLegalInvoiceDialog({
                 onChange={(e) => setIssuedToOther(e.target.value)}
                 required
               />
+            </div>
+          )}
+
+          {vehicleIsConsigned && (
+            <div className="space-y-1.5">
+              <Label htmlFor="legal-invoice-issuer">{t("LegalInvoiceIssuerName")}</Label>
+              <Input
+                id="legal-invoice-issuer"
+                value={issuerName}
+                onChange={(e) => setIssuerName(e.target.value)}
+                aria-describedby="legal-invoice-issuer-hint"
+                required
+              />
+              <p id="legal-invoice-issuer-hint" className="text-xs text-muted-foreground">
+                {t("LegalInvoiceIssuerHintConsigned")}
+              </p>
             </div>
           )}
 

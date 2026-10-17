@@ -18,6 +18,7 @@ import { describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { expectAppError } from "../test-utils/expectAppError";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -265,6 +266,18 @@ describe("(c) positive control: finalizeDeal still completes a FINANCED sale thr
       })
     );
     const { asUser, asApprover, orgId } = s;
+    // The payment to the finance company counts only once it is posted, so the books
+    // (chart + an open period) exist before it is recorded.
+    const fiscalYear = new Date().getUTCFullYear();
+    await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+    await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear,
+      periodNumber: 1,
+      openImmediately: true,
+    });
     const quoteId = await asUser.mutation(api.quotes.saveQuote, {
       orgId,
       customerId: s.customerId,
@@ -328,8 +341,10 @@ describe("(c) positive control: finalizeDeal still completes a FINANCED sale thr
       actualAmountMinor: 0,
       description: "The dealership bore no closing costs on this deal.",
     });
-    await asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Nothing to match." });
+    await asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
 
+    // SCRUM-411 P2-01: the held deposit is paid to the finance company before finalizing.
+    await payForwardBeforeFinalize(s, asUser, applicationId);
     const saleId = await asUser.mutation(api.applications.finalizeDeal, {
       idempotencyKey: crypto.randomUUID(),
       orgId,

@@ -46,7 +46,9 @@
   "fingerprint": "448b64ea97c91e3c27ce4b2a6c0802ea1b76df76f61c810e919128625d807ca6",
   "domain": "money",
   "level": "backend",
-  "status": "active",
+  "status": "retired",
+  "retiredReason": "finalizeDeal now freezes plan v3 (server-derived consideration, SCRUM-411), so a new finalization can no longer produce v2. Superseded by financed-v3-finalize-freezes-forward-due-and-full-receivable; v2 on already-closed deals is covered by a seeded v2 case in the same test file.",
+  "retiredByRuling": "SCRUM-407#c21031",
   "source": {
     "hunter": "scripted",
     "runId": "scrum761-pilot-path",

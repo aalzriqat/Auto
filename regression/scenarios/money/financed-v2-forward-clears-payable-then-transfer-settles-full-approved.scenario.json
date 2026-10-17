@@ -6,11 +6,9 @@
         "role": "accountant",
         "org": "A"
       },
-      "action": "applications.finalizeDeal",
+      "action": "financeCompanyForward.recordFinanceCompanyForward",
       "input": {
-        "approvedMinor": 12500000,
-        "depositMinor": 200000,
-        "contributionMinor": 1375000
+        "expectedAmountMinor": 1575000
       }
     },
     {
@@ -18,9 +16,11 @@
         "role": "accountant",
         "org": "A"
       },
-      "action": "financeCompanyForward.recordFinanceCompanyForward",
+      "action": "applications.finalizeDeal",
       "input": {
-        "expectedAmountMinor": 1575000
+        "approvedMinor": 12500000,
+        "depositMinor": 200000,
+        "contributionMinor": 1375000
       }
     },
     {
@@ -60,10 +60,10 @@
   ],
   "impl": {
     "file": "convex/financeCompanyForward.test.ts",
-    "testName": "recording the forward clears AP-Finance to zero; the transfer then settles the FULL G"
+    "testName": "paying the forward before the sale, then the sale, clears AP-Finance to zero; the transfer then settles the FULL G"
   },
   "matrixRow": "pilot-financed-v2-forward-transfer",
-  "fingerprint": "419a6ae22f41321404ef0d8d3272e12aa03f96ddeca068b77ca2135bec90032d",
+  "fingerprint": "c8d2dcebfaaab5add4be962ce93a84dfe57be38add7a221d3b0191241cc7c302",
   "domain": "money",
   "level": "backend",
   "status": "active",

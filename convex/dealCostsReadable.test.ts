@@ -496,18 +496,14 @@ async function withCompany(seed: Seed) {
 }
 
 describe("closing readiness blocks a deal whose costs are not readable figures", () => {
+  /** A configured-company deal; no legal invoice is needed to close (SCRUM-411). */
   async function invoiced(suffix: string) {
-    const seed = await withCompany(await seedDeal(suffix));
-    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: seed.orgId, applicationId: seed.applicationId,
-      legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-1", legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
-    });
-    return seed;
+    return await withCompany(await seedDeal(suffix));
   }
 
   async function reconciledFee(seed: Seed, actualAmountMinor: number) {
     const feeId = await addFee(seed, { actualAmountMinor });
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "matched" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "matched", expectedActualAmountMinor: actualAmountMinor, expectedActualEvidenceRevision: 0 });
     return feeId;
   }
 
@@ -659,16 +655,12 @@ describe("a frozen snapshot template whose estimate is not readable withholds it
 
       // And the configured-position gate is satisfied by the real actual:
       // once every other real requirement is met, closing readiness agrees.
-      await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-        orgId: seed.orgId, applicationId: seed.applicationId,
-        legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-1", legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
-      });
       const platesFeeId = await seed.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
         orgId: seed.orgId, applicationId: seed.applicationId, templateIndex: 0, feeType: "LICENSING",
         expectedCurrency: "JOD", actualAmountMinor: jod(250), idempotencyKey: crypto.randomUUID(),
       });
-      for (const feeId of [stampsFeeId, platesFeeId]) {
-        await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "matched" });
+      for (const [feeId, actualAmountMinor] of [[stampsFeeId, jod(90)], [platesFeeId, jod(250)]] as const) {
+        await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "matched", expectedActualAmountMinor: actualAmountMinor, expectedActualEvidenceRevision: 0 });
       }
       await seed.t.run(async (ctx) => {
         const liveFees = await loadActiveFees(ctx, seed.applicationId);
@@ -679,9 +671,11 @@ describe("a frozen snapshot template whose estimate is not readable withholds it
       const readiness = await seed.asUser.query(api.applications.getClosingReadiness, {
         orgId: seed.orgId, applicationId: seed.applicationId,
       });
-      for (const key of ["CONFIGURED_FEES_RECORDED", "COSTS_CLOSABLE", "LEGAL_INVOICE_RECORDED"]) {
+      for (const key of ["CONFIGURED_FEES_RECORDED", "COSTS_CLOSABLE"]) {
         expect(readiness.checks.find((row) => row.key === key)).toMatchObject({ key, status: "READY" });
       }
+      // No legal invoice is recorded and none is needed (SCRUM-411).
+      expect(readiness.checks.find((row) => row.key === "LEGAL_INVOICE_RECORDED")).toMatchObject({ status: "NOT_APPLICABLE" });
     }
   );
 });

@@ -1,0 +1,84 @@
+{
+  "id": "financed-v3-supplier-transfer-refused-while-forward-payment-is-due",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "financeCompanyForward.recordFinanceCompanyForward",
+      "input": {
+        "expectedAmountMinor": 1575000
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "approvedMinor": 12500000,
+        "supplierEntitlementMinor": 9000000,
+        "gapMinor": 500000,
+        "depositMinor": 200000,
+        "contributionMinor": 1375000,
+        "route": "DIRECT_TO_SUPPLIER"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "financeCompanyForward.reverseFinanceCompanyForward",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.confirmSupplierDisbursement",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step3.forwardProofState",
+      "value": "DUE"
+    },
+    {
+      "observable": "step4.outcome",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "step4.refusalNamesAmounts",
+      "value": false
+    },
+    {
+      "observable": "application.supplierDisbursementConfirmed",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum411ForwardOrdering.test.ts",
+    "testName": "DUE (payment taken back): refused, names who acts next, never echoes H or D, writes nothing"
+  },
+  "matrixRow": "pilot-financed-v3-supplier-gate",
+  "fingerprint": "2ddd71b5178dcb876fde51d49e05a8aa82226752bcccc613d7f8d68ab15cfdd6",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum411-forward-ordering",
+    "firstSeen": "2026-10-14"
+  }
+}

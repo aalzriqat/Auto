@@ -8,10 +8,19 @@ import { requireOwner, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
+import { FACEBOOK_REVOCATION_RETENTION_MS } from "./utils/facebookRevocation";
 import { requireFeature } from "./subscriptions";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const FACEBOOK_GRAPH_VERSION = "v25.0";
+
+// Fixed text for the revocation fence (see `facebookRevocations` in schema.ts).
+// FACEBOOK_REVOCATION_RETENTION_MS must stay well above OAUTH_STATE_TTL_MS plus
+// the exchange action's runtime.
+const FACEBOOK_REVOKED_MESSAGE =
+  "Facebook access for this account was revoked while connecting. Please start the connection again.";
+const FACEBOOK_ATTEMPT_EXPIRED_MESSAGE = "This connection attempt expired. Please start the connection again.";
+const FACEBOOK_DISCONNECTED_MESSAGE = "Facebook was disconnected while connecting. Please start the connection again.";
 
 // Facebook Login for Pages: authenticates a person, who may manage several
 // Pages. Unlike Instagram Login (whose token exchange returns the IG
@@ -213,30 +222,53 @@ export const setFacebookLeadCreationConfig = mutation({
 export const disconnectByFacebookConnectedUserId = internalMutation({
   args: { facebookConnectedByUserId: v.string() },
   handler: async (ctx, args) => {
-    const settings = await ctx.db
+    // Record the revocation first and unconditionally: a first-time connection
+    // still in flight has no row for the clear below to find, and without this
+    // its exchange would store the tokens it already fetched after we replied 200.
+    // One row per user; its time never moves backwards.
+    // Expired fences are removed by the hourly adminSystem.pruneOperationalLogs.
+    const now = Date.now();
+    const fence = await findFacebookRevocation(ctx, args.facebookConnectedByUserId);
+    if (fence) await ctx.db.patch(fence._id, { revokedAt: Math.max(fence.revokedAt, now) });
+    else await ctx.db.insert("facebookRevocations", { facebookUserId: args.facebookConnectedByUserId, revokedAt: now });
+
+    // One Facebook user can connect several orgs (e.g. a dealer-group admin);
+    // Meta sends a single callback for that user, so every one must be cleared.
+    const rows = await ctx.db
       .query("orgSettings")
       .withIndex("by_facebook_connected_user_id", (q) =>
         q.eq("facebookConnectedByUserId", args.facebookConnectedByUserId)
       )
-      .first();
-    if (!settings) return;
+      .collect();
 
-    await ctx.db.patch(settings._id, {
-      facebookPageId: undefined,
-      facebookPageAccessToken: undefined,
-      facebookTokenExpiresAt: undefined,
-      facebookPageName: undefined,
-      facebookConnectedByUserId: undefined,
-      facebookAutoReplyEnabled: false,
-      facebookAvailablePages: undefined,
-      facebookPendingCredentials: undefined,
-    });
+    for (const settings of rows) {
+      await ctx.db.patch(settings._id, {
+        facebookPageId: undefined,
+        facebookPageAccessToken: undefined,
+        facebookTokenExpiresAt: undefined,
+        facebookPageName: undefined,
+        facebookConnectedByUserId: undefined,
+        facebookAutoReplyEnabled: false,
+        facebookAvailablePages: undefined,
+        facebookPendingCredentials: undefined,
+        facebookPendingAttemptId: undefined,
+      });
+    }
   },
 });
 
 /** Disconnects Facebook for the org. Owner-only.
  *  Intentionally NOT gated behind requireFeature — downgraded orgs must
- *  still be able to revoke stored credentials. */
+ *  still be able to revoke stored credentials.
+ *
+ *  Also records WHEN, as `facebookDisconnectedAt`: an exchange already in flight
+ *  (its Graph call is an action, outside any transaction) or a state never
+ *  consumed must not be able to recreate pending credentials afterwards. That is
+ *  checked inside `saveFacebookPendingPages`, which reads the same `by_org` index
+ *  range this writes (an empty range included), so the two conflict and whichever
+ *  commits second re-runs and sees the other. The record is made even when the
+ *  org has no settings row yet. Assumes mutation clocks are ordered to within far
+ *  less than an OAuth round trip; a tie is refused. */
 export const disconnect = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -246,9 +278,20 @@ export const disconnect = mutation({
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    if (!settings) return;
+    const now = Date.now();
+    if (!settings) {
+      await ctx.db.insert("orgSettings", {
+        orgId: args.orgId,
+        currency: DEFAULT_SETTINGS.currency,
+        currencySymbol: DEFAULT_SETTINGS.currencySymbol,
+        enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
+        facebookDisconnectedAt: now,
+      });
+      return;
+    }
 
     await ctx.db.patch(settings._id, {
+      facebookDisconnectedAt: Math.max(settings.facebookDisconnectedAt ?? 0, now),
       facebookPageId: undefined,
       facebookPageAccessToken: undefined,
       facebookTokenExpiresAt: undefined,
@@ -257,6 +300,7 @@ export const disconnect = mutation({
       facebookAutoReplyEnabled: false,
       facebookAvailablePages: undefined,
       facebookPendingCredentials: undefined,
+      facebookPendingAttemptId: undefined,
     });
   },
 });
@@ -280,9 +324,17 @@ export const consumeOAuthState = internalMutation({
     }
 
     await ctx.db.delete(record._id);
-    return { orgId: record.orgId };
+    return { orgId: record.orgId, createdAt: record.createdAt };
   },
 });
+
+/** The user's revocation fence, if any. One row per user (see disconnectByFacebookConnectedUserId). */
+function findFacebookRevocation(ctx: MutationCtx, facebookUserId: string) {
+  return ctx.db
+    .query("facebookRevocations")
+    .withIndex("by_facebook_user_id", (q) => q.eq("facebookUserId", facebookUserId))
+    .unique();
+}
 
 export const FACEBOOK_PAGE_IN_USE_MESSAGE =
   "This Facebook Page is already connected to another AutoFlow organization. Disconnect it there first.";
@@ -301,6 +353,27 @@ async function assertFacebookPageFree(ctx: MutationCtx, orgId: Id<"organizations
   }
 }
 
+// Fixed text: this is thrown on a path that holds Page tokens.
+const FACEBOOK_SELECTION_CHANGED_MESSAGE =
+  "This Facebook connection changed before it could be completed. Please reconnect via OAuth.";
+
+/**
+ * Finalises a Page selection: the only writer of an active Page token.
+ *
+ * selectFacebookPage reads the pending credential, awaits Meta's subscribed_apps
+ * call, and only then calls this. Meta's deauthorize / data-deletion callback
+ * (or a newer OAuth) can clear or replace the pending credentials during that
+ * await, so the caller's copy proves nothing here: the org row must STILL hold a
+ * pending credential with the same Page id and token, under the same non-empty
+ * connecting-user id, read in this transaction. Otherwise a token the callback
+ * had already erased would be written back after it reported success.
+ *
+ * It must also still be the SAME ATTEMPT: every save of pending credentials stamps
+ * a fresh `facebookPendingAttemptId`, and the selection carries the one it read. A
+ * disconnect followed by a genuinely new attempt for the same user, Page and token
+ * matches on everything above, and only this tells the old selection from the new
+ * attempt whose credentials it would otherwise promote.
+ */
 export const saveFacebookCredentials = internalMutation({
   args: {
     orgId: v.id("organizations"),
@@ -308,32 +381,39 @@ export const saveFacebookCredentials = internalMutation({
     facebookPageAccessToken: v.string(),
     facebookTokenExpiresAt: v.optional(v.number()),
     facebookPageName: v.optional(v.string()),
-    facebookConnectedByUserId: v.optional(v.string()),
+    facebookConnectedByUserId: v.string(),
+    pendingAttemptId: v.string(),
   },
   handler: async (ctx, args) => {
-    const { orgId, ...fields } = args;
+    // `pendingAttemptId` is destructured out so it is not spread into the row below.
+    const { orgId, pendingAttemptId, ...fields } = args;
     await assertFacebookPageFree(ctx, orgId, fields.facebookPageId);
     const existing = await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .unique();
 
-    if (existing) {
-      // Clear both pending-page fields now that selection is finalised.
-      await ctx.db.patch(existing._id, {
-        ...fields,
-        facebookAvailablePages: undefined,
-        facebookPendingCredentials: undefined,
-      });
-    } else {
-      await ctx.db.insert("orgSettings", {
-        orgId,
-        currency: DEFAULT_SETTINGS.currency,
-        currencySymbol: DEFAULT_SETTINGS.currencySymbol,
-        enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
-        ...fields,
-      });
+    const stillPending = existing?.facebookPendingCredentials?.some(
+      (cred) => cred.id === fields.facebookPageId && cred.token === fields.facebookPageAccessToken
+    );
+    if (
+      !existing ||
+      !stillPending ||
+      !fields.facebookConnectedByUserId ||
+      existing.facebookConnectedByUserId !== fields.facebookConnectedByUserId ||
+      !pendingAttemptId ||
+      existing.facebookPendingAttemptId !== pendingAttemptId
+    ) {
+      throw new ConvexError(FACEBOOK_SELECTION_CHANGED_MESSAGE);
     }
+
+    // Clear the pending-page fields now that selection is finalised.
+    await ctx.db.patch(existing._id, {
+      ...fields,
+      facebookAvailablePages: undefined,
+      facebookPendingCredentials: undefined,
+      facebookPendingAttemptId: undefined,
+    });
   },
 });
 
@@ -352,6 +432,51 @@ export const getEnvForExchange = internalQuery({
   },
 });
 
+// Fixed user-facing text. Meta's own `error.message` and the response body are
+// untrusted and may echo tokens; they are never interpolated into these.
+const FACEBOOK_UNEXPECTED_PAGES = "Facebook returned an unexpected Pages response.";
+
+type FacebookPageCredential = { id: string; name: string; access_token: string };
+
+/**
+ * Narrows the untrusted `/me/accounts` `data` array to the three fields we store.
+ *
+ * Meta also returns `category`, `category_list` and `tasks` per Page, and a type
+ * annotation does not remove them at runtime: `saveFacebookPendingPages`
+ * validates strictly, so passing the response through made it reject the
+ * argument and echo the rejected value — `access_token` included — into the
+ * thrown error. Any row that is not a Page with a string id, name and token
+ * fails the whole connection, with a message that quotes nothing from Meta.
+ */
+function pickPageCredentials(data: unknown): FacebookPageCredential[] {
+  if (!Array.isArray(data)) throw new ConvexError(FACEBOOK_UNEXPECTED_PAGES);
+  return data.map((page) => {
+    const { id, name, access_token } = (page && typeof page === "object" ? page : {}) as Record<string, unknown>;
+    if (typeof id !== "string" || !id || typeof name !== "string" || typeof access_token !== "string" || !access_token) {
+      throw new ConvexError(FACEBOOK_UNEXPECTED_PAGES);
+    }
+    return { id, name, access_token };
+  });
+}
+
+/** The only fields read from an untrusted Graph reply; anything else is ignored. */
+type GraphBody = { access_token?: string; id?: unknown; data?: unknown } | null;
+
+/**
+ * GETs a Graph URL that carries credentials in its query string. A rejected
+ * fetch can embed that URL (`client_secret`, `access_token`) in its message, and
+ * the OAuth callback stores thrown messages in the webhook log, so a transport
+ * or body failure is replaced by the caller's fixed message.
+ */
+async function graphGet(url: URL, failureMessage: string): Promise<{ ok: boolean; json: GraphBody }> {
+  try {
+    const res = await fetch(url.toString());
+    return { ok: res.ok, json: await res.json().catch(() => null) };
+  } catch {
+    throw new ConvexError(failureMessage);
+  }
+}
+
 /**
  * Exchanges the OAuth `code` for a long-lived user token, fetches all Pages
  * this user manages, and stores them in `facebookAvailablePages` for the org
@@ -361,7 +486,9 @@ export const getEnvForExchange = internalQuery({
  * Runs as a Node action since it needs `fetch`.
  */
 export const exchangeCodeForToken = internalAction({
-  args: { orgId: v.id("organizations"), code: v.string() },
+  // attemptStartedAt: when the user began this OAuth attempt (the state's
+  // createdAt); the revocation fence is compared against it.
+  args: { orgId: v.id("organizations"), code: v.string(), attemptStartedAt: v.number() },
   handler: async (ctx, args): Promise<void> => {
     const { appId, appSecret, redirectUri } = await ctx.runQuery(internal.facebookIntegrations.getEnvForExchange, {});
 
@@ -371,11 +498,11 @@ export const exchangeCodeForToken = internalAction({
     tokenUrl.searchParams.set("client_secret", appSecret);
     tokenUrl.searchParams.set("redirect_uri", redirectUri);
     tokenUrl.searchParams.set("code", args.code);
-    const tokenRes = await fetch(tokenUrl.toString());
-    const tokenJson = await tokenRes.json();
-    const shortLivedToken: string | undefined = tokenJson.access_token;
-    if (!tokenRes.ok || !shortLivedToken) {
-      throw new ConvexError(`Facebook token exchange failed: ${tokenJson?.error?.message ?? tokenRes.statusText}`);
+    const tokenFailed = "Facebook token exchange failed.";
+    const { ok: tokenOk, json: tokenJson } = await graphGet(tokenUrl, tokenFailed);
+    const shortLivedToken: string | undefined = tokenJson?.access_token;
+    if (!tokenOk || !shortLivedToken) {
+      throw new ConvexError(tokenFailed);
     }
 
     // 2. Exchange for a long-lived user access token (~60 days).
@@ -384,27 +511,26 @@ export const exchangeCodeForToken = internalAction({
     longLivedUrl.searchParams.set("client_id", appId);
     longLivedUrl.searchParams.set("client_secret", appSecret);
     longLivedUrl.searchParams.set("fb_exchange_token", shortLivedToken);
-    const longLivedRes = await fetch(longLivedUrl.toString());
-    const longLivedJson = await longLivedRes.json();
-    if (!longLivedRes.ok || !longLivedJson.access_token) {
-      throw new ConvexError(`Facebook long-lived token exchange failed: ${longLivedJson?.error?.message ?? longLivedRes.statusText}`);
+    const longLivedFailed = "Facebook long-lived token exchange failed.";
+    const { ok: longLivedOk, json: longLivedJson } = await graphGet(longLivedUrl, longLivedFailed);
+    if (!longLivedOk || !longLivedJson?.access_token) {
+      throw new ConvexError(longLivedFailed);
     }
     const longLivedUserToken: string = longLivedJson.access_token;
 
-    // 3. Fetch the connecting user's own Facebook ID — needed because Meta's
-    // deauthorize/data-deletion callbacks only identify the user, not the
-    // Page, in their signed_request payload.
-    let connectedByUserId: string | undefined;
-    try {
-      const meUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me`);
-      meUrl.searchParams.set("fields", "id");
-      meUrl.searchParams.set("access_token", longLivedUserToken);
-      const meRes = await fetch(meUrl.toString());
-      const meJson = await meRes.json();
-      connectedByUserId = meJson.id;
-    } catch {
-      // Non-fatal — connection still succeeds; only the deauth/data-deletion
-      // callbacks would be unable to resolve this org later.
+    // 3. Fetch the connecting user's own Facebook ID. Meta's deauthorize and
+    // data-deletion callbacks identify only the user, never the Page, and
+    // disconnectByFacebookConnectedUserId finds the org through this ID alone —
+    // so Page tokens stored without it could never be erased by them. Any /me
+    // failure therefore aborts the connection before anything is written.
+    const meUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me`);
+    meUrl.searchParams.set("fields", "id");
+    meUrl.searchParams.set("access_token", longLivedUserToken);
+    const identityFailed = "Facebook could not identify the connecting account.";
+    const { ok: meOk, json: meJson } = await graphGet(meUrl, identityFailed);
+    const connectedByUserId = meJson?.id;
+    if (!meOk || typeof connectedByUserId !== "string" || !connectedByUserId) {
+      throw new ConvexError(identityFailed);
     }
 
     // 4. List the Pages this person manages. Page Access Tokens returned
@@ -412,13 +538,14 @@ export const exchangeCodeForToken = internalAction({
     // non-expiring — no separate refresh flow needed, unlike Instagram.
     const accountsUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me/accounts`);
     accountsUrl.searchParams.set("access_token", longLivedUserToken);
-    const accountsRes = await fetch(accountsUrl.toString());
-    const accountsJson = await accountsRes.json();
-    const pages: Array<{ id: string; name: string; access_token: string }> = accountsJson?.data ?? [];
-    if (!accountsRes.ok || pages.length === 0) {
-      throw new ConvexError(
-        `No Facebook Pages available to connect: ${accountsJson?.error?.message ?? "this account doesn't manage any Pages."}`
-      );
+    const accountsFailed = "Facebook Pages could not be retrieved.";
+    const { ok: accountsOk, json: accountsJson } = await graphGet(accountsUrl, accountsFailed);
+    if (!accountsOk) {
+      throw new ConvexError(accountsFailed);
+    }
+    const pages = pickPageCredentials(accountsJson?.data);
+    if (pages.length === 0) {
+      throw new ConvexError("No Facebook Pages available to connect: this account doesn't manage any Pages.");
     }
 
     // 5. Store the full page list so the admin can pick which Page to connect.
@@ -427,6 +554,7 @@ export const exchangeCodeForToken = internalAction({
       orgId: args.orgId,
       pages,
       connectedByUserId,
+      attemptStartedAt: args.attemptStartedAt,
     });
   },
 });
@@ -440,14 +568,50 @@ export const saveFacebookPendingPages = internalMutation({
   args: {
     orgId: v.id("organizations"),
     pages: v.array(v.object({ id: v.string(), name: v.string(), access_token: v.string() })),
-    connectedByUserId: v.optional(v.string()),
+    // Required: it is the only key Meta's deauthorize / data-deletion callbacks
+    // can use to find and erase these credentials.
+    connectedByUserId: v.string(),
+    attemptStartedAt: v.number(),
   },
   handler: async (ctx, args) => {
-    const { orgId, pages, connectedByUserId } = args;
+    const { orgId, pages, connectedByUserId, attemptStartedAt } = args;
+
+    // An attempt begun at or before this user's last signed revocation must not
+    // store anything: the callback has already committed and cleared what it
+    // could find. Ties go to the revocation; a genuinely new attempt has a later
+    // start. An attempt older than the retention window cannot be judged (its
+    // fence may already have been swept) and is refused; no live attempt is that
+    // old, so this is a backstop.
+    if (attemptStartedAt < Date.now() - FACEBOOK_REVOCATION_RETENTION_MS) {
+      throw new ConvexError(FACEBOOK_ATTEMPT_EXPIRED_MESSAGE);
+    }
+    const fence = await findFacebookRevocation(ctx, connectedByUserId);
+    if (fence && fence.revokedAt >= attemptStartedAt) {
+      throw new ConvexError(FACEBOOK_REVOKED_MESSAGE);
+    }
+
     const existing = await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .unique();
+
+    // The Owner's disconnect fences attempts begun at or before it, with or
+    // without a prior settings row (ties go to the disconnect). A new attempt
+    // begun afterwards has a later start and passes.
+    if (existing?.facebookDisconnectedAt !== undefined && existing.facebookDisconnectedAt >= attemptStartedAt) {
+      throw new ConvexError(FACEBOOK_DISCONNECTED_MESSAGE);
+    }
+
+    // facebookConnectedByUserId is the single key Meta's callbacks use to find
+    // this row. Overwriting it while an active Page token stays would make that
+    // token invisible to its real owner's deauthorization, so another user (or
+    // an unknown one, on a legacy row) must disconnect first. Pending-only state
+    // has nothing active depending on the id and may be replaced.
+    if (existing?.facebookPageAccessToken && existing.facebookConnectedByUserId !== connectedByUserId) {
+      throw new ConvexError(
+        "A different Facebook account is already connected to this organization. Disconnect Facebook first, then connect again."
+      );
+    }
 
     // Picker-safe subset for the client; credentials kept server-side only.
     const pickerPages = pages.map(({ id, name }) => ({ id, name }));
@@ -460,6 +624,7 @@ export const saveFacebookPendingPages = internalMutation({
     const patch = {
       facebookAvailablePages: pickerPages,
       facebookPendingCredentials: pendingCredentials,
+      facebookPendingAttemptId: crypto.randomUUID(),
       facebookConnectedByUserId: connectedByUserId,
       // Active connection (facebookPageId / facebookPageAccessToken / facebookPageName)
       // is intentionally NOT cleared here — the current Page keeps working while the
@@ -482,7 +647,8 @@ export const saveFacebookPendingPages = internalMutation({
 
 /** Auth guard run inside a mutation so `requireTenantAuth` receives a MutationCtx.
  *  Also resolves the pending token for the chosen page, returning it so the
- *  action can call the Graph API without touching DB credentials from ActionCtx. */
+ *  action can call the Graph API without touching DB credentials from ActionCtx,
+ *  and the attempt id that `saveFacebookCredentials` must find still current. */
 export const validateFacebookPageSelectAuth = internalMutation({
   args: { orgId: v.id("organizations"), pageId: v.string() },
   handler: async (ctx, args) => {
@@ -504,11 +670,21 @@ export const validateFacebookPageSelectAuth = internalMutation({
     }
     // Refuse before the action subscribes the Page, not only at save time.
     await assertFacebookPageFree(ctx, args.orgId, cred.id);
+    // Credentials saved before the user id was mandatory carry none, and Meta's
+    // deauthorize / data-deletion callbacks could never find them once promoted.
+    // Likewise a pending row from before the attempt id: nothing could tie the
+    // selection to it at save time.
+    const facebookConnectedByUserId = settings?.facebookConnectedByUserId;
+    const pendingAttemptId = settings?.facebookPendingAttemptId;
+    if (!facebookConnectedByUserId || !pendingAttemptId) {
+      throw new ConvexError("This Facebook connection is incomplete. Please reconnect via OAuth.");
+    }
     return {
       pageId: cred.id,
       pageName: cred.name,
       pageAccessToken: cred.token,
-      facebookConnectedByUserId: settings?.facebookConnectedByUserId,
+      facebookConnectedByUserId,
+      pendingAttemptId,
     };
   },
 });
@@ -539,15 +715,18 @@ export const selectFacebookPage = action({
       const subscribeRes = await fetch(subscribeUrl.toString(), { method: "POST" });
       const subscribeJson = await subscribeRes.json();
       if (!subscribeRes.ok || subscribeJson?.success !== true) {
-        throw new ConvexError(subscribeJson?.error?.message ?? subscribeRes.statusText);
+        throw new ConvexError("subscribed_apps was not accepted");
       }
-    } catch (err) {
+    } catch {
       // Non-fatal — save credentials anyway; only inbound webhook is affected.
+      // The log row is fixed text: the request URL carries the Page token and
+      // Meta's error.message / a fetch failure can echo it, and the row is
+      // stored verbatim.
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "facebook",
         status: "error",
         summary: `subscribed_apps failed for Page ${page.pageId}`,
-        error: err instanceof Error ? err.message : String(err),
+        error: "Webhook subscription failed; provider detail withheld.",
       });
     }
 
@@ -557,6 +736,7 @@ export const selectFacebookPage = action({
       facebookPageAccessToken: page.pageAccessToken,
       facebookPageName: page.pageName,
       facebookConnectedByUserId: page.facebookConnectedByUserId,
+      pendingAttemptId: page.pendingAttemptId,
     });
   },
 });
