@@ -2933,6 +2933,15 @@ export const salesEn = {
   RejectApplication: "Reject Application",
   ConfirmDisbursement: "Confirm Disbursement",
   ConfirmDisbursementDesc: "Record receipt of the finance-company funds for this closed deal.",
+  DisbursementBank: "Receiving bank account",
+  DisbursementSelectBank: "Select the bank account that received the funds",
+  DisbursementLoadingBanks: "Loading bank accounts...",
+  DisbursementNoBank:
+    "There is no active bank account in this currency. Add one under Bank Accounts before confirming this receipt.",
+  DisbursementReceivableMissing:
+    "This deal has no finance-company receivable recorded yet, so the receiving bank account cannot be chosen. Finalize the deal first, then confirm the receipt.",
+  DisbursementTooManyBanks:
+    "This organization has too many active bank accounts to list here, so the receiving account cannot be chosen safely. Deactivate unused bank accounts, then try again.",
   DisbursementAmount: "Disbursement Amount",
   ConfirmReceipt: "Confirm Receipt",
   ConfirmSupplierDisbursement: "Record payment to the supplier",
@@ -4107,6 +4116,15 @@ export const salesAr = {
   RejectApplication: "رفض الطلب",
   ConfirmDisbursement: "تأكيد الصرف",
   ConfirmDisbursementDesc: "تسجيل استلام مبلغ شركة التمويل لهذه الصفقة المغلقة.",
+  DisbursementBank: "الحساب المصرفي المستلِم",
+  DisbursementSelectBank: "اختر الحساب المصرفي الذي استلم المبلغ",
+  DisbursementLoadingBanks: "جاري تحميل الحسابات المصرفية...",
+  DisbursementNoBank:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل تأكيد هذا الاستلام.",
+  DisbursementReceivableMissing:
+    "لا توجد ذمة مدينة على شركة التمويل مسجلة لهذه الصفقة بعد، لذا لا يمكن اختيار الحساب المصرفي المستلِم. أنهِ الصفقة أولاً ثم أكّد الاستلام.",
+  DisbursementTooManyBanks:
+    "لدى هذه المنشأة عدد كبير جداً من الحسابات المصرفية النشطة بحيث لا يمكن عرضها هنا، لذا لا يمكن اختيار الحساب المستلِم بأمان. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
   DisbursementAmount: "مبلغ الصرف",
   ConfirmReceipt: "تأكيد الاستلام",
   ConfirmSupplierDisbursement: "تسجيل الدفع للمورّد",

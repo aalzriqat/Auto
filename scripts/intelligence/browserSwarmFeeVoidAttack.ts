@@ -147,6 +147,20 @@ export function feeVoidSpec(options: MissionTiming, figures: Readonly<FeeVoidFig
       );
       const applicationId = await submitApprovedApplication(env, command, customer, { vehicleId, priceMajor: 20_000 });
 
+      // SCRUM-54: a bank-transfer payment names the physical bank it left. A fresh zero-balance bank in the organization's
+      // own denomination is created through the product's command (never a pre-existing one), on the disposable preview.
+      const paidFromBankId = await refusalIsInconclusive(
+        () =>
+          client.mutation(api.bankAccounts.create, {
+            orgId: org,
+            name: `Swarm fee-void bank ${nonce}`,
+            currency,
+            openingBalanceMinor: 0,
+            openingBalanceDate: Date.now(),
+          }),
+        "the product refused to create the bank the dealership-paid costs leave",
+      );
+
       // Two dealership-paid costs on the deal; only the first is reconciled. Each is paid directly, by bank transfer, at
       // the amount the approver saw.
       const recordAndPay = async (label: string, amountMinor: number, reconcile: boolean) => {
@@ -190,6 +204,7 @@ export function feeVoidSpec(options: MissionTiming, figures: Readonly<FeeVoidFig
               orgId: org,
               feeId,
               method: "BANK_TRANSFER",
+              bankAccountId: paidFromBankId,
               paidAt: Date.now() - PAID_AT_SKEW_MS,
               expectedAmountMinor: amountMinor,
               idempotencyKey: `${nonce}-${label}-pay`,

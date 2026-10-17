@@ -98,6 +98,26 @@ export async function seedFinancedDealership<K extends string>(tag: string, opts
   return { t, orgId, customerId, customerStatusId, vehicleId, companyId, owner, approver, actors, fiscalYear };
 }
 
+/**
+ * SCRUM-54: a physical bank the finance company's transfer can be received
+ * into. Called EXPLICITLY at each BANK_TRANSFER / CHEQUE `confirmDisbursement`
+ * (the id is passed in the call); a CASH receipt takes none. It is not seeded
+ * with the dealership, so no test gets a bank it did not ask for.
+ */
+export async function insertReceiptBank(
+  s: { t: ForwardPayerSeed["t"]; orgId: Id<"organizations">; owner: { userId: Id<"users"> } },
+  over: { currency?: string } = {}
+): Promise<Id<"bankAccounts">> {
+  const now = Date.now();
+  return await s.t.run((ctx) =>
+    ctx.db.insert("bankAccounts", {
+      orgId: s.orgId, name: "Receiving bank", currency: over.currency ?? "JOD",
+      openingBalanceMinor: 0, openingBalanceDate: now, isActive: true, isReconciliationTarget: false,
+      createdBy: s.owner.userId, createdAt: now, updatedAt: now,
+    })
+  );
+}
+
 /** The slice of a seeded dealership the deal drivers below use. */
 interface DealSeed {
   t: Awaited<ReturnType<typeof seedFinancedDealership>>["t"];

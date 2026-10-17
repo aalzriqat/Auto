@@ -2559,6 +2559,8 @@ export async function hookFinanceCashReceived(
      * canonical payment in the same transaction. Picks the debited account.
      */
     paymentMethod: FinanceReceiptMethod;
+    /** SCRUM-54: the physical bank, already validated by the caller. Bank receipts only. */
+    bankAccountId?: Id<"bankAccounts">;
   }
 ) {
   const keys = financeDisbursementKeys(args.applicationId, args.disbursementVersion);
@@ -2583,6 +2585,7 @@ export async function hookFinanceCashReceived(
       currency: args.currency,
       customerId: args.customerId?.toString(),
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -3278,6 +3281,8 @@ export async function hookCashDrawerDeposited(
     sessionId: Id<"cashDrawerSessions">;
     amountMinor: number;
     currency: string;
+    /** SCRUM-54: the physical bank, already validated by the caller. */
+    bankAccountId: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -3295,6 +3300,7 @@ export async function hookCashDrawerDeposited(
       sessionId: args.sessionId.toString(),
       amountMinor: args.amountMinor,
       currency: args.currency,
+      bankAccountId: args.bankAccountId.toString(),
     },
   });
 }
@@ -3572,6 +3578,8 @@ export async function hookHandoverCostPaidDirect(
     version: number;
     amountMinor: number;
     paymentMethod: string;
+    /** SCRUM-54: the physical bank, set exactly when `cashKey` is the bank control account. */
+    bankAccountId?: Id<"bankAccounts">;
     expenseKey: SystemKey;
     cashKey: SystemKey;
     actorId: Id<"users">;
@@ -3602,6 +3610,7 @@ export async function hookHandoverCostPaidDirect(
       amountMinor: args.amountMinor,
       currency: args.fee.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }

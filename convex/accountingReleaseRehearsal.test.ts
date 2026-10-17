@@ -148,6 +148,7 @@ async function ledgerLines(t: TestHarness, orgId: Id<"organizations">) {
       code: string | undefined;
       debitMinor: number;
       creditMinor: number;
+      bankAccountId: Id<"bankAccounts"> | undefined;
     }> = [];
     for (const line of lines) {
       const account = await ctx.db.get(line.accountId);
@@ -156,6 +157,7 @@ async function ledgerLines(t: TestHarness, orgId: Id<"organizations">) {
         code: account?.code,
         debitMinor: line.debitMinor,
         creditMinor: line.creditMinor,
+        bankAccountId: line.bankAccountId,
       });
     }
     return out;
@@ -385,7 +387,7 @@ describe("R3 — command identity under retry", () => {
 
 describe("R4 — exact reconciliation", () => {
   test("across several receipts the ledger balances and the subledger agrees exactly", async () => {
-    const { t, asAdmin, orgId, customerId } = await rehearseFreshDealership("r4");
+    const { t, asAdmin, orgId, userId, customerId } = await rehearseFreshDealership("r4");
 
     const debts = [
       await debtOf(asAdmin, orgId, customerId, 100, "Debt A"),
@@ -398,9 +400,15 @@ describe("R4 — exact reconciliation", () => {
       idempotencyKey: crypto.randomUUID(),
       orgId, receivableId: debts[0], amount: 100, method: "CASH", paymentDate: Date.now(),
     });
+    const bankAccountId = await t.run((ctx) =>
+      ctx.db.insert("bankAccounts", {
+        orgId, name: "Operating bank", currency: "USD", openingBalanceMinor: 0, openingBalanceDate: Date.now(),
+        isActive: true, isReconciliationTarget: false, createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
     await asAdmin.mutation(api.collections.recordPayment, {
       idempotencyKey: crypto.randomUUID(),
-      orgId, receivableId: debts[1], amount: 250, method: "BANK_TRANSFER", paymentDate: Date.now(),
+      orgId, receivableId: debts[1], amount: 250, method: "BANK_TRANSFER", paymentDate: Date.now(), bankAccountId,
     });
     await asAdmin.mutation(api.collections.recordPayment, {
       idempotencyKey: crypto.randomUUID(),
@@ -408,6 +416,13 @@ describe("R4 — exact reconciliation", () => {
     });
 
     const lines = await ledgerLines(t, orgId);
+
+    // SCRUM-54: the posted BANK_ACCOUNT line names the chosen bank; no other line does.
+    const named = lines.filter((l) => l.bankAccountId !== undefined);
+    expect(named).toHaveLength(1);
+    expect(named[0].systemKey).toBe("BANK_ACCOUNT");
+    expect(named[0].bankAccountId).toBe(bankAccountId);
+    expect(named[0].debitMinor).toBe(25000);
 
     // 1. Debits equal credits. Every entry, not just in aggregate.
     expect(lines.reduce((n, l) => n + l.debitMinor, 0)).toBe(

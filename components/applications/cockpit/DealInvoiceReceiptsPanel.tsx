@@ -16,9 +16,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ReceiptBankSelect, useReceiptBankOptions } from "@/components/accounting/ReceiptBankSelect";
 
 type ReceiptMethod = "CASH" | "BANK_TRANSFER";
-type PaymentAttempt = { amount: number; method: ReceiptMethod; paymentDate: number; reference?: string };
+type PaymentAttempt = {
+  amount: number; method: ReceiptMethod; paymentDate: number; reference?: string; bankAccountId?: Id<"bankAccounts">;
+};
 type ReserveAttempt = { receiptMovementId: Id<"receiptMovements">; amountMinor: number };
 /** SCRUM-724 CR-2: a retained-credit refund is paid by bank transfer only. */
 const REFUND_METHOD = "BANK_TRANSFER" as const;
@@ -65,6 +68,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const [method, setMethod] = useState<ReceiptMethod>("CASH");
   const [date, setDate] = useState(economicTodayDateInput);
   const [reference, setReference] = useState("");
+  const [bankAccountId, setBankAccountId] = useState("");
   const [chequeBank, setChequeBank] = useState("");
   const [chequeNumber, setChequeNumber] = useState("");
   const [chequeAmount, setChequeAmount] = useState("");
@@ -80,6 +84,8 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  const needsBank = method === "BANK_TRANSFER";
+  const bankOptions = useReceiptBankOptions(orgId, canManage && needsBank, paymentAttempt?.bankAccountId ?? bankAccountId);
   if (!canView) return null;
   const invoice = status?.invoice;
   const currency = invoice?.currency ?? "JOD";
@@ -133,13 +139,15 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
     const paymentDate = economicDateInputToMs(date);
     if (!paymentAttempt && (parsedPayment.minor === null || parsedPayment.minor <= 0 ||
       parsedPayment.minor > invoice.availableToReserveMinor ||
-      !Number.isFinite(paymentDate) || (method === "BANK_TRANSFER" && !reference.trim()))) {
+      !Number.isFinite(paymentDate) || (needsBank && (!reference.trim() || !bankOptions.chosenOffered)))) {
       setError(t("DealReceiptEnterValidPayment"));
       return;
     }
-    const attempt = paymentAttempt ?? {
+    // The chosen bank is frozen with the attempt, so a retry replays the same bank under the same key.
+    const attempt: PaymentAttempt = paymentAttempt ?? {
       amount: parsedPayment.minor! / factor, method, paymentDate,
       reference: reference.trim() || undefined,
+      ...(needsBank ? { bankAccountId: bankAccountId as Id<"bankAccounts"> } : {}),
     };
     setPaymentAttempt(attempt);
     setBusy(true); setError(""); setNotice("");
@@ -147,7 +155,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
       await recordPayment({ orgId, customerId: status.customerId, invoiceSaleId: saleId, ...attempt,
         idempotencyKey: command.for(paymentIntent) });
       command.retire(paymentIntent);
-      setPaymentAttempt(null); setAmount(""); setReference("");
+      setPaymentAttempt(null); setAmount(""); setReference(""); setBankAccountId("");
       setNotice(t("DealReceiptRecorded"));
     } catch (error_) {
       showFailure(error_, "DealReceiptActionFailed");
@@ -293,6 +301,11 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
                 <option value="CASH">{t("MethodCash")}</option>
                 <option value="BANK_TRANSFER">{t("MethodBankTransfer")}</option>
               </select></div>
+            {needsBank && (
+              <div className="sm:col-span-2"><Label htmlFor="sale-receipt-bank">{t("ReceiptBankAccount")}</Label>
+                <ReceiptBankSelect id="sale-receipt-bank" bankOptions={bankOptions} value={paymentAttempt?.bankAccountId ?? bankAccountId}
+                  disabled={!!paymentAttempt || busy || !doorsAvailable} onChange={setBankAccountId} /></div>
+            )}
             <div><Label htmlFor="sale-receipt-date">{t("DealReceiptDate")}</Label>
               <Input id="sale-receipt-date" type="date" max={economicTodayDateInput()} value={date}
                 disabled={!!paymentAttempt || busy || !doorsAvailable} aria-describedby={doorsReason}

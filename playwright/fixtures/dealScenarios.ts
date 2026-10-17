@@ -508,13 +508,58 @@ export async function decideDeposit(
   ).toBeVisible({ timeout: 60_000 });
 }
 
-export async function confirmDisbursement(managerPage: Page): Promise<void> {
+/** The disposable-environment bank every through-dealership receipt names (SCRUM-54). */
+export const RECEIVING_BANK_NAME = "QA TEST Receiving Bank";
+
+/**
+ * Seeds the physical bank the finance company's transfer is received into, through the
+ * same authorized `bankAccounts.create` mutation the Bank Accounts screen calls (zero
+ * opening balance, so it posts nothing). It is created in the org's CURRENT currency -
+ * the deal's pinned currency in a disposable environment - and reused when it is already
+ * there. The receipt dialog never preselects a bank and no other bank is ever chosen, so
+ * a fixture that cannot seed this fails here, before any deal step runs.
+ */
+export async function ensureReceivingBank(
+  client: ConvexHttpClient,
+  orgId: Id<"organizations">,
+): Promise<void> {
+  const settings = await client.query(api.orgSettings.get, { orgId });
+  const currency = settings?.currency;
+  if (!currency) throw new Error("ensureReceivingBank: the org has no currency configured; refusing to guess one.");
+  const banks = await client.query(api.bankAccounts.list, { orgId });
+  if (banks.some((b) => b.name === RECEIVING_BANK_NAME && b.isActive && b.currency === currency)) return;
+  await client.mutation(api.bankAccounts.create, {
+    orgId,
+    name: RECEIVING_BANK_NAME,
+    currency,
+    openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(),
+    notes: "QA TEST - SCRUM-54 receipt fixture",
+  });
+}
+
+export async function confirmDisbursement(
+  managerPage: Page,
+  expectedPayment: ExpectedPaymentMethod,
+): Promise<void> {
   const action = managerPage
     .getByTestId("deal-next-step")
     .getByRole("button", { name: "Confirm Disbursement" });
   await expect(action).toBeVisible();
   await action.click();
   const dialog = managerPage.getByRole("dialog");
+  const bankPicker = dialog.getByRole("combobox", { name: "Receiving bank account" });
+  if (expectedPayment === "CASH") {
+    // Cash is cash on hand: the dialog must NOT ask for a bank.
+    await expect(bankPicker).toHaveCount(0);
+  } else {
+    // Fail closed: the picker must exist and offer the seeded bank. Nothing else is selected.
+    await expect(bankPicker).toBeVisible({ timeout: 60_000 });
+    await expect(bankPicker).toBeEnabled({ timeout: 60_000 });
+    await bankPicker.click();
+    await managerPage.getByRole("option", { name: new RegExp(`^${RECEIVING_BANK_NAME}\\b`) }).click();
+    await expect(bankPicker).toContainText(RECEIVING_BANK_NAME);
+  }
   await dialog.getByRole("button", { name: "Confirm Receipt" }).click();
   await expect(dialog).not.toBeVisible();
 }

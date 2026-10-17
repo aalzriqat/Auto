@@ -21,7 +21,7 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { deriveForwardState } from "./utils/financeCompanyForward";
 import { economicsStamp } from "./utils/financingEconomics";
-import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -244,9 +244,11 @@ const record = (
   });
 
 const confirmTransfer = (s: Seeded, applicationId: Id<"financeApplications">, amount = G) =>
-  s.owner.as.mutation(api.applications.confirmDisbursement, {
-    orgId: s.orgId, applicationId, disbursedAmountMinor: amount, idempotencyKey: crypto.randomUUID(),
-  });
+  insertReceiptBank(s).then((bankAccountId) =>
+    s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: amount, idempotencyKey: crypto.randomUUID(), bankAccountId,
+    })
+  );
 
 async function netByAccount(s: Seeded, eventType: string) {
   return await s.t.run(async (ctx) => {

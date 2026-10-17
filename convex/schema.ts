@@ -751,6 +751,12 @@ export default defineSchema({
     payerNameSnapshot: v.optional(v.string()),
     salespersonId: v.optional(v.id("users")),
     cashierId: v.optional(v.id("users")),
+    /**
+     * SCRUM-54: the physical bank account a BANK_ACCOUNT control line moved
+     * money through, captured by the money-moving producer. Absent on legacy
+     * lines — those are unmatched and never inferred by amount/date.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     description: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
@@ -1014,6 +1020,10 @@ export default defineSchema({
       debitMinor: v.number(),
       creditMinor: v.number(),
       description: v.optional(v.string()),
+      // SCRUM-54: the physical bank a BANK_ACCOUNT-control line seeds. Required
+      // by the mutations for that account, absent on every other line and on
+      // drafts saved before this field existed (which approval refuses).
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
@@ -5438,6 +5448,8 @@ export default defineSchema({
     occurredAt: v.number(),
     notes: v.optional(v.string()),
     accountingEventId: v.optional(v.id("accountingEvents")),
+    /** SCRUM-54: the physical bank a BANK_DEPOSIT movement went into. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     actorId: v.id("users"),
     createdAt: v.number(),
     idempotencyKey: v.string(),
@@ -5472,7 +5484,9 @@ export default defineSchema({
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_active", ["orgId", "isActive"]),
+    // SCRUM-54: the receipt / deposit bank pickers read only the banks in the one currency a
+    // bank must match, so a long list in other currencies cannot crowd out an eligible bank.
+    .index("by_org_active_currency", ["orgId", "isActive", "currency"]),
 
   // Uploaded bank-statement rows for the reconciliation-target bank account,
   // matched against posted journalLines on SYSTEM_KEYS.BANK_ACCOUNT.

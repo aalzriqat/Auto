@@ -22,6 +22,8 @@ import {
   type ReversalOutcome,
 } from "./accounting/workflowHooks";
 import { disbursementAccountKey } from "./accounting/postingRules";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import {
   dealCustodyAccountingReadiness,
   ensureFinancedSettlementAccounts,
@@ -2962,6 +2964,18 @@ export const setFeeCustody = mutation({
 });
 
 /**
+ * SCRUM-54: the banks a direct payment of a cost in `currency` may name - this org's
+ * active banks, id/name/currency only. Same permission as `recordDirectFeePayment`.
+ */
+export const listDirectPaymentBankOptions = query({
+  args: { orgId: v.id("organizations"), currency: v.string() },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    return await listEligibleBanks(ctx, args.orgId, args.currency);
+  },
+});
+
+/**
  * Records that the DEALERSHIP itself paid a handover cost (SCRUM-443) — bank
  * transfer, e-payment, cash or an issued cheque — rather than an employee out
  * of custody cash. Posts `HANDOVER_COST_PAID_DIRECT`: DR the treatment's
@@ -3001,6 +3015,12 @@ export const recordDirectFeePayment = mutation({
     feeId: v.id("financeDealFees"),
     /** REQUIRED, no default — it decides which account the money left. */
     method: directPaymentMethodValidator,
+    /**
+     * SCRUM-54: the physical bank the money left from. Required for every method that
+     * credits the bank control account (bank transfer, card, issued cheque); never
+     * defaulted or inferred, and refused for cash.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** When the dealership paid it. Dates the posting. */
     paidAt: v.number(),
     /**
@@ -3038,6 +3058,10 @@ export const recordDirectFeePayment = mutation({
         `The payment reference is too long (${reference.length} characters; the most is ${MAX_DIRECT_PAYMENT_REFERENCE_CHARS}). Shorten it and try again. Nothing has been recorded.`
       );
     }
+    const paidFromBank = disbursementAccountKey(args.method) === SYSTEM_KEYS.BANK_ACCOUNT;
+    if (args.bankAccountId && !paidFromBank) {
+      throw new ConvexError("A bank account applies only to a bank transfer, card or cheque payment. Nothing has been recorded.");
+    }
 
     return await runWithIdempotency(
       ctx,
@@ -3053,6 +3077,8 @@ export const recordDirectFeePayment = mutation({
         fingerprint: JSON.stringify({
           feeId: args.feeId,
           method: args.method,
+          // Present only when named, so a payment recorded before banks were named still replays.
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           paidAt: args.paidAt,
           reference: reference ?? null,
           expectedAmountMinor: args.expectedAmountMinor,
@@ -3088,6 +3114,16 @@ export const recordDirectFeePayment = mutation({
             `The amount of this cost changed to ${fromMinorUnits(amountMinor, fee.currency)} ${fee.currency} since you opened the form (you were about to pay ${fromMinorUnits(args.expectedAmountMinor, fee.currency)} ${fee.currency}). Review the cost and record the payment again. Nothing has been recorded.`
           );
         }
+        // Before the first write, so a refused bank leaves nothing behind.
+        const bankAccountId = paidFromBank
+          ? await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId,
+              bankAccountId: args.bankAccountId,
+              currency: fee.currency,
+              missingMessage: "Select the bank account this payment was made from. Nothing has been recorded.",
+              currencySubject: "cost",
+            })
+          : undefined;
         const expense = custodyFeeExpenseKey(fee.accountingTreatment);
         if (expense.systemKey === null) throw new ConvexError(expense.refusal);
         const cashKey = disbursementAccountKey(args.method);
@@ -3157,6 +3193,7 @@ export const recordDirectFeePayment = mutation({
           version,
           amountMinor,
           paymentMethod: args.method,
+          bankAccountId,
           expenseKey: expense.systemKey,
           cashKey,
           actorId: user._id,

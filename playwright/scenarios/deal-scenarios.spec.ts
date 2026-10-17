@@ -13,6 +13,7 @@ import {
   createCostedVehicle,
   decideDeposit,
   ensureCompany,
+  ensureReceivingBank,
   quoteFinancedDeal,
   recordApproved,
   resolveAppraisalGap,
@@ -704,7 +705,10 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
     const context = await newContainedContext(browser, { storageState: "playwright/.auth/user.json" });
     const page = await context.newPage();
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
-    await ensureLedgerMonthOpen(await authenticatedConvexClient(page), orgId);
+    const seedClient = await authenticatedConvexClient(page);
+    await ensureLedgerMonthOpen(seedClient, orgId);
+    // SCRUM-54: the bank every BANK_TRANSFER / CHEQUE receipt is explicitly received into.
+    await ensureReceivingBank(seedClient, orgId);
     await ensureFinanceCompany(page);
     await ensureCompany(page, LTV70);
     await context.close();
@@ -760,7 +764,7 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
           page,
           orgId,
           s.expect.disbursement,
-          () => confirmDisbursement(managerPage),
+          () => confirmDisbursement(managerPage, s.expectedPayment),
           s.expect.knownDefect?.step === "disbursement" ? s.expect.knownDefect : undefined,
         );
         await managerPage.screenshot({

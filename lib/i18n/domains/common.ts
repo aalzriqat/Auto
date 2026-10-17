@@ -1010,6 +1010,12 @@ export const commonEn = {
   OpeningBalancePostedToast: "Opening balance posted.",
   OpeningBalanceSubmittedToast: "Opening balance saved for approval.",
   OpeningBalanceSelectAccount: "Select an account",
+  OpeningBalanceBankAccount: "Bank account",
+  OpeningBalanceSelectBank: "Select a bank account",
+  OpeningBalanceNoBankAccounts:
+    "There is no active bank account in this currency. Add one under Bank Accounts first.",
+  OpeningBalanceBankMissing:
+    "A bank line on this draft has no usable bank account selected, so it cannot be posted.",
   TransactionRegister: "Transaction Register",
   TransactionRegisterDesc: "Operational money activity from sales, deposits, collections, and expenses.",
   GLReports: "GL Reports",
@@ -1038,6 +1044,8 @@ export const commonEn = {
   ReconciliationTargetUpdated: "Reconciliation target updated.",
   BankAccountDeactivated: "Bank account deactivated.",
   BookBalanceFor: "Book balance for",
+  BookBalanceUnavailableNoBankAttribution: "Balance unavailable: some ledger bank activity is not linked to a specific bank account yet.",
+  BookBalanceUnavailableHistoryIncomplete: "Balance unavailable: the bank history cannot be fully verified, so no balance is shown rather than an unverified one.",
   Reconciliation: "Reconciliation",
   UploadStatement: "Upload Statement",
   UploadStatementDesc: "Upload a CSV or XLSX bank statement to match against posted transactions.",
@@ -1367,6 +1375,28 @@ export const commonEn = {
   CloseCashDrawer: "Close Cash Drawer",
   CloseCashDrawerDesc: "Enter the counted cash. The system computes the variance before approval.",
   CashDrawerClosed: "Cash drawer closed for approval.",
+  ApproveCashDrawer: "Approve Cash Drawer",
+  DirectPaymentBankLabel: "Bank account paid from",
+  DirectPaymentBankChoose: "Select the bank account this was paid from",
+  DirectPaymentBankRequired: "Select the bank account this payment was made from.",
+  DirectPaymentNoBank:
+    "There is no active bank account in this currency. Add one under Bank Accounts before recording a bank transfer, card or cheque payment.",
+  DirectPaymentTooManyBanks:
+    "This currency has too many active bank accounts to list here, so a bank payment cannot be recorded from this screen. Deactivate the accounts that are no longer used, then try again.",
+  ReceiptBankAccount: "Bank account received into",
+  ReceiptSelectBank: "Select the bank account that received this payment",
+  ReceiptNoBank:
+    "There is no active bank account in this currency. Add one under Bank Accounts before recording a bank transfer or card payment.",
+  ReceiptTooManyBanks:
+    "This currency has too many active bank accounts to list here, so a bank transfer or card payment cannot be recorded from this screen. Deactivate the accounts that are no longer used, then try again.",
+  CashDrawerDepositBank: "Deposit bank account",
+  CashDrawerSelectBank: "Select the bank account receiving this cash",
+  CashDrawerLoadingBanks: "Loading bank accounts...",
+  CashDrawerNoDepositBank:
+    "There is no active bank account in this currency. Add one under Bank Accounts before approving this deposit.",
+  CashDrawerTooManyBanks:
+    "This currency has too many active bank accounts to list here, so the deposit cannot be approved from this screen. Deactivate the accounts that are no longer used, then try again.",
+  ConfirmCashDrawerApprovalNoDeposit: "Approve this cash drawer count? Nothing was counted, so no bank deposit will be made.",
   Payments: "Payments",
   CollectionOutstanding: "Outstanding",
   CollectionOverdue: "Overdue",
@@ -2004,6 +2034,12 @@ export const commonAr = {
   OpeningBalancePostedToast: "تم ترحيل الرصيد الافتتاحي.",
   OpeningBalanceSubmittedToast: "تم حفظ الرصيد الافتتاحي بانتظار الموافقة.",
   OpeningBalanceSelectAccount: "اختر الحساب",
+  OpeningBalanceBankAccount: "الحساب المصرفي",
+  OpeningBalanceSelectBank: "اختر الحساب المصرفي",
+  OpeningBalanceNoBankAccounts:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية أولاً.",
+  OpeningBalanceBankMissing:
+    "أحد بنود البنك في هذه المسودة لا يحدد حساباً مصرفياً صالحاً، لذا لا يمكن ترحيلها.",
   TransactionRegister: "سجل الحركات",
   TransactionRegisterDesc: "حركات مالية تشغيلية من المبيعات والعربون والتحصيلات والمصروفات.",
   GLReports: "تقارير الأستاذ العام",
@@ -2032,6 +2068,8 @@ export const commonAr = {
   ReconciliationTargetUpdated: "تم تحديث حساب المطابقة.",
   BankAccountDeactivated: "تم تعطيل الحساب البنكي.",
   BookBalanceFor: "الرصيد الدفتري لـ",
+  BookBalanceUnavailableNoBankAttribution: "الرصيد غير متاح: بعض حركات البنك في دفتر الأستاذ غير مرتبطة بعد بحساب بنكي محدد.",
+  BookBalanceUnavailableHistoryIncomplete: "الرصيد غير متاح: تعذّر التحقق الكامل من سجل البنك، لذا لا يُعرض رصيد بدلاً من رصيد غير موثّق.",
   Reconciliation: "المطابقة البنكية",
   UploadStatement: "رفع كشف حساب",
   UploadStatementDesc: "ارفع كشف حساب بصيغة CSV أو XLSX لمطابقته مع الحركات المرحّلة.",
@@ -2360,6 +2398,28 @@ export const commonAr = {
   CloseCashDrawer: "إغلاق صندوق النقد",
   CloseCashDrawerDesc: "أدخل النقد المعدود. سيحسب النظام الفرق قبل الموافقة.",
   CashDrawerClosed: "تم إغلاق صندوق النقد للموافقة.",
+  ApproveCashDrawer: "اعتماد صندوق النقد",
+  DirectPaymentBankLabel: "الحساب المصرفي المدفوع منه",
+  DirectPaymentBankChoose: "اختر الحساب المصرفي الذي دُفع منه",
+  DirectPaymentBankRequired: "اختر الحساب المصرفي الذي تم الدفع منه.",
+  DirectPaymentNoBank:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل تسجيل دفعة تحويل مصرفي أو بطاقة أو شيك.",
+  DirectPaymentTooManyBanks:
+    "عدد الحسابات المصرفية النشطة بهذه العملة أكبر من أن يُعرض هنا، لذا لا يمكن تسجيل دفعة مصرفية من هذه الشاشة. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
+  ReceiptBankAccount: "الحساب المصرفي المستلم",
+  ReceiptSelectBank: "اختر الحساب المصرفي الذي استلم هذه الدفعة",
+  ReceiptNoBank:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل تسجيل دفعة تحويل مصرفي أو بطاقة.",
+  ReceiptTooManyBanks:
+    "عدد الحسابات المصرفية النشطة بهذه العملة أكبر من أن يُعرض هنا، لذا لا يمكن تسجيل دفعة تحويل مصرفي أو بطاقة من هذه الشاشة. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
+  CashDrawerDepositBank: "الحساب المصرفي للإيداع",
+  CashDrawerSelectBank: "اختر الحساب المصرفي الذي سيستلم هذا النقد",
+  CashDrawerLoadingBanks: "جاري تحميل الحسابات المصرفية...",
+  CashDrawerNoDepositBank:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل اعتماد هذا الإيداع.",
+  CashDrawerTooManyBanks:
+    "عدد الحسابات المصرفية النشطة بهذه العملة أكبر من أن يُعرض هنا، لذا لا يمكن اعتماد الإيداع من هذه الشاشة. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
+  ConfirmCashDrawerApprovalNoDeposit: "اعتماد عدّ صندوق النقد؟ لم يُعدّ أي نقد، لذا لن يتم أي إيداع مصرفي.",
   Payments: "الدفعات",
   CollectionOutstanding: "المتبقي",
   CollectionOverdue: "المتأخر",

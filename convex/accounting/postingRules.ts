@@ -178,6 +178,8 @@ export interface LineSpec {
   financeCompanyId?: string;
   /** SCRUM-27: a MANUAL finance company has no id; its letter name is its identity. */
   payerNameSnapshot?: string;
+  /** SCRUM-54: the physical bank a BANK_ACCOUNT control line moved money through. */
+  bankAccountId?: string;
 }
 
 /**
@@ -248,7 +250,7 @@ function line(
   debitMinor: number,
   creditMinor: number,
   description?: string,
-  dims?: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "cashierId" | "financeCompanyId" | "payerNameSnapshot">>
+  dims?: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "cashierId" | "financeCompanyId" | "payerNameSnapshot" | "bankAccountId">>
 ): LineSpec {
   return { accountSystemKey, debitMinor, creditMinor, description, ...dims };
 }
@@ -569,6 +571,12 @@ export interface CollectionPaymentPayload {
   currency: string;
   customerId: string;
   paymentMethod?: string;
+  /**
+   * SCRUM-54: the physical bank a BANK_TRANSFER / CARD receipt reached. Optional only
+   * so an event queued before this field existed still drains; `recordPayment`
+   * requires it for every new bank receipt. Never set for CASH or CHEQUE.
+   */
+  bankAccountId?: string;
 }
 
 /**
@@ -1867,7 +1875,13 @@ function assertReceiptSplit(p: CollectionPaymentPayload): void {
 export function ruleCollectionPayment(p: CollectionPaymentPayload): RuleResult {
   assertReceiptSplit(p);
   const cashKey = cashAccountKey(p.paymentMethod);
-  const lines = [line(cashKey, p.receivedMinor, 0, "Payment received", { customerId: p.customerId })];
+  const lines = [
+    line(cashKey, p.receivedMinor, 0, "Payment received", {
+      customerId: p.customerId,
+      // SCRUM-54: only the bank control line names the bank.
+      ...(cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}),
+    }),
+  ];
   if (p.appliedMinor > 0) {
     lines.push(
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.appliedMinor, "AR settled", { customerId: p.customerId })
@@ -2236,6 +2250,13 @@ export interface FinanceCashReceivedPayload {
    * its canonical payment. Absent on events emitted before SCRUM-599.
    */
   paymentMethod?: FinanceReceiptMethod;
+  /**
+   * SCRUM-54: the physical bank a BANK_TRANSFER / CHEQUE receipt reached.
+   * Optional only so an event queued before this field existed still drains;
+   * `confirmDisbursement` requires it for every new bank receipt. Never set for
+   * CASH, which is cash on hand.
+   */
+  bankAccountId?: string;
 }
 
 /** How a finance company's disbursement can reach the dealership. */
@@ -2270,11 +2291,16 @@ export function ruleFinanceDisbursed(p: FinanceDisbursedPayload): RuleResult {
 }
 
 export function ruleFinanceCashReceived(p: FinanceCashReceivedPayload): RuleResult {
+  const receiptKey = financeReceiptAccountKey(p.paymentMethod);
   return {
     lines: [
       // Actual receipt of funds from the finance company settles their receivable,
-      // debited to wherever the money landed (SCRUM-599).
-      line(financeReceiptAccountKey(p.paymentMethod), p.amountMinor, 0, "Finance company disbursement received", financePayerDims(p)),
+      // debited to wherever the money landed (SCRUM-599). Only the bank control
+      // line names the bank (SCRUM-54) - cash on hand is not a bank.
+      line(receiptKey, p.amountMinor, 0, "Finance company disbursement received", {
+        ...financePayerDims(p),
+        ...(receiptKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}),
+      }),
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance company receivable settled", { ...financePayerDims(p), customerId: p.customerId }),
     ],
     memo: "Finance company disbursement received",
@@ -2863,12 +2889,19 @@ export interface CashDrawerDepositedPayload {
   sessionId: string;
   amountMinor: number;
   currency: string;
+  /**
+   * SCRUM-54: the physical bank the cash was deposited into, chosen by the
+   * approver. Optional only so an event queued before this field existed still
+   * drains; `cashDrawer.approveVariance` requires it for every new deposit.
+   */
+  bankAccountId?: string;
 }
 
 export function ruleCashDrawerDeposited(p: CashDrawerDepositedPayload): RuleResult {
   return {
     lines: [
-      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Cash drawer deposited to bank"),
+      // Only the bank control line names the bank - CASH_ON_HAND is not a bank.
+      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Cash drawer deposited to bank", { bankAccountId: p.bankAccountId }),
       line(SYSTEM_KEYS.CASH_ON_HAND, 0, p.amountMinor, "Drawer cash removed"),
     ],
     memo: "Cash drawer session deposited",
@@ -3086,6 +3119,12 @@ export interface HandoverCostPaidDirectPayload {
   currency: string;
   /** How the money left: REQUIRED, never defaulted — see the rule. */
   paymentMethod: string;
+  /**
+   * SCRUM-54: the physical bank the money left from. Optional only so an event queued
+   * before this field existed still drains; the command requires it for every new
+   * payment that credits the bank control account.
+   */
+  bankAccountId?: string;
 }
 
 /**
@@ -3116,10 +3155,13 @@ export function ruleHandoverCostPaidDirect(p: HandoverCostPaidDirectPayload): Ru
   }
   const expense = custodyFeeExpenseKey(p.accountingTreatment);
   if (expense.systemKey === null) throw new Error(expense.refusal);
+  const cashKey = disbursementAccountKey(p.paymentMethod);
   return {
     lines: [
       line(expense.systemKey, p.amountMinor, 0, `Handover cost (${p.feeType}) paid directly by the dealership`, { vehicleId: p.vehicleId }),
-      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Handover cost paid by the dealership"),
+      // SCRUM-54: only the bank control line names the bank.
+      line(cashKey, 0, p.amountMinor, "Handover cost paid by the dealership",
+        cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Handover cost paid directly by the dealership",
     category: "SYSTEM",

@@ -49,6 +49,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { toast } from "@/components/ui/sonner";
+import { ReceiptBankSelect, useReceiptBankOptions } from "./ReceiptBankSelect";
 import { CashDrawerPanel } from "./collections/CashDrawerPanel";
 import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
@@ -1009,11 +1010,15 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
   const [paymentDate, setPaymentDate] = useState(todayInput);
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
+  const [bankAccountId, setBankAccountId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const idempotencyKeyRef = useRef<string | null>(null);
+  const needsBank = method === "BANK_TRANSFER" || method === "CARD";
+  const bankOptions = useReceiptBankOptions(activeOrgId ?? undefined, needsBank && !!receivable, bankAccountId);
 
   async function submit() {
     if (!activeOrgId || !receivable) return;
+    if (needsBank && !bankOptions.chosenOffered) return;
     setSubmitting(true);
     try {
       idempotencyKeyRef.current ??= `collection-payment:${crypto.randomUUID()}`;
@@ -1022,6 +1027,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
         receivableId: receivable._id,
         amount: Number(amount),
         method: method as Doc<"collectionPayments">["method"],
+        ...(needsBank ? { bankAccountId: bankAccountId as Id<"bankAccounts"> } : {}),
         paymentDate: dateInputToMs(paymentDate),
         reference: reference || undefined,
         notes: notes || undefined,
@@ -1031,6 +1037,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
       idempotencyKeyRef.current = null;
       onOpenChange(false);
       setAmount("");
+      setBankAccountId("");
       setReference("");
       setNotes("");
     } catch (error) {
@@ -1057,13 +1064,14 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
               ))}
             </SelectContent>
           </Select>
+          {needsBank && <ReceiptBankSelect value={bankAccountId} onChange={setBankAccountId} bankOptions={bankOptions} />}
           <Input type="date" value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} />
           <Input value={reference} onChange={(event) => setReference(event.target.value)} placeholder={t("Reference" as any)} />
           <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={t("NotesLabel" as any)} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || !amount}>{submitting ? t("Saving" as any) : t("Record" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !amount || (needsBank && !bankOptions.chosenOffered)}>{submitting ? t("Saving" as any) : t("Record" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

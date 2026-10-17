@@ -13,7 +13,7 @@
  * refuse. No `unifiedDeal.*` second path exists; the structural test in
  * `scripts/` proves that at the file level, this proves it at the call level.
  */
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { pickMethod } from "@/test-utils/paymentMethodSelect";
@@ -39,6 +39,8 @@ const stubs = vi.hoisted(() => ({
   queryResults: new Map<string, unknown>(),
   /** The args the cockpit last asked each `useQueries` function with. */
   queryArgs: new Map<string, unknown>(),
+  /** The args the cockpit last asked each plain `useQuery` function with ("skip" included). */
+  useQueryArgs: new Map<string, unknown>(),
   permissions: new Set<string>(),
   mutationCalls: new Map<string, unknown[]>(),
   mutationFailures: new Map<string, string>(),
@@ -71,8 +73,10 @@ vi.mock("convex/react", async () => {
           return [key, stubs.queryResults.get(getFunctionName(query))];
         })
       ),
-    useQuery: (reference: never, args: unknown) =>
-      args === "skip" ? undefined : stubs.queryResults.get(getFunctionName(reference)),
+    useQuery: (reference: never, args: unknown) => {
+      stubs.useQueryArgs.set(getFunctionName(reference), args);
+      return args === "skip" ? undefined : stubs.queryResults.get(getFunctionName(reference));
+    },
     useMutation: (reference: never) => {
       const name = getFunctionName(reference);
       return async (args: unknown) => {
@@ -214,6 +218,10 @@ function application(overrides: Record<string, unknown> = {}) {
 // A closed deal's unwind status, once read: nothing active, nothing offered. The controls an active unwind
 // bars stay off until it resolves, so a closed deal needs one to be seen as the settled deal these tests mean.
 beforeEach(() => {
+  // SCRUM-54: the server's answer for the receipt's bank. Defaults to "no bank
+  // needed" (a CASH-like receipt) so the key/version cases below stay about
+  // the key and version; the bank path has its own describe.
+  queryResults.set("applications:listDisbursementBankOptions", { needsBank: false, banks: [] });
   queryResults.set("dealUnwind:unwindStatus", {
     unwindId: null,
     status: null,
@@ -229,6 +237,7 @@ afterEach(() => {
   cleanup();
   queryResults.clear();
   stubs.queryArgs.clear();
+  stubs.useQueryArgs.clear();
   permissions.clear();
   mutationCalls.clear();
   stubs.membershipUserId = "user_manager";
@@ -4103,5 +4112,128 @@ describe("SCRUM-522: the finance-company confirm dialog and its retained state",
     const shown = vi.mocked(toast.error).mock.calls.map((call) => String(call[0]));
     expect(shown).not.toContain("DisbursementChangedOutcomeUnknown");
     expect(shown).not.toContain("DisbursementChangedWhileConfirming");
+  });
+});
+
+describe("SCRUM-54: the finance-company receipt names the physical bank", () => {
+  const stages = [
+    { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+    { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+    { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+    { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+  ];
+  const CONFIRM = "applications:confirmDisbursement";
+  const BANK_OPTIONS = "applications:listDisbursementBankOptions";
+  const twoBanks = {
+    needsBank: true,
+    banks: [
+      { _id: "bank1", name: "Operating bank", currency: "JOD" },
+      { _id: "bank2", name: "Reserve bank", currency: "JOD" },
+    ],
+  };
+  // `options` replaces the server's answer for the receipt's bank before the dialog opens.
+  const openDialog = (options?: Record<string, unknown>) => {
+    if (options) queryResults.set(BANK_OPTIONS, options);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages }));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+  };
+  const confirmCalls = () => (mutationCalls.get("applications:confirmDisbursement") ?? []) as Array<Record<string, unknown>>;
+  // jsdom implements none of the pointer-capture surface Radix's Select reaches for.
+  beforeAll(() => {
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.setPointerCapture = () => {};
+    Element.prototype.releasePointerCapture = () => {};
+    Element.prototype.scrollIntoView = () => {};
+  });
+  const chooseBank = async (name: string) => {
+    const trigger = screen.getByRole("combobox", { name: "DisbursementBank" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: new RegExp(name) }));
+  };
+
+  test("a bank receipt cannot be confirmed before a bank is chosen, even with one bank on offer; the options query is mounted only for the open dialog", async () => {
+    queryResults.set("applications:listDisbursementBankOptions", {
+      needsBank: true,
+      banks: [{ _id: "bank1", name: "Operating bank", currency: "JOD" }],
+    });
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages }));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    // Bank options are read with plain `useQuery`, so its args are what prove the mount: skipped
+    // until the dialog opens, then asked for this application only.
+    expect(stubs.useQueryArgs.get(BANK_OPTIONS)).toBe("skip");
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    expect(stubs.useQueryArgs.get(BANK_OPTIONS)).toEqual({ orgId: ORG, applicationId: APP });
+
+    expect(screen.getByRole("combobox", { name: "DisbursementBank" })).toBeTruthy();
+    const confirm = screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    await act(async () => {});
+    expect(confirmCalls()).toHaveLength(0);
+  });
+
+  test("choosing a bank enables the confirm, and the cockpit sends exactly that bankAccountId", async () => {
+    openDialog(twoBanks);
+    await chooseBank("Operating bank");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+    expect(confirmCalls()[0]).toMatchObject({ bankAccountId: "bank1" });
+    expect(String(confirmCalls()[0].idempotencyKey)).toMatch(/^confirm-disbursement:/);
+  });
+
+  test("a retry on the same bank reuses the key; changing the bank mints a new key (confirmDisbursementKeyBankRef)", async () => {
+    openDialog(twoBanks);
+    // A lost response keeps the dialog open and the outcome unknown, so the next confirm is a retry.
+    stubs.mutationFailures.set(CONFIRM, "connection lost");
+    await chooseBank("Operating bank");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+
+    stubs.mutationFailures.set(CONFIRM, "connection lost");
+    await waitFor(() => expect((screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+    expect(confirmCalls()[1]).toMatchObject({ bankAccountId: "bank1" });
+    expect(confirmCalls()[1].idempotencyKey).toBe(confirmCalls()[0].idempotencyKey);
+
+    await chooseBank("Reserve bank");
+    await waitFor(() => expect((screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(confirmCalls()).toHaveLength(3));
+    expect(confirmCalls()[2]).toMatchObject({ bankAccountId: "bank2" });
+    expect(confirmCalls()[2].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+  });
+
+  test("a truncated bank list reaches the dialog as its own state and blocks the confirm", async () => {
+    openDialog({ needsBank: true, banks: [], truncated: true });
+    expect(screen.getByRole("alert").textContent).toBe("DisbursementTooManyBanks");
+    const confirm = screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    await act(async () => {});
+    expect(confirmCalls()).toHaveLength(0);
+  });
+
+  test("a missing receivable reaches the dialog as its own state and blocks the confirm", async () => {
+    openDialog({ needsBank: true, banks: [], truncated: false, receivableMissing: true });
+    expect(screen.getByRole("alert").textContent).toBe("DisbursementReceivableMissing");
+    const confirm = screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    await act(async () => {});
+    expect(confirmCalls()).toHaveLength(0);
+  });
+
+  test("a CASH receipt shows no selector and sends no bankAccountId", async () => {
+    openDialog(); // default stub: { needsBank: false }
+    expect(screen.queryByRole("combobox", { name: "DisbursementBank" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+    expect(Object.keys(confirmCalls()[0])).not.toContain("bankAccountId");
   });
 });

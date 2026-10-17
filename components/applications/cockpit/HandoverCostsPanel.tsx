@@ -313,10 +313,20 @@ export type HandoverPaymentView =
 export const DIRECT_PAYMENT_METHODS = ["BANK_TRANSFER", "CARD", "CASH", "CHEQUE"] as const;
 export type DirectPaymentMethodChoice = (typeof DIRECT_PAYMENT_METHODS)[number];
 
+/** SCRUM-54: methods that credit the bank control account, so the payment must name the physical bank. */
+export const BANK_PAYMENT_METHODS: ReadonlyArray<DirectPaymentMethodChoice> = ["BANK_TRANSFER", "CARD", "CHEQUE"];
+
+/** The banks offered for a direct payment; `undefined` while loading. */
+export type DirectPaymentBankOptions =
+  | { banks: ReadonlyArray<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean }
+  | undefined;
+
 export type DirectHandoverPayment = {
   /** Names THIS attempt — minted when the form opened, so a retry after a lost response replays it. */
   intentId: string;
   method: DirectPaymentMethodChoice;
+  /** The physical bank, for a bank method only — frozen with the attempt like every other field. */
+  bankAccountId?: Id<"bankAccounts">;
   paidAt: number;
   reference: string | undefined;
   /**
@@ -576,6 +586,7 @@ export function HandoverCostsPanel({
   onAbandonTemplateActual,
   canRecordDirectPayment = false,
   canReconcile = false,
+  directPaymentBankOptions,
   onRecordDirectPayment,
   onAbandonDirectPayment,
   postingHoldFeeIds = [],
@@ -644,6 +655,8 @@ export function HandoverCostsPanel({
    * that refuses (SCRUM-446).
    */
   canReconcile?: boolean;
+  /** SCRUM-54: the banks a bank-method payment may name (the deal's currency). */
+  directPaymentBankOptions?: DirectPaymentBankOptions;
   /** Records the dealership's own payment of a line. Rejects with `HandoverCostAttemptError`. */
   onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
   /** The form closed after an attempt whose result never arrived: that identity is over. */
@@ -926,6 +939,7 @@ export function HandoverCostsPanel({
         custodyConfirmed={custodyLedgerCheck === "READY"}
         paying={payingId === line._id && line.directPaymentEligible === true}
         busy={submittingAny || paymentPending}
+        bankOptions={directPaymentBankOptions}
         t={t}
         onOpen={() => {
           // An in-flight or UNKNOWN attempt keeps its form: no opener may swap it out.
@@ -2910,6 +2924,7 @@ function HandoverPaymentRow({
   custodyConfirmed,
   paying,
   busy,
+  bankOptions,
   t,
   onOpen,
   onClose,
@@ -2918,6 +2933,7 @@ function HandoverPaymentRow({
 }: Readonly<{
   line: HandoverCostLine;
   money: (minor: number, currency: string) => string;
+  bankOptions: DirectPaymentBankOptions;
   denominationCode: string;
   dealClosed: boolean;
   /** The deal is stopped (cancelled or rejected): its payments are recorded, never settled, and none is offered. */
@@ -3092,7 +3108,7 @@ function HandoverPaymentRow({
         )}
       </div>
       {paying && payable && canRecord && (
-        <DirectPaymentForm line={line} money={money} t={t} onCancel={onClose} onPendingChange={onPendingChange} onSubmit={onSubmit} />
+        <DirectPaymentForm line={line} money={money} bankOptions={bankOptions} t={t} onCancel={onClose} onPendingChange={onPendingChange} onSubmit={onSubmit} />
       )}
     </div>
   );
@@ -3101,6 +3117,7 @@ function HandoverPaymentRow({
 function DirectPaymentForm({
   line,
   money,
+  bankOptions,
   t,
   onCancel,
   onPendingChange,
@@ -3108,6 +3125,7 @@ function DirectPaymentForm({
 }: Readonly<{
   line: HandoverCostLine;
   money: (minor: number, currency: string) => string;
+  bankOptions: DirectPaymentBankOptions;
   t: (key: string) => string;
   onCancel: (afterUnknown: boolean, intentId: string | null) => void;
   onPendingChange: (pending: boolean) => void;
@@ -3115,6 +3133,7 @@ function DirectPaymentForm({
 }>) {
   const [intentId, setIntentId] = useState(() => crypto.randomUUID());
   const [method, setMethod] = useState<DirectPaymentMethodChoice | "">("");
+  const [bankAccountId, setBankAccountId] = useState("");
   const [paidOn, setPaidOn] = useState(economicTodayDateInput());
   const [reference, setReference] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -3132,6 +3151,11 @@ function DirectPaymentForm({
   const changedTo = line.actualAmountMinor !== pinnedMinor ? line.actualAmountMinor : undefined;
   const frozen = unknownSent !== null;
   const id = `direct-payment-${line._id}`;
+  const needsBank = method !== "" && BANK_PAYMENT_METHODS.includes(method);
+  // A choice the server no longer offers (the list moved while the form was open) cannot be sent.
+  const chosenBank = bankOptions?.banks.find((bank) => bank._id === bankAccountId);
+  const bankListTruncated = needsBank && bankOptions?.truncated === true;
+  const noEligibleBank = needsBank && bankOptions !== undefined && !bankListTruncated && bankOptions.banks.length === 0;
   // Tell the panel while an attempt is in flight or its outcome is UNKNOWN, so it
   // can keep other openers from unmounting this form; cleared on unmount.
   useEffect(() => {
@@ -3150,6 +3174,10 @@ function DirectPaymentForm({
         setError(t("DirectPaymentDateRequired"));
         return;
       }
+      if (needsBank && chosenBank === undefined) {
+        setError(t("DirectPaymentBankRequired"));
+        return;
+      }
       // The PINNED figure is the one being approved, never the live one.
       if (pinnedMinor === undefined) {
         setError(t("HandoverPaymentNoActual"));
@@ -3158,6 +3186,7 @@ function DirectPaymentForm({
       values = {
         intentId,
         method,
+        ...(needsBank && chosenBank ? { bankAccountId: chosenBank._id } : {}),
         paidAt: economicDateInputToMs(paidOn),
         reference: reference.trim() || undefined,
         expectedAmountMinor: pinnedMinor,
@@ -3187,6 +3216,10 @@ function DirectPaymentForm({
     <form
       className="space-y-3 rounded-md border bg-muted/30 p-3"
       data-testid={`${id}-form`}
+      // `required` stays on the fields for assistive tech; submit() owns the
+      // validation so the refusal is the translated in-form alert, not a
+      // browser tooltip in the browser's language.
+      noValidate
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
@@ -3267,6 +3300,33 @@ function DirectPaymentForm({
           />
         </div>
       </div>
+      {needsBank && (
+        <div className="space-y-1.5">
+          <Label htmlFor={`${id}-bank`}>{t("DirectPaymentBankLabel")}</Label>
+          <select
+            id={`${id}-bank`}
+            className={selectClass}
+            value={chosenBank?._id ?? ""}
+            disabled={frozen || submitting || bankOptions === undefined || noEligibleBank || bankListTruncated}
+            required
+            aria-invalid={error === t("DirectPaymentBankRequired")}
+            onChange={(event) => setBankAccountId(event.target.value)}
+          >
+            <option value="">{t(bankOptions === undefined ? "CashDrawerLoadingBanks" : "DirectPaymentBankChoose")}</option>
+            {(bankOptions?.banks ?? []).map((bank) => (
+              <option key={bank._id} value={bank._id}>
+                {bank.name} · {bank.currency}
+              </option>
+            ))}
+          </select>
+          {noEligibleBank && (
+            <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("DirectPaymentNoBank")}</p>
+          )}
+          {bankListTruncated && (
+            <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("DirectPaymentTooManyBanks")}</p>
+          )}
+        </div>
+      )}
       {error && (
         <p role="alert" className="text-xs font-medium text-destructive">
           {error}

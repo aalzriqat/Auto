@@ -1,6 +1,6 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
-import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { forwardPostKey } from "./utils/financeCompanyForward";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
@@ -1434,7 +1434,7 @@ async function setupFinalizedFinancedDeal() {
 
 describe("applications finance-company canonical receivable", () => {
   test("finalizeDeal opens a FINANCE_COMPANY receivable and confirmDisbursement settles it by allocation", async () => {
-    const { t, orgId, companyId, applicationId, asUser, getFinanceReceivable, getCustomerReceivable, recordForward } =
+    const { t, orgId, userId, companyId, applicationId, asUser, getFinanceReceivable, getCustomerReceivable, recordForward } =
       await setupFinalizedFinancedDeal();
 
     // Finalizing must open a canonical receivable owed BY the finance company.
@@ -1488,6 +1488,7 @@ describe("applications finance-company canonical receivable", () => {
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
+      bankAccountId: await receiptBankFor(t, orgId, userId),
     });
 
     const settledReceivable = await getFinanceReceivable();
@@ -1941,9 +1942,22 @@ async function setupFinalizedFinancedDealWithCheque() {
   return { ...base, companyId, quoteId, applicationId, getCheque };
 }
 
+/**
+ * SCRUM-54: the physical bank a BANK_TRANSFER / CHEQUE finance-company receipt
+ * names. Passed explicitly at each `confirmDisbursement` that gets past the
+ * checks ahead of the bank (amount, forward), never injected by a wrapper.
+ */
+async function receiptBankFor(
+  t: Parameters<typeof insertReceiptBank>[0]["t"],
+  orgId: Id<"organizations">,
+  userId: Id<"users">
+) {
+  return await insertReceiptBank({ t, orgId, owner: { userId } });
+}
+
 describe("applications.confirmDisbursement cheque linking", () => {
   test("confirmDisbursement transitions the linked postDatedCheques row to CLEARED", async () => {
-    const { orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const { t, orgId, userId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
 
     const chequeBefore = await getCheque();
     expect(chequeBefore?.status).toBe("HELD");
@@ -1952,6 +1966,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
+      bankAccountId: await receiptBankFor(t, orgId, userId),
     });
 
     const chequeAfter = await getCheque();
@@ -1960,7 +1975,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
   });
 
   test("confirmDisbursement throws if the linked cheque was already returned", async () => {
-    const { orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const { t, orgId, userId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
     const cheque = await getCheque();
 
     await asUser.mutation(api.collections.returnCheque, {
@@ -1974,6 +1989,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
         orgId,
         applicationId,
         disbursedAmountMinor: 20_000_000,
+        bankAccountId: await receiptBankFor(t, orgId, userId),
       })
     ).rejects.toThrow(/returned or cancelled\. Correct the expected payment, then register the new payment/i);
   });
@@ -1988,7 +2004,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
   });
 
   test("confirmDisbursement resolves the replacement cheque after the original was replaced", async () => {
-    const { orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const { t, orgId, userId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
     const originalCheque = await getCheque();
 
     const newChequeId = await asUser.mutation(api.collections.replaceCheque, {
@@ -2004,6 +2020,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
+      bankAccountId: await receiptBankFor(t, orgId, userId),
     });
 
     const chequeAfter = await getCheque();
@@ -2012,7 +2029,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
   });
 
   test("confirmDisbursement treats a soft-deleted linked cheque as not found", async () => {
-    const { t, orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const { t, orgId, userId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
     const cheque = await getCheque();
 
     await t.run((ctx) => ctx.db.patch(cheque!._id, { isDeleted: true }));
@@ -2022,6 +2039,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
         orgId,
         applicationId,
         disbursedAmountMinor: 20_000_000,
+        bankAccountId: await receiptBankFor(t, orgId, userId),
       })
     ).rejects.toThrow(/cheque record not found/i);
   });
@@ -2094,12 +2112,15 @@ async function setupApprovedDealWithCheque(opts: { face?: string; chequeNumber?:
       applicationId,
     });
   };
-  const confirm = () =>
+  // One receiving bank per deal, made on first use: repeated (and refused) confirms name the same one.
+  let receiptBankId: Id<"bankAccounts"> | undefined;
+  const confirm = async () =>
     asUser.mutation(api.applications.confirmDisbursement, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
+      bankAccountId: (receiptBankId ??= await receiptBankFor(base.t, orgId, base.userId)),
     });
   return { ...base, companyId, applicationId, registerCheque, rows, finalize, confirm };
 }
@@ -2556,6 +2577,7 @@ describe("SCRUM-447 D3 correcting the expected payment", () => {
         orgId: s.orgId,
         applicationId: s.applicationId,
         disbursedAmountMinor: 20_000_000,
+        bankAccountId: await receiptBankFor(s.t, s.orgId, s.userId),
       });
       const app = await s.t.run((ctx) => ctx.db.get(s.applicationId));
       expect(app?.disbursedAt).toBeGreaterThan(0);
@@ -2687,7 +2709,13 @@ describe("SCRUM-447 D3 correcting the expected payment", () => {
     const s = await setupApprovedDealWithCheque({ face: "20000" });
     await s.finalize();
     const key = crypto.randomUUID();
-    const args = { idempotencyKey: key, orgId: s.orgId, applicationId: s.applicationId, disbursedAmountMinor: 20_000_000 };
+    const args = {
+      idempotencyKey: key,
+      orgId: s.orgId,
+      applicationId: s.applicationId,
+      disbursedAmountMinor: 20_000_000,
+      bankAccountId: await receiptBankFor(s.t, s.orgId, s.userId),
+    };
     const first = await s.asUser.mutation(api.applications.confirmDisbursement, args);
     const second = await s.asUser.mutation(api.applications.confirmDisbursement, args);
     expect(second).toEqual(first);

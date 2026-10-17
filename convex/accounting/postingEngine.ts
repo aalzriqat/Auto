@@ -631,6 +631,7 @@ export async function postAccountingEvent(
       financeCompanyId: (l.financeCompanyId || undefined) as Id<"financeCompanies"> | undefined,
       // SCRUM-27: a manual finance company's name, so its lines are attributable.
       payerNameSnapshot: l.payerNameSnapshot || undefined,
+      bankAccountId: (l.bankAccountId || undefined) as Id<"bankAccounts"> | undefined,
       description: l.description,
     });
     await incrementAccountSnapshot(ctx, {

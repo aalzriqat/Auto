@@ -13,6 +13,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { settleOutbox, makeDue } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
+import { insertReceiptBank } from "../test-utils/financedDealFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -629,6 +630,8 @@ describe("Phase 9 — finance disbursement receipt", () => {
     await asUser.mutation(api.applications.confirmDisbursement, {
       orgId, applicationId: appId, disbursedAmountMinor: 10_000_000,
       idempotencyKey: "disb_gl_1",
+      // SCRUM-54: a BANK_TRANSFER receipt names the physical bank (JOD, the receivable's currency).
+      bankAccountId: await insertReceiptBank({ t, orgId, owner: { userId } }),
     });
 
     const event = await eventForSource(asUser, orgId, "financeApplications", `disbursement_${appId}`);
