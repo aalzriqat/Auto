@@ -344,7 +344,7 @@ export default function SalesHomePage() {
                                     <div>
                                         <p className="text-sm font-medium text-foreground">{approval.vehicleSummary}</p>
                                         <p className="text-xs text-muted-foreground mt-0.5">
-                                            {t("RequestedProfit" as any) ?? "Requested profit"}: {format(approval.requestedProfit)}
+                                            {t("RequestedProfit" as any) ?? "Requested price uplift"}: {format(approval.requestedProfit)}
                                         </p>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
