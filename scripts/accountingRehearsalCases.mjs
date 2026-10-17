@@ -1575,7 +1575,7 @@ export async function runRehearsalCases(ctx) {
         pick: (event) => event.sourceType === "expenses" && !preReturnEventIds.has(String(event._id)),
       });
       expectExactLines(fee.lines, keyOf, [
-        { key: "GENERAL_EXPENSE", debitMinor: 500 },
+        { key: "PROFESSIONAL_FEES_EXPENSE", debitMinor: 500 },
         { key: "BANK_ACCOUNT", creditMinor: 500 },
       ], { currency: denom.currency, decimals: denom.decimals, what: "the cheque return fee" });
       const feeBankLine = fee.lines.find((line) => keyOf.get(String(line.accountId)) === "BANK_ACCOUNT");

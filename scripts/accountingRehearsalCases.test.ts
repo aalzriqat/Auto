@@ -547,6 +547,7 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_cap", code: "3000", type: "EQUITY", name: "Partner Capital", systemKey: "PARTNER_CAPITAL", normalBalance: "CREDIT" },
     { _id: "acct_draw", code: "3100", type: "EQUITY", name: "Partner Drawings", systemKey: "PARTNER_DRAWINGS", normalBalance: "DEBIT" },
     { _id: "acct_exp", code: "6000", type: "EXPENSE", name: "General Expense", systemKey: "GENERAL_EXPENSE", normalBalance: "DEBIT" },
+    { _id: "acct_prof_fees", code: "6850", type: "EXPENSE", name: "Professional Fees", systemKey: "PROFESSIONAL_FEES_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_arfc", code: "1210", type: "ASSET", name: "AR Finance Companies", systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", normalBalance: "DEBIT" },
     { _id: "acct_fc_comm", code: "6860", type: "EXPENSE", name: "Finance Company Commission", systemKey: "FINANCE_COMPANY_COMMISSION_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_transfer", code: "6820", type: "EXPENSE", name: "Ownership Transfer", systemKey: "OWNERSHIP_TRANSFER_EXPENSE", normalBalance: "DEBIT" },
@@ -1322,7 +1323,7 @@ function makeBackend(defects: Defects = {}) {
         }
         if (Number(args.bankFeeMinor ?? 0) > 0) {
           post("EXPENSE_POSTED", "expenses", id("expense"), [
-            { key: "GENERAL_EXPENSE", debitMinor: Number(args.bankFeeMinor) },
+            { key: "PROFESSIONAL_FEES_EXPENSE", debitMinor: Number(args.bankFeeMinor) },
             { key: "BANK_ACCOUNT", creditMinor: Number(args.bankFeeMinor), bankAccountId: String(args.bankFeeBankAccountId) },
           ]);
         }

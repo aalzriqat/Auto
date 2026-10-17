@@ -1236,6 +1236,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
   const [bankFeeMinor, setBankFeeMinor] = useState("");
   const [bankFeeBankAccountId, setBankFeeBankAccountId] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [uncertainReturn, setUncertainReturn] = useState(false);
   const idempotencyKeyRef = useRef<string | null>(null);
   const feeNeedsBank = cheque?.status === "CLEARED" && Number(bankFeeMinor) > 0;
   const feeBankOptions = useReceiptBankOptions(activeOrgId ?? undefined, feeNeedsBank, bankFeeBankAccountId);
@@ -1256,6 +1257,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
           idempotencyKey: idempotencyKeyRef.current,
         });
         idempotencyKeyRef.current = null;
+        setUncertainReturn(false);
       } else {
         await returnCheque({ orgId: activeOrgId, chequeId: cheque._id, returnReason: reason || undefined });
       }
@@ -1265,12 +1267,14 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
       setBankFeeMinor("");
       setBankFeeBankAccountId("");
     } catch (error) {
-      // The server says this key already belongs to a request with different
-      // content: it is dead for what is on screen, so the next attempt is a new
-      // command under a fresh key. (A lost response keeps the key.)
-      const refusedCode = isConvexError(error) ? (error.data as { code?: unknown } | null)?.code : undefined;
-      if (refusedCode === "CHEQUE_RETURN_KEY_CONFLICT") {
+      // A server refusal rolled back. A transport error might follow a commit.
+      if (isConvexError(error)) {
         idempotencyKeyRef.current = null;
+        setUncertainReturn(false);
+      } else {
+        // The server may have committed before the response was lost. Keep
+        // every economic input fixed while retrying the original command.
+        setUncertainReturn(true);
       }
       toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
@@ -1290,27 +1294,35 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
             {t("ReturnClearedChequeWarning" as any)}
           </div>
         )}
-        <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("ReturnReason" as any)} />
+        <Textarea value={reason} onChange={(event) => setReason(event.target.value)}
+          disabled={submitting || uncertainReturn} placeholder={t("ReturnReason" as any)} />
         {cheque?.status === "CLEARED" && (
-          <Input
-            type="number"
-            min="0"
-            step="1"
-            value={bankFeeMinor}
-            onChange={(event) => setBankFeeMinor(event.target.value)}
-            placeholder={t("BankFeeMinorOptional" as any)}
-          />
+          <div className="space-y-2">
+            <Label htmlFor="cheque-return-fee-amount">{t("BankFeeMinorOptional" as any)}</Label>
+            <Input
+              id="cheque-return-fee-amount"
+              type="number"
+              min="0"
+              step="1"
+              value={bankFeeMinor}
+              onChange={(event) => setBankFeeMinor(event.target.value)}
+              disabled={submitting || uncertainReturn}
+              placeholder={t("BankFeeMinorOptional" as any)}
+            />
+          </div>
         )}
         {feeNeedsBank && <div className="space-y-2">
           <Label htmlFor="cheque-return-fee-bank">{t("ChequeReturnFeeBank" as any)}</Label>
           <ReceiptBankSelect id="cheque-return-fee-bank" ariaLabel={t("ChequeReturnFeeBank" as any)} value={bankFeeBankAccountId}
-            onChange={setBankFeeBankAccountId} bankOptions={feeBankOptions} disabled={submitting} />
+            onChange={setBankFeeBankAccountId} bankOptions={feeBankOptions} disabled={submitting || uncertainReturn} />
         </div>}
+        {uncertainReturn && <p role="status" className="text-xs text-muted-foreground">{t("ChequeReturnRetrySameDetails" as any)}</p>}
         <DialogFooter>
           <Button
             variant="outline"
             onClick={() => {
               idempotencyKeyRef.current = null;
+              setUncertainReturn(false);
               onOpenChange(false);
             }}
           >

@@ -23,22 +23,23 @@ export function ClearChequeBankDialog({ orgId, chequeId, chequeLabel, onClose, o
   const { t } = useLanguage();
   const clearCheque = useMutation(api.collections.clearCheque);
   const command = useCommandIdentity();
-  const [attempts, setAttempts] = useState(() => new Map<string, Id<"bankAccounts">>());
+  const [attempts, setAttempts] = useState(() => new Map<string, { id: Id<"bankAccounts">; name: string }>());
   const [selection, setSelection] = useState<{ chequeId: Id<"postDatedCheques">; bankId: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<{ chequeId: Id<"postDatedCheques">; text: string } | null>(null);
   const selectedBank = selection?.chequeId === chequeId ? selection.bankId : "";
   const frozenBank = chequeId ? attempts.get(chequeId) ?? null : null;
   const error = failure?.chequeId === chequeId ? failure.text : "";
-  const bankOptions = useReceiptBankOptions(orgId, chequeId !== null, frozenBank ?? selectedBank);
+  const bankOptions = useReceiptBankOptions(orgId, chequeId !== null, frozenBank?.id ?? selectedBank);
 
   async function submit() {
     if (!chequeId || busy) return;
     const priorBank = attempts.get(chequeId);
     if (!priorBank && !bankOptions.chosenOffered) return;
-    const bankAccountId = priorBank ?? selectedBank as Id<"bankAccounts">;
+    const bankAccountId = priorBank?.id ?? selectedBank as Id<"bankAccounts">;
+    const bankName = priorBank?.name ?? bankOptions.banks?.find((bank) => bank._id === bankAccountId)?.name ?? bankAccountId;
     const intent = `clear-cheque:${chequeId}`;
-    setAttempts((previous) => new Map(previous).set(chequeId, bankAccountId));
+    setAttempts((previous) => new Map(previous).set(chequeId, { id: bankAccountId, name: bankName }));
     setBusy(true);
     setFailure(null);
     try {
@@ -78,11 +79,11 @@ export function ClearChequeBankDialog({ orgId, chequeId, chequeLabel, onClose, o
         </DialogHeader>
         <div className="space-y-2">
           <Label htmlFor="cheque-clear-bank">{t("ReceiptBankAccount" as any)}</Label>
-          <ReceiptBankSelect id="cheque-clear-bank" value={frozenBank ?? selectedBank}
+          <ReceiptBankSelect id="cheque-clear-bank" value={frozenBank?.id ?? selectedBank}
             onChange={(bankId) => { if (chequeId) setSelection({ chequeId, bankId }); }}
             bankOptions={bankOptions} disabled={busy || frozenBank !== null} />
           {frozenBank && !bankOptions.chosenOffered &&
-            <p role="status" className="text-xs text-muted-foreground">{t("ChequeClearRetryBank" as any)}</p>}
+            <p role="status" className="text-xs text-muted-foreground">{t("ChequeClearRetryBank" as any)} <bdi>{frozenBank.name}</bdi></p>}
         </div>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <DialogFooter>

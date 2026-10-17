@@ -16,6 +16,8 @@ const stubs = vi.hoisted(() => ({
   paginated: new Map<string, unknown[]>(),
   mutations: new Map<string, (...args: unknown[]) => unknown>(),
   t: (key: string): string => key,
+  commandKeys: new Map<string, string>(),
+  nextCommand: 0,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -32,7 +34,13 @@ vi.mock("@/hooks/useCurrencyFormatter", () => ({
   useCurrencyFormatter: () => (n: number) => `${n} JOD`,
 }));
 vi.mock("@/hooks/useCommandIdentity", () => ({
-  useCommandIdentity: () => ({ for: (k: string) => k, retire: () => {} }),
+  useCommandIdentity: () => ({
+    for: (intent: string) => {
+      if (!stubs.commandKeys.has(intent)) stubs.commandKeys.set(intent, `command-${++stubs.nextCommand}`);
+      return stubs.commandKeys.get(intent)!;
+    },
+    retire: (intent: string) => stubs.commandKeys.delete(intent),
+  }),
 }));
 vi.mock("@/components/accounting/collections/CashDrawerPanel", () => ({ CashDrawerPanel: () => null }));
 vi.mock("@/components/accounting/collections/PaymentLinksPanel", () => ({ PaymentLinksPanel: () => null }));
@@ -80,6 +88,8 @@ afterEach(() => {
   stubs.paginated.clear();
   stubs.mutations.clear();
   stubs.t = (key: string) => key;
+  stubs.commandKeys.clear();
+  stubs.nextCommand = 0;
 });
 
 async function openChequesTab() {
@@ -114,6 +124,44 @@ describe("Collections, Cheques tab: Return", () => {
     await waitFor(() => expect(clearCheque).toHaveBeenCalledWith(expect.objectContaining({
       orgId: "org1", chequeId: "c1", bankAccountId: "bank1",
     })));
+  });
+
+  test("a lost clearing response retries the same bank and key, while a server refusal releases both", async () => {
+    stubs.queryResults.set("collections:listReceiptBankOptions", {
+      banks: [
+        { _id: "bank1", name: "First bank", currency: "JOD" },
+        { _id: "bank2", name: "Second bank", currency: "JOD" },
+      ], truncated: false,
+    });
+    const clearCheque = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new ConvexError({ code: "CHEQUE_CLEAR_BANK_INVALID", message: "The selected bank account is inactive." }))
+      .mockResolvedValue("payment1");
+    stubs.mutations.set("collections:clearCheque", clearCheque);
+    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "DEPOSITED" })]);
+    await openChequesTab();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    const dialog = await screen.findByRole("dialog");
+    const trigger = within(dialog).getByRole("combobox", { name: "ReceiptBankAccount" }) as HTMLButtonElement;
+    const submit = () => fireEvent.click(within(dialog).getByRole("button", { name: "Clear" }));
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: /First bank/ }));
+    submit();
+    await waitFor(() => expect(clearCheque).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(trigger.disabled).toBe(true));
+    submit();
+    await waitFor(() => expect(clearCheque).toHaveBeenCalledTimes(2));
+    const [first, retry] = clearCheque.mock.calls.map((call) => call[0] as { bankAccountId: string; idempotencyKey: string });
+    expect(retry.bankAccountId).toBe(first.bankAccountId);
+    expect(retry.idempotencyKey).toBe(first.idempotencyKey);
+    await waitFor(() => expect(trigger.disabled).toBe(false));
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: /Second bank/ }));
+    submit();
+    await waitFor(() => expect(clearCheque).toHaveBeenCalledTimes(3));
+    const fresh = clearCheque.mock.calls[2][0] as { bankAccountId: string; idempotencyKey: string };
+    expect(fresh.bankAccountId).toBe("bank2");
+    expect(fresh.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 
   test("a positive return fee asks which bank paid that fee", async () => {
@@ -300,5 +348,39 @@ describe("Collections, Cheques tab: the Return dialog shows a translated refusal
     await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledTimes(2));
     const [first, second] = returnClearedCheque.mock.calls.map((call) => (call[0] as { idempotencyKey: string }).idempotencyKey);
     expect(second).toBe(first);
+  });
+
+  test("a lost fee-return response freezes reason, fee and paying bank for the original-key retry", async () => {
+    stubs.queryResults.set("collections:listReceiptBankOptions", {
+      banks: [{ _id: "fee-bank", name: "Fee bank", currency: "JOD" }], truncated: false,
+    });
+    const returnClearedCheque = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(undefined);
+    stubs.mutations.set("collections:returnClearedCheque", returnClearedCheque);
+    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c3", isFinanceCompanyCheque: false, status: "CLEARED" })]);
+    await openChequesTab();
+    fireEvent.click(screen.getAllByRole("button", { name: "Return" })[0]);
+    const dialog = await screen.findByRole("dialog");
+    const reason = within(dialog).getByPlaceholderText("ReturnReason") as HTMLTextAreaElement;
+    const fee = within(dialog).getByLabelText("BankFeeMinorOptional") as HTMLInputElement;
+    fireEvent.change(reason, { target: { value: "Bounced" } });
+    fireEvent.change(fee, { target: { value: "500" } });
+    const trigger = within(dialog).getByRole("combobox", { name: "ChequeReturnFeeBank" }) as HTMLButtonElement;
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: /Fee bank/ }));
+    const submit = () => fireEvent.click(within(dialog).getAllByRole("button", { name: "Return" }).at(-1)!);
+    submit();
+    await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(within(dialog).getByText("ChequeReturnRetrySameDetails")).toBeTruthy());
+    expect(reason.disabled).toBe(true);
+    expect(fee.disabled).toBe(true);
+    expect(trigger.disabled).toBe(true);
+    submit();
+    await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledTimes(2));
+    const [first, retry] = returnClearedCheque.mock.calls.map((call) => call[0] as {
+      idempotencyKey: string; returnReason: string; bankFeeMinor: number; bankFeeBankAccountId: string;
+    });
+    expect(retry).toEqual(first);
   });
 });

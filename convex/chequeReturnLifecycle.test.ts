@@ -335,6 +335,20 @@ describe("SCRUM-54 cleared-cheque bank identity", () => {
       { bankAccountId: seeded.bankAccountId, debitMinor: 0, creditMinor: 10_000 },
       { bankAccountId: feeBankAccountId, debitMinor: 0, creditMinor: 500 },
     ]);
+    const feeDebitAccounts = await seeded.t.run(async (ctx) => {
+      const entries = await ctx.db.query("journalEntries")
+        .withIndex("by_org", (q) => q.eq("orgId", seeded.orgId)).collect();
+      const keys: string[] = [];
+      for (const entry of entries) {
+        const lines = await ctx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)).collect();
+        for (const line of lines) {
+          if (line.debitMinor === 500) keys.push((await ctx.db.get(line.accountId))?.systemKey ?? "UNKNOWN");
+        }
+      }
+      return keys;
+    });
+    expect(feeDebitAccounts).toEqual([SYSTEM_KEYS.PROFESSIONAL_FEES_EXPENSE]);
   });
 });
 

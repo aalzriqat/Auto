@@ -1386,6 +1386,7 @@ export const commonEn = {
   ReceiptBankAccount: "Bank account received into",
   ReceiptSelectBank: "Select the bank account that received this payment",
   ChequeClearRetryBank: "Retrying the same cheque clearance with its original bank choice.",
+  ChequeReturnRetrySameDetails: "The response was lost. Retry this return with the same reason, fee and bank.",
   ChequeReturnFeeBank: "Bank account charged the return fee",
   ReceiptNoBank:
     "There is no active bank account in this currency. Add one under Bank Accounts before recording a bank transfer or card payment.",
@@ -2411,6 +2412,7 @@ export const commonAr = {
   ReceiptBankAccount: "الحساب المصرفي المستلم",
   ReceiptSelectBank: "اختر الحساب المصرفي الذي استلم هذه الدفعة",
   ChequeClearRetryBank: "إعادة محاولة تحصيل الشيك باستخدام الحساب المصرفي المختار أولاً.",
+  ChequeReturnRetrySameDetails: "فُقد الرد. أعد محاولة إرجاع الشيك بالسبب والرسوم والحساب المصرفي نفسها.",
   ChequeReturnFeeBank: "الحساب المصرفي الذي خُصمت منه رسوم الإرجاع",
   ReceiptNoBank:
     "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل تسجيل دفعة تحويل مصرفي أو بطاقة.",
