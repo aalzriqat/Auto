@@ -792,21 +792,9 @@ export function SalesWizardScreen({
               <Icon color="subtleText" name="chevronDown" size={18} />
             </Pressable>
 
-            {/* Cost bar — purchase vs sale margin, like VehicleCostBar */}
-            {selectedVehicle?.purchasePrice != null ? (
-              <View style={styles.costBar}>
-                <View style={styles.costBarRow}>
-                  <Text style={styles.costBarLabel}>{locale === "ar" ? "التكلفة" : "Cost"}</Text>
-                  <Text style={styles.costBarValue}>{money(selectedVehicle.purchasePrice, locale)}</Text>
-                </View>
-                <View style={styles.costBarRow}>
-                  <Text style={styles.costBarLabel}>{locale === "ar" ? "الهامش" : "Margin"}</Text>
-                  <Text style={[styles.costBarValue, { color: accent }]}>
-                    {money(Math.max(0, (price || selectedVehicle.sellingPrice || 0) - (selectedVehicle.purchasePrice ?? 0)), locale)}
-                  </Text>
-                </View>
-              </View>
-            ) : null}
+            {/* SCRUM-55: no cost or margin panel. Purchase price alone is not the
+                books' cost (landed cost and capitalized expenses are missing), so a
+                margin derived from it disagrees with the ledger. */}
 
             {/* Pricing grid */}
             <View style={styles.fieldGrid}>
@@ -1587,25 +1575,6 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     flex: 1,
     color: theme.colors.mutedText,
     fontSize: 15,
-  },
-  costBar: {
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surfaceAlt,
-    padding: theme.spacing.md,
-  },
-  costBarRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  costBarLabel: {
-    color: theme.colors.mutedText,
-    fontSize: 13,
-  },
-  costBarValue: {
-    color: theme.colors.text,
-    fontSize: 13,
-    fontWeight: "600",
   },
   fieldGrid: {
     flexDirection: "row",
