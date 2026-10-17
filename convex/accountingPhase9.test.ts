@@ -713,7 +713,7 @@ describe("Phase 9 — commission payment GL posting", () => {
   });
 
   test("markCommissionPaid stores bank-transfer method and credits Bank", async () => {
-    const { t, orgId, asUser, customerId, userId } = await seedDealer("comm_method");
+    const { t, orgId, asUser, customerId, userId, bankAccountId } = await seedDealer("comm_method");
 
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
@@ -749,11 +749,13 @@ describe("Phase 9 — commission payment GL posting", () => {
       orgId,
       saleId,
       paymentMethod: "BANK_TRANSFER",
+      bankAccountId,
       idempotencyKey: "comm_method_paid_1",
     });
 
     const event = await eventForSource(asUser, orgId, "sales", `commission_paid_${saleId}`);
     expect((event.payload as { paymentMethod?: string }).paymentMethod).toBe("BANK_TRANSFER");
+    expect((event.payload as { bankAccountId?: string }).bankAccountId).toBe(bankAccountId);
     const byCode = await journalByCode(asUser, orgId, event.journalEntryId);
     expect(byCode["2300"]?.debit).toBe(700_000);
     expect(byCode["1110"]?.credit).toBe(700_000);
@@ -762,6 +764,13 @@ describe("Phase 9 — commission payment GL posting", () => {
     await t.run(async (ctx) => {
       const sale = await ctx.db.get(saleId);
       expect(sale?.commissionPaymentMethod).toBe("BANK_TRANSFER");
+      expect(sale?.commissionBankAccountId).toBe(bankAccountId);
+      const lines = await ctx.db.query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event.journalEntryId))
+        .collect();
+      expect(lines.filter((line) => line.bankAccountId === bankAccountId)).toEqual([
+        expect.objectContaining({ creditMinor: 700_000 }),
+      ]);
     });
   });
 });

@@ -714,6 +714,7 @@ export interface CommissionPaidPayload {
   currency: string;
   salespersonId: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 export interface ChequeReceivedPayload {
@@ -2196,7 +2197,10 @@ export function ruleCommissionPaid(p: CommissionPaidPayload): RuleResult {
   return {
     lines: [
       line(SYSTEM_KEYS.COMMISSION_PAYABLE, p.amountMinor, 0, "Commission settled", { salespersonId: p.salespersonId }),
-      line(cashKey, 0, p.amountMinor, "Commission paid", { salespersonId: p.salespersonId }),
+      line(cashKey, 0, p.amountMinor, "Commission paid", {
+        salespersonId: p.salespersonId,
+        ...(cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}),
+      }),
     ],
     memo: "Commission paid",
     category: "SYSTEM",

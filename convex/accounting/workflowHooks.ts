@@ -1719,6 +1719,7 @@ type CommissionHookArgs = {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: Id<"bankAccounts">;
   actorId: Id<"users">;
   occurredAt: number;
 };
@@ -1752,6 +1753,7 @@ function makeCommissionHook(
       salespersonId: args.salespersonId.toString(),
     };
     if (args.paymentMethod) payload.paymentMethod = args.paymentMethod;
+    if (args.bankAccountId) payload.bankAccountId = args.bankAccountId.toString();
     await postDomainEvent(ctx, {
       orgId: args.orgId,
       eventType,

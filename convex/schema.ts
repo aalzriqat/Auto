@@ -2144,6 +2144,7 @@ export default defineSchema({
     commissionPaidAt: v.optional(v.number()),
     commissionPaidBy: v.optional(v.id("users")),
     commissionPaymentMethod: v.optional(paymentMethodValidator),
+    commissionBankAccountId: v.optional(v.id("bankAccounts")),
     commissionPaymentIdempotencyKey: v.optional(v.string()),
     // A sale is either live (unset) or soft-deleted (true); `false` is
     // unrepresentable, so the by_org_deleted / by_org_salesperson_deleted index
