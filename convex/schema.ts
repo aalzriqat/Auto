@@ -5639,6 +5639,7 @@ export default defineSchema({
     amountMinor: v.number(),
     recoveredMinor: v.number(),
     currency: v.string(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     date: v.number(),
     method: v.optional(
       v.union(
@@ -5675,6 +5676,7 @@ export default defineSchema({
     userId: v.id("users"),
     amountMinor: v.number(),
     currency: v.string(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     method: v.optional(
       v.union(
         v.literal("CASH"),
@@ -5738,6 +5740,7 @@ export default defineSchema({
     approvedNetMinor: v.optional(v.number()),
     // The method the whole run was paid with (per-employee split not supported).
     paidMethod: v.optional(v.string()),
+    paidBankAccountId: v.optional(v.id("bankAccounts")),
     createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
     approvedBy: v.optional(v.id("users")),

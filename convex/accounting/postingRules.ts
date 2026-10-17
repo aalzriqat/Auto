@@ -2950,6 +2950,7 @@ export interface EmployeeAdvancePaidPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 /** Advance issued to an employee: Dr Employee Advances (asset) / Cr cash. */
@@ -2960,7 +2961,8 @@ export function ruleEmployeeAdvancePaid(p: EmployeeAdvancePaidPayload): RuleResu
   return {
     lines: [
       line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, p.amountMinor, 0, "Employee advance issued"),
-      line(cashKey, 0, p.amountMinor, "Advance paid to employee"),
+      line(cashKey, 0, p.amountMinor, "Advance paid to employee",
+        cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Employee advance paid",
     category: "SYSTEM",
@@ -2972,7 +2974,8 @@ export function ruleEmployeeAdvanceRecovered(p: EmployeeAdvancePaidPayload): Rul
   const cashKey = cashAccountKey(p.paymentMethod);
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, "Advance repaid by employee"),
+      line(cashKey, p.amountMinor, 0, "Advance repaid by employee",
+        cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
       line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, 0, p.amountMinor, "Employee advance recovered"),
     ],
     memo: "Employee advance recovered",
@@ -3012,6 +3015,7 @@ export interface PayrollPaidPayload {
   netMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 /**
@@ -3032,7 +3036,8 @@ export function rulePayrollPaid(p: PayrollPaidPayload): RuleResult {
   if (p.advanceRecoveredMinor > 0) {
     lines.push(line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, 0, p.advanceRecoveredMinor, "Advance recovered from payroll"));
   }
-  if (p.netMinor > 0) lines.push(line(cashKey, 0, p.netMinor, "Net pay disbursed"));
+  if (p.netMinor > 0) lines.push(line(cashKey, 0, p.netMinor, "Net pay disbursed",
+    cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined));
   // Defense-in-depth: the payroll caller skips all-zero payslips, but a
   // zero-line "journal entry" passes validateBalance trivially (0 === 0), so
   // fail closed here too rather than letting an empty entry post.

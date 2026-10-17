@@ -78,6 +78,31 @@ describe("payroll posting rules", () => {
     expect(credit.accountSystemKey).toBe(SYSTEM_KEYS.EMPLOYEE_ADVANCES);
   });
 
+  test("bank advance, repayment and payslip lines keep the named physical bank", () => {
+    const base = { advanceId: "a1", userId: "u1", amountMinor: 20000, currency: "JOD",
+      paymentMethod: "BANK_TRANSFER", bankAccountId: "bank-a" };
+    const issued = ruleEmployeeAdvancePaid(base).lines.find((line) => line.accountSystemKey === SYSTEM_KEYS.BANK_ACCOUNT);
+    const repaid = ruleEmployeeAdvanceRecovered(base).lines.find((line) => line.accountSystemKey === SYSTEM_KEYS.BANK_ACCOUNT);
+    const payroll = rulePayrollPaid({ itemId: "i1", userId: "u1", salaryMinor: 20000,
+      commissionMinor: 0, advanceRecoveredMinor: 0, netMinor: 20000,
+      currency: "JOD", paymentMethod: "BANK_TRANSFER", bankAccountId: "bank-a" })
+      .lines.find((line) => line.accountSystemKey === SYSTEM_KEYS.BANK_ACCOUNT);
+    expect(issued).toMatchObject({ creditMinor: 20000, bankAccountId: "bank-a" });
+    expect(repaid).toMatchObject({ debitMinor: 20000, bankAccountId: "bank-a" });
+    expect(payroll).toMatchObject({ creditMinor: 20000, bankAccountId: "bank-a" });
+  });
+
+  test("a received repayment cheque stays in cheques in hand until it clears", () => {
+    const result = ruleEmployeeAdvanceRecovered({
+      advanceId: "a1", userId: "u1", amountMinor: 20000,
+      currency: "JOD", paymentMethod: "CHEQUE",
+    });
+    expect(result.lines.find((line) => line.debitMinor > 0)).toMatchObject({
+      accountSystemKey: SYSTEM_KEYS.CHEQUES_IN_HAND, debitMinor: 20000,
+    });
+    expect(result.lines.some((line) => line.accountSystemKey === SYSTEM_KEYS.BANK_ACCOUNT)).toBe(false);
+  });
+
   test("payroll accrual is Dr Salaries Expense / Cr Salaries Payable", () => {
     const r = rulePayrollAccrued({ runId: "r1", userId: "u1", amountMinor: 50000, currency: "JOD" });
     expect(() => validateBalance(r.lines)).not.toThrow();
@@ -197,7 +222,68 @@ async function seedPayrollOrg(t: ReturnType<typeof convexTestWithComponents>, su
   return { orgId, userId, asAdmin: t.withIdentity({ subject: `pay_${suffix}`, clerkId: `pay_${suffix}` }) };
 }
 
+async function seedPayrollBank(
+  t: ReturnType<typeof convexTestWithComponents>,
+  orgId: Awaited<ReturnType<typeof seedPayrollOrg>>["orgId"],
+  userId: Awaited<ReturnType<typeof seedPayrollOrg>>["userId"]
+) {
+  return await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Payroll bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+}
+
 describe("payroll: employee advances (سلفة)", () => {
+  test("a bank-paid advance without a physical bank creates no advance or accounting event", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "advance_missing_bank");
+    await expect(asAdmin.mutation(api.payroll.recordAdvance, {
+      orgId, userId, amount: 20, method: "BANK_TRANSFER", idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow();
+    const records = await t.run(async (ctx) => ({
+      advances: await ctx.db.query("employeeAdvances").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      events: (await ctx.db.query("accountingEvents").collect()).filter((event) => event.orgId === orgId),
+      pending: (await ctx.db.query("pendingAccountingEvents").collect()).filter((event) => event.orgId === orgId),
+    }));
+    expect(records.advances).toHaveLength(0);
+    expect(records.events).toHaveLength(0);
+    expect(records.pending).toHaveLength(0);
+  });
+
+  test("a bank-issued advance and bank repayment retain the chosen physical bank", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "advance_banks");
+    const bankAccountId = await seedPayrollBank(t, orgId, userId);
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, {
+      orgId, userId, amount: 20, method: "BANK_TRANSFER", bankAccountId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await t.run((ctx) => ctx.db.get(advanceId)))?.bankAccountId).toBe(bankAccountId);
+    const recoveryId = await asAdmin.mutation(api.payroll.recoverAdvance, {
+      orgId, advanceId, amount: 10, method: "BANK_TRANSFER", bankAccountId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await t.run((ctx) => ctx.db.get(recoveryId)))?.bankAccountId).toBe(bankAccountId);
+    const events = await t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect());
+    expect(events.find((event) => event.idempotencyKey === `employee_advance_paid_${advanceId}`)?.payload)
+      .toMatchObject({ bankAccountId });
+    expect(events.find((event) => event.idempotencyKey === `employee_advance_recovered_${recoveryId}`)?.payload)
+      .toMatchObject({ bankAccountId });
+  });
+
+  test("a bank repayment without a bank leaves an outstanding advance unchanged", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "recovery_missing_bank");
+    const advanceId = await asAdmin.mutation(api.payroll.recordAdvance, {
+      orgId, userId, amount: 20, method: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(asAdmin.mutation(api.payroll.recoverAdvance, {
+      orgId, advanceId, amount: 10, method: "BANK_TRANSFER", idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow();
+    expect((await t.run((ctx) => ctx.db.get(advanceId)))?.recoveredMinor).toBe(0);
+    expect((await t.run((ctx) => ctx.db.query("employeeAdvanceRecoveries").collect()))).toHaveLength(0);
+  });
   test("recording an advance creates an OUTSTANDING row and a GL asset event (not an expense)", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "adv");
@@ -513,7 +599,8 @@ describe("payroll: monthly run (Option A — commissions paid through payroll)",
     await asAdmin.mutation(api.sales.markCommissionPaid, { idempotencyKey: crypto.randomUUID(), orgId, saleId, paymentMethod: "CASH" });
 
     await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
-    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "BANK_TRANSFER" });
+    const bankAccountId = await seedPayrollBank(t, orgId, userId);
+    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "BANK_TRANSFER", bankAccountId });
 
     // The run pays ONLY the salary; the direct payment record is untouched.
     const items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
@@ -729,8 +816,27 @@ describe("payroll: production-hardening controls", () => {
 
     await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
     expect((await t.run((ctx) => ctx.db.get(runId)))?.approvedNetMinor).toBe(500000);
-    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CHEQUE" });
+    const bankAccountId = await seedPayrollBank(t, orgId, userId);
+    await asAdmin.mutation(api.payroll.payRun, { orgId, runId, method: "CHEQUE", bankAccountId });
     expect((await t.run((ctx) => ctx.db.get(runId)))?.paidMethod).toBe("CHEQUE");
+    expect((await t.run((ctx) => ctx.db.get(runId)))?.paidBankAccountId).toBe(bankAccountId);
+    const items = await asAdmin.query(api.payroll.listRunItems, { orgId, runId });
+    const pending = await t.run((ctx) => ctx.db.query("pendingAccountingEvents")
+      .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", `payroll_paid_${items[0]._id}`))
+      .first());
+    expect(pending?.payload).toMatchObject({ bankAccountId });
+  });
+
+  test("a bank payroll run without a physical bank remains approved and unpaid", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asAdmin } = await seedPayrollOrg(t, "run_missing_bank");
+    await asAdmin.mutation(api.payroll.setCompensation, { orgId, userId, monthlySalary: 100 });
+    const runId = await asAdmin.mutation(api.payroll.createRun, { orgId, periodYear: 2026, periodMonth: 7 });
+    await asAdmin.mutation(api.payroll.approveRun, { orgId, runId });
+    await expect(asAdmin.mutation(api.payroll.payRun, {
+      orgId, runId, method: "BANK_TRANSFER",
+    })).rejects.toThrow();
+    expect((await t.run((ctx) => ctx.db.get(runId)))?.status).toBe("APPROVED");
   });
 
   test("createRun rejects a non-integer month", async () => {

@@ -2167,6 +2167,7 @@ export async function hookEmployeeAdvancePaid(
     amountMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2187,6 +2188,7 @@ export async function hookEmployeeAdvancePaid(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -2205,6 +2207,7 @@ export async function hookEmployeeAdvanceRecovered(
     amountMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2225,6 +2228,7 @@ export async function hookEmployeeAdvanceRecovered(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -2275,6 +2279,7 @@ export async function hookPayrollPaid(
     netMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2298,6 +2303,7 @@ export async function hookPayrollPaid(
       netMinor: args.netMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
