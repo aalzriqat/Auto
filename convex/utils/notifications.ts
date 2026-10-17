@@ -44,6 +44,17 @@ export async function dispatch(
 ) {
   const def = NOTIFICATION_TYPES[type];
 
+  // SCRUM-789: the single choke point every helper and every direct notifyUser
+  // call goes through, so an offboarding member is refused on every channel
+  // (in-app row, email, WhatsApp, push) no matter which caller named them. Only
+  // a membership that EXISTS and is offboarding is refused; a user with no
+  // membership keeps today's behaviour (cross-org and pre-membership notices).
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+    .unique();
+  if (membership?.offboardingStatus) return;
+
   await ctx.db.insert("notifications", {
     orgId,
     userId,
@@ -146,6 +157,7 @@ export async function notifyManagers(
 
   for (const membership of memberships) {
     if (opts?.excludeUserId && membership.userId === opts.excludeUserId) continue;
+    if (membership.offboardingStatus) continue; // SCRUM-789: same rule as notifyByPermission
     const role = await ctx.db.get(membership.roleId);
     if (!role) continue;
     if (role.permissions.includes(PERMISSIONS.MANAGE_USERS)) {
@@ -203,6 +215,7 @@ export async function notifyAllMembers(
   let notified = 0;
   for (const membership of memberships) {
     if (opts?.excludeUserId && membership.userId === opts.excludeUserId) continue;
+    if (membership.offboardingStatus) continue; // SCRUM-789
     await dispatch(ctx, orgId, membership.userId, type, data, opts);
     notified++;
   }
@@ -223,6 +236,7 @@ export async function notifyOwner(
     .collect();
 
   for (const membership of memberships) {
+    if (membership.offboardingStatus) continue; // SCRUM-789: an offboarding owner gets nothing routine
     const role = await ctx.db.get(membership.roleId);
     if (isSystemOwnerRole(role)) {
       await dispatch(ctx, orgId, membership.userId, type, data, opts);
@@ -259,6 +273,7 @@ export async function notifyFinanceManagers(
   for (const membership of memberships) {
     if (opts?.excludeUserId && membership.userId === opts.excludeUserId) continue;
     if (notified.has(membership.userId)) continue;
+    if (membership.offboardingStatus) continue; // SCRUM-789
     const role = await ctx.db.get(membership.roleId);
     if (!role) continue;
     if (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.MANAGE_FINANCE)) {
