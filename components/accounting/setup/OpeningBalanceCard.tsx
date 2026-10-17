@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "@/convex/utils/money";
 import { getLocalizedErrorMessage } from "@/lib/errors";
+import { formatInCurrency } from "@/lib/currencyFormat";
 import { accountDisplayName } from "../reports/FinancialReportShared";
 
 /**
@@ -211,9 +212,11 @@ export function OpeningBalanceCard() {
   }
 
   if (!activeOrgId || status === undefined) return null;
-  if (!status.canManageFinance) return null;
+  if (!status.canManageFinance && !status.posted) return null;
 
   const alreadyResolved = status.posted || status.pendingDraftId !== null;
+  const postedOpening = status.postedOpening;
+  const postedCurrency = postedOpening?.currency;
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -242,7 +245,7 @@ export function OpeningBalanceCard() {
           </div>
         </div>
 
-        {!alreadyResolved && (
+        {status.canManageFinance && !alreadyResolved && (
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button size="sm">{t("OpeningBalanceSet")}</Button>
@@ -404,8 +407,8 @@ export function OpeningBalanceCard() {
                   <span className="text-muted-foreground">{t("OpeningBalanceTotals")}</span>
                   <span className="flex items-center gap-3">
                     <span className="tabular-nums text-foreground">
-                      {fromMinorUnits(totals.debitMinor, currency).toFixed(scaleForCurrency(currency))}{" / "}
-                      {fromMinorUnits(totals.creditMinor, currency).toFixed(scaleForCurrency(currency))}
+                      {formatInCurrency(locale === "ar" ? "ar" : "en-US", currency, fromMinorUnits(totals.debitMinor, currency), scaleForCurrency(currency))}{" / "}
+                      {formatInCurrency(locale === "ar" ? "ar" : "en-US", currency, fromMinorUnits(totals.creditMinor, currency), scaleForCurrency(currency))}
                     </span>
                     <span className={totals.balanced ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}>
                       {totals.balanced ? t("OpeningBalanceBalanced") : t("OpeningBalanceUnbalanced")}
@@ -425,6 +428,53 @@ export function OpeningBalanceCard() {
           </Dialog>
         )}
       </div>
+      {status.posted && postedOpening && (
+        <div className="mt-4 space-y-2 border-t border-border pt-4">
+          <p className="text-sm text-muted-foreground">
+            {t("OpeningBalanceAsOfDate")}: <time dateTime={toDateInputValue(postedOpening.accountingDate)}>
+              {toDateInputValue(postedOpening.accountingDate)}
+            </time>
+            {postedCurrency && <> {" · "}<bdi>{postedCurrency}</bdi></>}
+          </p>
+          {(!postedCurrency || postedOpening.lines.length === 0) ? (
+            <p className="text-sm text-amber-700 dark:text-amber-300" role="status">
+              {t("OpeningBalanceDetailsUnavailable")}
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-md border border-border">
+              <table className="w-full min-w-[440px] text-sm">
+                <thead className="bg-muted/50 text-muted-foreground">
+                  <tr>
+                    <th scope="col" className="px-3 py-2 text-start font-medium">{t("OpeningBalanceAccount")}</th>
+                    <th scope="col" className="px-3 py-2 text-end font-medium">{t("OpeningBalanceDebit")}</th>
+                    <th scope="col" className="px-3 py-2 text-end font-medium">{t("OpeningBalanceCredit")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {postedOpening.lines.map((line, index) => (
+                    <tr key={`${line.accountId}-${index}`} className="border-t border-border">
+                      <th scope="row" className="px-3 py-2 text-start font-medium">
+                        <bdi>{line.accountCode ? `${line.accountCode} — ` : ""}{line.accountName
+                          ? accountDisplayName({ name: line.accountName, nameAr: line.accountNameAr ?? undefined }, locale)
+                          : t("OpeningBalanceAccountUnavailable")}</bdi>
+                        {line.bankAccountName && <span className="block text-xs font-normal text-muted-foreground"><bdi>{line.bankAccountName}</bdi></span>}
+                      </th>
+                      <td className="px-3 py-2 text-end tabular-nums">
+                        {line.debitMinor ? formatInCurrency(locale === "ar" ? "ar" : "en-US", postedCurrency,
+                          fromMinorUnits(line.debitMinor, postedCurrency), scaleForCurrency(postedCurrency)) : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-end tabular-nums">
+                        {line.creditMinor ? formatInCurrency(locale === "ar" ? "ar" : "en-US", postedCurrency,
+                          fromMinorUnits(line.creditMinor, postedCurrency), scaleForCurrency(postedCurrency)) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

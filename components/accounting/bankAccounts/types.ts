@@ -10,7 +10,17 @@ export type BankAccountSummary = {
   accountNumber?: string;
   currency: string;
   isActive: boolean;
+  isDeleted?: boolean;
   isReconciliationTarget: boolean;
+};
+
+export type BankBookBalance = {
+  bankAccountId: Id<"bankAccounts"> | null;
+  name: string | null;
+  currency: string | null;
+  isDeleted: boolean;
+  status: "OK" | "UNATTRIBUTED_GL_ACTIVITY" | "BALANCE_HISTORY_INCOMPLETE";
+  balanceMinor: number | null;
 };
 
 export type CreateBankAccountFormState = {

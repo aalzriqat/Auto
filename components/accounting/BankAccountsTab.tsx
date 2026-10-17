@@ -8,28 +8,27 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useCurrency } from "@/hooks/useCurrency";
-import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/components/ui/sonner";
+import { Button } from "@/components/ui/button";
 import { getLocalizedErrorMessage } from "@/lib/errors";
-import { LoadingAccountingState, scaleForCurrency } from "./AccountingTabShared";
+import { LoadingAccountingState } from "./AccountingTabShared";
 import { BankAccountsTable } from "./bankAccounts/BankAccountsTable";
 import { CreateBankAccountDialog } from "./bankAccounts/CreateBankAccountDialog";
 import { ReconciliationPanel } from "./bankAccounts/ReconciliationPanel";
 import { defaultCreateBankAccountForm, type CreateBankAccountFormState } from "./bankAccounts/types";
 
-export function BankAccountsTab() {
+export function BankAccountsTab({ onOpenAccountingSetup }: Readonly<{ onOpenAccountingSetup: () => void }>) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { code: orgCurrency } = useCurrency();
-  const formatCurrency = useCurrencyFormatter();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<CreateBankAccountFormState>(defaultCreateBankAccountForm(orgCurrency));
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const accounts = useQuery(api.bankAccounts.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const bookBalance = useQuery(api.bankAccounts.getBookBalance, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const bankBalances = useQuery(api.bankAccounts.listBookBalances, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createAccount = useMutation(api.bankAccounts.create);
   const setReconciliationTarget = useMutation(api.bankAccounts.setReconciliationTarget);
@@ -77,47 +76,51 @@ export function BankAccountsTab() {
 
   if (!activeOrgId) return null;
   if (accounts === undefined) return <LoadingAccountingState label={t("Loading")} />;
+  const reconciliationTarget = accounts.find((account) => account.isReconciliationTarget && !account.isDeleted);
+  const targetBalance = bankBalances?.find((balance) => balance?.bankAccountId === reconciliationTarget?._id);
+  const historicalAccounts = (bankBalances ?? []).flatMap((balance) => {
+    if (!balance?.isDeleted || !balance.bankAccountId || !balance.name || !balance.currency) return [];
+    return [{
+      _id: balance.bankAccountId,
+      name: balance.name,
+      currency: balance.currency,
+      isActive: false,
+      isDeleted: true,
+      isReconciliationTarget: false,
+    }];
+  });
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
           <h2 className="text-lg font-semibold text-foreground">{t("BankAccounts" as any)}</h2>
           <p className="text-sm text-muted-foreground">{t("BankAccountsDesc" as any)}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{t("BankStartingBalanceInSetup")}</p>
         </div>
-        <CreateBankAccountDialog
-          open={createOpen}
-          form={form}
-          submitting={busyAction === "create"}
-          disabled={!canManageFinance}
-          t={t as any}
-          onOpenChange={setCreateOpen}
-          onFormChange={setForm}
-          onSubmit={submitCreate}
-        />
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {canManageFinance && (
+            <Button type="button" size="sm" variant="outline" onClick={onOpenAccountingSetup}>
+              {t("OpeningBalance")}
+            </Button>
+          )}
+          <CreateBankAccountDialog
+            open={createOpen}
+            form={form}
+            submitting={busyAction === "create"}
+            disabled={!canManageFinance}
+            t={t as any}
+            onOpenChange={setCreateOpen}
+            onFormChange={setForm}
+            onSubmit={submitCreate}
+          />
+        </div>
       </div>
 
-      {bookBalance && (
-        <div className="rounded-md border border-border bg-muted/50 p-4">
-          <p className="text-sm text-muted-foreground">{t("BookBalanceFor" as any)}: <strong>{bookBalance.name ?? ""}</strong></p>
-          {bookBalance.balanceMinor === null || bookBalance.currency === null ? (
-            <p className="text-sm text-foreground" role="status">
-              {t(
-                bookBalance.status === "BALANCE_HISTORY_INCOMPLETE"
-                  ? "BookBalanceUnavailableHistoryIncomplete"
-                  : "BookBalanceUnavailableNoBankAttribution"
-              )}
-            </p>
-          ) : (
-            <p className="text-2xl font-semibold text-foreground">
-              {formatCurrency(bookBalance.balanceMinor / Math.pow(10, scaleForCurrency(bookBalance.currency)))}
-            </p>
-          )}
-        </div>
-      )}
-
       <BankAccountsTable
-        accounts={accounts}
+        accounts={[...accounts, ...historicalAccounts]}
+        balances={bankBalances}
+        locale={locale}
         canManageFinance={canManageFinance}
         busyAction={busyAction}
         t={t as any}
@@ -137,11 +140,11 @@ export function BankAccountsTab() {
         }
       />
 
-      {bookBalance && bookBalance.bankAccountId && bookBalance.currency && (
+      {reconciliationTarget && targetBalance?.bankAccountId && targetBalance.currency && (
         <ReconciliationPanel
           orgId={activeOrgId}
-          bankAccountId={bookBalance.bankAccountId}
-          currency={bookBalance.currency}
+          bankAccountId={reconciliationTarget._id}
+          currency={reconciliationTarget.currency}
           canManageFinance={canManageFinance}
         />
       )}
