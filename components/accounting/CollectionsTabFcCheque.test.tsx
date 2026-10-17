@@ -376,7 +376,10 @@ describe("Collections, Cheques tab: the Return dialog shows a translated refusal
       banks: [{ _id: "fee-bank", name: "Fee bank", currency: "JOD" }], truncated: false,
     });
     const returnClearedCheque = vi.fn()
-      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockImplementationOnce(async () => {
+        stubs.queryResults.set("collections:listReceiptBankOptions", { banks: [], truncated: false });
+        throw new TypeError("Failed to fetch");
+      })
       .mockResolvedValue(undefined);
     stubs.mutations.set("collections:returnClearedCheque", returnClearedCheque);
     stubs.paginated.set("collections:listCheques", [cheque({ _id: "c3", isFinanceCompanyCheque: false, status: "CLEARED" })]);
@@ -393,10 +396,12 @@ describe("Collections, Cheques tab: the Return dialog shows a translated refusal
     const submit = () => fireEvent.click(within(dialog).getAllByRole("button", { name: "Return" }).at(-1)!);
     submit();
     await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(within(dialog).getByText("ChequeReturnRetrySameDetails")).toBeTruthy());
+    await waitFor(() => expect(within(dialog).getByRole("status").textContent).toContain("Fee bank"));
+    expect(within(dialog).getByRole("status").textContent).toContain("ChequeReturnRetrySameDetails");
     expect(reason.disabled).toBe(true);
     expect(fee.disabled).toBe(true);
     expect(trigger.disabled).toBe(true);
+    expect((within(dialog).getAllByRole("button", { name: "Return" }).at(-1) as HTMLButtonElement).disabled).toBe(false);
     submit();
     await waitFor(() => expect(returnClearedCheque).toHaveBeenCalledTimes(2));
     const [first, retry] = returnClearedCheque.mock.calls.map((call) => call[0] as {

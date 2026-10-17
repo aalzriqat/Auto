@@ -458,8 +458,12 @@ type Defects = {
   bankIdentityDroppedFromJournal?: boolean;
   /** RV1: a cleared customer cheque loses its named destination bank. */
   chequeClearingBankDropped?: boolean;
+  /** RV1: a cheque reversal drops the clearing bank. */
+  chequeReversalBankDropped?: boolean;
   /** RV1: a returned-cheque fee loses the bank that paid it. */
   chequeFeeBankDropped?: boolean;
+  /** RV1: the fee credits the clearing bank instead of its distinct paying bank. */
+  chequeFeeBankUsesClearingBank?: boolean;
   /** RV1: a returned-cheque fee debits the wrong expense account. */
   chequeFeeWrongAccount?: boolean;
   /** Bank contract: a short receipt that names a valid bank is accepted. */
@@ -662,7 +666,8 @@ function makeBackend(defects: Defects = {}) {
         vehicleId: l.vehicleId,
         financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
-        bankAccountId: l.bankAccountId,
+        bankAccountId: defects.chequeReversalBankDropped && original.eventType === "COLLECTION_PAYMENT" &&
+          CHART.find((a) => a._id === l.accountId)?.systemKey === "BANK_ACCOUNT" ? undefined : l.bankAccountId,
       })),
       { category: "REVERSAL" }
     );
@@ -1288,6 +1293,7 @@ function makeBackend(defects: Defects = {}) {
         const cheque = cheques.get(String(args.chequeId));
         if (!cheque) return { ok: false as const, error: "Cheque not found" };
         cheque.status = "CLEARED";
+        cheque.clearingBankAccountId = String(args.bankAccountId);
         const paymentId = id("pay");
         collectionPayments.push({ _id: paymentId, direction: "IN", method: "CHEQUE", amount: cheque.amount, chequeId: cheque._id, receivableId: cheque.receivableId });
         settle(cheque.receivableId, cheque.amount);
@@ -1330,7 +1336,8 @@ function makeBackend(defects: Defects = {}) {
         if (Number(args.bankFeeMinor ?? 0) > 0) {
           post("EXPENSE_POSTED", "expenses", id("expense"), [
             { key: defects.chequeFeeWrongAccount ? "GENERAL_EXPENSE" : "PROFESSIONAL_FEES_EXPENSE", debitMinor: Number(args.bankFeeMinor) },
-            { key: "BANK_ACCOUNT", creditMinor: Number(args.bankFeeMinor), bankAccountId: defects.chequeFeeBankDropped ? undefined : String(args.bankFeeBankAccountId) },
+            { key: "BANK_ACCOUNT", creditMinor: Number(args.bankFeeMinor), bankAccountId: defects.chequeFeeBankDropped
+              ? undefined : defects.chequeFeeBankUsesClearingBank ? cheque.clearingBankAccountId : String(args.bankFeeBankAccountId) },
           ]);
         }
         return { ok: true as const, value: null };
@@ -3068,7 +3075,9 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
   });
   test.each([
     ["clearing bank", { chequeClearingBankDropped: true }, /cheque clearing's physical bank/],
+    ["reversal bank", { chequeReversalBankDropped: true }, /cheque reversal's original physical bank/],
     ["fee bank", { chequeFeeBankDropped: true }, /bank that paid the cheque return fee/],
+    ["fee bank choice", { chequeFeeBankUsesClearingBank: true }, /bank that paid the cheque return fee/],
     ["fee account", { chequeFeeWrongAccount: true }, /cheque return fee: journal lines are not exactly/],
   ] as const)("RV1 catches a wrong %s", async (_label, defect, refusal) => {
     const results = await runAgainst(defect);

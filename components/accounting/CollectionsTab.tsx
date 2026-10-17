@@ -1237,13 +1237,17 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
   const [bankFeeBankAccountId, setBankFeeBankAccountId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [uncertainReturn, setUncertainReturn] = useState(false);
+  const [attemptedFeeBankName, setAttemptedFeeBankName] = useState("");
   const idempotencyKeyRef = useRef<string | null>(null);
   const feeNeedsBank = cheque?.status === "CLEARED" && Number(bankFeeMinor) > 0;
   const feeBankOptions = useReceiptBankOptions(activeOrgId ?? undefined, feeNeedsBank, bankFeeBankAccountId);
 
   async function submit() {
     if (!activeOrgId || !cheque) return;
-    if (feeNeedsBank && !feeBankOptions.chosenOffered) return;
+    if (feeNeedsBank && !uncertainReturn && !feeBankOptions.chosenOffered) return;
+    if (feeNeedsBank && !uncertainReturn) {
+      setAttemptedFeeBankName(feeBankOptions.banks?.find((bank) => bank._id === bankFeeBankAccountId)?.name ?? bankFeeBankAccountId);
+    }
     setSubmitting(true);
     try {
       if (cheque.status === "CLEARED") {
@@ -1258,6 +1262,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
         });
         idempotencyKeyRef.current = null;
         setUncertainReturn(false);
+        setAttemptedFeeBankName("");
       } else {
         await returnCheque({ orgId: activeOrgId, chequeId: cheque._id, returnReason: reason || undefined });
       }
@@ -1271,6 +1276,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
       if (isConvexError(error)) {
         idempotencyKeyRef.current = null;
         setUncertainReturn(false);
+        setAttemptedFeeBankName("");
       } else {
         // The server may have committed before the response was lost. Keep
         // every keyed economic input fixed while retrying the original command.
@@ -1316,19 +1322,22 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
           <ReceiptBankSelect id="cheque-return-fee-bank" ariaLabel={t("ChequeReturnFeeBank" as any)} value={bankFeeBankAccountId}
             onChange={setBankFeeBankAccountId} bankOptions={feeBankOptions} disabled={submitting || uncertainReturn} />
         </div>}
-        {uncertainReturn && <p role="status" className="text-xs text-muted-foreground">{t("ChequeReturnRetrySameDetails" as any)}</p>}
+        {uncertainReturn && <p role="status" className="text-xs text-muted-foreground">
+          {t("ChequeReturnRetrySameDetails" as any)} {feeNeedsBank && <bdi>{attemptedFeeBankName}</bdi>}
+        </p>}
         <DialogFooter>
           <Button
             variant="outline"
             onClick={() => {
               idempotencyKeyRef.current = null;
               setUncertainReturn(false);
+              setAttemptedFeeBankName("");
               onOpenChange(false);
             }}
           >
             {t("Cancel" as any)}
           </Button>
-          <Button onClick={submit} disabled={submitting || (feeNeedsBank && !feeBankOptions.chosenOffered)}>
+          <Button onClick={submit} disabled={submitting || (feeNeedsBank && !uncertainReturn && !feeBankOptions.chosenOffered)}>
             {submitting ? t("Saving" as any) : t("Return" as any)}
           </Button>
         </DialogFooter>

@@ -1473,6 +1473,14 @@ export async function runRehearsalCases(ctx) {
         openingBalanceDate: Date.now(),
       });
       if (!clearingBankId) fail("bankAccounts:create returned no id for the cheque clearing bank");
+      const feeBankId = await ownerMust("mutation", "bankAccounts:create", {
+        orgId,
+        name: `Rehearsal cheque fee bank ${stamp}`,
+        currency: denom.currency,
+        openingBalanceMinor: 0,
+        openingBalanceDate: Date.now(),
+      });
+      if (!feeBankId || String(feeBankId) === String(clearingBankId)) fail("bankAccounts:create returned no distinct bank for the cheque return fee");
       // OWNER, not the MANAGER. `clearCheque` requires manage:finance and the
       // seated MANAGER does not hold it, so the cloud run refused with
       // "Forbidden: Missing required permissions: manage:finance".
@@ -1525,7 +1533,7 @@ export async function runRehearsalCases(ctx) {
         chequeId,
         returnReason: "Rehearsal bounce",
         bankFeeMinor: 500,
-        bankFeeBankAccountId: clearingBankId,
+        bankFeeBankAccountId: feeBankId,
         idempotencyKey: `rehearsal-rv1-return-${stamp}`,
       });
       if (!returned.ok) {
@@ -1579,7 +1587,7 @@ export async function runRehearsalCases(ctx) {
         { key: "BANK_ACCOUNT", creditMinor: 500 },
       ], { currency: denom.currency, decimals: denom.decimals, what: "the cheque return fee" });
       const feeBankLine = fee.lines.find((line) => keyOf.get(String(line.accountId)) === "BANK_ACCOUNT");
-      expectEqual(String(feeBankLine?.bankAccountId), String(clearingBankId), "the bank that paid the cheque return fee");
+      expectEqual(String(feeBankLine?.bankAccountId), String(feeBankId), "the bank that paid the cheque return fee");
 
       // THE DEBT IS OWED AGAIN — exactly, not approximately.
       const reopened = await findReceivable({ orgId, ownerMust, receivableId });
