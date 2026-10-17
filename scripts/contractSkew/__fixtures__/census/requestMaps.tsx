@@ -2,6 +2,7 @@
 // @ts-nocheck
 /** `useQueries` request-map shapes: several entries, an empty branch, a dynamic map. */
 import { useQueries } from "convex/react";
+import { useMemo } from "react";
 import { api } from "@/convex/_generated/api";
 
 export function SeveralEntries(orgId: string, vehicleId: string) {
@@ -25,4 +26,30 @@ export function DynamicMap(requests: Record<string, never>) {
 
 export function DynamicEntry(orgId: string, name: string) {
   return useQueries({ x: { query: api.vehicles[name], args: { orgId } } });
+}
+
+export function MappedEntries(orgId: string, chunks: string[][]) {
+  const queries = useMemo(() => {
+    if (!orgId) return {};
+    return Object.fromEntries(chunks.map((chunk, index) => [
+      `chunk${index}`,
+      { query: api.vehicleAvailability.pickerAvailability, args: { orgId, vehicleIds: chunk } },
+    ]));
+  }, [orgId, chunks]);
+  return useQueries(queries);
+}
+
+export function MappedDynamicEntry(orgId: string, names: string[]) {
+  return useQueries(Object.fromEntries(names.map((name, index) => [
+    `query${index}`,
+    { query: api.organizations[name], args: { orgId } },
+  ])));
+}
+
+export function ShadowedFromEntries(orgId: string, chunks: string[][]) {
+  const Object = { fromEntries: (pairs: unknown) => pairs };
+  return useQueries(Object.fromEntries(chunks.map((chunk, index) => [
+    `shadow${index}`,
+    { query: api.vehicles.list, args: { orgId, vehicleIds: chunk } },
+  ])));
 }

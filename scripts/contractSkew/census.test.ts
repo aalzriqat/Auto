@@ -111,6 +111,9 @@ describe("census reconciliation, by site identity", () => {
     expect(dispositionAt("return useQueries(requests);")).toEqual(["UNRESOLVED"]);
     const dynamicEntry = at(census, "requestMaps", "api.vehicles[name]").filter((c) => c.roles.includes("reference"));
     expect(dynamicEntry.map((c) => c.disposition)).toEqual(["UNRESOLVED"]);
+    const shadowedEntry = at(census, "requestMaps", "api.vehicles.list, args: { orgId, vehicleIds: chunk }")
+      .filter((c) => c.roles.includes("reference"));
+    expect(shadowedEntry.map((c) => c.disposition)).toEqual(["UNRESOLVED"]);
     expect(census.unaccounted).toEqual([]);
   }, 120_000);
 

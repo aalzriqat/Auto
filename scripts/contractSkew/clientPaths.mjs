@@ -688,6 +688,55 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
       }
       if (ts.isCallExpression(node)) {
         const callee = node.expression;
+        // A dynamic number of keys can still have one statically known request
+        // shape. Follow only Array.map -> Object.fromEntries with an inline
+        // [key, { query: api.*, args: ... }] tuple; entry() continues to fail
+        // closed on a dynamic query reference or payload shape.
+        if (
+          ts.isPropertyAccessExpression(callee) &&
+          ts.isIdentifier(callee.expression) &&
+          callee.expression.text === "Object" &&
+          callee.name.text === "fromEntries"
+        ) {
+          const objectSymbol = checker.getSymbolAtLocation(callee.expression);
+          const isGlobalObject = objectSymbol?.declarations?.some((decl) =>
+            decl.getSourceFile().isDeclarationFile && /^lib\..*\.d\.ts$/.test(path.basename(decl.getSourceFile().fileName))
+          );
+          const mapped = node.arguments[0] && unwrapReferenceExpression(node.arguments[0]);
+          const mapCallee = mapped && ts.isCallExpression(mapped) ? mapped.expression : null;
+          const source = mapCallee && ts.isPropertyAccessExpression(mapCallee) && mapCallee.name.text === "map"
+            ? mapCallee.expression
+            : null;
+          const sourceType = source && checker.getTypeAtLocation(source);
+          const callback = mapped && ts.isCallExpression(mapped) && mapped.arguments[0]
+            ? unwrapReferenceExpression(mapped.arguments[0])
+            : null;
+          if (
+            !isGlobalObject ||
+            node.arguments.length !== 1 ||
+            !sourceType ||
+            (!checker.isArrayType(sourceType) && !checker.isTupleType(sourceType)) ||
+            !callback ||
+            (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback))
+          ) {
+            unresolved(node, "DYNAMIC_REQUEST_MAP", "the Object.fromEntries request map cannot be proved from an Array.map callback");
+            return;
+          }
+          const returns = returnedExpressions(callback);
+          if (returns.length === 0) {
+            unresolved(node, "DYNAMIC_REQUEST_MAP", "the Array.map callback returns no request entry");
+            return;
+          }
+          for (const returned of returns) {
+            const tuple = unwrapReferenceExpression(returned);
+            if (!ts.isArrayLiteralExpression(tuple) || tuple.elements.length !== 2 || tuple.elements.some(ts.isSpreadElement)) {
+              unresolved(returned, "DYNAMIC_REQUEST_MAP", "the Array.map callback does not return a literal [key, entry] tuple");
+              continue;
+            }
+            entry(tuple.elements[1]);
+          }
+          return;
+        }
         const isUseMemo =
           (ts.isIdentifier(callee) && callee.text === "useMemo") ||
           (ts.isPropertyAccessExpression(callee) && callee.name.text === "useMemo");
