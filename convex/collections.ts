@@ -3082,7 +3082,7 @@ export const returnClearedCheque = mutation({
         // Post bank fee as expense if provided. Convert minor→major units with
         // the central currency-aware helper (the old `JOD ? 3 : 2` was wrong for
         // KWD/BHD/OMR/JPY) and route it through the posting engine so it hits the
-        // GL (DR General Expenses / CR Bank) instead of only the legacy tables.
+        // GL (DR Professional Fees / CR Bank) instead of only the legacy tables.
         if (args.bankFeeMinor && args.bankFeeMinor > 0) {
           const currency = await getOrgCurrency(ctx, args.orgId);
           const feeAmount = fromMinorUnits(args.bankFeeMinor, currency);

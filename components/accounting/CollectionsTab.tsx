@@ -1273,8 +1273,8 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
         setUncertainReturn(false);
       } else {
         // The server may have committed before the response was lost. Keep
-        // every economic input fixed while retrying the original command.
-        setUncertainReturn(true);
+        // every keyed economic input fixed while retrying the original command.
+        if (cheque.status === "CLEARED") setUncertainReturn(true);
       }
       toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {

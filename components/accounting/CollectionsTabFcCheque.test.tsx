@@ -164,6 +164,27 @@ describe("Collections, Cheques tab: Return", () => {
     expect(fresh.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 
+  test("an uncertain retry names its original bank when that bank disappears from the picker", async () => {
+    stubs.queryResults.set("collections:listReceiptBankOptions", {
+      banks: [{ _id: "bank1", name: "First bank", currency: "JOD" }], truncated: false,
+    });
+    const clearCheque = vi.fn().mockImplementationOnce(async () => {
+      stubs.queryResults.set("collections:listReceiptBankOptions", { banks: [], truncated: false });
+      throw new TypeError("Failed to fetch");
+    });
+    stubs.mutations.set("collections:clearCheque", clearCheque);
+    stubs.paginated.set("collections:listCheques", [cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "DEPOSITED" })]);
+    await openChequesTab();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    const dialog = await screen.findByRole("dialog");
+    const trigger = within(dialog).getByRole("combobox", { name: "ReceiptBankAccount" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: /First bank/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(within(dialog).getByRole("status").textContent).toContain("First bank"));
+    expect(within(dialog).getByRole("status").textContent).toContain("ChequeClearRetryBank");
+  });
+
   test("a positive return fee asks which bank paid that fee", async () => {
     stubs.queryResults.set("collections:listReceiptBankOptions", {
       banks: [{ _id: "fee-bank", name: "Fee bank", currency: "JOD" }], truncated: false,

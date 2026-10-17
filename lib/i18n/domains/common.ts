@@ -1385,7 +1385,7 @@ export const commonEn = {
     "This currency has too many active bank accounts to list here, so a bank payment cannot be recorded from this screen. Deactivate the accounts that are no longer used, then try again.",
   ReceiptBankAccount: "Bank account received into",
   ReceiptSelectBank: "Select the bank account that received this payment",
-  ChequeClearRetryBank: "Retrying the same cheque clearance with its original bank choice.",
+  ChequeClearRetryBank: "Retrying the same cheque clearance with its original bank choice:",
   ChequeReturnRetrySameDetails: "The response was lost. Retry this return with the same reason, fee and bank.",
   ChequeReturnFeeBank: "Bank account charged the return fee",
   ReceiptNoBank:
@@ -2411,7 +2411,7 @@ export const commonAr = {
     "عدد الحسابات المصرفية النشطة بهذه العملة أكبر من أن يُعرض هنا، لذا لا يمكن تسجيل دفعة مصرفية من هذه الشاشة. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
   ReceiptBankAccount: "الحساب المصرفي المستلم",
   ReceiptSelectBank: "اختر الحساب المصرفي الذي استلم هذه الدفعة",
-  ChequeClearRetryBank: "إعادة محاولة تحصيل الشيك باستخدام الحساب المصرفي المختار أولاً.",
+  ChequeClearRetryBank: "إعادة محاولة تحصيل الشيك باستخدام الحساب المصرفي المختار أولاً:",
   ChequeReturnRetrySameDetails: "فُقد الرد. أعد محاولة إرجاع الشيك بالسبب والرسوم والحساب المصرفي نفسها.",
   ChequeReturnFeeBank: "الحساب المصرفي الذي خُصمت منه رسوم الإرجاع",
   ReceiptNoBank:
