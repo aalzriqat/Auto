@@ -63,6 +63,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "accountingMigration.backfillVehicleInventoryOpeningBalances": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: dryRun unless explicitly false; each vehicle is SKIPPED when a VEHICLE_ACQUIRED/VEHICLE_INVENTORY_OPENING_BALANCE event already exists or a vehicle_acquired_ row is pending, and the posting it delegates to keys on `vehicle_inventory_opening_${vehicleId}` — the pre-existing vehicle — which the posting engine dedupes by_org_idempotency" },
   "accountingOutbox.redrive": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: drains the first page of the outbox inline and schedules the claims, which claim only PENDING rows and posts each under the idempotencyKey STORED on the row; the posting engine dedupes that key by_org_idempotency, so a re-run re-drives nothing already posted" },
   "accountingOutbox.retryFailed": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 (was NON_ECONOMIC, which was false: it revives the row and schedules claimOutboxRow, which posts): refuses unless the row is FAILED, reviveFailedEntry re-checks FAILED and refuses a retired posting, and the worker posts under the idempotencyKey stored on the row, deduped by_org_idempotency; a retry finds the row no longer FAILED and throws" },
+  "accountingPeriods.create": { bucket: "STATE_GUARDED", mechanism: "SCRUM-807: with openImmediately it schedules wakePeriodHeldRows for the new period's own date range, which releases only this org's PENDING period-held rows and schedules their claims; each claim refuses a row that is not PENDING, already DISPATCHED or not yet due, and the worker re-proves eligibility and posts under the idempotencyKey STORED on the row, deduped by_org_idempotency, so a repeat wake posts nothing twice. create itself refuses a duplicate fiscalYear/periodNumber or an overlapping range, so it cannot be replayed to re-wake" },
   "accountingPeriods.open": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain after opening the period; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency, so a duplicate drain posts nothing twice" },
   "accountingPeriods.reopen": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain after reopening the period; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency, so a duplicate drain posts nothing twice" },
   "applications.amendSupplierDisbursementAdvice": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -322,12 +323,16 @@ describe("analyzer self-tests — the seven blind spots, pinned", () => {
     // Pinned real paths, each through a function reference.
     expect(edge("accountingPeriods.open", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     expect(edge("accountingPeriods.reopen", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
+    // SCRUM-807: both period doors wake the rows they cover, and the wake only schedules claims.
+    expect(edge("accountingPeriods.create", "accountingOutbox.wakePeriodHeldRows")).toBe(true);
+    expect(edge("accountingPeriods.open", "accountingOutbox.wakePeriodHeldRows")).toBe(true);
+    expect(edge("accountingOutbox.wakePeriodHeldRows", "accountingOutbox.claimOutboxRow")).toBe(true);
     expect(edge("chartOfAccounts.initialize", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     expect(edge("chartOfAccounts.repairMissingSystemAccounts", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     expect(edge("accountingOutbox.retryFailed", "accountingOutbox.claimOutboxRow")).toBe(true);
     expect(edge("prepaidExpenses.runAmortizationNow", "prepaidExpenses.catchUpScheduleMutation")).toBe(true);
     for (const id of [
-      "accountingPeriods.open", "accountingPeriods.reopen", "chartOfAccounts.initialize",
+      "accountingPeriods.create", "accountingPeriods.open", "accountingPeriods.reopen", "chartOfAccounts.initialize",
       "chartOfAccounts.repairMissingSystemAccounts", "accountingOutbox.redrive",
       "accountingMigration.backfillVehicleInventoryOpeningBalances", "prepaidExpenses.runAmortizationNow",
     ]) expect([...forward], id).toContain(id);
@@ -670,7 +675,10 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 143 -> 147 (SCRUM-724): `collections.registerSaleInvoiceCheque`, `.reserveSaleInvoiceReceipt`,
     // `.activateSaleInvoiceReceipt` and `retainedCreditRefunds.executeRetainedCreditRefund`.
     // 147 -> 149: `customerFinanceCompanyPayments.confirmPayment` and `.voidPayment` (SCRUM-766 PR-B confirmed payment evidence).
-    expect(population).toHaveLength(149);
+    // 149 -> 150: `accountingPeriods.create` (SCRUM-807): a period created with openImmediately now
+    // schedules `accountingOutbox.wakePeriodHeldRows`, which schedules `claimOutboxRow` and so reaches posting
+    // by function reference. It is the same wake `open` performs; `accountingPeriods.lock` is still excluded.
+    expect(population).toHaveLength(150);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {
