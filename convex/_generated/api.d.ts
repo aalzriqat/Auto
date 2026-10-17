@@ -231,6 +231,7 @@ import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_orgLifecycle from "../utils/orgLifecycle.js";
 import type * as utils_orgResetGeneration from "../utils/orgResetGeneration.js";
 import type * as utils_orgSettingsProjection from "../utils/orgSettingsProjection.js";
+import type * as utils_partnerEquityBank from "../utils/partnerEquityBank.js";
 import type * as utils_paymentMethods from "../utils/paymentMethods.js";
 import type * as utils_paymentWebhook from "../utils/paymentWebhook.js";
 import type * as utils_payrollSourceLedger from "../utils/payrollSourceLedger.js";
@@ -513,6 +514,7 @@ declare const fullApi: ApiFromModules<{
   "utils/orgLifecycle": typeof utils_orgLifecycle;
   "utils/orgResetGeneration": typeof utils_orgResetGeneration;
   "utils/orgSettingsProjection": typeof utils_orgSettingsProjection;
+  "utils/partnerEquityBank": typeof utils_partnerEquityBank;
   "utils/paymentMethods": typeof utils_paymentMethods;
   "utils/paymentWebhook": typeof utils_paymentWebhook;
   "utils/payrollSourceLedger": typeof utils_payrollSourceLedger;

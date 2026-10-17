@@ -113,6 +113,13 @@ describe("SCRUM-313 · identity-guarded creation commands survive a lost-respons
     };
     const first = await asAdmin.mutation(api.partnerEquity.add, args);
     const journals = await countJournals(t, orgId);
+    const stored = await t.run((ctx) => ctx.db.query("commandIdempotency")
+      .withIndex("by_org_operation_key", (q) => q.eq("orgId", orgId)
+        .eq("operation", "partnerEquity.add").eq("idempotencyKey", args.idempotencyKey)).unique());
+    expect(stored?.fingerprint).toBe(JSON.stringify({
+      partnerName: args.partnerName, openingContributionMinor: args.openingContributionMinor,
+      paymentMethod: args.paymentMethod,
+    }));
 
     const second = await asAdmin.mutation(api.partnerEquity.add, args);
 
@@ -154,6 +161,13 @@ describe("SCRUM-313 · identity-guarded creation commands survive a lost-respons
       paymentMethod: "CASH" as const,
     };
     const first = await asAdmin.mutation(api.partnerEquity.recordEquityMovement, args);
+    const stored = await t.run((ctx) => ctx.db.query("commandIdempotency")
+      .withIndex("by_org_operation_key", (q) => q.eq("orgId", orgId)
+        .eq("operation", "partnerEquity.recordEquityMovement").eq("idempotencyKey", args.idempotencyKey)).unique());
+    expect(stored?.fingerprint).toBe(JSON.stringify({
+      partnerId: args.partnerId.toString(), type: args.type,
+      amountMinor: args.amountMinor, paymentMethod: args.paymentMethod, occurredAt: null,
+    }));
     const second = await asAdmin.mutation(api.partnerEquity.recordEquityMovement, args);
 
     expect(second).toBe(first);
@@ -211,6 +225,27 @@ describe("SCRUM-313 · identity-guarded creation commands survive a lost-respons
     })).rejects.toThrow(/Idempotency key reused with different request content/);
     expect(await countRows(t, orgId, "partnerEquityTransactions")).toBe(2);
     expect(await countJournals(t, orgId)).toBe(journals);
+  });
+
+  test("partnerEquity.recordEquityMovement: a completed draw replays after its bank is deactivated", async () => {
+    const { t, asAdmin, orgId } = await freshOrg("mv-closed-bank");
+    const bankAccountId = await asAdmin.mutation(api.bankAccounts.create, {
+      orgId, name: "Draw Bank", currency: "USD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isReconciliationTarget: true,
+    });
+    const partnerId = await asAdmin.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Draw Replay Partner",
+      openingContributionMinor: 200_000, paymentMethod: "CASH",
+    });
+    const args = {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerId,
+      type: "DRAW" as const, amountMinor: 100_000,
+      paymentMethod: "BANK_TRANSFER" as const, bankAccountId,
+    };
+    const first = await asAdmin.mutation(api.partnerEquity.recordEquityMovement, args);
+    await asAdmin.mutation(api.bankAccounts.deactivate, { orgId, bankAccountId });
+    expect(await asAdmin.mutation(api.partnerEquity.recordEquityMovement, args)).toBe(first);
+    expect(await countRows(t, orgId, "partnerEquityTransactions")).toBe(2);
   });
 
   test("vehicles.create: a retry capitalizes ONE car, not two", async () => {
