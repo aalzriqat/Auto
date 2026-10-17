@@ -3,7 +3,7 @@ import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyOwner, getActorName } from "./utils/notifications";
 import { toMinorUnits } from "./utils/money";
@@ -12,15 +12,46 @@ import {
   hookPartnerDrew,
   hookProfitDistributed,
   getOrgCurrency,
+  shouldPost,
 } from "./accounting/workflowHooks";
 import { paymentMethodValidator, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { partnerEquityNeedsBank } from "./utils/partnerEquityBank";
 
 const movementTypeValidator = v.union(
   v.literal("CONTRIBUTION"),
   v.literal("DRAW"),
   v.literal("PROFIT_DISTRIBUTION"),
 );
+
+async function validateMovementBank(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    type: "CONTRIBUTION" | "DRAW" | "PROFIT_DISTRIBUTION";
+    paymentMethod?: PaymentMethod;
+    bankAccountId?: Id<"bankAccounts">;
+    currency: string;
+  }
+): Promise<Id<"bankAccounts"> | undefined> {
+  if (args.type === "PROFIT_DISTRIBUTION" && args.paymentMethod) {
+    throw new ConvexError("A profit distribution does not move cash or bank money.");
+  }
+  if (!partnerEquityNeedsBank(args.type, args.paymentMethod)) {
+    if (args.bankAccountId) {
+      throw new ConvexError("A bank account does not apply to this partner movement.");
+    }
+    return undefined;
+  }
+  return await requireActiveBankInCurrency(ctx, {
+    orgId: args.orgId,
+    bankAccountId: args.bankAccountId,
+    currency: args.currency,
+    missingMessage: "Select the physical bank for this partner movement. Nothing has been recorded.",
+    currencySubject: "partner movement",
+  });
+}
 
 /**
  * GL Phase 12 balance model: the partner's opening base plus every movement
@@ -83,10 +114,7 @@ export const listTransactions = query({
   args: { orgId: v.id("organizations"), partnerId: v.id("partnerEquity") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    const partner = await ctx.db.get(args.partnerId);
-    if (!partner || partner.orgId !== args.orgId) {
-      throw new ConvexError("Partner not found in this organization.");
-    }
+    await requireOwnedRow(ctx, args.orgId, "partnerEquity", args.partnerId, "Partner not found in this organization.");
     return await ctx.db
       .query("partnerEquityTransactions")
       .withIndex("by_org_partner_time", (q) =>
@@ -94,6 +122,14 @@ export const listTransactions = query({
       )
       .order("desc")
       .collect();
+  },
+});
+
+export const listBankOptions = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
   },
 });
 
@@ -106,6 +142,7 @@ export const add = mutation({
     // contribution — replaces the old free-typed initialCapital/currentBalance.
     openingContributionMinor: v.optional(v.number()),
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     // SCRUM-313 census. With an opening contribution this calls
     // `recordMovement`, which mints a `partnerEquityTransactions` id and posts
     // a CAPITAL_CONTRIBUTED event keyed on it, so a retry mints a new id, a new
@@ -139,22 +176,41 @@ export const add = mutation({
           partnerName: args.partnerName.trim(),
           openingContributionMinor: args.openingContributionMinor ?? null,
           paymentMethod: args.paymentMethod ?? null,
+          bankAccountId: args.bankAccountId ?? null,
         }),
       },
       async () => {
+        if (args.openingContributionMinor !== undefined &&
+            (!Number.isSafeInteger(args.openingContributionMinor) || args.openingContributionMinor < 0)) {
+          throw new ConvexError("Opening contribution must be a non-negative whole minor-unit amount.");
+        }
+        const hasContribution = (args.openingContributionMinor ?? 0) > 0;
+        if (!hasContribution && args.bankAccountId) {
+          throw new ConvexError("A bank account requires a positive opening contribution.");
+        }
+        const bankAccountId = hasContribution
+          ? await validateMovementBank(ctx, {
+              orgId: args.orgId,
+              type: "CONTRIBUTION",
+              paymentMethod: args.paymentMethod,
+              bankAccountId: args.bankAccountId,
+              currency: await getOrgCurrency(ctx, args.orgId),
+            })
+          : undefined;
         const partnerId = await ctx.db.insert("partnerEquity", {
           orgId: args.orgId,
           partnerName: args.partnerName.trim(),
           notes: args.notes,
         });
 
-        if (args.openingContributionMinor != null && args.openingContributionMinor > 0) {
+        if (hasContribution && args.openingContributionMinor !== undefined) {
           await recordMovement(ctx, {
             orgId: args.orgId,
             partnerId,
             type: "CONTRIBUTION",
             amountMinor: args.openingContributionMinor,
             paymentMethod: args.paymentMethod,
+            bankAccountId,
             actorId: user._id,
           });
         }
@@ -178,6 +234,7 @@ async function recordMovement(
     type: "CONTRIBUTION" | "DRAW" | "PROFIT_DISTRIBUTION";
     amountMinor: number;
     paymentMethod?: PaymentMethod;
+    bankAccountId?: Id<"bankAccounts">;
     notes?: string;
     occurredAt?: number;
     actorId: Id<"users">;
@@ -189,6 +246,14 @@ async function recordMovement(
 
   const currency = await getOrgCurrency(ctx, args.orgId);
   const occurredAt = args.occurredAt ?? Date.now();
+  if (!Number.isSafeInteger(occurredAt) || occurredAt < 0 || occurredAt > Date.now()) {
+    throw new ConvexError("Choose a valid partner movement date that is not in the future.");
+  }
+  // Use the exact predicate that postOrEnqueue uses. A CLOSING period is not
+  // postable even though the general period guard has not marked it CLOSED.
+  if (!(await shouldPost(ctx, args.orgId, occurredAt))) {
+    throw new ConvexError("Set up accounting and open the period before recording a partner movement.");
+  }
 
   const transactionId = await ctx.db.insert("partnerEquityTransactions", {
     orgId: args.orgId,
@@ -196,6 +261,8 @@ async function recordMovement(
     type: args.type,
     amountMinor: args.amountMinor,
     currency,
+    paymentMethod: args.paymentMethod,
+    bankAccountId: args.bankAccountId,
     occurredAt,
     notes: args.notes,
     actorId: args.actorId,
@@ -209,6 +276,7 @@ async function recordMovement(
     amountMinor: args.amountMinor,
     currency,
     paymentMethod: args.paymentMethod,
+    bankAccountId: args.bankAccountId,
     actorId: args.actorId,
     occurredAt,
   };
@@ -226,6 +294,7 @@ export const recordEquityMovement = mutation({
     type: movementTypeValidator,
     amountMinor: v.number(),
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     notes: v.optional(v.string()),
     occurredAt: v.optional(v.number()),
     // SCRUM-313 census. `recordMovement` mints a `partnerEquityTransactions`
@@ -237,21 +306,6 @@ export const recordEquityMovement = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-
-    const partner = await ctx.db.get(args.partnerId);
-    if (!partner || partner.orgId !== args.orgId || partner.isDeleted) {
-      throw new ConvexError("Partner not found in this organization.");
-    }
-
-    if (args.type === "DRAW") {
-      const currency = await getOrgCurrency(ctx, args.orgId);
-      const { balanceMinor } = await derivePartnerBalanceMinor(ctx, partner, currency);
-      if (args.amountMinor > balanceMinor) {
-        throw new ConvexError(
-          "Draw exceeds this partner's equity balance. Record a profit distribution first if the partner is drawing against undistributed profit."
-        );
-      }
-    }
 
     return await runWithIdempotency(
       ctx,
@@ -266,16 +320,41 @@ export const recordEquityMovement = mutation({
           type: args.type,
           amountMinor: args.amountMinor,
           paymentMethod: args.paymentMethod ?? null,
+          bankAccountId: args.bankAccountId ?? null,
           occurredAt: args.occurredAt ?? null,
         }),
       },
       async () => {
+        // A replay must return the first result even if that draw exhausted the
+        // partner balance or the partner has since been removed.
+        const partner = await requireOwnedRow(ctx, args.orgId, "partnerEquity", args.partnerId, "Partner not found in this organization.");
+        if (partner.isDeleted) {
+          throw new ConvexError("Partner not found in this organization.");
+        }
+        const currency = await getOrgCurrency(ctx, args.orgId);
+        const bankAccountId = await validateMovementBank(ctx, {
+          orgId: args.orgId,
+          type: args.type,
+          paymentMethod: args.paymentMethod,
+          bankAccountId: args.bankAccountId,
+          currency,
+        });
+        if (args.type === "DRAW") {
+          const { balanceMinor } = await derivePartnerBalanceMinor(ctx, partner, currency);
+          if (args.amountMinor > balanceMinor) {
+            throw new ConvexError(
+              "Draw exceeds this partner's equity balance. Record a profit distribution first if the partner is drawing against undistributed profit."
+            );
+          }
+        }
+
         const transactionId = await recordMovement(ctx, {
           orgId: args.orgId,
           partnerId: args.partnerId,
           type: args.type,
           amountMinor: args.amountMinor,
           paymentMethod: args.paymentMethod,
+          bankAccountId,
           notes: args.notes,
           occurredAt: args.occurredAt,
           actorId: user._id,
@@ -304,10 +383,7 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const { orgId, equityId, ...updates } = args;
 
-    const equity = await ctx.db.get(equityId);
-    if (!equity || equity.orgId !== orgId) {
-      throw new ConvexError("Partner equity record not found in this organization.");
-    }
+    await requireOwnedRow(ctx, orgId, "partnerEquity", equityId, "Partner equity record not found in this organization.");
 
     const cleanedUpdates = Object.fromEntries(
       Object.entries(updates).filter(([, value]) => value !== undefined)
@@ -330,10 +406,7 @@ export const remove = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const equity = await ctx.db.get(args.equityId);
-    if (!equity || equity.orgId !== args.orgId) {
-      throw new ConvexError("Partner equity record not found in this organization.");
-    }
+    const equity = await requireOwnedRow(ctx, args.orgId, "partnerEquity", args.equityId, "Partner equity record not found in this organization.");
 
     // A partner with GL-backed equity movements can't just vanish — their
     // capital is on the books. Pure legacy rows (no transactions) may still be

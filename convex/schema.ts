@@ -5570,6 +5570,8 @@ export default defineSchema({
     ),
     amountMinor: v.number(),
     currency: v.string(),
+    paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     occurredAt: v.number(),
     notes: v.optional(v.string()),
     accountingEventId: v.optional(v.id("accountingEvents")),

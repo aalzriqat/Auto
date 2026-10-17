@@ -3189,6 +3189,7 @@ export interface PartnerEquityHookArgs {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: Id<"bankAccounts">;
   actorId: Id<"users">;
   occurredAt: number;
 }
@@ -3213,6 +3214,7 @@ async function postPartnerEquityEvent(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }

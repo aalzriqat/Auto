@@ -63,6 +63,17 @@ async function seedEquityDealer() {
 
 type Ctx = Awaited<ReturnType<typeof seedEquityDealer>>;
 
+async function createPhysicalBank(asOwner: Ctx["asOwner"], orgId: Id<"organizations">, name: string, currency = "JOD") {
+  return await asOwner.mutation(api.bankAccounts.create, {
+    orgId,
+    name,
+    currency,
+    openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(),
+    isReconciliationTarget: true,
+  });
+}
+
 async function eventsOfType(t: Ctx["t"], orgId: Id<"organizations">, eventType: string) {
   return await t.run((ctx) =>
     ctx.db
@@ -138,16 +149,17 @@ describe("Phase 12 — capital contribution", () => {
 
   test("adding a partner with an opening contribution posts it to the GL", async () => {
     const { t, orgId, asOwner } = await seedEquityDealer();
+    const bankId = await createPhysicalBank(asOwner, orgId, "Contribution Bank");
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
       idempotencyKey: crypto.randomUUID(),
-      orgId, partnerName: "Partner B", openingContributionMinor: 500_000, paymentMethod: "BANK_TRANSFER",
+      orgId, partnerName: "Partner B", openingContributionMinor: 500_000, paymentMethod: "BANK_TRANSFER", bankAccountId: bankId,
     });
 
     const events = await eventsOfType(t, orgId, "CAPITAL_CONTRIBUTED");
     expect(events).toHaveLength(1);
     const lines = await linesForEvent(t, events[0]);
     const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
-    expect(lines.find((l) => l.accountId === bank?._id)?.debitMinor).toBe(500_000);
+    expect(lines.find((l) => l.accountId === bank?._id)).toMatchObject({ debitMinor: 500_000, bankAccountId: bankId });
 
     expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(500_000);
   });
@@ -176,6 +188,44 @@ describe("Phase 12 — capital contribution", () => {
 });
 
 describe("Phase 12 — partner draw", () => {
+  test("contribution and draw keep separate bank identities through event, journal and book balance", async () => {
+    const { t, orgId, asOwner } = await seedEquityDealer();
+    const bankA = await createPhysicalBank(asOwner, orgId, "Capital Bank");
+    const bankB = await createPhysicalBank(asOwner, orgId, "Draw Bank");
+    const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Two Bank Partner",
+      openingContributionMinor: 500_000, paymentMethod: "BANK_TRANSFER", bankAccountId: bankA,
+    });
+    await asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerId,
+      type: "DRAW", amountMinor: 100_000, paymentMethod: "CHEQUE", bankAccountId: bankB,
+    });
+
+    const contributed = (await eventsOfType(t, orgId, "CAPITAL_CONTRIBUTED"))[0];
+    const drew = (await eventsOfType(t, orgId, "PARTNER_DREW"))[0];
+    expect(contributed.payload).toMatchObject({ bankAccountId: bankA });
+    expect(drew.payload).toMatchObject({ bankAccountId: bankB });
+    const contributionLines = await linesForEvent(t, contributed);
+    const drawLines = await linesForEvent(t, drew);
+    const history = await asOwner.query(api.partnerEquity.listTransactions, { orgId, partnerId });
+    expect(history).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "CONTRIBUTION", bankAccountId: bankA, paymentMethod: "BANK_TRANSFER" }),
+      expect.objectContaining({ type: "DRAW", bankAccountId: bankB, paymentMethod: "CHEQUE" }),
+    ]));
+    expect(contributionLines.filter((line) => line.bankAccountId !== undefined)).toEqual([
+      expect.objectContaining({ debitMinor: 500_000, bankAccountId: bankA }),
+    ]);
+    expect(drawLines.filter((line) => line.bankAccountId !== undefined)).toEqual([
+      expect.objectContaining({ creditMinor: 100_000, bankAccountId: bankB }),
+    ]);
+
+    const onB = await asOwner.query(api.bankAccounts.getBookBalance, { orgId });
+    expect(onB).toMatchObject({ status: "OK", bankAccountId: bankB, balanceMinor: -100_000, unattributedLineCount: 0 });
+    await asOwner.mutation(api.bankAccounts.setReconciliationTarget, { orgId, bankAccountId: bankA });
+    const onA = await asOwner.query(api.bankAccounts.getBookBalance, { orgId });
+    expect(onA).toMatchObject({ status: "OK", bankAccountId: bankA, balanceMinor: 500_000, unattributedLineCount: 0 });
+  });
+
   test("draw posts DR Partner Drawings / CR Cash and lowers the derived balance", async () => {
     const { t, orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
@@ -205,6 +255,7 @@ describe("Phase 12 — partner draw", () => {
 
   test("a draw paid by cheque credits the bank account, not cheques-in-hand", async () => {
     const { t, orgId, asOwner } = await seedEquityDealer();
+    const bankId = await createPhysicalBank(asOwner, orgId, "Draw Bank");
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
       idempotencyKey: crypto.randomUUID(),
       orgId, partnerName: "Cheque Drawer", openingContributionMinor: 400_000,
@@ -212,15 +263,111 @@ describe("Phase 12 — partner draw", () => {
 
     await asOwner.mutation(api.partnerEquity.recordEquityMovement, {
       idempotencyKey: crypto.randomUUID(),
-      orgId, partnerId, type: "DRAW", amountMinor: 100_000, paymentMethod: "CHEQUE",
+      orgId, partnerId, type: "DRAW", amountMinor: 100_000, paymentMethod: "CHEQUE", bankAccountId: bankId,
     });
 
     const events = await eventsOfType(t, orgId, "PARTNER_DREW");
     const lines = await linesForEvent(t, events[0]);
     const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
     const chequesInHand = await accountBySystemKey(t, orgId, "CHEQUES_IN_HAND");
-    expect(lines.find((l) => l.accountId === bank?._id)?.creditMinor).toBe(100_000);
+    expect(lines.find((l) => l.accountId === bank?._id)).toMatchObject({ creditMinor: 100_000, bankAccountId: bankId });
     expect(lines.find((l) => l.accountId === chequesInHand?._id)).toBeUndefined();
+  });
+
+  test("a bank-method draw without a physical bank refuses before the subledger or GL changes", async () => {
+    const { t, orgId, asOwner } = await seedEquityDealer();
+    const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Bank Draw Partner",
+      openingContributionMinor: 400_000, paymentMethod: "CASH",
+    });
+    const beforeEvents = await eventsOfType(t, orgId, "PARTNER_DREW");
+    await expect(asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerId,
+      type: "DRAW", amountMinor: 100_000, paymentMethod: "BANK_TRANSFER",
+    })).rejects.toThrow(/Select the physical bank/);
+    expect(await eventsOfType(t, orgId, "PARTNER_DREW")).toHaveLength(beforeEvents.length);
+    expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(400_000);
+  });
+
+  test("a wrong-currency bank is refused before a partner draw changes either balance", async () => {
+    const { t, orgId, asOwner } = await seedEquityDealer();
+    const usdBank = await createPhysicalBank(asOwner, orgId, "USD Bank", "USD");
+    const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Currency Partner",
+      openingContributionMinor: 400_000, paymentMethod: "CASH",
+    });
+    await expect(asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerId,
+      type: "DRAW", amountMinor: 100_000, paymentMethod: "CARD", bankAccountId: usdBank,
+    })).rejects.toThrow(/denominated in USD/);
+    expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(400_000);
+    expect(await eventsOfType(t, orgId, "PARTNER_DREW")).toHaveLength(0);
+  });
+
+  test("inactive and foreign-organization banks cannot fund a partner draw", async () => {
+    const { t, orgId, userId, asOwner } = await seedEquityDealer();
+    const inactiveBank = await createPhysicalBank(asOwner, orgId, "Closed Bank");
+    await asOwner.mutation(api.bankAccounts.deactivate, { orgId, bankAccountId: inactiveBank });
+    const foreignBank = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() });
+      return await ctx.db.insert("bankAccounts", {
+        orgId: otherOrgId, name: "Other Bank", currency: "JOD",
+        openingBalanceMinor: 0, openingBalanceDate: Date.now(),
+        isActive: true, isReconciliationTarget: true,
+        createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+    });
+    const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Guarded Partner",
+      openingContributionMinor: 400_000, paymentMethod: "CASH",
+    });
+
+    for (const bankAccountId of [inactiveBank, foreignBank]) {
+      await expect(asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+        idempotencyKey: crypto.randomUUID(), orgId, partnerId,
+        type: "DRAW", amountMinor: 100_000, paymentMethod: "BANK_TRANSFER", bankAccountId,
+      })).rejects.toThrow(/bank account/i);
+    }
+    expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(400_000);
+    expect(await eventsOfType(t, orgId, "PARTNER_DREW")).toHaveLength(0);
+  });
+
+  test("an inbound contribution cheque stays in cheques in hand and refuses a bank ID", async () => {
+    const { t, orgId, asOwner } = await seedEquityDealer();
+    const bankId = await createPhysicalBank(asOwner, orgId, "Cheque Bank");
+    const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Cheque Partner",
+    });
+    await expect(asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerId,
+      type: "CONTRIBUTION", amountMinor: 100_000, paymentMethod: "CHEQUE", bankAccountId: bankId,
+    })).rejects.toThrow(/does not apply/);
+    await asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerId,
+      type: "CONTRIBUTION", amountMinor: 100_000, paymentMethod: "CHEQUE",
+    });
+    const event = (await eventsOfType(t, orgId, "CAPITAL_CONTRIBUTED"))[0];
+    const lines = await linesForEvent(t, event);
+    const cheques = await accountBySystemKey(t, orgId, "CHEQUES_IN_HAND");
+    expect(lines.find((line) => line.accountId === cheques?._id)).toMatchObject({ debitMinor: 100_000 });
+    expect(lines.every((line) => line.bankAccountId === undefined)).toBe(true);
+  });
+
+  test.each(["CLOSED", "CLOSING"] as const)("a draw in a %s period cannot reduce partner equity while its journal is queued", async (status) => {
+    const { t, orgId, asOwner } = await seedEquityDealer();
+    const partnerId = await asOwner.mutation(api.partnerEquity.add, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerName: "Period Partner",
+      openingContributionMinor: 400_000, paymentMethod: "CASH",
+    });
+    const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
+    await t.run((ctx) => ctx.db.patch(period._id, { status }));
+
+    await expect(asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+      idempotencyKey: crypto.randomUUID(), orgId, partnerId,
+      type: "DRAW", amountMinor: 100_000, paymentMethod: "CASH",
+    })).rejects.toThrow(/period/i);
+    expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(400_000);
+    expect(await eventsOfType(t, orgId, "PARTNER_DREW")).toHaveLength(0);
   });
 
   test("a draw exceeding the partner's balance is rejected", async () => {

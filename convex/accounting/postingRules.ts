@@ -7,6 +7,7 @@ import {
   type FeeAccountingTreatment,
 } from "../utils/financedSalePostingPlan";
 import type { Id } from "../_generated/dataModel";
+import { partnerEquityNeedsBank } from "../utils/partnerEquityBank";
 
 /**
  * The one spelling of an expense's EXPENSE_POSTED idempotency key. Lives in
@@ -2793,15 +2794,31 @@ export interface PartnerEquityMovementPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
+}
+
+function partnerEquityBankDims(
+  type: "CONTRIBUTION" | "DRAW",
+  p: PartnerEquityMovementPayload
+): Pick<LineSpec, "bankAccountId"> | undefined {
+  const needsBank = partnerEquityNeedsBank(type, p.paymentMethod);
+  if (needsBank && !p.bankAccountId) {
+    throw new ConvexError("Select the physical bank for this partner payment before posting.");
+  }
+  if (!needsBank && p.bankAccountId) {
+    throw new ConvexError("A physical bank does not apply to this partner payment.");
+  }
+  return needsBank ? { bankAccountId: p.bankAccountId } : undefined;
 }
 
 export function ruleCapitalContributed(p: PartnerEquityMovementPayload): RuleResult {
   // Inbound money: a cheque handed over by the partner genuinely sits in
   // CHEQUES_IN_HAND, so the shared inbound mapper applies as-is.
   const cashKey = cashAccountKey(p.paymentMethod);
+  const bankDims = partnerEquityBankDims("CONTRIBUTION", p);
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, "Capital contribution received"),
+      line(cashKey, p.amountMinor, 0, "Capital contribution received", bankDims),
       line(SYSTEM_KEYS.PARTNER_CAPITAL, 0, p.amountMinor, "Partner capital"),
     ],
     memo: "Partner capital contributed",
@@ -2815,10 +2832,11 @@ export function rulePartnerDrew(p: PartnerEquityMovementPayload): RuleResult {
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
     : cashAccountKey(p.paymentMethod);
+  const bankDims = partnerEquityBankDims("DRAW", p);
   return {
     lines: [
       line(SYSTEM_KEYS.PARTNER_DRAWINGS, p.amountMinor, 0, "Partner draw"),
-      line(cashKey, 0, p.amountMinor, "Draw paid out"),
+      line(cashKey, 0, p.amountMinor, "Draw paid out", bankDims),
     ],
     memo: "Partner draw",
     category: "SYSTEM",
@@ -2828,6 +2846,9 @@ export function rulePartnerDrew(p: PartnerEquityMovementPayload): RuleResult {
 export function ruleProfitDistributed(p: PartnerEquityMovementPayload): RuleResult {
   // Pure equity reclassification — accumulated profit becomes partner
   // capital; no cash moves until the partner later draws it.
+  if (p.paymentMethod || p.bankAccountId) {
+    throw new ConvexError("A profit distribution does not move cash or bank money.");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.RETAINED_EARNINGS, p.amountMinor, 0, "Profit distributed to partner"),
