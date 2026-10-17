@@ -9,14 +9,31 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 // founding-dealer volume, same tradeoff as other marketplace list caps.
 const MAX_ROWS_PER_ORG = 200;
 
-export const listOptedInDealerOrgIds = internalQuery({
-  args: {},
-  handler: async (ctx): Promise<Id<"organizations">[]> => {
-    const profiles = await ctx.db
+// Dealers handled per scheduled invocation. Each dealer costs ~3 queries plus
+// one email action, so this keeps a single action well inside its time limit;
+// the rest of the roster continues in a freshly scheduled invocation.
+export const WEEKLY_REPORT_ORG_PAGE_SIZE = 25;
+// Pause between pages, so the shared emailGlobal bucket (300/min, used by every
+// other sender) refills before the next page's emails start.
+export const WEEKLY_REPORT_PAGE_DELAY_MS = 30_000;
+
+/**
+ * One cursor page of opted-in, non-deleted dealer orgs. `isDeleted` has no
+ * index, so it is filtered within the page: a page may be short, and `isDone`
+ * (not the page length) says whether the roster is exhausted.
+ */
+export const listOptedInDealerOrgIdsPage = internalQuery({
+  args: { cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
       .query("marketplaceDealerProfiles")
       .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
-      .collect();
-    return profiles.filter((profile) => !profile.isDeleted).map((profile) => profile.orgId);
+      .paginate({ numItems: WEEKLY_REPORT_ORG_PAGE_SIZE, cursor: args.cursor });
+    return {
+      orgIds: page.page.filter((profile) => !profile.isDeleted).map((profile) => profile.orgId),
+      continueCursor: page.continueCursor,
+      isDone: page.isDone,
+    };
   },
 });
 
@@ -172,64 +189,125 @@ export function currentWeekStart(now: number = Date.now()): number {
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - daysSinceMonday);
 }
 
+type WeeklyReportOutcome = "sent" | "skipped" | "failed";
+
+type WeeklyReportPageResult = Record<WeeklyReportOutcome, number>;
+
+/** Runs `processOrg` for every org in order, isolating failures: one dealer's throw (or "failed" outcome) is counted but never stops the rest of the page. */
+export async function deliverWeeklyReportsForOrgs(
+  orgIds: Id<"organizations">[],
+  processOrg: (orgId: Id<"organizations">) => Promise<WeeklyReportOutcome>
+): Promise<WeeklyReportPageResult> {
+  const result: WeeklyReportPageResult = { sent: 0, skipped: 0, failed: 0 };
+  for (const orgId of orgIds) {
+    try {
+      result[await processOrg(orgId)]++;
+    } catch (error) {
+      result.failed++;
+      console.error("marketplace weekly report failed for org", orgId, error);
+    }
+  }
+  return result;
+}
+
+function summarizePage(result: WeeklyReportPageResult, hasMore: boolean): string {
+  const failed = result.failed > 0 ? ` ${result.failed} dealer(s) failed.` : "";
+  const more = hasMore ? " More dealers continue in a follow-up run." : "";
+  return `Sent ${result.sent} weekly proof report(s), skipped ${result.skipped} dealer(s) with no activity.${failed}${more}`;
+}
+
 /**
  * Weekly cron entrypoint (Phase 58B). WhatsApp delivery is deferred until
  * Business Verification clears (master plan A5b) — this sends the proof
  * report by email only for now, the documented fallback channel.
+ *
+ * The roster is walked one bounded page per invocation. A page finishes its
+ * sends and only then schedules its successor (after a fixed delay, carrying
+ * the same `since` so every dealer sees the same window), so pages run strictly
+ * one after another. A dealer whose send fails or throws is counted and logged
+ * and does not stop the page or the chain.
+ *
+ * This is not exactly-once and not crash-proof: nothing durable records which
+ * dealers were handled, so a process that dies mid-page ends the chain there
+ * (the last logged page then still says dealers continue), and a manual re-run
+ * of the cron re-emails every dealer with activity.
  */
 export const sendWeeklyProofReports = internalAction({
   args: {},
-  handler: async (ctx) => {
-    try {
-      const summary = await runWeeklyProofReports(ctx);
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "marketplace-weekly-report",
-        status: "success",
-        summary,
-      });
-      return summary;
-    } catch (err) {
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "marketplace-weekly-report",
-        status: "error",
-        summary: "marketplace weekly report cron failed",
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
-    }
-  },
+  handler: async (ctx) => runLoggedPage(ctx, null, Date.now() - ONE_WEEK_MS),
 });
 
-async function runWeeklyProofReports(ctx: ActionCtx): Promise<string> {
-  const orgIds = await ctx.runQuery(internal.marketplaceReports.listOptedInDealerOrgIds, {});
-  const since = Date.now() - ONE_WEEK_MS;
+/** Continuation of `sendWeeklyProofReports` for the next page of dealers. */
+export const sendWeeklyProofReportsPage = internalAction({
+  args: { cursor: v.string(), since: v.number() },
+  handler: async (ctx, args) => runLoggedPage(ctx, args.cursor, args.since),
+});
 
-  let sent = 0;
-  let skipped = 0;
-  for (const orgId of orgIds) {
+async function runLoggedPage(ctx: ActionCtx, cursor: string | null, since: number): Promise<string> {
+  try {
+    const { summary, failed } = await runWeeklyProofReportsPage(ctx, cursor, since);
+    const hasFailures = failed > 0;
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "marketplace-weekly-report",
+      status: hasFailures ? "error" : "success",
+      summary,
+      ...(hasFailures ? { error: `${failed} dealer report(s) failed; see Convex logs.` } : {}),
+    });
+    return summary;
+  } catch (err) {
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "marketplace-weekly-report",
+      status: "error",
+      summary: "marketplace weekly report cron failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
+async function runWeeklyProofReportsPage(
+  ctx: ActionCtx,
+  cursor: string | null,
+  since: number
+): Promise<{ summary: string; failed: number }> {
+  const page = await ctx.runQuery(internal.marketplaceReports.listOptedInDealerOrgIdsPage, { cursor });
+
+  const result = await deliverWeeklyReportsForOrgs(page.orgIds, async (orgId) => {
     const report = await ctx.runQuery(internal.marketplaceReports.buildWeeklyReportForOrg, { orgId, since });
-    if (!report) {
-      skipped++;
-      continue;
-    }
+    if (!report) return "skipped";
 
     const [ownerEmail, org] = await Promise.all([
       ctx.runQuery(internal.crons.getOrgOwnerEmail, { orgId }),
       ctx.runQuery(internal.organizations.getInternal, { orgId }),
     ]);
-    if (!ownerEmail || !org) {
-      skipped++;
-      continue;
-    }
+    if (!ownerEmail || !org) return "skipped";
 
-    await ctx.runAction(internal.email.sendMarketplaceWeeklyReportEmail, {
+    const delivery = await ctx.runAction(internal.email.sendMarketplaceWeeklyReportEmail, {
       orgId,
       toEmail: ownerEmail,
       orgName: org.name,
       ...report,
     });
-    sent++;
+    if (!delivery.success) {
+      // The email action reports rate limiting and provider errors as a value
+      // rather than throwing. Its own detail may name the recipient, so only a
+      // coarse reason is logged here.
+      console.error(
+        "marketplace weekly report not delivered for org",
+        orgId,
+        delivery.error === "rate_limited" ? "rate_limited" : "send_failed"
+      );
+      return "failed";
+    }
+    return "sent";
+  });
+
+  if (!page.isDone) {
+    await ctx.scheduler.runAfter(WEEKLY_REPORT_PAGE_DELAY_MS, internal.marketplaceReports.sendWeeklyProofReportsPage, {
+      cursor: page.continueCursor,
+      since,
+    });
   }
 
-  return `Sent ${sent} weekly proof report(s), skipped ${skipped} dealer(s) with no activity.`;
+  return { summary: summarizePage(result, !page.isDone), failed: result.failed };
 }
