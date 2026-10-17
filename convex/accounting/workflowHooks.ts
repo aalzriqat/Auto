@@ -1501,6 +1501,7 @@ export async function hookVehicleAcquired(
     costMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -1519,6 +1520,7 @@ export async function hookVehicleAcquired(
       costMinor: args.costMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId,
     },
   });
 }

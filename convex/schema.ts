@@ -1805,6 +1805,7 @@ export default defineSchema({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
       purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),

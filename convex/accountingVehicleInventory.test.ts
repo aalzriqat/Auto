@@ -98,6 +98,15 @@ async function addCancellationApprover(t: Ctx["t"], orgId: Id<"organizations">, 
 
 type Ctx = Awaited<ReturnType<typeof seedDealer>>;
 
+async function addOperatingBank({ t, orgId, userId }: Ctx) {
+  const now = Date.now();
+  return await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Operating bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: now, isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: now, updatedAt: now,
+  }));
+}
+
 async function accountBySystemKey(t: Ctx["t"], orgId: Id<"organizations">, systemKey: string) {
   const account = await t.run((ctx) =>
     ctx.db
@@ -1348,7 +1357,9 @@ describe("Fix #11 — flipping a SOURCED vehicle to owned stock capitalizes it",
   });
 
   test("a STOCK vehicle created without a purchase price capitalizes once one is set via update()", async () => {
-    const { t, orgId, asOwner } = await seedDealer("f11c");
+    const dealer = await seedDealer("f11c");
+    const { t, orgId, asOwner } = dealer;
+    const bankAccountId = await addOperatingBank(dealer);
 
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
@@ -1364,7 +1375,7 @@ describe("Fix #11 — flipping a SOURCED vehicle to owned stock capitalizes it",
     expect(event).toBeNull();
 
     await asOwner.mutation(api.vehicles.update, {
-      orgId, vehicleId, purchasePrice: 7500, purchasePaymentMethod: "BANK_TRANSFER",
+      orgId, vehicleId, purchasePrice: 7500, purchasePaymentMethod: "BANK_TRANSFER", bankAccountId,
     });
 
     event = await t.run(async (ctx) =>
@@ -1960,10 +1971,12 @@ describe("Review issue #1 — payment method required whenever a purchase price 
   });
 
   test("an approved creation request posts VEHICLE_ACQUIRED using the requested payment method", async () => {
-    const { t, orgId, asOwner } = await seedDealer("ri1d");
+    const dealer = await seedDealer("ri1d");
+    const { t, orgId, asOwner } = dealer;
+    const bankAccountId = await addOperatingBank(dealer);
     const requestId = await asOwner.mutation(api.vehicleEdits.requestCreate, {
       orgId,
-      payload: { ...baseVehicle, purchasePrice: 6000, purchasePaymentMethod: "BANK_TRANSFER" },
+      payload: { ...baseVehicle, purchasePrice: 6000, purchasePaymentMethod: "BANK_TRANSFER", bankAccountId },
     });
     await asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
 
@@ -1974,6 +1987,17 @@ describe("Review issue #1 — payment method required whenever a purchase price 
     const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
     const { lines } = await linesForEvent(t, orgId, "vehicles", vehicle!._id, "VEHICLE_ACQUIRED");
     expect(lines.find((l) => l.accountId === bank._id)?.creditMinor).toBe(6_000_000);
+    expect(lines.find((l) => l.accountId === bank._id)?.bankAccountId).toBe(bankAccountId);
+  });
+
+  test("a bank-funded approval request cannot be queued without a physical bank", async () => {
+    const { t, orgId, asOwner } = await seedDealer("ri1bankrequest");
+    await expect(asOwner.mutation(api.vehicleEdits.requestCreate, {
+      orgId, payload: { ...baseVehicle, purchasePrice: 6000, purchasePaymentMethod: "BANK_TRANSFER" },
+    })).rejects.toThrow(/Choose the bank account/);
+    const requests = await t.run((ctx) => ctx.db.query("vehicleEdits")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING")).collect());
+    expect(requests).toHaveLength(0);
   });
 
   test("an approved creation request with ON_ACCOUNT credits AP-Suppliers and creates the payable", async () => {
@@ -2062,17 +2086,56 @@ describe("Review issue #1 — payment method required whenever a purchase price 
 });
 
 describe("Review issue #2 — outbound cheque purchases credit Bank Account, not Cheques in Hand", () => {
+  test("bank-funded acquisition requires an explicit physical bank before any posting", async () => {
+    const { t, orgId, asOwner } = await seedDealer("ri2bankrequired");
+    const counts = async () => await t.run(async (ctx) => ({
+      vehicles: (await ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).length,
+      events: (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).length,
+      journals: (await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).length,
+      transactions: (await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).length,
+    }));
+    const before = await counts();
+    await expect(asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle,
+      purchasePrice: 10000, purchasePaymentMethod: "BANK_TRANSFER",
+    })).rejects.toThrow(/Choose the bank account/);
+    expect(await counts()).toEqual(before);
+  });
+
+  test("same-currency acquisitions retain their distinct bank identities", async () => {
+    const dealer = await seedDealer("ri2twobanks");
+    const { t, orgId, asOwner } = dealer;
+    const firstBankId = await addOperatingBank(dealer);
+    const secondBankId = await addOperatingBank(dealer);
+    const firstVehicleId = await asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, vin: "BANKPURCHASE00001",
+      purchasePrice: 7000, purchasePaymentMethod: "BANK_TRANSFER", bankAccountId: firstBankId,
+    });
+    const secondVehicleId = await asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, vin: "BANKPURCHASE00002",
+      purchasePrice: 9000, purchasePaymentMethod: "CARD", bankAccountId: secondBankId,
+    });
+    const bankControl = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const first = await linesForEvent(t, orgId, "vehicles", firstVehicleId, "VEHICLE_ACQUIRED");
+    const second = await linesForEvent(t, orgId, "vehicles", secondVehicleId, "VEHICLE_ACQUIRED");
+    expect(first.lines.find((line) => line.accountId === bankControl._id)).toMatchObject({ creditMinor: 7_000_000, bankAccountId: firstBankId });
+    expect(second.lines.find((line) => line.accountId === bankControl._id)).toMatchObject({ creditMinor: 9_000_000, bankAccountId: secondBankId });
+  });
+
   test("vehicle acquisition by cheque credits Bank Account", async () => {
-    const { t, orgId, asOwner } = await seedDealer("ri2a");
+    const dealer = await seedDealer("ri2a");
+    const { t, orgId, asOwner } = dealer;
+    const bankAccountId = await addOperatingBank(dealer);
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
-      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CHEQUE",
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CHEQUE", bankAccountId,
     });
 
     const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
     const chequesInHand = await accountBySystemKey(t, orgId, "CHEQUES_IN_HAND");
     const { lines } = await linesForEvent(t, orgId, "vehicles", vehicleId, "VEHICLE_ACQUIRED");
     expect(lines.find((l) => l.accountId === bank._id)?.creditMinor).toBe(10_000_000);
+    expect(lines.find((l) => l.accountId === bank._id)?.bankAccountId).toBe(bankAccountId);
     expect(lines.some((l) => l.accountId === chequesInHand._id)).toBe(false);
   });
 
@@ -2458,6 +2521,26 @@ async function vehicleByVin(t: Ctx["t"], orgId: Id<"organizations">, vin: string
 }
 
 describe("SCRUM-59 — a CSV import must not create inventory the GL never saw", () => {
+  test("bank purchase import retains its bank identity and proven retry survives later deactivation", async () => {
+    const dealer = await seedDealer("s59bankretry");
+    const { t, orgId, asOwner } = dealer;
+    const bankAccountId = await addOperatingBank(dealer);
+    const command = {
+      orgId, acquisitionPosting: "PURCHASE" as const, importId: "bank-import-1",
+      purchasePaymentMethod: "BANK_TRANSFER" as const, bankAccountId,
+      vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTBANK00001A", purchasePrice: 7000 }],
+    };
+    expect((await asOwner.mutation(api.vehicles.importBulk, command)).inserted).toBe(1);
+    const vehicle = await vehicleByVin(t, orgId, "IMPORTBANK00001A");
+    const bankControl = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const posting = await linesForEvent(t, orgId, "vehicles", vehicle!._id, "VEHICLE_ACQUIRED");
+    expect(posting.lines.find((line) => line.accountId === bankControl._id)).toMatchObject({
+      creditMinor: 7_000_000, bankAccountId,
+    });
+    await t.run((ctx) => ctx.db.patch(bankAccountId, { isActive: false }));
+    expect(await asOwner.mutation(api.vehicles.importBulk, command)).toMatchObject({ inserted: 0, alreadyRecorded: 1 });
+  });
+
   test("PURCHASE capitalizes every imported row, so selling one cannot drive Vehicle Inventory negative", async () => {
     const { t, orgId, asOwner, customerId, userId } = await seedDealer("s59a");
 
@@ -3420,12 +3503,14 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
   });
 
   test("same car and cost, DIFFERENT PAYMENT METHOD is refused", async () => {
-    const { t, orgId, asOwner } = await seedPurchased("s59pm", "IMPORTPM00000001", 10000);
+    const dealer = await seedPurchased("s59pm", "IMPORTPM00000001", 10000);
+    const { t, orgId, asOwner } = dealer;
+    const bankAccountId = await addOperatingBank(dealer);
     const before = await worldDelta(t, orgId);
 
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
-        orgId, acquisitionPosting: "PURCHASE", importId: "imp-32", purchasePaymentMethod: "BANK_TRANSFER",
+        orgId, acquisitionPosting: "PURCHASE", importId: "imp-32", purchasePaymentMethod: "BANK_TRANSFER", bankAccountId,
         vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTPM00000001", purchasePrice: 10000 }],
       })
     ).rejects.toThrow(/recorded as paid by CASH, this import says BANK_TRANSFER/);
@@ -3894,7 +3979,9 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     ];
 
     for (const [label, change, method] of variants) {
-      const { t, orgId, asOwner } = await seedDealer(`s59idem-${label.replace(/\s/g, "")}`);
+      const dealer = await seedDealer(`s59idem-${label.replace(/\s/g, "")}`);
+      const { t, orgId, asOwner } = dealer;
+      const bankAccountId = method === "BANK_TRANSFER" ? await addOperatingBank(dealer) : undefined;
       await asOwner.mutation(api.vehicles.importBulk, {
         orgId, acquisitionPosting: "PURCHASE", importId: "conflict-1", purchasePaymentMethod: "CASH",
         vehicles: [car],
@@ -3903,7 +3990,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
       await expect(
         asOwner.mutation(api.vehicles.importBulk, {
-          orgId, acquisitionPosting: "PURCHASE", importId: "conflict-1", purchasePaymentMethod: method,
+          orgId, acquisitionPosting: "PURCHASE", importId: "conflict-1", purchasePaymentMethod: method, bankAccountId,
           vehicles: [{ ...car, ...change }],
         })
       ).rejects.toThrow(/IDEMPOTENCY_CONFLICT/);

@@ -2397,6 +2397,7 @@ export interface VehicleAcquiredPayload {
   costMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 /**
@@ -2419,10 +2420,19 @@ export function ruleVehicleAcquired(p: VehicleAcquiredPayload): RuleResult {
   const creditKey = isOnAccount
     ? SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS
     : p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
+  if (creditKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("VEHICLE_ACQUISITION_BANK_REQUIRED");
+  }
+  if (creditKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("VEHICLE_ACQUISITION_BANK_UNEXPECTED");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.VEHICLE_INVENTORY, p.costMinor, 0, "Vehicle acquired", { vehicleId: p.vehicleId }),
-      line(creditKey, 0, p.costMinor, isOnAccount ? "Supplier payable created" : "Payment for vehicle", { vehicleId: p.vehicleId }),
+      line(creditKey, 0, p.costMinor, isOnAccount ? "Supplier payable created" : "Payment for vehicle", {
+        vehicleId: p.vehicleId,
+        ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}),
+      }),
     ],
     memo: "Vehicle acquired for inventory",
     category: "SYSTEM",
