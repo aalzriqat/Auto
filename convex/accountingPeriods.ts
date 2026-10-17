@@ -791,6 +791,12 @@ export const reopen = mutation({
     await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
       orgId: args.orgId,
     });
+    // SCRUM-807 — every transition into OPEN wakes the period-parked rows it covers.
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.wakePeriodHeldRows, {
+      orgId: args.orgId,
+      startDate: period.startDate,
+      endDate: period.endDate,
+    });
     return args.periodId;
   },
 });
