@@ -140,6 +140,42 @@ describe("deriveOverviewKpis", () => {
 
     expect(deriveOverviewKpis(stats)).toEqual({ sales: 500, expenses: 0, netProfit: 0 });
   });
+
+  test("an unavailable (null) source is unavailable, never zero or a partial sum", () => {
+    // Expense window over its cap: expenses and profit unavailable, sales intact.
+    const expensesOver = makeStats({
+      salesVolumeThisMonth: 700,
+      salesTrend: [
+        { name: "Aug 1", Revenue: 300, Profit: null, Expenses: null },
+        { name: "Aug 2", Revenue: 400, Profit: null, Expenses: null },
+      ],
+    });
+    expect(deriveOverviewKpis(expensesOver)).toEqual({ sales: 700, expenses: null, netProfit: null });
+
+    // One null bucket poisons the whole sum even when the others are numbers.
+    const mixed = makeStats({
+      salesVolumeThisMonth: 700,
+      salesTrend: [
+        { name: "Aug 1", Revenue: 300, Profit: 10, Expenses: 5 },
+        { name: "Aug 2", Revenue: 400, Profit: null, Expenses: null },
+      ],
+    });
+    expect(deriveOverviewKpis(mixed)).toMatchObject({ expenses: null, netProfit: null });
+
+    // Sale window over its cap with an EMPTY trend: sales and profit are still
+    // unavailable, and the server's expense flag alone is enough for expenses.
+    const salesOver = makeStats({ salesVolumeThisMonth: null, salesTrend: [] });
+    expect(deriveOverviewKpis(salesOver)).toEqual({ sales: null, expenses: 0, netProfit: null });
+    const flagged = makeStats({
+      salesTrend: [],
+      truncated: { vehicles: false, sales: false, members: false, expenses: true },
+    });
+    expect(deriveOverviewKpis(flagged)).toMatchObject({ expenses: null, netProfit: null });
+  });
+
+  test("an unavailable figure produces no delta", () => {
+    expect(deriveKpiDelta(null, 100)).toBeNull();
+  });
 });
 
 describe("deriveTaskCentre", () => {

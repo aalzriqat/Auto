@@ -1009,7 +1009,7 @@ describe("dashboard.stats previous-period totals", () => {
     const reversedExpenseId = await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 7_000 });
     await t.run((ctx) => ctx.db.patch(reversedExpenseId, { isDeleted: true, reversedAt: NOW - 2 * DAY_MS }));
     // A deleted expense may have no reversal timestamp (including legacy rows).
-    // The remaining post-index deletion filter must exclude it in both windows.
+    // The live-row index ranges must exclude it in both windows.
     const deletedCurrentExpenseId = await seedExpenseAt(t, orgId, { daysAgo: 5, amount: 8_000 });
     const deletedPreviousExpenseId = await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 9_000 });
     await t.run(async (ctx) => {
@@ -1020,7 +1020,8 @@ describe("dashboard.stats previous-period totals", () => {
     const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "MONTH" });
     expect(result.salesVolumeThisMonth).toBe(20_000);
     expect(result.previousPeriod?.sales).toBe(30_000);
-    expect(result.salesTrend.reduce((sum, point) => sum + point.Expenses, 0)).toBe(200);
+    // `?? NaN`: an unavailable (null) bucket must fail this total, never add 0.
+    expect(result.salesTrend.reduce((sum, point) => sum + (point.Expenses ?? Number.NaN), 0)).toBe(200);
     expect(result.previousPeriod?.expenses).toBe(300);
   });
 
