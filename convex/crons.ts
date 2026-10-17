@@ -1,12 +1,12 @@
 import { cronJobs } from "convex/server";
 import { v } from "convex/values";
-import { internalQuery, internalAction, MutationCtx, ActionCtx, QueryCtx } from "./_generated/server";
+import { internalQuery, internalAction, MutationCtx, ActionCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { notifyManagers, notifyUser } from "./utils/notifications";
 import { PLANS, PlanId } from "./subscriptions";
 import { Doc, Id } from "./_generated/dataModel";
-import { isSystemOwnerRole } from "./utils/permissions";
+import { findOrgOwnerUser } from "./utils/orgOwner";
 import { toYearMonth } from "./utils/expenseAmortization";
 import type { DepreciationSkipReason } from "./fixedAssets";
 import type { RecognitionSkipReason } from "./dealerProductDeferrals";
@@ -925,28 +925,6 @@ export const triggerPrepaidExpenseAmortization = internalAction({
     }
   },
 });
-
-/** Shared by getOrgOwnerEmail/getOrgOwnerUserId: finds the org's OWNER-role member's user doc. */
-async function findOrgOwnerUser(ctx: QueryCtx, orgId: Id<"organizations">): Promise<Doc<"users"> | null> {
-  // Role *definitions* per org are inherently few (the role list, not member
-  // assignments), so collect() is safe here — while a .take(N) cap could
-  // silently miss the owner role in an org with many custom roles.
-  const roles = await ctx.db
-    .query("roles")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .collect();
-  const ownerRole = roles.find((r) => isSystemOwnerRole(r));
-  if (!ownerRole) return null;
-
-  // by_org_role fixes orgId and roleId, so first() is the earliest owner membership (index order = _creationTime).
-  const ownerMembership = await ctx.db
-    .query("memberships")
-    .withIndex("by_org_role", (q) => q.eq("orgId", orgId).eq("roleId", ownerRole._id))
-    .first();
-  if (!ownerMembership) return null;
-
-  return await ctx.db.get(ownerMembership.userId);
-}
 
 /** Returns the email address of the org's OWNER-role member. */
 export const getOrgOwnerEmail = internalQuery({

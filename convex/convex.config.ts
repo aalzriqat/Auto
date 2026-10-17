@@ -1,9 +1,15 @@
 import { defineApp } from "convex/server";
 import rateLimiter from "@convex-dev/rate-limiter/convex.config.js";
 import aggregate from "@convex-dev/aggregate/convex.config.js";
+import workpool from "@convex-dev/workpool/convex.config.js";
 
 const app = defineApp();
 app.use(rateLimiter);
+
+// Durable per-dealer jobs for the weekly marketplace proof report (SCRUM-807).
+// Workpool (exact 0.4.14) owns only the temporary queue rows; the business
+// result lives in marketplaceWeeklyReportRuns/Deliveries and is retained.
+app.use(workpool, { name: "weeklyReportWorkpool" });
 
 // Maintained counts for the dashboard's aggregate queries. Reading whole
 // documents to produce a handful of numbers was 67% of this project's database
