@@ -2,7 +2,7 @@
  * Phase 41 tests — bank accounts.
  *
  * Bank accounts are reference/reconciliation records, not new GL control
- * accounts. Opening balance is a reporting-layer number (no journal entry),
+ * accounts. Bank starting balances come from the GL opening journal,
  * so these tests assert CRUD, single-reconciliation-target enforcement, and
  * the book-balance math against seeded ledger activity.
  */
@@ -67,7 +67,7 @@ describe("bankAccounts.create / list", () => {
       orgId,
       name: "Main Operating Account",
       currency: "JOD",
-      openingBalanceMinor: 1_000_000,
+      openingBalanceMinor: 0,
       openingBalanceDate: Date.now(),
     });
 
@@ -75,6 +75,30 @@ describe("bankAccounts.create / list", () => {
     expect(accounts).toHaveLength(1);
     expect(accounts[0]._id).toBe(id);
     expect(accounts[0].isReconciliationTarget).toBe(false);
+  });
+
+  test("refuses a separate bank starting amount and leaves no bank row", async () => {
+    const { orgId, asOwner } = await seedDealer();
+    await expect(asOwner.mutation(api.bankAccounts.create, {
+      orgId, name: "Unposted bank seed", currency: "JOD",
+      openingBalanceMinor: 1_000_000, openingBalanceDate: Date.now(),
+    })).rejects.toThrow("BANK_OPENING_BALANCE_VIA_GL");
+    expect(await asOwner.query(api.bankAccounts.list, { orgId })).toHaveLength(0);
+  });
+
+  test("refuses changing a bank's reference seed after creation", async () => {
+    const { orgId, asOwner } = await seedDealer();
+    const id = await asOwner.mutation(api.bankAccounts.create, {
+      orgId, name: "Operating", currency: "JOD",
+    });
+    await expect(asOwner.mutation(api.bankAccounts.update, {
+      orgId, bankAccountId: id, openingBalanceMinor: 500_000,
+    })).rejects.toThrow("BANK_OPENING_BALANCE_VIA_GL");
+    await expect(asOwner.mutation(api.bankAccounts.update, {
+      orgId, bankAccountId: id, openingBalanceMinor: 0,
+    })).rejects.toThrow("BANK_OPENING_BALANCE_VIA_GL");
+    const [bank] = await asOwner.query(api.bankAccounts.list, { orgId });
+    expect(bank.openingBalanceMinor).toBe(0);
   });
 
   test("rejects unauthenticated requests", async () => {
@@ -129,7 +153,7 @@ describe("bankAccounts.getBookBalance", () => {
   test("returns null when no account is the reconciliation target", async () => {
     const { orgId, asOwner } = await seedDealer();
     await asOwner.mutation(api.bankAccounts.create, {
-      orgId, name: "Reference Only", currency: "JOD", openingBalanceMinor: 500_000, openingBalanceDate: Date.now(),
+      orgId, name: "Reference Only", currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: Date.now(),
     });
 
     const balance = await asOwner.query(api.bankAccounts.getBookBalance, { orgId });
@@ -229,10 +253,13 @@ describe("bankAccounts.getBookBalance", () => {
   }
 
   async function createBank(fx: Fixture, name: string, target: boolean, currency = "JOD") {
-    return await fx.asOwner.mutation(api.bankAccounts.create, {
-      orgId: fx.orgId, name, currency, openingBalanceMinor: 1_000_000,
+    const id = await fx.asOwner.mutation(api.bankAccounts.create, {
+      orgId: fx.orgId, name, currency, openingBalanceMinor: 0,
       openingBalanceDate: Date.now() - 30 * 24 * 60 * 60 * 1000, isReconciliationTarget: target,
     });
+    // Simulate a historical reference seed: the new public mutation refuses it.
+    await fx.t.run((ctx) => ctx.db.patch(id, { openingBalanceMinor: 1_000_000 }));
+    return id;
   }
 
   test("control: an attributable GL amount is the balance and reference openingBalanceMinor is not added", async () => {

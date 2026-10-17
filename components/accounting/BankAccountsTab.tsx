@@ -11,11 +11,12 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/components/ui/sonner";
-import { errorMessage, LoadingAccountingState, scaleForCurrency } from "./AccountingTabShared";
+import { getLocalizedErrorMessage } from "@/lib/errors";
+import { LoadingAccountingState, scaleForCurrency } from "./AccountingTabShared";
 import { BankAccountsTable } from "./bankAccounts/BankAccountsTable";
 import { CreateBankAccountDialog } from "./bankAccounts/CreateBankAccountDialog";
 import { ReconciliationPanel } from "./bankAccounts/ReconciliationPanel";
-import { dateInputToMs, defaultCreateBankAccountForm, type CreateBankAccountFormState } from "./bankAccounts/types";
+import { defaultCreateBankAccountForm, type CreateBankAccountFormState } from "./bankAccounts/types";
 
 export function BankAccountsTab() {
   const { activeOrgId } = useOrg();
@@ -42,7 +43,7 @@ export function BankAccountsTab() {
       await action();
       toast.success(successMessage);
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setBusyAction(null);
     }
@@ -53,8 +54,6 @@ export function BankAccountsTab() {
     await runAction(
       "create",
       async () => {
-        const scale = scaleForCurrency(form.currency);
-        const factor = Math.pow(10, scale);
         await createAccount({
           orgId: activeOrgId,
           name: form.name.trim(),
@@ -62,8 +61,10 @@ export function BankAccountsTab() {
           iban: form.iban.trim() || undefined,
           accountNumber: form.accountNumber.trim() || undefined,
           currency: form.currency,
-          openingBalanceMinor: Math.round(Number(form.openingBalance || "0") * factor),
-          openingBalanceDate: dateInputToMs(form.openingBalanceDate),
+          // Both fields remain required on the currently deployed backend.
+          // Zero cannot be mistaken for a posted GL opening during rollout.
+          openingBalanceMinor: 0,
+          openingBalanceDate: Date.now(),
           isReconciliationTarget: form.isReconciliationTarget,
           notes: form.notes.trim() || undefined,
         });
