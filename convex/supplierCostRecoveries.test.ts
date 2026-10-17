@@ -503,11 +503,26 @@ describe("receipt chronology, cheque payment and reversal after conversion", () 
 
   test("SC-389-02: a supplier-borne cost paid by cheque credits the bank, never Cheques in Hand", async () => {
     const s = await seed("sc02");
-    await paySupplierCost(s, { paymentMethod: "CHEQUE" });
+    const bankAccountId = await s.t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId: s.orgId, name: "Supplier-cost bank", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    const { expenseId } = await paySupplierCost(s, { paymentMethod: "CHEQUE", bankAccountId });
     const gl = await ledger(s.t, s.orgId);
     expect(gl[SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe(SUPPLIER_COST * SCALE);
     expect(gl[SYSTEM_KEYS.CHEQUES_IN_HAND] ?? 0).toBe(0);
     expect(gl[SYSTEM_KEYS.BANK_ACCOUNT]).toBe(-SUPPLIER_COST * SCALE);
+    await s.t.run(async (ctx) => {
+      const event = await ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString()))
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED")).first();
+      const lines = await ctx.db.query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!)).collect();
+      expect(lines.filter((line) => line.bankAccountId === bankAccountId)).toEqual([
+        expect.objectContaining({ creditMinor: SUPPLIER_COST * SCALE }),
+      ]);
+    });
   });
 
   test("SC-389-03: a receipt dated before its cost was posted is refused and records nothing", async () => {

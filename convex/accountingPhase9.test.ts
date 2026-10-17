@@ -131,7 +131,7 @@ describe("Phase 9 — expense account mapping", () => {
   });
 
   test("bank-transfer expense stores method and credits Bank", async () => {
-    const { t, orgId, asUser } = await seedDealer("exp_method");
+    const { t, orgId, asUser, bankAccountId } = await seedDealer("exp_method");
 
     const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -141,6 +141,7 @@ describe("Phase 9 — expense account mapping", () => {
       category: "REPAIR",
       status: "PAID",
       paymentMethod: "BANK_TRANSFER",
+      bankAccountId,
     });
 
     const event = await eventForSource(asUser, orgId, "expenses", expenseId.toString());

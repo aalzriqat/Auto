@@ -525,6 +525,11 @@ async function seedActivePrepaidSchedule(
   dealer: Awaited<ReturnType<typeof seedDealer>>
 ) {
   const fiscalYear = new Date().getUTCFullYear();
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId: dealer.orgId, name: "Prepaid expense bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: dealer.userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
   await dealer.asUser.mutation(api.expenses.create, {
       idempotencyKey: crypto.randomUUID(),
     orgId: dealer.orgId,
@@ -534,6 +539,7 @@ async function seedActivePrepaidSchedule(
     category: "PREPAID" as const,
     status: "PAID" as const,
     paymentMethod: "BANK_TRANSFER" as const,
+    bankAccountId,
     isPrepaid: true,
     amortizationMonths: 12,
   });

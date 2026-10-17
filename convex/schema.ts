@@ -2339,6 +2339,8 @@ export default defineSchema({
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     idempotencyKey: v.optional(v.string()),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Physical bank used by a paid transfer, issued cheque or card expense. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
