@@ -388,17 +388,31 @@ export default defineSchema({
     // "due now" rather than "invisible" — which is what a legacy backlog must
     // mean. That the index actually behaves that way is not assumed here; it is
     // proved against a real deployment (contract §4.2).
-    /** Present only while a worker attempt is outstanding. Absent = unclaimed. */
-    dispatchState: v.optional(v.literal("DISPATCHED")),
+    /**
+     * `DISPATCHED`: a worker attempt is outstanding. `PERIOD_HELD` (SCRUM-807): parked
+     * until a period covers `accountingDate`; neither due-work range matches it, so
+     * nothing re-selects it until `wakePeriodHeldRows` releases it. Absent = unclaimed.
+     */
+    dispatchState: v.optional(v.union(v.literal("DISPATCHED"), v.literal("PERIOD_HELD"))),
     /** Bumped on every claim and every manual revive; a stale worker loses. */
     generation: v.optional(v.number()),
     activeAttemptId: v.optional(v.string()),
     scheduledFunctionId: v.optional(v.id("_scheduled_functions")),
     /** When this row next becomes selectable. Absent = immediately due. */
     nextActionAt: v.optional(v.number()),
+    /**
+     * SCRUM-807 — set only while the row is HELD waiting for an accounting
+     * period to cover `accountingDate`. It lets a period opening find exactly
+     * the rows it unblocks by index. Absent for every other hold, for failures
+     * in backoff, and for rows written before this field existed (those are
+     * claimed once, re-evaluated and then marked like any new hold).
+     */
+    holdKind: v.optional(v.literal("PERIOD")),
   })
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
+    // SCRUM-807 — the period-held rows a period now covers, in date order.
+    .index("by_org_hold_date", ["orgId", "holdKind", "accountingDate"])
     // SCRUM-222 — the due-work index, mirroring `commitmentAuthorityWork`'s
     // `by_status_next_action`. One index serves both selector ranges:
     // unclaimed work (`dispatchState` absent) and claimed work awaiting
