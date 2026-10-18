@@ -93,6 +93,7 @@ const RESET_TABLES = [
   // lines go BEFORE their entry and their account (CHILD_TABLES defers both).
   "bankBalanceAggregateItems",
   "bankBalanceAggregateStates",
+  "bankBalanceGrossShards",
   "journalLines",
   "journalEntries",
   "financialAuditLog",
@@ -370,6 +371,7 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   journalLines: "by_org",
   bankBalanceAggregateItems: "by_org",
   bankBalanceAggregateStates: "by_org",
+  bankBalanceGrossShards: "by_org",
   financialAuditLog: "by_org",
   accountBalanceSnapshots: "by_org_period",
   chartOfAccounts: "by_org",

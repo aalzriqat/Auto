@@ -10,7 +10,41 @@ import {
   type BankAggregateLine,
 } from "./bankLineAggregate";
 
-const MAX_GROSS_MINOR = Number.MAX_SAFE_INTEGER;
+// Gross absolute flow is counted in shards so concurrent postings in one org
+// do not all write one document. Each shard is capped at its share of the safe
+// range, so the namespace total, and every partial sum in the component trees,
+// stays an exact integer without any writer reading the other shards.
+const GROSS_SHARDS = 64;
+const MAX_SHARD_GROSS_MINOR = Math.floor(Number.MAX_SAFE_INTEGER / GROSS_SHARDS);
+
+function grossShard(lineId: Id<"journalLines">): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < lineId.length; i++) {
+    hash ^= lineId.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash % GROSS_SHARDS;
+}
+
+async function adjustGross(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  namespace: string,
+  lineId: Id<"journalLines">,
+  deltaMinor: number,
+): Promise<void> {
+  const shard = grossShard(lineId);
+  const row = await ctx.db.query("bankBalanceGrossShards")
+    .withIndex("by_namespace_shard", (q) => q.eq("namespace", namespace).eq("shard", shard)).unique();
+  // A cleared namespace has no shards left; its stale items carry nothing to undo.
+  if (!row && deltaMinor < 0) return;
+  const grossAbsMinor = (row?.grossAbsMinor ?? 0) + deltaMinor;
+  if (!Number.isSafeInteger(grossAbsMinor) || grossAbsMinor < 0 || grossAbsMinor > MAX_SHARD_GROSS_MINOR) {
+    throw new Error("Bank-control aggregate would exceed exact integer precision.");
+  }
+  if (row) await ctx.db.patch(row._id, { grossAbsMinor });
+  else await ctx.db.insert("bankBalanceGrossShards", { orgId, namespace, shard, grossAbsMinor });
+}
 
 function refuseBankLine(reason: string): never {
   console.error("Bank-control journal line rejected", reason);
@@ -178,11 +212,7 @@ export async function onBankLineChange(
   if (item) {
     await removeBankControlLine(ctx, storedProjection(item), item.namespace);
     await ctx.db.delete(item._id);
-    const state = await ctx.db.query("bankBalanceAggregateStates")
-      .withIndex("by_org", (q) => q.eq("orgId", item.orgId)).unique();
-    if (state && item.namespace === bankAggregateNamespace(item.orgId, state.resetGeneration, state.mappingGeneration)) {
-      await ctx.db.patch(state._id, { grossAbsMinor: state.grossAbsMinor - item.absMinor, updatedAt: Date.now() });
-    }
+    await adjustGross(ctx, item.orgId, item.namespace, item.journalLineId, -item.absMinor);
   }
   if (!newLine) return;
 
@@ -194,11 +224,8 @@ export async function onBankLineChange(
   const state = await stateForLiveLine(ctx, newLine, org);
   const projection = projected(newLine);
   const absMinor = Math.abs(projection.netMinor);
-  const grossAbsMinor = state.grossAbsMinor + absMinor;
-  if (!Number.isSafeInteger(grossAbsMinor) || grossAbsMinor > MAX_GROSS_MINOR) {
-    throw new Error("Bank-control aggregate would exceed exact integer precision.");
-  }
   const namespace = bankAggregateNamespace(newLine.orgId, state.resetGeneration, state.mappingGeneration);
+  await adjustGross(ctx, newLine.orgId, namespace, newLine._id, absMinor);
   await addBankControlLine(ctx, projection, namespace);
   await ctx.db.insert("bankBalanceAggregateItems", {
     orgId: newLine.orgId,
@@ -211,7 +238,6 @@ export async function onBankLineChange(
     netMinor: projection.netMinor,
     absMinor,
   });
-  await ctx.db.patch(state._id, { grossAbsMinor, updatedAt: Date.now() });
 }
 
 export function registerBankBalanceTriggers<Ctx extends MutationCtx>(triggers: Triggers<DataModel, Ctx>): void {
@@ -251,10 +277,14 @@ export function registerBankBalanceTriggers<Ctx extends MutationCtx>(triggers: T
     const after = change.newDoc;
     if (after && before.bankAggregateMappingGeneration === after.bankAggregateMappingGeneration &&
         before.financialResetGeneration === after.financialResetGeneration) return;
-    await clearBankAggregateNamespace(ctx, bankAggregateNamespace(
+    const namespace = bankAggregateNamespace(
       before._id,
       before.financialResetGeneration ?? 0,
       before.bankAggregateMappingGeneration ?? 0,
-    ));
+    );
+    await clearBankAggregateNamespace(ctx, namespace);
+    const shards = await ctx.db.query("bankBalanceGrossShards")
+      .withIndex("by_namespace_shard", (q) => q.eq("namespace", namespace)).take(GROSS_SHARDS + 1);
+    await Promise.all(shards.map((row) => ctx.db.delete(row._id)));
   });
 }

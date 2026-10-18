@@ -519,6 +519,31 @@ describe("bankAccounts.getBookBalance", () => {
     });
   });
 
+  test("bank postings do not write the shared per-org aggregate state, so they do not contend on it", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const bankB = await createBank(fx, "Bank B", false);
+    await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankA });
+    const stateBefore = await fx.t.run((ctx) =>
+      ctx.db.query("bankBalanceAggregateStates").withIndex("by_org", (q) => q.eq("orgId", fx.orgId)).unique());
+    expect(stateBefore?.status).toBe("READY");
+
+    for (let i = 0; i < 12; i++) {
+      await seedBankLine(fx, { debitMinor: 2_000 + i, bankAccountId: i % 2 ? bankB : bankA });
+    }
+    await seedBankLine(fx, { creditMinor: 700, bankAccountId: bankA });
+
+    const stateAfter = await fx.t.run((ctx) => ctx.db.get(stateBefore!._id));
+    // Unchanged document: a posting that writes it serialises every bank posting in the org.
+    expect(stateAfter).toEqual(stateBefore);
+    const shards = await fx.t.run((ctx) =>
+      ctx.db.query("bankBalanceGrossShards").withIndex("by_org", (q) => q.eq("orgId", fx.orgId)).collect());
+    expect(shards.length).toBeGreaterThan(1);
+    const expectedGross = 1_000 + Array.from({ length: 12 }, (_, i) => 2_000 + i).reduce((a, b) => a + b, 0) + 700;
+    expect(shards.reduce((sum, row) => sum + row.grossAbsMinor, 0)).toBe(expectedGross);
+    expect(await asOfBalance(fx, Date.now(), 200)).toMatchObject({ status: "OK" });
+  });
+
   test("a large posted period stays readable without per-entry lookups", async () => {
     const fx = await seedDealer();
     const bankA = await createBank(fx, "Bank A", true);

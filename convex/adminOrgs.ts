@@ -236,6 +236,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // triggers remove projections before these residual cleanup steps run.
   { kind: "orgRows", table: "bankBalanceAggregateItems", index: "by_org" },
   { kind: "orgRows", table: "bankBalanceAggregateStates", index: "by_org" },
+  { kind: "orgRows", table: "bankBalanceGrossShards", index: "by_org" },
 ];
 
 async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {

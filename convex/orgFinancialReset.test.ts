@@ -356,9 +356,12 @@ describe("resetOrgFinancialData", () => {
     // its movement and the canonical payout, all of which the reset clears.
     // 41 -> 43: bank aggregate line markers and readiness state are financial
     // derivatives; reset must remove both with the underlying journal history.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(43);
+    // 43 -> 44: the sharded gross-flow counters behind that aggregate are the
+    // same kind of derivative and go with it.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(44);
     expect(RESET_TABLES_FOR_TEST).toContain("bankBalanceAggregateItems");
     expect(RESET_TABLES_FOR_TEST).toContain("bankBalanceAggregateStates");
+    expect(RESET_TABLES_FOR_TEST).toContain("bankBalanceGrossShards");
   });
 });
 

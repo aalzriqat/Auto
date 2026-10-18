@@ -5448,9 +5448,22 @@ export default defineSchema({
     resetGeneration: v.number(),
     status: v.union(v.literal("READY"), v.literal("BACKFILL_REQUIRED"), v.literal("BACKFILLING")),
     cursor: v.optional(v.string()),
+    // Legacy; written as 0 on rebuild. Gross flow lives in bankBalanceGrossShards.
     grossAbsMinor: v.number(),
     updatedAt: v.number(),
   }).index("by_org", ["orgId"]),
+
+  // Sharded gross absolute bank flow per aggregate namespace, so concurrent
+  // postings in one org write different documents. Each shard is capped at its
+  // share of the safe-integer range (see bankAggregateTriggers.ts).
+  bankBalanceGrossShards: defineTable({
+    orgId: v.id("organizations"),
+    namespace: v.string(),
+    shard: v.number(),
+    grossAbsMinor: v.number(),
+  })
+    .index("by_namespace_shard", ["namespace", "shard"])
+    .index("by_org", ["orgId"]),
 
   // Transactional membership record for each line projected into the two
   // component trees. The backfill and live trigger share this exact-once key.
