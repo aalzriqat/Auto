@@ -8,7 +8,16 @@
  * @module
  */
 
+import type * as accountingCutover from "../accountingCutover.js";
+import type * as accountingLedger from "../accountingLedger.js";
+import type * as accountingMigration from "../accountingMigration.js";
+import type * as accountingOutbox from "../accountingOutbox.js";
+import type * as accountingPeriods from "../accountingPeriods.js";
+import type * as accountingReports from "../accountingReports.js";
+import type * as accountingSetup from "../accountingSetup.js";
 import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
+import type * as accounting_bankAggregateTriggers from "../accounting/bankAggregateTriggers.js";
+import type * as accounting_bankLineAggregate from "../accounting/bankLineAggregate.js";
 import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
 import type * as accounting_invoiceReceiptDisposition from "../accounting/invoiceReceiptDisposition.js";
 import type * as accounting_invoiceReceiptReservation from "../accounting/invoiceReceiptReservation.js";
@@ -19,13 +28,6 @@ import type * as accounting_receiptOccurrence from "../accounting/receiptOccurre
 import type * as accounting_reversals from "../accounting/reversals.js";
 import type * as accounting_supplierCostRecoveryPosting from "../accounting/supplierCostRecoveryPosting.js";
 import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
-import type * as accountingCutover from "../accountingCutover.js";
-import type * as accountingLedger from "../accountingLedger.js";
-import type * as accountingMigration from "../accountingMigration.js";
-import type * as accountingOutbox from "../accountingOutbox.js";
-import type * as accountingPeriods from "../accountingPeriods.js";
-import type * as accountingReports from "../accountingReports.js";
-import type * as accountingSetup from "../accountingSetup.js";
 import type * as adminAnalytics from "../adminAnalytics.js";
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
@@ -41,6 +43,7 @@ import type * as aggregates from "../aggregates.js";
 import type * as applications from "../applications.js";
 import type * as approvals from "../approvals.js";
 import type * as bankAccounts from "../bankAccounts.js";
+import type * as bankBalanceBackfill from "../bankBalanceBackfill.js";
 import type * as bankReconciliation from "../bankReconciliation.js";
 import type * as branches from "../branches.js";
 import type * as cashDrawer from "../cashDrawer.js";
@@ -291,7 +294,16 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accountingCutover: typeof accountingCutover;
+  accountingLedger: typeof accountingLedger;
+  accountingMigration: typeof accountingMigration;
+  accountingOutbox: typeof accountingOutbox;
+  accountingPeriods: typeof accountingPeriods;
+  accountingReports: typeof accountingReports;
+  accountingSetup: typeof accountingSetup;
   "accounting/accountSnapshots": typeof accounting_accountSnapshots;
+  "accounting/bankAggregateTriggers": typeof accounting_bankAggregateTriggers;
+  "accounting/bankLineAggregate": typeof accounting_bankLineAggregate;
   "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
   "accounting/invoiceReceiptDisposition": typeof accounting_invoiceReceiptDisposition;
   "accounting/invoiceReceiptReservation": typeof accounting_invoiceReceiptReservation;
@@ -302,13 +314,6 @@ declare const fullApi: ApiFromModules<{
   "accounting/reversals": typeof accounting_reversals;
   "accounting/supplierCostRecoveryPosting": typeof accounting_supplierCostRecoveryPosting;
   "accounting/workflowHooks": typeof accounting_workflowHooks;
-  accountingCutover: typeof accountingCutover;
-  accountingLedger: typeof accountingLedger;
-  accountingMigration: typeof accountingMigration;
-  accountingOutbox: typeof accountingOutbox;
-  accountingPeriods: typeof accountingPeriods;
-  accountingReports: typeof accountingReports;
-  accountingSetup: typeof accountingSetup;
   adminAnalytics: typeof adminAnalytics;
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
@@ -324,6 +329,7 @@ declare const fullApi: ApiFromModules<{
   applications: typeof applications;
   approvals: typeof approvals;
   bankAccounts: typeof bankAccounts;
+  bankBalanceBackfill: typeof bankBalanceBackfill;
   bankReconciliation: typeof bankReconciliation;
   branches: typeof branches;
   cashDrawer: typeof cashDrawer;
@@ -604,4 +610,6 @@ export declare const components: {
   instagramEventsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"instagramEventsByOrg">;
   facebookEventsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"facebookEventsByOrg">;
   socialContactsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"socialContactsByOrg">;
+  bankControlByDate: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"bankControlByDate">;
+  bankAttributionByDate: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"bankAttributionByDate">;
 };

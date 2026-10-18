@@ -135,6 +135,8 @@ export default defineSchema({
     /** SCRUM-563 — financial reset counters; absent means 0. Protocol: `convex/utils/orgResetGeneration.ts`. */
     financialResetGeneration: v.optional(v.number()),
     financialResetCompletedGeneration: v.optional(v.number()),
+    /** Incremented whenever journal/period facts or BANK_ACCOUNT mapping change. */
+    bankAggregateMappingGeneration: v.optional(v.number()),
   }),
 
   organizationDeletionRequests: defineTable({
@@ -5436,6 +5438,35 @@ export default defineSchema({
   })
     .index("by_org_account_currency_period_shard", ["orgId", "accountId", "currency", "periodId", "shard"])
     .index("by_org_period", ["orgId", "periodId"]),
+
+  // A bank-control aggregate is usable only after the organization, chart
+  // mapping and reset generation behind it have been fully validated.
+  bankBalanceAggregateStates: defineTable({
+    orgId: v.id("organizations"),
+    controlAccountId: v.id("chartOfAccounts"),
+    mappingGeneration: v.number(),
+    resetGeneration: v.number(),
+    status: v.union(v.literal("READY"), v.literal("BACKFILL_REQUIRED"), v.literal("BACKFILLING")),
+    cursor: v.optional(v.string()),
+    grossAbsMinor: v.number(),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  // Transactional membership record for each line projected into the two
+  // component trees. The backfill and live trigger share this exact-once key.
+  bankBalanceAggregateItems: defineTable({
+    orgId: v.id("organizations"),
+    journalLineId: v.id("journalLines"),
+    namespace: v.string(),
+    accountId: v.id("chartOfAccounts"),
+    currency: v.string(),
+    accountingDate: v.number(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
+    netMinor: v.number(),
+    absMinor: v.number(),
+  })
+    .index("by_line", ["journalLineId"])
+    .index("by_org", ["orgId"]),
 
   // GL Phase 15: full cash-drawer lifecycle. Distinct from the simpler,
   // pre-existing cashierReconciliations (open-float-free count-vs-expected
