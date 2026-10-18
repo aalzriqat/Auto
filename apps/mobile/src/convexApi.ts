@@ -121,11 +121,15 @@ export interface MobileOrgSummary {
 
 export type MobileDashboardTimeRange = "DAY" | "MONTH" | "YEAR" | "ALL_TIME";
 
+/**
+ * A figure is `null` when the window it sums exceeded its read cap: it is
+ * UNAVAILABLE, never zero. Render an explicit marker, not a number.
+ */
 export interface MobileDashboardTrendPoint {
   name: string;
-  Revenue: number;
-  Profit: number;
-  Expenses: number;
+  Revenue: number | null;
+  Profit: number | null;
+  Expenses: number | null;
 }
 
 export interface MobileDashboardTeamTask {
@@ -142,8 +146,9 @@ export interface MobileDashboardStats {
   totalVehicles: number;
   availableVehicles: number;
   activeLeads: number;
-  salesThisMonth: number;
-  salesVolumeThisMonth: number;
+  /** `null` = unavailable: the dated sale window exceeded its read cap. */
+  salesThisMonth: number | null;
+  salesVolumeThisMonth: number | null;
   teamMembers: number;
   salesTrend: MobileDashboardTrendPoint[];
   /**
@@ -171,6 +176,11 @@ export interface MobileDashboardStats {
     turnover?: boolean;
     /** Same, for the profit figures. */
     profit?: boolean;
+    /**
+     * The current window's expense read exceeded its cap: the trend's
+     * Expenses, CashOut and Profit are `null` (unavailable), not zero.
+     */
+    expenses?: boolean;
   };
   taskStats: {
     total: number;
