@@ -84,6 +84,34 @@ function dateInputToUtcMs(value: string): number | null {
   return Date.UTC(y, m - 1, d);
 }
 
+/** Do not silently round a typed opening amount to a different posted amount. */
+function isOpeningAmountRepresentable(value: string, scale: number): boolean {
+  if (value === "") return true;
+  if (value.length > 32) return false;
+  const parts = /^(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!parts || (parts[2]?.length ?? 0) > scale) return false;
+  const exactMinor = Number(`${parts[1]}${(parts[2] ?? "").padEnd(scale, "0")}`);
+  return Number.isSafeInteger(exactMinor) &&
+    Math.round(Number(value) * Math.pow(10, scale)) === exactMinor;
+}
+
+function openingTotals(lines: DraftLine[], currency: string, scale: number) {
+  if (!lines.every((line) =>
+    isOpeningAmountRepresentable(line.debit, scale) &&
+    isOpeningAmountRepresentable(line.credit, scale)
+  )) return { debitMinor: 0, creditMinor: 0, balanced: false, valid: false };
+  let debitMinor = 0;
+  let creditMinor = 0;
+  for (const line of lines) {
+    debitMinor += toMinorUnits(Number(line.debit) || 0, currency);
+    creditMinor += toMinorUnits(Number(line.credit) || 0, currency);
+    if (!Number.isSafeInteger(debitMinor) || !Number.isSafeInteger(creditMinor)) {
+      return { debitMinor: 0, creditMinor: 0, balanced: false, valid: false };
+    }
+  }
+  return { debitMinor, creditMinor, balanced: debitMinor === creditMinor && debitMinor > 0, valid: true };
+}
+
 export function OpeningBalanceCard() {
   const { t, locale } = useLanguage();
   const { activeOrgId } = useOrg();
@@ -116,6 +144,7 @@ export function OpeningBalanceCard() {
   // amounts off by a factor of ten on any org that is not on a 3-decimal
   // currency.
   const currency = status?.currency ?? "JOD";
+  const amountScale = scaleForCurrency(currency);
 
   // The bank control account is the one chart account whose line must name a
   // physical bank; the server refuses it otherwise. Only banks the server would
@@ -131,15 +160,7 @@ export function OpeningBalanceCard() {
 
   // Summed in minor units, so the balance check matches exactly what the
   // server validates rather than accumulating float error across lines.
-  const totals = useMemo(() => {
-    let debitMinor = 0;
-    let creditMinor = 0;
-    for (const line of lines) {
-      debitMinor += toMinorUnits(Number(line.debit) || 0, currency);
-      creditMinor += toMinorUnits(Number(line.credit) || 0, currency);
-    }
-    return { debitMinor, creditMinor, balanced: debitMinor === creditMinor && debitMinor > 0 };
-  }, [lines, currency]);
+  const totals = openingTotals(lines, currency, amountScale);
 
   const filledLines = lines.filter(
     (line) => line.accountId && (Number(line.debit) > 0 || Number(line.credit) > 0)
@@ -153,6 +174,7 @@ export function OpeningBalanceCard() {
   const canSubmit =
     Boolean(activeOrgId) &&
     totals.balanced &&
+    totals.valid &&
     filledLines.length >= 2 &&
     bankChosenForEveryBankLine &&
     dateInputToUtcMs(asOfDate) !== null &&
@@ -334,9 +356,10 @@ export function OpeningBalanceCard() {
                       <Input
                         type="number"
                         min="0"
-                        step="0.001"
+                        step={1 / Math.pow(10, amountScale)}
                         placeholder={t("OpeningBalanceDebit")}
                         aria-label={t("OpeningBalanceDebit")}
+                        aria-invalid={!isOpeningAmountRepresentable(line.debit, amountScale)}
                         value={line.debit}
                         // A line is one side or the other; clearing the opposite
                         // field keeps a mistyped row from posting as both.
@@ -345,9 +368,10 @@ export function OpeningBalanceCard() {
                       <Input
                         type="number"
                         min="0"
-                        step="0.001"
+                        step={1 / Math.pow(10, amountScale)}
                         placeholder={t("OpeningBalanceCredit")}
                         aria-label={t("OpeningBalanceCredit")}
+                        aria-invalid={!isOpeningAmountRepresentable(line.credit, amountScale)}
                         value={line.credit}
                         onChange={(e) => updateLine(index, { credit: e.target.value, debit: "" })}
                       />
@@ -415,6 +439,11 @@ export function OpeningBalanceCard() {
                     </span>
                   </span>
                 </div>
+                {!totals.valid && (
+                  <p className="text-sm text-amber-700 dark:text-amber-300" role="status">
+                    {t("OpeningBalanceAmountInvalid")}
+                  </p>
+                )}
               </div>
 
               <DialogFooter>
