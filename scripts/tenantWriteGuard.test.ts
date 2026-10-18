@@ -683,12 +683,12 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // unchanged at 356 (re-measured FROM THE ANALYSER). The removed internalMutation had no `orgId` and deleted
   // deployment-global diagnostics; operational records are now never deleted.
   // The two SCRUM-807 changes are independent; with both applied: 529 + 1 = 530 total, 356 + 1 = 357 analysed.
-  // SCRUM-807: + dashboardExpenseSummary.{begin,blockForImport,buildPage} (+3) - 533 total, 360 analysed. All
+  // SCRUM-807: + dashboardExpenseSummary.{begin,blockForImport,buildPage} (+3) on top of main - 536 total, 363 analysed. All
   // three take `orgId` and write only that org's summary rows, found by index.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 533,
-      analysed: 360,
+      totalMutations: 536,
+      analysed: 363,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 158,
     });

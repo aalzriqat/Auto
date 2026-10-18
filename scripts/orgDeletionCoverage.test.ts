@@ -29,6 +29,7 @@ const RETAINED_BY_DESIGN: Record<string, string> = {
   // forbids record cleanup, so they are kept rather than purged.
   dashboardExpenseMonths: "derived dashboard expense totals, zero once the org's expenses are deleted; owner forbids record cleanup (SCRUM-807)",
   dashboardExpenseSummaryState: "summary generation state; owner forbids record cleanup (SCRUM-807)",
+  journalReportEligibility: "retained ledger index completeness and backfill evidence; owner forbids record cleanup (SCRUM-807)",
   // The platform's own deletion trail. Deleting it with the org would erase the
   // record that the deletion happened, which is the one row that must outlive
   // it.

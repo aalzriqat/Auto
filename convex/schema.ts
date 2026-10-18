@@ -747,6 +747,7 @@ export default defineSchema({
   journalLines: defineTable({
     orgId: v.id("organizations"),
     journalEntryId: v.id("journalEntries"),
+    reportPosted: v.optional(v.boolean()),
     lineNumber: v.number(),
     accountId: v.id("chartOfAccounts"),
     debitMinor: v.number(),
@@ -773,7 +774,14 @@ export default defineSchema({
     .index("by_org_account_date", ["orgId", "accountId", "accountingDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     // SCRUM-555 lane-B: getPostedLines date-range read without a query filter.
-    .index("by_org_date", ["orgId", "accountingDate"]),
+    .index("by_org_date", ["orgId", "accountingDate"])
+    .index("by_org_reportPosted_date", ["orgId", "reportPosted", "accountingDate"]),
+
+  journalReportEligibility: defineTable({
+    orgId: v.id("organizations"),
+    phase: v.union(v.literal("BUILDING"), v.literal("READY"), v.literal("BLOCKED")),
+    cursor: v.union(v.string(), v.null()),
+  }).index("by_org", ["orgId"]),
 
   // ─── Phase 3: Receivables, payments, and allocations subledger ────────────
 
