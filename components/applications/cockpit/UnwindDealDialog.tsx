@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ReceiptBankSelect, useReceiptBankOptions } from "@/components/accounting/ReceiptBankSelect";
+import type { Id } from "@/convex/_generated/dataModel";
 import { economicDateInputToMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
 import { cn } from "@/lib/utils";
 import { moneyDisplayScale, parseTypedAmount } from "@/lib/moneyDisplay";
@@ -69,6 +71,7 @@ export type UnwindFinishValues = Readonly<{
   customerPaymentDisposition: "REFUND" | "RETAIN_CREDIT";
   customerRefundAmountMinor?: number;
   customerRefundMethod?: "BANK_TRANSFER" | "CASH";
+  customerRefundBankAccountId?: Id<"bankAccounts">;
   customerRefundReference?: string;
   customerRefundedAt?: number;
 }>;
@@ -92,6 +95,7 @@ function refundInstant(dateInput: string, frozenNow: number, notBefore: number |
 }
 
 export function UnwindDealDialog({
+  orgId,
   open,
   status,
   submitting,
@@ -105,6 +109,7 @@ export function UnwindDealDialog({
   onFinish,
   onAbandon,
 }: Readonly<{
+  orgId: Id<"organizations">;
   open: boolean;
   status: UnwindStatusView;
   submitting: boolean;
@@ -191,7 +196,7 @@ export function UnwindDealDialog({
           />
         )}
         {current === "FINISH" && (
-          <FinishStep status={status} submitting={submitting} formatMinor={formatMinor} notBefore={notBefore} t={t} onSubmit={onFinish} />
+          <FinishStep orgId={orgId} status={status} submitting={submitting} formatMinor={formatMinor} notBefore={notBefore} t={t} onSubmit={onFinish} />
         )}
 
         {active && status.eligibility.canAbandon && (
@@ -351,6 +356,7 @@ function ForwardStep({
 }
 
 function FinishStep({
+  orgId,
   status,
   submitting,
   formatMinor,
@@ -358,6 +364,7 @@ function FinishStep({
   t,
   onSubmit,
 }: Readonly<{
+  orgId: Id<"organizations">;
   status: UnwindStatusView;
   submitting: boolean;
   formatMinor: (minor: number) => string;
@@ -380,6 +387,7 @@ function FinishStep({
   const [disposition, setDisposition] = useState<"REFUND" | "RETAIN_CREDIT" | "">("");
   const [customerRefundAmount, setCustomerRefundAmount] = useState("");
   const [customerRefundMethod, setCustomerRefundMethod] = useState<"BANK_TRANSFER" | "CASH">("BANK_TRANSFER");
+  const [customerRefundBankAccountId, setCustomerRefundBankAccountId] = useState("");
   const [customerRefundReference, setCustomerRefundReference] = useState("");
   const [customerRefundDate, setCustomerRefundDate] = useState(economicTodayDateInput());
   const customerReceiptMinor = status.evidence?.customerReceiptMinor ?? 0;
@@ -392,9 +400,11 @@ function FinishStep({
   const customerPayoutAvailable = status.evidence?.customerPayoutAvailable === true;
   const payoutBlocked = customerReceiptMinor > 0 && !customerPayoutAvailable;
   const customerPayoutRequired = disposition === "REFUND" && customerReceiptMinor > 0 && customerPayoutAvailable;
+  const customerRefundBanks = useReceiptBankOptions(orgId, customerPayoutRequired && customerRefundMethod === "BANK_TRANSFER", customerRefundBankAccountId);
   const customerPayoutOk = !customerPayoutRequired || (
     refundAmount !== null && refundAmount > 0 && refundAmount <= customerReceiptMinor &&
-    customerRefundReference.trim() !== "" && customerRefundDate !== ""
+    customerRefundReference.trim() !== "" && customerRefundDate !== "" &&
+    (customerRefundMethod !== "BANK_TRANSFER" || customerRefundBanks.chosenOffered)
   );
 
   const evidenceOk =
@@ -429,6 +439,9 @@ function FinishStep({
             ...(customerPayoutRequired && refundAmount !== null ? {
               customerRefundAmountMinor: refundAmount,
               customerRefundMethod,
+              ...(customerRefundMethod === "BANK_TRANSFER" ? {
+                customerRefundBankAccountId: customerRefundBankAccountId as Id<"bankAccounts">,
+              } : {}),
               customerRefundReference: customerRefundReference.trim(),
               customerRefundedAt: refundInstant(customerRefundDate, frozenNow, undefined),
             } : {}),
@@ -581,6 +594,13 @@ function FinishStep({
                 </SelectContent>
               </Select>
             </div>
+            {customerRefundMethod === "BANK_TRANSFER" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="deal-unwind-customer-bank">{t("ReceiptBankAccount")}</Label>
+                <ReceiptBankSelect id="deal-unwind-customer-bank" value={customerRefundBankAccountId}
+                  onChange={setCustomerRefundBankAccountId} bankOptions={customerRefundBanks} disabled={submitting} />
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="deal-unwind-customer-ref">{t("UnwindCustomerPayoutReferenceLabel")}</Label>
               <Input id="deal-unwind-customer-ref" required maxLength={MAX_REFERENCE_CHARS}

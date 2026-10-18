@@ -37,6 +37,7 @@ const mockUseMutation = useMutation as jest.MockedFunction<typeof useMutation>;
 const mockUseQuery = useQuery as jest.MockedFunction<typeof useQuery>;
 
 const REFUND_LABEL = "طريقة الاسترداد";
+const REFUND_BANK_LABEL = "حساب البنك الذي سيُدفع منه الاسترداد";
 const REFUND_BUTTON = "استرداد";
 
 let releaseCount = 0;
@@ -51,6 +52,9 @@ function query(ref: unknown) {
   }
   if (ref === api.deposits.listByVehicle) {
     return [{ _id: "dep_1", amount: 1000, status: "HELD", releaseCount }];
+  }
+  if (ref === api.deposits.listRefundBankOptions) {
+    return { banks: [{ _id: "bank_1", name: "Test bank", currency: "JOD" }], truncated: false };
   }
   return undefined;
 }
@@ -112,6 +116,9 @@ describe("VehicleDetailScreen an unconfirmed payout keeps its identity (SCRUM-46
   };
   const refund = async (view: Awaited<ReturnType<typeof render>>, method: string) => {
     await fireEvent.changeText(view.getByTestId(`select-${REFUND_LABEL}`), method);
+    if (method !== "CASH") {
+      await fireEvent.changeText(view.getByTestId(`select-${REFUND_BANK_LABEL}`), "bank_1");
+    }
     await fireEvent.press(view.getByRole("button", { name: REFUND_BUTTON }));
     await pressAlert(REFUND_BUTTON);
   };

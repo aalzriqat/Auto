@@ -280,6 +280,7 @@ export interface DepositRefundedPayload {
   currency: string;
   customerId: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 export interface DepositForfeitedPayload {
@@ -630,6 +631,7 @@ export interface RetainedCreditRefundPayload {
   currency: string;
   customerId: string;
   paymentMethod: "BANK_TRANSFER" | "CASH";
+  bankAccountId?: string;
 }
 
 export interface ExpensePostedPayload {
@@ -813,7 +815,8 @@ export function ruleDepositRefunded(p: DepositRefundedPayload): RuleResult {
   return {
     lines: [
       line(SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, p.amountMinor, 0, "Deposit liability released", { customerId: p.customerId }),
-      line(disbursementKey, 0, p.amountMinor, "Deposit refund paid out", { customerId: p.customerId }),
+      line(disbursementKey, 0, p.amountMinor, "Deposit refund paid out", { customerId: p.customerId,
+        ...(disbursementKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}) }),
     ],
     memo: "Deposit refunded to customer",
     category: "SYSTEM",
@@ -1993,7 +1996,8 @@ export function ruleRetainedCreditRefunded(p: RetainedCreditRefundPayload): Rule
       line(SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY, p.amountMinor, 0,
         "Customer credit refunded", { customerId: p.customerId }),
       line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor,
-        "Customer refund paid out", { customerId: p.customerId }),
+          "Customer refund paid out", { customerId: p.customerId,
+            ...(p.paymentMethod === "BANK_TRANSFER" ? { bankAccountId: p.bankAccountId } : {}) }),
     ],
     memo: "Retained customer credit refunded",
     category: "SYSTEM",

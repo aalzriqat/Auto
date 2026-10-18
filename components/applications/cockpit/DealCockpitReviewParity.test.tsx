@@ -16,7 +16,26 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { pickMethod } from "@/test-utils/paymentMethodSelect";
+import { pickMethod as pickPaymentMethod } from "@/test-utils/paymentMethodSelect";
+
+vi.mock("@/components/deposits/DepositRefundBankSelect", () => ({
+  useDepositRefundBanks: (_orgId: unknown, _currency: unknown, _enabled: boolean, value: string) => ({
+    banks: [{ _id: "bank_1", name: "Test bank", currency: "JOD" }],
+    chosenOffered: value === "bank_1", loading: false, truncated: false, noEligible: false,
+  }),
+  DepositRefundBankSelect: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
+    <select data-testid="deposit-refund-bank" value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="" />
+      <option value="bank_1">Test bank</option>
+    </select>
+  ),
+}));
+
+function pickMethod(scope: HTMLElement, method = "CASH") {
+  pickPaymentMethod(scope, method);
+  const bank = within(scope).queryByTestId("deposit-refund-bank");
+  if (bank && method !== "CASH") fireEvent.change(bank, { target: { value: "bank_1" } });
+}
 
 // SCRUM-469: no money dialog pre-selects a method, so the tests choose one.
 vi.mock("@/components/payments/PaymentMethodSelect", () => import("@/test-utils/paymentMethodSelect"));
@@ -1472,7 +1491,7 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     // byte-identical requests and only the server's `releaseCount` can tell a
     // retry from a second real payout. The intent names deposit, decision,
     // method and the generation observed when the operator decided.
-    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:BANK_TRANSFER:gen0:[0-9a-f-]{36}$/);
+    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:BANK_TRANSFER:bank_1:gen0:[0-9a-f-]{36}$/);
   });
 
   test("an unknown result keeps the SAME release identity for the retry; a confirmed payout that advanced the generation mints a NEW one", async () => {
@@ -1496,7 +1515,7 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
     const [first, second] = mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>;
-    expect(first.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen2:/);
+    expect(first.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:none:gen2:/);
     expect(second.idempotencyKey).toBe(first.idempotencyKey);
 
     // The payout confirmed and the server bumped the generation: the next
@@ -1515,7 +1534,7 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
     const third = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[2];
-    expect(third.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen3:/);
+    expect(third.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:none:gen3:/);
     expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 

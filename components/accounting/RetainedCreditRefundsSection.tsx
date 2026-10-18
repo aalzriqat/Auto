@@ -11,6 +11,7 @@ import { getCodedErrorMessage } from "@/lib/errors";
 import { formatMoneyDisplay, moneyDisplayScale } from "@/lib/moneyDisplay";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ReceiptBankSelect, useReceiptBankOptions } from "./ReceiptBankSelect";
 
 /**
  * SCRUM-724: standalone customer-credit refunds (cheque cleared after its sale
@@ -40,6 +41,9 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
   const execute = useMutation(api.retainedCreditRefunds.executeRetainedCreditRefund);
   const cancel = useMutation(api.retainedCreditRefunds.cancelRetainedCreditRefund);
   const [references, setReferences] = useState<Record<string, string>>({});
+  const [bankByRequest, setBankByRequest] = useState<Record<string, string>>({});
+  const bankOptions = useReceiptBankOptions(orgId,
+    payoutAvailable && (approved ?? []).some((request) => request.method === "BANK_TRANSFER"), "");
   const [cancelReasons, setCancelReasons] = useState<Record<string, string>>({});
   const paidAtByRequest = useRef<Record<string, number>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -78,15 +82,21 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
 
   async function onExecute(requestId: Id<"retainedCreditRefundRequests">) {
     const reference = (references[requestId] ?? "").trim();
-    if (busyId || !reference || !payoutAvailable) return;
+    const request = approved?.find((row) => row._id === requestId);
+    const bankAccountId = bankByRequest[requestId] ?? "";
+    const bankChosen = bankOptions.banks?.some((bank) => bank._id === bankAccountId) === true;
+    if (busyId || !reference || !payoutAvailable || !request ||
+        (request.method === "BANK_TRANSFER" && !bankChosen)) return;
     setBusyId(requestId);
-    const intent = `retained-refund-execute:${requestId}`;
+    const intent = `retained-refund-execute:${requestId}:${bankAccountId}`;
     try {
       // The payout date is part of the command fingerprint, so it is fixed on
       // the first attempt: a retry replays instead of mismatching the key.
       const paidAt = paidAtByRequest.current[requestId] ?? (Date.now() - 60_000);
       paidAtByRequest.current[requestId] = paidAt;
-      await execute({ orgId, requestId, reference, paidAt, idempotencyKey: command.for(intent) });
+      await execute({ orgId, requestId, reference, paidAt,
+        ...(request.method === "BANK_TRANSFER" ? { bankAccountId: bankAccountId as Id<"bankAccounts"> } : {}),
+        idempotencyKey: command.for(intent) });
       command.retire(intent);
       delete paidAtByRequest.current[requestId];
       toast.success(t("RetainedCreditRefundPaid"));
@@ -130,12 +140,22 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
               onClick={() => onCancel(row._id)}>{t("RetainedCreditRefundCancel")}</Button>
           </>}
           {row.status === "APPROVED" && canManage && <>
+            {row.method === "BANK_TRANSFER" && (
+              <ReceiptBankSelect id={`retained-refund-bank-${row._id}`}
+                value={bankByRequest[row._id] ?? ""}
+                onChange={(value) => setBankByRequest((previous) => ({ ...previous, [row._id]: value }))}
+                bankOptions={{ ...bankOptions,
+                  chosenOffered: bankOptions.banks?.some((bank) => bank._id === bankByRequest[row._id]) === true }}
+                disabled={!!busyId || !payoutAvailable} />
+            )}
             <Input className="w-48" aria-label={t("RetainedCreditPayoutReference")}
               placeholder={t("RetainedCreditPayoutReference")} value={references[row._id] ?? ""}
               disabled={!!busyId || !payoutAvailable}
               aria-describedby={payoutAvailable ? undefined : payoutReasonId}
               onChange={(event) => setReferences((prev) => ({ ...prev, [row._id]: event.target.value }))} />
-            <Button size="sm" disabled={!!busyId || !payoutAvailable || !(references[row._id] ?? "").trim()}
+            <Button size="sm" disabled={!!busyId || !payoutAvailable || !(references[row._id] ?? "").trim() ||
+              (row.method === "BANK_TRANSFER" &&
+                !bankOptions.banks?.some((bank) => bank._id === bankByRequest[row._id]))}
               aria-describedby={payoutAvailable ? undefined : payoutReasonId}
               onClick={() => onExecute(row._id)}>{t("RetainedCreditExecute")}</Button>
           </>}

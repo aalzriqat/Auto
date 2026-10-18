@@ -53,6 +53,7 @@ vi.mock("convex/react", async () => {
       if (name === "vehicles:getRelations") return { testDrives: [], workOrders: [], leads: [], sales: [], tasks: [], expenses: [] };
       if (name === "vehicles:getLandedCosts") return state.landedCosts;
       if (name === "vehicles:listAcquisitionBankOptions") return state.bankOptions;
+      if (name === "deposits:listRefundBankOptions") return state.bankOptions;
       return undefined;
     },
     useMutation: (reference: never) => async (args: Record<string, unknown>) => {
@@ -307,6 +308,7 @@ describe("vehicle dialog: method is per money movement (SCRUM-469 round 1)", () 
 describe("vehicle dialog: an unconfirmed payout keeps its identity (SCRUM-469 round 3, F1)", () => {
   const chooseAndRefund = async (method: string) => {
     fireEvent.change(refundSelect(), { target: { value: method } });
+    if (method !== "CASH") fireEvent.click(screen.getByTestId("item-bank_1"));
     fireEvent.click(refundButton());
     await new Promise((resolve) => setTimeout(resolve, 0));
   };

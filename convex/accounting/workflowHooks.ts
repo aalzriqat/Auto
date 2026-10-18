@@ -1116,6 +1116,7 @@ type DepositResolutionHookArgs = {
   occurredAt: number;
   /** Only meaningful for DEPOSIT_REFUNDED — forfeiture never moves cash. */
   paymentMethod?: string;
+  bankAccountId?: Id<"bankAccounts">;
   /**
    * Scopes the entry to ONE vehicle's slice of a shared quote deposit.
    *
@@ -1162,6 +1163,7 @@ function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORF
         currency: args.currency,
         customerId: args.customerId.toString(),
         paymentMethod: args.paymentMethod,
+        bankAccountId: args.bankAccountId?.toString(),
         holdId: args.sliceHoldId?.toString(),
       },
     });

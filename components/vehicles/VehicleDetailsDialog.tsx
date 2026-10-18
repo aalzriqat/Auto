@@ -142,7 +142,7 @@ export function VehicleDetailsDialog({
   // it into the next payout, while a retry of the same unconfirmed attempt (same
   // generation) keeps both its method and its command identity.
   const [refundChoiceByDeposit, setRefundChoiceByDeposit] = useState<
-    Record<string, { method: PaymentMethod; generation: number }>
+    Record<string, { method: PaymentMethod; bankAccountId?: Id<"bankAccounts">; generation: number }>
   >({});
   const [landedCostItems, setLandedCostItems] = useState<
     { id: string; label: string; amount: number; paymentMethod: PaymentMethod; bankAccountId?: Id<"bankAccounts"> }[]
@@ -298,7 +298,8 @@ export function VehicleDetailsDialog({
     // SCRUM-469: the method the operator CHOSE, handed in by the control that
     // refuses to offer Refund without one. Never read back from state with a
     // fallback: a refund with no method has no account to leave by.
-    chosenRefundMethod?: PaymentMethod
+    chosenRefundMethod?: PaymentMethod,
+    chosenRefundBankAccountId?: Id<"bankAccounts">
   ) => {
     if (!activeOrgId) return;
     if (resolution === "REFUNDED" && !isChosenMethod(chosenRefundMethod)) return;
@@ -306,7 +307,8 @@ export function VehicleDetailsDialog({
     // An earlier attempt on this deposit that never confirmed keeps its identity.
     // A DIFFERENT decision is refused here (the notice explains) rather than
     // minting a new key that could pay the same or newly freed money out twice.
-    const gate = pendingPayouts.check(String(depositId), resolution, String(refundMethod));
+    const bankAccountId = resolution === "REFUNDED" && refundMethod !== "CASH" ? chosenRefundBankAccountId : undefined;
+    const gate = pendingPayouts.check(String(depositId), resolution, String(refundMethod), bankAccountId);
     if (gate.status === "blocked") return;
     setReleasingDepositId(depositId);
     // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
@@ -343,14 +345,15 @@ export function VehicleDetailsDialog({
     // attempt this call belongs to, so a late failure cannot settle a newer record.
     const intent =
       gate.recordedIntent ??
-      `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${observedReleaseCount}`;
-    pendingPayouts.record(String(depositId), { resolution, method: String(refundMethod), intent });
+      `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:${bankAccountId ?? "none"}:gen${observedReleaseCount}`;
+    pendingPayouts.record(String(depositId), { resolution, method: String(refundMethod), bankAccountId, intent });
     try {
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? chosenRefundMethod : undefined,
+        bankAccountId,
         idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
@@ -614,20 +617,32 @@ export function VehicleDetailsDialog({
                           {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
                             <HeldDepositActions
                               t={t as any}
+                              orgId={activeOrgId ?? undefined}
+                              currency={deposit.currency}
                               method={
                                 refundChoiceByDeposit[deposit._id]?.generation === (deposit.releaseCount ?? 0)
                                   ? refundChoiceByDeposit[deposit._id]?.method
                                   : undefined
                               }
+                              bankAccountId={refundChoiceByDeposit[deposit._id]?.generation === (deposit.releaseCount ?? 0)
+                                ? String(refundChoiceByDeposit[deposit._id]?.bankAccountId ?? "") : ""}
                               onMethodChange={(method) =>
                                 setRefundChoiceByDeposit((prev) => ({
                                   ...prev,
                                   [deposit._id]: { method, generation: deposit.releaseCount ?? 0 },
                                 }))
                               }
+                              onBankChange={(bankAccountId) => setRefundChoiceByDeposit((prev) => {
+                                const choice = prev[deposit._id];
+                                if (!choice) return prev;
+                                return { ...prev, [deposit._id]: {
+                                  ...choice,
+                                  bankAccountId: bankAccountId ? bankAccountId as Id<"bankAccounts"> : undefined,
+                                } };
+                              })}
                               busy={releasingDepositId === deposit._id}
-                              onRefund={(method) =>
-                                handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0, method)
+                              onRefund={(method, bankAccountId) =>
+                                handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0, method, bankAccountId)
                               }
                               onForfeit={() => handleReleaseDeposit(deposit._id, "FORFEITED", deposit.releaseCount ?? 0)}
                             />
@@ -643,7 +658,8 @@ export function VehicleDetailsDialog({
                                   deposit._id,
                                   recorded.resolution,
                                   deposit.releaseCount ?? 0,
-                                  recorded.resolution === "REFUNDED" ? (recorded.method as PaymentMethod) : undefined
+                                  recorded.resolution === "REFUNDED" ? (recorded.method as PaymentMethod) : undefined,
+                                  recorded.bankAccountId as Id<"bankAccounts"> | undefined
                                 );
                               }}
                               onDismiss={() => pendingPayouts.dismiss(deposit._id)}

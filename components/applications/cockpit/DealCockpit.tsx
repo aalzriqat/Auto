@@ -2029,6 +2029,7 @@ export function DealCockpit({
     amount: deposit.amount,
     status: deposit.status,
     method: deposit.method,
+    currency: deposit.currency,
     releasedAmountMinor: deposit.releasedAmountMinor,
     releaseCount: deposit.releaseCount,
   }));
@@ -3450,17 +3451,17 @@ export function DealCockpit({
               resolvingId: resolvingDepositId,
               unconfirmed: pendingPayouts.blocked,
               onDismissUnconfirmed: pendingPayouts.dismiss,
-              onResolve: async (depositId, resolution, refundMethod, observedReleaseCount) => {
+              onResolve: async (depositId, resolution, refundMethod, observedReleaseCount, bankAccountId) => {
                 const method = resolution === "REFUNDED" ? refundMethod : "NONE";
                 // A DIFFERENT decision than an unconfirmed earlier attempt is not
                 // sent: it would mint a new key and could pay out twice. The panel
                 // shows the reconciliation notice instead.
-                const gate = pendingPayouts.check(depositId, resolution, String(method));
+                const gate = pendingPayouts.check(depositId, resolution, String(method), bankAccountId);
                 if (gate.status === "blocked") return;
                 const releaseIntent =
                   gate.recordedIntent ??
-                  `release-deposit:${depositId}:${resolution}:${method}:gen${observedReleaseCount}`;
-                pendingPayouts.record(depositId, { resolution, method: String(method), intent: releaseIntent });
+                  `release-deposit:${depositId}:${resolution}:${method}:${bankAccountId ?? "none"}:gen${observedReleaseCount}`;
+                pendingPayouts.record(depositId, { resolution, method: String(method), bankAccountId, intent: releaseIntent });
                 setResolvingDepositId(depositId);
                 try {
                   await trackRecorded(
@@ -3470,6 +3471,7 @@ export function DealCockpit({
                         depositId: depositId as Id<"deposits">,
                         resolution,
                         refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
+                        bankAccountId,
                         idempotencyKey: commandId.for(releaseIntent),
                       }),
                     resolution === "REFUNDED" ? "DepositRefundedSuccess" : "DepositForfeitedSuccess",
@@ -5161,7 +5163,8 @@ export function DealCockpitView({
       depositId: string,
       resolution: DepositResolution,
       refundMethod: PaymentMethod | undefined,
-      observedReleaseCount: number
+      observedReleaseCount: number,
+      bankAccountId?: Id<"bankAccounts">
     ) => Promise<void>;
     /** SCRUM-469 F1: earlier unconfirmed payouts blocking a different decision, by deposit id. */
     unconfirmed: Readonly<Record<string, PendingPayout>>;
@@ -7248,6 +7251,7 @@ export function DealCockpitView({
               lists, formatted the way that dialog formatted them. */}
           {deposits && (
             <StoppedDealDepositsPanel
+              orgId={orgId}
               deposits={deposits.items}
               canResolve={deposits.canResolve}
               faceValueIsReleasable={deposits.faceValueIsReleasable}
@@ -7653,8 +7657,9 @@ export function DealCockpitView({
           onConfirm={chequeReturn.onConfirm}
         />
       )}
-      {unwind?.offered && (
+      {unwind?.offered && orgId && (
         <UnwindDealDialog
+          orgId={orgId}
           open={unwind.open}
           status={unwind.status}
           submitting={unwind.submitting}

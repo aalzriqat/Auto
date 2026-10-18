@@ -499,7 +499,7 @@ async function completedSaleInvoice(
 
 /** A completed cash sale with 30.00 of ACTIVE customer invoice credit and a manage:finance approver. */
 async function cashSaleWithActiveCredit(tag: string) {
-    const { t, asAdmin, orgId, userId, customerId } = await seedOrg(tag);
+    const { t, asAdmin, orgId, userId, customerId, bankAccountId } = await seedOrg(tag);
     registerRateLimiter(t);
     const vehicleId = await t.run((ctx) => ctx.db.insert("vehicles", {
       orgId, vin: "VIN-S723-CASH-CANCEL", make: "Kia", model: "Rio", year: 2021,
@@ -534,7 +534,7 @@ async function cashSaleWithActiveCredit(tag: string) {
     });
     const approver = t.withIdentity({ subject: "s723_cash_approver", clerkId: "s723_cash_approver" });
     expect(approverId).toBeDefined();
-  return { t, asAdmin, orgId, userId, customerId, saleId, applicationId, movement, approver };
+  return { t, asAdmin, orgId, userId, customerId, bankAccountId, saleId, applicationId, movement, approver };
 }
 
 describe("SCRUM-218-C §4 — applying retained credit", () => {
@@ -779,7 +779,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
   test("SCRUM-723 (pilot switch flipped off): a completed cash sale cancels with a separate partial customer payout", async () => {
     payoutSwitch.disabled = false;
     try {
-    const { t, orgId, customerId, saleId, applicationId, movement, approver } = await cashSaleWithActiveCredit("s723cashcancel");
+      const { t, orgId, customerId, saleId, applicationId, movement, approver, bankAccountId } = await cashSaleWithActiveCredit("s723cashcancel");
     expect(await approver.query(api.sales.cancellationReceiptStatus, { orgId, saleId })).toMatchObject({
       customerReceiptMinor: 3000, blocked: false,
     });
@@ -789,6 +789,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     await approver.mutation(api.sales.update, {
       orgId, saleId, status: "CANCELLED", customerPaymentDisposition: "REFUND",
       customerRefundAmountMinor: 2000, customerRefundMethod: "BANK_TRANSFER",
+        customerRefundBankAccountId: bankAccountId,
       customerRefundReference: "PV-CASH-1", customerRefundedAt: Date.now(),
     });
     expect((await t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");

@@ -28,6 +28,7 @@ import { AppErrorCode, throwAppError } from "./utils/errors";
 import { RETAINED_CREDIT_MESSAGES } from "./utils/retainedCreditMessages";
 import { createCanonicalPayment } from "./subledger";
 import { postAccountingEvent } from "./accounting/postingEngine";
+import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { loadRetainedPosition, requirePostedReceiptForMovement } from "./accounting/receiptMovement";
 import { availableRetainedCreditMinor } from "./accounting/invoiceReceiptReservation";
 import {
@@ -183,6 +184,7 @@ export const executeRetainedCreditRefund = mutation({
   args: {
     orgId: v.id("organizations"),
     requestId: v.id("retainedCreditRefundRequests"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     reference: v.string(),
     paidAt: v.number(),
     idempotencyKey: v.string(),
@@ -208,7 +210,7 @@ export const executeRetainedCreditRefund = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ requestId: args.requestId, reference, paidAt: args.paidAt }),
+        fingerprint: JSON.stringify({ requestId: args.requestId, bankAccountId: args.bankAccountId ?? null, reference, paidAt: args.paidAt }),
       },
       async () => {
         const request = await ctx.db.get(args.requestId);
@@ -218,6 +220,17 @@ export const executeRetainedCreditRefund = mutation({
         // Defence in depth that survives the switch: a CASH payout would leave no
         // collectionPayments row for cashier-day reconciliation (Sol Q5, deferred).
         assertCustomerCreditPayoutMethodSupported(request.method);
+        if (request.method === "BANK_TRANSFER") {
+          await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId,
+            bankAccountId: args.bankAccountId,
+            currency: request.currency,
+            missingMessage: "Select the bank account that paid this customer refund.",
+            currencySubject: "customer refund",
+          });
+        } else if (args.bankAccountId) {
+          refuse("RETAINED_CREDIT_REFUND_PAYOUT_INVALID");
+        }
 
         const { movement, position } = await loadMovementAndPosition(ctx, args.orgId, request.receiptMovementId);
         if (position._id !== request.positionId || movement.customerId !== request.customerId) {
@@ -281,6 +294,7 @@ export const executeRetainedCreditRefund = mutation({
             currency: request.currency,
             customerId: String(request.customerId),
             paymentMethod: request.method,
+            ...(args.bankAccountId ? { bankAccountId: String(args.bankAccountId) } : {}),
           },
           actorId: user._id,
         });

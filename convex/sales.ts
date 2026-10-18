@@ -107,6 +107,7 @@ const depositResolutionValidator = v.object({
   // Required for REFUND_TO_CUSTOMER: the deposit's own recorded method may be
   // OTHER, which the release path refuses because it cannot be paid out.
   refundMethod: v.optional(depositMethodValidator),
+  bankAccountId: v.optional(v.id("bankAccounts")),
 });
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
@@ -954,6 +955,7 @@ export const update = mutation({
     customerPaymentDisposition: v.optional(v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT"))),
     customerRefundAmountMinor: v.optional(v.number()),
     customerRefundMethod: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+    customerRefundBankAccountId: v.optional(v.id("bankAccounts")),
     customerRefundReference: v.optional(v.string()),
     customerRefundedAt: v.optional(v.number()),
   },
@@ -990,6 +992,7 @@ export const update = mutation({
     const isCancellingCompletedSale = args.status === "CANCELLED" && sale.status === "COMPLETED";
     const customerDispositionProvided = args.customerPaymentDisposition !== undefined ||
       args.customerRefundAmountMinor !== undefined || args.customerRefundMethod !== undefined ||
+      args.customerRefundBankAccountId !== undefined ||
       args.customerRefundReference !== undefined || args.customerRefundedAt !== undefined;
     if (customerDispositionProvided && !isCancellingCompletedSale) {
       throwAppError(AppErrorCode.VALIDATION_FAILED, "Customer receipt disposition requires cancellation of a completed sale.");
@@ -1178,7 +1181,7 @@ export const update = mutation({
         // after the MANAGE_FINANCE check above; the shared helper refuses too.
         if ((args.customerPaymentDisposition === "REFUND" && invoicePlan.totalMinor > 0) ||
             [args.customerRefundAmountMinor, args.customerRefundMethod,
-              args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined)) {
+              args.customerRefundBankAccountId, args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined)) {
           assertCustomerCreditPayoutAllowed();
         }
         if (invoicePlan.totalMinor > 0 && !args.customerPaymentDisposition) {
@@ -1208,6 +1211,7 @@ export const update = mutation({
           payout: allRefundFields ? {
             amountMinor: args.customerRefundAmountMinor!,
             method: args.customerRefundMethod!,
+            bankAccountId: args.customerRefundBankAccountId,
             reference: refundReference!,
             paidAt: args.customerRefundedAt!,
           } : undefined,

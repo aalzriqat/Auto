@@ -1487,6 +1487,7 @@ type DepositReleaseArgs = OrgScopedArgs & {
   depositId: string;
   resolution: "REFUNDED" | "FORFEITED";
   refundMethod?: MobileDepositMethod;
+  bankAccountId?: string;
   notes?: string;
   /** REQUIRED on the backend — see ExpenseCreateArgs. */
   idempotencyKey: string;
@@ -2690,6 +2691,7 @@ export const api = {
       VehicleScopedArgs,
       MobileVehicleDeposit[]
     >("deposits:listByVehicle"),
+    listRefundBankOptions: makeFunctionReference<"query", OrgScopedArgs & { currency?: string }, MobileAcquisitionBankOptions>("deposits:listRefundBankOptions"),
     release: makeFunctionReference<"mutation", DepositReleaseArgs, unknown>("deposits:release"),
   },
   depositRequests: {
@@ -3363,6 +3365,7 @@ export const api = {
       string
     >;
     listByVehicle: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicleDeposit[]>;
+    listRefundBankOptions: FunctionReference<"query", "public", OrgScopedArgs & { currency?: string }, MobileAcquisitionBankOptions>;
     release: FunctionReference<"mutation", "public", DepositReleaseArgs, unknown>;
   };
   depositRequests: {
