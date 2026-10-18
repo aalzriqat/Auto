@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
@@ -7,17 +7,17 @@ if (mode !== "unit" && mode !== "sonar") {
   throw new Error('Usage: node scripts/runVitestCoverageShards.mjs <unit|sonar>');
 }
 
-// Sonar coverage remains sharded because its input is already narrowly scoped.
-// The full unit suite is intentionally process-isolated per test file: even 16
-// Vitest shards left one long-lived V8 coverage process above the fixed 5.5 GiB
-// CI heap ceiling. Per-file processes preserve the exact test census and final
-// merged coverage gate while bounding retained V8 coverage state without buying
+// The full unit suite is process-isolated in small batches: even 16 Vitest
+// shards left one long-lived V8 coverage process above the fixed 5.5 GiB CI heap
+// ceiling. Bounded processes preserve the exact test census and final merged
+// coverage gate while bounding retained V8 coverage state without buying
 // reliability by raising the heap or weakening thresholds.
-const shardCount = Number(process.env.VITEST_COVERAGE_SHARDS ?? "16");
-if (!Number.isInteger(shardCount) || shardCount < 2 || shardCount > 16) {
-  throw new Error("VITEST_COVERAGE_SHARDS must be an integer between 2 and 16.");
-}
-
+//
+// SCRUM-752: Sonar used Vitest's hash-based `--shard`, which hid each shard's
+// composition from the scheduler and could put several of the most expensive
+// suites in one process. Sonar now uses explicit file batches built exactly like
+// the unit batches, from the same census filtered the way Vitest filters
+// `vitest run convex scripts` (see sonarCensus below).
 // CI parallelism (SCRUM-359). "all" is the original single-process pipeline.
 // "run" executes only this slice's share of the SAME work units (authority
 // control, unit batches or Sonar shards) and writes blobs without merging.
@@ -43,9 +43,6 @@ if (phase === "run") {
     throw new Error("AUTOFLOW_COVERAGE_SLICE must be <index>/<count> with 1 <= index <= count and 2 <= count <= 16.");
   }
 }
-// Work unit N (1-based) belongs to slice ((N - 1) mod count) + 1. The authority
-// control is work unit 1, so exactly one slice runs it.
-const ownsWorkUnit = (ordinal) => (ordinal - 1) % sliceCount === sliceIndex - 1;
 
 const root = process.cwd();
 const vitestBin = path.join(root, "node_modules", "vitest", "vitest.mjs");
@@ -100,12 +97,32 @@ const sharedCoverageArgs = [
 // reporter by name so no other reporter can claim it.
 const reporterArgs = (blobPath) => ["--reporter=blob", "--reporter=dot", `--outputFile.blob=${blobPath}`];
 
-function runVitest(args, diagnosticFiles = []) {
+// Optional machine-readable telemetry (SCRUM-752): one JSON line per Vitest
+// process with its work unit, files, planned cost and measured wall time. It is
+// written outside the blob directory, which must hold blobs only.
+const timingsFile = process.env.AUTOFLOW_COVERAGE_TIMINGS;
+
+function runVitest(args, diagnosticFiles = [], unit = undefined) {
+  const started = performance.now();
   const result = spawnSync(process.execPath, [vitestBin, ...args], {
     cwd: root,
     env: process.env,
     stdio: "inherit",
   });
+  if (timingsFile && unit) {
+    appendFileSync(
+      timingsFile,
+      `${JSON.stringify({
+        mode,
+        unit: unit.blob,
+        slice: phase === "run" ? `${sliceIndex}/${sliceCount}` : "all",
+        files: unit.files,
+        estimatedSeconds: Math.round(unit.cost),
+        wallSeconds: Math.round((performance.now() - started) / 100) / 10,
+        status: result.status,
+      })}\n`,
+    );
+  }
   if (result.error) throw result.error;
   if (result.status !== 0) {
     process.stderr.write(
@@ -160,31 +177,123 @@ function collectUnitTestFiles(directory = discoveryRoot, relative = "") {
 
 const authorityBlob = "unified-deal-authority.json";
 
-function unitBatches() {
+function unitTestCensus() {
   const testFiles = collectUnitTestFiles().sort();
   if (testFiles.length === 0) throw new Error("No unit/integration test files discovered.");
-
-  const batchSize = Number(process.env.VITEST_COVERAGE_BATCH_SIZE ?? "8");
-  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 16) {
-    throw new Error("VITEST_COVERAGE_BATCH_SIZE must be an integer between 1 and 16.");
+  // Every file is handed to Vitest as a CLI filter, and Vitest keeps any test
+  // file whose lower-cased relative path CONTAINS a filter. A census entry that
+  // is a substring of another entry would therefore run that other file a second
+  // time, in a batch that does not own it. Refuse instead of double-counting.
+  const lower = testFiles.map((file) => file.toLowerCase());
+  for (const [index, file] of lower.entries()) {
+    const shadowed = lower.find((other, otherIndex) => otherIndex !== index && other.includes(file));
+    if (shadowed) {
+      throw new Error(`Test file ${testFiles[index]} is a substring of ${shadowed}; Vitest would run both for one filter.`);
+    }
   }
-  const batches = [];
-  for (let offset = 0; offset < testFiles.length; offset += batchSize) {
-    batches.push(testFiles.slice(offset, offset + batchSize));
+  return testFiles;
+}
+
+// `vitest run convex scripts` keeps every test file whose lower-cased path
+// relative to the root contains "convex" or "scripts" (Vitest filterFiles).
+// The runner test pins this against the real `vitest list` so the two cannot
+// drift apart.
+const sonarFilters = ["convex", "scripts"];
+const sonarCensus = (testFiles) =>
+  testFiles.filter((file) => sonarFilters.some((filter) => file.toLowerCase().includes(filter)));
+
+function boundedInteger(name, fallback, min, max) {
+  const value = Number(process.env[name] ?? fallback);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  }
+  return value;
+}
+
+// SCRUM-752 workload model. Costs only decide which suites get a process of
+// their own and which slice runs which batch; they never add or drop a file. A
+// file the model does not name costs `defaultFileSeconds`, so a new suite is
+// still scheduled, only less precisely.
+const workloadPath = path.resolve(root, process.env.AUTOFLOW_COVERAGE_WORKLOAD ?? "scripts/coverageWorkload.json");
+const workload = JSON.parse(readFileSync(workloadPath, "utf8"));
+const fileSeconds = (file) => workload.files[file] ?? workload.defaultFileSeconds;
+
+function assertWorkloadNamesRealFiles(testFiles) {
+  // A stale entry would silently stop isolating whatever replaced it. Only the
+  // real repository census is checked; synthetic discovery roots in the runner's
+  // own tests name none of these files.
+  if (discoveryRoot !== root) return;
+  const known = new Set([...testFiles, authorityTest]);
+  const stale = Object.keys(workload.files).filter((file) => !known.has(file));
+  if (stale.length > 0) {
+    throw new Error(`${path.relative(root, workloadPath)} names test files that do not exist: ${stale.join(", ")}`);
+  }
+}
+
+// Expensive suites (cost >= isolateAtSeconds) each get their own process; the
+// rest keep the original sorted, fixed-size batching. Composition depends only
+// on the census and the committed workload file, never on the slice.
+function batchesOf(files, batchSize) {
+  const isolated = files.filter((file) => fileSeconds(file) >= workload.isolateAtSeconds);
+  const rest = files.filter((file) => fileSeconds(file) < workload.isolateAtSeconds);
+  const batches = isolated.map((file) => [file]);
+  for (let offset = 0; offset < rest.length; offset += batchSize) {
+    batches.push(rest.slice(offset, offset + batchSize));
   }
   return batches;
+}
+
+function workUnits(forMode, testFiles) {
+  const processSeconds = workload.processSeconds[forMode];
+  const cost = (files) => processSeconds + files.reduce((sum, file) => sum + fileSeconds(file), 0);
+  const units = [{ mode: forMode, blob: authorityBlob, files: [authorityTest], cost: cost([authorityTest]), authority: true }];
+  if (forMode === "unit") {
+    const batchSize = boundedInteger("VITEST_COVERAGE_BATCH_SIZE", "8", 1, 16);
+    batchesOf(testFiles, batchSize).forEach((files, index) => {
+      units.push({ mode: forMode, blob: `unit-batch-${index + 1}.json`, files, cost: cost(files) });
+    });
+  } else {
+    const batchSize = boundedInteger("VITEST_SONAR_BATCH_SIZE", "32", 1, 64);
+    batchesOf(sonarCensus(testFiles), batchSize).forEach((files, index) => {
+      units.push({ mode: forMode, blob: `sonar-${index + 1}.json`, files, cost: cost(files) });
+    });
+  }
+  return units;
+}
+
+// Slice assignment covers BOTH modes at once, because a slice runs its unit
+// share and then its Sonar share: balancing each mode separately can still stack
+// two heavy halves on one runner. Largest cost first onto the least-loaded
+// slice, ties to the lower slice and then the earlier unit, so every slice
+// computes the identical plan. Both authority controls stay on slice 1, which
+// also runs the plain authority suite.
+function slicePlan(testFiles) {
+  const units = [...workUnits("unit", testFiles), ...workUnits("sonar", testFiles)];
+  const load = Array.from({ length: sliceCount }, () => 0);
+  const owner = new Map();
+  for (const unit of units.filter((u) => u.authority)) {
+    owner.set(unit, 1);
+    load[0] += unit.cost;
+  }
+  const ordered = units
+    .map((unit, index) => ({ unit, index }))
+    .filter(({ unit }) => !unit.authority)
+    .sort((a, b) => b.unit.cost - a.unit.cost || a.index - b.index);
+  for (const { unit } of ordered) {
+    let target = 0;
+    for (let slice = 1; slice < sliceCount; slice += 1) if (load[slice] < load[target]) target = slice;
+    owner.set(unit, target + 1);
+    load[target] += unit.cost;
+  }
+  return { units, owner, load };
 }
 
 // The merge-phase completeness gate: a missing slice, a slice that stopped
 // early, or a stray blob from another run must not reach the merge, because
 // Vitest merges whatever blobs it finds and would report the smaller census
 // as green.
-function assertCompleteBlobSet() {
-  const expected =
-    mode === "unit"
-      ? unitBatches().map((_, index) => `unit-batch-${index + 1}.json`)
-      : Array.from({ length: shardCount }, (_, index) => `sonar-${index + 1}.json`);
-  expected.push(authorityBlob);
+function assertCompleteBlobSet(units) {
+  const expected = units.map((unit) => unit.blob);
   // Every file counts, not only .json: Vitest's merge parses every file in the
   // directory, so the gate must see exactly what the merge will read.
   let present = [];
@@ -204,67 +313,73 @@ function assertCompleteBlobSet() {
   process.stdout.write(`Coverage blob set complete for ${mode} merge: ${expected.length} blobs.\n`);
 }
 
+const census = unitTestCensus();
+assertWorkloadNamesRealFiles(census);
+const plan = slicePlan(census);
+const modeUnits = plan.units.filter((unit) => unit.mode === mode);
+
 rmSync(coverageDir, { recursive: true, force: true });
 if (phase === "merge") {
-  assertCompleteBlobSet();
+  assertCompleteBlobSet(modeUnits);
 } else {
   rmSync(blobDir, { recursive: true, force: true });
   mkdirSync(blobDir, { recursive: true });
 }
 
-// Negative control for the coverage pipeline itself: the release-critical
-// authority suite must produce a V8 coverage blob on every covered path. It is
-// deliberately isolated so coverage instrumentation cannot reintroduce the
-// long-lived-process OOM that motivated this runner.
-if (phase !== "merge" && ownsWorkUnit(1)) {
-  runVitest([
-    "run",
-    authorityTest,
-    ...reporterArgs(path.join(blobDir, authorityBlob)),
-    "--coverage",
-    coverageReportsArg,
-    "--maxWorkers=1",
-    ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
-  ]);
+// Per-process coverage reports are never read: each covered process cleans the
+// reports directory, the slices upload only blobs, and the merge regenerates
+// every configured reporter from the blobs. Sonar's full-scope text table alone
+// printed ~1,500 lines per process, so each process now prints one summary.
+const runReporterArgs = ["--coverage.reporter=text-summary"];
+
+if (phase === "run") {
+  const mine = modeUnits.filter((unit) => plan.owner.get(unit) === sliceIndex);
+  process.stdout.write(
+    `Coverage slice ${sliceIndex}/${sliceCount} (${mode}): ${mine.length} of ${modeUnits.length} work units; ` +
+      `planned load per slice (s, both modes): ${plan.load.map((l) => Math.round(l)).join(" ")}\n`,
+  );
 }
 
-if (phase === "merge") {
-  // Tests already ran in the slices; fall through to the merge.
-} else if (mode === "unit") {
-  const batches = unitBatches();
-  const batchCount = batches.length;
-  for (let batch = 1; batch <= batchCount; batch += 1) {
-    // Work unit 1 is the authority control, so batch N is work unit N + 1.
-    if (!ownsWorkUnit(batch + 1)) continue;
-    const batchFiles = batches[batch - 1];
-    process.stdout.write(
-      `Coverage batch ${batch}/${batchCount}: ${batchFiles.join(" ")}\n`,
-    );
+if (phase !== "merge") {
+  const total = modeUnits.length - 1;
+  for (const [index, unit] of modeUnits.entries()) {
+    if (phase === "run" && plan.owner.get(unit) !== sliceIndex) continue;
+    if (unit.authority) {
+      // Negative control for the coverage pipeline itself: the release-critical
+      // authority suite must produce a V8 coverage blob on every covered path. It
+      // is deliberately isolated so coverage instrumentation cannot reintroduce
+      // the long-lived-process OOM that motivated this runner.
+      runVitest(
+        [
+          "run",
+          authorityTest,
+          ...reporterArgs(path.join(blobDir, authorityBlob)),
+          "--coverage",
+          coverageReportsArg,
+          "--maxWorkers=1",
+          ...runReporterArgs,
+          ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
+        ],
+        [],
+        unit,
+      );
+      continue;
+    }
+    const label = mode === "unit" ? "Coverage batch" : "Sonar coverage batch";
+    process.stdout.write(`${label} ${index}/${total}: ${unit.files.join(" ")}\n`);
     runVitest(
       [
         "run",
-        ...batchFiles,
-        ...reporterArgs(path.join(blobDir, `unit-batch-${batch}.json`)),
+        ...unit.files,
+        ...reporterArgs(path.join(blobDir, unit.blob)),
         ...sharedCoverageArgs,
         coverageReportsArg,
-        ...thresholdZeroArgs,
+        ...runReporterArgs,
+        ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
       ],
-      batchFiles,
+      unit.files,
+      unit,
     );
-  }
-} else {
-  for (let shard = 1; shard <= shardCount; shard += 1) {
-    if (!ownsWorkUnit(shard + 1)) continue;
-    runVitest([
-      "run",
-      "convex",
-      "scripts",
-      `--shard=${shard}/${shardCount}`,
-      ...reporterArgs(path.join(blobDir, `sonar-${shard}.json`)),
-      ...sharedCoverageArgs,
-      coverageReportsArg,
-      ...sonarCoverageArgs,
-    ]);
   }
 }
 

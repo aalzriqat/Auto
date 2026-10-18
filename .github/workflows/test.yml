@@ -60,6 +60,10 @@ jobs:
     - name: Run unit + integration tests with coverage
       run: |
         set -euo pipefail
+        # SCRUM-752 telemetry: the runner's resources and one JSON line per
+        # Vitest process, uploaded beside (never inside) the blob directory.
+        echo "runner: nproc=$(nproc) mem=$(free -m | awk '/^Mem:/{print $2}')MiB cpu.max=$(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo n/a)"
+        mkdir -p coverage-timings
         if [ "${{ matrix.slice }}" = "1" ]; then pnpm test:unified-deal-authority; fi
         AUTOFLOW_COVERAGE_BLOB_DIR=coverage-blobs/unit node scripts/runVitestCoverageShards.mjs unit
         AUTOFLOW_COVERAGE_BLOB_DIR=coverage-blobs/sonar node scripts/runVitestCoverageShards.mjs sonar
@@ -68,6 +72,7 @@ jobs:
         AUTOFLOW_COVERAGE_PHASE: run
         AUTOFLOW_COVERAGE_SLICE: ${{ matrix.slice }}/4
         AUTOFLOW_COVERAGE_REPORTS_DIR: coverage-slice
+        AUTOFLOW_COVERAGE_TIMINGS: coverage-timings/slice-${{ matrix.slice }}.jsonl
         # Coverage runs are split into bounded Vitest shards and merged before
         # threshold enforcement. Keep headroom for the final V8 coverage merge;
         # assertions, tracked files and coverage thresholds remain unchanged.
@@ -80,6 +85,17 @@ jobs:
         path: coverage-blobs/
         if-no-files-found: error
         retention-days: 1
+
+    # Diagnostics only: nothing downstream reads these, so a missing file is a
+    # warning and the gate stays the blob set above.
+    - name: Upload coverage timings
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: coverage-timings-${{ matrix.slice }}
+        path: coverage-timings/
+        if-no-files-found: warn
+        retention-days: 14
 
   unit-and-integration:
     needs: unit-and-integration-slice

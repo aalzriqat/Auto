@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -128,14 +128,24 @@ function expectedVitestCensus(
   return files.sort();
 }
 
+const WORKLOAD = JSON.parse(readFileSync(path.join(process.cwd(), "scripts", "coverageWorkload.json"), "utf8")) as {
+  defaultFileSeconds: number;
+  isolateAtSeconds: number;
+  processSeconds: { unit: number; sonar: number };
+  files: Record<string, number>;
+};
+const isHeavy = (file: string) => (WORKLOAD.files[file] ?? WORKLOAD.defaultFileSeconds) >= WORKLOAD.isolateAtSeconds;
+
 const TEST_BLOB_DIR = ".vitest-reports-runner-test";
 const TEST_COVERAGE_DIR = ".coverage-runner-test";
 const tempDiscoveryRoots: string[] = [];
 
 async function run(mode: string, env: Record<string, string | undefined> = {}) {
   for (const key of [
-    "VITEST_COVERAGE_SHARDS",
+    "VITEST_SONAR_BATCH_SIZE",
     "VITEST_COVERAGE_BATCH_SIZE",
+    "AUTOFLOW_COVERAGE_WORKLOAD",
+    "AUTOFLOW_COVERAGE_TIMINGS",
     "AUTOFLOW_COVERAGE_BLOB_DIR",
     "AUTOFLOW_COVERAGE_REPORTS_DIR",
     "AUTOFLOW_COVERAGE_DISCOVERY_ROOT",
@@ -207,7 +217,7 @@ describe("runVitestCoverageShards", () => {
     expect(loadedConfig.test?.include).toEqual([...EXPECTED_VITEST_INCLUDE]);
     expect(loadedConfig.test?.exclude).toEqual([...EXPECTED_VITEST_EXCLUDE]);
 
-    await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_SHARDS: "2" });
+    await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16" });
 
     const authority = rawArgs(childBoundary.calls[0]);
     expect(authority).toContain(
@@ -223,11 +233,16 @@ describe("runVitestCoverageShards", () => {
     expect(files).toContain("scripts/runVitestCoverageShards.test.ts");
     expect(files.filter((f) => f === "scripts/runVitestCoverageShards.test.ts")).toHaveLength(1);
     expect(files).not.toContain("convex/unifiedDealFeeAuthority.test.ts");
-    expect([...files].sort()).toEqual(files);
     const expected = expectedVitestCensus().filter(
       (file) => file !== "convex/unifiedDealFeeAuthority.test.ts",
     );
-    expect(files).toEqual(expected);
+    // Exactly the census, each file once; isolated suites come first, the rest
+    // keep their sorted order.
+    expect([...files].sort()).toEqual(expected);
+    expect(new Set(files).size).toBe(files.length);
+    const isolated = batches.map(batchTestFiles).filter((batch) => batch.length === 1 && isHeavy(batch[0]));
+    const rest = batches.map(batchTestFiles).slice(isolated.length).flat();
+    expect([...rest].sort()).toEqual(rest);
 
     for (const batch of batches) {
       const args = rawArgs(batch);
@@ -244,10 +259,9 @@ describe("runVitestCoverageShards", () => {
     expect(stdout.join("")).toContain("Coverage batch 1/");
   });
 
-  test("sonar mode keeps the measured source scope, bounded shards, isolated authority coverage, and zero local thresholds", async () => {
-    await run("sonar", { VITEST_COVERAGE_SHARDS: "2" });
+  test("sonar mode keeps the measured source scope, explicit bounded batches, isolated authority coverage, and zero local thresholds", async () => {
+    await run("sonar", { VITEST_SONAR_BATCH_SIZE: "64" });
 
-    expect(childBoundary.calls).toHaveLength(4);
     const authority = rawArgs(childBoundary.calls[0]);
     expect(authority).toContain("convex/unifiedDealFeeAuthority.test.ts");
     expect(authority).toContain("--coverage.include=convex/**/*.ts");
@@ -257,21 +271,105 @@ describe("runVitestCoverageShards", () => {
     expect(authority).not.toContain("--coverage.include=proxy.ts");
     for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(authority).toContain(threshold);
 
-    const shard1 = rawArgs(childBoundary.calls[1]);
-    const shard2 = rawArgs(childBoundary.calls[2]);
-    expect(shard1).toContain("--shard=1/2");
-    expect(shard2).toContain("--shard=2/2");
-    for (const args of [shard1, shard2]) {
-      expect(args).toContain("convex");
-      expect(args).toContain("scripts");
+    const batches = childBoundary.calls.slice(1, -1).map(rawArgs);
+    expect(batches.length).toBeGreaterThan(1);
+    for (const args of batches) {
+      expect(args.some((arg) => /--outputFile\.blob=.*sonar-\d+\.json$/.test(arg))).toBe(true);
+      expect(args).not.toContain("convex");
+      expect(args).not.toContain("scripts");
+      expect(args.some((arg) => arg.startsWith("--shard"))).toBe(false);
       expect(args).toContain("--exclude=convex/unifiedDealFeeAuthority.test.ts");
+      expect(args).toContain("--coverage.include=convex/**/*.ts");
       for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(args).toContain(threshold);
+      expect(args.filter((arg) => /\.test\.tsx?$/.test(arg) && !arg.startsWith("--")).length).toBeLessThanOrEqual(64);
     }
+    // The batches together are exactly the census `vitest run convex scripts`
+    // selects (Vitest keeps a file whose lower-cased path contains a filter),
+    // each file once, never the authority suite.
+    const files = childBoundary.calls.slice(1, -1).flatMap(batchTestFiles);
+    const expected = expectedVitestCensus().filter(
+      (file) => file !== "convex/unifiedDealFeeAuthority.test.ts" && /convex|scripts/.test(file.toLowerCase()),
+    );
+    expect([...files].sort()).toEqual(expected);
+    expect(new Set(files).size).toBe(files.length);
 
-    const merge = rawArgs(childBoundary.calls[3]);
+    const merge = rawArgs(childBoundary.calls.at(-1)!);
     expect(merge.some((arg) => arg.startsWith("--merge-reports="))).toBe(true);
     expect(merge).toContain("--coverage.include=convex/**/*.ts");
     for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(merge).toContain(threshold);
+  });
+
+  test("the Sonar census is exactly what the real `vitest list convex scripts` selects", async () => {
+    const cp = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-sonar-list-"));
+    tempDiscoveryRoots.push(directory);
+    const out = path.join(directory, "list.json");
+    const result = cp.spawnSync(
+      process.execPath,
+      [path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs"), "list", "--filesOnly", `--json=${out}`, "convex", "scripts"],
+      { encoding: "utf8", timeout: 120_000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const listed = (JSON.parse(readFileSync(out, "utf8")) as Array<{ file: string }>)
+      .map((entry) => path.relative(process.cwd(), entry.file).split(path.sep).join("/"))
+      .sort();
+    const expected = expectedVitestCensus().filter((file) => /convex|scripts/.test(file.toLowerCase()));
+    expect(listed.length).toBeGreaterThan(100);
+    expect(listed).toEqual(expected);
+  }, 180_000);
+
+  test("every suite the workload model marks heavy runs in a process of its own, in both modes", async () => {
+    await run("unit");
+    const unitBatches = childBoundary.calls.filter(isBatchCall).map(batchTestFiles);
+    childBoundary.calls.length = 0;
+    await run("sonar");
+    const sonarBatches = childBoundary.calls.slice(1, -1).map(batchTestFiles);
+    const heavy = Object.keys(WORKLOAD.files).filter(isHeavy);
+    expect(heavy).toContain("scripts/contractSkew/census.test.ts");
+    expect(heavy).toContain("scripts/contractSkew/cliExit.test.ts");
+    for (const file of heavy) {
+      expect(unitBatches.filter((batch) => batch.includes(file))).toEqual([[file]]);
+      if (/convex|scripts/.test(file)) expect(sonarBatches.filter((batch) => batch.includes(file))).toEqual([[file]]);
+    }
+  });
+
+  test("a workload entry naming a test file that does not exist refuses before any subprocess", async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-workload-"));
+    tempDiscoveryRoots.push(directory);
+    const stale = path.join(directory, "workload.json");
+    writeFileSync(stale, JSON.stringify({ ...WORKLOAD, files: { ...WORKLOAD.files, "convex/removedSuite.test.ts": 99 } }));
+    await expect(run("unit", { AUTOFLOW_COVERAGE_WORKLOAD: stale })).rejects.toThrow(
+      "names test files that do not exist: convex/removedSuite.test.ts",
+    );
+    expect(childBoundary.calls).toHaveLength(0);
+  });
+
+  test("a census file that is a substring of another refuses, because one Vitest filter would run both", async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-coverage-substring-"));
+    tempDiscoveryRoots.push(directory);
+    mkdirSync(path.join(directory, "lib"), { recursive: true });
+    mkdirSync(path.join(directory, "x", "lib"), { recursive: true });
+    writeFileSync(path.join(directory, "lib", "a.test.ts"), "");
+    writeFileSync(path.join(directory, "x", "lib", "a.test.ts"), "");
+    await expect(run("unit", { AUTOFLOW_COVERAGE_DISCOVERY_ROOT: directory })).rejects.toThrow(
+      "Test file lib/a.test.ts is a substring of x/lib/a.test.ts",
+    );
+    expect(childBoundary.calls).toHaveLength(0);
+  });
+
+  test("timings telemetry records one line per Vitest process, outside the blob directory", async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-timings-"));
+    tempDiscoveryRoots.push(directory);
+    const timings = path.join(directory, "timings.jsonl");
+    await run("unit", { AUTOFLOW_COVERAGE_TIMINGS: timings, VITEST_COVERAGE_BATCH_SIZE: "16" });
+    const lines = readFileSync(timings, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const tested = childBoundary.calls.filter((call) => !rawArgs(call).some((arg) => arg.startsWith("--merge-reports=")));
+    expect(lines).toHaveLength(tested.length);
+    expect(lines[0]).toMatchObject({ mode: "unit", unit: "unified-deal-authority.json", slice: "all", status: 0 });
+    for (const line of lines) {
+      expect(typeof line.wallSeconds).toBe("number");
+      expect(line.files.length).toBeGreaterThan(0);
+    }
   });
 
   test("rejects an unknown mode before touching the filesystem or spawning Vitest", async () => {
@@ -280,22 +378,21 @@ describe("runVitestCoverageShards", () => {
     expect(childBoundary.calls).toHaveLength(0);
   });
 
-  test.each(["1", "17", "2.5", "not-a-number"])(
-    "rejects an invalid shard count (%s) before any subprocess",
+  test.each(["0", "65", "2.5", "not-a-number"])(
+    "rejects an invalid Sonar batch size (%s) before any subprocess",
     async (value) => {
-      await expect(run("sonar", { VITEST_COVERAGE_SHARDS: value })).rejects.toThrow(
-        "VITEST_COVERAGE_SHARDS must be an integer between 2 and 16."
+      await expect(run("sonar", { VITEST_SONAR_BATCH_SIZE: value })).rejects.toThrow(
+        "VITEST_SONAR_BATCH_SIZE must be an integer between 1 and 64."
       );
       expect(childBoundary.calls).toHaveLength(0);
     }
   );
 
-  test("rejects an invalid unit batch size after the isolated authority control and before any batch", async () => {
+  test("rejects an invalid unit batch size before any subprocess", async () => {
     await expect(run("unit", { VITEST_COVERAGE_BATCH_SIZE: "0" })).rejects.toThrow(
       "VITEST_COVERAGE_BATCH_SIZE must be an integer between 1 and 16."
     );
-    expect(childBoundary.calls).toHaveLength(1);
-    expect(rawArgs(childBoundary.calls[0])).toContain("convex/unifiedDealFeeAuthority.test.ts");
+    expect(childBoundary.calls).toHaveLength(0);
   });
 
   test("fails closed when unit test discovery returns an empty census", async () => {
@@ -304,7 +401,7 @@ describe("runVitestCoverageShards", () => {
     await expect(
       run("unit", { AUTOFLOW_COVERAGE_DISCOVERY_ROOT: emptyRoot }),
     ).rejects.toThrow("No unit/integration test files discovered.");
-    expect(childBoundary.calls).toHaveLength(1);
+    expect(childBoundary.calls).toHaveLength(0);
   });
 
   test("a failing coverage batch is rerun without coverage for diagnostics and exits with the original status", async () => {
@@ -345,12 +442,12 @@ describe("runVitestCoverageShards", () => {
       return childBoundary.calls.map((call) => ({ ...call, args: [...call.args] }));
     }
 
-    function fakeDiscoveryRoot(count: number): string {
+    function fakeDiscoveryRoot(count: number, dir = "lib"): string {
       const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-coverage-slices-"));
       tempDiscoveryRoots.push(directory);
-      mkdirSync(path.join(directory, "lib"));
+      mkdirSync(path.join(directory, dir));
       for (let index = 1; index <= count; index += 1) {
-        writeFileSync(path.join(directory, "lib", `f${String(index).padStart(2, "0")}.test.ts`), "");
+        writeFileSync(path.join(directory, dir, `f${String(index).padStart(2, "0")}.test.ts`), "");
       }
       return directory;
     }
@@ -385,13 +482,14 @@ describe("runVitestCoverageShards", () => {
       expect(new Set(sliced.map(key)).size).toBe(sliced.length);
     });
 
-    test("Sonar slices partition the exact shards of a full run", async () => {
-      const full = await callsFor("sonar", { VITEST_COVERAGE_SHARDS: "5" });
+    test("Sonar slices partition the exact batches of a full run", async () => {
+      const env = { VITEST_SONAR_BATCH_SIZE: "40" };
+      const full = await callsFor("sonar", env);
       const fullWork = full.filter((call) => !isMerge(call)).map(rawArgs);
       const sliced: string[][] = [];
       for (let slice = 1; slice <= 4; slice += 1) {
         const calls = await callsFor("sonar", {
-          VITEST_COVERAGE_SHARDS: "5",
+          ...env,
           AUTOFLOW_COVERAGE_PHASE: "run",
           AUTOFLOW_COVERAGE_SLICE: `${slice}/4`,
         });
@@ -401,6 +499,28 @@ describe("runVitestCoverageShards", () => {
       const key = (args: string[]) => JSON.stringify(args);
       expect(sliced.map(key).sort()).toEqual(fullWork.map(key).sort());
       expect(new Set(sliced.map(key)).size).toBe(sliced.length);
+    });
+
+    test("SCRUM-752: the plan balances planned cost across slices over both modes together", async () => {
+      const loads: string[] = [];
+      for (const mode of ["unit", "sonar"]) {
+        for (let slice = 1; slice <= 4; slice += 1) {
+          stdout = [];
+          await callsFor(mode, { AUTOFLOW_COVERAGE_PHASE: "run", AUTOFLOW_COVERAGE_SLICE: `${slice}/4` });
+          const line = stdout.join("").match(/planned load per slice \(s, both modes\): ([\d ]+)/);
+          expect(line, "each slice states the plan it ran").not.toBeNull();
+          loads.push(line![1].trim());
+        }
+      }
+      // Every invocation computed the identical joint plan.
+      expect(new Set(loads).size).toBe(1);
+      const perSlice = loads[0].split(" ").map(Number);
+      expect(perSlice).toHaveLength(4);
+      // Largest-first assignment keeps each slice within one heaviest unit of the
+      // mean; round-robin by ordinal did not (slice 4 ran ~2x slice 2).
+      const mean = perSlice.reduce((a, b) => a + b, 0) / perSlice.length;
+      const heaviest = Math.max(...Object.values(WORKLOAD.files)) + WORKLOAD.processSeconds.unit;
+      for (const load of perSlice) expect(Math.abs(load - mean)).toBeLessThanOrEqual(heaviest);
     });
 
     const invalidSliceEnvs: Array<[Record<string, string>, string]> = [
@@ -420,8 +540,13 @@ describe("runVitestCoverageShards", () => {
       expect(childBoundary.calls).toHaveLength(0);
     });
 
+    const sonarRoot = () => ({
+      AUTOFLOW_COVERAGE_DISCOVERY_ROOT: fakeDiscoveryRoot(4, "convex"),
+      VITEST_SONAR_BATCH_SIZE: "2",
+    });
+
     test("merge refuses a missing blob directory without running anything", async () => {
-      await expect(run("sonar", { VITEST_COVERAGE_SHARDS: "2", AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
+      await expect(run("sonar", { ...sonarRoot(), AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
         /incomplete for sonar merge \(expected 3, found 0\)/,
       );
       expect(childBoundary.calls).toHaveLength(0);
@@ -429,15 +554,17 @@ describe("runVitestCoverageShards", () => {
 
     test("merge refuses a blob set missing one slice's work and names it", async () => {
       writeBlobs(["unified-deal-authority.json", "sonar-1.json", "sonar-3.json"]);
-      await expect(run("sonar", { VITEST_COVERAGE_SHARDS: "3", AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
-        "Missing: sonar-2.json. Unexpected: none.",
+      await expect(
+        run("sonar", { ...sonarRoot(), VITEST_SONAR_BATCH_SIZE: "1", AUTOFLOW_COVERAGE_PHASE: "merge" }),
+      ).rejects.toThrow(
+        "Missing: sonar-2.json, sonar-4.json. Unexpected: none.",
       );
       expect(childBoundary.calls).toHaveLength(0);
     });
 
     test("merge refuses a stray blob from another run", async () => {
       writeBlobs(["unified-deal-authority.json", "sonar-1.json", "sonar-2.json", "unit-batch-1.json"]);
-      await expect(run("sonar", { VITEST_COVERAGE_SHARDS: "2", AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
+      await expect(run("sonar", { ...sonarRoot(), AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
         "Missing: none. Unexpected: unit-batch-1.json.",
       );
       expect(childBoundary.calls).toHaveLength(0);
@@ -445,7 +572,7 @@ describe("runVitestCoverageShards", () => {
 
     test("merge refuses a stray file of any extension, because Vitest merges every file in the directory", async () => {
       writeBlobs(["unified-deal-authority.json", "sonar-1.json", "sonar-2.json", "stray.blob"]);
-      await expect(run("sonar", { VITEST_COVERAGE_SHARDS: "2", AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
+      await expect(run("sonar", { ...sonarRoot(), AUTOFLOW_COVERAGE_PHASE: "merge" })).rejects.toThrow(
         "Missing: none. Unexpected: stray.blob.",
       );
       expect(childBoundary.calls).toHaveLength(0);
@@ -467,10 +594,10 @@ describe("runVitestCoverageShards", () => {
     test.each(["unit", "sonar"])(
       "%s merge on a complete blob set runs only the merge, with the same args as a full run, and keeps the blobs",
       async (mode) => {
-        const root = fakeDiscoveryRoot(5);
+        const root = fakeDiscoveryRoot(5, "convex");
         const env = {
           VITEST_COVERAGE_BATCH_SIZE: "2",
-          VITEST_COVERAGE_SHARDS: "2",
+          VITEST_SONAR_BATCH_SIZE: "3",
           AUTOFLOW_COVERAGE_DISCOVERY_ROOT: root,
         };
         const fullMerge = (await callsFor(mode, env)).filter(isMerge).map(rawArgs);
@@ -497,7 +624,7 @@ describe("runVitestCoverageShards", () => {
       calls.map(rawArgs).filter((args) => args.includes("--coverage") && !args.some((arg) => arg.startsWith("--merge-reports=")));
 
     test.each(["unit", "sonar"])("%s mode: a console reporter beside blob, and the output file bound to blob only", async (mode) => {
-      await run(mode, { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_SHARDS: "2" });
+      await run(mode, { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_SONAR_BATCH_SIZE: "64" });
       const calls = testRunning(childBoundary.calls);
       expect(calls.length).toBeGreaterThanOrEqual(3);
       for (const args of calls) {
@@ -511,8 +638,8 @@ describe("runVitestCoverageShards", () => {
     });
 
     test("the real Vitest, given the runner's own reporter arguments, reports a zero-failing-test error and still writes the blob", async () => {
-      await run("sonar", { VITEST_COVERAGE_SHARDS: "2" });
-      const shard = testRunning(childBoundary.calls).find((args) => args.some((arg) => arg.startsWith("--shard=")));
+      await run("sonar", { VITEST_SONAR_BATCH_SIZE: "64" });
+      const shard = testRunning(childBoundary.calls).find((args) => args.some((arg) => /sonar-\d+\.json$/.test(arg)));
       const reporting = (shard ?? []).filter((arg) => arg.startsWith("--reporter=") || arg.startsWith("--outputFile"));
       expect(reporting.length).toBeGreaterThan(0);
 
