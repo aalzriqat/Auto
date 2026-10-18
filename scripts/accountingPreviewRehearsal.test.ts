@@ -168,19 +168,21 @@ describe("FD1 bank-contract inputs come from trusted provenance (SCRUM-54)", () 
   const read = vi.fn((file: string) => `source of ${file.replace(/\\/g, "/")}`);
 
   test("the candidate source is read from the checkout beside the trusted one; unreadable is undefined", () => {
-    const inputs = fd1BankContractInputs({ cwd, readText: read });
+    const inputs = fd1BankContractInputs({ env: { PR_NUMBER: "602" }, cwd, readText: read });
     expect(inputs.candidateSource).toMatch(/\/work\/candidate\/convex\/applications\.ts$/);
+    expect(inputs.directFeeSource).toMatch(/\/work\/candidate\/convex\/financeDealCosts\.ts$/);
+    expect(inputs.chequeSource).toMatch(/\/work\/candidate\/convex\/collections\.ts$/);
     const unreadable = fd1BankContractInputs({
+      env: { PR_NUMBER: "602" },
       cwd,
       readText: () => {
         throw new Error("ENOENT");
       },
     });
     expect(unreadable.candidateSource).toBeUndefined();
-  });
-
-  test("the inputs carry no PR-number expectation: the bank contract is unconditional", () => {
-    expect(Object.keys(fd1BankContractInputs({ cwd, readText: read }))).toEqual(["candidateSource"]);
+    expect(unreadable.directFeeSource).toBeUndefined();
+    expect(unreadable.chequeSource).toBeUndefined();
+    expect(unreadable.requireBankContract).toBe(true);
   });
 });
 

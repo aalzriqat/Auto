@@ -502,14 +502,20 @@ export function summarize(results) {
  * The bank receipt contract itself is unconditional: FD1 fails unless the candidate
  * source and the deployed backend both take the physical bank.
  */
-export function fd1BankContractInputs({ cwd, readText = (file) => readFileSync(file, "utf8") }) {
-  let candidateSource;
-  try {
-    candidateSource = readText(path.join(cwd, "..", "candidate", "convex", "applications.ts"));
-  } catch {
-    candidateSource = undefined;
-  }
-  return { candidateSource };
+export function fd1BankContractInputs({ env, cwd, readText = (file) => readFileSync(file, "utf8") }) {
+  const candidateSource = (filename) => {
+    try {
+      return readText(path.join(cwd, "..", "candidate", "convex", filename));
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    candidateSource: candidateSource("applications.ts"),
+    directFeeSource: candidateSource("financeDealCosts.ts"),
+    chequeSource: candidateSource("collections.ts"),
+    requireBankContract: env.PR_NUMBER === "602",
+  };
 }
 
 /* c8 ignore start — the orchestration below only runs inside CI against a preview. */
@@ -589,10 +595,13 @@ export async function main(env = process.env) {
   evidence.orgId = orgId;
 
   const results = evidence.cases;
-  const { runRehearsalCases, candidateNamesReceiptBank } = await import("./accountingRehearsalCases.mjs");
-  const fd1Bank = fd1BankContractInputs({ cwd: process.cwd() });
+  const { runRehearsalCases, candidateNamesReceiptBank, candidateCommandNamesBank } = await import("./accountingRehearsalCases.mjs");
+  const fd1Bank = fd1BankContractInputs({ env, cwd: process.cwd() });
   await runRehearsalCases({
     candidateFinanceReceiptNamesBank: candidateNamesReceiptBank(fd1Bank.candidateSource),
+    candidateDirectFeeNamesBank: candidateCommandNamesBank(fd1Bank.directFeeSource, "recordDirectFeePayment"),
+    candidateChequeClearNamesBank: candidateCommandNamesBank(fd1Bank.chequeSource, "clearCheque"),
+    requireFinanceReceiptBankContract: fd1Bank.requireBankContract,
     results,
     orgId,
     config,
