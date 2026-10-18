@@ -177,16 +177,13 @@ crons.interval(
   {}
 );
 
-// Delete cronHeartbeats/webhookLogs rows past their retention window. Both are
-// append-only diagnostics that nothing pruned, and the admin Cron Status panel
-// re-read every heartbeat on every insert — together the largest source of
-// database bandwidth on this deployment.
-crons.interval(
-  "prune-operational-logs",
-  { hours: 1 },
-  internal.adminSystem.pruneOperationalLogs,
-  {}
-);
+// SCRUM-807: operational history (cronHeartbeats, webhookLogs, notifications,
+// facebookRevocations) is deliberately NOT pruned on a schedule. The owner
+// requires every Convex record to be preserved while the I/O spike is being
+// diagnosed, and the hourly sweep itself cost up to four 1000-row reads plus
+// deletes per run. The sweep (`adminSystem.pruneOperationalLogs`) was removed
+// entirely; do not reintroduce a deleter or schedule without a new retention
+// ruling (see crons.test.ts and adminSystem.test.ts).
 
 // GL Phase 11: post one month of straight-line depreciation for every ACTIVE
 // fixed asset, across every org. Runs once a month; depreciateAssetForMonth

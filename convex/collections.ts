@@ -3828,15 +3828,16 @@ if (REMINDER_SWEEP_MAX_SCHEDULED >= CONVEX_MAX_SCHEDULED_PER_MUTATION) {
   throw new Error("Collection reminder sweep budget can exceed the Convex scheduling limit.");
 }
 
-type ReminderStep =
+type ReminderStep = (
   | { kind: "overdue"; status: ReceivableStatus }
   | { kind: "dueSoon"; status: ReceivableStatus }
-  | { kind: "cheque" };
+  | { kind: "cheque" }
+) & { isDeleted?: false };
 /** Overdue rows leave their range when marked; the other steps are windows rows stay in. */
 type ReminderWindowStep = Exclude<ReminderStep, { kind: "overdue" }>;
 
 /** The seven per-organization steps, in the order they run. A step is addressed by its index. */
-const REMINDER_STEPS: readonly ReminderStep[] = [
+const LEGACY_REMINDER_STEPS: readonly ReminderStep[] = [
   { kind: "overdue", status: "OPEN" },
   { kind: "dueSoon", status: "OPEN" },
   { kind: "overdue", status: "PARTIALLY_PAID" },
@@ -3844,6 +3845,12 @@ const REMINDER_STEPS: readonly ReminderStep[] = [
   { kind: "overdue", status: "RESCHEDULED" },
   { kind: "dueSoon", status: "RESCHEDULED" },
   { kind: "cheque" },
+];
+// Missing and explicit false are disjoint live cohorts. Original step numbers
+// stay stable for queued resumes; deleted history is excluded by the index.
+const REMINDER_STEPS: readonly ReminderStep[] = [
+  ...LEGACY_REMINDER_STEPS,
+  ...LEGACY_REMINDER_STEPS.map((step) => ({ ...step, isDeleted: false as const })),
 ];
 
 function reminderStepAt(step: number): ReminderStep | undefined {
@@ -3871,13 +3878,14 @@ async function readOverdueReceivables(
   orgId: Id<"organizations">,
   status: ReceivableStatus,
   now: number,
-  limit: number
+  limit: number,
+  isDeleted?: false
 ) {
   // Rows leave this range as they are marked OVERDUE, so no position is needed.
   return await ctx.db
     .query("receivables")
-    .withIndex("by_org_status_and_dueDate", (q) =>
-      q.eq("orgId", orgId).eq("status", status).lte("dueDate", now)
+    .withIndex("by_org_status_isDeleted_dueDate", (q) =>
+      q.eq("orgId", orgId).eq("status", status).eq("isDeleted", isDeleted).lte("dueDate", now)
     )
     .take(limit);
 }
@@ -3885,25 +3893,37 @@ async function readOverdueReceivables(
 // The due-soon window starts strictly AFTER `now`: a receivable due exactly at
 // `now` is overdue (the overdue step takes it and flips its status), so it is
 // never also reminded as due-soon, whichever step happens to run first.
-function dueSoonReceivablesQuery(ctx: MutationCtx, orgId: Id<"organizations">, status: ReceivableStatus, now: number) {
+function dueSoonReceivablesQuery(ctx: MutationCtx, orgId: Id<"organizations">, status: ReceivableStatus, now: number, isDeleted?: false, legacy = false) {
+  if (legacy) {
+    return ctx.db.query("receivables").withIndex("by_org_status_and_dueDate", (q) =>
+      q.eq("orgId", orgId).eq("status", status).gt("dueDate", now).lte("dueDate", now + 2 * DAY_MS)
+    );
+  }
   return ctx.db
     .query("receivables")
-    .withIndex("by_org_status_and_dueDate", (q) =>
-      q.eq("orgId", orgId).eq("status", status).gt("dueDate", now).lte("dueDate", now + 2 * DAY_MS)
+    .withIndex("by_org_status_isDeleted_dueDate", (q) =>
+      q.eq("orgId", orgId).eq("status", status).eq("isDeleted", isDeleted).gt("dueDate", now).lte("dueDate", now + 2 * DAY_MS)
     );
 }
 
-function upcomingChequesQuery(ctx: MutationCtx, orgId: Id<"organizations">, now: number) {
+function upcomingChequesQuery(ctx: MutationCtx, orgId: Id<"organizations">, now: number, isDeleted?: false, legacy = false) {
+  if (legacy) {
+    return ctx.db.query("postDatedCheques").withIndex("by_org_status_and_chequeDate", (q) =>
+      q.eq("orgId", orgId).eq("status", "HELD").gte("chequeDate", now).lte("chequeDate", now + 3 * DAY_MS)
+    );
+  }
   return ctx.db
     .query("postDatedCheques")
-    .withIndex("by_org_status_and_chequeDate", (q) =>
-      q.eq("orgId", orgId).eq("status", "HELD").gte("chequeDate", now).lte("chequeDate", now + 3 * DAY_MS)
+    .withIndex("by_org_status_isDeleted_chequeDate", (q) =>
+      q.eq("orgId", orgId).eq("status", "HELD").eq("isDeleted", isDeleted).gte("chequeDate", now).lte("chequeDate", now + 3 * DAY_MS)
     );
 }
 
 async function queueDueSoonRows(ctx: MutationCtx, orgId: Id<"organizations">, rows: Doc<"receivables">[]) {
   let queued = 0;
   for (const receivable of rows) {
+    // Old queued cursors still use the retained legacy index, one bounded page.
+    if (receivable.isDeleted === true) continue;
     const reminderId = await queueCustomerReminder(ctx, {
       orgId,
       customerId: receivable.customerId,
@@ -3920,7 +3940,7 @@ async function queueChequeRows(ctx: MutationCtx, orgId: Id<"organizations">, row
   for (const cheque of rows) {
     // SCRUM-447 D5': a finance-company cheque is never chased from the
     // customer, whatever its receivable or applicationId says.
-    if (isFcLineage(cheque)) continue;
+    if (cheque.isDeleted === true || isFcLineage(cheque)) continue;
     const reminderId = await queueCustomerReminder(ctx, {
       orgId,
       customerId: cheque.customerId,
@@ -3936,7 +3956,7 @@ async function queueChequeRows(ctx: MutationCtx, orgId: Id<"organizations">, row
 type ReminderWindowBatch = { size: number; queue: () => Promise<number> };
 
 /** One due-soon or cheque window as "read some rows" / "read a page", whichever table backs it. */
-function reminderWindow(ctx: MutationCtx, orgId: Id<"organizations">, step: ReminderWindowStep, now: number) {
+function reminderWindow(ctx: MutationCtx, orgId: Id<"organizations">, step: ReminderWindowStep, now: number, legacy = false) {
   const windowOf = <Row>(
     query: {
       take(limit: number): Promise<Row[]>;
@@ -3954,8 +3974,8 @@ function reminderWindow(ctx: MutationCtx, orgId: Id<"organizations">, step: Remi
     };
   };
   return step.kind === "cheque"
-    ? windowOf(upcomingChequesQuery(ctx, orgId, now), (rows) => queueChequeRows(ctx, orgId, rows))
-    : windowOf(dueSoonReceivablesQuery(ctx, orgId, step.status, now), (rows) => queueDueSoonRows(ctx, orgId, rows));
+    ? windowOf(upcomingChequesQuery(ctx, orgId, now, step.isDeleted, legacy), (rows) => queueChequeRows(ctx, orgId, rows))
+    : windowOf(dueSoonReceivablesQuery(ctx, orgId, step.status, now, step.isDeleted, legacy), (rows) => queueDueSoonRows(ctx, orgId, rows));
 }
 
 /**
@@ -3998,7 +4018,7 @@ async function processOrgReminders(
       continue;
     }
 
-    const read = await readOverdueReceivables(ctx, orgId, step.status, now, left + 1);
+    const read = await readOverdueReceivables(ctx, orgId, step.status, now, left + 1, step.isDeleted);
     const rows = read.slice(0, left);
     for (const receivable of rows) {
       await ctx.db.patch(receivable._id, { status: "OVERDUE", updatedAt: now });
@@ -4036,13 +4056,17 @@ export const processReminderRange = internalMutation({
     step: v.number(),
     cursor: v.union(v.string(), v.null()),
     now: v.number(),
+    indexVersion: v.optional(v.literal("active-v1")),
   },
   handler: async (ctx, args) => {
     const step = reminderStepAt(args.step);
-    if (!step || step.kind === "overdue") throw new ConvexError("Invalid collection reminder window step.");
+    if (!step || step.kind === "overdue" || (args.indexVersion === undefined && args.step >= LEGACY_REMINDER_STEPS.length)) {
+      throw new ConvexError("Invalid collection reminder window step.");
+    }
     const org = await ctx.db.get(args.orgId);
     if (!org) return { queued: 0, isDone: true };
-    const page = await reminderWindow(ctx, org._id, step, args.now).paginate({
+    // Never reinterpret a queued old-index cursor using the new live-row index.
+    const page = await reminderWindow(ctx, org._id, step, args.now, args.indexVersion === undefined).paginate({
       cursor: args.cursor,
       numItems: REMINDER_RESUME_ROWS,
     });
@@ -4053,6 +4077,7 @@ export const processReminderRange = internalMutation({
         step: args.step,
         cursor: page.continueCursor,
         now: args.now,
+        indexVersion: args.indexVersion,
       });
     }
     return { queued, isDone: page.isDone };
@@ -4071,7 +4096,7 @@ async function scheduleOrgFollowUps(
   result: OrgReminderOutcome
 ) {
   for (const step of result.deferred) {
-    await ctx.scheduler.runAfter(0, internal.collections.processReminderRange, { orgId, step, cursor: null, now });
+    await ctx.scheduler.runAfter(0, internal.collections.processReminderRange, { orgId, step, cursor: null, now, indexVersion: "active-v1" });
   }
   if (result.resume) {
     await ctx.scheduler.runAfter(0, internal.collections.processDailyCollectionReminders, { now, resume: result.resume });
@@ -4146,7 +4171,10 @@ export const getReminderPayload = internalQuery({
     // here. This narrows the window; it cannot recall a message already handed
     // to the provider, and no atomicity is claimed.
     const fcLineageSuppressed = cheque ? isFcLineage(cheque) : false;
-    return { reminder, customer, receivable, cheque, currency, fcLineageSuppressed };
+    const sourceUnavailable = !customer || customer.isDeleted === true ||
+      Boolean(reminder.receivableId && (!receivable || receivable.isDeleted === true)) ||
+      Boolean(reminder.chequeId && (!cheque || cheque.isDeleted === true));
+    return { reminder, customer, receivable, cheque, currency, fcLineageSuppressed, sourceUnavailable };
   },
 });
 

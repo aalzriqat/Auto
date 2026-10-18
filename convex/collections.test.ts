@@ -2591,6 +2591,117 @@ describe("daily collection reminders stay bounded without losing work (SCRUM-807
     return counts;
   }
 
+  test.each([
+    ["customer", "deleted"], ["customer", "missing"],
+    ["receivable", "deleted"], ["receivable", "missing"],
+    ["cheque", "deleted"], ["cheque", "missing"],
+  ] as const)("queued reminders skip a %s that becomes %s before the payload read", async (kind, state) => {
+    await import("./collectionReminderActions");
+    const t = startClock();
+    const org = await seedOrg(t, `queued-${kind}-${state}`);
+    const [receivableId] = await addReceivables(t, org, 1, () => NOW + DAY);
+    const [chequeId] = await addCheques(t, org, 1, () => NOW + DAY);
+    const reminderId = await t.run(async (ctx) => {
+      await ctx.db.patch(org.customerId, { phone: "+15550000001" });
+      const id = await ctx.db.insert("collectionReminders", {
+        orgId: org.orgId, customerId: org.customerId,
+        receivableId: kind === "cheque" ? undefined : receivableId,
+        chequeId: kind === "cheque" ? chequeId : undefined,
+        channel: "SMS", messageType: kind === "cheque" ? "CHEQUE_UPCOMING" : "DUE_SOON",
+        status: "PENDING", scheduledAt: NOW, createdAt: NOW,
+      });
+      const sourceId = kind === "customer" ? org.customerId : kind === "cheque" ? chequeId : receivableId;
+      if (state === "deleted") await ctx.db.patch(sourceId, { isDeleted: true });
+      else await ctx.db.delete(sourceId);
+      return id;
+    });
+    const request = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 201 }));
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "");
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "synthetic-account");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "synthetic-token");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "+15550000000");
+    try {
+      await t.action(internal.collectionReminderActions.sendCollectionReminder, { reminderId });
+      expect(request).not.toHaveBeenCalled();
+      const reminder = await t.run((ctx) => ctx.db.get(reminderId));
+      expect(reminder?.status).toBe("SKIPPED");
+      expect(reminder?.sentAt).toBeUndefined();
+    } finally {
+      request.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  test.each(["overdue", "dueSoon", "cheque"] as const)(
+    "soft-deleted %s rows are never chased or changed by the reminder sweep",
+    async (kind) => {
+      const t = startClock();
+      const org = await seedOrg(t, `deleted-${kind}`);
+      const ids = kind === "cheque"
+        ? await addCheques(t, org, 3, () => NOW + DAY)
+        : await addReceivables(t, org, 3, () => kind === "overdue" ? NOW - DAY : NOW + DAY);
+      await t.run(async (ctx) => {
+        await ctx.db.patch(ids[1], { isDeleted: false });
+        await ctx.db.patch(ids[2], { isDeleted: true });
+      });
+      const before = await t.run((ctx) => ctx.db.get(ids[2]));
+
+      await runCronToCompletion(t);
+
+      const reminders = await remindersFor(t, org.orgId);
+      expect(reminders.map((r) => r.chequeId ?? r.receivableId).sort()).toEqual(ids.slice(0, 2).sort());
+      expect(await t.run((ctx) => ctx.db.get(ids[2]))).toEqual(before);
+      for (const id of ids.slice(0, 2)) {
+        expect(await t.run((ctx) => ctx.db.get(id))).toMatchObject(kind === "cheque"
+          ? { amount: 50, status: "HELD" }
+          : { originalAmount: 100, outstandingAmount: 100, status: kind === "overdue" ? "OVERDUE" : "OPEN" });
+      }
+    }
+  );
+
+  test("missing and false live cohorts both finish overflow pages without chasing deleted history", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "live-cohorts");
+    const missing = await addReceivables(t, org, 220, () => NOW + DAY);
+    const explicitFalse = await addReceivables(t, org, 220, () => NOW + DAY);
+    const deleted = await addReceivables(t, org, 250, () => NOW + DAY);
+    await t.run(async (ctx) => {
+      for (const id of explicitFalse) await ctx.db.patch(id, { isDeleted: false });
+      for (const id of deleted) await ctx.db.patch(id, { isDeleted: true });
+    });
+    await runCronToCompletion(t);
+    const counts = receivableReminderCounts(await remindersFor(t, org.orgId));
+    expect([...counts.keys()].sort()).toEqual([...missing, ...explicitFalse].sort());
+    expect([...counts.values()].every((n) => n === 1)).toBe(true);
+    expect(await t.run((ctx) => ctx.db.get(deleted[0]))).toMatchObject({ isDeleted: true, status: "OPEN", outstandingAmount: 100 });
+  });
+
+  test("an old index cursor continues on its original index and skips a subsequently deleted row", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "legacy-cursor");
+    const ids = await addReceivables(t, org, 450, () => NOW + DAY);
+    const oldPage = await t.run((ctx) => ctx.db.query("receivables")
+      .withIndex("by_org_status_and_dueDate", (q) => q.eq("orgId", org.orgId).eq("status", "OPEN").gt("dueDate", NOW).lte("dueDate", NOW + 2 * DAY))
+      .paginate({ cursor: null, numItems: 180 }));
+    expect(oldPage.isDone).toBe(false);
+    await t.run(async (ctx) => {
+      for (const row of oldPage.page) await ctx.db.insert("collectionReminders", {
+        orgId: org.orgId, customerId: org.customerId, receivableId: row._id,
+        channel: "MANUAL", messageType: "DUE_SOON", status: "SKIPPED", scheduledAt: NOW, createdAt: NOW,
+      });
+      await ctx.db.patch(ids[220], { isDeleted: true });
+      await ctx.db.patch(ids[230], { isDeleted: false });
+    });
+    const first = await t.mutation(internal.collections.processReminderRange, {
+      orgId: org.orgId, step: 1, now: NOW, cursor: oldPage.continueCursor,
+    });
+    expect(first.isDone).toBe(false);
+    await drainScheduled(t);
+    const counts = receivableReminderCounts(await remindersFor(t, org.orgId));
+    expect([...counts.keys()].sort()).toEqual(ids.filter((id) => id !== ids[220]).sort());
+    expect([...counts.values()].every((n) => n === 1)).toBe(true);
+  });
+
   test("an overdue book larger than one invocation is fully marked and reminded exactly once", async () => {
     const t = startClock();
     const org = await seedOrg(t, "bigoverdue");
@@ -2899,7 +3010,8 @@ describe("daily collection reminders stay bounded without losing work (SCRUM-807
       const org = await seedOrg(t, "badresume");
       const [due] = await addReceivables(t, org, 1, () => NOW - DAY);
 
-      for (const step of [7, -1, 1.5]) {
+      // The live missing/false cohorts now occupy steps0..13; step7 is valid.
+      for (const step of [14, -1, 1.5, Number.NaN]) {
         await expect(
           t.mutation(internal.collections.processDailyCollectionReminders, { now: NOW, resume: { orgId: org.orgId, step } })
         ).rejects.toThrow("Invalid collection reminder resume step");
