@@ -1076,6 +1076,7 @@ export async function hookSupplierReceivableCollected(
     amountMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     receiptSeq: number;
     actorId: Id<"users">;
     occurredAt: number;
@@ -1099,6 +1100,7 @@ export async function hookSupplierReceivableCollected(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
       vehicleId: args.vehicleId.toString(),
     },
   });

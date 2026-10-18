@@ -1768,6 +1768,7 @@ export interface SupplierReceivableCollectedPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
   vehicleId?: string;
 }
 
@@ -1788,9 +1789,15 @@ export function ruleSupplierReceivableCollected(p: SupplierReceivableCollectedPa
   // Inbound money, so the cheque case is a cheque the dealership HOLDS —
   // cashAccountKey, not disbursementAccountKey.
   const cashKey = cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Supplier collection bank posting has no physical bank identity.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Supplier collection unexpectedly names a physical bank.");
+  }
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, `Received from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+      line(cashKey, p.amountMinor, 0, `Received from ${p.sourcedFromName}`, { vehicleId: p.vehicleId, ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}) }),
       line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, 0, p.amountMinor, `Commission collected from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
     ],
     memo: `Supplier commission received — ${p.sourcedFromName}`,

@@ -889,9 +889,11 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const claim = await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables")
       .withIndex("by_sale", (q) => q.eq("saleId", saleId!)).unique());
     expect(claim).toMatchObject({ amountDue: 2_500, status: "OPEN" });
+    const bankAccountId = await seedBank(s.t, s.orgId);
     const receiptArgs = {
       orgId: s.orgId, receivableId: claim!._id, amount: 2_500,
       receiptMethod: "BANK_TRANSFER" as const,
+      bankAccountId,
       idempotencyKey: "s486-direct-supplier-receipt",
     };
     expect(await s.owner.as.mutation(api.supplierReceivables.recordReceipt, receiptArgs)).toEqual({
@@ -931,9 +933,11 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const claim = await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables")
       .withIndex("by_sale", (q) => q.eq("saleId", saleId!)).unique());
     expect(claim).toMatchObject({ amountDue: 2_500, status: "OPEN" });
+    const bankAccountId = await seedBank(s.t, s.orgId);
     const firstArgs = {
       orgId: s.orgId, receivableId: claim!._id, amount: 1_000,
       receiptMethod: "BANK_TRANSFER" as const,
+      bankAccountId,
       idempotencyKey: "s486-direct-supplier-partial-first",
     };
     expect(await s.owner.as.mutation(api.supplierReceivables.recordReceipt, firstArgs)).toEqual({

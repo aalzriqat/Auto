@@ -3057,6 +3057,7 @@ export function DealCockpit({
   return (
     <>
       <DealCockpitView
+        orgId={orgId}
       deal={deal}
       stageDeepLink={stageDeepLink}
       backHref={`/${orgId}/deals`}
@@ -3967,6 +3968,7 @@ export function DealCockpit({
           receivableId,
           amount: receipt.amount,
           receiptMethod: receipt.receiptMethod,
+          ...(receipt.bankAccountId ? { bankAccountId: receipt.bankAccountId } : {}),
           receiptReference: receipt.receiptReference,
           receivedAt: receipt.receivedAt,
           idempotencyKey: receipt.idempotencyKey,
@@ -4268,6 +4270,7 @@ export function SaleDealCockpit({
   return (
     <>
       <DealCockpitView
+        orgId={orgId}
         deal={deal}
         stageDeepLink={stageDeepLink}
         backHref={`/${orgId}/deals`}
@@ -4284,6 +4287,7 @@ export function SaleDealCockpit({
             receivableId,
             amount: receipt.amount,
             receiptMethod: receipt.receiptMethod,
+            ...(receipt.bankAccountId ? { bankAccountId: receipt.bankAccountId } : {}),
             receiptReference: receipt.receiptReference,
             receivedAt: receipt.receivedAt,
             idempotencyKey: receipt.idempotencyKey,
@@ -4976,6 +4980,7 @@ export type FinanceDecisionWiring = {
 };
 
 export function DealCockpitView({
+  orgId,
   deal,
   stageDeepLink,
   backHref,
@@ -5015,6 +5020,7 @@ export function DealCockpitView({
   disbursement,
   closingChecklist,
 }: Readonly<{
+  orgId?: Id<"organizations">;
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
   /**
@@ -5392,6 +5398,7 @@ export function DealCockpitView({
     receipt: {
       amount: number;
       receiptMethod?: PaymentMethod;
+      bankAccountId?: Id<"bankAccounts">;
       receiptReference?: string;
       receivedAt?: number;
       /**
@@ -5654,6 +5661,12 @@ export function DealCockpitView({
     supplierRow?.position === "OWED_TO_DEALERSHIP" &&
     supplierReceipt?.actionable === true;
   const canSettleSupplier = callerMaySettleSupplier && supplierClaimSettleable;
+  const supplierReceiptBankOptions = useQuery(
+    api.supplierReceivables.listReceiptBankOptions,
+    orgId && canSettleSupplier && settlingSupplier && supplierRow?.receivableId
+      ? { orgId, receivableId: supplierRow.receivableId as Id<"vehicleSupplierReceivables"> }
+      : "skip"
+  );
   // Named guidance for the one refusal the operator can act on. Every other
   // reason simply withholds the button, as before.
   const supplierGuidance =
@@ -5966,6 +5979,7 @@ export function DealCockpitView({
   const handleSupplierReceipt = async (receipt: {
     amount: number;
     receiptMethod?: PaymentMethod;
+    bankAccountId?: Id<"bankAccounts">;
     receiptReference?: string;
     receivedAt?: number;
   }) => {
@@ -7429,6 +7443,7 @@ export function DealCockpitView({
           supplierName={supplierRow.name}
           outstandingMajor={supplierRow.amountMinor / factor}
           outstandingLabel={money(supplierRow.amountMinor)}
+          bankOptions={supplierReceiptBankOptions}
           t={t}
           onOpenChange={setSettlingSupplier}
           onConfirm={handleSupplierReceipt}

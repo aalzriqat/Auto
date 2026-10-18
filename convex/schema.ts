@@ -1457,6 +1457,7 @@ export default defineSchema({
      */
     amountReceived: v.optional(v.number()),
     receiptMethod: v.optional(paymentMethodValidator),
+    receiptBankAccountId: v.optional(v.id("bankAccounts")),
     /** Cheque number or transfer reference for the most recent receipt. */
     receiptReference: v.optional(v.string()),
     /** The bank or cash account the money arrived in. */
