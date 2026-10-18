@@ -2019,6 +2019,15 @@ export function classifyExpensePosting(args: {
 
 export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   const { capitalize, prepaid } = classifyExpensePosting(p);
+  const paymentKey = p.costBearer === "SUPPLIER"
+    ? disbursementAccountKey(p.paymentMethod)
+    : cashAccountKey(p.paymentMethod);
+  if (paymentKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A paid expense bank posting requires its physical bank account.");
+  }
+  if (paymentKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A non-bank paid expense cannot name a physical bank account.");
+  }
   // SCRUM-389: a supplier-borne cost is money the supplier owes back, so it is
   // a receivable, not an expense. The refusals below are a second line, not
   // the enforcement — `assertCostBearerAllowed` refuses these shapes at the
@@ -2030,7 +2039,6 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
         "A supplier-borne EXPENSE_POSTED must be vehicle-linked, untaxed and neither capitalized nor prepaid. Refusing to post it."
       );
     }
-    const paymentKey = disbursementAccountKey(p.paymentMethod);
     return {
       lines: [
         line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, p.amountMinor, 0, "Supplier-borne vehicle cost recoverable", { vehicleId: p.vehicleId }),
@@ -2065,7 +2073,6 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   if (p.taxMinor && p.taxMinor > 0) {
     lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, p.taxMinor, 0, "Input VAT paid"));
   }
-  const paymentKey = cashAccountKey(p.paymentMethod);
   lines.push(line(paymentKey, 0, p.amountMinor, "Cash payment",
     paymentKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined));
   return {
@@ -3016,13 +3023,16 @@ export interface CashDrawerDepositedPayload {
   currency: string;
   /**
    * SCRUM-54: the physical bank the cash was deposited into, chosen by the
-   * approver. Optional only so an event queued before this field existed still
-   * drains; `cashDrawer.approveVariance` requires it for every new deposit.
+   * approver. Optional in the historic payload shape only; an event queued
+   * before this field existed is refused rather than posting an unbanked line.
    */
   bankAccountId?: string;
 }
 
 export function ruleCashDrawerDeposited(p: CashDrawerDepositedPayload): RuleResult {
+  if (!p.bankAccountId) {
+    throw new Error("A cash drawer bank deposit requires its physical bank account.");
+  }
   return {
     lines: [
       // Only the bank control line names the bank - CASH_ON_HAND is not a bank.
