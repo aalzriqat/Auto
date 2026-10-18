@@ -7,6 +7,8 @@ describe("queued paid-expense bank identity", () => {
   test("refuses legacy bank-funded events without a physical bank before producing journal lines", () => {
     expect(() => ruleExpensePosted({ ...base, paymentMethod: "BANK_TRANSFER" }))
       .toThrow(/physical bank account/i);
+    expect(() => ruleExpensePosted({ ...base, paymentMethod: "CHEQUE" }))
+      .toThrow(/physical bank account/i);
     expect(() => ruleExpensePosted({
       ...base, paymentMethod: "CHEQUE", costBearer: "SUPPLIER", vehicleId: "vehicle-1",
     })).toThrow(/physical bank account/i);
@@ -15,12 +17,18 @@ describe("queued paid-expense bank identity", () => {
   test("keeps the bank on both ordinary and supplier-borne bank credits", () => {
     for (const payload of [
       { ...base, paymentMethod: "BANK_TRANSFER", bankAccountId: "bank-1" },
+      { ...base, paymentMethod: "CHEQUE", bankAccountId: "bank-1" },
       { ...base, paymentMethod: "CHEQUE", costBearer: "SUPPLIER" as const, vehicleId: "vehicle-1", bankAccountId: "bank-1" },
     ]) {
       const bankLine = ruleExpensePosted(payload).lines.find((line) => line.accountSystemKey === "BANK_ACCOUNT");
       expect(bankLine?.bankAccountId).toBe("bank-1");
       expect(bankLine?.creditMinor).toBe(1_000);
     }
+  });
+
+  test("books a showroom expense paid by our own cheque against the bank, not cheques in hand", () => {
+    const { lines } = ruleExpensePosted({ ...base, paymentMethod: "CHEQUE", bankAccountId: "bank-1" });
+    expect(lines.some((line) => line.accountSystemKey === "CHEQUES_IN_HAND")).toBe(false);
   });
 
   test("refuses a physical bank on a cash expense", () => {

@@ -2031,9 +2031,9 @@ export function classifyExpensePosting(args: {
 
 export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   const { capitalize, prepaid } = classifyExpensePosting(p);
-  const paymentKey = p.costBearer === "SUPPLIER"
-    ? disbursementAccountKey(p.paymentMethod)
-    : cashAccountKey(p.paymentMethod);
+  // Outbound for either bearer: a CHEQUE here is one the dealership ISSUED,
+  // so it credits the bank, never CHEQUES_IN_HAND (customer cheques held).
+  const paymentKey = disbursementAccountKey(p.paymentMethod);
   if (paymentKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
     throw new Error("A paid expense bank posting requires its physical bank account.");
   }
