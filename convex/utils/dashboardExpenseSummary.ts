@@ -25,6 +25,8 @@ import { isCashOutExpense, isShowroomBorne } from "./costBearer";
  */
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
+/** Month key for dates the calendar cannot place; below every real month. */
+export const UNPLACEABLE_MONTH = 0;
 const DAYS = 31;
 
 export const expenseSummaryPage = makeFunctionReference<
@@ -85,6 +87,13 @@ type Contribution = {
 
 export function contributionOf(exp: Doc<"expenses"> | null | undefined): Contribution | null {
   if (!exp || !isLiveExpense(exp)) return null;
+  const year = new Date(exp.date).getUTCFullYear();
+  // A date the calendar cannot place (non-finite, or outside years 1-9999)
+  // goes to the UNPLACEABLE_MONTH sentinel as unrepresentable, so any window
+  // that could reach it (ALL_TIME) falls back to the raw reader.
+  if (!Number.isFinite(year) || year < 1 || year > 9999) {
+    return { month: UNPLACEABLE_MONTH, day: 0, cashOut: 0, showroom: 0, general: 0, showroomCount: 0, unrepresentable: 1, abs: 0 };
+  }
   const month = monthKeyOf(exp.date);
   const day = new Date(exp.date).getUTCDate() - 1;
   const t = toThousandths(exp.amount);
@@ -108,7 +117,8 @@ function sameContribution(a: Contribution | null, b: Contribution | null): boole
   if (a === null || b === null) return a === b;
   return (
     a.month === b.month && a.day === b.day && a.cashOut === b.cashOut && a.showroom === b.showroom &&
-    a.general === b.general && a.showroomCount === b.showroomCount && a.unrepresentable === b.unrepresentable
+    a.general === b.general && a.showroomCount === b.showroomCount && a.unrepresentable === b.unrepresentable &&
+    a.abs === b.abs
   );
 }
 

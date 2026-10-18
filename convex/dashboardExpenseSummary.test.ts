@@ -15,6 +15,10 @@ import { MAX_SUMMARY_MONTHS, toThousandths } from "./utils/dashboardExpenseSumma
  * The raw reference is the same deployment with the summary BLOCKED, which
  * makes `dashboard.stats` fall back to the raw reader on identical data.
  */
+// The Convex runtime runs in UTC and the raw reader's labels use local time, so
+// pin it: on a developer laptop the near-midnight rows below would otherwise
+// compare a local-day raw label with a UTC-day summary label.
+process.env.TZ = "UTC";
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Deliberately not a midnight, so every rolling cutoff falls inside a day.
 const NOW = Date.UTC(2026, 6, 15, 13, 37, 11, 123);
@@ -125,6 +129,9 @@ function mixedRows(vehicleId: Id<"vehicles">): ExpenseInput[] {
     { ...base, amount: 8, date: NOW + 365 * DAY_MS },
     { ...base, amount: 13, date: NOW + 3 * 365 * DAY_MS + 40 * DAY_MS },
     { ...base, amount: 2, date: NOW + 2 * 60 * 60 * 1000 }, // later today
+    // Either side of a UTC midnight: labels follow the UTC day, whatever TZ runs the test.
+    { ...base, amount: 0.5, date: Date.UTC(2026, 6, 9) - 1 },
+    { ...base, amount: 0.75, date: Date.UTC(2026, 6, 9) },
   ];
 }
 
@@ -218,6 +225,16 @@ describe("dashboard expense month summary", () => {
     const day = await s.identity.query(api.dashboard.stats, { orgId: s.orgId, timeRange: "DAY" });
     expect(day.truncated.expenses).toBe(false);
   }, 60_000);
+
+  test("an amount change on a row with no stored figure still moves the overflow bound", async () => {
+    const s = await setup();
+    const [id] = await s.add([{ ...base, amount: 10, date: NOW - 3 * DAY_MS, status: "PENDING", costBearer: "SUPPLIER" }]);
+    await s.t.mutation(begin, { orgId: s.orgId });
+    await s.drain();
+    await s.t.run((ctx) => ctx.db.patch(id, { amount: 25 }));
+    const months = await s.t.run((ctx) => ctx.db.query("dashboardExpenseMonths").collect());
+    expect(months.map((m) => m.absTotal)).toEqual([25000]);
+  });
 
   test("an amount the summary cannot hold exactly falls back to the raw reader", async () => {
     const s = await setup();
