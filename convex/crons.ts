@@ -3,7 +3,13 @@ import { v } from "convex/values";
 import { internalQuery, internalAction, MutationCtx, ActionCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
-import { notifyManagers, notifyUser } from "./utils/notifications";
+import {
+  dispatch,
+  notifyUser,
+  resolveManagerRecipientsPage,
+  DISPATCH_MAX_SCHEDULED,
+} from "./utils/notifications";
+import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { PLANS, PlanId } from "./subscriptions";
 import { Doc, Id } from "./_generated/dataModel";
 import { findOrgOwnerUser } from "./utils/orgOwner";
@@ -221,13 +227,62 @@ crons.cron(
 
 export default crons;
 
+// ─── Task alarm cron ──────────────────────────────────────────────────────────
+//
+// A due task is alarmed in two steps so that no transaction's size depends on how
+// many managers an org has:
+//
+//  1. triggerAlarms flags the task, alerts its assignee and leaves a
+//     `taskAlarmDeliveries` row plus ONE scheduled kick, all in one transaction.
+//     Its cost per task is constant.
+//  2. deliverTaskAlarmToManagers walks the org's memberships a page at a time,
+//     notifying the managers on each page. A page commits its notifications
+//     together with the cursor past them, so a page is delivered exactly once and
+//     the next page resumes where it ended.
+//
+// Before this, step 2 ran inside step 1 for the whole cohort. A cohort too big for
+// one transaction made the first (soonest-due) task throw on every tick, which
+// stopped the alarms of every other tenant behind it.
+//
+// The per-transaction ceilings below are the 1,000 scheduled functions a mutation
+// may schedule, with headroom, as modelled by convex-test. Both sizes derive from
+// the worst case one `dispatch` can schedule.
+const SCHEDULED_BUDGET = 800;
+// Re-queue sweep: deliveries re-kicked per hop (see rekickStalledDeliveries).
+const SWEEP_BATCH_SIZE = 20;
+// A delivery's kick is scheduled for "now" and every page re-stamps its progress,
+// so one that has not moved for this long has lost its continuation.
+const STALLED_DELIVERY_MS = 15 * 60 * 1000;
+// Re-kicks a delivery gets without making progress before it is parked as FAILED.
+// A page that throws rolls back and cannot record its own failure, so the sweep
+// counts the re-kicks instead.
+const MAX_DELIVERY_REKICKS = 5;
+// Memberships one delivery page covers: each manager may take a full dispatch,
+// and one function is reserved for the next page's kick, so a full page schedules
+// 199 x 4 + 1 = 797, inside the budget.
+const MANAGER_PAGE_SIZE = Math.floor((SCHEDULED_BUDGET - 1) / DISPATCH_MAX_SCHEDULED);
+// Per bucket, and the cap on tasks one hop alarms. A task schedules up to a full
+// dispatch for its assignee, the task email and its delivery kick; the hop also
+// schedules its sweep and its own continuation.
+const ALARM_BATCH_SIZE = Math.floor((SCHEDULED_BUDGET - SWEEP_BATCH_SIZE - 1) / (DISPATCH_MAX_SCHEDULED + 2));
+
 export const triggerAlarms = internalMutation({
   args: {},
   handler: async (ctx) => {
     try {
-      const result = await runTriggerAlarms(ctx);
-      await ctx.db.insert("cronHeartbeats", { jobName: "check-upcoming-tasks", ranAt: Date.now(), success: true, detail: result });
-      return result;
+      const { summary, hasMore, parked } = await runTriggerAlarms(ctx);
+      // Every task read by a full batch was flagged out of the candidate range,
+      // so each continuation strictly shrinks the due set and the chain ends on
+      // data. Scheduled inside the try: if anything throws, the rethrow rolls
+      // back the alarms, the notifications and this schedule together.
+      if (hasMore) {
+        await ctx.scheduler.runAfter(0, internal.crons.triggerAlarms, {});
+      }
+      // The tick itself succeeded, but a delivery given up on this tick is a
+      // failure the cron must report: the parked row is the lasting record, and
+      // this is the only signal an operator watching the heartbeats gets.
+      await ctx.db.insert("cronHeartbeats", { jobName: "check-upcoming-tasks", ranAt: Date.now(), success: parked === 0, detail: summary });
+      return summary;
     } catch (err) {
       await ctx.db.insert("cronHeartbeats", {
         jobName: "check-upcoming-tasks",
@@ -240,97 +295,218 @@ export const triggerAlarms = internalMutation({
   },
 });
 
-async function runTriggerAlarms(ctx: MutationCtx) {
+async function runTriggerAlarms(
+  ctx: MutationCtx
+): Promise<{ summary: string; hasMore: boolean; parked: number }> {
   const now = Date.now();
   // Look for tasks due in the next 15 minutes (or overdue) that haven't been triggered
   const upcomingThreshold = now + 15 * 60 * 1000;
 
-  // `alarmTriggered` is the second field of by_status_alarm, so untriggered
-  // tasks can be read directly from the index instead of being sifted out
-  // afterwards. The previous shape — withIndex(status) + .filter(alarmTriggered
-  // != true) + .collect() — was a POST-READ filter: it loaded every PENDING
-  // task in the entire deployment, including ones already alarmed, on every
-  // 5-minute run. Alarmed tasks stay PENDING until a human completes them, so
-  // that read set only ever grew; once it crossed Convex's per-mutation read
-  // limit this cron would throw on every run and alarms would stop firing for
-  // every tenant at once. Two bounded index reads instead, since a range can't
-  // express "!= true" over an optional boolean (undefined | false | true).
-  const ALARM_SCAN_LIMIT = 500;
+  // `dueDate` is the third field of by_status_alarm_due, so the due window is
+  // part of the index range: only tasks that are actually due are read, soonest
+  // first. The previous shape read the first 500 untriggered PENDING tasks per
+  // bucket in creation order and compared `dueDate` afterwards. That cost up to
+  // 1,000 task reads on every 5-minute run even when nothing was due, and a
+  // backlog of old far-future tasks could fill the whole window ahead of newer
+  // tasks that were due, so their alarms silently never fired. (Before that, an
+  // unbounded `.filter().collect()` over every PENDING task would have crossed
+  // Convex's per-mutation read limit and stopped alarms for every tenant.)
+  //
+  // Two reads, since a range can't express "!= true" over an optional boolean
+  // (undefined | false | true).
   const [neverFlagged, explicitlyFalse] = await Promise.all([
     ctx.db
       .query("tasks")
-      .withIndex("by_status_alarm", (q) =>
-        q.eq("status", "PENDING").eq("alarmTriggered", undefined)
+      .withIndex("by_status_alarm_due", (q) =>
+        q.eq("status", "PENDING").eq("alarmTriggered", undefined).lte("dueDate", upcomingThreshold)
       )
-      .take(ALARM_SCAN_LIMIT),
+      .take(ALARM_BATCH_SIZE),
     ctx.db
       .query("tasks")
-      .withIndex("by_status_alarm", (q) =>
-        q.eq("status", "PENDING").eq("alarmTriggered", false)
+      .withIndex("by_status_alarm_due", (q) =>
+        q.eq("status", "PENDING").eq("alarmTriggered", false).lte("dueDate", upcomingThreshold)
       )
-      .take(ALARM_SCAN_LIMIT),
+      .take(ALARM_BATCH_SIZE),
   ]);
-  const allPendingTasks = [...neverFlagged, ...explicitlyFalse];
-
-  // A task only leaves this candidate pool once its alarm fires, and the index
-  // returns oldest-created-first with no org partitioning. So if untriggered
-  // PENDING tasks ever exceed the cap, old far-future tasks can hold every scan
-  // slot ahead of newer ones that are actually due, and their alarms are delayed
-  // indefinitely — the same starvation the unbounded read caused, just under the
-  // cap and silent. Saturating the limit is the signal that this is happening.
-  if (neverFlagged.length === ALARM_SCAN_LIMIT || explicitlyFalse.length === ALARM_SCAN_LIMIT) {
-    console.warn(
-      `[crons] triggerAlarms hit the ${ALARM_SCAN_LIMIT}-task scan limit ` +
-        `(neverFlagged=${neverFlagged.length}, explicitlyFalse=${explicitlyFalse.length}). ` +
-        `Due alarms may be starved behind older untriggered tasks.`
-    );
-  }
+  // The two buckets are disjoint; merge them so the hop works soonest-due first,
+  // and cap the hop. Whatever the cap leaves behind stays un-flagged for the
+  // continuation, so nothing is dropped or doubled.
+  const merged = [...neverFlagged, ...explicitlyFalse].sort(
+    (a, b) => a.dueDate - b.dueDate || a._creationTime - b._creationTime
+  );
+  const dueTasks = merged.slice(0, ALARM_BATCH_SIZE);
+  const hasMore =
+    neverFlagged.length === ALARM_BATCH_SIZE ||
+    explicitlyFalse.length === ALARM_BATCH_SIZE ||
+    merged.length > dueTasks.length;
 
   let triggeredCount = 0;
 
-  for (const task of allPendingTasks) {
-    if (task.dueDate <= upcomingThreshold) {
-      // Mark as triggered
-      await ctx.db.patch(task._id, { alarmTriggered: true });
+  for (const task of dueTasks) {
+    // Mark as triggered
+    await ctx.db.patch(task._id, { alarmTriggered: true });
 
-      // Create in-app notification for the assignee
-      await notifyUser(
-        ctx,
-        task.orgId,
-        task.assignedTo,
-        "task.due_soon",
-        { taskTitle: task.title, dueTime: new Date(task.dueDate).toLocaleTimeString() },
-        { link: `/${task.orgId}/tasks`, relatedTaskId: task._id }
-      );
+    // Create in-app notification for the assignee
+    await notifyUser(
+      ctx,
+      task.orgId,
+      task.assignedTo,
+      "task.due_soon",
+      { taskTitle: task.title, dueTime: new Date(task.dueDate).toLocaleTimeString() },
+      { link: `/${task.orgId}/tasks`, relatedTaskId: task._id }
+    );
 
-      // Fetch assignee details for notifications and email
-      const assignee = await ctx.db.get(task.assignedTo);
-      const assigneeName = assignee ? (assignee.name || assignee.email) : 'someone';
-      const email = assignee?.email;
+    // Fetch assignee details for notifications and email
+    const assignee = await ctx.db.get(task.assignedTo);
+    const assigneeName = assignee ? (assignee.name || assignee.email) : 'someone';
+    const email = assignee?.email;
 
-      // Notify managers about the upcoming/overdue task
-      await notifyManagers(
-        ctx,
-        task.orgId,
-        "task.overdue_warning",
-        { taskTitle: task.title, assigneeName },
-        { link: "/tasks" }
-      );
+    // Managers are warned by the delivery this leaves behind. The row is written
+    // in this transaction, so a task is flagged if and only if its warning is owed.
+    const deliveryId = await ctx.db.insert("taskAlarmDeliveries", {
+      orgId: task.orgId,
+      taskId: task._id,
+      taskTitle: task.title,
+      assigneeName,
+      cursor: null,
+      lastProgressAt: Date.now(),
+      status: "ACTIVE",
+      attempts: 0,
+    });
+    await ctx.scheduler.runAfter(0, internal.crons.deliverTaskAlarmToManagers, { deliveryId });
 
-      if (email) {
-        await ctx.scheduler.runAfter(0, internal.email.sendTaskAlarm, {
-          toEmail: email,
-          taskTitle: task.title,
-          taskDescription: task.description,
-          dueDate: task.dueDate,
-        });
-      }
-
-      triggeredCount++;
+    if (email) {
+      await ctx.scheduler.runAfter(0, internal.email.sendTaskAlarm, {
+        toEmail: email,
+        taskTitle: task.title,
+        taskDescription: task.description,
+        dueDate: task.dueDate,
+      });
     }
+
+    triggeredCount++;
   }
 
-  return `Triggered alarms for ${triggeredCount} tasks.`;
+  const { requeued, parked } = await rekickStalledDeliveries(ctx);
+  const summary =
+    `Triggered alarms for ${triggeredCount} tasks.` +
+    (requeued > 0 ? ` Re-queued ${requeued} stalled manager deliveries.` : "") +
+    (parked > 0
+      ? ` Gave up on ${parked} manager ${parked === 1 ? "delivery" : "deliveries"} after ${MAX_DELIVERY_REKICKS} re-queues.`
+      : "");
+  return { summary, hasMore, parked };
+}
+
+/**
+ * Delivers one task alarm's warning to the org's managers, one page of memberships
+ * per transaction. The page's notifications, the cursor past them and the next
+ * page's kick commit together; the final page retains a COMPLETED history row.
+ *
+ * Every invocation takes its position from the row, never from an argument, so
+ * duplicate kicks (the cron re-queued a delivery whose first kick was merely
+ * slow) each advance the same cursor: the cohort is covered once, not once per
+ * kick. A kick for a terminal delivery does nothing and preserves its history.
+ *
+ * A page that throws rolls back whole (no notification of a half-delivered page
+ * survives) and leaves the row where it was; the sweep re-kicks it a bounded number
+ * of times and then parks it as FAILED.
+ *
+ * Each page first checks that the alarm is still owed, and sends nothing if not:
+ *  - the organization is being, or has been, destructively purged. Org deletion
+ *    stamps `destructivePurgeStartedAt` before its first step but deletes tasks,
+ *    notifications and preferences, then memberships, in a frozen order. A page
+ *    running in between would insert notifications the purge has already passed and
+ *    schedule sends with the saved preferences gone. Only a PERMANENT block stops
+ *    delivery: a merely suspended organization is warned, as it always was.
+ *  - the task is gone or no longer PENDING (completed, cancelled, deleted): an
+ *    "overdue" warning for it would be false. The assignee's alert was sent by the
+ *    alarm itself and is not retracted.
+ */
+export const deliverTaskAlarmToManagers = internalMutation({
+  args: { deliveryId: v.id("taskAlarmDeliveries") },
+  returns: v.null(),
+  handler: async (ctx, { deliveryId }) => {
+    try {
+      const delivery = await ctx.db.get(deliveryId);
+      // A parked delivery is kept for the record and for org deletion, not retried.
+      if (!delivery || delivery.status !== "ACTIVE") return null;
+
+      const lifecycle = await orgEconomicLifecycleBlock(ctx, delivery.orgId);
+      if (lifecycle?.permanent) {
+        await ctx.db.patch(deliveryId, { status: "CANCELLED", completedAt: Date.now() });
+        return null;
+      }
+      const task = await ctx.db.get(delivery.taskId);
+      if (!task || task.status !== "PENDING") {
+        await ctx.db.patch(deliveryId, { status: "CANCELLED", completedAt: Date.now() });
+        return null;
+      }
+
+      const page = await resolveManagerRecipientsPage(ctx, delivery.orgId, delivery.cursor, MANAGER_PAGE_SIZE);
+      for (const managerId of page.recipients) {
+        await dispatch(
+          ctx,
+          delivery.orgId,
+          managerId,
+          "task.overdue_warning",
+          { taskTitle: delivery.taskTitle, assigneeName: delivery.assigneeName },
+          { link: "/tasks" }
+        );
+      }
+
+      if (page.isDone) {
+        await ctx.db.patch(deliveryId, { status: "COMPLETED", completedAt: Date.now() });
+      } else {
+        await ctx.db.patch(deliveryId, { cursor: page.continueCursor, lastProgressAt: Date.now(), attempts: 0 });
+        await ctx.scheduler.runAfter(0, internal.crons.deliverTaskAlarmToManagers, { deliveryId });
+      }
+      return null;
+    } catch (error) {
+      console.error(error);
+      throw error;
+    }
+  },
+});
+
+/**
+ * Re-kicks deliveries that have not progressed for STALLED_DELIVERY_MS, oldest
+ * first, and stamps them so they are not re-kicked again on the next tick. This is
+ * the only recovery for a page that failed or a kick that never ran: a scheduled
+ * mutation is not retried on an application error. It costs one empty index read
+ * per hop when nothing is stalled.
+ *
+ * Each re-kick is counted on the row (`attempts`, reset by any page that makes
+ * progress). A delivery that has used MAX_DELIVERY_REKICKS without progress is
+ * parked as FAILED instead of re-kicked again, so a page that fails every time costs
+ * a bounded number of transactions rather than one per window forever. It holds up
+ * nobody else either way: each delivery is its own transaction, and a re-kick
+ * rotates the row behind the others. Parked rows are outside the index range read
+ * here, so they cannot crowd out live stalled deliveries.
+ */
+async function rekickStalledDeliveries(ctx: MutationCtx): Promise<{ requeued: number; parked: number }> {
+  const now = Date.now();
+  const stalled = await ctx.db
+    .query("taskAlarmDeliveries")
+    .withIndex("by_status_lastProgressAt", (q) =>
+      q.eq("status", "ACTIVE").lt("lastProgressAt", now - STALLED_DELIVERY_MS)
+    )
+    .take(SWEEP_BATCH_SIZE);
+  let requeued = 0;
+  let parked = 0;
+  for (const delivery of stalled) {
+    if (delivery.attempts >= MAX_DELIVERY_REKICKS) {
+      await ctx.db.patch(delivery._id, { status: "FAILED" });
+      console.error(
+        `Task alarm delivery ${delivery._id} for task ${delivery.taskId} made no progress after ${delivery.attempts} re-queues; parked as FAILED.`
+      );
+      parked++;
+      continue;
+    }
+    await ctx.db.patch(delivery._id, { lastProgressAt: now, attempts: delivery.attempts + 1 });
+    await ctx.scheduler.runAfter(0, internal.crons.deliverTaskAlarmToManagers, { deliveryId: delivery._id });
+    requeued++;
+  }
+  return { requeued, parked };
 }
 
 // ─── Subscription reminder cron ───────────────────────────────────────────────

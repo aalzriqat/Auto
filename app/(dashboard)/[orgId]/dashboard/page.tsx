@@ -148,8 +148,18 @@ export default function DashboardPage() {
     avatar: lead.customerName.substring(0, 2).toUpperCase()
   }));
 
-  const lineChartData = stats?.salesTrend?.length ? stats.salesTrend.map((t: { name: string; Revenue: number }) => ({ name: t.name, value: t.Revenue })) : [];
-  const trendRange = (stats?.salesTrend?.length || 0) > 1
+  // `null` means the sale window exceeded its read cap: the figure is
+  // unavailable, so say so - no zero, no sold count, no chart of a prefix.
+  const salesUnavailable =
+    stats?.salesVolumeThisMonth === null ||
+    stats?.salesThisMonth === null ||
+    !!stats?.salesTrend?.some((t: { Revenue: number | null }) => t.Revenue === null);
+  const lineChartData = stats?.salesTrend?.length && !salesUnavailable
+    ? stats.salesTrend.map((t: { name: string; Revenue: number | null }) => ({ name: t.name, value: t.Revenue ?? 0 }))
+    : [];
+  const trendRange = salesUnavailable
+    ? t("FigureUnavailable" as any)
+    : (stats?.salesTrend?.length || 0) > 1
     ? `${stats!.salesTrend![0].name} - ${stats!.salesTrend![stats!.salesTrend!.length - 1].name}`
     : timeRange === "DAY" ? t("Today") : timeRange === "MONTH" ? t("ThisMonth") : timeRange === "YEAR" ? t("ThisYear") : t("AllTime");
   // Counted server-side across every lead, not derived from `leads` — that is
@@ -233,7 +243,9 @@ export default function DashboardPage() {
               <div className="flex items-baseline gap-6">
                 <div>
                   <div className="text-3xl md:text-5xl font-bold tracking-tight">
-                    {formatCompact(stats?.salesVolumeThisMonth || 0)}
+                    {salesUnavailable
+                      ? t("FigureUnavailable" as any)
+                      : formatCompact(stats?.salesVolumeThisMonth || 0)}
                     {/* A trailing "+" the moment the figure is known to be
                         short. Sales whose accounting basis could not be
                         established are excluded from turnover on purpose —
@@ -242,7 +254,9 @@ export default function DashboardPage() {
                         silently only trades an overstated figure for an
                         understated one presented as exact. Same idiom the
                         admin counts already use. */}
-                    {stats?.truncated?.turnover ? (
+                    {/* The server also raises `turnover` for an unavailable
+                        window; "Unavailable+" would read as a partial total. */}
+                    {stats?.truncated?.turnover && !salesUnavailable ? (
                       <span title={t("PartialTotalExplain" as any)}>+</span>
                     ) : null}
                   </div>
@@ -256,16 +270,24 @@ export default function DashboardPage() {
                     {stats?.salesVolumeBasis === "GROSS_TRANSACTION_VALUE"
                       ? (t("GrossTransactionValue" as any) || "Deal volume")
                       : (t("Revenue" as any) || "Revenue")}
-                    <span className="ms-1 text-[#4ade80] font-medium">(+0.0%)</span>
+                    {salesUnavailable ? null : (
+                      <span className="ms-1 text-[#4ade80] font-medium">(+0.0%)</span>
+                    )}
                   </p>
-                  {stats?.truncated?.turnover ? (
+                  {salesUnavailable ? (
+                    <p className="text-xs text-amber-200/90 mt-1" role="status">
+                      {t("FiguresUnavailableExplain" as any)}
+                    </p>
+                  ) : stats?.truncated?.turnover ? (
                     <p className="text-xs text-amber-200/90 mt-1">
                       {t("PartialTotalExplain" as any)}
                     </p>
                   ) : null}
                 </div>
                 <div>
-                  <div className="text-3xl md:text-5xl font-bold tracking-tight">{stats?.salesThisMonth || 0}</div>
+                  <div className="text-3xl md:text-5xl font-bold tracking-tight">
+                    {salesUnavailable ? t("FigureUnavailable" as any) : stats?.salesThisMonth || 0}
+                  </div>
                   <p className="text-sm text-white/80 mt-1">{t("VehiclesSold" as any) || "Vehicles Sold"}</p>
                 </div>
               </div>

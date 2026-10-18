@@ -105,6 +105,8 @@ const mobileFoundationStringEntries = [
   ["overdueReceivables", "Overdue receivables", "ذمم متأخرة"],
   ["collectionsDueTodayCaption", "Outstanding collections", "تحصيلات مستحقة"],
   ["todayForRolePartialTotal", "Partial total — some rows were capped", "إجمالي جزئي — تم تقييد بعض الصفوف"],
+  ["dashboardFigureUnavailable", "Unavailable", "غير متاح"],
+  ["dashboardFiguresUnavailableNote", "Too many records in this period to total exactly — the unavailable figures are not shown. Choose a shorter period.", "عدد السجلات في هذه الفترة كبير جدًا لحساب إجمالي دقيق — الأرقام غير المتاحة غير معروضة. اختر فترة أقصر."],
   ["todayAgendaAllCaughtUpTitle", "You're all caught up", "أنجزت كل شيء"],
   ["todayAgendaAllCaughtUpBody", "Nothing needs your attention right now.", "لا يوجد ما يحتاج انتباهك الآن."],
   ["todayAgendaOverdueTasks", "overdue tasks", "مهام متأخرة"],
