@@ -75,6 +75,8 @@ async function seedJournal(
       postedAt: now,
       createdAt: now,
     });
+    const physicalBanks = await ctx.db.query("bankAccounts").collect();
+    const physicalBank = physicalBanks.find((bank) => bank.orgId === orgId && bank.currency === opts.currency);
     let lineNumber = 1;
     for (const line of opts.lines) {
       // Collected rather than indexed: `ReturnType<typeof
@@ -86,6 +88,9 @@ async function seedJournal(
         (a) => a.orgId === orgId && a.systemKey === line.systemKey
       );
       if (!account) throw new Error(`account ${line.systemKey} was not initialized`);
+      if (line.systemKey === "BANK_ACCOUNT" && !physicalBank) {
+        throw new Error(`no physical bank was seeded for ${opts.currency}`);
+      }
       await ctx.db.insert("journalLines", {
         orgId,
         journalEntryId,
@@ -96,6 +101,7 @@ async function seedJournal(
         currency: opts.currency,
         scale: opts.scale,
         accountingDate: now,
+        ...(line.systemKey === "BANK_ACCOUNT" && physicalBank ? { bankAccountId: physicalBank._id } : {}),
       });
       await incrementAccountSnapshot(ctx as unknown as MutationCtx, {
         orgId,
@@ -154,6 +160,12 @@ async function seedMultiCurrencyDealer() {
   });
   const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+  await asOwner.mutation(api.bankAccounts.create, {
+    orgId, name: "JOD operating", currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: Date.now(),
+  });
+  await asOwner.mutation(api.bankAccounts.create, {
+    orgId, name: "USD operating", currency: "USD", openingBalanceMinor: 0, openingBalanceDate: Date.now(),
+  });
 
   // The same two postings the retired claim flow produced: money into the
   // bank against finance-company AR, once in each currency, on the SAME two
