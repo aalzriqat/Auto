@@ -222,7 +222,7 @@ export function AccountingClient() {
       cash: (
         <div className="max-w-5xl space-y-3">
           <SectionFrame>
-            <BankAccountsTab />
+            <BankAccountsTab onOpenAccountingSetup={() => navigate("settings")} />
           </SectionFrame>
           <p className="px-1 text-sm text-muted-foreground">{t("AccountingCashDrawerElsewhere")}</p>
         </div>

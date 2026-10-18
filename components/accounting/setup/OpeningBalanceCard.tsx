@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/select";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "@/convex/utils/money";
 import { getLocalizedErrorMessage } from "@/lib/errors";
+import { formatInCurrency } from "@/lib/currencyFormat";
 import { accountDisplayName } from "../reports/FinancialReportShared";
 
 /**
@@ -83,6 +84,34 @@ function dateInputToUtcMs(value: string): number | null {
   return Date.UTC(y, m - 1, d);
 }
 
+/** Do not silently round a typed opening amount to a different posted amount. */
+function isOpeningAmountRepresentable(value: string, scale: number): boolean {
+  if (value === "") return true;
+  if (value.length > 32) return false;
+  const parts = /^(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!parts || (parts[2]?.length ?? 0) > scale) return false;
+  const exactMinor = Number(`${parts[1]}${(parts[2] ?? "").padEnd(scale, "0")}`);
+  return Number.isSafeInteger(exactMinor) &&
+    Math.round(Number(value) * Math.pow(10, scale)) === exactMinor;
+}
+
+function openingTotals(lines: DraftLine[], currency: string, scale: number) {
+  if (!lines.every((line) =>
+    isOpeningAmountRepresentable(line.debit, scale) &&
+    isOpeningAmountRepresentable(line.credit, scale)
+  )) return { debitMinor: 0, creditMinor: 0, balanced: false, valid: false };
+  let debitMinor = 0;
+  let creditMinor = 0;
+  for (const line of lines) {
+    debitMinor += toMinorUnits(Number(line.debit) || 0, currency);
+    creditMinor += toMinorUnits(Number(line.credit) || 0, currency);
+    if (!Number.isSafeInteger(debitMinor) || !Number.isSafeInteger(creditMinor)) {
+      return { debitMinor: 0, creditMinor: 0, balanced: false, valid: false };
+    }
+  }
+  return { debitMinor, creditMinor, balanced: debitMinor === creditMinor && debitMinor > 0, valid: true };
+}
+
 export function OpeningBalanceCard() {
   const { t, locale } = useLanguage();
   const { activeOrgId } = useOrg();
@@ -115,6 +144,7 @@ export function OpeningBalanceCard() {
   // amounts off by a factor of ten on any org that is not on a 3-decimal
   // currency.
   const currency = status?.currency ?? "JOD";
+  const amountScale = scaleForCurrency(currency);
 
   // The bank control account is the one chart account whose line must name a
   // physical bank; the server refuses it otherwise. Only banks the server would
@@ -130,15 +160,7 @@ export function OpeningBalanceCard() {
 
   // Summed in minor units, so the balance check matches exactly what the
   // server validates rather than accumulating float error across lines.
-  const totals = useMemo(() => {
-    let debitMinor = 0;
-    let creditMinor = 0;
-    for (const line of lines) {
-      debitMinor += toMinorUnits(Number(line.debit) || 0, currency);
-      creditMinor += toMinorUnits(Number(line.credit) || 0, currency);
-    }
-    return { debitMinor, creditMinor, balanced: debitMinor === creditMinor && debitMinor > 0 };
-  }, [lines, currency]);
+  const totals = openingTotals(lines, currency, amountScale);
 
   const filledLines = lines.filter(
     (line) => line.accountId && (Number(line.debit) > 0 || Number(line.credit) > 0)
@@ -152,6 +174,7 @@ export function OpeningBalanceCard() {
   const canSubmit =
     Boolean(activeOrgId) &&
     totals.balanced &&
+    totals.valid &&
     filledLines.length >= 2 &&
     bankChosenForEveryBankLine &&
     dateInputToUtcMs(asOfDate) !== null &&
@@ -211,9 +234,11 @@ export function OpeningBalanceCard() {
   }
 
   if (!activeOrgId || status === undefined) return null;
-  if (!status.canManageFinance) return null;
+  if (!status.canManageFinance && !status.posted) return null;
 
   const alreadyResolved = status.posted || status.pendingDraftId !== null;
+  const postedOpening = status.postedOpening;
+  const postedCurrency = postedOpening?.currency;
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -242,7 +267,7 @@ export function OpeningBalanceCard() {
           </div>
         </div>
 
-        {!alreadyResolved && (
+        {status.canManageFinance && !alreadyResolved && (
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button size="sm">{t("OpeningBalanceSet")}</Button>
@@ -331,9 +356,10 @@ export function OpeningBalanceCard() {
                       <Input
                         type="number"
                         min="0"
-                        step="0.001"
+                        step={1 / Math.pow(10, amountScale)}
                         placeholder={t("OpeningBalanceDebit")}
                         aria-label={t("OpeningBalanceDebit")}
+                        aria-invalid={!isOpeningAmountRepresentable(line.debit, amountScale)}
                         value={line.debit}
                         // A line is one side or the other; clearing the opposite
                         // field keeps a mistyped row from posting as both.
@@ -342,9 +368,10 @@ export function OpeningBalanceCard() {
                       <Input
                         type="number"
                         min="0"
-                        step="0.001"
+                        step={1 / Math.pow(10, amountScale)}
                         placeholder={t("OpeningBalanceCredit")}
                         aria-label={t("OpeningBalanceCredit")}
+                        aria-invalid={!isOpeningAmountRepresentable(line.credit, amountScale)}
                         value={line.credit}
                         onChange={(e) => updateLine(index, { credit: e.target.value, debit: "" })}
                       />
@@ -404,14 +431,19 @@ export function OpeningBalanceCard() {
                   <span className="text-muted-foreground">{t("OpeningBalanceTotals")}</span>
                   <span className="flex items-center gap-3">
                     <span className="tabular-nums text-foreground">
-                      {fromMinorUnits(totals.debitMinor, currency).toFixed(scaleForCurrency(currency))}{" / "}
-                      {fromMinorUnits(totals.creditMinor, currency).toFixed(scaleForCurrency(currency))}
+                      {formatInCurrency(locale === "ar" ? "ar" : "en-US", currency, fromMinorUnits(totals.debitMinor, currency), scaleForCurrency(currency))}{" / "}
+                      {formatInCurrency(locale === "ar" ? "ar" : "en-US", currency, fromMinorUnits(totals.creditMinor, currency), scaleForCurrency(currency))}
                     </span>
                     <span className={totals.balanced ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}>
                       {totals.balanced ? t("OpeningBalanceBalanced") : t("OpeningBalanceUnbalanced")}
                     </span>
                   </span>
                 </div>
+                {!totals.valid && (
+                  <p className="text-sm text-amber-700 dark:text-amber-300" role="status">
+                    {t("OpeningBalanceAmountInvalid")}
+                  </p>
+                )}
               </div>
 
               <DialogFooter>
@@ -425,6 +457,53 @@ export function OpeningBalanceCard() {
           </Dialog>
         )}
       </div>
+      {status.posted && postedOpening && (
+        <div className="mt-4 space-y-2 border-t border-border pt-4">
+          <p className="text-sm text-muted-foreground">
+            {t("OpeningBalanceAsOfDate")}: <time dateTime={toDateInputValue(postedOpening.accountingDate)}>
+              {toDateInputValue(postedOpening.accountingDate)}
+            </time>
+            {postedCurrency && <> {" · "}<bdi>{postedCurrency}</bdi></>}
+          </p>
+          {(!postedCurrency || postedOpening.lines.length === 0) ? (
+            <p className="text-sm text-amber-700 dark:text-amber-300" role="status">
+              {t("OpeningBalanceDetailsUnavailable")}
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-md border border-border">
+              <table className="w-full min-w-[440px] text-sm">
+                <thead className="bg-muted/50 text-muted-foreground">
+                  <tr>
+                    <th scope="col" className="px-3 py-2 text-start font-medium">{t("OpeningBalanceAccount")}</th>
+                    <th scope="col" className="px-3 py-2 text-end font-medium">{t("OpeningBalanceDebit")}</th>
+                    <th scope="col" className="px-3 py-2 text-end font-medium">{t("OpeningBalanceCredit")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {postedOpening.lines.map((line, index) => (
+                    <tr key={`${line.accountId}-${index}`} className="border-t border-border">
+                      <th scope="row" className="px-3 py-2 text-start font-medium">
+                        <bdi>{line.accountCode ? `${line.accountCode} — ` : ""}{line.accountName
+                          ? accountDisplayName({ name: line.accountName, nameAr: line.accountNameAr ?? undefined }, locale)
+                          : t("OpeningBalanceAccountUnavailable")}</bdi>
+                        {line.bankAccountName && <span className="block text-xs font-normal text-muted-foreground"><bdi>{line.bankAccountName}</bdi></span>}
+                      </th>
+                      <td className="px-3 py-2 text-end tabular-nums">
+                        {line.debitMinor ? formatInCurrency(locale === "ar" ? "ar" : "en-US", postedCurrency,
+                          fromMinorUnits(line.debitMinor, postedCurrency), scaleForCurrency(postedCurrency)) : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-end tabular-nums">
+                        {line.creditMinor ? formatInCurrency(locale === "ar" ? "ar" : "en-US", postedCurrency,
+                          fromMinorUnits(line.creditMinor, postedCurrency), scaleForCurrency(postedCurrency)) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
