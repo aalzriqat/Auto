@@ -2886,6 +2886,22 @@ async function insertBank(
   );
 }
 
+test("retained-credit payout bank options follow the requested currency", async () => {
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  const s = await seedFinanceMember(t);
+  const usdBankId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId: s.orgId, name: "USD payout bank", currency: "USD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  const usdOptions = await s.asFinance.query(api.collections.listReceiptBankOptions,
+    { orgId: s.orgId, currency: "USD" });
+  expect(usdOptions.banks.map((bank) => bank._id)).toEqual([usdBankId]);
+  const defaultOptions = await s.asFinance.query(api.collections.listReceiptBankOptions,
+    { orgId: s.orgId });
+  expect(defaultOptions.banks.map((bank) => bank._id)).toEqual([s.bankAccountId]);
+});
+
 describe("SCRUM-54 recordPayment names the physical bank of a bank-bound receipt", () => {
   const TRACKED = [
     "collectionPayments", "canonicalPayments", "paymentAllocations", "transactions", "accountingEvents",
