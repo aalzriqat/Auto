@@ -162,7 +162,7 @@ describe("Phase 9 — expense account mapping", () => {
 
 describe("Phase 9 — supplier payable payment method", () => {
   test("markPaid stores bank-transfer method and credits Bank", async () => {
-    const { t, orgId, userId, asUser } = await seedDealer("supplier_method");
+    const { t, orgId, userId, asUser, bankAccountId } = await seedDealer("supplier_method");
     const now = Date.now();
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
@@ -199,6 +199,7 @@ describe("Phase 9 — supplier payable payment method", () => {
       orgId,
       payableId,
       paymentMethod: "BANK_TRANSFER",
+      bankAccountId,
       idempotencyKey: "supplier_bank_transfer_1",
     });
 

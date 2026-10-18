@@ -1439,7 +1439,9 @@ describe("Fix #13 — ON_ACCOUNT credit purchases for owned vehicles", () => {
   });
 
   test("settling the payable via sourcingPayables.markPaid clears AP against Bank and reclassifies VAT out of Vehicle Inventory, not COGS", async () => {
-    const { t, orgId, asOwner } = await seedDealer("f13c");
+    const dealer = await seedDealer("f13c");
+    const { t, orgId, asOwner } = dealer;
+    const bankAccountId = await addOperatingBank(dealer);
 
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
@@ -1451,7 +1453,7 @@ describe("Fix #13 — ON_ACCOUNT credit purchases for owned vehicles", () => {
     );
 
     await asOwner.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(),
-      orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER", taxAmount: 500,
+      orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER", bankAccountId, taxAmount: 500,
     });
 
     const ap = await accountBySystemKey(t, orgId, "ACCOUNTS_PAYABLE_SUPPLIERS");

@@ -538,6 +538,7 @@ export interface SupplierPaymentSettledPayload {
   taxMinor?: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
   /**
    * Which account AP-Suppliers was originally credited against for this
    * payable — a sourced/drop-ship vehicle credits AP against COST_OF_VEHICLES_SOLD
@@ -1729,6 +1730,12 @@ export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): Ru
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
     : cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Supplier bank payment lacks its physical bank account; refusing to post.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Cash supplier payment cannot name a physical bank account.");
+  }
   // AP-Suppliers was originally credited for the full gross amountMinor back
   // at SALE_COMPLETED (ruleSaleCompleted's isSourced branch), so it must be
   // debited in full here too — netting it would leave a permanent residual
@@ -1738,7 +1745,7 @@ export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): Ru
   // the AP/cash settlement lines.
   const lines: LineSpec[] = [
     line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, p.amountMinor, 0, `AP settled — ${p.sourcedFromName}`),
-    line(cashKey, 0, p.amountMinor, "Cash paid to supplier"),
+    line(cashKey, 0, p.amountMinor, "Cash paid to supplier", cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
   ];
   if (p.taxMinor && p.taxMinor > 0) {
     // Reclassify out of whichever account AP was actually credited against

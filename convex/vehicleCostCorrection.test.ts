@@ -74,7 +74,8 @@ async function seedDealer(suffix: string) {
   });
   const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
-  return { t, orgId, userId, asOwner, periodId: period._id };
+  const supplierBankAccountId = await seedBank(t, orgId);
+  return { t, orgId, userId, asOwner, periodId: period._id, supplierBankAccountId };
 }
 
 type Dealer = Awaited<ReturnType<typeof seedDealer>>;
@@ -314,7 +315,7 @@ describe("SCRUM-650 correctAcquisitionCost — ON_ACCOUNT acquisition", () => {
     expect(await balanceMinor(d.t, d.orgId, "ACCOUNTS_PAYABLE_SUPPLIERS")).toBe(-9_800_000);
 
     await d.asOwner.mutation(api.sourcingPayables.markPaid, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER",
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER", bankAccountId: d.supplierBankAccountId,
     });
     expect(await balanceMinor(d.t, d.orgId, "ACCOUNTS_PAYABLE_SUPPLIERS")).toBe(0);
   });
@@ -336,7 +337,7 @@ describe("SCRUM-650 correctAcquisitionCost — ON_ACCOUNT acquisition", () => {
     const vehicleId = await createOnAccountVehicle(d, 12500);
     const payable = await payableOf(d.t, vehicleId);
     await d.asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, amount: 1000, paymentMethod: "BANK_TRANSFER",
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, amount: 1000, paymentMethod: "BANK_TRANSFER", bankAccountId: d.supplierBankAccountId,
     });
     const before = await snapshot(d.t, d.orgId, vehicleId);
 
@@ -397,7 +398,7 @@ describe("SCRUM-650 correctAcquisitionCost — ON_ACCOUNT acquisition", () => {
     const vehicleId = await createOnAccountVehicle(d, 12500);
     const payable = await payableOf(d.t, vehicleId);
     await d.asOwner.mutation(api.sourcingPayables.markPaid, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER",
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER", bankAccountId: d.supplierBankAccountId,
     });
     await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier refunded the difference",
@@ -670,7 +671,7 @@ describe("SCRUM-650 batch 2 A2: payable eligibility is derived from the money", 
     expect(await balanceMinor(d.t, d.orgId, "ACCOUNTS_PAYABLE_SUPPLIERS")).toBe(-9_800_000);
     expect(inventoryBefore - (await balanceMinor(d.t, d.orgId, "VEHICLE_INVENTORY"))).toBe(2_700_000);
     await d.asOwner.mutation(api.sourcingPayables.markPaid, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER",
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER", bankAccountId: d.supplierBankAccountId,
     });
     expect(await balanceMinor(d.t, d.orgId, "ACCOUNTS_PAYABLE_SUPPLIERS")).toBe(0);
   });
@@ -755,7 +756,7 @@ describe("SCRUM-650 batch 2 A4: the cashbook projection of a cash correction", (
     const vehicleId = await createOnAccountVehicle(d, 12500);
     const payable = await payableOf(d.t, vehicleId);
     await d.asOwner.mutation(api.sourcingPayables.markPaid, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER",
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER", bankAccountId: d.supplierBankAccountId,
     });
     const rowsBefore = (await listAll(d)).page;
     const inventoryBefore = await balanceMinor(d.t, d.orgId, "VEHICLE_INVENTORY");
@@ -993,7 +994,7 @@ describe("SCRUM-650 batch 2 A12: the counter-account mirror matches what the led
       if (c.original === "PAID_ON_ACCOUNT") {
         const payable = await payableOf(d.t, vehicleId);
         await d.asOwner.mutation(api.sourcingPayables.markPaid, {
-          idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER",
+          idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER", bankAccountId: d.supplierBankAccountId,
         });
       }
     }

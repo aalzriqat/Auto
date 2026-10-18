@@ -1299,6 +1299,7 @@ export async function hookSupplierPaymentSettled(
     taxMinor?: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     /** See SupplierPaymentSettledPayload — defaults to "COGS" (sale-originated payables). */
     costOrigin?: "COGS" | "VEHICLE_INVENTORY";
     actorId: Id<"users">;
@@ -1328,6 +1329,7 @@ export async function hookSupplierPaymentSettled(
       taxMinor: args.taxMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
       costOrigin: args.costOrigin,
     },
   });

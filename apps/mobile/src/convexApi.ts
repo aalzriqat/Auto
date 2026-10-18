@@ -2554,6 +2554,7 @@ export const api = {
         payableId: string;
         paymentNotes?: string;
         paymentMethod?: MobilePaymentMethod;
+        bankAccountId?: string;
         taxAmount?: number;
         idempotencyKey?: string;
       },

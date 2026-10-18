@@ -1641,6 +1641,8 @@ export default defineSchema({
     paidAt: v.optional(v.number()),
     paidBy: v.optional(v.id("users")),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Last payment's physical bank; each instalment also retains its bank on its accounting event. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** Cheque number or transfer reference. */
     paymentReference: v.optional(v.string()),
     /** The bank or cash account the payment left. */
