@@ -685,10 +685,11 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // The two SCRUM-807 changes are independent; with both applied: 529 + 1 = 530 total, 356 + 1 = 357 analysed.
   // SCRUM-54: bankBalanceBackfill.runPage is one additional org-scoped internal
   // mutation; it reads the mapped account and bounded journal page by org.
+  // With main's three SCRUM-807 additions: 533 + 1 = 534 total, 360 + 1 = 361 analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 531,
-      analysed: 358,
+      totalMutations: 534,
+      analysed: 361,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 158,
     });

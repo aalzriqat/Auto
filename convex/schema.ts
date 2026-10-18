@@ -749,6 +749,7 @@ export default defineSchema({
   journalLines: defineTable({
     orgId: v.id("organizations"),
     journalEntryId: v.id("journalEntries"),
+    reportPosted: v.optional(v.boolean()),
     lineNumber: v.number(),
     accountId: v.id("chartOfAccounts"),
     debitMinor: v.number(),
@@ -781,7 +782,14 @@ export default defineSchema({
     .index("by_org_account_date", ["orgId", "accountId", "accountingDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     // SCRUM-555 lane-B: getPostedLines date-range read without a query filter.
-    .index("by_org_date", ["orgId", "accountingDate"]),
+    .index("by_org_date", ["orgId", "accountingDate"])
+    .index("by_org_reportPosted_date", ["orgId", "reportPosted", "accountingDate"]),
+
+  journalReportEligibility: defineTable({
+    orgId: v.id("organizations"),
+    phase: v.union(v.literal("BUILDING"), v.literal("READY"), v.literal("BLOCKED")),
+    cursor: v.union(v.string(), v.null()),
+  }).index("by_org", ["orgId"]),
 
   // ─── Phase 3: Receivables, payments, and allocations subledger ────────────
 
@@ -2189,6 +2197,9 @@ export default defineSchema({
     // created early but completed later would land in the wrong page.
     .index("by_org_salesperson_saleDate", ["orgId", "salespersonId", "saleDate"])
     .index("by_org_saleDate", ["orgId", "saleDate"])
+    // Dashboard totals (dated windows and ALL_TIME) need completed, non-deleted
+    // rows in sale-date order.
+    .index("by_org_status_live_saleDate", ["orgId", "status", "isDeleted", "saleDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_quote", ["quoteId"])
     .index("by_lead", ["leadId"]),
@@ -2407,6 +2418,10 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_date", ["orgId", "date"])
+    // Dashboard ranges: live (isDeleted undefined or false - two ranges, as the
+    // optional field holds either) and unreversed, in date order. Both
+    // exclusions are in the index so a read never scans deleted or reversed rows.
+    .index("by_org_deleted_reversedAt_date", ["orgId", "isDeleted", "reversedAt", "date"])
     // Finds expenses whose *reversal* lands in a reporting window even though
     // the expense itself is dated long before it — a date-range scan over
     // `by_org_date` would never reach them.
@@ -5306,6 +5321,9 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_date", ["orgId", "date"])
+    // Dashboard sale-ledger fallback: live VEHICLE_SALE inflows in date order,
+    // so the read never scans the org's other transactions (or deleted ones).
+    .index("by_org_category_type_deleted_date", ["orgId", "category", "type", "isDeleted", "date"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_customer", ["orgId", "customerId"])
     // Cancellation finds a sale's own cashflow rows by the sale itself.
