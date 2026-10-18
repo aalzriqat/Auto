@@ -456,6 +456,16 @@ type Defects = {
   bankMissingWritesBeforeRefusing?: boolean;
   /** Bank contract: the receipt posts, but its BANK_ACCOUNT line loses the named bank. */
   bankIdentityDroppedFromJournal?: boolean;
+  /** RV1: a cleared customer cheque loses its named destination bank. */
+  chequeClearingBankDropped?: boolean;
+  /** RV1: a cheque reversal drops the clearing bank. */
+  chequeReversalBankDropped?: boolean;
+  /** RV1: a returned-cheque fee loses the bank that paid it. */
+  chequeFeeBankDropped?: boolean;
+  /** RV1: the fee credits the clearing bank instead of its distinct paying bank. */
+  chequeFeeBankUsesClearingBank?: boolean;
+  /** RV1: a returned-cheque fee debits the wrong expense account. */
+  chequeFeeWrongAccount?: boolean;
   /** Bank contract: a short receipt that names a valid bank is accepted. */
   bankShortReceiptAccepted?: boolean;
   /** Bank contract: the malformed-id contract probe is accepted. */
@@ -547,6 +557,7 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_cap", code: "3000", type: "EQUITY", name: "Partner Capital", systemKey: "PARTNER_CAPITAL", normalBalance: "CREDIT" },
     { _id: "acct_draw", code: "3100", type: "EQUITY", name: "Partner Drawings", systemKey: "PARTNER_DRAWINGS", normalBalance: "DEBIT" },
     { _id: "acct_exp", code: "6000", type: "EXPENSE", name: "General Expense", systemKey: "GENERAL_EXPENSE", normalBalance: "DEBIT" },
+    { _id: "acct_prof_fees", code: "6850", type: "EXPENSE", name: "Professional Fees", systemKey: "PROFESSIONAL_FEES_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_arfc", code: "1210", type: "ASSET", name: "AR Finance Companies", systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", normalBalance: "DEBIT" },
     { _id: "acct_fc_comm", code: "6860", type: "EXPENSE", name: "Finance Company Commission", systemKey: "FINANCE_COMPANY_COMMISSION_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_transfer", code: "6820", type: "EXPENSE", name: "Ownership Transfer", systemKey: "OWNERSHIP_TRANSFER_EXPENSE", normalBalance: "DEBIT" },
@@ -655,6 +666,8 @@ function makeBackend(defects: Defects = {}) {
         vehicleId: l.vehicleId,
         financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
+        bankAccountId: defects.chequeReversalBankDropped && original.eventType === "COLLECTION_PAYMENT" &&
+          CHART.find((a) => a._id === l.accountId)?.systemKey === "BANK_ACCOUNT" ? undefined : l.bankAccountId,
       })),
       { category: "REVERSAL" }
     );
@@ -953,8 +966,8 @@ function makeBackend(defects: Defects = {}) {
   }
 
   /** A customer receipt: cash in, against AR (allocated) or 2110 (on account). */
-  function postReceipt(paymentId: string, customerId: string, amountMinor: number, allocatedMinor: number, cashKey: string) {
-    const lines: Line[] = [{ key: cashKey, debitMinor: amountMinor, customerId }];
+  function postReceipt(paymentId: string, customerId: string, amountMinor: number, allocatedMinor: number, cashKey: string, bankAccountId?: string) {
+    const lines: Line[] = [{ key: cashKey, debitMinor: amountMinor, customerId, bankAccountId }];
     if (allocatedMinor > 0) lines.push({ key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: allocatedMinor, customerId });
     const unapplied = amountMinor - allocatedMinor;
     if (unapplied > 0) {
@@ -1270,22 +1283,33 @@ function makeBackend(defects: Defects = {}) {
         if (!canManageFinance) {
           return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
         }
+        const clearingBank = bankAccounts.get(String(args.bankAccountId ?? ""));
+        if (!clearingBank || clearingBank.orgId !== String(args.orgId) || !clearingBank.isActive || clearingBank.currency !== ORG_CURRENCY) {
+          return { ok: false as const, error: "Select an active bank account in this organization and currency." };
+        }
         const made = replayableCreate("clr", args, true);
         if (made) return made;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("clr"));
         const cheque = cheques.get(String(args.chequeId));
         if (!cheque) return { ok: false as const, error: "Cheque not found" };
         cheque.status = "CLEARED";
+        cheque.clearingBankAccountId = String(args.bankAccountId);
         const paymentId = id("pay");
         collectionPayments.push({ _id: paymentId, direction: "IN", method: "CHEQUE", amount: cheque.amount, chequeId: cheque._id, receivableId: cheque.receivableId });
         settle(cheque.receivableId, cheque.amount);
-        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT");
+        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT", defects.chequeClearingBankDropped ? undefined : String(args.bankAccountId));
         cheque.clearingEventId = eventId;
         return { ok: true as const, value: null };
       }
       case "collections:returnClearedCheque": {
         if (!canManageFinance) {
           return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
+        }
+        if (Number(args.bankFeeMinor ?? 0) > 0) {
+          const feeBank = bankAccounts.get(String(args.bankFeeBankAccountId ?? ""));
+          if (!feeBank || feeBank.orgId !== String(args.orgId) || !feeBank.isActive || feeBank.currency !== ORG_CURRENCY) {
+            return { ok: false as const, error: "Select an active bank account to pay the return fee." };
+          }
         }
         const made = replayableCreate("ret", args, true);
         if (made) return made;
@@ -1308,6 +1332,13 @@ function makeBackend(defects: Defects = {}) {
             r.outstandingAmount += cheque.amount;
             r.status = r.outstandingAmount >= r.originalAmount ? "OPEN" : "PARTIALLY_PAID";
           }
+        }
+        if (Number(args.bankFeeMinor ?? 0) > 0) {
+          post("EXPENSE_POSTED", "expenses", id("expense"), [
+            { key: defects.chequeFeeWrongAccount ? "GENERAL_EXPENSE" : "PROFESSIONAL_FEES_EXPENSE", debitMinor: Number(args.bankFeeMinor) },
+            { key: "BANK_ACCOUNT", creditMinor: Number(args.bankFeeMinor), bankAccountId: defects.chequeFeeBankDropped
+              ? undefined : defects.chequeFeeBankUsesClearingBank ? cheque.clearingBankAccountId : String(args.bankFeeBankAccountId) },
+          ]);
         }
         return { ok: true as const, value: null };
       }
@@ -3041,6 +3072,17 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ receivableNotReopened: true });
     expect(statusOf(results, "RV1")).toBe("FAIL");
     expect(detail(results, "RV1")).toMatch(/outstanding on the receivable after the cheque bounced: expected 1200, got 0/);
+  });
+  test.each([
+    ["clearing bank", { chequeClearingBankDropped: true }, /cheque clearing's physical bank/],
+    ["reversal bank", { chequeReversalBankDropped: true }, /cheque reversal's original physical bank/],
+    ["fee bank", { chequeFeeBankDropped: true }, /bank that paid the cheque return fee/],
+    ["fee bank choice", { chequeFeeBankUsesClearingBank: true }, /bank that paid the cheque return fee/],
+    ["fee account", { chequeFeeWrongAccount: true }, /cheque return fee: journal lines are not exactly/],
+  ] as const)("RV1 catches a wrong %s", async (_label, defect, refusal) => {
+    const results = await runAgainst(defect);
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(detail(results, "RV1")).toMatch(refusal);
   });
 
   // ── RT2: the eight named commands ──

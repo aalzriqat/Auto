@@ -1308,8 +1308,9 @@ describe("SCRUM-239 round 3 - every reachable confirm-after-return refusal is co
     expect(ar.ServerError_CHEQUE_BANK_FEE_INVALID).toContain("عددًا صحيحًا غير سالب");
     expect(ar.ServerError_FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES).toContain("أكثر من شيك واحد فعّال");
     expect(ar.ServerError_FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH).toContain("لا يساوي مبلغ الصرف");
-    expect(FC_RETURN_MESSAGES.CHEQUE_RETURN_KEY_CONFLICT).toContain("cheque, reason or bank fee");
+    expect(FC_RETURN_MESSAGES.CHEQUE_RETURN_KEY_CONFLICT).toContain("cheque, reason, bank fee or bank account");
     expect(ar.ServerError_CHEQUE_RETURN_KEY_CONFLICT).toContain("رسوم بنكية");
+    expect(ar.ServerError_CHEQUE_RETURN_KEY_CONFLICT).toContain("حساب مصرفي");
   });
 
   test("every new confirm/return refusal has EN text equal to the server text, AR text, and the nothing-changed sentence", () => {

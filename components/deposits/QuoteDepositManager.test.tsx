@@ -275,6 +275,9 @@ beforeAll(() => {
 beforeEach(() => {
   cleanup();
   queryResults.clear();
+  queryResults.set("deposits:listRefundBankOptions", {
+    banks: [{ _id: "bank_1", name: "Test refund bank", currency: "JOD" }], truncated: false,
+  });
   mutationCalls.length = 0;
   permissions = [];
   vi.restoreAllMocks();
@@ -573,6 +576,10 @@ describe("what each role can do with a released share", () => {
     fireEvent.click(screen.getByText("PaymentMethod_BANK_TRANSFER"));
 
     expect(within(row).queryByRole("status")).toBeNull();
+    expect(record().disabled).toBe(true);
+    const bankTrigger = within(row).getByRole("combobox", { name: "ReceiptBankAccount" });
+    fireEvent.keyDown(bankTrigger, { key: "Enter", code: "Enter" });
+    fireEvent.click(screen.getByText(/Test refund bank/));
     expect(record().disabled).toBe(false);
     fireEvent.click(record());
     expect(mutationCalls).toHaveLength(1);
@@ -580,6 +587,7 @@ describe("what each role can do with a released share", () => {
       holdId,
       treatment: "REFUND_TO_CUSTOMER",
       refundMethod: "BANK_TRANSFER",
+      bankAccountId: "bank_1",
     });
   });
 

@@ -189,6 +189,7 @@ export function SalesWizardScreen({
   // records it. Nothing is held until a request is confirmed.
   const [depositRequested, setDepositRequested] = useState(false);
   const [depositMethod, setDepositMethod] = useState("");
+  const [depositBankAccountId, setDepositBankAccountId] = useState("");
   const [depositId, setDepositId] = useState<string | null>(null);
   const [resumeChecked, setResumeChecked] = useState(false);
   const [resumePromptVisible, setResumePromptVisible] = useState(false);
@@ -224,6 +225,11 @@ export function SalesWizardScreen({
   const canRecordDeposit =
     myMembership?.roleName?.toUpperCase() === "OWNER" ||
     (myMembership?.permissions ?? []).includes("confirm:finance_disbursement");
+  const depositNeedsBank = depositMethod === "BANK_TRANSFER" || depositMethod === "CARD";
+  const receiptBankOptions = useQuery(api.deposits.listReceiptBankOptions,
+    canRecordDeposit && depositNeedsBank ? { orgId } : "skip");
+  const depositBankReady = !depositNeedsBank ||
+    (receiptBankOptions?.banks.some((bank) => bank._id === depositBankAccountId) ?? false);
   const commandId = useCommandIdentity();
   const saveDraft = useMutation(api.wizardDrafts.saveDraft);
   const clearDraft = useMutation(api.wizardDrafts.clearDraft);
@@ -637,7 +643,7 @@ export function SalesWizardScreen({
     setSaving(true);
     // Scoped to the QUOTE this wizard is building, so a lost response and a
     // second tap take the customer's deposit ONCE. Retired only on success.
-    const depositIntent = `wizard-deposit:${String(quoteId)}:${amount}:${depositMethod}`;
+    const depositIntent = `wizard-deposit:${String(quoteId)}:${amount}:${depositMethod}:${depositBankAccountId}`;
     try {
       if (!canRecordDeposit) {
         await requestDeposit({
@@ -651,12 +657,13 @@ export function SalesWizardScreen({
         setDepositOpen(false);
         return;
       }
-      if (!depositMethod) return;
+      if (!depositMethod || !depositBankReady) return;
       const newDepositId = await createDeposit({
         orgId,
         quoteId,
         amount,
         method: depositMethod as "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE",
+        bankAccountId: depositNeedsBank ? depositBankAccountId : undefined,
         idempotencyKey: commandId.for(depositIntent),
       });
       commandId.retire(depositIntent);
@@ -1298,7 +1305,7 @@ export function SalesWizardScreen({
                       { label: locale === "ar" ? "بطاقة" : "Card", value: "CARD" },
                       { label: locale === "ar" ? "شيك" : "Cheque", value: "CHEQUE" },
                     ]}
-                    onChange={setDepositMethod}
+                    onChange={(method) => { setDepositMethod(method); setDepositBankAccountId(""); }}
                   />
                 ) : (
                   <Text style={styles.successMonthly}>
@@ -1307,13 +1314,24 @@ export function SalesWizardScreen({
                       : "A manager or accountant will confirm receipt. Nothing is held until they do."}
                   </Text>
                 )}
+                {canRecordDeposit && depositNeedsBank && (
+                  <SelectField
+                    label={locale === "ar" ? "البنك الذي استلم العربون" : "Bank that received the deposit"}
+                    value={receiptBankOptions?.banks.some((bank) => bank._id === depositBankAccountId) ? depositBankAccountId : ""}
+                    options={(receiptBankOptions?.banks ?? []).map((bank) => ({ label: `${bank.name} · ${bank.currency}`, value: bank._id }))}
+                    onChange={setDepositBankAccountId}
+                  />
+                )}
+                {depositNeedsBank && receiptBankOptions?.truncated && (
+                  <Text style={styles.successMonthly}>{locale === "ar" ? "قائمة البنوك كبيرة جداً؛ اطلب مساعدة المسؤول." : "Too many banks to choose from; ask an administrator."}</Text>
+                )}
                 <View style={styles.rowButtons}>
                   <Pressable accessibilityRole="button" style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]} onPress={() => setDepositOpen(false)}>
                     <Text style={styles.ghostButtonText}>{locale === "ar" ? "إلغاء" : "Cancel"}</Text>
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
-                    disabled={saving || (canRecordDeposit && !depositMethod)}
+                    disabled={saving || (canRecordDeposit && (!depositMethod || !depositBankReady))}
                     style={({ pressed }) => [styles.nextButton, { backgroundColor: accent, flex: 1 }, pressed && styles.pressed]}
                     onPress={handleRecordDeposit}
                   >

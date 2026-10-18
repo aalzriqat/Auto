@@ -17,8 +17,8 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
-import { NO_ACCOUNTING_DATE_SENTINEL } from "./accountingReports";
 import { AppErrorCode, throwAppError } from "./utils/errors";
+import { bankAggregateNamespace, readAttributionRange, readControlRange } from "./accounting/bankLineAggregate";
 
 export const BANK_OPENING_BALANCE_VIA_GL_MESSAGE =
   "This bank form cannot set a book balance. For initial setup, create every bank before posting the one-time opening journal in Accounting Setup.";
@@ -211,7 +211,28 @@ export const getBookBalance = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    return await computeBookBalance(ctx, args.orgId, args.asOf ?? Date.now(), BOOK_BALANCE_READ_BUDGET);
+    const asOf = args.asOf ?? Date.now();
+    try {
+      return await computeBookBalance(ctx, args.orgId, asOf, BOOK_BALANCE_READ_BUDGET);
+    } catch (error) {
+      console.error("Failed to read the bank book balance", error);
+      return incompleteBankBalance(asOf);
+    }
+  },
+});
+
+/** One bounded result per visible physical bank for the bank accounts table. */
+export const listBookBalances = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const asOf = Date.now();
+    try {
+      return (await computeBankBalances(ctx, args.orgId, asOf, BOOK_BALANCE_READ_BUDGET)).rows;
+    } catch (error) {
+      console.error("Failed to read bank book balances", error);
+      return [incompleteBankBalance(asOf)];
+    }
   },
 });
 
@@ -225,45 +246,50 @@ export const BOOK_BALANCE_READ_BUDGET = 4000;
 
 class ReadBudgetExhausted extends Error {}
 
-/**
- * A control-account line whose date disagrees with its own entry's date or lies
- * outside the entry's period. The control (read by entry) and attribution (read
- * by line) then select different rows, so their nets could cancel into a false OK.
- */
+/** Missing or inconsistent readiness, history, precision, or accounting period facts. */
 class InconsistentHistory extends Error {}
-
-/**
- * What the status/date checks need from an entry; null when the entry row is missing.
- * `periodId` is optional in the schema; an entry without one has no period to bound its lines.
- */
-type EntryFacts = { counts: boolean; accountingDate: number; periodId: Id<"accountingPeriods"> | undefined } | null;
-
-function entryFacts(entry: Doc<"journalEntries">): EntryFacts {
-  return {
-    counts: entry.status === "POSTED" || entry.status === "REVERSED",
-    accountingDate: entry.accountingDate,
-    periodId: entry.periodId,
-  };
-}
-
-/**
- * A line must carry its entry's accounting date, inside the bounds of the entry's
- * period. `endDate` is inclusive (posting assigns the exact end instant to the period).
- * No period (entry without a periodId, or one not read) is a disagreement: fail closed.
- */
-function assertLineMatchesEntry(
-  lineDate: number,
-  entryDate: number,
-  period: { startDate: number; endDate: number } | undefined
-): void {
-  if (lineDate !== entryDate || !period || lineDate < period.startDate || lineDate > period.endDate) {
-    throw new InconsistentHistory();
-  }
-}
 
 function chargeDocs(budget: { remaining: number }, count: number): void {
   if (count > budget.remaining) throw new ReadBudgetExhausted();
   budget.remaining -= count;
+}
+
+/** An aggregate can be read only after its full control-account history is projected. */
+async function readyBankAggregateNamespace(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  accountId: Id<"chartOfAccounts">,
+  budget: { remaining: number },
+): Promise<string> {
+  chargeDocs(budget, 1);
+  const org = await ctx.db.get(orgId);
+  if (!org) throw new InconsistentHistory();
+  const resetGeneration = org.financialResetGeneration ?? 0;
+  if ((org.financialResetCompletedGeneration ?? 0) !== resetGeneration) throw new InconsistentHistory();
+  const mappingGeneration = org.bankAggregateMappingGeneration ?? 0;
+  const namespace = bankAggregateNamespace(orgId, resetGeneration, mappingGeneration);
+  const states = await takeWithinBudget(
+    budget,
+    ctx.db.query("bankBalanceAggregateStates").withIndex("by_org", (q) => q.eq("orgId", orgId)),
+  );
+  if (states.length > 1) throw new InconsistentHistory();
+  const state = states[0];
+  if (!state) {
+    // Only a genuinely empty control history may use an empty tree without a
+    // backfill certificate. This is the first-day organization path.
+    chargeDocs(budget, 1);
+    const first = await ctx.db.query("journalLines")
+      .withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", accountId))
+      .first();
+    if (first) throw new InconsistentHistory();
+    return namespace;
+  }
+  if (state.status !== "READY" || state.controlAccountId !== accountId ||
+      state.resetGeneration !== resetGeneration || state.mappingGeneration !== mappingGeneration ||
+      !Number.isSafeInteger(state.grossAbsMinor)) {
+    throw new InconsistentHistory();
+  }
+  return namespace;
 }
 
 /** Reads at most the remaining budget; one row more proves the budget is exceeded. */
@@ -305,44 +331,68 @@ async function resolveBankControlAccount(
 }
 
 /**
- * The bounded read behind getBookBalance (exported so the budget can be
- * exercised directly). Every read - banks, chart account, periods, control
- * snapshots, the control account's lines and each entry lookup - spends one
- * shared budget. When it runs out the balance is withheld as
- * BALANCE_HISTORY_INCOMPLETE; history that could not be measured is never OK.
- * The same status covers a counted control line whose date or period disagrees
- * with its entry (InconsistentHistory), whatever the net.
- * The control total keeps ACC-2: elapsed periods come from the account's
- * snapshots, the containing period from its snapshot only while it is
- * certified and has no later-dated entry, otherwise from its own entries and
- * their lines.
+ * Bounded book-balance read. Ordinary documents spend one shared read budget;
+ * dated control and physical-bank attribution use certified aggregate ranges.
+ * Elapsed periods retain authoritative snapshots (ACC-2). An uncertified
+ * containing period uses its dated control aggregate. Missing backfill,
+ * inconsistent history or exhausted budget withholds the balance.
  */
-export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number, budgetDocs: number) {
-  const budget = { remaining: budgetDocs };
-  let target: Doc<"bankAccounts"> | undefined;
-  try {
-    const accounts = await takeWithinBudget(budget, ctx.db.query("bankAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)));
-    target = accounts.find((a) => a.isReconciliationTarget && !a.isDeleted);
-    if (!target) return null;
-    const currency = target.currency;
+type BankBalanceRow = {
+  bankAccountId: Id<"bankAccounts"> | null;
+  name: string | null;
+  currency: string | null;
+  isDeleted: boolean;
+  asOf: number;
+  status: "OK" | "UNATTRIBUTED_GL_ACTIVITY" | "BALANCE_HISTORY_INCOMPLETE";
+  balanceMinor: number | null;
+  unmatchedMinor: number | null;
+  unattributedLineCount: number | null;
+};
 
+function incompleteBankBalance(asOf: number): BankBalanceRow {
+  return {
+    bankAccountId: null, name: null, currency: null, isDeleted: false, asOf,
+    status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null,
+    unmatchedMinor: null, unattributedLineCount: null,
+  };
+}
+
+async function computeBankBalances(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  asOf: number,
+  budgetDocs: number,
+  targetOnly = false,
+): Promise<{ targetBankId: Id<"bankAccounts"> | null; rows: BankBalanceRow[] }> {
+  if (!Number.isSafeInteger(asOf)) throw new ConvexError("The balance date must be valid.");
+  const budget = { remaining: budgetDocs };
+  let accounts: Doc<"bankAccounts">[] = [];
+  let targetBankId: Id<"bankAccounts"> | null = null;
+  try {
+    accounts = await takeWithinBudget(budget, ctx.db.query("bankAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)));
+    const targetBank = accounts.find((bank) => bank.isReconciliationTarget && !bank.isDeleted);
+    targetBankId = targetBank?._id ?? null;
+    const reportBanks = targetOnly ? (targetBank ? [targetBank] : []) : accounts;
+    if (reportBanks.length === 0) return { targetBankId, rows: [] };
+    const currencies = new Set(reportBanks.map((bank) => bank.currency));
     const bankChartAccountId = await resolveBankControlAccount(ctx, orgId, budget);
+    const namespace = await readyBankAggregateNamespace(ctx, orgId, bankChartAccountId, budget);
 
     const periods = await takeWithinBudget(
       budget,
-      ctx.db.query("accountingPeriods").withIndex("by_org_startDate", (q) => q.eq("orgId", orgId).lte("startDate", asOf))
+      ctx.db.query("accountingPeriods").withIndex("by_org_startDate", (q) => q.eq("orgId", orgId).lte("startDate", asOf)),
     );
-    const snapshotPeriodIds = new Set<string>(periods.filter((p) => p.endDate <= asOf).map((p) => p._id));
-    const containing = periods.find((p) => p.startDate <= asOf && asOf < p.endDate);
+    const snapshotPeriodIds = new Set<string>(periods.filter((period) => period.endDate <= asOf).map((period) => period._id));
+    const containing = periods.find((period) => period.startDate <= asOf && asOf < period.endDate);
     let containingFromLines = false;
     if (containing) {
       containingFromLines = true;
       if (containing.snapshotFastPathEligible) {
         chargeDocs(budget, 1);
-        const futureEntry = await ctx.db
-          .query("journalEntries")
-          .withIndex("by_org_period_date", (q) => q.eq("orgId", orgId).eq("periodId", containing._id).gt("accountingDate", asOf))
-          .first();
+        const futureEntry = await ctx.db.query("journalEntries")
+          .withIndex("by_org_period_date", (q) =>
+            q.eq("orgId", orgId).eq("periodId", containing._id).gt("accountingDate", asOf)
+          ).first();
         if (!futureEntry) {
           snapshotPeriodIds.add(containing._id);
           containingFromLines = false;
@@ -350,128 +400,84 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
       }
     }
 
-    // Authoritative control total (BANK_ACCOUNT is a DEBIT-normal asset).
-    const snapshots = await takeWithinBudget(
-      budget,
-      ctx.db
-        .query("accountBalanceSnapshots")
-        .withIndex("by_org_account_currency_period_shard", (q) =>
-          q.eq("orgId", orgId).eq("accountId", bankChartAccountId).eq("currency", currency)
-        )
-    );
-    let controlNetMinor = 0;
-    for (const s of snapshots) {
-      if (snapshotPeriodIds.has(s.periodId)) controlNetMinor += s.runningDebitMinor - s.runningCreditMinor;
-    }
-    // Draft/validated entries are not ledger activity; REVERSED originals are
-    // (their reversal is a separate entry). Each entry's status, date and period are
-    // read and charged once: the control block below caches the entries it reads, the
-    // attribution loop looks up only the rest.
-    const entryFactsById = new Map<string, EntryFacts>();
-    const periodsById = new Map(periods.map((p) => [p._id, p]));
-    // A containing period with no usable snapshot takes its control exactly as
-    // getCumulativeBalancesAsOf does: POSTED/REVERSED entries of that period dated on
-    // or before asOf (by ENTRY date), then each entry's lines on the control account.
-    // Attribution below still reads lines by LINE date. A control line whose date or
-    // period disagrees with its entry throws InconsistentHistory (reported as
-    // BALANCE_HISTORY_INCOMPLETE) even when the nets would cancel; any other
-    // difference leaves control != identified and the balance is withheld.
-    if (containing && containingFromLines) {
-      const entries = await takeWithinBudget(
+    const controlNetByCurrency = new Map<string, number>();
+    const identifiedNetByCurrency = new Map<string, number>();
+    const unattributedCountByCurrency = new Map<string, number>();
+    const netByBankId = new Map<string, number>();
+    for (const currency of currencies) {
+      // Certified elapsed periods remain snapshot-authoritative (ACC-2).
+      const snapshots = await takeWithinBudget(
         budget,
-        ctx.db
-          .query("journalEntries")
-          .withIndex("by_org_period_date", (q) =>
-            q.eq("orgId", orgId).eq("periodId", containing._id).lte("accountingDate", asOf)
-          )
+        ctx.db.query("accountBalanceSnapshots")
+          .withIndex("by_org_account_currency_period_shard", (q) =>
+            q.eq("orgId", orgId).eq("accountId", bankChartAccountId).eq("currency", currency)
+          ),
       );
-      for (const entry of entries) {
-        const facts = entryFacts(entry);
-        entryFactsById.set(entry._id, facts);
-        if (!facts?.counts) continue;
-        const entryLines = await takeWithinBudget(
-          budget,
-          ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-        );
-        for (const l of entryLines) {
-          if (l.accountId !== bankChartAccountId || l.currency !== currency) continue;
-          // Withheld whatever the net: offsetting entries must not cancel a date disagreement.
-          assertLineMatchesEntry(l.accountingDate, entry.accountingDate, containing);
-          controlNetMinor += l.debitMinor - l.creditMinor;
+      let controlNetMinor = 0;
+      for (const snapshot of snapshots) {
+        if (snapshotPeriodIds.has(snapshot.periodId)) {
+          controlNetMinor += snapshot.runningDebitMinor - snapshot.runningCreditMinor;
         }
       }
+      if (containing && containingFromLines) {
+        const partial = await readControlRange(ctx, namespace, bankChartAccountId, currency, {
+          fromInclusive: containing.startDate, through: asOf,
+        });
+        controlNetMinor += partial.netMinor;
+      }
+      if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
+      controlNetByCurrency.set(currency, controlNetMinor);
+
+      // Counts expose equal-and-opposite legacy lines that have zero net.
+      const allControl = await readControlRange(ctx, namespace, bankChartAccountId, currency, { through: asOf });
+      let identifiedCount = 0;
+      let identifiedNetMinor = 0;
+      for (const bank of accounts) {
+        if (bank.currency !== currency) continue;
+        const identified = await readAttributionRange(ctx, namespace, bankChartAccountId, currency, bank._id, { through: asOf });
+        identifiedCount += identified.count;
+        identifiedNetMinor += identified.netMinor;
+        netByBankId.set(bank._id, identified.netMinor);
+      }
+      const unmatchedCount = allControl.count - identifiedCount;
+      if (unmatchedCount < 0 || !Number.isSafeInteger(identifiedNetMinor) || !Number.isSafeInteger(identifiedCount)) {
+        throw new InconsistentHistory();
+      }
+      identifiedNetByCurrency.set(currency, identifiedNetMinor);
+      unattributedCountByCurrency.set(currency, unmatchedCount);
     }
 
-    // Valid attribution = a same-org bank (deleted banks still own their
-    // history) in the line's own currency; a JOD line naming a USD bank is
-    // not a physical identity for that line.
-    const bankCurrencyById = new Map<string, string>(accounts.map((a) => [a._id, a.currency]));
-    // Only the control account's own lines, bounded by date on the index
-    // (the -1 "no date" sentinel is excluded, as in getPostedLines).
-    const lines = await takeWithinBudget(
-      budget,
-      ctx.db
-        .query("journalLines")
-        .withIndex("by_org_account_date", (q) =>
-          q
-            .eq("orgId", orgId)
-            .eq("accountId", bankChartAccountId)
-            .gt("accountingDate", NO_ACCOUNTING_DATE_SENTINEL)
-            .lte("accountingDate", asOf)
-        )
-    );
-    let targetNetMinor = 0;
-    let identifiedNetMinor = 0;
-    // Counted by line, not by net: equal-and-opposite unidentified lines net
-    // to zero but are still activity with no physical bank behind it.
-    let unattributedLineCount = 0;
-    for (const line of lines) {
-      if (line.currency !== currency) continue;
-      let facts = entryFactsById.get(line.journalEntryId);
-      if (facts === undefined) {
-        chargeDocs(budget, 1);
-        const entry = await ctx.db.get(line.journalEntryId);
-        facts = entry ? entryFacts(entry) : null;
-        entryFactsById.set(line.journalEntryId, facts);
+    const rows: BankBalanceRow[] = reportBanks.map((bank) => {
+      const base = { bankAccountId: bank._id, name: bank.name, currency: bank.currency, isDeleted: bank.isDeleted === true, asOf };
+      const unmatchedMinor = (controlNetByCurrency.get(bank.currency) ?? 0) - (identifiedNetByCurrency.get(bank.currency) ?? 0);
+      if (!Number.isSafeInteger(unmatchedMinor)) throw new InconsistentHistory();
+      const unattributedLineCount = unattributedCountByCurrency.get(bank.currency) ?? 0;
+      if (unmatchedMinor !== 0 || unattributedLineCount > 0) {
+        return { ...base, status: "UNATTRIBUTED_GL_ACTIVITY" as const, balanceMinor: null, unmatchedMinor, unattributedLineCount };
       }
-      if (!facts?.counts) continue;
-      assertLineMatchesEntry(
-        line.accountingDate,
-        facts.accountingDate,
-        facts.periodId ? periodsById.get(facts.periodId) : undefined
-      );
-      if (!line.bankAccountId || bankCurrencyById.get(line.bankAccountId) !== line.currency) {
-        unattributedLineCount += 1;
-        continue;
-      }
-      const netMinor = line.debitMinor - line.creditMinor;
-      identifiedNetMinor += netMinor;
-      if (line.bankAccountId === target._id) targetNetMinor += netMinor;
-    }
-
-    const base = { bankAccountId: target._id, name: target.name, currency, asOf };
-    const unmatchedMinor = controlNetMinor - identifiedNetMinor;
-    if (unmatchedMinor !== 0 || unattributedLineCount > 0) {
       return {
-        ...base,
-        status: "UNATTRIBUTED_GL_ACTIVITY" as const,
-        balanceMinor: null,
-        unmatchedMinor,
-        unattributedLineCount,
+        ...base, status: "OK" as const, balanceMinor: netByBankId.get(bank._id) ?? 0,
+        unmatchedMinor: 0, unattributedLineCount: 0,
       };
-    }
-    return { ...base, status: "OK" as const, balanceMinor: targetNetMinor, unmatchedMinor: 0, unattributedLineCount: 0 };
+    });
+    return { targetBankId, rows: rows.filter((row) => !row.isDeleted || row.status !== "OK" || row.balanceMinor !== 0) };
   } catch (error) {
-    if (!(error instanceof ReadBudgetExhausted || error instanceof InconsistentHistory)) throw error;
-    return {
-      bankAccountId: target?._id ?? null,
-      name: target?.name ?? null,
-      currency: target?.currency ?? null,
-      asOf,
-      status: "BALANCE_HISTORY_INCOMPLETE" as const,
-      balanceMinor: null,
-      unmatchedMinor: null,
-      unattributedLineCount: null,
-    };
+    if (!(error instanceof ReadBudgetExhausted || error instanceof InconsistentHistory)) {
+      console.error("Bank book balances could not be verified", { orgId, error });
+    }
+    if (accounts.length === 0) return { targetBankId: null, rows: [incompleteBankBalance(asOf)] };
+    const rows: BankBalanceRow[] = accounts
+      .filter((bank) => !targetOnly || bank._id === targetBankId)
+      .map((bank) => ({
+        bankAccountId: bank._id, name: bank.name, currency: bank.currency, isDeleted: bank.isDeleted === true,
+        asOf, status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null, unmatchedMinor: null, unattributedLineCount: null,
+      }));
+    return { targetBankId, rows };
   }
+}
+
+export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations">, asOf: number, budgetDocs: number) {
+  const { targetBankId, rows } = await computeBankBalances(ctx, orgId, asOf, budgetDocs, true);
+  if (!targetBankId) return rows.find((row) => row.bankAccountId === null) ?? null;
+  return rows.find((row) => row.bankAccountId === targetBankId) ?? null;
 }

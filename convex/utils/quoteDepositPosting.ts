@@ -56,6 +56,7 @@ export async function postQuoteDeposit(
     amountMinor: number;
     currency: string;
     method: DepositMethod;
+    bankAccountId?: Id<"bankAccounts">;
     notes?: string;
     idempotencyKey: string;
     actorId: Id<"users">;
@@ -110,6 +111,7 @@ export async function postQuoteDeposit(
     amountMinor: args.amountMinor,
     currency: args.currency,
     method: args.method,
+    bankAccountId: args.bankAccountId,
     idempotencyKey: args.idempotencyKey,
     notes: args.notes,
     actorId: args.actorId,

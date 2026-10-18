@@ -16,7 +16,26 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
-import { pickMethod } from "@/test-utils/paymentMethodSelect";
+import { pickMethod as pickPaymentMethod } from "@/test-utils/paymentMethodSelect";
+
+vi.mock("@/components/deposits/DepositRefundBankSelect", () => ({
+  useDepositRefundBanks: (_orgId: unknown, _currency: unknown, _enabled: boolean, value: string) => ({
+    banks: [{ _id: "bank_1", name: "Test bank", currency: "JOD" }],
+    chosenOffered: value === "bank_1", loading: false, truncated: false, noEligible: false,
+  }),
+  DepositRefundBankSelect: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
+    <select data-testid="deposit-refund-bank" value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="" />
+      <option value="bank_1">Test bank</option>
+    </select>
+  ),
+}));
+
+function pickMethod(scope: HTMLElement, method = "CASH") {
+  pickPaymentMethod(scope, method);
+  const bank = within(scope).queryByTestId("deposit-refund-bank");
+  if (bank && method !== "CASH") fireEvent.change(bank, { target: { value: "bank_1" } });
+}
 
 // SCRUM-469: no money dialog pre-selects a method, so the tests choose one.
 vi.mock("@/components/payments/PaymentMethodSelect", () => import("@/test-utils/paymentMethodSelect"));
@@ -720,6 +739,30 @@ describe("disbursement - the payment to the finance company comes first", () => 
     mayCancelFinalized: true,
     ...overrides,
   });
+  // SCRUM-54: a bank-method forward names the bank it left. The list needs the
+  // payment's own permission pair, so a caller with both is served it.
+  const FORWARD_BANKS_QUERY = "financeCompanyForward:listForwardBankOptions";
+  const FORWARD_BANK = "bank_operating";
+  function offerForwardBanks() {
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(FORWARD_BANKS_QUERY, {
+      banks: [{ _id: FORWARD_BANK, name: "Operating bank", currency: "JOD" }],
+      truncated: false,
+    });
+  }
+  function recordForwardWith(method: string, bank: string | null) {
+    fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: method } });
+    if (bank !== null) fireEvent.change(screen.getByLabelText("DirectPaymentBankLabel"), { target: { value: bank } });
+    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+  }
+  /** A closed deal awaiting the forward, owing `dueMinor` onward. */
+  const dueCockpit = (dueMinor: number) =>
+    cockpit({
+      status: "CLOSED",
+      stages: forwardStages("AwaitingForwardToFinanceCompany"),
+      forward: forward(),
+      money: { ...forwardMoney, forward: { ...forwardMoney.forward, dueMinor } },
+    });
 
   const settledStages = [
     { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
@@ -856,6 +899,7 @@ describe("disbursement - the payment to the finance company comes first", () => 
 
   test("DUE: the step offers the recording, not the transfer, and sends the frozen figure the operator saw", async () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    offerForwardBanks();
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({
@@ -871,8 +915,7 @@ describe("disbursement - the payment to the finance company comes first", () => 
     expect(within(focusRow()).queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
     fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
     expect(screen.getByTestId("forward-breakdown").textContent).toContain("1,575");
-    fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: "BANK_TRANSFER" } });
-    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+    recordForwardWith("BANK_TRANSFER", FORWARD_BANK);
 
     await waitFor(() =>
       expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
@@ -882,10 +925,123 @@ describe("disbursement - the payment to the finance company comes first", () => 
       orgId: ORG,
       applicationId: APP,
       method: "BANK_TRANSFER",
+      bankAccountId: FORWARD_BANK,
       expectedAmountMinor: 1_575_000,
     });
     expect(typeof call.idempotencyKey).toBe("string");
     expect(mutationCalls.get("applications:confirmDisbursement")).toBeUndefined();
+    // The list is asked in the deal's currency with an explicit org.
+    expect(stubs.useQueryArgs.get(FORWARD_BANKS_QUERY)).toEqual({ orgId: ORG, currency: "JOD" });
+  });
+
+  test("DUE: a bank method with no bank chosen is refused in the form, nothing is sent; cash sends no bank", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    offerForwardBanks();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward(),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
+    recordForwardWith("CHEQUE", null);
+    expect((await screen.findByRole("alert")).textContent).toBe("DirectPaymentBankRequired");
+    expect(screen.getByLabelText("DirectPaymentBankLabel").getAttribute("aria-invalid")).toBe("true");
+    expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toBeUndefined();
+
+    // Cash credits the cash drawer: the picker goes away and no bank is sent.
+    fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: "CASH" } });
+    expect(screen.queryByLabelText("DirectPaymentBankLabel")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
+    );
+    const call = mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")![0] as Record<string, unknown>;
+    expect(call.method).toBe("CASH");
+    expect("bankAccountId" in call).toBe(false);
+  });
+
+  test("DUE: after a lost response the retry re-sends the FIRST attempt's amount and key even if the due moved", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    offerForwardBanks();
+    queryResults.set(COCKPIT_QUERY, dueCockpit(1_575_000));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    const view = renderCockpit();
+
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
+    stubs.mutationFailures.set("financeCompanyForward:recordFinanceCompanyForward", "network down");
+    recordForwardWith("BANK_TRANSFER", FORWARD_BANK);
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
+    );
+
+    // The deal's due moves while the first attempt's outcome is unknown.
+    queryResults.set(COCKPIT_QUERY, dueCockpit(1_600_000));
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    // The figure the attempt was sent with stays on screen, not the live one.
+    expect(screen.getByTestId("forward-breakdown").textContent).toContain("1,575");
+    expect(screen.getByTestId("forward-breakdown").textContent).not.toContain("1,600");
+
+    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(2)
+    );
+    const [first, second] = mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward") as Array<
+      Record<string, unknown>
+    >;
+    expect(first).toMatchObject({ expectedAmountMinor: 1_575_000 });
+    expect(second).toEqual(first);
+  });
+
+  test("DUE: after the server's own refusal a new attempt is deliberate and carries the live due with a new key", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    offerForwardBanks();
+    queryResults.set(COCKPIT_QUERY, dueCockpit(1_575_000));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    const view = renderCockpit();
+
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
+    stubs.mutationFailures.set("financeCompanyForward:recordFinanceCompanyForward", "refused:The amount due changed.");
+    recordForwardWith("BANK_TRANSFER", FORWARD_BANK);
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
+    );
+
+    // A definite refusal ends the pin: the dialog shows the live figure again and the operator re-submits on purpose.
+    queryResults.set(COCKPIT_QUERY, dueCockpit(1_600_000));
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    await waitFor(() => expect(screen.getByTestId("forward-breakdown").textContent).toContain("1,600"));
+    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(2)
+    );
+    const [first, second] = mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward") as Array<
+      Record<string, unknown>
+    >;
+    expect(second).toMatchObject({ expectedAmountMinor: 1_600_000 });
+    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  test("DUE without VIEW_FINANCE: the bank list is not asked (the payment itself needs the pair)", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward(),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(stubs.useQueryArgs.get(FORWARD_BANKS_QUERY)).toBe("skip");
   });
 
   test("DUE without the permission: no button, the reason names the manager or accountant", () => {
@@ -946,14 +1102,14 @@ describe("disbursement - the payment to the finance company comes first", () => 
 
     test("UNPAID: the step is the payment, not the close, and it sends the amount the server pinned", async () => {
       approvedAtTheClose(pre());
+      offerForwardBanks();
       renderCockpit();
 
       expect(within(focusRow()).queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
       expect(within(focusRow()).getByTestId("deal-next-step-note").textContent).toBe("FinalizeNeedsForwardPayment");
       fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
       expect(screen.getByTestId("forward-breakdown").textContent).toContain("1,575");
-      fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: "BANK_TRANSFER" } });
-      fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+      recordForwardWith("BANK_TRANSFER", FORWARD_BANK);
 
       await waitFor(() =>
         expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
@@ -962,6 +1118,7 @@ describe("disbursement - the payment to the finance company comes first", () => 
         orgId: ORG,
         applicationId: APP,
         method: "BANK_TRANSFER",
+        bankAccountId: FORWARD_BANK,
         expectedAmountMinor: 1_575_000,
       });
       expect(mutationCalls.get("applications:finalizeDeal")).toBeUndefined();
@@ -1130,6 +1287,7 @@ describe("disbursement - the payment to the finance company comes first", () => 
 
   test("returned AFTER the transfer: the step reopens and offers the replacement payment", async () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    offerForwardBanks();
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({
@@ -1144,13 +1302,13 @@ describe("disbursement - the payment to the finance company comes first", () => 
 
     expect(within(focusRow()).queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
     fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
-    fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: "BANK_TRANSFER" } });
-    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+    recordForwardWith("BANK_TRANSFER", FORWARD_BANK);
     await waitFor(() =>
       expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
     );
     expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")![0]).toMatchObject({
       applicationId: APP,
+      bankAccountId: FORWARD_BANK,
       expectedAmountMinor: 1_575_000,
     });
   });
@@ -1333,7 +1491,7 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     // byte-identical requests and only the server's `releaseCount` can tell a
     // retry from a second real payout. The intent names deposit, decision,
     // method and the generation observed when the operator decided.
-    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:BANK_TRANSFER:gen0:[0-9a-f-]{36}$/);
+    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:BANK_TRANSFER:bank_1:gen0:[0-9a-f-]{36}$/);
   });
 
   test("an unknown result keeps the SAME release identity for the retry; a confirmed payout that advanced the generation mints a NEW one", async () => {
@@ -1357,7 +1515,7 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
     const [first, second] = mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>;
-    expect(first.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen2:/);
+    expect(first.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:none:gen2:/);
     expect(second.idempotencyKey).toBe(first.idempotencyKey);
 
     // The payout confirmed and the server bumped the generation: the next
@@ -1376,7 +1534,7 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
     const third = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[2];
-    expect(third.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen3:/);
+    expect(third.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:none:gen3:/);
     expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
   });
 

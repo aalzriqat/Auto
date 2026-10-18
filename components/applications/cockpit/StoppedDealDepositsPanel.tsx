@@ -15,6 +15,8 @@ import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/P
 import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { UnconfirmedPayoutNotice } from "@/components/deposits/UnconfirmedPayoutNotice";
 import type { PendingPayout } from "@/hooks/usePendingDepositPayouts";
+import type { Id } from "@/convex/_generated/dataModel";
+import { DepositRefundBankSelect, useDepositRefundBanks } from "@/components/deposits/DepositRefundBankSelect";
 
 export type DepositResolution = "REFUNDED" | "FORFEITED";
 
@@ -24,6 +26,7 @@ export type DealDeposit = {
   amount: number;
   status: string;
   method?: string;
+  currency?: string;
   /** Minor units already paid out of this row by an earlier release. */
   releasedAmountMinor?: number;
   /**
@@ -50,6 +53,7 @@ export type DealDeposit = {
  * audited financial decision — the same confirmation Review required.
  */
 export function StoppedDealDepositsPanel({
+  orgId,
   deposits,
   canResolve,
   faceValueIsReleasable,
@@ -60,6 +64,7 @@ export function StoppedDealDepositsPanel({
   unconfirmed,
   onDismissUnconfirmed,
 }: Readonly<{
+  orgId: Id<"organizations"> | undefined;
   deposits: ReadonlyArray<DealDeposit>;
   canResolve: boolean;
   /**
@@ -77,7 +82,8 @@ export function StoppedDealDepositsPanel({
     depositId: string,
     resolution: DepositResolution,
     refundMethod: PaymentMethod | undefined,
-    observedReleaseCount: number
+    observedReleaseCount: number,
+    bankAccountId?: Id<"bankAccounts">
   ) => Promise<void>;
   /**
    * SCRUM-469 F1: deposits whose EARLIER payout attempt never confirmed and is
@@ -101,6 +107,11 @@ export function StoppedDealDepositsPanel({
   // SCRUM-469: no default. The method picks the ledger account the refund is
   // credited to, so it is chosen, never assumed.
   const [refundMethod, setRefundMethod] = useState<PaymentMethod | undefined>(undefined);
+  const [refundBankAccountId, setRefundBankAccountId] = useState("");
+  const refundNeedsBank = pending?.resolution === "REFUNDED" && isChosenMethod(refundMethod) && refundMethod !== "CASH";
+  const refundBanks = useDepositRefundBanks(orgId,
+    deposits.find((deposit) => deposit._id === pending?.depositId)?.currency,
+    refundNeedsBank, refundBankAccountId);
 
   const statusLabel = (status: string) => {
     switch (status) {
@@ -132,6 +143,7 @@ export function StoppedDealDepositsPanel({
   const close = () => {
     setPending(null);
     setRefundMethod(undefined);
+    setRefundBankAccountId("");
   };
   const refundMethodMissing = pending?.resolution === "REFUNDED" && !isChosenMethod(refundMethod);
   const isResolvingPending = pending !== null && resolvingId === pending.depositId;
@@ -188,7 +200,8 @@ export function StoppedDealDepositsPanel({
                       deposit._id,
                       recorded.resolution,
                       recorded.resolution === "REFUNDED" ? (recorded.method as PaymentMethod) : undefined,
-                      deposit.releaseCount ?? 0
+                      deposit.releaseCount ?? 0,
+                      recorded.bankAccountId as Id<"bankAccounts"> | undefined
                     ).catch(() => undefined);
                   }}
                   onDismiss={() => onDismissUnconfirmed?.(deposit._id)}
@@ -272,7 +285,7 @@ export function StoppedDealDepositsPanel({
               <PaymentMethodSelect
                 t={t}
                 value={refundMethod}
-                onValueChange={setRefundMethod}
+                onValueChange={(method) => { setRefundMethod(method); setRefundBankAccountId(""); }}
                 ariaLabel={t("PaymentMethodLabel")}
                 placeholder={t("RefundChooseMethod")}
               />
@@ -283,6 +296,10 @@ export function StoppedDealDepositsPanel({
               ) : null}
             </div>
           )}
+          {refundNeedsBank && (
+            <DepositRefundBankSelect value={refundBankAccountId} onChange={setRefundBankAccountId}
+              bankOptions={refundBanks} disabled={isResolvingPending} />
+          )}
           <DialogFooter className="gap-2">
             <Button variant="outline" disabled={isResolvingPending} onClick={close}>
               {t("Cancel")}
@@ -290,15 +307,16 @@ export function StoppedDealDepositsPanel({
             {pending && (
               <Button
                 variant={pending.resolution === "FORFEITED" ? "destructive" : "default"}
-                disabled={isResolvingPending || refundMethodMissing}
+                disabled={isResolvingPending || refundMethodMissing || (refundNeedsBank && !refundBanks.chosenOffered)}
                 onClick={() => {
                   // Belt and braces with `disabled`: an unchosen refund method is never sent.
-                  if (refundMethodMissing) return;
+                  if (refundMethodMissing || (refundNeedsBank && !refundBanks.chosenOffered)) return;
                   void onResolve(
                     pending.depositId,
                     pending.resolution,
                     pending.resolution === "REFUNDED" ? refundMethod : undefined,
-                    pending.releaseCount
+                    pending.releaseCount,
+                    refundNeedsBank ? refundBankAccountId as Id<"bankAccounts"> : undefined
                   ).then(close, () => undefined);
                 }}
               >

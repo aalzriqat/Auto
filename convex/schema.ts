@@ -135,6 +135,8 @@ export default defineSchema({
     /** SCRUM-563 — financial reset counters; absent means 0. Protocol: `convex/utils/orgResetGeneration.ts`. */
     financialResetGeneration: v.optional(v.number()),
     financialResetCompletedGeneration: v.optional(v.number()),
+    /** Incremented whenever journal/period facts or BANK_ACCOUNT mapping change. */
+    bankAggregateMappingGeneration: v.optional(v.number()),
   }),
 
   organizationDeletionRequests: defineTable({
@@ -388,17 +390,31 @@ export default defineSchema({
     // "due now" rather than "invisible" — which is what a legacy backlog must
     // mean. That the index actually behaves that way is not assumed here; it is
     // proved against a real deployment (contract §4.2).
-    /** Present only while a worker attempt is outstanding. Absent = unclaimed. */
-    dispatchState: v.optional(v.literal("DISPATCHED")),
+    /**
+     * `DISPATCHED`: a worker attempt is outstanding. `PERIOD_HELD` (SCRUM-807): parked
+     * until a period covers `accountingDate`; neither due-work range matches it, so
+     * nothing re-selects it until `wakePeriodHeldRows` releases it. Absent = unclaimed.
+     */
+    dispatchState: v.optional(v.union(v.literal("DISPATCHED"), v.literal("PERIOD_HELD"))),
     /** Bumped on every claim and every manual revive; a stale worker loses. */
     generation: v.optional(v.number()),
     activeAttemptId: v.optional(v.string()),
     scheduledFunctionId: v.optional(v.id("_scheduled_functions")),
     /** When this row next becomes selectable. Absent = immediately due. */
     nextActionAt: v.optional(v.number()),
+    /**
+     * SCRUM-807 — set only while the row is HELD waiting for an accounting
+     * period to cover `accountingDate`. It lets a period opening find exactly
+     * the rows it unblocks by index. Absent for every other hold, for failures
+     * in backoff, and for rows written before this field existed (those are
+     * claimed once, re-evaluated and then marked like any new hold).
+     */
+    holdKind: v.optional(v.literal("PERIOD")),
   })
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
+    // SCRUM-807 — the period-held rows a period now covers, in date order.
+    .index("by_org_hold_date", ["orgId", "holdKind", "accountingDate"])
     // SCRUM-222 — the due-work index, mirroring `commitmentAuthorityWork`'s
     // `by_status_next_action`. One index serves both selector ranges:
     // unclaimed work (`dispatchState` absent) and claimed work awaiting
@@ -1276,6 +1292,7 @@ export default defineSchema({
       // written before this field existed have none, treated as CASH (the
       // old normalizePaymentMethod default) wherever it's read.
       paymentMethod: v.optional(paymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     total: v.number(),
     updatedAt: v.number(),
@@ -1289,6 +1306,7 @@ export default defineSchema({
   vehicleCostCorrections: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     previousCost: v.number(),
     newCost: v.number(),
     reason: v.string(),
@@ -1455,6 +1473,7 @@ export default defineSchema({
      */
     amountReceived: v.optional(v.number()),
     receiptMethod: v.optional(paymentMethodValidator),
+    receiptBankAccountId: v.optional(v.id("bankAccounts")),
     /** Cheque number or transfer reference for the most recent receipt. */
     receiptReference: v.optional(v.string()),
     /** The bank or cash account the money arrived in. */
@@ -1551,6 +1570,7 @@ export default defineSchema({
     amountMinor: v.number(),
     currency: v.string(),
     method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     receivedDate: v.number(),
     reference: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -1639,6 +1659,8 @@ export default defineSchema({
     paidAt: v.optional(v.number()),
     paidBy: v.optional(v.id("users")),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Last payment's physical bank; each instalment also retains its bank on its accounting event. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** Cheque number or transfer reference. */
     paymentReference: v.optional(v.string()),
     /** The bank or cash account the payment left. */
@@ -1804,6 +1826,7 @@ export default defineSchema({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
       purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
@@ -2144,6 +2167,7 @@ export default defineSchema({
     commissionPaidAt: v.optional(v.number()),
     commissionPaidBy: v.optional(v.id("users")),
     commissionPaymentMethod: v.optional(paymentMethodValidator),
+    commissionBankAccountId: v.optional(v.id("bankAccounts")),
     commissionPaymentIdempotencyKey: v.optional(v.string()),
     // A sale is either live (unset) or soft-deleted (true); `false` is
     // unrepresentable, so the by_org_deleted / by_org_salesperson_deleted index
@@ -2259,6 +2283,7 @@ export default defineSchema({
     refundMinor: v.number(), // cash/bank refund received for the unused portion, 0 if none
     refundTaxMinor: v.optional(v.number()), // VAT portion of the refund, 0/undefined if none
     refundPaymentMethod: v.optional(paymentMethodValidator),
+    refundBankAccountId: v.optional(v.id("bankAccounts")),
     writeOffMinor: v.number(), // non-refundable unused portion expensed immediately, 0 if none
     previousTermMonths: v.number(),
     newTermMonths: v.number(),
@@ -2288,6 +2313,7 @@ export default defineSchema({
     refundMinor: v.number(),
     refundTaxMinor: v.optional(v.number()),
     refundPaymentMethod: v.optional(paymentMethodValidator),
+    refundBankAccountId: v.optional(v.id("bankAccounts")),
     writeOffMinor: v.number(),
     newTermMonths: v.number(),
     reason: v.string(),
@@ -2339,6 +2365,8 @@ export default defineSchema({
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     idempotencyKey: v.optional(v.string()),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Physical bank used by a paid transfer, issued cheque or card expense. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
@@ -3569,6 +3597,7 @@ export default defineSchema({
    */
   financeCompanyForwards: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     applicationId: v.id("financeApplications"),
     // SCRUM-27: exactly ONE of the two is set - a configured company by id, a manual one by the name on its letter.
     financeCompanyId: v.optional(v.id("financeCompanies")),
@@ -3856,6 +3885,7 @@ export default defineSchema({
         v.literal("CARD")
       )
     ),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     reference: v.optional(v.string()),
     note: v.optional(v.string()),
     occurredAt: v.number(),
@@ -4919,6 +4949,7 @@ export default defineSchema({
 
   collectionPayments: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     branchId: v.optional(v.id("branches")),
     receivableId: v.optional(v.id("receivables")),
     customerId: v.id("customers"),
@@ -5068,6 +5099,7 @@ export default defineSchema({
 
   collectionApprovalRequests: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     receivableId: v.id("receivables"),
     customerId: v.id("customers"),
     requestedBy: v.id("users"),
@@ -5333,6 +5365,7 @@ export default defineSchema({
   fixedAssetEvents: defineTable({
     orgId: v.id("organizations"),
     assetId: v.id("fixedAssets"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     type: v.union(
       v.literal("CAPITALIZE"),
       v.literal("DEPRECIATE"),
@@ -5405,6 +5438,35 @@ export default defineSchema({
   })
     .index("by_org_account_currency_period_shard", ["orgId", "accountId", "currency", "periodId", "shard"])
     .index("by_org_period", ["orgId", "periodId"]),
+
+  // A bank-control aggregate is usable only after the organization, chart
+  // mapping and reset generation behind it have been fully validated.
+  bankBalanceAggregateStates: defineTable({
+    orgId: v.id("organizations"),
+    controlAccountId: v.id("chartOfAccounts"),
+    mappingGeneration: v.number(),
+    resetGeneration: v.number(),
+    status: v.union(v.literal("READY"), v.literal("BACKFILL_REQUIRED"), v.literal("BACKFILLING")),
+    cursor: v.optional(v.string()),
+    grossAbsMinor: v.number(),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  // Transactional membership record for each line projected into the two
+  // component trees. The backfill and live trigger share this exact-once key.
+  bankBalanceAggregateItems: defineTable({
+    orgId: v.id("organizations"),
+    journalLineId: v.id("journalLines"),
+    namespace: v.string(),
+    accountId: v.id("chartOfAccounts"),
+    currency: v.string(),
+    accountingDate: v.number(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
+    netMinor: v.number(),
+    absMinor: v.number(),
+  })
+    .index("by_line", ["journalLineId"])
+    .index("by_org", ["orgId"]),
 
   // GL Phase 15: full cash-drawer lifecycle. Distinct from the simpler,
   // pre-existing cashierReconciliations (open-float-free count-vs-expected
@@ -5570,6 +5632,8 @@ export default defineSchema({
     ),
     amountMinor: v.number(),
     currency: v.string(),
+    paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     occurredAt: v.number(),
     notes: v.optional(v.string()),
     accountingEventId: v.optional(v.id("accountingEvents")),
@@ -5634,6 +5698,7 @@ export default defineSchema({
     amountMinor: v.number(),
     recoveredMinor: v.number(),
     currency: v.string(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     date: v.number(),
     method: v.optional(
       v.union(
@@ -5670,6 +5735,7 @@ export default defineSchema({
     userId: v.id("users"),
     amountMinor: v.number(),
     currency: v.string(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     method: v.optional(
       v.union(
         v.literal("CASH"),
@@ -5733,6 +5799,7 @@ export default defineSchema({
     approvedNetMinor: v.optional(v.number()),
     // The method the whole run was paid with (per-employee split not supported).
     paidMethod: v.optional(v.string()),
+    paidBankAccountId: v.optional(v.id("bankAccounts")),
     createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
     approvedBy: v.optional(v.id("users")),
@@ -6205,13 +6272,11 @@ export default defineSchema({
   // user, keyed by Facebook user id (not org-scoped, so the org hard-delete does
   // not touch it). `facebookUserId` is a Facebook user identifier, i.e. personal
   // data; the row holds that id and a timestamp only — no tokens and no other
-  // user content. It is retained deliberately, and only briefly, as a security
+  // user content. It is retained deliberately as a security
   // record: a data-deletion request writes it rather than erasing it, since it is
-  // what stops an in-flight connection undoing that request. The hourly
-  // adminSystem.pruneOperationalLogs deletes it once older than
-  // FACEBOOK_REVOCATION_RETENTION_MS: normally within about two hours of the
-  // user's latest callback, but not a hard bound, and correctness does not depend
-  // on it (both explained in utils/facebookRevocation.ts).
+  // what stops an in-flight connection undoing that request. Since SCRUM-807
+  // nothing deletes it (operational records are preserved); correctness does not
+  // depend on removal (see utils/facebookRevocation.ts).
   facebookRevocations: defineTable({
     facebookUserId: v.string(),
     revokedAt: v.number(),

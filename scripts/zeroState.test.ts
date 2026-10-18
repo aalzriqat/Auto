@@ -76,6 +76,7 @@ describe("parsing the CLI's real output shapes", () => {
     expect(componentNames(config)).toEqual([
       "rateLimiter", "vehiclesByOrg", "vehicleQualityByOrg", "customersByOrg", "leadsByOrg", "membershipsByOrg",
       "instagramEventsByOrg", "facebookEventsByOrg", "socialContactsByOrg",
+      "bankControlByDate", "bankAttributionByDate",
     ]);
   });
   test("a deployment name is read from its cloud URL and nothing else", () => {
@@ -340,11 +341,11 @@ describe("diagnostic rows — provenance is validated row by row, from the CLI's
     }
   });
 
-  test("the row ceilings are pinned per table and derived from schedule × retention, not a flat guess", () => {
-    // cronHeartbeats: 2 five-minute jobs × 288 runs/day × (7-day retention + 1 day prune lag).
+  test("the row ceilings are pinned per table and derived from schedule × a fixed fresh-launch window (nothing prunes), not a flat guess", () => {
+    // cronHeartbeats: 2 five-minute jobs × 288 runs/day × (7-day window + 1 day slack).
     expect(DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats).toBe(2 * 288 * 8);
     expect(DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats).toBe(4608);
-    // webhookLogs: (96 fifteen-minute + 2 daily) × (30-day retention + 1 day lag) + 5 weekly + 3 monthly × 2.
+    // webhookLogs: (96 fifteen-minute + 2 daily) × (30-day window + 1 day slack) + 5 weekly + 3 monthly × 2.
     expect(DIAGNOSTIC_ROW_BOUNDS.webhookLogs).toBe(98 * 31 + 5 + 6);
     expect(DIAGNOSTIC_ROW_BOUNDS.webhookLogs).toBe(3049);
     // Exactly the declared tables have a ceiling; nothing else is ever admissible at any count.
@@ -353,7 +354,7 @@ describe("diagnostic rows — provenance is validated row by row, from the CLI's
     expect(diagnosticRowBound("webhookLogs")).toBe(3049);
     expect(diagnosticRowBound("organizations")).toBeUndefined();
     expect(diagnosticRowBound("toString")).toBeUndefined();
-    // Steady state under retention alone (7 × 576 = 4,032) fits with the lag day to spare; the old flat 500 does not.
+    // A week of accrual (7 × 576 = 4,032) fits with the slack day to spare; the old flat 500 does not.
     expect(DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats).toBeGreaterThan(7 * 576);
     expect(DIAGNOSTIC_ROW_BOUNDS.cronHeartbeats).toBeGreaterThan(500);
   });
@@ -446,7 +447,7 @@ describe("diagnostic rows — provenance is validated row by row, from the CLI's
     expect(p.state).toBe("REJECTED");
     expect(p.rows).toBe(1146);
     expect(p.reasons).toEqual(["cronHeartbeats row 1146: jobName is not a declared heartbeat writer."]);
-    // And a full retention window of steady-state heartbeats (7 × 576 = 4,032) is VERIFIED too.
+    // And a full week of steady-state heartbeats (7 × 576 = 4,032) is VERIFIED too.
     const week = Array.from({ length: 4032 }, (_, i) => HEARTBEAT_ROWS[i % 2]).join("\n");
     expect(validateDiagnosticRows("cronHeartbeats", week, "", 0)).toMatchObject({ state: "VERIFIED", rows: 4032 });
   });

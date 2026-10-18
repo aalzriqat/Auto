@@ -7,6 +7,7 @@ import { DataModel, Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { validateVinChecksum } from "../lib/vinHelpers";
 import { SOCIAL_CONVERSATION_GENERATION } from "./utils/materialization";
+import { registerBankBalanceTriggers } from "./accounting/bankAggregateTriggers";
 
 /**
  * Maintained counts for vehicles, so the dashboard can answer "how many" and
@@ -418,6 +419,7 @@ function registerCountingTriggers<Ctx extends MutationCtx>(
   triggers.register("instagramEvents", instagramEventsByOrg.idempotentTrigger());
   triggers.register("facebookEvents", facebookEventsByOrg.idempotentTrigger());
   triggers.register("socialContacts", socialContactsByOrg.idempotentTrigger());
+  registerBankBalanceTriggers(triggers);
 
   // Insert-only and a single indexed point lookup, so it is cheap enough to
   // keep running inside a bulk loop.

@@ -813,6 +813,19 @@ export const openingBalanceStatus = query({
     args,
   ): Promise<{
     posted: boolean;
+    postedOpening: {
+      accountingDate: number;
+      currency: string | null;
+      lines: Array<{
+        accountId: Id<"chartOfAccounts">;
+        accountCode: string | null;
+        accountName: string | null;
+        accountNameAr: string | null;
+        bankAccountName: string | null;
+        debitMinor: number;
+        creditMinor: number;
+      }>;
+    } | null;
     pendingDraftId: string | null;
     canPostDirectly: boolean;
     canManageFinance: boolean;
@@ -822,6 +835,32 @@ export const openingBalanceStatus = query({
 
     // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
     const postedEntry = await findPostedOpeningBalanceJournal(ctx, args.orgId);
+    const postedLines = postedEntry
+      ? await ctx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", postedEntry._id))
+          .take(101)
+      : [];
+    // An opening beyond the display cap is withheld rather than shown only in part.
+    const detailsAvailable = postedLines.length <= 100;
+    const postedOpening = postedEntry ? {
+      accountingDate: postedEntry.accountingDate,
+      currency: detailsAvailable ? postedEntry.currency ?? null : null,
+      lines: detailsAvailable ? await Promise.all(postedLines.map(async (line) => {
+        const [account, bank] = await Promise.all([
+          ctx.db.get(line.accountId),
+          line.bankAccountId ? ctx.db.get(line.bankAccountId) : Promise.resolve(null),
+        ]);
+        return {
+          accountId: line.accountId,
+          accountCode: account?.orgId === args.orgId ? account.code : null,
+          accountName: account?.orgId === args.orgId ? account.name : null,
+          accountNameAr: account?.orgId === args.orgId ? account.nameAr ?? null : null,
+          bankAccountName: bank?.orgId === args.orgId ? bank.name : null,
+          debitMinor: line.debitMinor,
+          creditMinor: line.creditMinor,
+        };
+      })) : [],
+    } : null;
 
     const pending = await ctx.db
       .query("openingBalanceDrafts")
@@ -834,6 +873,7 @@ export const openingBalanceStatus = query({
 
     return {
       posted: postedEntry !== null,
+      postedOpening,
       pendingDraftId: pending?._id.toString() ?? null,
       canPostDirectly: isOwner && canManageFinance,
       canManageFinance,

@@ -10,8 +10,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
  * SCRUM-54: the physical bank a bank transfer / card receipt reached. Read only while
  * `enabled`; no bank is ever preselected or inferred.
  */
-export function useReceiptBankOptions(orgId: Id<"organizations"> | undefined, enabled: boolean, value: string) {
-  const options = useQuery(api.collections.listReceiptBankOptions, enabled && orgId ? { orgId } : "skip");
+export function useReceiptBankOptions(
+  orgId: Id<"organizations"> | undefined,
+  enabled: boolean,
+  value: string,
+  currency?: string,
+) {
+  const options = useQuery(api.collections.listReceiptBankOptions,
+    enabled && orgId ? { orgId, ...(currency ? { currency } : {}) } : "skip");
   const banks = options?.banks;
   // Too many banks to list is its own state: never "no bank", and nothing can be chosen.
   const truncated = enabled && options?.truncated === true;
@@ -27,9 +33,11 @@ export function ReceiptBankSelect({
   onChange,
   bankOptions,
   disabled = false,
+  ariaLabel,
 }: Readonly<{
   id?: string;
   disabled?: boolean;
+  ariaLabel?: string;
   value: string;
   onChange: (bankAccountId: string) => void;
   bankOptions: ReturnType<typeof useReceiptBankOptions>;
@@ -39,7 +47,7 @@ export function ReceiptBankSelect({
   return (
     <div className="space-y-2">
       <Select value={chosenOffered ? value : ""} onValueChange={onChange} disabled={disabled || loading || noEligible || truncated}>
-        <SelectTrigger id={id} aria-label={t("ReceiptBankAccount" as any)}>
+        <SelectTrigger id={id} aria-label={ariaLabel ?? t("ReceiptBankAccount" as any)}>
           <SelectValue placeholder={t((loading ? "CashDrawerLoadingBanks" : "ReceiptSelectBank") as any)} />
         </SelectTrigger>
         <SelectContent className="max-h-72">

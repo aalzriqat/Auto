@@ -418,6 +418,7 @@ async function markEntryPosted(
     ...(resultEventId ? { resultEventId } : {}),
     attempts: p.attempts + 1,
     ...CLEARED_CLAIM,
+    ...CLEARED_HOLD,
     nextActionAt: undefined,
   });
 
@@ -1306,6 +1307,31 @@ const OUTBOX_OBSERVE_DELAY_MS = 60_000;
  */
 const OUTBOX_HOLD_DELAY_MS = 60_000;
 
+/**
+ * SCRUM-807 — a row held for a missing/unopened PERIOD is PARKED
+ * (`dispatchState: "PERIOD_HELD"`, no `nextActionAt`) until its blocker changes,
+ * instead of being re-claimed (two mutations) every minute for ever.
+ *
+ * ⚠️ PARKED MEANS INVISIBLE TO THE CRON BY INDEX, NOT BY A LATE TIMESTAMP:
+ * `selectDueOutboxRows` matches only `dispatchState` absent and `DISPATCHED`.
+ * Liveness therefore rests on the release, which is scheduled from the very
+ * mutation that resolves the blocker (`accountingPeriods.create`/`open`/`reopen`)
+ * and chains its pages from its own transactions. Convex documents that a
+ * function scheduled by a mutation is scheduled iff the mutation commits, runs
+ * exactly once and is retried on internal errors
+ * (https://docs.convex.dev/scheduling/scheduled-functions), so a durable wake
+ * table and a recovery cron would only duplicate the platform. What remains is a
+ * developer error or a manually cancelled schedule: `redrive` re-wakes the org.
+ * Other holds (dependencies, org lifecycle) have no wake route and keep the flat delay.
+ */
+
+/**
+ * Clears the period-hold marker. Every transition that is not a fresh period
+ * hold must clear it, or a later period opening would release a row that is in
+ * failure backoff (or already finished).
+ */
+const CLEARED_HOLD = { holdKind: undefined } as const;
+
 /** Exponential, capped. Mirrors `authorityBackoffFor`. */
 function outboxBackoffFor(generation: number): number {
   return Math.min(2 ** Math.max(0, generation - 1) * 30_000, 30 * 60_000);
@@ -1395,6 +1421,7 @@ export async function reviveFailedEntry(
     // the revived row is PENDING-but-claimed: invisible to the unclaimed
     // selector range, and therefore never picked up again.
     ...CLEARED_CLAIM,
+    ...CLEARED_HOLD,
     // A fresh generation guarantees that if the ancient worker ever did
     // arrive, it loses.
     generation: (current.generation ?? 0) + 1,
@@ -1403,6 +1430,81 @@ export async function reviveFailedEntry(
   });
   return true;
 }
+
+/**
+ * Un-park a `PERIOD_HELD` row: back to the selector-eligible shape a fresh row has
+ * (no `dispatchState`, no `nextActionAt`). Shared by the period wake and the
+ * operator redrive so the two cannot drift. It claims nothing and posts nothing.
+ */
+async function releaseParkedRow(ctx: MutationCtx, row: Doc<"pendingAccountingEvents">): Promise<void> {
+  await ctx.db.patch(row._id, { ...CLEARED_CLAIM, ...CLEARED_HOLD, nextActionAt: undefined });
+}
+
+/** Rows examined per wake page; each page schedules its own continuation. */
+const PERIOD_WAKE_PAGE_SIZE = 100;
+
+/**
+ * SCRUM-807 — WAKE THE ROWS A PERIOD NOW COVERS, AND ONLY THOSE.
+ *
+ * Scheduled by `accountingPeriods.create` (with `openImmediately`), `open` and
+ * `reopen` — every transition into OPEN — from the same mutation that makes it.
+ * Manual redrives release parked rows through their bounded drains instead.
+ * This wake releases rows that
+ * are `PERIOD_HELD` and whose `accountingDate` lies in the range. It is NOT a
+ * generic drain: other orgs, other dates, failures in backoff and rows in flight
+ * are untouched.
+ *
+ * Releasing clears the park marker and schedules the normal `claimOutboxRow`
+ * (a lost claim schedule is still found by the cron's unclaimed range, since a
+ * released row is selector-eligible); the claim and the worker re-prove every
+ * condition, so a wake can never post what the worker would not have posted. A
+ * row that raced the cron or was woken twice is stopped by the `dispatchState` /
+ * generation guards: one journal.
+ *
+ * Paginated by cursor, each page scheduling the next from its own transaction,
+ * so the chain is as durable as the scheduler. Release removes the row from the
+ * `by_org_hold_date` range, which leaves the cursor valid.
+ */
+export const wakePeriodHeldRows = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    startDate: v.number(),
+    endDate: v.number(),
+    limit: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(args.limit ?? PERIOD_WAKE_PAGE_SIZE, PERIOD_WAKE_PAGE_SIZE);
+    const page = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_hold_date", (q) =>
+        q
+          .eq("orgId", args.orgId)
+          .eq("holdKind", "PERIOD")
+          .gte("accountingDate", args.startDate)
+          .lte("accountingDate", args.endDate)
+      )
+      .paginate({ cursor: args.cursor ?? null, numItems: limit });
+
+    let woken = 0;
+    for (const row of page.page) {
+      if (row.status !== "PENDING" || row.dispatchState !== "PERIOD_HELD") continue;
+      await releaseParkedRow(ctx, row);
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.claimOutboxRow, {
+        rowId: row._id,
+      });
+      woken += 1;
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.wakePeriodHeldRows, {
+        ...args,
+        cursor: page.continueCursor,
+      });
+    }
+    return { woken, done: page.isDone };
+  },
+});
 
 /**
  * SCRUM-222 — LIVENESS. A fixed tick over `nextActionAt`, never accounting
@@ -1468,7 +1570,9 @@ export const claimOutboxRow = internalMutation({
     // helpers already terminate it" needs no new mechanism here, only that a
     // vanished row is never resurrected.
     if (!row || row.status !== "PENDING") return { claimed: false as const };
-    if (row.dispatchState === "DISPATCHED") return { claimed: false as const };
+    // DISPATCHED: an attempt is outstanding. PERIOD_HELD (SCRUM-807): parked until
+    // `wakePeriodHeldRows` releases it, so a stray schedule cannot re-run its hold.
+    if (row.dispatchState !== undefined) return { claimed: false as const };
     if ((row.nextActionAt ?? 0) > Date.now()) return { claimed: false as const };
 
     const now = Date.now();
@@ -1507,15 +1611,22 @@ export const claimOutboxRow = internalMutation({
 async function holdOutboxRow(
   ctx: MutationCtx,
   row: Doc<"pendingAccountingEvents">,
-  reason: string
+  reason: string,
+  kind?: "PERIOD"
 ): Promise<{ outcome: "HELD" }> {
+  // Only a period hold is parked (it has a wake route, and this is the same
+  // transaction that read the period); every other hold keeps the flat delay and
+  // drops any stale period marker.
+  const hold =
+    kind === "PERIOD"
+      ? { ...CLEARED_CLAIM, dispatchState: "PERIOD_HELD" as const, holdKind: kind, nextActionAt: undefined }
+      : { ...CLEARED_CLAIM, ...CLEARED_HOLD, nextActionAt: Date.now() + OUTBOX_HOLD_DELAY_MS };
   await ctx.db.patch(row._id, {
-    ...CLEARED_CLAIM,
+    ...hold,
     lastError: `Waiting to post: ${reason}.`,
     // ⚠️ ZERO ATTEMPTS BURNED. An entry waiting on someone else's blocker is
     // not failing, and routing it through the attempt counter would
     // dead-letter a perfectly valid entry.
-    nextActionAt: Date.now() + OUTBOX_HOLD_DELAY_MS,
   });
   return { outcome: "HELD" as const };
 }
@@ -1546,6 +1657,7 @@ async function failOutboxRow(
   const attempts = row.attempts + 1;
   await ctx.db.patch(row._id, {
     ...CLEARED_CLAIM,
+    ...CLEARED_HOLD,
     attempts,
     lastError: message,
     ...(attempts >= MAX_ATTEMPTS
@@ -1691,7 +1803,7 @@ export const postOutboxRow = internalMutation({
 
     const periodCheck = await checkPostingAllowed(ctx, row.orgId, row.accountingDate);
     if (!periodCheck.ok && periodCheck.waiting) {
-      return await holdOutboxRow(ctx, row, periodCheck.reason);
+      return await holdOutboxRow(ctx, row, periodCheck.reason, "PERIOD");
     }
 
     if (row.kind === "POST") {
@@ -1796,6 +1908,7 @@ export const observeOutboxAttempt = internalMutation({
 
     await ctx.db.patch(row._id, {
       ...CLEARED_CLAIM,
+      ...CLEARED_HOLD,
       attempts,
       lastError: scheduled
         ? "this posting attempt did not complete"
@@ -1836,10 +1949,16 @@ export const observeOutboxAttempt = internalMutation({
  */
 export async function drainEntries(
   ctx: MutationCtx,
-  entries: Doc<"pendingAccountingEvents">[]
-): Promise<{ scheduled: number; alreadyInFlight: number }> {
+  entries: Doc<"pendingAccountingEvents">[],
+  // SCRUM-807 — true ONLY for an operator's explicit redrive (`redrive`,
+  // `prepaidExpenses.redriveScheduleEvents`): parked period holds are released and
+  // claimed, and counted in `scheduled`, so the caller's "N queued" is the truth.
+  // Every automatic drain leaves the default and keeps parked rows excluded.
+  options: { releaseParked?: boolean } = {}
+): Promise<{ scheduled: number; alreadyInFlight: number; periodHeld: number }> {
   let scheduled = 0;
   let alreadyInFlight = 0;
+  let periodHeld = 0;
   for (const p of entries) {
     // Terminal rows and rows already carrying an outstanding attempt are not
     // re-dispatched. A row whose `nextActionAt` is still in the future is
@@ -1857,10 +1976,22 @@ export async function drainEntries(
       alreadyInFlight += 1;
       continue;
     }
+    // SCRUM-807 — a row parked for its period is neither "in flight" nor "nothing
+    // here": an automatic drain counts it on its own and does NOT claim it — only the
+    // period opening releases it, and claiming it would re-run a hold whose blocker
+    // has not changed. A manual redrive releases it and falls through to the claim
+    // below; the worker re-proves the period and re-parks it with no attempt burned.
+    if (p.dispatchState === "PERIOD_HELD") {
+      if (!options.releaseParked) {
+        periodHeld += 1;
+        continue;
+      }
+      await releaseParkedRow(ctx, p);
+    }
     await ctx.scheduler.runAfter(0, internal.accountingOutbox.claimOutboxRow, { rowId: p._id });
     scheduled += 1;
   }
-  return { scheduled, alreadyInFlight };
+  return { scheduled, alreadyInFlight, periodHeld };
 }
 
 // ─── Internal mutation (scheduler target) ─────────────────────────────────────
@@ -1894,14 +2025,17 @@ async function drainPageAndContinue(
   orgId: Id<"organizations">,
   limit: number,
   cursor: string | null,
-  pass: number
-): Promise<{ scheduled: number; alreadyInFlight: number }> {
+  pass: number,
+  // SCRUM-807 — an operator's redrive. Carried through EVERY continuation, including
+  // the delayed resume after the pass budget, so the whole org is covered, not page one.
+  releaseParked = false
+): Promise<{ scheduled: number; alreadyInFlight: number; periodHeld: number }> {
   const page = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
     .paginate({ cursor, numItems: Math.min(limit, 200) });
 
-  const result = await drainEntries(ctx, page.page);
+  const result = await drainEntries(ctx, page.page, { releaseParked });
 
   console.log(
     `[outbox-drain] org ${orgId} pass ${pass}: scheduled ${result.scheduled}, already in flight ${result.alreadyInFlight}`
@@ -1936,6 +2070,7 @@ async function drainPageAndContinue(
         limit,
         cursor: page.continueCursor,
         pass: budgetSpent ? 0 : pass + 1,
+        ...(releaseParked ? { releaseParked } : {}),
       }
     );
   }
@@ -1958,9 +2093,17 @@ export const drainPendingAccountingEvents = internalMutation({
     limit: v.optional(v.number()),
     cursor: v.optional(v.string()),
     pass: v.optional(v.number()),
+    releaseParked: v.optional(v.boolean()),
   },
   handler: async (ctx, args) =>
-    drainPageAndContinue(ctx, args.orgId, args.limit ?? 50, args.cursor ?? null, args.pass ?? 0),
+    drainPageAndContinue(
+      ctx,
+      args.orgId,
+      args.limit ?? 50,
+      args.cursor ?? null,
+      args.pass ?? 0,
+      args.releaseParked ?? false
+    ),
 });
 
 // ─── Visibility query ─────────────────────────────────────────────────────────
@@ -2093,7 +2236,16 @@ export const redrive = mutation({
     // money path, and precisely the kind of claim this ticket exists to stop
     // the outbox making. A duplicate click is safe: `claimOutboxRow` refuses a
     // row that already carries an outstanding attempt.
-    return drainPageAndContinue(ctx, args.orgId, 50, null, 0);
+    //
+    // ⚠️ SCRUM-807 — THE MANUAL RECOVERY FOR PARKED PERIOD HOLDS. This click RELEASES
+    // every `PERIOD_HELD` row it pages over and schedules its real claim, so the
+    // returned `scheduled` counts exactly the rows queued (no separate wake, no
+    // count the UI would read as "nothing"). The flag rides every continuation page.
+    // It is the supported route when a period's own wake never ran (a developer error
+    // in the scheduled function, or one cancelled from the dashboard). A row whose
+    // period is still missing is re-evaluated once and parked again, burning no
+    // attempt. An operator action under the same MANAGE_FINANCE gate, never periodic.
+    return drainPageAndContinue(ctx, args.orgId, 50, null, 0, true);
   },
 });
 

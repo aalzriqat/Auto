@@ -146,6 +146,14 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
 
     const book = await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId });
     expect(book).toMatchObject({ status: "OK", balanceMinor: 1_000_000, unattributedLineCount: 0 });
+    const status = await fx.asOwner.query(api.accountingCutover.openingBalanceStatus, { orgId: fx.orgId });
+    expect(status.postedOpening).toMatchObject({
+      currency: "JOD",
+      lines: expect.arrayContaining([
+        expect.objectContaining({ bankAccountName: "Arab Bank JOD", debitMinor: 1_000_000, creditMinor: 0 }),
+        expect.objectContaining({ debitMinor: 0, creditMinor: 1_000_000 }),
+      ]),
+    });
   });
 
   test("two banks in one opening each keep their own balance", async () => {

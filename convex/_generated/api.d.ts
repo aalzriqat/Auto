@@ -9,6 +9,8 @@
  */
 
 import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
+import type * as accounting_bankAggregateTriggers from "../accounting/bankAggregateTriggers.js";
+import type * as accounting_bankLineAggregate from "../accounting/bankLineAggregate.js";
 import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
 import type * as accounting_invoiceReceiptDisposition from "../accounting/invoiceReceiptDisposition.js";
 import type * as accounting_invoiceReceiptReservation from "../accounting/invoiceReceiptReservation.js";
@@ -41,6 +43,7 @@ import type * as aggregates from "../aggregates.js";
 import type * as applications from "../applications.js";
 import type * as approvals from "../approvals.js";
 import type * as bankAccounts from "../bankAccounts.js";
+import type * as bankBalanceBackfill from "../bankBalanceBackfill.js";
 import type * as bankReconciliation from "../bankReconciliation.js";
 import type * as branches from "../branches.js";
 import type * as cashDrawer from "../cashDrawer.js";
@@ -231,6 +234,7 @@ import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_orgLifecycle from "../utils/orgLifecycle.js";
 import type * as utils_orgResetGeneration from "../utils/orgResetGeneration.js";
 import type * as utils_orgSettingsProjection from "../utils/orgSettingsProjection.js";
+import type * as utils_partnerEquityBank from "../utils/partnerEquityBank.js";
 import type * as utils_paymentMethods from "../utils/paymentMethods.js";
 import type * as utils_paymentWebhook from "../utils/paymentWebhook.js";
 import type * as utils_payrollSourceLedger from "../utils/payrollSourceLedger.js";
@@ -291,6 +295,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   "accounting/accountSnapshots": typeof accounting_accountSnapshots;
+  "accounting/bankAggregateTriggers": typeof accounting_bankAggregateTriggers;
+  "accounting/bankLineAggregate": typeof accounting_bankLineAggregate;
   "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
   "accounting/invoiceReceiptDisposition": typeof accounting_invoiceReceiptDisposition;
   "accounting/invoiceReceiptReservation": typeof accounting_invoiceReceiptReservation;
@@ -323,6 +329,7 @@ declare const fullApi: ApiFromModules<{
   applications: typeof applications;
   approvals: typeof approvals;
   bankAccounts: typeof bankAccounts;
+  bankBalanceBackfill: typeof bankBalanceBackfill;
   bankReconciliation: typeof bankReconciliation;
   branches: typeof branches;
   cashDrawer: typeof cashDrawer;
@@ -513,6 +520,7 @@ declare const fullApi: ApiFromModules<{
   "utils/orgLifecycle": typeof utils_orgLifecycle;
   "utils/orgResetGeneration": typeof utils_orgResetGeneration;
   "utils/orgSettingsProjection": typeof utils_orgSettingsProjection;
+  "utils/partnerEquityBank": typeof utils_partnerEquityBank;
   "utils/paymentMethods": typeof utils_paymentMethods;
   "utils/paymentWebhook": typeof utils_paymentWebhook;
   "utils/payrollSourceLedger": typeof utils_payrollSourceLedger;
@@ -602,4 +610,6 @@ export declare const components: {
   instagramEventsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"instagramEventsByOrg">;
   facebookEventsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"facebookEventsByOrg">;
   socialContactsByOrg: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"socialContactsByOrg">;
+  bankControlByDate: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"bankControlByDate">;
+  bankAttributionByDate: import("@convex-dev/aggregate/_generated/component.js").ComponentApi<"bankAttributionByDate">;
 };

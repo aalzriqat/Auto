@@ -7,6 +7,8 @@ import { ConvexError } from "convex/values";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { requireOwnedRow } from "./tenancy";
+import { throwAppError } from "./errors";
+import type { AppErrorCode as AppErrorCodeType } from "./errors";
 
 const BANK_NOT_FOUND_MESSAGE = "The selected bank account was not found in this organization.";
 
@@ -46,18 +48,29 @@ export async function requireActiveBankInCurrency(
     missingMessage: string;
     /** Completes "...but this <subject> is in JOD." */
     currencySubject: string;
+    /** Stable translation code for a user-facing bank refusal. */
+    errorCode?: AppErrorCodeType;
   }
 ): Promise<Id<"bankAccounts">> {
-  if (!args.bankAccountId) throw new ConvexError(args.missingMessage);
-  const bank = await requireOwnedRow(ctx, args.orgId, "bankAccounts", args.bankAccountId, BANK_NOT_FOUND_MESSAGE);
-  if (bank.isDeleted) throw new ConvexError(BANK_NOT_FOUND_MESSAGE);
+  const reject = (message: string): never => {
+    if (args.errorCode) throwAppError(args.errorCode, message);
+    throw new ConvexError(message);
+  };
+  const bankAccountId = args.bankAccountId;
+  if (!bankAccountId) return reject(args.missingMessage);
+  let bank;
+  try {
+    bank = await requireOwnedRow(ctx, args.orgId, "bankAccounts", bankAccountId, BANK_NOT_FOUND_MESSAGE);
+  } catch (error) {
+    if (error instanceof ConvexError && error.data === BANK_NOT_FOUND_MESSAGE) reject(BANK_NOT_FOUND_MESSAGE);
+    throw error;
+  }
+  if (bank.isDeleted) reject(BANK_NOT_FOUND_MESSAGE);
   if (!bank.isActive) {
-    throw new ConvexError("The selected bank account is inactive.");
+    reject("The selected bank account is inactive.");
   }
   if (bank.currency !== args.currency) {
-    throw new ConvexError(
-      `The selected bank account is denominated in ${bank.currency}, but this ${args.currencySubject} is in ${args.currency}.`
-    );
+    reject(`The selected bank account is denominated in ${bank.currency}, but this ${args.currencySubject} is in ${args.currency}.`);
   }
-  return args.bankAccountId;
+  return bankAccountId;
 }

@@ -77,6 +77,16 @@ afterEach(() => {
 const tickProviderChecked = (dialog: HTMLElement) =>
   fireEvent.click(within(dialog).getByRole("checkbox", { name: "ExpireProviderCheckedLabel" }));
 
+test.each([commonEn, commonAr])("pilot disables new links and explains the refusal in both languages", (locale) => {
+  stubs.t = (key) => (locale as Record<string, string>)[key] ?? key;
+  render(<PaymentLinksPanel />);
+  const create = screen.getByRole("button", { name: locale.NewPaymentLink }) as HTMLButtonElement;
+  expect(create.disabled).toBe(true);
+  expect(screen.getByRole("status").textContent).toBe(locale.ServerError_PAYMENT_LINKS_DISABLED);
+  fireEvent.click(create);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
 describe("PaymentLinksPanel: Expire link", () => {
   test.each(["SETTLED", "EXPIRED", "FAILED"])("is disabled for a %s link", (status) => {
     stubs.rows = [intent({ status })];
