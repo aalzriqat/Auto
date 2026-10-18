@@ -11,7 +11,15 @@ const enabled = process.env.BROWSER_SWARM_ENABLED === "1";
 
 if (enabled) {
   test.describe("SCRUM-350 browser adversarial swarm", () => {
+    // SCRUM-826 F1: a retry-pass must never hide a confirmed breach or harness
+    // error from attempt 1 (Playwright exits 0 when a retry passes), and the
+    // missions mutate the shared preview, so they must not run twice either.
+    test.describe.configure({ retries: 0 });
+
     test("executes the assigned deterministic/Jev mission partition", async ({}, testInfo) => {
+    if (testInfo.retry > 0) {
+      throw new Error("trusted swarm never retries");
+    }
     assertBrowserSwarmExecutionEnvironment(process.env);
     const { manifest, workerId } = browserSwarmManifestFromEnv(process.env);
     const worker = manifest.workers.find((entry) => entry.workerId === workerId);

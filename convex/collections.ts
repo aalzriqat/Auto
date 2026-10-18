@@ -4,7 +4,7 @@ import { internalQuery, query, QueryCtx, MutationCtx } from "./_generated/server
 import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -22,11 +22,31 @@ import {
   retireReceiptRevocationState,
   RETAINED_CREDIT_SYSTEM_KEY,
 } from "./accounting/receiptMovement";
+import {
+  cancelOpenRefundRequestsForMovement,
+  cancelPendingInvoiceReceiptsForMovement,
+  availableRetainedCreditMinor,
+  pendingSaleInvoiceReceiptMinor,
+  reservePendingInvoiceReceipt,
+} from "./accounting/invoiceReceiptReservation";
+import {
+  activatePendingInvoiceReceipt,
+  InvoiceReceiptProofError,
+  planActiveInvoiceReceiptReversal,
+  reverseActiveInvoiceReceiptApplications,
+  verifyPendingInvoiceReceiptActivation,
+} from "./accounting/invoiceReceiptActivation";
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { assertValidAccountingDate } from "./accountingPeriods";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP, FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { RETAINED_CREDIT_MESSAGES } from "./utils/retainedCreditMessages";
+import {
+  areSaleInvoiceReceiptDoorsDisabled,
+  assertSaleInvoiceReceiptDoorsAllowed,
+  isCustomerCreditPayoutDisabled,
+} from "./utils/customerCreditPayoutContainment";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import {
   assertNoSaleIdOnNewReceivable,
@@ -279,10 +299,11 @@ async function hydrateReceivable(ctx: QueryCtx, receivable: Doc<"receivables">) 
 }
 
 async function hydrateCheque(ctx: QueryCtx, cheque: Doc<"postDatedCheques">) {
-  const [customer, vehicle, receivable] = await Promise.all([
+  const [customer, vehicle, receivable, invoiceSale] = await Promise.all([
     ctx.db.get(cheque.customerId),
     getOptionalVehicle(ctx, cheque.vehicleId),
     cheque.receivableId ? ctx.db.get(cheque.receivableId) : null,
+    cheque.invoiceSaleId ? ctx.db.get(cheque.invoiceSaleId) : null,
   ]);
   const isFinanceCompanyCheque = isFcLineage(cheque);
   let drawerName: string | null = null;
@@ -295,6 +316,9 @@ async function hydrateCheque(ctx: QueryCtx, cheque: Doc<"postDatedCheques">) {
     customerName: customerName(customer),
     vehicleLabel: vehicleLabel(vehicle),
     receivableTitle: receivable?.title,
+    // SCRUM-724: the sale this cheque was written for, so a cheque on a
+    // cancelled sale can say it becomes customer credit when it clears.
+    invoiceSaleStatus: invoiceSale && invoiceSale.orgId === cheque.orgId ? invoiceSale.status : undefined,
     // SCRUM-447 D2/D5: lineage and the named drawer, for the read side. A row
     // with lineage but no recorded drawer is UNVERIFIED (drawerName null).
     isFinanceCompanyCheque,
@@ -723,6 +747,8 @@ export const summary = query({
       collectedToday: roundMoney(collectedToday, currency),
       upcomingChequeTotal: roundMoney(upcomingChequeTotal, currency),
       upcomingChequeCount: upcomingChequesThisWeek.length,
+      // Additive (SCRUM-724): false while the pilot payout switch is on.
+      retainedCreditPayoutAvailable: !isCustomerCreditPayoutDisabled(),
     };
   },
 });
@@ -888,13 +914,27 @@ export const listRetainedCredits = query({
       result.page.map(async (position) => {
         const movement = await ctx.db.get(position.receiptMovementId);
         const customer = await ctx.db.get(position.customerId);
+        const { reservedMinor: reservedForSaleInvoicesMinor, openRefundMinor, availableMinor } =
+          await availableRetainedCreditMinor(ctx, args.orgId, position);
+        // SCRUM-724: lineage is read from the immutable position fields; whether
+        // the originating sale is cancelled is derived NOW from the sale row.
+        const lineageCheque = position.sourceChequeId ? await ctx.db.get(position.sourceChequeId) : null;
+        const lineageSale = position.originatingSaleId ? await ctx.db.get(position.originatingSaleId) : null;
         return {
+          sourceChequeId: position.sourceChequeId,
+          sourceChequeLabel: lineageCheque && lineageCheque.orgId === args.orgId
+            ? `${lineageCheque.bank} #${lineageCheque.chequeNumber}` : undefined,
+          originatingSaleId: position.originatingSaleId,
+          originatingSaleStatus: lineageSale && lineageSale.orgId === args.orgId ? lineageSale.status : undefined,
           receiptMovementId: position.receiptMovementId,
           customerId: position.customerId,
           customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : undefined,
           currency: position.currency,
           initialUnappliedMinor: position.initialUnappliedMinor,
           remainingUnappliedMinor: position.remainingUnappliedMinor,
+          reservedForSaleInvoicesMinor,
+          openRefundRequestMinor: openRefundMinor,
+          availableUnappliedMinor: availableMinor,
           applicationCount: position.applicationCount,
           // Whether `applyRetainedCredit` would currently accept it. The receipt
           // must be POSTED, so a credit whose own journal is still queued behind
@@ -916,6 +956,194 @@ export const listRetainedCredits = query({
       ...result,
       page: args.onlyRemaining ? page.filter((p) => p.remainingUnappliedMinor > 0) : page,
     };
+  },
+});
+
+/** Completed-sale customer invoice and its parked receipt applications. */
+export const saleInvoiceReceiptStatus = query({
+  args: {
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.saleId);
+    const invoice = sale.canonicalReceivableDocumentId
+      ? await ctx.db.get(sale.canonicalReceivableDocumentId) : null;
+    if (invoice && (invoice.orgId !== args.orgId || invoice.sourceType !== "sales" ||
+      invoice.sourceId !== String(sale._id) || invoice.documentType !== "INVOICE" ||
+      invoice.payerType !== "CUSTOMER" || invoice.customerId !== sale.customerId)) {
+      throw new ConvexError("The sale's customer invoice cannot be verified.");
+    }
+    const pending = await ctx.db.query("invoiceReceiptApplications")
+      .withIndex("by_org_sale_status", (q) => q.eq("orgId", args.orgId)
+        .eq("saleId", sale._id).eq("status", "PENDING"))
+      .paginate(args.paginationOpts);
+    const page = await Promise.all(pending.page.map(async (row) => {
+      let readiness: "ORIGINS_VERIFIED" | "REVIEW_REQUIRED" = "REVIEW_REQUIRED";
+      let reason: string | undefined;
+      try {
+        await verifyPendingInvoiceReceiptActivation(ctx, args.orgId, row._id);
+        readiness = "ORIGINS_VERIFIED";
+      } catch (error) {
+        // This preview is advisory. The writer checks the same proof again;
+        // never show a technical lineage error or mark missing evidence ready.
+        console.error("Pending invoice receipt proof unavailable", error);
+        reason = error instanceof InvoiceReceiptProofError ? error.reason : "PROOF_UNAVAILABLE";
+      }
+      return {
+        applicationId: row._id,
+        receiptMovementId: row.receiptMovementId,
+        amountMinor: row.amountMinor,
+        currency: row.currency,
+        createdAt: row.createdAt,
+        readiness,
+        reason,
+      };
+    }));
+    const outstandingMinor = invoice ? await getReceivableOutstandingMinor(ctx, invoice._id) : null;
+    const pendingMinor = invoice ? await pendingSaleInvoiceReceiptMinor(ctx, args.orgId, sale._id) : null;
+    return {
+      ...pending,
+      page,
+      invoice: invoice ? {
+        currency: invoice.currency,
+        originalAmountMinor: invoice.originalAmountMinor,
+        outstandingMinor: outstandingMinor!,
+        availableToReserveMinor: Math.max(0, outstandingMinor! - pendingMinor!),
+      } : null,
+      saleStatus: sale.status,
+      customerId: sale.customerId,
+      receiptCurrency: await getOrgCurrency(ctx, args.orgId),
+      // Additive (SCRUM-724): the UI shows its disabled state from these.
+      // Absent (older backend) must be read as unavailable by every client.
+      saleInvoiceDoorsAvailable: !areSaleInvoiceReceiptDoorsDisabled(),
+      retainedCreditPayoutAvailable: !isCustomerCreditPayoutDisabled(),
+    };
+  },
+});
+
+/** Unassigned customer cheques that can become retained credit after clearing. */
+export const listSaleCustomerCheques = query({
+  args: { orgId: v.id("organizations"), saleId: v.id("sales"),
+    paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.saleId);
+    const result = await ctx.db.query("postDatedCheques")
+      .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", sale.customerId))
+      .paginate(args.paginationOpts);
+    return { ...result, saleStatus: sale.status, page: result.page.filter((cheque) =>
+      !cheque.isDeleted && cheque.invoiceSaleId === sale._id &&
+      !cheque.receivableId && !cheque.saleId &&
+      !cheque.applicationId && !cheque.originApplicationId && !cheque.drawerType &&
+      (cheque.status === "HELD" || cheque.status === "DEPOSITED")
+    ).map((cheque) => ({ chequeId: cheque._id, bank: cheque.bank,
+      chequeNumber: cheque.chequeNumber, chequeDate: cheque.chequeDate,
+      amount: cheque.amount, status: cheque.status })) };
+  },
+});
+
+/** Register a customer cheque for the currently uncovered invoice amount. */
+export const registerSaleInvoiceCheque = mutation({
+  args: { orgId: v.id("organizations"), saleId: v.id("sales"),
+    bank: v.string(), chequeNumber: v.string(), chequeDate: v.number(),
+    amountMinor: v.number() },
+  handler: async (ctx, args) => {
+    const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    assertSaleInvoiceReceiptDoorsAllowed();
+    const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.saleId);
+    const invoice = sale.canonicalReceivableDocumentId
+      ? await requireOwnedRow(ctx, args.orgId, "receivableDocuments", sale.canonicalReceivableDocumentId) : null;
+    if (sale.status !== "COMPLETED" || !invoice || invoice.sourceType !== "sales" ||
+      invoice.sourceId !== String(sale._id) || invoice.documentType !== "INVOICE" ||
+      invoice.payerType !== "CUSTOMER" || invoice.customerId !== sale.customerId ||
+      invoice.currency.toUpperCase() !== (await getOrgCurrency(ctx, args.orgId)).toUpperCase()) {
+      throw new ConvexError("This sale has no eligible customer invoice for a cheque.");
+    }
+    const [outstanding, reserved] = await Promise.all([
+      getReceivableOutstandingMinor(ctx, invoice._id),
+      pendingSaleInvoiceReceiptMinor(ctx, args.orgId, sale._id),
+    ]);
+    if (!Number.isSafeInteger(args.amountMinor) || args.amountMinor <= 0 ||
+      args.amountMinor > outstanding - reserved || !Number.isFinite(args.chequeDate)) {
+      throw new ConvexError("Choose an available customer invoice amount and a valid cheque date.");
+    }
+    // The generic customer cheque must not carry a saleId: SCRUM-571 keeps
+    // clearing from booking directly to a sale. Clearing makes retained 2110;
+    // the later explicit reservation and activation settle this invoice.
+    return registerChequeCore(ctx, { orgId: args.orgId, customerId: sale.customerId,
+      bank: args.bank, chequeNumber: args.chequeNumber, chequeDate: args.chequeDate,
+      amount: fromMinorUnits(args.amountMinor, invoice.currency), actorId: user._id,
+      branchId: membership.branchId, invoiceSaleId: sale._id });
+  },
+});
+
+/** Park existing retained 2110 credit for a completed sale's exact invoice. */
+export const reserveSaleInvoiceReceipt = mutation({
+  args: {
+    orgId: v.id("organizations"), saleId: v.id("sales"),
+    receiptMovementId: v.id("receiptMovements"), amountMinor: v.number(),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    assertSaleInvoiceReceiptDoorsAllowed();
+    const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.saleId);
+    // A stored command result must not make a cancelled sale look newly
+    // reservable on replay. The writer repeats its full proof inside the
+    // idempotency boundary for the first execution.
+    if (sale.status !== "COMPLETED") {
+      throw new ConvexError("This sale cannot accept a customer invoice receipt.");
+    }
+    await requireOwnedRow(ctx, args.orgId, "receiptMovements", args.receiptMovementId);
+    if (!Number.isSafeInteger(args.amountMinor) || args.amountMinor <= 0) {
+      throw new ConvexError("Choose a positive customer credit amount.");
+    }
+    const applicationId = await runWithIdempotency(ctx, {
+      orgId: args.orgId, operation: "collections.reserveSaleInvoiceReceipt", economic: true,
+      idempotencyKey: args.idempotencyKey, actorId: user._id,
+      fingerprint: JSON.stringify([args.saleId, args.receiptMovementId, args.amountMinor]),
+    }, () => reservePendingInvoiceReceipt(ctx, {
+      orgId: args.orgId, saleId: args.saleId,
+      receiptMovementId: args.receiptMovementId,
+      amountMinor: args.amountMinor, actorId: user._id,
+    }));
+    const application = await requireOwnedRow(ctx, args.orgId, "invoiceReceiptApplications", applicationId);
+    if (application.status !== "PENDING" || application.saleId !== args.saleId ||
+      application.receiptMovementId !== args.receiptMovementId || application.amountMinor !== args.amountMinor) {
+      throw new ConvexError("This invoice receipt reservation is no longer pending.");
+    }
+    return applicationId;
+  },
+});
+
+/** Activate only after the exact receipt and sale journals are POSTED. */
+export const activateSaleInvoiceReceipt = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("invoiceReceiptApplications"),
+    amountMinor: v.number(), idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    assertSaleInvoiceReceiptDoorsAllowed();
+    const application = await requireOwnedRow(ctx, args.orgId, "invoiceReceiptApplications", args.applicationId);
+    if (application.status !== "PENDING" && application.status !== "ACTIVE") {
+      throw new ConvexError("This invoice receipt application is no longer available.");
+    }
+    if (!Number.isSafeInteger(args.amountMinor) || args.amountMinor <= 0) {
+      throw new ConvexError("Choose a positive invoice application amount.");
+    }
+    return runWithIdempotency(ctx, {
+      orgId: args.orgId, operation: "collections.activateSaleInvoiceReceipt", economic: true,
+      idempotencyKey: args.idempotencyKey, actorId: user._id,
+      fingerprint: JSON.stringify([args.applicationId, args.amountMinor]),
+    }, () => activatePendingInvoiceReceipt(ctx, {
+      orgId: args.orgId, applicationId: args.applicationId,
+      amountMinor: args.amountMinor, actorId: user._id,
+    }));
   },
 });
 
@@ -1242,6 +1470,8 @@ export const recordPayment = mutation({
     customerId: v.optional(v.id("customers")),
     vehicleId: v.optional(v.id("vehicles")),
     saleId: v.optional(v.id("sales")),
+    /** SCRUM-724: bounds a generic retained receipt to a sale invoice without attributing it as legacy sale AR. */
+    invoiceSaleId: v.optional(v.id("sales")),
     amount: v.number(),
     method: paymentMethodValidator,
     paymentDate: v.number(),
@@ -1251,6 +1481,10 @@ export const recordPayment = mutation({
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-724 Sol 6 Q1: a receipt bound to a sale invoice is a new claim on
+    // 2110 credit. Refused before anything else and before the idempotency
+    // wrapper; a plain receipt (no invoiceSaleId) is the existing door.
+    if (args.invoiceSaleId) assertSaleInvoiceReceiptDoorsAllowed();
     // SCRUM-263: this is a receipt door, so it records only money that arrives.
     // A deposit application moves deposit liability already held; recorded here
     // it posted through the cash-on-hand default and invented cash, leaving the
@@ -1281,6 +1515,28 @@ export const recordPayment = mutation({
       receivableId: args.receivableId,
       saleId: args.saleId,
     });
+    const validateInvoiceIntent = async () => {
+      if (args.invoiceSaleId) {
+        const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.invoiceSaleId);
+        const invoice = sale.canonicalReceivableDocumentId
+          ? await requireOwnedRow(ctx, args.orgId, "receivableDocuments", sale.canonicalReceivableDocumentId) : null;
+        if (args.receivableId || args.saleId || !args.customerId || sale.customerId !== args.customerId ||
+          sale.status !== "COMPLETED" || !invoice || invoice.sourceType !== "sales" ||
+          invoice.sourceId !== String(sale._id) || invoice.documentType !== "INVOICE" ||
+          invoice.payerType !== "CUSTOMER" || invoice.customerId !== sale.customerId ||
+          invoice.currency.toUpperCase() !== (await getOrgCurrency(ctx, args.orgId)).toUpperCase()) {
+          throw new ConvexError("This sale has no eligible customer invoice for this receipt.");
+        }
+        const [outstanding, reserved] = await Promise.all([
+          getReceivableOutstandingMinor(ctx, invoice._id),
+          pendingSaleInvoiceReceiptMinor(ctx, args.orgId, sale._id),
+        ]);
+        const amountMinor = toMinorUnits(args.amount, invoice.currency);
+        if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0 || amountMinor > outstanding - reserved) {
+          throw new ConvexError("The receipt exceeds the available customer invoice amount.");
+        }
+      }
+    };
     return await runWithIdempotency(
       ctx,
       {
@@ -1297,6 +1553,7 @@ export const recordPayment = mutation({
           customerId: args.customerId ?? null,
           vehicleId: args.vehicleId ?? null,
           saleId: args.saleId ?? null,
+          invoiceSaleId: args.invoiceSaleId ?? null,
           amount: args.amount,
           method: args.method,
           paymentDate: args.paymentDate,
@@ -1309,6 +1566,7 @@ export const recordPayment = mutation({
         if (args.method === "OTHER") {
           throw new ConvexError("Select a specific payment method — OTHER is not accepted for recording a payment.");
         }
+        await validateInvoiceIntent();
 
         let receivable: Doc<"receivables"> | null = null;
         if (args.receivableId) {
@@ -1484,7 +1742,7 @@ export const recordPayment = mutation({
         // outcome is one of exactly two shapes: a receivable was named and fully
         // absorbed the money, or none was and the whole receipt is retained
         // customer credit.
-        const { split } = await sealReceiptMovement(ctx, {
+        const { movementId, split } = await sealReceiptMovement(ctx, {
           identity: receiptIdentity,
           orgId: args.orgId,
           collectionPaymentId: paymentId,
@@ -1514,6 +1772,14 @@ export const recordPayment = mutation({
             paymentMethod: args.method,
           },
         });
+
+        if (args.invoiceSaleId) {
+          await reservePendingInvoiceReceipt(ctx, {
+            orgId: args.orgId, saleId: args.invoiceSaleId,
+            receiptMovementId: movementId, amountMinor: split.unappliedMinor,
+            actorId: user._id,
+          });
+        }
 
         const actorName = await getActorName(ctx);
         await notifyManagers(ctx, args.orgId, "collection.payment_recorded", {
@@ -1621,6 +1887,15 @@ export const applyRetainedCredit = mutation({
         await requirePostedReceiptForMovement(ctx, movement);
 
         const position = await loadRetainedPosition(ctx, args.orgId, movement._id);
+        const credit = await availableRetainedCreditMinor(ctx, args.orgId, position);
+        // SCRUM-724: credit that exists but is held (reserved for a sale invoice or
+        // asked back by the customer) is refused with a coded, localized reason.
+        if (credit.availableMinor <= 0 && position.remainingUnappliedMinor > 0) {
+          throwAppError(
+            AppErrorCode.RETAINED_CREDIT_UNAVAILABLE,
+            RETAINED_CREDIT_MESSAGES.RETAINED_CREDIT_UNAVAILABLE
+          );
+        }
 
         const receivable = await ctx.db.get(args.receivableId);
         if (!receivable || receivable.orgId !== args.orgId) {
@@ -1660,7 +1935,7 @@ export const applyRetainedCredit = mutation({
 
         const amountMinor = computeApplicableMinor({
           requestedMinor: toMinorUnits(roundMoney(args.requestedAmount, currency), currency),
-          remainingUnappliedMinor: position.remainingUnappliedMinor,
+          remainingUnappliedMinor: Math.max(0, credit.availableMinor),
           outstandingMinor: Math.min(
             toMinorUnits(roundMoney(receivable.outstandingAmount, currency), currency),
             canonicalOutstandingMinor
@@ -1742,6 +2017,7 @@ export async function registerChequeCore(
     customerId: Id<"customers">;
     vehicleId?: Id<"vehicles">;
     saleId?: Id<"sales">;
+    invoiceSaleId?: Id<"sales">;
     applicationId?: Id<"financeApplications">;
     bank: string;
     chequeNumber: string;
@@ -1845,6 +2121,7 @@ export async function registerChequeCore(
     customerId: args.customerId,
     vehicleId: receivable?.vehicleId ?? args.vehicleId,
     saleId: receivable?.saleId ?? args.saleId,
+    invoiceSaleId: args.invoiceSaleId,
     applicationId: args.applicationId,
     ...(args.amountMinor !== undefined ? { amountMinor: args.amountMinor, currency: args.currency } : {}),
     ...(args.drawerType !== undefined ? { drawerType: args.drawerType } : {}),
@@ -1883,6 +2160,70 @@ export const registerCheque = mutation({
   },
 });
 
+/**
+ * What a sale-invoice cheque's sale currently allows (SCRUM-724).
+ *   NONE                  the cheque is not tied to a sale invoice
+ *   LIVE                  the sale is COMPLETED and its open invoice covers the cheque
+ *   CANCELLED_SALE_CREDIT the sale was cancelled after the cheque was presented:
+ *                         clearing posts DR Bank / CR 2110 and nothing else
+ *   OVER_COVERED_CREDIT   the cheque was presented, then the COMPLETED sale's
+ *                         invoice was covered by other money (Sol 6 Q2=A):
+ *                         clearing posts DR Bank / CR 2110 for the whole face,
+ *                         unreserved, with cheque + sale lineage; the invoice,
+ *                         revenue and sale state are untouched
+ * A HELD cheque the invoice cannot cover is refused (CHEQUE_INVOICE_UNCOVERED_HELD).
+ */
+type ChequeInvoiceIntent = "NONE" | "LIVE" | "CANCELLED_SALE_CREDIT" | "OVER_COVERED_CREDIT";
+
+async function assertChequeInvoiceIntentLive(
+  ctx: MutationCtx,
+  cheque: Doc<"postDatedCheques">
+): Promise<ChequeInvoiceIntent> {
+  if (!cheque.invoiceSaleId) return "NONE";
+  const sale = await requireOwnedRow(ctx, cheque.orgId, "sales", cheque.invoiceSaleId);
+  const invoice = sale.canonicalReceivableDocumentId
+    ? await requireOwnedRow(ctx, cheque.orgId, "receivableDocuments", sale.canonicalReceivableDocumentId) : null;
+  const currency = await getOrgCurrency(ctx, cheque.orgId);
+  // Identity that must hold in BOTH modes. The denomination is proven from the
+  // sale's canonical invoice (a sale-invoice cheque stores no currency of its own).
+  const identityHolds = sale.customerId === cheque.customerId &&
+    !cheque.receivableId && !cheque.saleId && !isFcLineage(cheque) &&
+    !!invoice && invoice.sourceType === "sales" && invoice.sourceId === String(sale._id) &&
+    invoice.documentType === "INVOICE" && invoice.payerType === "CUSTOMER" &&
+    invoice.customerId === sale.customerId && invoice.currency.toUpperCase() === currency.toUpperCase();
+  if (sale.status === "CANCELLED" && identityHolds) {
+    // Only a cheque already presented to the bank can still clear; an unpresented
+    // one goes back to the customer (owner ruling Q-DA07).
+    if (cheque.status !== "DEPOSITED") {
+      throwAppError(
+        AppErrorCode.CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER,
+        RETAINED_CREDIT_MESSAGES.CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER
+      );
+    }
+    return "CANCELLED_SALE_CREDIT";
+  }
+  if (sale.status !== "COMPLETED" || !identityHolds || !invoice) {
+    throw new ConvexError("This sale's customer cheque can no longer be advanced.");
+  }
+  const [outstanding, reserved] = await Promise.all([
+    getReceivableOutstandingMinor(ctx, invoice._id),
+    pendingSaleInvoiceReceiptMinor(ctx, cheque.orgId, sale._id),
+  ]);
+  if (toMinorUnits(cheque.amount, currency) > outstanding - reserved) {
+    // Sol 6 Q2=A. An UNPRESENTED cheque the invoice can no longer cover must not
+    // be deposited: it would reach the bank with nowhere to land. Once the bank
+    // has it (DEPOSITED) the money is real and must book, never strand.
+    if (cheque.status === "HELD") {
+      throwAppError(
+        AppErrorCode.CHEQUE_INVOICE_UNCOVERED_HELD,
+        RETAINED_CREDIT_MESSAGES.CHEQUE_INVOICE_UNCOVERED_HELD
+      );
+    }
+    return "OVER_COVERED_CREDIT";
+  }
+  return "LIVE";
+}
+
 export const depositCheque = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1894,6 +2235,7 @@ export const depositCheque = mutation({
     const cheque = await ctx.db.get(args.chequeId);
     if (!cheque || cheque.orgId !== args.orgId || cheque.isDeleted) throw new ConvexError("Cheque not found.");
     if (cheque.status !== "HELD") throw new ConvexError("Only held cheques can be deposited.");
+    await assertChequeInvoiceIntentLive(ctx, cheque);
     // SCRUM-571 R4 (D-20): a sale-linked customer cheque cannot advance toward a
     // clearing that is itself refused. Finance-company cheques are unaffected.
     await assertCustomerChequeNotSaleLinked(ctx, cheque);
@@ -1932,6 +2274,7 @@ export async function markChequeClearedCore(
   if (cheque.status !== "HELD" && cheque.status !== "DEPOSITED") {
     throw new ConvexError("Only held or deposited cheques can be cleared.");
   }
+  await assertChequeInvoiceIntentLive(ctx, cheque);
 
   const clearedAt = args.clearedAt ?? Date.now();
   const patch: Partial<Doc<"postDatedCheques">> = {
@@ -1962,6 +2305,9 @@ export const clearCheque = mutation({
     const chequeToClear = await ctx.db.get(args.chequeId);
     if (chequeToClear && chequeToClear.orgId === args.orgId && !chequeToClear.isDeleted) {
       await assertCustomerChequeNotSaleLinked(ctx, chequeToClear);
+      if (chequeToClear.status === "HELD" || chequeToClear.status === "DEPOSITED") {
+        await assertChequeInvoiceIntentLive(ctx, chequeToClear);
+      }
     }
     return await runWithIdempotency(
       ctx,
@@ -1991,6 +2337,10 @@ export const clearCheque = mutation({
           );
         }
 
+        // SCRUM-724: decided BEFORE the cheque moves. A cheque presented before
+        // its sale was cancelled still clears; the money is then customer credit
+        // (2110) that nothing reserves, never a payment on the cancelled sale.
+        const invoiceIntent = await assertChequeInvoiceIntentLive(ctx, existingCheque);
         const cheque = await markChequeClearedCore(ctx, {
           orgId: args.orgId,
           chequeId: args.chequeId,
@@ -2077,7 +2427,7 @@ export const clearCheque = mutation({
         const receiptIdentity = directCollectionReceipt({ orgId: args.orgId, paymentId });
 
         // SCRUM-218-C — identical sealing to `recordPayment`; see the note there.
-        const { split } = await sealReceiptMovement(ctx, {
+        const { movementId, split } = await sealReceiptMovement(ctx, {
           identity: receiptIdentity,
           orgId: args.orgId,
           collectionPaymentId: paymentId,
@@ -2086,6 +2436,11 @@ export const clearCheque = mutation({
           currency,
           allocationIds: mirrored.paymentAllocationId ? [mirrored.paymentAllocationId] : [],
           actorId: user._id,
+          // SCRUM-724: immutable cheque + originating-sale lineage, for both a
+          // clear before and a clear after the sale's cancellation.
+          ...(cheque.invoiceSaleId
+            ? { lineage: { sourceChequeId: cheque._id, originatingSaleId: cheque.invoiceSaleId } }
+            : {}),
         });
 
         await postReceiptOccurrence(ctx, {
@@ -2104,6 +2459,17 @@ export const clearCheque = mutation({
             paymentMethod: "BANK_TRANSFER",
           },
         });
+
+        // Reservation is a new claim on 2110 credit: only a LIVE intent, and
+        // only while the pilot invoice-door switch is off. Otherwise the whole
+        // face stays unreserved credit (SCRUM-724 Sol 6 Q1/Q2).
+        if (cheque.invoiceSaleId && invoiceIntent === "LIVE" && !areSaleInvoiceReceiptDoorsDisabled()) {
+          await reservePendingInvoiceReceipt(ctx, {
+            orgId: args.orgId, saleId: cheque.invoiceSaleId,
+            receiptMovementId: movementId, amountMinor: split.unappliedMinor,
+            actorId: user._id,
+          });
+        }
 
         return paymentId;
       }
@@ -2198,6 +2564,25 @@ export const replaceCheque = mutation({
     // instrument whose clearing is refused. Finance-company cheques unaffected.
     await assertCustomerChequeNotSaleLinked(ctx, oldCheque);
 
+    // SCRUM-724: a sale-invoice cheque's replacement keeps that link (it was
+    // silently dropped, orphaning the replacement from the sale and from the
+    // credit lineage). The link is re-validated, and a cancelled sale's cheque
+    // is not replaced: the instrument goes back to the customer.
+    let replacementInvoiceSaleId: Id<"sales"> | undefined;
+    if (oldCheque.invoiceSaleId) {
+      const linkedSale = await requireOwnedRow(ctx, args.orgId, "sales", oldCheque.invoiceSaleId);
+      if (linkedSale.customerId !== oldCheque.customerId) {
+        throw new ConvexError("This sale's customer cheque can no longer be advanced.");
+      }
+      if (linkedSale.status === "CANCELLED") {
+        throwAppError(
+          AppErrorCode.CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER,
+          RETAINED_CREDIT_MESSAGES.CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER
+        );
+      }
+      replacementInvoiceSaleId = linkedSale._id;
+    }
+
     const fcLineage = isFcLineage(oldCheque);
     let amount: number;
     let faceFields: { amountMinor: number; currency: string } | null = null;
@@ -2261,6 +2646,7 @@ export const replaceCheque = mutation({
       customerId: oldCheque.customerId,
       vehicleId: oldCheque.vehicleId,
       saleId: oldCheque.saleId,
+      ...(replacementInvoiceSaleId ? { invoiceSaleId: replacementInvoiceSaleId } : {}),
       // SCRUM-447 D0: lineage is COPIED, never transferred. The old row keeps
       // its applicationId; "the application's live cheque" is a status
       // predicate (liveChequesForApplication), so exactly one HELD/DEPOSITED
@@ -2479,9 +2865,47 @@ export const returnClearedCheque = mutation({
             );
           }
 
+          // SCRUM-724 (DA-01): credit already paid back to the customer through a
+          // standalone refund cannot be unwound by returning the cheque - the
+          // payout would be left unrecovered. Refused before the first write;
+          // refund reversal / payout recovery is out of scope and handled by an
+          // accountant.
+          // Status-precise: an EXECUTED row is found however many other requests
+          // the movement has, so the guard cannot be outrun by the request cap.
+          const executedRefund = await ctx.db
+            .query("retainedCreditRefundRequests")
+            .withIndex("by_org_movement_status", (q) =>
+              q.eq("orgId", args.orgId).eq("receiptMovementId", movement._id).eq("status", "EXECUTED")
+            )
+            .first();
+          if (executedRefund) {
+            throwAppError(
+              AppErrorCode.CHEQUE_RETURN_AFTER_CREDIT_REFUND,
+              RETAINED_CREDIT_MESSAGES.CHEQUE_RETURN_AFTER_CREDIT_REFUND
+            );
+          }
+
+          // SCRUM-724 Sol 6 Q3: an OPEN (PENDING/APPROVED) refund request holds
+          // credit from a source that is about to be reversed. Invalidate it with
+          // an audited reason BEFORE the source reversal so no approved payout can
+          // outlive its money. Same transaction: any later refusal rolls it back.
+          await cancelOpenRefundRequestsForMovement(ctx, {
+            orgId: args.orgId,
+            receiptMovementId: movement._id,
+            actorId: user._id,
+            reason: "Cancelled automatically: the source cheque was returned by the bank.",
+          });
+
           // Throws the named refusals — refund interaction, missing allocation,
           // conservation violation — and writes nothing.
           const plan = await planReceiptRevocation(ctx, { orgId: args.orgId, movement });
+          const invoicePlan = await planActiveInvoiceReceiptReversal(ctx, args.orgId, movement);
+          if (
+            plan.applications.length + invoicePlan.applications.length > 100 ||
+            plan.totalApplicationMinor + invoicePlan.totalMinor > movement.initialUnappliedMinor
+          ) {
+            throw new ConvexError("This receipt has more applied credit than one return can safely unwind.");
+          }
 
           // ── 2. EVERY LATER APPLICATION, NEWEST FIRST ───────────────────────
           //
@@ -2504,6 +2928,14 @@ export const returnClearedCheque = mutation({
             });
             await reopenLegacyReceivable(unwind.receivableId, unwind.amountMinor);
           }
+
+          await reverseActiveInvoiceReceiptApplications(ctx, {
+            orgId: args.orgId,
+            applications: invoicePlan.applications,
+            actorId: user._id,
+            reason,
+            reversalDate: now,
+          });
 
           // ── 3. THE INITIAL RECEIPT OCCURRENCE ──────────────────────────────
           //
@@ -2553,6 +2985,7 @@ export const returnClearedCheque = mutation({
           // Applications marked REVERSED and the retained position taken to zero,
           // together, so no 2110 residue survives a tender that no longer exists
           // and no future application can be drawn from it.
+          await cancelPendingInvoiceReceiptsForMovement(ctx, args.orgId, movement._id);
           await retireReceiptRevocationState(ctx, { orgId: args.orgId, plan });
 
           if (clearedPayment.canonicalPaymentId) {

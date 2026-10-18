@@ -144,19 +144,29 @@ export function serverErrorMessageKey(code: string): string {
  * itself when it cannot resolve one; that is how a missing entry is detected.
  */
 export function getLocalizedErrorMessage(error: unknown, t: (key: string) => string): string {
+  return getCodedErrorMessage(error, t) ?? getErrorMessage(error);
+}
+
+/**
+ * The translated `ServerError_<code>` text for a coded server refusal, or null
+ * when there is none (no code, an unknown code, a plain-string ConvexError, a
+ * transport failure, a throwing `t`). Unlike `getLocalizedErrorMessage` it never
+ * falls back to the server's own (English) wording, so a surface that must show
+ * only its user's language pairs it with a localized message of its own.
+ */
+export function getCodedErrorMessage(error: unknown, t: (key: string) => string): string | null {
   try {
     const data = codedPayloadOf(error);
-    if (data !== null) {
-      const key = serverErrorMessageKey(data.code as string);
-      const template = t(key);
-      if (typeof template === "string" && template !== "" && template !== key) {
-        return interpolate(template, scalarFields(data));
-      }
+    if (data === null) return null;
+    const key = serverErrorMessageKey(data.code as string);
+    const template = t(key);
+    if (typeof template === "string" && template !== "" && template !== key) {
+      return interpolate(template, scalarFields(data));
     }
   } catch {
-    // fall through to the untranslated message
+    // no usable translation
   }
-  return getErrorMessage(error);
+  return null;
 }
 
 /** The `ConvexError.data` object when it carries a string `code`, else null. */

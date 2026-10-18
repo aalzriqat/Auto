@@ -7,8 +7,11 @@ import {
   createCustomer,
   createVehicle,
   gotoOrgRoute,
+  resolveOrgId,
   testDataSuffix,
 } from "../utils";
+import { openPeriodCovering, type DisplayedPeriodRow } from "./periodCoverage";
+import { utcMonthPeriodsCovering, type UtcMonthPeriod } from "./utcMonthPeriod";
 
 /**
  * Building a financed deal through the interface — the steps, without the
@@ -34,6 +37,20 @@ import {
  */
 
 export const COMPANY_NAME = "AutoFlow E2E Finance";
+/**
+ * The finance company a deal is created against. The default is the zero-fee
+ * lender every other spec uses. A deal built on a lender with a configured
+ * execution fee is the only way to draw the execution-fee section (SCRUM-690),
+ * which a zero fee deliberately does not.
+ *
+ * `name` must not contain `COMPANY_NAME`: the wizard picks a company by a
+ * substring match on its name and takes the first, so a name that contained the
+ * default's would make every default-fixture run ambiguous.
+ */
+export type FinanceCompanyFixture = { name: string; adminFees: string };
+export const ZERO_FEE_COMPANY: FinanceCompanyFixture = { name: COMPANY_NAME, adminFees: "0" };
+/** A lender configured with an execution fee (major units of the deal's currency): the SCRUM-834 original shape. */
+export const EXECUTION_FEE_COMPANY: FinanceCompanyFixture = { name: "E2E Execution Fee Lender", adminFees: "1250" };
 export const CUSTOMER_STATUS = "Employee";
 /** The rate the company buys at, configured once and snapshotted per deal. */
 export const PURCHASE_LTV = "90";
@@ -114,7 +131,7 @@ export async function hideFloatingButtons(page: Page): Promise<void> {
  * the specs are self-contained on a fresh deployment, reused if present so they
  * do not accumulate a company per run.
  */
-export async function ensureFinanceCompany(page: Page): Promise<void> {
+export async function ensureFinanceCompany(page: Page, company: FinanceCompanyFixture = ZERO_FEE_COMPANY): Promise<void> {
   await gotoOrgRoute(page, "settings/finance");
   await dismissOverlays(page);
 
@@ -141,7 +158,7 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
     await expect(page.getByText(CUSTOMER_STATUS, { exact: true }).first()).toBeVisible();
   }
 
-  const existingCompanyRow = page.getByRole("row").filter({ hasText: COMPANY_NAME }).first();
+  const existingCompanyRow = page.getByRole("row").filter({ hasText: company.name }).first();
   if (await existsWithin(existingCompanyRow)) {
     await existingCompanyRow.getByRole("button").first().click();
     const dialog = page.getByRole("dialog");
@@ -149,10 +166,13 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
     const offsetRule = dialog.locator("#first-payment-offset-rule");
     await expect(adminFees).toBeVisible();
     // A company left by an earlier run may predate either field (SCRUM-428):
-    // without the offset rule every quote below stays uncalculated.
-    const needsFees = (await adminFees.inputValue()).trim() === "";
+    // without the offset rule every quote below stays uncalculated, and the
+    // quotation check expects price + company.adminFees, so a blank or stale
+    // fee is rewritten. The dialog shows `String(adminFees)`, so equal fees
+    // compare equal as strings.
+    const needsFees = (await adminFees.inputValue()) !== company.adminFees;
     const needsRule = (await offsetRule.inputValue()) !== "yes";
-    if (needsFees) await adminFees.fill("0");
+    if (needsFees) await adminFees.fill(company.adminFees);
     if (needsRule) await offsetRule.selectOption("yes");
     if (needsFees || needsRule) {
       await adminFees.press("Enter");
@@ -172,7 +192,7 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
   // unlabelled. Pre-existing and outside this change's diff; recorded as
   // follow-up rather than fixed here. The two fields below are the exceptions,
   // and are addressed by the ids they actually have.
-  await dialog.locator("form input").first().fill(COMPANY_NAME);
+  await dialog.locator("form input").first().fill(company.name);
   // The field SCRUM-68 turns on: with no purchase LTV the quotation calculator
   // cannot run and the funding split cannot be worked out.
   await dialog.locator("#default-ltv-percent").fill(PURCHASE_LTV);
@@ -180,7 +200,7 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
   // "not configured", not zero, and the wizard now correctly refuses to quote
   // such a company. Make the E2E lender explicitly zero-fee so the fixture
   // exercises the configured-finance path without inventing hidden costs.
-  await dialog.locator("#admin-fees").fill("0");
+  await dialog.locator("#admin-fees").fill(company.adminFees);
   // SCRUM-428: the quotation solver declines while this rule is unconfirmed,
   // and the "AutoFlow calculation" assertion below depends on it.
   await dialog.locator("#first-payment-offset-rule").selectOption("yes");
@@ -201,7 +221,7 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
   await dialog.locator("#default-ltv-percent").press("Enter");
 
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByText(COMPANY_NAME, { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(company.name, { exact: true }).first()).toBeVisible();
 }
 
 /**
@@ -210,8 +230,9 @@ export async function ensureFinanceCompany(page: Page): Promise<void> {
  */
 export async function createFinancedApplication(
   page: Page,
-  fixtures: { model: string; customer: string },
+  fixtures: { model: string; customer: string; company?: FinanceCompanyFixture },
 ): Promise<string> {
+  const company = fixtures.company ?? ZERO_FEE_COMPANY;
   await gotoOrgRoute(page, "sales");
   await dismissOverlays(page);
   await page.locator("#btn-new-installment-sale").click();
@@ -245,7 +266,7 @@ export async function createFinancedApplication(
 
   // The customer's status is what makes a configured company offerable.
   await page.getByText(CUSTOMER_STATUS, { exact: true }).first().click();
-  await page.getByText(COMPANY_NAME, { exact: false }).first().click();
+  await page.getByText(company.name, { exact: false }).first().click();
   await page.getByRole("button", { name: "Next", exact: true }).click();
 
   // --- step 2: the customer -----------------------------------------------
@@ -283,7 +304,7 @@ export async function createFinancedApplication(
 
   await page.waitForURL(/\/applications\/[^/]+\/deal$/, { timeout: 60_000 });
   const dealUrl = page.url();
-  await expectQuotationRecordedAtCreation(page, dealUrl);
+  await expectQuotationRecordedAtCreation(page, dealUrl, company);
   return dealUrl;
 }
 
@@ -299,7 +320,11 @@ export async function createFinancedApplication(
  * Needs the snapshot to be visible to this caller (`view:finance`, SCRUM-117):
  * the fixture's operator is the org owner, which holds it.
  */
-async function expectQuotationRecordedAtCreation(page: Page, dealUrl: string): Promise<void> {
+async function expectQuotationRecordedAtCreation(
+  page: Page,
+  dealUrl: string,
+  company: FinanceCompanyFixture,
+): Promise<void> {
   const match = /\/([^/]+)\/applications\/([^/]+)\/deal$/.exec(new URL(dealUrl).pathname);
   if (!match) throw new Error(`Unexpected deal URL shape: ${dealUrl}`);
   const orgId = match[1] as Id<"organizations">;
@@ -317,12 +342,14 @@ async function expectQuotationRecordedAtCreation(page: Page, dealUrl: string): P
   expect(snapshot?.calculatedQuotationMinor).toBe(app.submittedQuotationMinor);
   expect(snapshot?.finalQuotationMinor).toBe(app.submittedQuotationMinor);
   // The down payment covers the unfinanced share at this rate (3,000 against
-  // 10% of 15,000), so the solver's answer is the vehicle price itself. The
-  // scale comes from the deal's own currency, never assumed: JOD is three
-  // decimals, not two.
+  // 10% of 15,000), so the solver's answer is the vehicle price plus the
+  // company's execution fee: 15,000 for the zero-fee lender, 16,250 for the
+  // 1,250-fee one (SCRUM-834). The scale comes from the deal's own currency,
+  // never assumed: JOD is three decimals, not two.
   const scale = supportedCurrencyScale(app.economicsCurrency);
   expect(scale).not.toBeNull();
-  expect(app.submittedQuotationMinor).toBe(Number(VEHICLE_PRICE) * 10 ** (scale ?? 0));
+  const expectedMajor = Number(VEHICLE_PRICE) + Number(company.adminFees);
+  expect(app.submittedQuotationMinor).toBe(expectedMajor * 10 ** (scale ?? 0));
 }
 
 /**
@@ -426,8 +453,9 @@ export async function buildDealWithRecordedEconomics(
   page: Page,
   managerPage: Page,
   tag: string,
+  company: FinanceCompanyFixture = ZERO_FEE_COMPANY,
 ): Promise<string> {
-  await ensureFinanceCompany(page);
+  await ensureFinanceCompany(page, company);
 
   const { model } = await createVehicle(page, {
     model: `E2E-${tag}-${testDataSuffix()}`,
@@ -438,7 +466,7 @@ export async function buildDealWithRecordedEconomics(
   });
   const customer = `${firstName} ${lastName}`;
 
-  const dealUrl = await createFinancedApplication(page, { model, customer });
+  const dealUrl = await createFinancedApplication(page, { model, customer, company });
   await approveCreditDecision(managerPage, dealUrl);
   await recordQuotation(page, dealUrl);
   await recordApprovedAmount(managerPage, dealUrl);
@@ -464,4 +492,150 @@ export async function openDealDetails(page: Page): Promise<void> {
     await toggle.click();
   }
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
+
+/**
+ * How far ahead of the check the server may stamp the handover. The check runs
+ * immediately before the handover is confirmed, so this only has to exceed the
+ * check's own navigation plus the click — minutes of margin, not the length of
+ * the deal journey. It costs nothing outside the last minutes of a UTC month.
+ */
+export const HANDOVER_PERIOD_WINDOW_MS = 5 * 60_000;
+
+/**
+ * Accounting periods that are OPEN for the moment the handover is stamped,
+ * established through the Accounting screens.
+ *
+ * Closing a financed deal recognises the sale on the handover date, and the
+ * server refuses (RECOGNITION_PERIOD_OPEN) when no open period covers it. A
+ * fresh dealership has none, so the deal cannot close until an operator opens
+ * one — the product's rule, not weakened here. The server stamps the handover
+ * with its own clock when it is confirmed, so call this immediately before
+ * confirming: the current UTC month must be open, and so must the next one when
+ * `windowMs` reaches it.
+ *
+ * Coverage is judged by the periods' DATES, not their labels, so an open
+ * full-year period labelled 2026-01 covers a September handover. Idempotent and
+ * non-destructive: a covered instant creates nothing. Otherwise the month is
+ * created and opened immediately, then its own row is read back as OPEN. A
+ * period that exists but is not open, or a table too full to show every period,
+ * is a failure with a diagnostic — never a blind create, and never a reopen,
+ * lock or delete behind the operator's back.
+ *
+ * The returned `assertConfirmedWithinWindow` must be called once the handover is
+ * confirmed: it throws if that happened after the window this check covered.
+ */
+export async function ensureOpenAccountingPeriod(
+  page: Page,
+  windowMs: number = HANDOVER_PERIOD_WINDOW_MS,
+): Promise<{ assertConfirmedWithinWindow: () => void }> {
+  const windowStart = Date.now();
+  const windowEnd = windowStart + windowMs;
+  const orgId = await resolveOrgId(page);
+
+  // The period card, its Create dialog and the table all render on the
+  // reconcile section (the settings section only shows the chart). gotoOrgRoute
+  // matches on the bare pathname, so the deep link is navigated to directly.
+  await page.goto(`/${orgId}/accounting?section=reconcile`);
+  await dismissOverlays(page);
+
+  for (const [index, period] of utcMonthPeriodsCovering(new Date(windowStart), windowMs).entries()) {
+    // The earliest instant of this month the handover can be stamped at.
+    const instantMs = index === 0 ? windowStart : Date.parse(`${period.startDate}T00:00:00Z`);
+    const rows = await readPeriodRows(page);
+    if (openPeriodCovering(rows, instantMs)) continue;
+
+    const label = `${period.fiscalYear}-${period.periodNumber.padStart(2, "0")}`;
+    if (rows.length >= PERIODS_TABLE_LIMIT) {
+      throw new Error(
+        `Cannot tell whether an open accounting period covers ${new Date(instantMs).toISOString()}: the table shows only the ${PERIODS_TABLE_LIMIT} newest periods and none of them covers it. Nothing was created.`,
+      );
+    }
+    const existing = rows.find((row) => row.label === label);
+    if (existing) {
+      throw new Error(
+        `Accounting period ${label} exists with status "${existing.status}" and does not cover ${new Date(instantMs).toISOString()}. This spec does not reopen periods.`,
+      );
+    }
+
+    await createOpenPeriod(page, period);
+    await expect(
+      periodsSection(page).getByRole("row").filter({ hasText: label }).getByText("Open", { exact: true }),
+      `Accounting period ${label} was created but its row is not OPEN.`,
+    ).toBeVisible();
+    if (!openPeriodCovering(await readPeriodRows(page), instantMs)) {
+      throw new Error(`Accounting period ${label} is open but does not cover ${new Date(instantMs).toISOString()}.`);
+    }
+  }
+
+  return {
+    assertConfirmedWithinWindow: () => {
+      const lateMs = Date.now() - windowEnd;
+      if (lateMs > 0) {
+        throw new Error(
+          `The handover was confirmed ${lateMs} ms after the ${windowMs} ms window the accounting periods were checked for; the period covering its date is not established.`,
+        );
+      }
+    },
+  };
+}
+
+/** `recentPeriods` in convex/accountingSetup.ts: the table never shows more. */
+const PERIODS_TABLE_LIMIT = 24;
+
+function periodsSection(page: Page) {
+  return page.getByRole("heading", { name: "Accounting Periods", exact: true }).locator("xpath=..");
+}
+
+async function readPeriodRows(page: Page): Promise<DisplayedPeriodRow[]> {
+  await expect(page.getByRole("heading", { name: "Accounting Periods", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  // The table formats its dates in the browser's zone; they are the stored UTC
+  // day bounds only when that zone is UTC.
+  const offsetMinutes = await page.evaluate(() => new Date().getTimezoneOffset());
+  if (offsetMinutes !== 0) {
+    throw new Error(
+      `Cannot read the accounting periods' dates: the browser is ${offsetMinutes} minutes from UTC, and the table shows them in its own zone.`,
+    );
+  }
+  const rows: DisplayedPeriodRow[] = [];
+  for (const row of await periodsSection(page).getByRole("row").all()) {
+    const cells = (await row.getByRole("cell").allInnerTexts()).map((cell) => cell.replace(/\s+/g, " ").trim());
+    if (cells.length === 4) rows.push({ label: cells[0], range: cells[1], status: cells[2] });
+  }
+  return rows;
+}
+
+async function createOpenPeriod(page: Page, period: UtcMonthPeriod): Promise<void> {
+  const create = page.getByRole("button", { name: "Create period", exact: true });
+  await expect(
+    create,
+    "Creating an accounting period needs the finance-management permission; this identity cannot reach the screen that does it.",
+  ).toBeEnabled();
+  await create.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Create Accounting Period");
+
+  // A single UTC month, not the dialog's full-year default (which would
+  // overlap another month's period in a shared org). The dialog's labels are
+  // not associated with their inputs, so each field is the input that follows
+  // its label.
+  const field = (label: string) =>
+    dialog.locator(`xpath=.//label[normalize-space()="${label}"]/following-sibling::input`);
+  await field("Fiscal year").fill(period.fiscalYear);
+  await field("Period number").fill(period.periodNumber);
+  await field("Start Date").fill(period.startDate);
+  await field("End Date").fill(period.endDate);
+  await expect(dialog.getByRole("checkbox")).toBeChecked();
+  await dialog.getByRole("button", { name: "Create period", exact: true }).click();
+
+  // Durable state, not the toast: the dialog closes only on success. A dialog
+  // that stays open means the create did not succeed (for example a server
+  // refusal) — nothing is reopened or removed to get past it. The caller then
+  // reads the new row back.
+  await expect(
+    dialog,
+    `Creating accounting period ${period.fiscalYear}-${period.periodNumber} did not succeed: the dialog stayed open. This spec does not reopen, lock or delete periods.`,
+  ).not.toBeVisible();
 }

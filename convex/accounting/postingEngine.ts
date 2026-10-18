@@ -628,6 +628,7 @@ export async function postAccountingEvent(
       vehicleId: (l.vehicleId || undefined) as Id<"vehicles"> | undefined,
       customerId: (l.customerId || undefined) as Id<"customers"> | undefined,
       salespersonId: (l.salespersonId || undefined) as Id<"users"> | undefined,
+      financeCompanyId: (l.financeCompanyId || undefined) as Id<"financeCompanies"> | undefined,
       // SCRUM-27: a manual finance company's name, so its lines are attributable.
       payerNameSnapshot: l.payerNameSnapshot || undefined,
       description: l.description,

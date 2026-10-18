@@ -28,6 +28,7 @@ import {
 } from "./utils/depositHelpers";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
+import { assertDepositNotInLiveForward } from "./utils/financeCompanyForward";
 import { hookDepositVoided, getOrgCurrency } from "./accounting/workflowHooks";
 import {
   amountToMinorOrThrow,
@@ -219,6 +220,9 @@ export const release = mutation({
           throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
         }
 
+        // SCRUM-411 P2-02: a deposit already paid to the finance company before the sale cannot
+        // also leave as a refund or forfeiture - `releaseHeldDeposit` refuses it before any write.
+
         // A row that carries a cancelled-sale share decides its follow-up through the
         // exact liveness reader (SCRUM-712 Q34); every other row is unchanged.
         const carriesShare = await hasPendingDispositionForDeposit(ctx, args.orgId, args.depositId);
@@ -278,6 +282,9 @@ export const voidDeposit = mutation({
     if (deposit.status !== "HELD") {
       throwAppError(AppErrorCode.DEPOSIT_ALREADY_RESOLVED, "Only HELD deposits can be voided.");
     }
+    // SCRUM-411 P2-02: voiding reverses the receipt; the same money is already inside the
+    // payment to the finance company, so it would be reversed twice.
+    await assertDepositNotInLiveForward(ctx, deposit);
     // A row can now be released in part and stay HELD, so the status above no
     // longer means "nothing has happened to this money". Voiding says the
     // payment was recorded in error and reverses the receipt — which, after a
@@ -790,6 +797,10 @@ export const resolveReleasedAllocation = mutation({
     if (!deposit || deposit.orgId !== args.orgId) {
       throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
     }
+    // SCRUM-411 P2-02: a slice that is FORWARDED to the finance company can be neither spent
+    // (refund, forfeit, write-off) nor moved (another car, back to the pool) until the payment
+    // is recovered - moving it would commit the same H to a second sale.
+    await assertDepositNotInLiveForward(ctx, deposit, hold._id);
 
     const currency = normalizeCurrency(
       deposit.currency ?? (await getOrgCurrency(ctx, args.orgId))

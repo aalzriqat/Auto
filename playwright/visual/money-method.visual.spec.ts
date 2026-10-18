@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { test, expect } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 
 /**
  * SCRUM-469 — the money-method surfaces, painted. EN and AR x 390px and 1280px.
@@ -98,7 +99,7 @@ for (const locale of LOCALES) {
     for (const surface of SURFACES) {
       for (const state of ["empty", "chosen"] as const) {
         test(`${surface.name} · ${state} · ${locale} · ${viewport.name}px`, async ({ browser }) => {
-          const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+          const context = await newContainedContext(browser, { viewport: { width: viewport.width, height: viewport.height } });
           const page = await context.newPage();
           try {
             const file = resolve(RUN_DIR, `page-${surface.name}-${state}-${locale}-${viewport.name}.html`);
@@ -144,7 +145,7 @@ for (const locale of LOCALES) {
 test("custody server refusal state is painted in both languages", async ({ browser }) => {
   for (const locale of LOCALES) {
     for (const viewport of VIEWPORTS) {
-      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+      const context = await newContainedContext(browser, { viewport: { width: viewport.width, height: viewport.height } });
       const page = await context.newPage();
       try {
         const file = resolve(RUN_DIR, `page-custody-error-${locale}-${viewport.name}.html`);

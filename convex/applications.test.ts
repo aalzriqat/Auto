@@ -1,5 +1,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { forwardPostKey } from "./utils/financeCompanyForward";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -1133,9 +1135,11 @@ describe("applications hold release and deposit resolution", () => {
     ).rejects.toThrow(/disbursement has already been confirmed/i);
   });
 
-  // NOTE: this fixture has no chart of accounts and no accounting period, so
-  // nothing here can post to the ledger and no reversal can be asserted from
-  // it. The name used to promise otherwise. What it actually pins is that
+  // NOTE: the commission here is patched onto the sale AFTER it posted, so no
+  // accrual exists to back out and no commission reversal can be asserted from
+  // it (the fixture's books do exist since SCRUM-411 P2-01, which pays the
+  // finance company before finalizing). The name used to promise otherwise.
+  // What it actually pins is that
   // cancelling a finalized deal cancels the SALE — the reversal itself is
   // covered against real books in convex/commissionAccrualTiming.test.ts
   // ("voiding a sale backs the whole commission out of the ledger"), which
@@ -1266,12 +1270,40 @@ async function classifyFinancedDeal(
     orgId,
     feeId,
     notes: "Nothing to match.",
+    expectedActualAmountMinor: 0,
+    expectedActualEvidenceRevision: 0,
   });
   // SCRUM-407: no manual classification step — finalization checks readiness itself.
 }
+/**
+ * A chart of accounts and an open period for the current year. SCRUM-411 P2-01: a
+ * financed deal's deposit is paid to the finance company BEFORE it is finalized, and
+ * that payment counts only once it is on the books, so the books must exist first.
+ */
+async function openBooks(s: Awaited<ReturnType<typeof setup>>) {
+  const { t, orgId, asUser } = s;
+  const fiscalYear = new Date().getUTCFullYear();
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+  );
+  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  await asUser.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear,
+    periodNumber: 1,
+  });
+  const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+  await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+}
+
 async function setupFinalizedFinancedDeal() {
   const base = await setup();
   const { t, orgId, customerId, customerStatusId, vehicleId, asUser, asApprover } = base;
+  // Opened first so every posting of the deal (deposit receipt, sale, forward) lands
+  // on real books rather than queueing behind a missing chart.
+  await openBooks(base);
 
   const companyId = await t.run((ctx) =>
     ctx.db.insert("financeCompanies", {
@@ -1333,7 +1365,22 @@ async function setupFinalizedFinancedDeal() {
     expectedDate: Date.now(),
   });
   await classifyFinancedDeal({ orgId, applicationId, asUser }, 20000);
+  // SCRUM-411 P2-01: finalize refuses until the deposit (3,000,000) is on the books as
+  // paid to the finance company, so it is paid first...
+  const firstForwardId = await payForwardBeforeFinalize(base, asUser, applicationId);
   await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
+  // ...and then taken back, leaving the CLOSED deal with the forward due again. That is
+  // the state these tests were written against (the transfer is refused until the
+  // payment is recorded; a deal with a payment on the books cannot be cancelled).
+  if (firstForwardId !== null) {
+    await asUser.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+      orgId,
+      applicationId,
+      forwardId: firstForwardId,
+      reason: "Recorded in error.",
+      idempotencyKey: crypto.randomUUID(),
+    });
+  }
 
   const getFinanceReceivable = () =>
     t.run((ctx) =>
@@ -1355,26 +1402,11 @@ async function setupFinalizedFinancedDeal() {
     });
 
   // SCRUM-435: a v2 deal is paid out only after the dealership has recorded the
-  // deposit and contribution it owes the finance company back.
+  // deposit and contribution it owes the finance company back. The first payment
+  // (version 1) was taken back above, so this records its replacement (version 2).
   const recordForward = async () => {
     const due = await t.run(async (ctx) => (await ctx.db.get(applicationId))?.financeCompanyForwardDueMinor ?? 0);
     if (due > 0) {
-      // The forward posts to the ledger, so the books must exist. finalizeDeal
-      // queued its own posts before this point; only the forward is drained here.
-      const fiscalYear = new Date().getUTCFullYear();
-      await t.run((ctx) =>
-        ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
-      );
-      await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
-      await asUser.mutation(api.accountingPeriods.create, {
-        orgId,
-        startDate: Date.UTC(fiscalYear, 0, 1),
-        endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
-        fiscalYear,
-        periodNumber: 1,
-      });
-      const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
-      await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
       await asUser.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
         orgId,
         applicationId,
@@ -1383,14 +1415,16 @@ async function setupFinalizedFinancedDeal() {
         expectedAmountMinor: due,
         idempotencyKey: crypto.randomUUID(),
       });
-      // The chart and an open period exist, so the forward posts synchronously.
+      // The chart and an open period exist, so the replacement posts synchronously.
       // Assert it rather than force it: confirmDisbursement gates on this proof.
-      const forwardEvents = await t.run(async (ctx) =>
-        (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).filter(
-          (e) => e.eventType === "FINANCE_COMPANY_FORWARD_PAID"
-        )
+      // Read by the replacement's own key; version 1 is the REVERSED payment above.
+      const replacementEvents = await t.run(async (ctx) =>
+        ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", forwardPostKey(applicationId, 2)))
+          .collect()
       );
-      expect(forwardEvents.map((e) => e.status)).toEqual(["POSTED"]);
+      expect(replacementEvents.map((e) => e.status)).toEqual(["POSTED"]);
     }
     return due;
   };

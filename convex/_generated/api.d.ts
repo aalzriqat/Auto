@@ -9,6 +9,9 @@
  */
 
 import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
+import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
+import type * as accounting_invoiceReceiptDisposition from "../accounting/invoiceReceiptDisposition.js";
+import type * as accounting_invoiceReceiptReservation from "../accounting/invoiceReceiptReservation.js";
 import type * as accounting_postingEngine from "../accounting/postingEngine.js";
 import type * as accounting_postingRules from "../accounting/postingRules.js";
 import type * as accounting_receiptMovement from "../accounting/receiptMovement.js";
@@ -50,6 +53,7 @@ import type * as collections from "../collections.js";
 import type * as commitments from "../commitments.js";
 import type * as constants from "../constants.js";
 import type * as crons from "../crons.js";
+import type * as customerFinanceCompanyPayments from "../customerFinanceCompanyPayments.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
 import type * as dealOverview from "../dealOverview.js";
@@ -129,6 +133,7 @@ import type * as pushSubscriptions from "../pushSubscriptions.js";
 import type * as quotes from "../quotes.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as reports from "../reports.js";
+import type * as retainedCreditRefunds from "../retainedCreditRefunds.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
 import type * as search from "../search.js";
@@ -166,6 +171,8 @@ import type * as utils_commitmentWriters from "../utils/commitmentWriters.js";
 import type * as utils_costBearer from "../utils/costBearer.js";
 import type * as utils_creationEconomics from "../utils/creationEconomics.js";
 import type * as utils_custodySourceLedger from "../utils/custodySourceLedger.js";
+import type * as utils_customerCreditPayoutContainment from "../utils/customerCreditPayoutContainment.js";
+import type * as utils_customerFinanceCompanyPayments from "../utils/customerFinanceCompanyPayments.js";
 import type * as utils_customerInvoiceObligation from "../utils/customerInvoiceObligation.js";
 import type * as utils_dealCostLimits from "../utils/dealCostLimits.js";
 import type * as utils_dealCustodyPosting from "../utils/dealCustodyPosting.js";
@@ -189,6 +196,7 @@ import type * as utils_errors from "../utils/errors.js";
 import type * as utils_executionFeePosition from "../utils/executionFeePosition.js";
 import type * as utils_expenseAmortization from "../utils/expenseAmortization.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
+import type * as utils_facebookRevocation from "../utils/facebookRevocation.js";
 import type * as utils_fcCheque from "../utils/fcCheque.js";
 import type * as utils_feeDocLimits from "../utils/feeDocLimits.js";
 import type * as utils_feeSummary from "../utils/feeSummary.js";
@@ -221,6 +229,7 @@ import type * as utils_money from "../utils/money.js";
 import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_orgLifecycle from "../utils/orgLifecycle.js";
 import type * as utils_orgResetGeneration from "../utils/orgResetGeneration.js";
+import type * as utils_orgSettingsProjection from "../utils/orgSettingsProjection.js";
 import type * as utils_paymentMethods from "../utils/paymentMethods.js";
 import type * as utils_paymentWebhook from "../utils/paymentWebhook.js";
 import type * as utils_payrollSourceLedger from "../utils/payrollSourceLedger.js";
@@ -230,6 +239,7 @@ import type * as utils_prepaidSourceLedger from "../utils/prepaidSourceLedger.js
 import type * as utils_profitApproval from "../utils/profitApproval.js";
 import type * as utils_quoteDepositPosting from "../utils/quoteDepositPosting.js";
 import type * as utils_quoteEconomicsAnchor from "../utils/quoteEconomicsAnchor.js";
+import type * as utils_retainedCreditMessages from "../utils/retainedCreditMessages.js";
 import type * as utils_saleCancellation from "../utils/saleCancellation.js";
 import type * as utils_saleCompletion from "../utils/saleCompletion.js";
 import type * as utils_saleDebtContainment from "../utils/saleDebtContainment.js";
@@ -280,6 +290,9 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   "accounting/accountSnapshots": typeof accounting_accountSnapshots;
+  "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
+  "accounting/invoiceReceiptDisposition": typeof accounting_invoiceReceiptDisposition;
+  "accounting/invoiceReceiptReservation": typeof accounting_invoiceReceiptReservation;
   "accounting/postingEngine": typeof accounting_postingEngine;
   "accounting/postingRules": typeof accounting_postingRules;
   "accounting/receiptMovement": typeof accounting_receiptMovement;
@@ -321,6 +334,7 @@ declare const fullApi: ApiFromModules<{
   commitments: typeof commitments;
   constants: typeof constants;
   crons: typeof crons;
+  customerFinanceCompanyPayments: typeof customerFinanceCompanyPayments;
   customers: typeof customers;
   dashboard: typeof dashboard;
   dealOverview: typeof dealOverview;
@@ -400,6 +414,7 @@ declare const fullApi: ApiFromModules<{
   quotes: typeof quotes;
   rateLimit: typeof rateLimit;
   reports: typeof reports;
+  retainedCreditRefunds: typeof retainedCreditRefunds;
   roles: typeof roles;
   sales: typeof sales;
   search: typeof search;
@@ -437,6 +452,8 @@ declare const fullApi: ApiFromModules<{
   "utils/costBearer": typeof utils_costBearer;
   "utils/creationEconomics": typeof utils_creationEconomics;
   "utils/custodySourceLedger": typeof utils_custodySourceLedger;
+  "utils/customerCreditPayoutContainment": typeof utils_customerCreditPayoutContainment;
+  "utils/customerFinanceCompanyPayments": typeof utils_customerFinanceCompanyPayments;
   "utils/customerInvoiceObligation": typeof utils_customerInvoiceObligation;
   "utils/dealCostLimits": typeof utils_dealCostLimits;
   "utils/dealCustodyPosting": typeof utils_dealCustodyPosting;
@@ -460,6 +477,7 @@ declare const fullApi: ApiFromModules<{
   "utils/executionFeePosition": typeof utils_executionFeePosition;
   "utils/expenseAmortization": typeof utils_expenseAmortization;
   "utils/facebookApi": typeof utils_facebookApi;
+  "utils/facebookRevocation": typeof utils_facebookRevocation;
   "utils/fcCheque": typeof utils_fcCheque;
   "utils/feeDocLimits": typeof utils_feeDocLimits;
   "utils/feeSummary": typeof utils_feeSummary;
@@ -492,6 +510,7 @@ declare const fullApi: ApiFromModules<{
   "utils/notifications": typeof utils_notifications;
   "utils/orgLifecycle": typeof utils_orgLifecycle;
   "utils/orgResetGeneration": typeof utils_orgResetGeneration;
+  "utils/orgSettingsProjection": typeof utils_orgSettingsProjection;
   "utils/paymentMethods": typeof utils_paymentMethods;
   "utils/paymentWebhook": typeof utils_paymentWebhook;
   "utils/payrollSourceLedger": typeof utils_payrollSourceLedger;
@@ -501,6 +520,7 @@ declare const fullApi: ApiFromModules<{
   "utils/profitApproval": typeof utils_profitApproval;
   "utils/quoteDepositPosting": typeof utils_quoteDepositPosting;
   "utils/quoteEconomicsAnchor": typeof utils_quoteEconomicsAnchor;
+  "utils/retainedCreditMessages": typeof utils_retainedCreditMessages;
   "utils/saleCancellation": typeof utils_saleCancellation;
   "utils/saleCompletion": typeof utils_saleCompletion;
   "utils/saleDebtContainment": typeof utils_saleDebtContainment;

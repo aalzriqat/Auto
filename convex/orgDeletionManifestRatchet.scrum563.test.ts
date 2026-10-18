@@ -81,7 +81,7 @@ describe("SCRUM-563 R5(a) — ORGANIZATION_DELETION_STEPS order is frozen", () =
       "notifications", "notificationPreferences", "notificationBroadcasts",
       "test_drives", "workOrders", "financeCompanies", "vehicleValuations", "guarantors",
       "quotes", "applicationStatusLog",
-      "financeAppraisalsWithStorage", "financeApplicationOverrides", "financeCompanyForwards",
+      "financeAppraisalsWithStorage", "financeApplicationOverrides", "financeCompanyForwards", "customerFinanceCompanyPayments",
       "financeDealCustodyEntries", "financeDealFeesWithStorage", "financeDealCustody",
       "financeApplications", "vehicleOwnershipConversionsWithStorage", "financeCompanyRuleVersions",
       "vehicleCommitmentClaims", "commitmentRoots", "depositApplications", "deposits", "depositRequests",

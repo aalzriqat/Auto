@@ -294,7 +294,7 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       paidBy: "DEALER",
       idempotencyKey: crypto.randomUUID(),
     });
-    await asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId: executionFeeId, notes: "Not charged." });
+    await asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId: executionFeeId, notes: "Not charged.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
     await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {

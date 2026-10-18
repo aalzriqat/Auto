@@ -187,8 +187,24 @@ function localUses(workflow: Workflow): string[] {
 
 // sha256 of each workflow that can reach a Convex credential.
 const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
+  // SCRUM-826: re-pinned for two prepare-job steps only — the trusted
+  // pre-provisioning coverage gate (`pnpm browser-swarm:coverage-gate` in
+  // `trusted/`, no secrets, no candidate path) and the upload of its refusal
+  // evidence — plus the coverage json in the plan evidence upload.
+  // SCRUM-777: re-pinned for the swarm's own concurrency group (no longer the
+  // Playwright group) and three `contents: read` live-head checks: in prepare
+  // before the preview is created, in trusted-e2e before it deploys over the
+  // preview, and in attack-worker before the missions. None of them touches a
+  // Convex credential or a candidate path.
+  // SCRUM-350 G4 / SCRUM-411: also re-pinned for the swarm accounting period
+  // setup in trusted-e2e — the same trusted spec (`playwright test` of one
+  // trusted spec, no secret, no candidate path) run twice, once before the full
+  // E2E suite and once after it — plus both runs' report and results folders
+  // in the E2E report upload. The steps are named for what they measure (open
+  // the period, drain the pending outbox); they do not claim a later posting
+  // will settle.
   "browser-attack-swarm.yml":
-    "3f09dabc8dd6788ee770d4f1710b75c98f7fca57b5450b546ad709ca96e5c9c5",
+    "35a418ab548a709adcf2bb859a15dcf72864a7573e039ef74e0c51454367673a",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
@@ -289,6 +305,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       "scripts/intelligence/convexCredentialBoundary.test.ts",
       "scripts/intelligence/stageCandidateBackend.test.ts",
       "scripts/intelligence/auditStagedBackendInputs.test.ts",
+      "scripts/intelligence/browserSwarmLoopbackRelay.test.ts",
     ]) {
       expect(command).toContain(file);
     }

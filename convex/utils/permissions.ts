@@ -6,6 +6,8 @@
  * This decoupling means roles can be customized per-organization without code changes.
  */
 
+import { isForwardPlanVersion } from "./financedSalePostingPlan";
+
 export const PERMISSIONS = {
   // Organizations
   VIEW_ORG: "view:org",
@@ -273,7 +275,8 @@ export function needsOwnerFlagStamp(role: RoleLike): boolean {
  */
 export function cancelAuthorityFor(status: string, planVersion: number): Permission[][] {
   if (status === "CLOSED") {
-    return planVersion === 2
+    // Plan versions 2 and 3 both hold payments at the finance company.
+    return isForwardPlanVersion(planVersion)
       ? [[PERMISSIONS.CANCEL_CLOSED_DEAL], [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]]
       : [[PERMISSIONS.CANCEL_CLOSED_DEAL]];
   }

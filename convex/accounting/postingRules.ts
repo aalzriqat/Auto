@@ -1,7 +1,11 @@
 import { ConvexError } from "convex/values";
 import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
 import { CUSTODY_CLEARING_KEY, custodyFeeExpenseKey } from "../utils/dealCustodyPosting";
-import type { FeeAccountingTreatment } from "../utils/financedSalePostingPlan";
+import {
+  isForwardPlanVersion,
+  isServerDerivedPlanVersion,
+  type FeeAccountingTreatment,
+} from "../utils/financedSalePostingPlan";
 import type { Id } from "../_generated/dataModel";
 
 /**
@@ -31,6 +35,7 @@ export type EventType =
   // SCRUM-218-C: a later application of retained customer credit. NOT a second
   // receipt — no cash moves, the money arrived when COLLECTION_PAYMENT posted.
   | "RECEIPT_CREDIT_APPLIED"
+  | "RETAINED_CREDIT_REFUNDED"
   | "EXPENSE_POSTED"
   | "CHEQUE_RECEIVED"
   | "CHEQUE_DEPOSITED"
@@ -97,7 +102,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_APPLIED_TO_SETTLEMENT",
   "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
   "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "COLLECTION_REFUND",
-  "RECEIPT_CREDIT_APPLIED", "EXPENSE_POSTED",
+  "RECEIPT_CREDIT_APPLIED", "RETAINED_CREDIT_REFUNDED", "EXPENSE_POSTED",
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
   "COMMISSION_ACCRUED", "COMMISSION_ADJUSTED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
@@ -137,7 +142,7 @@ export const AP_AFFECTING_BY_EVENT_TYPE = {
   DEPOSIT_RECEIVED: false, DEPOSIT_APPLIED: false, DEPOSIT_APPLIED_TO_SETTLEMENT: false,
   DEPOSIT_REFUNDED: false, DEPOSIT_FORFEITED: false,
   SALE_COMPLETED: true, SALE_CANCELLED: false, COLLECTION_PAYMENT: false, COLLECTION_REFUND: false,
-  RECEIPT_CREDIT_APPLIED: false, EXPENSE_POSTED: false,
+  RECEIPT_CREDIT_APPLIED: false, RETAINED_CREDIT_REFUNDED: false, EXPENSE_POSTED: false,
   CHEQUE_RECEIVED: false, CHEQUE_DEPOSITED: false, CHEQUE_CLEARED: false, CHEQUE_RETURNED: false,
   COMMISSION_ACCRUED: false, COMMISSION_ADJUSTED: false, COMMISSION_PAID: false,
   FINANCE_DISBURSED: false, FINANCE_CASH_RECEIVED: false, PAYMENT_LINK_RECEIVED: false,
@@ -317,8 +322,15 @@ export interface FinancedSalePlanPayload {
   /** Exactly one of `financeCompanyId` / `payerNameSnapshot` (SCRUM-27). */
   financeCompanyId?: string;
   payerNameSnapshot?: string;
-  /** The only figure the vehicle leg's revenue is posted from. */
-  legalInvoiceConsiderationMinor: number;
+  /**
+   * v1/v2 only: the only figure the vehicle leg's revenue is posted from. A v3
+   * plan carries `considerationMinor` instead and never this field; read either
+   * through `planConsiderationMinor`, so an event of one version can never be
+   * posted from the other's field.
+   */
+  legalInvoiceConsiderationMinor?: number;
+  /** v3 only: A + R, derived by the server from the frozen economics (SCRUM-411). */
+  considerationMinor?: number;
   /** N — what the financing company will actually remit. */
   financeCompanyReceivableMinor: number;
   /** P — what the dealership owes the company when deductions exceed the gross. */
@@ -333,11 +345,45 @@ export interface FinancedSalePlanPayload {
    * liability, and debiting cash here as well would book the same money twice.
    */
   depositLiabilityAppliedMinor: number;
-  /** v2 only: H forwarded to the finance company (credit AP-Finance). */
+  /** v2/v3 only: H forwarded to the finance company (credit AP-Finance). */
   forwardDepositMinor?: number;
-  /** v2 only: C, the dealership contribution forwarded (contra-revenue / AP-Finance). */
+  /** v2/v3 only: C, the dealership contribution forwarded (contra-revenue / AP-Finance). */
   forwardContributionMinor?: number;
   components: FinancedSalePlanLine[];
+}
+
+/**
+ * The vehicle consideration a plan recognises: v3 reads its server-derived
+ * `considerationMinor`, v1/v2 their invoice-sourced field. Throws (so the
+ * outbox dead-letters the event) when the version's own field is absent,
+ * rather than reading the other version's field or posting a NaN line.
+ */
+export function planConsiderationMinor(plan: Pick<FinancedSalePlanPayload, "version" | "legalInvoiceConsiderationMinor" | "considerationMinor">): number {
+  const amount = isServerDerivedPlanVersion(plan.version) ? plan.considerationMinor : plan.legalInvoiceConsiderationMinor;
+  if (amount === undefined || !Number.isSafeInteger(amount) || amount < 0) {
+    throw new ConvexError(
+      `A financed sale plan (version ${plan.version}) carries no usable consideration, so its revenue cannot be posted. Re-derive the deal's settlement before posting it.`
+    );
+  }
+  return amount;
+}
+
+/**
+ * The contra-revenue a plan posts against the vehicle leg: the showroom's
+ * contribution C (v2/v3) plus every classified component whose treatment posts to
+ * SALES_CONSIDERATION_REDUCTIONS, net of any that credit it. Read off the lines
+ * `settlementFundingLines` itself writes - not re-selected here - so
+ * `consideration - this` is the revenue the ledger nets, the figure a sale
+ * freezes for the reports to read.
+ */
+export function planContraRevenueMinor(plan: FinancedSalePlanPayload): number {
+  let contra = 0;
+  for (const funded of settlementFundingLines(plan, {}).lines) {
+    if (funded.accountSystemKey === SYSTEM_KEYS.SALES_CONSIDERATION_REDUCTIONS) {
+      contra += funded.debitMinor - funded.creditMinor;
+    }
+  }
+  return contra;
 }
 
 export interface SaleCompletedPayload {
@@ -560,6 +606,19 @@ export interface CollectionRefundPayload {
   currency: string;
   customerId: string;
   paymentMethod?: string;
+}
+
+export interface RetainedCreditRefundPayload {
+  /** A refund of a sale-invoice application names it ... */
+  applicationId?: string;
+  /** ... a standalone refund of retained credit (SCRUM-724) names the position and the approved request. */
+  positionId?: string;
+  refundRequestId?: string;
+  paymentId: string;
+  amountMinor: number;
+  currency: string;
+  customerId: string;
+  paymentMethod: "BANK_TRANSFER" | "CASH";
 }
 
 export interface ExpensePostedPayload {
@@ -836,8 +895,17 @@ interface SettlementFunding {
   lines: LineSpec[];
   /** C — for the basis to fold into the customer receivable it already raises. */
   customerReceivableMinor: number;
-  /** L — the consideration the plan was made under, for the basis's balance bridge. */
-  legalInvoiceConsiderationMinor: number;
+  /** L (v1/v2) or K (v3) — the consideration the plan was made under, for the basis's balance bridge. */
+  considerationMinor: number;
+  /**
+   * v3: the consideration is the server's own A + R, so a basis measures its
+   * commission from it instead of bridging it against the quote's gross.
+   */
+  serverDerivedConsideration: boolean;
+  /** N - what the company will remit to the dealership. A direct-route plan must carry none. */
+  financeReceivableMinor: number;
+  /** H - the deposit liability released. A direct-route plan may carry it: it is discharged against the amount owed onward to the finance company. */
+  depositAppliedMinor: number;
 }
 
 function settlementFundingLines(
@@ -895,7 +963,7 @@ function settlementFundingLines(
   // ONWARD to the finance company, which transfers the full approved amount. H
   // is the debit above (liability released) against AP-Finance; C is
   // contra-revenue against AP-Finance. The forward payment later clears 2220.
-  if (plan.version === 2) {
+  if (isForwardPlanVersion(plan.version)) {
     const forwardDeposit = plan.forwardDepositMinor ?? 0;
     const forwardContribution = plan.forwardContributionMinor ?? 0;
     if (forwardDeposit > 0) {
@@ -948,7 +1016,10 @@ function settlementFundingLines(
   return {
     lines,
     customerReceivableMinor: plan.customerReceivableMinor,
-    legalInvoiceConsiderationMinor: plan.legalInvoiceConsiderationMinor,
+    considerationMinor: planConsiderationMinor(plan),
+    serverDerivedConsideration: isServerDerivedPlanVersion(plan.version),
+    financeReceivableMinor: plan.financeCompanyReceivableMinor,
+    depositAppliedMinor: plan.depositLiabilityAppliedMinor,
   };
 }
 
@@ -1026,10 +1097,15 @@ function consignedAgentSaleLines(
       `Consigned sale ${p.saleId} settles directly with ${supplier} and is externally financed, but records no amount actually paid to him. The dealership's claim cannot be measured against the sale price on this route — repair the event with the finance company's approved amount before posting it.`
     );
   }
+  // SCRUM-411 (plan v3): on the through route the dealership's consideration is
+  // the server-derived A + R, not the quote's gross - so commission is measured
+  // from it (K - E), and the legal-invoice bridge below no longer applies.
   const settlementBasisMinor =
     consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
       ? (consignment.supplierGrossReceiptMinor ?? p.saleAmountMinor)
-      : p.saleAmountMinor;
+      : funding?.serverDerivedConsideration
+        ? funding.considerationMinor
+        : p.saleAmountMinor;
   const marginMinor = settlementBasisMinor - entitlementMinor;
 
   // Fail closed. A negative margin means the supplier is paid less than he is
@@ -1096,7 +1172,34 @@ function consignedAgentSaleLines(
       `Consigned sale ${p.saleId} carries ${taxMinor} minor units of sales tax, and agency sales have no agreed tax treatment yet: the dealership sells this car as ${supplier}'s agent, so whether the tax is his liability or its own changes which of them the money is owed by. Record the tax against the supplier agreement, or sell the car as dealership stock, before completing the sale.`
     );
   }
-  const commissionMinor = marginMinor;
+  // SCRUM-411 (plan v3) on the DIRECT route. The finance company pays the supplier
+  // A, so the supplier now owes the dealership A - E (`marginMinor`, the claim the
+  // subledger opens); the dealership's commission is the whole consideration over
+  // the entitlement, K - E, because the customer's gap R is also the dealership's
+  // to collect. The contribution D is contra-revenue owed onward to the company, and
+  // any held deposit H is discharged against that same amount owed onward.
+  const directV3 = consignment.settlementRoute === "DIRECT_TO_SUPPLIER" && funding?.serverDerivedConsideration === true;
+  if (directV3 && funding) {
+    // A v3 direct plan opens no finance receivable; one that does is a
+    // through-route plan on a direct event, and posting it would credit revenue for
+    // money the company never owed the dealership. Fail closed. A held deposit H is
+    // allowed: it is discharged here (Dr deposit liability) against the same amount
+    // owed onward to the company (Cr AP-finance), so the entry still balances and
+    // no separate DEPOSIT_APPLIED event releases it twice.
+    if (funding.financeReceivableMinor !== 0) {
+      throw new ConvexError(
+        `Consigned sale ${p.saleId} settles directly with ${supplier} but its settlement plan carries a finance-company receivable, which only a sale settled through the dealership has. Re-derive the deal's settlement before posting it.`
+      );
+    }
+    // K must be exactly what reaches the supplier plus what the customer owes; the
+    // two sides of the entry balance only then, and a gap is never plugged.
+    if (settlementBasisMinor + funding.customerReceivableMinor !== funding.considerationMinor) {
+      throw new ConvexError(
+        `Consigned sale ${p.saleId} settles directly with ${supplier}: the amount paid to him plus what the customer owes the dealership does not equal the settlement plan's consideration of ${funding.considerationMinor} minor units. Re-derive the deal's settlement before posting it.`
+      );
+    }
+  }
+  const commissionMinor = directV3 && funding ? funding.considerationMinor - entitlementMinor : marginMinor;
 
   // A zero margin is a real deal, not a broken one: the dealership placed the
   // car for a supplier and made nothing on the metal, earning only the dealer
@@ -1113,9 +1216,10 @@ function consignedAgentSaleLines(
   // handler and turned "no settlement route" and "below the minimum profit"
   // into the wrong message.
   //
-  // DIRECT_TO_SUPPLIER is excluded because no plan is ever built for it: the
-  // company pays the supplier, so the dealership holds no finance receivable to
-  // recognise (`financedSaleRecognitionApplies` returns false on that route).
+  // DIRECT_TO_SUPPLIER is excluded because the company pays the supplier, so the
+  // dealership holds no finance receivable and no gross to bridge. A v3 plan on
+  // that route carries the contribution, any held deposit H and the customer's
+  // gap, which the direct branch below posts itself (`directV3`).
   if (consignment.settlementRoute !== "DIRECT_TO_SUPPLIER") {
     // FAIL CLOSED. A consigned sale financed by a configured company funds its
     // gross from that company, which is the legal buyer of the car. Falling
@@ -1175,16 +1279,31 @@ function consignedAgentSaleLines(
     // equality with the plan's legal-invoice consideration. Do not infer a
     // balancing amount from a difference." Written down here so the next
     // reviewer does not have to re-derive it.
-    if (funding && funding.legalInvoiceConsiderationMinor !== p.saleAmountMinor) {
+    if (funding && !funding.serverDerivedConsideration && funding.considerationMinor !== p.saleAmountMinor) {
       throw new ConvexError(
-        `Consigned sale ${p.saleId} was invoiced to the financing company for ${funding.legalInvoiceConsiderationMinor} minor units but records gross proceeds of ${p.saleAmountMinor}. The supplier's entitlement and the dealership's commission are measured from the proceeds, so the two must agree before this can post. Reconcile the legal invoice with the sale before completing it.`
+        `Consigned sale ${p.saleId} was invoiced to the financing company for ${funding.considerationMinor} minor units but records gross proceeds of ${p.saleAmountMinor}. The supplier's entitlement and the dealership's commission are measured from the proceeds, so the two must agree before this can post. Reconcile the legal invoice with the sale before completing it.`
       );
     }
   }
 
   const lines: LineSpec[] =
     consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
-      ? marginMinor > 0
+      ? directV3 && funding
+        ? [
+            ...(marginMinor > 0
+              ? [line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, marginMinor, 0, `Commission due from ${supplier}`, dims)]
+              : []),
+            // The contribution D (contra-revenue) and any held deposit H (Dr deposit liability),
+            // both against the amount owed onward to the company (AP-finance).
+            ...funding.lines,
+            ...(funding.customerReceivableMinor > 0
+              ? [line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, funding.customerReceivableMinor, 0, "Consigned sale — customer's own share", dims)]
+              : []),
+            ...(commissionMinor > 0
+              ? [line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, commissionMinor, "Consignment commission earned", dims)]
+              : []),
+          ]
+        : marginMinor > 0
         ? [
             // The buyer paid the supplier. Nothing gross ever reaches these
             // books; the only asset is the margin he now owes back.
@@ -1480,12 +1599,14 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // to write a payload directly through the super-admin raw-JSON editor, which
   // can post an arbitrary payload to any rule by design. Stated because the
   // earlier wording claimed the refusal held generally, and it does not.
-  // With a plan the consideration comes from the legal invoice, which is the only
-  // document the sale of the car was made under. `saleAmountMinor` is the
-  // dealership's own operational figure and the two are allowed to differ — a
-  // 10,500 target against a 12,500 invoice to the financier is the ordinary
+  // With a plan the consideration comes from the plan, never from `saleAmountMinor`,
+  // the dealership's own operational figure; the two are allowed to differ — a
+  // 10,500 target against a 12,500 consideration to the financier is the ordinary
   // shape of these deals, not an error to reconcile away.
-  const vehicleRevenueMinor = plan ? plan.legalInvoiceConsiderationMinor : revenueMinor;
+  // v3 (SCRUM-411): the consideration is the server-derived A + R. A v2 event
+  // keeps posting from its own legal-invoice field; `planConsiderationMinor` reads
+  // whichever the plan's version defines.
+  const vehicleRevenueMinor = plan ? planConsiderationMinor(plan) : revenueMinor;
   if (vehicleRevenueMinor > 0) {
     lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, vehicleRevenueMinor, "Vehicle sale revenue", dims));
   }
@@ -1805,6 +1926,24 @@ export function ruleCollectionRefund(p: CollectionRefundPayload): RuleResult {
       line(disbursementKey, 0, p.amountMinor, "Refund paid out", { customerId: p.customerId }),
     ],
     memo: "Collection payment refunded",
+    category: "SYSTEM",
+  };
+}
+
+/** Return held customer credit; the sale's AR has already been reopened separately. */
+export function ruleRetainedCreditRefunded(p: RetainedCreditRefundPayload): RuleResult {
+  if (!Number.isSafeInteger(p.amountMinor) || p.amountMinor <= 0 ||
+      (p.paymentMethod !== "BANK_TRANSFER" && p.paymentMethod !== "CASH")) {
+    throw new Error("Retained credit refund needs a positive amount and a supported payout method.");
+  }
+  return {
+    lines: [
+      line(SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY, p.amountMinor, 0,
+        "Customer credit refunded", { customerId: p.customerId }),
+      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor,
+        "Customer refund paid out", { customerId: p.customerId }),
+    ],
+    memo: "Retained customer credit refunded",
     category: "SYSTEM",
   };
 }
@@ -3105,6 +3244,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "COLLECTION_PAYMENT": return ruleCollectionPayment(payload as unknown as CollectionPaymentPayload);
     case "RECEIPT_CREDIT_APPLIED": return ruleReceiptCreditApplied(payload as unknown as ReceiptCreditAppliedPayload);
     case "COLLECTION_REFUND": return ruleCollectionRefund(payload as unknown as CollectionRefundPayload);
+    case "RETAINED_CREDIT_REFUNDED": return ruleRetainedCreditRefunded(payload as unknown as RetainedCreditRefundPayload);
     case "EXPENSE_POSTED": return ruleExpensePosted(payload as unknown as ExpensePostedPayload);
     case "CHEQUE_RECEIVED": return ruleChequeReceived(payload as unknown as ChequeReceivedPayload);
     case "CHEQUE_CLEARED": return ruleChequeClear(payload as unknown as ChequeClearedPayload);

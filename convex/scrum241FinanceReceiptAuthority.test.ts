@@ -211,6 +211,8 @@ async function prepareForFinalize(
   });
   await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
     orgId: s.orgId, feeId, notes: "Matched.",
+    expectedActualAmountMinor: fee.withheldMinor,
+    expectedActualEvidenceRevision: 0,
   });
   // SCRUM-407: no manual classification step - finalization checks readiness itself.
 }

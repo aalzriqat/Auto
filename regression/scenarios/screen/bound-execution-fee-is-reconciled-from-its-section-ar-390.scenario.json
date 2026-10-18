@@ -1,0 +1,105 @@
+{
+  "id": "bound-execution-fee-is-reconciled-from-its-section-ar-390",
+  "fingerprint": "8828628803155770f410c4afda815789887b8beb8354826131b653110da08070",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum834-reconcile-route",
+    "firstSeen": "2026-10-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "settings.financeCompany.configure",
+      "input": {
+        "adminFeesMajor": 1250
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeDealCosts.recordDealFee",
+      "input": {
+        "feeType": "FINANCE_COMPANY_FEE",
+        "paidBy": "DEALER",
+        "paidTo": "FINANCE_COMPANY",
+        "accountingTreatment": "FINANCE_COMPANY_COMMISSION",
+        "estimatedMajor": 1250,
+        "actualMajor": 1500
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeDealCosts.bindExecutionFeeLine",
+      "input": {
+        "binding": "executionFee"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "deal.executionFee.reconcileFee",
+      "input": {
+        "locale": "ar",
+        "viewportWidth": 390,
+        "notes": "required"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "deal.executionFee.expectedMajor",
+      "value": 1250
+    },
+    {
+      "observable": "closingCheck.costsClosable.beforeAction",
+      "value": "BLOCKED"
+    },
+    {
+      "observable": "section.varianceStated",
+      "value": "actualHigherBy250"
+    },
+    {
+      "observable": "page.reconcileButtons",
+      "value": 1
+    },
+    {
+      "observable": "form.figuresAndVarianceVisibleWhileTyping",
+      "value": true
+    },
+    {
+      "observable": "fee.status.afterReconcile",
+      "value": "RECONCILED"
+    },
+    {
+      "observable": "closingCheck.costsClosable.afterReconcile",
+      "value": "READY"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "playwright/tests/deal-cost-reconcile-route.spec.ts",
+    "testName": "ar @ 390: a bound finance-company execution fee shows its variance and is reconciled from its own section"
+  },
+  "sourceGlobs": [
+    "components/applications/cockpit/HandoverCostsPanel.tsx",
+    "components/applications/cockpit/DealCockpit.tsx"
+  ]
+}
