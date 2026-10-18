@@ -21,6 +21,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -682,10 +683,21 @@ function CorrectScheduleDialog({
   });
   const changeTerm = form.watch("changeTerm");
   const refundAmount = form.watch("refundAmount") || 0;
+  const refundMethod = form.watch("refundPaymentMethod");
+  const [refundBankAccountId, setRefundBankAccountId] = useState("");
+  const needsRefundBank = refundAmount > 0 &&
+    (refundMethod === "BANK_TRANSFER" || refundMethod === "CARD");
+  const refundBankOptions = useQuery(api.prepaidExpenses.listRefundBankOptions,
+    needsRefundBank ? { orgId, scheduleId: schedule._id } : "skip");
+  const selectedRefundBank = refundBankOptions?.banks.find((bank) => bank._id === refundBankAccountId);
   const writeOffAmount = form.watch("writeOffAmount") || 0;
   const needsApproval = writeOffAmount > 0 && !isOwner;
 
   async function onSubmit(values: PrepaidCorrectionFormValues) {
+    if (needsRefundBank && (!selectedRefundBank || refundBankOptions?.truncated)) {
+      toast.error(t("ReceiptSelectBank"));
+      return;
+    }
     await submitWithFeedback(async () => {
       const result = await correct({
         orgId,
@@ -693,6 +705,7 @@ function CorrectScheduleDialog({
         refundMinor: Math.round(values.refundAmount * factor),
         refundTaxMinor: values.refundAmount > 0 ? Math.round(values.refundTaxAmount * factor) : undefined,
         refundPaymentMethod: values.refundAmount > 0 ? values.refundPaymentMethod : undefined,
+        refundBankAccountId: needsRefundBank ? selectedRefundBank?._id : undefined,
         reference: values.refundAmount > 0 ? values.reference?.trim() || undefined : undefined,
         writeOffMinor: Math.round(values.writeOffAmount * factor),
         newTermMonths: values.changeTerm ? values.newTermMonths : undefined,
@@ -798,13 +811,27 @@ function CorrectScheduleDialog({
                         // the field's zod type stays optional (refundPaymentMethod
                         // is only required when refundAmount > 0).
                         value={field.value ?? "BANK_TRANSFER"}
-                        onValueChange={field.onChange}
+                        onValueChange={(next) => { field.onChange(next); setRefundBankAccountId(""); }}
                       />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+            )}
+
+            {needsRefundBank && (
+              <div className="space-y-1.5">
+                <Label htmlFor="prepaid-refund-bank">{t("ReceiptBankAccount")}</Label>
+                <select id="prepaid-refund-bank" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={refundBankAccountId} disabled={!refundBankOptions || refundBankOptions.truncated || submitting}
+                  onChange={(event) => setRefundBankAccountId(event.target.value)}>
+                  <option value="">{t(refundBankOptions ? "ReceiptSelectBank" : "CashDrawerLoadingBanks")}</option>
+                  {(refundBankOptions?.banks ?? []).map((bank) => <option key={bank._id} value={bank._id}>{bank.name} ({bank.currency})</option>)}
+                </select>
+                {refundBankOptions?.truncated && <p role="alert" className="text-xs text-destructive">{t("ReceiptTooManyBanks")}</p>}
+                {refundBankOptions && !refundBankOptions.truncated && refundBankOptions.banks.length === 0 && <p role="alert" className="text-xs text-destructive">{t("ReceiptNoBank")}</p>}
+              </div>
             )}
 
             {refundAmount > 0 && (
@@ -902,6 +929,7 @@ function CorrectScheduleDialog({
                 onCancel={() => onOpenChange(false)}
                 onConfirm={form.handleSubmit(onSubmit)}
                 submitting={submitting}
+                disabled={needsRefundBank && (!selectedRefundBank || refundBankOptions?.truncated)}
               />
             </DialogFooter>
           </form>

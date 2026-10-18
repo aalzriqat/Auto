@@ -2090,6 +2090,7 @@ export interface PrepaidExpenseRefundedPayload {
   taxMinor?: number; // VAT portion of the refund, reclaimed from VAT_RECEIVABLE
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 /**
@@ -2103,8 +2104,15 @@ export interface PrepaidExpenseRefundedPayload {
  */
 export function rulePrepaidExpenseRefunded(p: PrepaidExpenseRefundedPayload): RuleResult {
   const taxMinor = p.taxMinor ?? 0;
+  const refundKey = cashAccountKey(p.paymentMethod);
+  if (refundKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Prepaid refund bank posting has no physical bank identity.");
+  }
+  if (refundKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Prepaid refund unexpectedly names a physical bank.");
+  }
   const lines: LineSpec[] = [
-    line(cashAccountKey(p.paymentMethod), p.amountMinor + taxMinor, 0, "Prepaid expense refund received"),
+    line(refundKey, p.amountMinor + taxMinor, 0, "Prepaid expense refund received", p.bankAccountId ? { bankAccountId: p.bankAccountId } : undefined),
     line(SYSTEM_KEYS.PREPAID_EXPENSES, 0, p.amountMinor, "Prepaid expense asset released (refund)"),
   ];
   if (taxMinor > 0) {

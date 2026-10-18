@@ -52,7 +52,7 @@ import {
   toYearMonth,
 } from "./utils/expenseAmortization";
 import { getOpenPeriodForDate } from "./accountingPeriods";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
@@ -62,6 +62,7 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { drainEntries, reviveFailedEntry } from "./accountingOutbox";
 import { postedSourceExpenseEvent } from "./utils/prepaidSourceLedger";
 import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 
 // Re-exported: existing callers/tests import `toYearMonth` from this module.
 export { toYearMonth };
@@ -777,8 +778,28 @@ interface CorrectionInputs {
   refundMinor: number;
   refundTaxMinor: number;
   refundPaymentMethod?: PaymentMethod;
+  refundBankAccountId?: Id<"bankAccounts">;
   writeOffMinor: number;
   newTermMonths: number;
+}
+
+async function requireCorrectionRefundBank(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  currency: string,
+  inputs: CorrectionInputs
+): Promise<void> {
+  const bankFunded = inputs.refundMinor > 0 &&
+    (inputs.refundPaymentMethod === "BANK_TRANSFER" || inputs.refundPaymentMethod === "CARD");
+  if (bankFunded) {
+    await requireActiveBankInCurrency(ctx, {
+      orgId, bankAccountId: inputs.refundBankAccountId, currency,
+      missingMessage: "Choose the physical bank account that received this prepaid refund. Nothing has been recorded.",
+      currencySubject: "prepaid refund",
+    });
+  } else if (inputs.refundBankAccountId) {
+    throw new ConvexError("This prepaid correction does not post a bank refund; remove the bank selection.");
+  }
 }
 
 /**
@@ -864,6 +885,7 @@ async function applyScheduleCorrection(
     refundMinor: number;
     refundTaxMinor: number;
     refundPaymentMethod?: PaymentMethod;
+    refundBankAccountId?: Id<"bankAccounts">;
     writeOffMinor: number;
     newTermMonths: number | undefined;
     reason: string;
@@ -873,10 +895,7 @@ async function applyScheduleCorrection(
     actorId: Id<"users">;
   }
 ): Promise<Id<"prepaidScheduleCorrections">> {
-  const schedule = await ctx.db.get(args.scheduleId);
-  if (!schedule || schedule.orgId !== args.orgId) {
-    throw new ConvexError("Prepaid schedule not found in this organization.");
-  }
+  const schedule = await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId, "Prepaid schedule not found in this organization.");
   if (schedule.status !== "ACTIVE") {
     throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
   }
@@ -916,11 +935,17 @@ async function applyScheduleCorrection(
       refundMinor: args.refundMinor,
       refundTaxMinor: args.refundTaxMinor,
       refundPaymentMethod: args.refundPaymentMethod,
+      refundBankAccountId: args.refundBankAccountId,
       writeOffMinor: args.writeOffMinor,
       newTermMonths,
     },
     remainingRefundableTaxMinor
   );
+  await requireCorrectionRefundBank(ctx, args.orgId, schedule.currency, {
+    refundMinor: args.refundMinor, refundTaxMinor: args.refundTaxMinor,
+    refundPaymentMethod: args.refundPaymentMethod, refundBankAccountId: args.refundBankAccountId,
+    writeOffMinor: args.writeOffMinor, newTermMonths,
+  });
 
   const correctionId = await ctx.db.insert("prepaidScheduleCorrections", {
     orgId: args.orgId,
@@ -928,6 +953,7 @@ async function applyScheduleCorrection(
     refundMinor: args.refundMinor,
     refundTaxMinor: args.refundMinor > 0 ? args.refundTaxMinor : undefined,
     refundPaymentMethod: args.refundMinor > 0 ? args.refundPaymentMethod : undefined,
+    refundBankAccountId: args.refundMinor > 0 ? args.refundBankAccountId : undefined,
     writeOffMinor: args.writeOffMinor,
     previousTermMonths: schedule.termMonths,
     newTermMonths,
@@ -954,6 +980,7 @@ async function applyScheduleCorrection(
       taxMinor: args.refundTaxMinor > 0 ? args.refundTaxMinor : undefined,
       currency: schedule.currency,
       paymentMethod: args.refundPaymentMethod,
+      bankAccountId: args.refundBankAccountId,
       actorId: args.actorId,
       occurredAt: accountingDate,
     });
@@ -1009,6 +1036,16 @@ async function applyScheduleCorrection(
  * owner to approve/reject (see approveCorrectionRequest). Owner submissions
  * and refund-only/term-only corrections (no write-off) always apply directly.
  */
+export const listRefundBankOptions = query({
+  args: { orgId: v.id("organizations"), scheduleId: v.id("prepaidExpenseSchedules") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    const schedule = await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId, "Prepaid schedule not found in this organization.");
+    return await listEligibleBanks(ctx, args.orgId, schedule.currency);
+  },
+});
+
 export const correctSchedule = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1016,6 +1053,7 @@ export const correctSchedule = mutation({
     refundMinor: v.optional(v.number()),
     refundTaxMinor: v.optional(v.number()),
     refundPaymentMethod: v.optional(paymentMethodValidator),
+    refundBankAccountId: v.optional(v.id("bankAccounts")),
     writeOffMinor: v.optional(v.number()),
     newTermMonths: v.optional(v.number()),
     reason: v.string(),
@@ -1056,6 +1094,7 @@ export const correctSchedule = mutation({
           refundMinor,
           refundTaxMinor,
           refundPaymentMethod: refundMinor > 0 ? (args.refundPaymentMethod ?? null) : null,
+          ...(args.refundBankAccountId ? { refundBankAccountId: args.refundBankAccountId } : {}),
           writeOffMinor,
           newTermMonths: args.newTermMonths ?? null,
           reason,
@@ -1071,6 +1110,7 @@ export const correctSchedule = mutation({
             refundMinor,
             refundTaxMinor,
             refundPaymentMethod: args.refundPaymentMethod,
+            refundBankAccountId: args.refundBankAccountId,
             writeOffMinor,
             newTermMonths: args.newTermMonths,
             reason,
@@ -1084,10 +1124,7 @@ export const correctSchedule = mutation({
         // Same validation the direct path runs, checked up front so the
         // accountant gets immediate feedback instead of a surprise rejection
         // once someone finally reviews the request.
-        const schedule = await ctx.db.get(args.scheduleId);
-        if (!schedule || schedule.orgId !== args.orgId) {
-          throw new ConvexError("Prepaid schedule not found in this organization.");
-        }
+        const schedule = await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId, "Prepaid schedule not found in this organization.");
         if (schedule.status !== "ACTIVE") {
           throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
         }
@@ -1114,6 +1151,10 @@ export const correctSchedule = mutation({
           { refundMinor, refundTaxMinor, refundPaymentMethod: args.refundPaymentMethod, writeOffMinor, newTermMonths },
           remainingRefundableTaxMinor
         );
+        await requireCorrectionRefundBank(ctx, args.orgId, schedule.currency, {
+          refundMinor, refundTaxMinor, refundPaymentMethod: args.refundPaymentMethod,
+          refundBankAccountId: args.refundBankAccountId, writeOffMinor, newTermMonths,
+        });
 
         const now = Date.now();
         const requestId = await ctx.db.insert("prepaidCorrectionRequests", {
@@ -1122,6 +1163,7 @@ export const correctSchedule = mutation({
           refundMinor,
           refundTaxMinor: refundMinor > 0 ? refundTaxMinor : undefined,
           refundPaymentMethod: refundMinor > 0 ? args.refundPaymentMethod : undefined,
+          refundBankAccountId: refundMinor > 0 ? args.refundBankAccountId : undefined,
           writeOffMinor,
           newTermMonths,
           reason,
@@ -1201,10 +1243,7 @@ export const approveCorrectionRequest = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
 
-    const request = await ctx.db.get(args.requestId);
-    if (!request || request.orgId !== args.orgId) {
-      throw new ConvexError("Correction request not found in this organization.");
-    }
+    const request = await requireOwnedRow(ctx, args.orgId, "prepaidCorrectionRequests", args.requestId, "Correction request not found in this organization.");
     if (request.status !== "PENDING") {
       throw new ConvexError(`This request has already been ${request.status.toLowerCase()}.`);
     }
@@ -1218,6 +1257,7 @@ export const approveCorrectionRequest = mutation({
       refundMinor: request.refundMinor,
       refundTaxMinor: request.refundTaxMinor ?? 0,
       refundPaymentMethod: request.refundPaymentMethod,
+      refundBankAccountId: request.refundBankAccountId,
       writeOffMinor: request.writeOffMinor,
       newTermMonths: request.newTermMonths,
       reason: request.reason,

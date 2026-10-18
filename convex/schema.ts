@@ -2267,6 +2267,7 @@ export default defineSchema({
     refundMinor: v.number(), // cash/bank refund received for the unused portion, 0 if none
     refundTaxMinor: v.optional(v.number()), // VAT portion of the refund, 0/undefined if none
     refundPaymentMethod: v.optional(paymentMethodValidator),
+    refundBankAccountId: v.optional(v.id("bankAccounts")),
     writeOffMinor: v.number(), // non-refundable unused portion expensed immediately, 0 if none
     previousTermMonths: v.number(),
     newTermMonths: v.number(),
@@ -2296,6 +2297,7 @@ export default defineSchema({
     refundMinor: v.number(),
     refundTaxMinor: v.optional(v.number()),
     refundPaymentMethod: v.optional(paymentMethodValidator),
+    refundBankAccountId: v.optional(v.id("bankAccounts")),
     writeOffMinor: v.number(),
     newTermMonths: v.number(),
     reason: v.string(),

@@ -2932,6 +2932,7 @@ export async function hookPrepaidExpenseRefunded(
     taxMinor?: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2957,6 +2958,7 @@ export async function hookPrepaidExpenseRefunded(
       taxMinor: args.taxMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
