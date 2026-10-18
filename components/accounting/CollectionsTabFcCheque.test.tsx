@@ -286,6 +286,36 @@ describe("Collections, Cheques tab: Return", () => {
   });
 });
 
+test("a canceled receipt does not carry its bank into another receivable", async () => {
+  const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+  try {
+    const receivable = (id: string, customerName: string) => ({
+      _id: id, orgId: "org1", customerName, title: "Invoice", sourceType: "MANUAL",
+      status: "OPEN", originalAmount: 500, outstandingAmount: 500, dueDate: Date.UTC(2026, 9, 12),
+    });
+    stubs.paginated.set("collections:listReceivables", [receivable("r1", "First Customer"), receivable("r2", "Second Customer")]);
+    stubs.queryResults.set("collections:listReceiptBankOptions", {
+      banks: [{ _id: "bank-a", name: "Bank A", currency: "JOD" }], truncated: false,
+    });
+    render(<CollectionsTab />);
+    const buttons = screen.getAllByRole("button", { name: "RecordPayment" });
+    fireEvent.click(buttons[0]);
+    let dialog = await screen.findByRole("dialog");
+    fireEvent.keyDown(within(dialog).getAllByRole("combobox")[0], { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "Bank Transfer" }));
+    fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "ReceiptBankAccount" }), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: /Bank A/ }));
+    expect(within(dialog).getByRole("combobox", { name: "ReceiptBankAccount" }).textContent).toContain("Bank A");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(buttons[1]);
+    dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("combobox", { name: "ReceiptBankAccount" }).textContent).toContain("ReceiptSelectBank");
+  } finally {
+    HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+  }
+});
+
 describe("Collections, Cheques tab: the Return dialog shows a translated refusal", () => {
   test("a coded CHEQUE_ALREADY_RETURNED refusal is rendered in Arabic, not as raw JSON", async () => {
     // Only the server-error dictionary is Arabic here; button labels stay keys.

@@ -248,13 +248,34 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
+    const paymentKey = "legacy-cash-retry";
+    const paymentDate = Date.now();
+    const paymentArgs = {
+      idempotencyKey: paymentKey,
       orgId,
       receivableId,
       amount: 300,
+      method: "CASH" as const,
+      paymentDate,
+    };
+    const firstPayment = await asFinance.mutation(api.collections.recordPayment, paymentArgs);
+
+    // A retry crossing this release must match the stored pre-bank fingerprint.
+    const command = await t.run((ctx) => ctx.db.query("commandIdempotency")
+      .withIndex("by_org_operation_key", (q) => q.eq("orgId", orgId)
+        .eq("operation", "collections.recordPayment").eq("idempotencyKey", paymentKey)).unique());
+    expect(JSON.parse(command?.fingerprint ?? "{}")).toEqual({
+      receivableId,
+      customerId: null,
+      vehicleId: null,
+      saleId: null,
+      invoiceSaleId: null,
+      amount: 300,
       method: "CASH",
-      paymentDate: Date.now(),
+      paymentDate,
+      reference: null,
     });
+    expect(await asFinance.mutation(api.collections.recordPayment, paymentArgs)).toEqual(firstPayment);
 
     await t.run(async (ctx) => {
       const receivable = await ctx.db.get(receivableId);
