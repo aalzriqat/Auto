@@ -3151,6 +3151,7 @@ export const requestApproval = mutation({
     requestedAmount: v.optional(v.number()),
     requestedDueDate: v.optional(v.number()),
     disbursementMethod: v.optional(disbursementMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     reason: v.string(),
   },
   handler: async (ctx, args) => {
@@ -3182,6 +3183,17 @@ export const requestApproval = mutation({
     }
 
     const currency = await getOrgCurrency(ctx, args.orgId);
+    const refundNeedsBank = args.requestType === "REFUND" && args.disbursementMethod !== "CASH";
+    const bankAccountId = refundNeedsBank
+      ? await requireActiveBankInCurrency(ctx, {
+          orgId: args.orgId,
+          bankAccountId: args.bankAccountId,
+          currency,
+          missingMessage: "Select the bank account that will pay this refund.",
+          currencySubject: "organization",
+        })
+      : undefined;
+    if (!refundNeedsBank && args.bankAccountId) throw new ConvexError("This request cannot name a bank account.");
     const now = Date.now();
     const requestId = await ctx.db.insert("collectionApprovalRequests", {
       orgId: args.orgId,
@@ -3193,6 +3205,7 @@ export const requestApproval = mutation({
       requestedAmount: args.requestedAmount ? roundMoney(args.requestedAmount, currency) : undefined,
       requestedDueDate: args.requestedDueDate,
       disbursementMethod: args.requestType === "REFUND" ? args.disbursementMethod : undefined,
+      bankAccountId,
       reason: args.reason.trim(),
       createdAt: now,
       updatedAt: now,
@@ -3279,6 +3292,17 @@ export const respondToApproval = mutation({
 
         const currency = await getOrgCurrency(ctx, args.orgId);
         const now = Date.now();
+        // Recheck a pending refund's physical bank before changing the approval.
+        // A bank can become inactive after the requester selects it.
+        const refundBankAccountId = args.status === "APPROVED" && request.requestType === "REFUND" && request.disbursementMethod && request.disbursementMethod !== "CASH"
+          ? await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId,
+              bankAccountId: request.bankAccountId,
+              currency,
+              missingMessage: "This refund request has no bank account. Reject it and submit a new request.",
+              currencySubject: "organization",
+            })
+          : undefined;
         await ctx.db.patch(args.requestId, {
           status: args.status,
           decisionNotes: args.decisionNotes,
@@ -3420,9 +3444,13 @@ export const respondToApproval = mutation({
               );
             }
             const refundDisbursementMethod = request.disbursementMethod;
+            if (refundDisbursementMethod === "CASH" && request.bankAccountId) {
+              throw new ConvexError("A cash refund request cannot name a bank account.");
+            }
 
             const refundPaymentId = await ctx.db.insert("collectionPayments", {
               orgId: args.orgId,
+              bankAccountId: refundBankAccountId,
               branchId: membership.branchId,
               receivableId: receivable._id,
               customerId: receivable.customerId,
@@ -3494,6 +3522,7 @@ export const respondToApproval = mutation({
               amountMinor: refundAmountMinor,
               currency,
               paymentMethod: refundDisbursementMethod,
+              bankAccountId: refundBankAccountId,
               actorId: user._id,
               occurredAt: now,
             });

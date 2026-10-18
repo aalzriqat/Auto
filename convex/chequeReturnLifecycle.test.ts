@@ -1271,7 +1271,7 @@ async function padLineage(
 describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
   test("F1 — a refund that reversed this receipt's allocation blocks the return", async () => {
     const seeded = await seedOrg("f1");
-    const { t, asAdmin, asApprover, orgId, customerId } = seeded;
+    const { t, asAdmin, asApprover, orgId, customerId, bankAccountId } = seeded;
     const debt = await makeReceivable(asAdmin, orgId, customerId, 1000, "Own debt");
     const { chequeId } = await clearedCheque(seeded, "f1", 1000, debt);
 
@@ -1279,7 +1279,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
     // reverses the receipt's own persisted allocation, newest first.
     const requestId = await asAdmin.mutation(api.collections.requestApproval, {
       orgId, receivableId: debt, requestType: "REFUND",
-      requestedAmount: 400, disbursementMethod: "BANK_TRANSFER", reason: "customer refund",
+      requestedAmount: 400, disbursementMethod: "BANK_TRANSFER", bankAccountId, reason: "customer refund",
     });
     await asApprover.mutation(api.collections.respondToApproval, {
       idempotencyKey: crypto.randomUUID(),

@@ -616,6 +616,7 @@ export interface CollectionRefundPayload {
   currency: string;
   customerId: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 export interface RetainedCreditRefundPayload {
@@ -1959,10 +1960,16 @@ export function ruleCollectionRefund(p: CollectionRefundPayload): RuleResult {
   // Use the refund-specific mapper so outbound cheques credit BANK_ACCOUNT,
   // not CHEQUES_IN_HAND (which is reserved for cheques held from customers).
   const disbursementKey = disbursementAccountKey(p.paymentMethod);
+  if (disbursementKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A bank account is required for a collection refund paid from a bank.");
+  }
+  if (disbursementKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A cash collection refund cannot name a bank account.");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.amountMinor, 0, "AR reopened by refund", { customerId: p.customerId }),
-      line(disbursementKey, 0, p.amountMinor, "Refund paid out", { customerId: p.customerId }),
+      line(disbursementKey, 0, p.amountMinor, "Refund paid out", { customerId: p.customerId, ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}) }),
     ],
     memo: "Collection payment refunded",
     category: "SYSTEM",

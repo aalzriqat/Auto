@@ -28,7 +28,10 @@ vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
-    useQuery: () => undefined,
+    useQuery: (reference: never, args: unknown) =>
+      getFunctionName(reference) === "collections:listReceiptBankOptions" && args !== "skip"
+        ? { banks: [{ _id: "bank_1", name: "Main bank", currency: "JOD" }], truncated: false }
+        : undefined,
     usePaginatedQuery: () => ({ results: [], status: "Exhausted", loadMore: () => undefined }),
     useMutation: (reference: never) => async (args: Record<string, unknown>) => {
       stubs.calls.push({ name: getFunctionName(reference), args });
@@ -63,9 +66,15 @@ function renderDialog(type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE") {
 const submit = () => screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
 
 function chooseMethod(label: string) {
-  const trigger = screen.getByRole("combobox");
+  const trigger = screen.getByRole("combobox", { name: "PaymentMethodLabel" });
   fireEvent.keyDown(trigger, { key: "Enter", code: "Enter" });
   fireEvent.click(screen.getByText(label));
+}
+
+function chooseBank() {
+  const trigger = screen.getByRole("combobox", { name: "ReceiptBankAccount" });
+  fireEvent.keyDown(trigger, { key: "Enter", code: "Enter" });
+  fireEvent.click(screen.getByText("Main bank"));
 }
 
 describe("ApprovalRequestDialog refund method (SCRUM-469)", () => {
@@ -88,6 +97,8 @@ describe("ApprovalRequestDialog refund method (SCRUM-469)", () => {
     chooseMethod("Bank Transfer");
 
     expect(screen.queryByRole("status")).toBeNull();
+    expect(submit().disabled).toBe(true);
+    chooseBank();
     expect(submit().disabled).toBe(false);
     fireEvent.click(submit());
     await waitFor(() => expect(stubs.calls).toHaveLength(1));
@@ -95,6 +106,7 @@ describe("ApprovalRequestDialog refund method (SCRUM-469)", () => {
       requestType: "REFUND",
       requestedAmount: 50,
       disbursementMethod: "BANK_TRANSFER",
+      bankAccountId: "bank_1",
     });
   });
 
@@ -120,6 +132,7 @@ describe("refund method is per intent, never carried over (SCRUM-469 round 1, SO
     fireEvent.change(screen.getByPlaceholderText("RefundAmount"), { target: { value: "50" } });
     fireEvent.change(screen.getByPlaceholderText("Reason"), { target: { value: "Customer withdrew" } });
     chooseMethod("Bank Transfer");
+    chooseBank();
     expect(submit().disabled).toBe(false);
 
     view.rerender(<KeyedApprovalRequestDialog target={null} onOpenChange={() => undefined} />);
@@ -134,6 +147,7 @@ describe("refund method is per intent, never carried over (SCRUM-469 round 1, SO
   test("reopening the SAME receivable after close is a new intent too", () => {
     const view = render(open(receivable));
     chooseMethod("Bank Transfer");
+    chooseBank();
     view.rerender(<KeyedApprovalRequestDialog target={null} onOpenChange={() => undefined} />);
     view.rerender(open(receivable));
     expect(screen.getByText("RefundChooseMethod")).toBeTruthy();
@@ -144,6 +158,7 @@ describe("refund method is per intent, never carried over (SCRUM-469 round 1, SO
     fireEvent.change(screen.getByPlaceholderText("RefundAmount"), { target: { value: "50" } });
     fireEvent.change(screen.getByPlaceholderText("Reason"), { target: { value: "Customer withdrew" } });
     chooseMethod("Bank Transfer");
+    chooseBank();
     view.rerender(open(receivable));
     expect(screen.queryByText("RefundChooseMethod")).toBeNull();
     expect(submit().disabled).toBe(false);

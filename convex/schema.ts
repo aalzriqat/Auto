@@ -4932,6 +4932,7 @@ export default defineSchema({
 
   collectionPayments: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     branchId: v.optional(v.id("branches")),
     receivableId: v.optional(v.id("receivables")),
     customerId: v.id("customers"),
@@ -5081,6 +5082,7 @@ export default defineSchema({
 
   collectionApprovalRequests: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     receivableId: v.id("receivables"),
     customerId: v.id("customers"),
     requestedBy: v.id("users"),

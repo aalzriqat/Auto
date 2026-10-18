@@ -1152,13 +1152,17 @@ export function ApprovalRequestDialog({ target, onOpenChange }: { target: { rece
   // SCRUM-469: a refund's method is chosen, never assumed - it picks the account
   // the money is paid out of, and an unstated one used to be sent as CASH.
   const [disbursementMethod, setDisbursementMethod] = useState<DisbursementMethod | undefined>(undefined);
+  const [refundBankAccountId, setRefundBankAccountId] = useState("");
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const refundMethodMissing = target?.type === "REFUND" && !isChosenMethod(disbursementMethod);
+  const refundNeedsBank = target?.type === "REFUND" && isChosenMethod(disbursementMethod) && disbursementMethod !== "CASH";
+  const refundBankOptions = useReceiptBankOptions(activeOrgId ?? undefined, !!refundNeedsBank, refundBankAccountId);
 
   async function submit() {
     if (!activeOrgId || !target) return;
     if (refundMethodMissing) return;
+    if (refundNeedsBank && !refundBankOptions.chosenOffered) return;
     setSubmitting(true);
     try {
       await requestApproval({
@@ -1168,6 +1172,7 @@ export function ApprovalRequestDialog({ target, onOpenChange }: { target: { rece
         requestedAmount: target.type === "REFUND" ? Number(amount) : undefined,
         requestedDueDate: target.type === "RESCHEDULE" ? dateInputToMs(dueDate) : undefined,
         disbursementMethod: target.type === "REFUND" ? disbursementMethod : undefined,
+        bankAccountId: refundNeedsBank ? refundBankAccountId as Id<"bankAccounts"> : undefined,
         reason,
       });
       toast.success(t("CollectionToastApprovalSubmitted" as any));
@@ -1175,6 +1180,7 @@ export function ApprovalRequestDialog({ target, onOpenChange }: { target: { rece
       setAmount("");
       setReason("");
       setDisbursementMethod(undefined);
+      setRefundBankAccountId("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1210,6 +1216,7 @@ export function ApprovalRequestDialog({ target, onOpenChange }: { target: { rece
                   ))}
                 </SelectContent>
               </Select>
+              {refundNeedsBank && <ReceiptBankSelect value={refundBankAccountId} onChange={setRefundBankAccountId} bankOptions={refundBankOptions} />}
               {refundMethodMissing && (
                 <p className="text-sm font-medium text-destructive" role="status">{t("RefundMethodRequired" as any)}</p>
               )}
@@ -1220,7 +1227,7 @@ export function ApprovalRequestDialog({ target, onOpenChange }: { target: { rece
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || !reason || (target?.type === "REFUND" && !amount) || refundMethodMissing}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !reason || (target?.type === "REFUND" && !amount) || refundMethodMissing || (refundNeedsBank && !refundBankOptions.chosenOffered)}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

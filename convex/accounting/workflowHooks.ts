@@ -1344,6 +1344,7 @@ type CollectionHookArgs = {
   amountMinor: number;
   currency: string;
   paymentMethod: string;
+  bankAccountId?: Id<"bankAccounts">;
   actorId: Id<"users">;
   occurredAt: number;
 };
@@ -1390,6 +1391,7 @@ function makeCollectionHook(eventType: "COLLECTION_REFUND", keyPrefix: string) {
         currency: args.currency,
         customerId: args.customerId.toString(),
         paymentMethod: args.paymentMethod,
+        ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
       },
     });
 }
