@@ -140,14 +140,25 @@ async function seedDealer() {
 }
 
 describe("SCRUM-54 — manual journals cannot create unbanked control lines", () => {
+  test("bank control cannot be configured for manual posting", async () => {
+    const s = await seedDealer();
+    const bank = (await s.asUser.query(api.chartOfAccounts.list, { orgId: s.orgId }))
+      .find((account) => account.systemKey === "BANK_ACCOUNT");
+    if (!bank) throw new Error("Bank control account missing from fixture");
+
+    await expect(s.asUser.mutation(api.chartOfAccounts.update, {
+      orgId: s.orgId, accountId: bank._id, allowManualPosting: true,
+    })).rejects.toThrow(/physical bank/i);
+    expect(await s.t.run((ctx) => ctx.db.get(bank._id))).toMatchObject({ allowManualPosting: false });
+  });
+
   test("enabling manual posting on bank control cannot create an unbanked journal draft", async () => {
     const s = await seedDealer();
     const bank = (await s.asUser.query(api.chartOfAccounts.list, { orgId: s.orgId }))
       .find((account) => account.systemKey === "BANK_ACCOUNT");
     if (!bank) throw new Error("Bank control account missing from fixture");
-    await s.asUser.mutation(api.chartOfAccounts.update, {
-      orgId: s.orgId, accountId: bank._id, allowManualPosting: true,
-    });
+    // Simulate a persisted setting from before the chart-update guard.
+    await s.t.run((ctx) => ctx.db.patch(bank._id, { allowManualPosting: true }));
 
     await expect(s.asUser.mutation(api.financialAudit.createManualJournal, {
       orgId: s.orgId,
@@ -167,9 +178,7 @@ describe("SCRUM-54 — manual journals cannot create unbanked control lines", ()
     const bank = (await s.asUser.query(api.chartOfAccounts.list, { orgId: s.orgId }))
       .find((account) => account.systemKey === "BANK_ACCOUNT");
     if (!bank) throw new Error("Bank control account missing from fixture");
-    await s.asUser.mutation(api.chartOfAccounts.update, {
-      orgId: s.orgId, accountId: bank._id, allowManualPosting: true,
-    });
+    await s.t.run((ctx) => ctx.db.patch(bank._id, { allowManualPosting: true }));
     const draftId = await s.t.run((ctx) => ctx.db.insert("manualJournalDrafts", {
       orgId: s.orgId,
       status: "PENDING_APPROVAL",
