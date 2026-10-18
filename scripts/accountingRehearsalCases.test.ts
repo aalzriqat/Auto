@@ -22,6 +22,7 @@ import {
   CURRENCY_SCALES,
   DEFAULT_ORG_CURRENCY,
   assertBothAttemptsExecuted,
+  candidateCommandNamesBank,
   candidateNamesReceiptBank,
   createVehicleForRehearsal,
   REQUIRED_REHEARSAL_CASE_IDS,
@@ -653,6 +654,7 @@ function makeBackend(defects: Defects = {}) {
         vehicleId: l.vehicleId,
         financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
+        bankAccountId: l.bankAccountId,
       })),
       { category: "REVERSAL" }
     );
@@ -951,8 +953,8 @@ function makeBackend(defects: Defects = {}) {
   }
 
   /** A customer receipt: cash in, against AR (allocated) or 2110 (on account). */
-  function postReceipt(paymentId: string, customerId: string, amountMinor: number, allocatedMinor: number, cashKey: string) {
-    const lines: Line[] = [{ key: cashKey, debitMinor: amountMinor, customerId }];
+  function postReceipt(paymentId: string, customerId: string, amountMinor: number, allocatedMinor: number, cashKey: string, bankAccountId?: string) {
+    const lines: Line[] = [{ key: cashKey, debitMinor: amountMinor, customerId, bankAccountId }];
     if (allocatedMinor > 0) lines.push({ key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: allocatedMinor, customerId });
     const unapplied = amountMinor - allocatedMinor;
     if (unapplied > 0) {
@@ -1268,6 +1270,9 @@ function makeBackend(defects: Defects = {}) {
         if (!canManageFinance) {
           return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
         }
+        if (defects.bankContract && !args.bankAccountId) {
+          return { ok: false as const, error: "Select the bank account this cheque was deposited into." };
+        }
         const made = replayableCreate("clr", args, true);
         if (made) return made;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("clr"));
@@ -1277,7 +1282,7 @@ function makeBackend(defects: Defects = {}) {
         const paymentId = id("pay");
         collectionPayments.push({ _id: paymentId, direction: "IN", method: "CHEQUE", amount: cheque.amount, chequeId: cheque._id, receivableId: cheque.receivableId });
         settle(cheque.receivableId, cheque.amount);
-        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT");
+        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT", args.bankAccountId);
         cheque.clearingEventId = eventId;
         return { ok: true as const, value: null };
       }
@@ -1980,7 +1985,7 @@ function makeBackend(defects: Defects = {}) {
         if (!defects.financeDirectPaymentPostingSkipped) {
           post("HANDOVER_COST_PAID_DIRECT", "financeDealFees", String(args.feeId), [
             { key: "OWNERSHIP_TRANSFER_EXPENSE", debitMinor: args.expectedAmountMinor },
-            { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor },
+            { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor, bankAccountId: args.bankAccountId },
           ]);
         }
         return { ok: true as const, value: fee._id };
@@ -2305,12 +2310,14 @@ const recordCase = (
       });
     });
 
-async function runAgainst(defects: Defects = {}, source: { declaresBank?: boolean; requireBank?: boolean } = { declaresBank: !!defects.bankContract }) {
+async function runAgainst(defects: Defects = {}, source: { declaresBank?: boolean; directFeeBank?: boolean; chequeBank?: boolean; requireBank?: boolean } = { declaresBank: !!defects.bankContract }) {
   const backend = makeBackend(defects);
   const results: Array<Record<string, unknown>> = [];
   await runRehearsalCases({
     results,
     candidateFinanceReceiptNamesBank: source.declaresBank,
+    candidateDirectFeeNamesBank: Object.hasOwn(source, "directFeeBank") ? source.directFeeBank : source.declaresBank,
+    candidateChequeClearNamesBank: Object.hasOwn(source, "chequeBank") ? source.chequeBank : source.declaresBank,
     requireFinanceReceiptBankContract: source.requireBank,
     orgId: "org_1",
     config: { convexUrl: "https://x.convex.cloud" },
@@ -2620,6 +2627,11 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     // Balances perfectly and destroys the history. ACC-3: a reversal ADDS.
     const results = await runAgainst({ eraseOnChequeReturn: true });
     expect(statusOf(results, "RV1")).toBe("FAIL");
+  });
+
+  test("RV1 withholds proof when the candidate cheque bank contract is unreadable", async () => {
+    const results = await runAgainst({}, { declaresBank: false, chequeBank: undefined });
+    expect(statusOf(results, "RV1")).toBe("UNPROVEN");
   });
 
   test("RV1 catches a cheque that bounces with no accounting effect at all", async () => {
@@ -3102,6 +3114,11 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
       expect(fd1Detail(results).receiptBankAccountId).toMatch(/^bank/);
     });
 
+    test("FD1 withholds proof when the candidate direct-fee bank contract is unreadable", async () => {
+      const results = await runAgainst({}, { declaresBank: false, directFeeBank: undefined });
+      expect(statusOf(results, "FD1")).toBe("UNPROVEN");
+    });
+
     test("legacy economics are still strict: a short receipt accepted on legacy main fails", async () => {
       const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
       expect(statusOf(results, "FD1")).toBe("FAIL");
@@ -3180,6 +3197,11 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
       expect(candidateNamesReceiptBank(sharedArgsThenHelper)).toBeUndefined();
       expect(candidateNamesReceiptBank("export const nothing = 1;")).toBeUndefined();
       expect(candidateNamesReceiptBank(undefined)).toBeUndefined();
+      const directFee = withBank.replace("confirmDisbursement", "recordDirectFeePayment");
+      const chequeClear = withBank.replace("confirmDisbursement", "clearCheque");
+      expect(candidateCommandNamesBank(directFee, "recordDirectFeePayment")).toBe(true);
+      expect(candidateCommandNamesBank(chequeClear, "clearCheque")).toBe(true);
+      expect(candidateCommandNamesBank(directFee, "clearCheque")).toBeUndefined();
     });
   });
 
