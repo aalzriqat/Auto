@@ -232,8 +232,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // because the order is pinned; the index leads with orgId, so the read is a
   // prefix scan, and nothing references these rows.
   { kind: "orgRows", table: "financeCompanyForwardSlices", index: "by_org_forward" },
-  // Preserve this slot so saved currentStepIndex values keep their meaning.
-  // Owner requires delivery history to survive; this step performs no deletion.
+  // Explicit retention marker, not a deletion step: the owner requires task
+  // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
+  // never purged here. Keep it last; never turn it into a delete.
   { kind: "retainTaskAlarmHistory" },
 ];
 
