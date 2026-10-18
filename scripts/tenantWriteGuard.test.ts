@@ -683,12 +683,16 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // unchanged at 356 (re-measured FROM THE ANALYSER). The removed internalMutation had no `orgId` and deleted
   // deployment-global diagnostics; operational records are now never deleted.
   // The two SCRUM-807 changes are independent; with both applied: 529 + 1 = 530 total, 356 + 1 = 357 analysed.
+  // Weekly Workpool adds six internal mutations: sendWeeklyProofReports,
+  // produceWeeklyDeliveries, freezeWeeklyDelivery, beginWeeklySend,
+  // recordWeeklySendOutcome and cancelWeeklyRun. Their args are run/delivery
+  // IDs, not orgId. Measured from the analyzer: +6 total and skippedNoOrgId.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 530,
+      totalMutations: 536,
       analysed: 357,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 158,
+      skippedNoOrgId: 164,
     });
   });
 });

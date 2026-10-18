@@ -16,7 +16,6 @@ import {
   OPERATIONAL_DIAGNOSTIC_TABLES,
   classifyMarkerRead,
   classifyTableRead,
-  componentNames,
   decideZeroState,
   deploymentNameFromUrl,
   diagnosticRowBound,
@@ -30,6 +29,7 @@ import {
   type TableRead,
   type ZeroStateInput,
 } from "./zeroState";
+import { componentPaths } from "./zeroStateComponents";
 
 const NOISE = "(node:123) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.\n(Use `node --trace-warnings ...` to show where the warning was created)\n";
 
@@ -72,9 +72,9 @@ describe("parsing the CLI's real output shapes", () => {
     expect(tables).toContain("organizations");
     expect(tables).toContain("e2ePreviewBootstrap");
     expect(tables).toContain("financeDealFees");
-    const config = fs.readFileSync(path.join(__dirname, "..", "convex", "convex.config.ts"), "utf8");
-    expect(componentNames(config)).toEqual([
-      "rateLimiter", "vehiclesByOrg", "vehicleQualityByOrg", "customersByOrg", "leadsByOrg", "membershipsByOrg",
+    expect(componentPaths(path.join(__dirname, "..", "convex", "convex.config.ts"))).toEqual([
+      "rateLimiter", "weeklyReportWorkpool", "weeklyReportWorkpool/batchWorker",
+      "vehiclesByOrg", "vehicleQualityByOrg", "customersByOrg", "leadsByOrg", "membershipsByOrg",
       "instagramEventsByOrg", "facebookEventsByOrg", "socialContactsByOrg",
     ]);
   });
