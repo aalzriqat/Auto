@@ -4959,6 +4959,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_status_and_dueDate", ["orgId", "status", "dueDate"])
+    .index("by_org_status_isDeleted_dueDate", ["orgId", "status", "isDeleted", "dueDate"])
     .index("by_org_dueDate", ["orgId", "dueDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
@@ -5083,6 +5084,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_status_and_chequeDate", ["orgId", "status", "chequeDate"])
+    .index("by_org_status_isDeleted_chequeDate", ["orgId", "status", "isDeleted", "chequeDate"])
     .index("by_org_chequeDate", ["orgId", "chequeDate"])
     .index("by_org_bank_and_chequeNumber", ["orgId", "bank", "chequeNumber"])
     .index("by_org_customer", ["orgId", "customerId"])
@@ -5185,6 +5187,11 @@ export default defineSchema({
     .index("by_org_status_and_scheduledAt", ["orgId", "status", "scheduledAt"])
     .index("by_receivable", ["receivableId"])
     .index("by_cheque", ["chequeId"])
+    // SCRUM-807: the reminder cooldown asks "is there a PENDING/SENT/SKIPPED row
+    // of this message type for this one document, newer than X" - an exact
+    // range per status, not a read of the document's whole reminder history.
+    .index("by_receivable_and_messageType_and_status_and_createdAt", ["receivableId", "messageType", "status", "createdAt"])
+    .index("by_cheque_and_messageType_and_status_and_createdAt", ["chequeId", "messageType", "status", "createdAt"])
     .index("by_org_customer", ["orgId", "customerId"]),
 
   companyDocumentRules: defineTable({
