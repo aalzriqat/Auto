@@ -1620,13 +1620,14 @@ export const upsertLandedCosts = mutation({
       amount: v.number(),
       /** How this specific item was paid — drives which account it capitalizes against and which account a later reduction/removal reverses against. Required for a non-zero item on a non-SOURCED vehicle. */
       paymentMethod: v.optional(paymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+    const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId, "Vehicle not found in this organization.");
+    if (vehicle.isDeleted) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
     if (vehicle.status === "SOLD") {
@@ -1642,8 +1643,11 @@ export const upsertLandedCosts = mutation({
     }
 
     const items = args.items
-      .map((item) => ({ label: item.label.trim(), amount: item.amount, paymentMethod: item.paymentMethod }))
+      .map((item) => ({ label: item.label.trim(), amount: item.amount, paymentMethod: item.paymentMethod, bankAccountId: item.bankAccountId }))
       .filter((item) => item.label.length > 0);
+    if (vehicle.sourceType === "SOURCED" && items.some((item) => item.bankAccountId)) {
+      throw new ConvexError("A physical bank account cannot be assigned to informational sourced-vehicle costs.");
+    }
     // Sourced/drop-ship vehicles never sit in physical inventory — their cost
     // basis is sourceCost only, so landed costs entered against one (kept for
     // informational tracking) never capitalize into the GL, and there's no
@@ -1662,6 +1666,32 @@ export const upsertLandedCosts = mutation({
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
       .unique();
     const previousItems = existing?.items ?? [];
+
+    if (vehicle.sourceType !== "SOURCED") {
+      // An old dimensionless bank cost cannot be reversed or reallocated to a
+      // physical bank truthfully. Hold the whole edit for reviewed correction.
+      if (previousItems.some((item) => item.amount !== 0 &&
+        (item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE") &&
+        !item.bankAccountId)) {
+        throw new ConvexError("Existing bank-funded landed costs lack a physical bank identity. Have finance review them before editing.");
+      }
+      const currency = await getOrgCurrency(ctx, args.orgId);
+      const checkedBanks = new Set<Id<"bankAccounts">>();
+      for (const item of items) {
+        const bankMethod = item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE";
+        if (bankMethod && (item.amount !== 0 || item.bankAccountId)) {
+          if (item.bankAccountId && checkedBanks.has(item.bankAccountId)) continue;
+          const bankId = await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId, bankAccountId: item.bankAccountId, currency,
+            missingMessage: `Choose a bank account for landed cost item "${item.label}".`,
+            currencySubject: "landed cost",
+          });
+          checkedBanks.add(bankId);
+        } else if (item.bankAccountId) {
+          throw new ConvexError(`A bank account is only valid for a bank-funded landed cost item "${item.label}".`);
+        }
+      }
+    }
 
     if (existing) {
       await ctx.db.patch(existing._id, { items, total, updatedAt: now, updatedBy: user._id });
@@ -1689,21 +1719,24 @@ export const upsertLandedCosts = mutation({
       // (or removing one paid from a different account than the others) posts
       // against the accounts actually affected, even when the net total is
       // unchanged.
-      const sumsByMethod = (list: ReadonlyArray<{ amount: number; paymentMethod?: PaymentMethod }>) => {
-        const sums = new Map<string, number>();
+      const sumsByMethodAndBank = (list: ReadonlyArray<{ amount: number; paymentMethod?: PaymentMethod; bankAccountId?: Id<"bankAccounts"> }>) => {
+        const sums = new Map<string, { paymentMethod: PaymentMethod; bankAccountId?: Id<"bankAccounts">; amount: number }>();
         for (const item of list) {
-          const key = item.paymentMethod ?? normalizePaymentMethod(undefined);
-          sums.set(key, (sums.get(key) ?? 0) + item.amount);
+          const paymentMethod = item.paymentMethod ?? normalizePaymentMethod(undefined);
+          const key = JSON.stringify([paymentMethod, item.bankAccountId ?? null]);
+          const prior = sums.get(key);
+          sums.set(key, { paymentMethod, bankAccountId: item.bankAccountId, amount: (prior?.amount ?? 0) + item.amount });
         }
         return sums;
       };
-      const oldSums = sumsByMethod(previousItems);
-      const newSums = sumsByMethod(items);
-      const allMethods = new Set([...oldSums.keys(), ...newSums.keys()]);
-      const accountDeltas = Array.from(allMethods)
-        .map((paymentMethod) => ({
-          paymentMethod,
-          deltaMinor: toMinorUnits((newSums.get(paymentMethod) ?? 0) - (oldSums.get(paymentMethod) ?? 0), currency),
+      const oldSums = sumsByMethodAndBank(previousItems);
+      const newSums = sumsByMethodAndBank(items);
+      const allAccounts = new Set([...oldSums.keys(), ...newSums.keys()]);
+      const accountDeltas = Array.from(allAccounts)
+        .map((key) => ({
+          paymentMethod: (newSums.get(key) ?? oldSums.get(key))!.paymentMethod,
+          bankAccountId: (newSums.get(key) ?? oldSums.get(key))!.bankAccountId,
+          deltaMinor: toMinorUnits((newSums.get(key)?.amount ?? 0) - (oldSums.get(key)?.amount ?? 0), currency),
         }))
         .filter((d) => d.deltaMinor !== 0);
 

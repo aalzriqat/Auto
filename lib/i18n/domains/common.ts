@@ -1398,6 +1398,7 @@ export const commonEn = {
   CashDrawerClosed: "Cash drawer closed for approval.",
   ApproveCashDrawer: "Approve Cash Drawer",
   DirectPaymentBankLabel: "Bank account paid from",
+  LandedCostLegacyBankReview: "An earlier bank-funded landed cost has no recorded physical bank. Finance must review its original payment before these costs can be changed.",
   DirectPaymentBankChoose: "Select the bank account this was paid from",
   DirectPaymentBankRequired: "Select the bank account this payment was made from.",
   DirectPaymentNoBank:
@@ -2433,6 +2434,7 @@ export const commonAr = {
   CashDrawerClosed: "تم إغلاق صندوق النقد للموافقة.",
   ApproveCashDrawer: "اعتماد صندوق النقد",
   DirectPaymentBankLabel: "الحساب المصرفي المدفوع منه",
+  LandedCostLegacyBankReview: "توجد تكلفة إضافية سابقة دُفعت عبر البنك دون تسجيل الحساب المصرفي الفعلي. يجب أن تراجع المالية الدفعة الأصلية قبل تعديل هذه التكاليف.",
   DirectPaymentBankChoose: "اختر الحساب المصرفي الذي دُفع منه",
   DirectPaymentBankRequired: "اختر الحساب المصرفي الذي تم الدفع منه.",
   DirectPaymentNoBank:

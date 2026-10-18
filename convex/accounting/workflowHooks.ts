@@ -1587,7 +1587,7 @@ export async function hookVehicleLandedCostCapitalized(
     vehicleId: Id<"vehicles">;
     editToken: string;
     /** Per-account signed deltas — see VehicleLandedCostCapitalizedPayload. */
-    accountDeltas: Array<{ paymentMethod?: string; deltaMinor: number }>;
+    accountDeltas: Array<{ paymentMethod?: string; bankAccountId?: Id<"bankAccounts">; deltaMinor: number }>;
     currency: string;
     actorId: Id<"users">;
     occurredAt: number;

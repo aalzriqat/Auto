@@ -2474,13 +2474,14 @@ export interface VehicleLandedCostCapitalizedPayload {
   /**
    * Signed change per settlement account since the landed-cost record was
    * last saved (upsertLandedCosts replaces the whole items list on every
-   * save, so the caller diffs old-vs-new items grouped by paymentMethod
+   * save, so the caller diffs old-vs-new items grouped by paymentMethod and
+   * physical bank identity
    * rather than passing one aggregate delta) — a positive entry capitalizes
    * more cost into inventory paid from that account, a negative entry
    * reverses a previously capitalized amount from that SAME account (not
    * whatever account happens to be selected on this call).
    */
-  accountDeltas: Array<{ paymentMethod?: string; deltaMinor: number }>;
+  accountDeltas: Array<{ paymentMethod?: string; bankAccountId?: string; deltaMinor: number }>;
 }
 
 /**
@@ -2493,15 +2494,22 @@ export interface VehicleLandedCostCapitalizedPayload {
 export function ruleVehicleLandedCostCapitalized(p: VehicleLandedCostCapitalizedPayload): RuleResult {
   const lines: LineSpec[] = [];
   let netDeltaMinor = 0;
-  for (const { paymentMethod, deltaMinor } of p.accountDeltas) {
+  for (const { paymentMethod, bankAccountId, deltaMinor } of p.accountDeltas) {
     if (deltaMinor === 0) continue;
     // Outbound payment — see ruleVehicleAcquired for why CHEQUE routes to the bank.
     const cashKey = paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(paymentMethod);
+    if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !bankAccountId) {
+      throw new Error("VEHICLE_LANDED_COST_BANK_REQUIRED");
+    }
+    if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && bankAccountId) {
+      throw new Error("VEHICLE_LANDED_COST_BANK_UNEXPECTED");
+    }
     const amountMinor = Math.abs(deltaMinor);
+    const dims = { vehicleId: p.vehicleId, ...(bankAccountId ? { bankAccountId } : {}) };
     lines.push(
       deltaMinor > 0
-        ? line(cashKey, 0, amountMinor, "Landed cost paid", { vehicleId: p.vehicleId })
-        : line(cashKey, amountMinor, 0, "Landed cost reversed", { vehicleId: p.vehicleId })
+        ? line(cashKey, 0, amountMinor, "Landed cost paid", dims)
+        : line(cashKey, amountMinor, 0, "Landed cost reversed", dims)
     );
     netDeltaMinor += deltaMinor;
   }

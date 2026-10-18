@@ -118,9 +118,10 @@ async function snapshot(t: Dealer["t"], orgId: Id<"organizations">, vehicleId: I
 }
 
 async function createCashVehicle(d: Dealer, price = 12500, method: "CASH" | "BANK_TRANSFER" = "CASH") {
+  const bankAccountId = method === "BANK_TRANSFER" ? await seedBank(d.t, d.orgId) : undefined;
   return d.asOwner.mutation(api.vehicles.create, {
     idempotencyKey: crypto.randomUUID(),
-    orgId: d.orgId, ...baseVehicle, purchasePrice: price, purchasePaymentMethod: method,
+    orgId: d.orgId, ...baseVehicle, purchasePrice: price, purchasePaymentMethod: method, bankAccountId,
   });
 }
 

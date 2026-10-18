@@ -1276,6 +1276,7 @@ export default defineSchema({
       // written before this field existed have none, treated as CASH (the
       // old normalizePaymentMethod default) wherever it's read.
       paymentMethod: v.optional(paymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     total: v.number(),
     updatedAt: v.number(),
