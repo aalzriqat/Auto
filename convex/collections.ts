@@ -1469,10 +1469,11 @@ export const createInstallmentPlan = mutation({
  * currency, id/name/currency only. Same permission as `recordPayment`.
  */
 export const listReceiptBankOptions = query({
-  args: { orgId: v.id("organizations") },
+  args: { orgId: v.id("organizations"), currency: v.optional(v.string()) },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+    return await listEligibleBanks(ctx, args.orgId,
+      args.currency?.trim().toUpperCase() || await getOrgCurrency(ctx, args.orgId));
   },
 });
 
