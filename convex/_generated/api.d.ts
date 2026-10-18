@@ -56,6 +56,7 @@ import type * as crons from "../crons.js";
 import type * as customerFinanceCompanyPayments from "../customerFinanceCompanyPayments.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
+import type * as dashboardExpenseSummary from "../dashboardExpenseSummary.js";
 import type * as dealOverview from "../dealOverview.js";
 import type * as dealUnwind from "../dealUnwind.js";
 import type * as dealWorkspace from "../dealWorkspace.js";
@@ -174,6 +175,7 @@ import type * as utils_custodySourceLedger from "../utils/custodySourceLedger.js
 import type * as utils_customerCreditPayoutContainment from "../utils/customerCreditPayoutContainment.js";
 import type * as utils_customerFinanceCompanyPayments from "../utils/customerFinanceCompanyPayments.js";
 import type * as utils_customerInvoiceObligation from "../utils/customerInvoiceObligation.js";
+import type * as utils_dashboardExpenseSummary from "../utils/dashboardExpenseSummary.js";
 import type * as utils_dealCostLimits from "../utils/dealCostLimits.js";
 import type * as utils_dealCustodyPosting from "../utils/dealCustodyPosting.js";
 import type * as utils_dealFinancialSummary from "../utils/dealFinancialSummary.js";
@@ -337,6 +339,7 @@ declare const fullApi: ApiFromModules<{
   customerFinanceCompanyPayments: typeof customerFinanceCompanyPayments;
   customers: typeof customers;
   dashboard: typeof dashboard;
+  dashboardExpenseSummary: typeof dashboardExpenseSummary;
   dealOverview: typeof dealOverview;
   dealUnwind: typeof dealUnwind;
   dealWorkspace: typeof dealWorkspace;
@@ -455,6 +458,7 @@ declare const fullApi: ApiFromModules<{
   "utils/customerCreditPayoutContainment": typeof utils_customerCreditPayoutContainment;
   "utils/customerFinanceCompanyPayments": typeof utils_customerFinanceCompanyPayments;
   "utils/customerInvoiceObligation": typeof utils_customerInvoiceObligation;
+  "utils/dashboardExpenseSummary": typeof utils_dashboardExpenseSummary;
   "utils/dealCostLimits": typeof utils_dealCostLimits;
   "utils/dealCustodyPosting": typeof utils_dealCustodyPosting;
   "utils/dealFinancialSummary": typeof utils_dealFinancialSummary;

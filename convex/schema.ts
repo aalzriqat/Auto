@@ -2395,6 +2395,32 @@ export default defineSchema({
     // `by_org_date` would never reach them.
     .index("by_org_reversedAt", ["orgId", "reversedAt"]),
 
+  // SCRUM-807: dashboard expense figures per (org, generation, UTC month). Each
+  // array holds one integer per UTC day 1..31, in thousandths of the org
+  // currency (showroomCount is a row count). Maintained by the expenses trigger;
+  // see convex/utils/dashboardExpenseSummary.ts. Rows are never deleted.
+  dashboardExpenseMonths: defineTable({
+    orgId: v.id("organizations"),
+    generation: v.number(),
+    month: v.number(),
+    cashOut: v.array(v.number()),
+    showroom: v.array(v.number()),
+    general: v.array(v.number()),
+    showroomCount: v.array(v.number()),
+    unrepresentable: v.number(),
+    absTotal: v.number(),
+    overflowed: v.boolean(),
+  }).index("by_org_generation_month", ["orgId", "generation", "month"]),
+
+  // SCRUM-807: one row per summary generation. The newest generation controls
+  // reads; only READY is ever read. Older generations are kept, not maintained.
+  dashboardExpenseSummaryState: defineTable({
+    orgId: v.id("organizations"),
+    generation: v.number(),
+    phase: v.union(v.literal("BUILDING"), v.literal("READY"), v.literal("BLOCKED")),
+    countedThrough: v.optional(v.number()),
+  }).index("by_org_generation", ["orgId", "generation"]),
+
   tasks: defineTable({
     orgId: v.id("organizations"),
     assignedTo: v.id("users"), // The salesperson or employee responsible
