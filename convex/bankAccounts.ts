@@ -367,9 +367,11 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
     let identifiedCount = 0;
     let identifiedNetMinor = 0;
     let targetNetMinor = 0;
-    for (const bank of accounts) {
-      if (bank.currency !== currency) continue;
-      const identified = await readAttributionRange(ctx, namespace, bankChartAccountId, currency, bank._id, { through: asOf });
+    const sameCurrency = accounts.filter((bank) => bank.currency === currency);
+    const attributions = await Promise.all(sameCurrency.map((bank) =>
+      readAttributionRange(ctx, namespace, bankChartAccountId, currency, bank._id, { through: asOf })));
+    for (const [index, bank] of sameCurrency.entries()) {
+      const identified = attributions[index];
       identifiedCount += identified.count;
       identifiedNetMinor += identified.netMinor;
       if (bank._id === target._id) targetNetMinor = identified.netMinor;

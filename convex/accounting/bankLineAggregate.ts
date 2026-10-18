@@ -124,10 +124,10 @@ export async function readControlRange(
     lower: { key: [accountId, currency, range.fromInclusive ?? Number.MIN_SAFE_INTEGER] as ControlKey, inclusive: true },
     upper: { key: [accountId, currency, range.through] as ControlKey, inclusive: true },
   };
-  return sumBuckets(await Promise.all(allBuckets(namespace).map((bucket) => Promise.all([
-    control.count(ctx, { namespace: bucket, bounds }),
-    control.sum(ctx, { namespace: bucket, bounds }),
-  ]))), "control");
+  // One component call per measure covers every bucket.
+  const queries = allBuckets(namespace).map((bucket) => ({ namespace: bucket, bounds }));
+  const [counts, sums] = await Promise.all([control.countBatch(ctx, queries), control.sumBatch(ctx, queries)]);
+  return sumBuckets(counts, sums, "control");
 }
 
 export async function readAttributionRange(
@@ -142,19 +142,21 @@ export async function readAttributionRange(
     lower: { key: [accountId, currency, bankAccountId, range.fromInclusive ?? Number.MIN_SAFE_INTEGER] as AttributionKey, inclusive: true },
     upper: { key: [accountId, currency, bankAccountId, range.through] as AttributionKey, inclusive: true },
   };
-  return sumBuckets(await Promise.all(allBuckets(namespace).map((bucket) => Promise.all([
-    attribution.count(ctx, { namespace: bucket, bounds }),
-    attribution.sum(ctx, { namespace: bucket, bounds }),
-  ]))), "attribution");
+  const queries = allBuckets(namespace).map((bucket) => ({ namespace: bucket, bounds }));
+  const [counts, sums] = await Promise.all([attribution.countBatch(ctx, queries), attribution.sumBatch(ctx, queries)]);
+  return sumBuckets(counts, sums, "attribution");
 }
 
-function sumBuckets(parts: Array<[number, number]>, tree: string): { count: number; netMinor: number } {
+function sumBuckets(counts: number[], sums: number[], tree: string): { count: number; netMinor: number } {
+  if (counts.length !== BANK_AGGREGATE_BUCKETS || sums.length !== BANK_AGGREGATE_BUCKETS) {
+    throw new Error(`Bank aggregate ${tree} read did not cover every bucket.`);
+  }
   let count = 0;
   let netMinor = 0;
-  for (const [bucketCount, bucketSum] of parts) {
-    if (!Number.isSafeInteger(bucketSum)) throw new Error(`Bank aggregate ${tree} sum lost integer precision.`);
-    count += bucketCount;
-    netMinor += bucketSum;
+  for (let bucket = 0; bucket < BANK_AGGREGATE_BUCKETS; bucket++) {
+    if (!Number.isSafeInteger(sums[bucket])) throw new Error(`Bank aggregate ${tree} sum lost integer precision.`);
+    count += counts[bucket];
+    netMinor += sums[bucket];
   }
   if (!Number.isSafeInteger(netMinor)) throw new Error(`Bank aggregate ${tree} sum lost integer precision.`);
   return { count, netMinor };
