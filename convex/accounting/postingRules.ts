@@ -263,6 +263,7 @@ export interface DepositReceivedPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
   customerId: string;
 }
 
@@ -746,9 +747,16 @@ export interface ChequeReturnedPayload {
 
 export function ruleDepositReceived(p: DepositReceivedPayload): RuleResult {
   const cashKey = cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Deposit receipt has no physical bank identity; refusing the journal.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Non-bank deposit receipt names a physical bank; refusing the journal.");
+  }
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, "Deposit received", { customerId: p.customerId }),
+      line(cashKey, p.amountMinor, 0, "Deposit received", { customerId: p.customerId,
+        ...(cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}) }),
       line(SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, 0, p.amountMinor, "Customer deposit liability", { customerId: p.customerId }),
     ],
     memo: "Deposit received",

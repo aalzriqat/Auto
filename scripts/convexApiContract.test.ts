@@ -40,7 +40,9 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // and landed-cost picker. The function exists on the backend and is now checked.
 // 197 -> 198: `deposits:listRefundBankOptions`, the physical-bank picker for
 // mobile deposit refunds. The backend query is included in this contract check.
-const EXPECTED_REFERENCE_COUNT = 198;
+// 198 -> 199: `deposits:listReceiptBankOptions`, the physical-bank picker for
+// mobile deposit receipts. The backend query is included in this contract check.
+const EXPECTED_REFERENCE_COUNT = 199;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {

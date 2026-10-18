@@ -1497,6 +1497,7 @@ type ReservationCreateArgs = VehicleScopedArgs & {
   customerId: string;
   depositAmount?: number;
   depositMethod?: MobileDepositMethod;
+  depositBankAccountId?: string;
   expiresAt?: number;
   /**
    * REQUIRED, matching the backend contract (SCRUM-313). This façade is a
@@ -2681,6 +2682,7 @@ export const api = {
         amount: number;
         /** Required by the backend (SCRUM-444): the method picks the account debited. */
         method?: MobileDepositMethod;
+        bankAccountId?: string;
         notes?: string;
         idempotencyKey?: string;
       },
@@ -2692,6 +2694,7 @@ export const api = {
       MobileVehicleDeposit[]
     >("deposits:listByVehicle"),
     listRefundBankOptions: makeFunctionReference<"query", OrgScopedArgs & { currency?: string }, MobileAcquisitionBankOptions>("deposits:listRefundBankOptions"),
+    listReceiptBankOptions: makeFunctionReference<"query", OrgScopedArgs & { currency?: string }, MobileAcquisitionBankOptions>("deposits:listReceiptBankOptions"),
     release: makeFunctionReference<"mutation", DepositReleaseArgs, unknown>("deposits:release"),
   },
   depositRequests: {
@@ -3359,6 +3362,7 @@ export const api = {
         quoteId: string;
         amount: number;
         method?: MobileDepositMethod;
+        bankAccountId?: string;
         notes?: string;
         idempotencyKey?: string;
       },
@@ -3366,6 +3370,7 @@ export const api = {
     >;
     listByVehicle: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicleDeposit[]>;
     listRefundBankOptions: FunctionReference<"query", "public", OrgScopedArgs & { currency?: string }, MobileAcquisitionBankOptions>;
+    listReceiptBankOptions: FunctionReference<"query", "public", OrgScopedArgs & { currency?: string }, MobileAcquisitionBankOptions>;
     release: FunctionReference<"mutation", "public", DepositReleaseArgs, unknown>;
   };
   depositRequests: {

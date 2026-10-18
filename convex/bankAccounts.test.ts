@@ -9,7 +9,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { BOOK_BALANCE_READ_BUDGET, computeBookBalance } from "./bankAccounts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
@@ -218,6 +218,8 @@ describe("bankAccounts.getBookBalance", () => {
       reversalOfEntryId?: Id<"journalEntries">;
       /** Posting paths update the period snapshot; DRAFT/VALIDATED entries do not. */
       snapshot?: boolean;
+      /** Seed malformed pre-trigger history without passing through live-write validation. */
+      rawHistorical?: boolean;
     }
   ) {
     const debitMinor = opts.debitMinor ?? 0;
@@ -228,7 +230,7 @@ describe("bankAccounts.getBookBalance", () => {
     const period = opts.period === "prior" ? await priorPeriod(fx) : current;
     const accountingDate = opts.accountingDate ?? (opts.period === "prior" ? period.startDate + 86_400_000 : Date.now());
     const tag = `${++seedSeq}`;
-    return await fx.t.run(async (ctx) => {
+    return await (opts.rawHistorical ? fx.t.runUnwrapped : fx.t.run)(async (ctx) => {
       const journalEntryId = await ctx.db.insert("journalEntries", {
         orgId: fx.orgId, periodId: period._id, journalNumber: `T-${tag}`, accountingDate,
         sourceType: "test", sourceId: `test-${tag}`,
@@ -274,7 +276,7 @@ describe("bankAccounts.getBookBalance", () => {
     });
   });
 
-  test("bank table shows each physical bank's own GL amount and withholds both when attribution is incomplete", async () => {
+  test("bank table shows each physical bank's own GL amount and rejects new unbanked activity", async () => {
     const fx = await seedDealer();
     const bankA = await createBank(fx, "Bank A", true);
     const bankB = await createBank(fx, "Bank B", false);
@@ -287,11 +289,26 @@ describe("bankAccounts.getBookBalance", () => {
       expect.objectContaining({ bankAccountId: bankB, status: "OK", balanceMinor: 300_000 }),
     ]));
 
-    await seedBankLine(fx, { debitMinor: 50_000 });
-    const incomplete = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
-    expect(incomplete).toEqual(expect.arrayContaining([
-      expect.objectContaining({ bankAccountId: bankA, status: "UNATTRIBUTED_GL_ACTIVITY", balanceMinor: null }),
-      expect.objectContaining({ bankAccountId: bankB, status: "UNATTRIBUTED_GL_ACTIVITY", balanceMinor: null }),
+    await expect(seedBankLine(fx, { debitMinor: 50_000 })).rejects.toThrow("Accounting data could not be verified");
+    const stillVerified = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
+    expect(stillVerified).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bankAccountId: bankA, status: "OK", balanceMinor: 700_000 }),
+      expect.objectContaining({ bankAccountId: bankB, status: "OK", balanceMinor: 300_000 }),
+    ]));
+  });
+
+  test("legacy unbanked activity withholds every bank of its currency after backfill", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const bankB = await createBank(fx, "Bank B", false);
+    await seedBankLine(fx, { debitMinor: 50_000, rawHistorical: true });
+    await seedBankLine(fx, { debitMinor: 700_000, bankAccountId: bankA });
+    await seedBankLine(fx, { debitMinor: 300_000, bankAccountId: bankB });
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
+    const balances = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
+    expect(balances).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bankAccountId: bankA, status: "UNATTRIBUTED_GL_ACTIVITY", balanceMinor: null, unmatchedMinor: 50_000 }),
+      expect.objectContaining({ bankAccountId: bankB, status: "UNATTRIBUTED_GL_ACTIVITY", balanceMinor: null, unmatchedMinor: 50_000 }),
     ]));
   });
 
@@ -320,9 +337,10 @@ describe("bankAccounts.getBookBalance", () => {
     const fx = await seedDealer();
     const jodBank = await createBank(fx, "JOD Bank", true);
     const usdBank = await createBank(fx, "USD Bank", false, "USD");
+    await seedBankLine(fx, { debitMinor: 5_000, currency: "USD", rawHistorical: true });
     await seedBankLine(fx, { debitMinor: 700_000, bankAccountId: jodBank });
     await seedBankLine(fx, { debitMinor: 30_000, bankAccountId: usdBank, currency: "USD" });
-    await seedBankLine(fx, { debitMinor: 5_000, currency: "USD" });
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
 
     const balances = await fx.asOwner.query(api.bankAccounts.listBookBalances, { orgId: fx.orgId });
     expect(balances).toEqual(expect.arrayContaining([
@@ -360,8 +378,9 @@ describe("bankAccounts.getBookBalance", () => {
     const fx = await seedDealer();
     const bankA = await createBank(fx, "Bank A", true);
     await createBank(fx, "Bank B", false);
+    await seedBankLine(fx, { debitMinor: 70_000, rawHistorical: true }); // legacy line, identity absent
     await seedBankLine(fx, { debitMinor: 200_000, bankAccountId: bankA });
-    await seedBankLine(fx, { debitMinor: 70_000 }); // legacy line, identity absent
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
 
     const balance = await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId });
     expect(balance).toMatchObject({
@@ -370,12 +389,25 @@ describe("bankAccounts.getBookBalance", () => {
     });
   });
 
+  test("new posted bank-control lines require a physical bank in the same tenant and currency", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const usdBank = await createBank(fx, "USD Bank", false, "USD");
+    await expect(seedBankLine(fx, { debitMinor: 1_000 })).rejects.toThrow("Accounting data could not be verified");
+    await expect(seedBankLine(fx, { debitMinor: 1_000, bankAccountId: usdBank })).rejects.toThrow("Accounting data could not be verified");
+    await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankA });
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "OK", balanceMinor: 1_000, unmatchedMinor: 0,
+    });
+  });
+
   test("equal-and-opposite legacy lines with no bank identity do not net to a false OK", async () => {
     const fx = await seedDealer();
     const bankA = await createBank(fx, "Bank A", true);
+    await seedBankLine(fx, { debitMinor: 100, rawHistorical: true });
+    await seedBankLine(fx, { creditMinor: 100, rawHistorical: true });
     await seedBankLine(fx, { debitMinor: 200_000, bankAccountId: bankA });
-    await seedBankLine(fx, { debitMinor: 100 });
-    await seedBankLine(fx, { creditMinor: 100 });
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
 
     const balance = await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId });
     expect(balance).toMatchObject({
@@ -393,13 +425,14 @@ describe("bankAccounts.getBookBalance", () => {
         isActive: true, isReconciliationTarget: false, createdBy: fx.userId, createdAt: Date.now(), updatedAt: Date.now(),
       });
     });
+    await seedBankLine(fx, { debitMinor: 50, bankAccountId: foreignBank, rawHistorical: true });
+    await seedBankLine(fx, { creditMinor: 50, bankAccountId: foreignBank, rawHistorical: true });
     await seedBankLine(fx, { debitMinor: 200_000, bankAccountId: bankA });
-    await seedBankLine(fx, { debitMinor: 50, bankAccountId: foreignBank });
-    await seedBankLine(fx, { creditMinor: 50, bankAccountId: foreignBank });
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "INCONSISTENT_HISTORY" });
 
     const balance = await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId });
     expect(balance).toMatchObject({
-      status: "UNATTRIBUTED_GL_ACTIVITY", balanceMinor: null, unmatchedMinor: 0, unattributedLineCount: 2,
+      status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null, unmatchedMinor: null, unattributedLineCount: null,
     });
   });
 
@@ -482,8 +515,9 @@ describe("bankAccounts.getBookBalance", () => {
   test("an unstamped reversal of a stamped original is not accepted", async () => {
     const fx = await seedDealer();
     const bankA = await createBank(fx, "Bank A", true);
-    const original = await seedBankLine(fx, { debitMinor: 300_000, bankAccountId: bankA, status: "REVERSED" });
-    await seedBankLine(fx, { creditMinor: 300_000, reversalOfEntryId: original }); // no bank identity
+    const original = await seedBankLine(fx, { debitMinor: 300_000, bankAccountId: bankA, status: "REVERSED", rawHistorical: true });
+    await seedBankLine(fx, { creditMinor: 300_000, reversalOfEntryId: original, rawHistorical: true }); // legacy no bank identity
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
 
     const balance = await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId });
     expect(balance).toMatchObject({
@@ -495,12 +529,13 @@ describe("bankAccounts.getBookBalance", () => {
     const fx = await seedDealer();
     const bankA = await createBank(fx, "Bank A", true);
     const usdBank = await createBank(fx, "USD Bank", false, "USD");
+    await seedBankLine(fx, { debitMinor: 50_000, bankAccountId: usdBank, rawHistorical: true }); // legacy JOD line, USD bank
     await seedBankLine(fx, { debitMinor: 200_000, bankAccountId: bankA });
-    await seedBankLine(fx, { debitMinor: 50_000, bankAccountId: usdBank }); // JOD line, USD bank
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "INCONSISTENT_HISTORY" });
 
     const balance = await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId });
     expect(balance).toMatchObject({
-      status: "UNATTRIBUTED_GL_ACTIVITY", balanceMinor: null, unmatchedMinor: 50_000, unattributedLineCount: 1,
+      status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null, unmatchedMinor: null, unattributedLineCount: null,
     });
   });
 
@@ -518,8 +553,9 @@ describe("bankAccounts.getBookBalance", () => {
   test("activity in another currency does not enter the target's balance", async () => {
     const fx = await seedDealer();
     const bankA = await createBank(fx, "Bank A", true);
+    await seedBankLine(fx, { debitMinor: 80_000, currency: "USD", rawHistorical: true }); // legacy other currency
     await seedBankLine(fx, { debitMinor: 200_000, bankAccountId: bankA });
-    await seedBankLine(fx, { debitMinor: 80_000, currency: "USD" }); // unstamped, other currency
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
 
     const balance = await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId });
     expect(balance).toMatchObject({ status: "OK", balanceMinor: 200_000, unattributedLineCount: 0 });
@@ -575,37 +611,53 @@ describe("bankAccounts.getBookBalance", () => {
     });
   });
 
-  test("the budget is shared: entry lookups count even when the lines alone fit", async () => {
+  test("a posted bank balance stays readable as the containing period grows", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    const asOf = Date.now();
+    for (let i = 0; i < 35; i++) {
+      await seedBankLine(fx, {
+        debitMinor: 1_000,
+        bankAccountId: bankA,
+        accountingDate: asOf - 1_000 - i,
+        snapshot: false,
+      });
+    }
+    // A later entry prevents the containing period's snapshot fast path.
+    await seedBankLine(fx, {
+      debitMinor: 5_000,
+      bankAccountId: bankA,
+      accountingDate: asOf + 600_000,
+      snapshot: false,
+    });
+
+    expect(await asOfBalance(fx, asOf, 60)).toMatchObject({
+      status: "OK", balanceMinor: 35_000, unmatchedMinor: 0, unattributedLineCount: 0,
+    });
+  });
+
+  test("a large posted period stays readable without per-entry lookups", async () => {
     const fx = await seedDealer();
     const bankA = await createBank(fx, "Bank A", true);
     for (let i = 0; i < 40; i++) await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankA });
 
-    // asOf is after every entry and none is later-dated, so the period is served from its
-    // snapshot: no entry was read by the control, none is cached, and each of the 40 lines
-    // needs its own charged entry lookup. Everything else costs at most 54 documents (40
-    // lines plus banks, chart row, periods, the probe and at most 8 snapshot shards), so
-    // only the lookups can push the total past 60.
-    expect(await asOfBalance(fx, Date.now(), 60)).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
-    expect(await asOfBalance(fx, Date.now(), 200)).toMatchObject({ status: "OK", balanceMinor: 40_000 });
+    expect(await asOfBalance(fx, Date.now(), 3)).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
+    expect(await asOfBalance(fx, Date.now(), 60)).toMatchObject({ status: "OK", balanceMinor: 40_000 });
   });
 
-  test("a partial period reads each entry once: the control's entry reads are not charged again by attribution", async () => {
+  test("a partial period uses dated control and attribution aggregates", async () => {
     const fx = await seedDealer();
     const bankA = await createBank(fx, "Bank A", true);
     const now = Date.now();
     const entries = 10;
-    // No snapshots (so no random shard count) and one later-dated entry, which forces the
-    // control to be measured from the period's entries rather than its snapshot.
+    // One later-dated entry forces the dated containing-period control read.
     for (let i = 0; i < entries; i++) {
       await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankA, accountingDate: now - 1_000 - i, snapshot: false });
     }
     await seedBankLine(fx, { debitMinor: 5_000, bankAccountId: bankA, accountingDate: now + 600_000, snapshot: false });
 
-    // Fixed cost: bank, chart row, period, future-entry probe = 4. Then per counted entry:
-    // the entry (control), its 2 lines (control) and its bank line (attribution) = 4, so
-    // 4 + 4 * 10 = 44. Re-charging each entry for its status would need 4 + 5 * 10 = 54.
-    expect(await asOfBalance(fx, now, 4 * entries)).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
-    expect(await asOfBalance(fx, now, 4 + 4 * entries + entries / 2)).toMatchObject({ status: "OK", balanceMinor: 10_000 });
+    expect(await asOfBalance(fx, now, 3)).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
+    expect(await asOfBalance(fx, now, 40)).toMatchObject({ status: "OK", balanceMinor: 10_000 });
   });
 
   test("duplicate control-account chart mappings spend the budget and keep the earliest active mapping", async () => {
@@ -639,15 +691,42 @@ describe("bankAccounts.getBookBalance", () => {
       orgId: fx.orgId, systemKey: "BANK_ACCOUNT", decision: "ADOPT",
     });
     expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null,
+    });
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
       status: "OK", bankAccountId: bankId, balanceMinor: 125_000, unattributedLineCount: 0,
+    });
+  });
+
+  test("legacy adoption backfills in bounded pages and counts each line once", async () => {
+    const fx = await seedDealer();
+    const bankId = await createBank(fx, "Operating", true);
+    const { bank } = await refs(fx);
+    await fx.t.run((ctx) => ctx.db.patch(bank._id, { systemKey: undefined }));
+    for (let i = 0; i < 35; i++) await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankId });
+
+    await fx.asOwner.mutation(api.chartOfAccounts.confirmSystemAccountAdoption, {
+      orgId: fx.orgId, systemKey: "BANK_ACCOUNT", decision: "ADOPT",
+    });
+    for (let page = 0; page < 2; page++) {
+      expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "MORE" });
+      expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+        status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null,
+      });
+    }
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "OK", balanceMinor: 35_000, unmatchedMinor: 0, unattributedLineCount: 0,
     });
   });
 
   test("an unbounded chart lookup cannot hide from the budget: three mappings exhaust a budget one mapping fits", async () => {
     const fx = await seedDealer();
     await createBank(fx, "Bank A", true);
-    // No history: one bank + one chart row + one period + the future-entry probe = 4 documents.
-    expect(await asOfBalance(fx, Date.now(), 4)).toMatchObject({ status: "OK", balanceMinor: 0 });
+    expect(await asOfBalance(fx, Date.now(), 4)).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
+    expect(await asOfBalance(fx, Date.now(), 20)).toMatchObject({ status: "OK", balanceMinor: 0 });
 
     const { bank } = await refs(fx);
     await fx.t.run(async (ctx) => {
@@ -657,19 +736,18 @@ describe("bankAccounts.getBookBalance", () => {
       await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 1" });
       await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 2" });
     });
-    // Three chart rows now cost 3, so the same history needs 6; 5 must be withheld, never OK.
+    // Duplicate mappings remain bounded and the earliest active row wins.
     expect(await asOfBalance(fx, Date.now(), 5)).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
-    expect(await asOfBalance(fx, Date.now(), 6)).toMatchObject({ status: "OK", balanceMinor: 0 });
+    expect(await asOfBalance(fx, Date.now(), 20)).toMatchObject({ status: "OK", balanceMinor: 0 });
   });
 
-  // Control for a partial period selects ENTRIES (period + entry date <= asOf) and then their
-  // lines; attribution selects LINES by line date. Where the two disagree the balance is
-  // withheld - never OK. A later-dated entry in the period forces that partial-period path.
+  // Malformed pre-trigger history cannot gain a READY aggregate certificate.
+  // Live writes with inconsistent entry/line dates or periods fail at insertion.
   async function seedSplitDated(
     fx: Fixture,
     opts: {
       entryDate: number; lineDate: number; debitMinor?: number; creditMinor?: number;
-      bankAccountId: Id<"bankAccounts">; entryPeriod?: "prior";
+      bankAccountId: Id<"bankAccounts">; entryPeriod?: "prior"; rawHistorical?: boolean;
     }
   ) {
     const debitMinor = opts.debitMinor ?? 0;
@@ -677,7 +755,7 @@ describe("bankAccounts.getBookBalance", () => {
     const { bank, equity, current } = await refs(fx);
     const period = opts.entryPeriod === "prior" ? await priorPeriod(fx) : current;
     const tag = `${++seedSeq}`;
-    await fx.t.run(async (ctx) => {
+    await (opts.rawHistorical ? fx.t.runUnwrapped : fx.t.run)(async (ctx) => {
       const journalEntryId = await ctx.db.insert("journalEntries", {
         orgId: fx.orgId, periodId: period._id, journalNumber: `T-${tag}`, accountingDate: opts.entryDate,
         sourceType: "test", sourceId: `test-${tag}`, category: "SYSTEM", memo: "split dated",
@@ -703,6 +781,7 @@ describe("bankAccounts.getBookBalance", () => {
     const now = Date.now();
     await seedSplitDated(fx, {
       entryDate: now + entryOffsetMs, lineDate: now + lineOffsetMs, debitMinor: 50_000, bankAccountId: bankA, entryPeriod,
+      rawHistorical: entryOffsetMs !== lineOffsetMs || entryPeriod === "prior",
     });
     // A later-dated entry in the period: the period total cannot be used for this asOf.
     await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankA, accountingDate: now + 600_000 });
@@ -736,8 +815,8 @@ describe("bankAccounts.getBookBalance", () => {
     const bankB = await createBank(fx, "Bank B", false);
     const now = Date.now();
     // Attribution reads both lines (+50,000 / -50,000, net 0); the control reads neither entry.
-    await seedSplitDated(fx, { entryDate: now + 30_000, lineDate: now - 30_000, debitMinor: 50_000, bankAccountId: bankA });
-    await seedSplitDated(fx, { entryDate: now + 30_000, lineDate: now - 30_000, creditMinor: 50_000, bankAccountId: bankB });
+    await seedSplitDated(fx, { entryDate: now + 30_000, lineDate: now - 30_000, debitMinor: 50_000, bankAccountId: bankA, rawHistorical: true });
+    await seedSplitDated(fx, { entryDate: now + 30_000, lineDate: now - 30_000, creditMinor: 50_000, bankAccountId: bankB, rawHistorical: true });
     expect(await asOfBalance(fx, now, BOOK_BALANCE_READ_BUDGET)).toMatchObject(HISTORY_UNVERIFIABLE);
   });
 
@@ -749,13 +828,12 @@ describe("bankAccounts.getBookBalance", () => {
     // Both entries are dated on or before asOf, so the entry-based control counts them (+50,000
     // and -50,000 = 0); both bank lines are dated after asOf, so attribution reads neither.
     // Control 0 == identified 0 with no unattributed line, yet bank A's posted receipt is +50,000.
-    await seedSplitDated(fx, { entryDate: now - 30_000, lineDate: now + 30_000, debitMinor: 50_000, bankAccountId: bankA });
-    await seedSplitDated(fx, { entryDate: now - 30_000, lineDate: now + 30_000, creditMinor: 50_000, bankAccountId: bankB });
-    // A later-dated entry: the period total cannot be used, so the control comes from entries.
+    await seedSplitDated(fx, { entryDate: now - 30_000, lineDate: now + 30_000, debitMinor: 50_000, bankAccountId: bankA, rawHistorical: true });
+    await seedSplitDated(fx, { entryDate: now - 30_000, lineDate: now + 30_000, creditMinor: 50_000, bankAccountId: bankB, rawHistorical: true });
+    // A later-dated entry prevents the containing-period snapshot fast path.
     await seedBankLine(fx, { debitMinor: 1_000, bankAccountId: bankA, accountingDate: now + 600_000 });
 
-    // The two sources disagree about which lines are in scope, so the balance must be withheld.
-    // Current code returns { status: "OK", balanceMinor: 0 } for bank A.
+    // The unverified historical rows prevent a certified balance, even at net zero.
     expect(await asOfBalance(fx, now, BOOK_BALANCE_READ_BUDGET)).toMatchObject(HISTORY_UNVERIFIABLE);
   });
 
@@ -764,7 +842,7 @@ describe("bankAccounts.getBookBalance", () => {
     const bankA = await createBank(fx, "Bank A", true);
     const { bank, equity } = await refs(fx);
     const now = Date.now();
-    await fx.t.run(async (ctx) => {
+    await fx.t.runUnwrapped(async (ctx) => {
       const date = now - 30_000;
       const journalEntryId = await ctx.db.insert("journalEntries", {
         orgId: fx.orgId, journalNumber: "T-NOPERIOD", accountingDate: date, sourceType: "test", sourceId: "test-noperiod",
@@ -790,7 +868,7 @@ describe("bankAccounts.getBookBalance", () => {
     const pastEnd = await seedDealer();
     const bankPastEnd = await createBank(pastEnd, "Bank A", true);
     const { endDate: pastEndDate } = await priorPeriod(pastEnd);
-    await seedBankLine(pastEnd, { debitMinor: 50_000, bankAccountId: bankPastEnd, period: "prior", accountingDate: pastEndDate + 1 });
+    await seedBankLine(pastEnd, { debitMinor: 50_000, bankAccountId: bankPastEnd, period: "prior", accountingDate: pastEndDate + 1, rawHistorical: true });
     expect(await asOfBalance(pastEnd, Date.now(), BOOK_BALANCE_READ_BUDGET)).toMatchObject(HISTORY_UNVERIFIABLE);
   });
 

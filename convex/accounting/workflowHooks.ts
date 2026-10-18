@@ -820,6 +820,7 @@ export async function hookDepositReceived(
     amountMinor: number;
     currency: string;
     paymentMethod: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -838,6 +839,7 @@ export async function hookDepositReceived(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId,
       customerId: args.customerId.toString(),
     },
   });

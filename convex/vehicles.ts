@@ -2354,6 +2354,7 @@ export const createReservation = mutation({
     customerId: v.id("customers"),
     depositAmount: v.optional(v.number()),
     depositMethod: v.optional(depositMethodValidator),
+    depositBankAccountId: v.optional(v.id("bankAccounts")),
     expiresAt: v.optional(v.number()),
     /**
      * SCRUM-195: EXPLICIT proof that this reservation belongs to the deal
@@ -2418,6 +2419,7 @@ export const createReservation = mutation({
           customerId: args.customerId.toString(),
           depositAmount: args.depositAmount ?? null,
           depositMethod: args.depositMethod ?? null,
+          depositBankAccountId: args.depositBankAccountId ?? null,
           dealQuoteId: args.dealQuoteId?.toString() ?? null,
           dealDepositId: args.dealDepositId?.toString() ?? null,
         }),
@@ -2443,6 +2445,9 @@ export const createReservation = mutation({
     const resolvedExpiresAt = args.expiresAt ?? (await getDefaultReservationExpiry(ctx, args.orgId, now));
 
     const hasDeposit = args.depositAmount !== undefined;
+    if (!hasDeposit && args.depositBankAccountId) {
+      throw new ConvexError("A reservation without a deposit cannot name a receiving bank.");
+    }
     const currency = hasDeposit ? normalizeCurrency(await getOrgCurrency(ctx, args.orgId)) : undefined;
     // SCRUM-445: a deposit's method is asked, never defaulted to CASH.
     // SCRUM-469: with no deposit there is no money and so no method to judge or
@@ -2580,6 +2585,7 @@ export const createReservation = mutation({
         amountMinor,
         currency,
         method,
+        bankAccountId: args.depositBankAccountId,
         actorId: user._id,
         now,
         sourceLabel: `reservation ${reservationId}`,

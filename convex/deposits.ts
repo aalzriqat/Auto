@@ -55,6 +55,7 @@ export const create = mutation({
     amount: v.number(),
     currency: v.optional(v.string()),
     method: v.optional(depositMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     notes: v.optional(v.string()),
     idempotencyKey: v.string(),
     /**
@@ -106,6 +107,7 @@ export const create = mutation({
           amountMinor,
           currency,
           method,
+          bankAccountId: args.bankAccountId ?? null,
           notes: args.notes ?? null,
           adoptReservationId: args.adoptReservationId ?? null,
         }),
@@ -133,6 +135,7 @@ export const create = mutation({
           amountMinor,
           currency,
           method,
+          bankAccountId: args.bankAccountId,
           notes: args.notes,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
@@ -180,6 +183,15 @@ export const listRefundBankOptions = query({
   args: { orgId: v.id("organizations"), currency: v.optional(v.string()) },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    return listEligibleBanks(ctx, args.orgId,
+      args.currency?.trim().toUpperCase() || await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
+export const listReceiptBankOptions = query({
+  args: { orgId: v.id("organizations"), currency: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
     return listEligibleBanks(ctx, args.orgId,
       args.currency?.trim().toUpperCase() || await getOrgCurrency(ctx, args.orgId));
   },

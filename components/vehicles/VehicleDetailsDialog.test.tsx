@@ -54,6 +54,7 @@ vi.mock("convex/react", async () => {
       if (name === "vehicles:getLandedCosts") return state.landedCosts;
       if (name === "vehicles:listAcquisitionBankOptions") return state.bankOptions;
       if (name === "deposits:listRefundBankOptions") return state.bankOptions;
+      if (name === "deposits:listReceiptBankOptions") return state.bankOptions;
       return undefined;
     },
     useMutation: (reference: never) => async (args: Record<string, unknown>) => {
@@ -300,6 +301,7 @@ describe("vehicle dialog: method is per money movement (SCRUM-469 round 1)", () 
     fireEvent.click(screen.getByTestId("item-cust_1"));
     fireEvent.change(screen.getAllByRole("spinbutton", { hidden: true })[0]!, { target: { value: "50" } });
     fireEvent.change(screen.getByTestId("method-DepositChooseMethod"), { target: { value: "BANK_TRANSFER" } });
+    fireEvent.click(screen.getByTestId("item-bank_1"));
     fireEvent.click(screen.getAllByRole("button", { name: "CreateReservation", hidden: true }).at(-1)!);
     await waitFor(() => expect(state.toastError).toHaveLength(1));
     expect(state.toastError[0]).toBe("ReservationAttemptChanged");

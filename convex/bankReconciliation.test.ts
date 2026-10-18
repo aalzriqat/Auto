@@ -40,6 +40,15 @@ async function seedDealerWithBankAccount() {
 
   const asOwner = t.withIdentity({ subject: "p41r_owner", clerkId: "p41r_owner" });
   await asOwner.mutation(api.chartOfAccounts.initialize, { orgId });
+  const fiscalYear = new Date().getUTCFullYear();
+  await asOwner.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear, periodNumber: 1,
+  });
+  const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
+  await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
   const bankAccountId = await asOwner.mutation(api.bankAccounts.create, {
     orgId, name: "Operating Account", currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: Date.now() - 60 * 24 * 60 * 60 * 1000,
@@ -69,6 +78,7 @@ async function seedDealerWithBankAccount() {
       bankAccountId?: Id<"bankAccounts"> | null;
       status?: "DRAFT" | "VALIDATED" | "POSTED" | "REVERSED";
       currency?: string;
+      rawHistorical?: boolean;
     } = {}
   ) {
     const now = Date.now();
@@ -78,12 +88,12 @@ async function seedDealerWithBankAccount() {
     const tag = `${++seedSeq}`;
     const journalId = await t.run((ctx) =>
       ctx.db.insert("journalEntries", {
-        orgId, journalNumber: `TEST-${tag}`, accountingDate, sourceType: "test", sourceId: `test-${tag}`,
+        orgId, periodId: period._id, journalNumber: `TEST-${tag}`, accountingDate, sourceType: "test", sourceId: `test-${tag}`,
         category: "SYSTEM", memo: "Test ledger line", status: opts.status ?? "POSTED", currency,
         postedBy: userId, postedAt: now, createdAt: now,
       })
     );
-    await t.run((ctx) =>
+    await (opts.rawHistorical ? t.runUnwrapped : t.run)((ctx) =>
       ctx.db.insert("journalLines", {
         orgId, journalEntryId: journalId, lineNumber: 1, accountId: bankChartAccount!._id,
         debitMinor: amountMinor, creditMinor: 0, currency, scale: 3, accountingDate,
@@ -228,7 +238,7 @@ describe("bankReconciliation physical-bank attribution (SCRUM-54)", () => {
   test("a legacy line with no bank identity matches no physical bank", async () => {
     const statementDate = Date.now();
     const fx = await seedStatement(55_000, statementDate);
-    await fx.seedLedgerLine(55_000, statementDate, { bankAccountId: null });
+    await fx.seedLedgerLine(55_000, statementDate, { bankAccountId: null, rawHistorical: true });
 
     const [suggestion] = await fx.asOwner.query(api.bankReconciliation.suggestMatches, {
       orgId: fx.orgId, bankAccountId: fx.bankAccountId,
@@ -252,7 +262,7 @@ describe("bankReconciliation physical-bank attribution (SCRUM-54)", () => {
   test("confirmMatch refuses a legacy line with no bank identity", async () => {
     const statementDate = Date.now();
     const fx = await seedStatement(55_000, statementDate);
-    const legacy = await fx.seedLedgerLine(55_000, statementDate, { bankAccountId: null });
+    const legacy = await fx.seedLedgerLine(55_000, statementDate, { bankAccountId: null, rawHistorical: true });
 
     await expect(
       fx.asOwner.mutation(api.bankReconciliation.confirmMatch, {
@@ -264,7 +274,7 @@ describe("bankReconciliation physical-bank attribution (SCRUM-54)", () => {
   test("a stamped line in another currency is never a candidate, even for the same bank", async () => {
     const statementDate = Date.now();
     const fx = await seedStatement(55_000, statementDate);
-    await fx.seedLedgerLine(55_000, statementDate, { currency: "USD" }); // stamped to Bank A (JOD)
+    await fx.seedLedgerLine(55_000, statementDate, { currency: "USD", rawHistorical: true }); // legacy USD line stamped to Bank A (JOD)
 
     const [suggestion] = await fx.asOwner.query(api.bankReconciliation.suggestMatches, {
       orgId: fx.orgId, bankAccountId: fx.bankAccountId,

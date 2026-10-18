@@ -115,6 +115,44 @@ async function openAccountingPeriod(asUser: any, orgId: any) {
 }
 
 describe("deposits.create", () => {
+  test("a bank-funded deposit requires a physical bank before any receipt is recorded", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+
+    await expect(asUser.mutation(api.deposits.create, {
+      orgId, quoteId, amount: 1500, method: "BANK_TRANSFER", idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(/physical bank/i);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("deposits").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+      expect(await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+      expect(await ctx.db.query("collectionPayments").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+    });
+  });
+
+  test("a bank-funded deposit posts its physical bank on the journal debit", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+    await openAccountingPeriod(asUser, orgId);
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+    const bankAccountId = await makeRefundBank(t, orgId, userId);
+
+    const depositId = await asUser.mutation(api.deposits.create, {
+      orgId, quoteId, amount: 1500, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: crypto.randomUUID(),
+    });
+
+    const events = await asUser.query(api.accountingLedger.listAccountingEvents, {
+      orgId, sourceType: "deposits", sourceId: depositId.toString(),
+    });
+    const received = events.find((event) => event.eventType === "DEPOSIT_RECEIVED");
+    expect(received?.status).toBe("POSTED");
+    await t.run(async (ctx) => {
+      const bankLines = await ctx.db.query("journalLines")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      expect(bankLines.filter((line) => line.bankAccountId === bankAccountId &&
+        line.debitMinor === 1_500_000)).toHaveLength(1);
+    });
+  });
+
   test("rejects OTHER as a deposit method", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);

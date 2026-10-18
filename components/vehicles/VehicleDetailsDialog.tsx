@@ -56,6 +56,8 @@ import { UnconfirmedPayoutNotice } from "@/components/deposits/UnconfirmedPayout
 import { usePendingDepositPayouts } from "@/hooks/usePendingDepositPayouts";
 import { getErrorMessage } from "@/lib/errors";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
+import { DepositReceiptBankPicker, useDepositReceiptBankOptions } from "@/components/deposits/DepositReceiptBankPicker";
 
 interface VehicleDetailsDialogProps {
   vehicle: Doc<"vehicles"> | null;
@@ -156,10 +158,17 @@ export function VehicleDetailsDialog({
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
   const [reservationMethod, setReservationMethod] = useState<PaymentMethod | undefined>(undefined);
+  const [reservationBankAccountId, setReservationBankAccountId] = useState<Id<"bankAccounts"> | undefined>(undefined);
+  const reservationHasDeposit = reservationDeposit !== "";
+  const canRecordDeposit = !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  const reservationCurrency = useMoneyDisplay();
+  const { required: reservationBankRequired, options: reservationBankOptions } =
+    useDepositReceiptBankOptions(activeOrgId ?? undefined,
+      reservationHasDeposit && canRecordDeposit ? reservationMethod : undefined, reservationCurrency.code);
+  const reservationBankReady = !reservationBankRequired ||
+    (reservationBankOptions?.banks.some((bank) => bank._id === reservationBankAccountId) ?? false);
   // A deposit taken at reservation is money in hand, so it needs the same
   // authority as recording one (SCRUM-444). Reserving without a deposit does not.
-  const canRecordDeposit = !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-  const reservationHasDeposit = reservationDeposit !== "";
   const [reservationExpiresAt, setReservationExpiresAt] = useState("");
   const [savingReservation, setSavingReservation] = useState(false);
   const [activeGroup, setActiveGroup] = useState<VehicleDetailsGroup>("overview");
@@ -173,6 +182,7 @@ export function VehicleDetailsDialog({
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- A new open / vehicle is a new intent: clear the chosen methods.
     setReservationMethod(undefined);
+    setReservationBankAccountId(undefined);
     setRefundChoiceByDeposit({});
   }, [detailsSessionId]);
 
@@ -239,7 +249,7 @@ export function VehicleDetailsDialog({
   };
 
   const handleCreateReservation = async () => {
-    if (!activeOrgId || !vehicle || !reservationCustomerId) return;
+    if (!activeOrgId || !vehicle || !reservationCustomerId || !reservationBankReady) return;
     setSavingReservation(true);
     try {
       const keys = reservationKeysRef.current;
@@ -255,6 +265,7 @@ export function VehicleDetailsDialog({
         customerId: reservationCustomerId as any,
         depositAmount: reservationDeposit ? Number(reservationDeposit) : undefined,
         depositMethod: reservationDeposit ? reservationMethod : undefined,
+        depositBankAccountId: reservationDeposit && reservationBankRequired ? reservationBankAccountId : undefined,
         expiresAt: reservationExpiresAt ? new Date(reservationExpiresAt).getTime() : undefined,
       });
       // Only a CONFIRMED success retires this vehicle's identity.
@@ -262,6 +273,7 @@ export function VehicleDetailsDialog({
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationMethod(undefined);
+      setReservationBankAccountId(undefined);
       setReservationExpiresAt("");
       toast.success(t("ReservationCreated" as any));
     } catch (error) {
@@ -1079,11 +1091,15 @@ export function VehicleDetailsDialog({
                         <PaymentMethodSelect
                           t={t as any}
                           value={reservationMethod}
-                          onValueChange={setReservationMethod}
+                          onValueChange={(next) => { setReservationMethod(next); setReservationBankAccountId(undefined); }}
                           ariaLabel={t("PaymentMethodLabel" as any)}
                           placeholder={t("DepositChooseMethod" as any)}
                         />
                       ) : null}
+                      {reservationHasDeposit && canRecordDeposit && reservationBankRequired && (
+                        <DepositReceiptBankPicker id="reservation-deposit-bank" options={reservationBankOptions}
+                          value={reservationBankAccountId} onChange={setReservationBankAccountId} />
+                      )}
                       {reservationHasDeposit && !canRecordDeposit ? (
                         <p className="text-xs text-muted-foreground" data-testid="reservation-deposit-needs-manager">
                           {t("ReservationDepositNeedsManager" as any)}
@@ -1105,7 +1121,7 @@ export function VehicleDetailsDialog({
                       disabled={
                         savingReservation ||
                         !reservationCustomerId ||
-                        (reservationHasDeposit && (!canRecordDeposit || !isChosenMethod(reservationMethod)))
+                        (reservationHasDeposit && (!canRecordDeposit || !isChosenMethod(reservationMethod) || !reservationBankReady))
                       }
                     >
                       <Plus className="h-4 w-4 me-2" />
