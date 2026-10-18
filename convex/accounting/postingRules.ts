@@ -3279,8 +3279,8 @@ export interface HandoverCostPaidDirectPayload {
   paymentMethod: string;
   /**
    * SCRUM-54: the physical bank the money left from. Optional only so an event queued
-   * before this field existed still drains; the command requires it for every new
-   * payment that credits the bank control account.
+   * before this field existed can be parsed. A bank event without it is refused
+   * at posting; the command requires it for every new bank payment.
    */
   bankAccountId?: string;
 }
@@ -3314,6 +3314,12 @@ export function ruleHandoverCostPaidDirect(p: HandoverCostPaidDirectPayload): Ru
   const expense = custodyFeeExpenseKey(p.accountingTreatment);
   if (expense.systemKey === null) throw new Error(expense.refusal);
   const cashKey = disbursementAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A physical bank account is required for a direct handover bank payment.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A cash direct handover payment cannot name a bank account.");
+  }
   return {
     lines: [
       line(expense.systemKey, p.amountMinor, 0, `Handover cost (${p.feeType}) paid directly by the dealership`, { vehicleId: p.vehicleId }),
@@ -3337,9 +3343,8 @@ export interface FinanceCompanyForwardPaidPayload {
   /** How the money left: REQUIRED, never defaulted. */
   paymentMethod: string;
   /**
-   * SCRUM-54: the physical bank a BANK_ACCOUNT payment left. Optional only so
-   * events queued before it existed still drain; they post unnamed, and the
-   * book balance withholds itself while any unnamed bank line exists.
+   * SCRUM-54: the physical bank a BANK_ACCOUNT payment left. Optional only
+   * for old queued payload shapes; missing identity refuses posting.
    */
   bankAccountId?: string;
 }
@@ -3364,6 +3369,12 @@ export function ruleFinanceCompanyForwardPaid(p: FinanceCompanyForwardPaidPayloa
     );
   }
   const cashKey = disbursementAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A physical bank account is required for a finance-company forward bank payment.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A cash finance-company forward cannot name a bank account.");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES, p.amountMinor, 0, "Forwarded to the finance company", financePayerDims(p)),

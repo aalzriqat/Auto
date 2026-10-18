@@ -3581,6 +3581,7 @@ export default defineSchema({
    */
   financeCompanyForwards: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     applicationId: v.id("financeApplications"),
     // SCRUM-27: exactly ONE of the two is set - a configured company by id, a manual one by the name on its letter.
     financeCompanyId: v.optional(v.id("financeCompanies")),

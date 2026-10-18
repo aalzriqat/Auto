@@ -320,6 +320,7 @@ export const recordFinanceCompanyForward = mutation({
 
         const forwardId = await ctx.db.insert("financeCompanyForwards", {
           orgId: args.orgId,
+          bankAccountId,
           applicationId: app._id,
           ...payerIdentity,
           version,

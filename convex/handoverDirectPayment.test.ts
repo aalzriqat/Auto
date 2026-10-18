@@ -10,6 +10,7 @@ import { MAX_CUSTODY_READ_BATCH } from "./utils/custodySourceLedger";
 import { Doc, Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { ruleHandoverCostPaidDirect } from "./accounting/postingRules";
 import { evaluateClosingReadiness, handoverDirectLedgerRefusal } from "./utils/financedSaleRecognition";
 import {
   DirectProofBudget,
@@ -227,6 +228,14 @@ describe("the credit is the OUTBOUND account of the method the dealership paid w
 });
 
 describe("SCRUM-54: a bank-method direct payment names the physical bank it left", () => {
+  test("a legacy queued direct-payment bank event without identity refuses at posting", () => {
+    const payload = { feeId: "fee", applicationId: "app", feeType: "LICENSING",
+      accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE" as const,
+      amountMinor: jod(40), currency: "JOD", paymentMethod: "BANK_TRANSFER" };
+    expect(() => ruleHandoverCostPaidDirect(payload)).toThrow(/physical bank account is required/);
+    expect(() => ruleHandoverCostPaidDirect({ ...payload, paymentMethod: "CASH", bankAccountId: "stray" }))
+      .toThrow(/cash direct handover payment/);
+  });
   const NOT_FOUND = "The selected bank account was not found in this organization.";
   const insertBank = (seed: Seed, orgId: Id<"organizations">, over: { currency?: string; isActive?: boolean; isDeleted?: boolean } = {}) =>
     seed.t.run((ctx) =>

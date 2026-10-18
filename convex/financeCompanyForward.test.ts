@@ -928,7 +928,8 @@ describe("SCRUM-54 - the forward names the physical bank it left", () => {
     const { s, applicationId } = await approvedDeal("attrib");
     const bankA = await insertBank(s, s.orgId);
     const bankB = await insertBank(s, s.orgId);
-    await record(s, applicationId, { bankAccountId: bankA });
+    const forwardId = await record(s, applicationId, { bankAccountId: bankA });
+    expect((await s.t.run((ctx) => ctx.db.get(forwardId)))?.bankAccountId).toBe(bankA);
     const { lines, events } = await forwardLines(s);
     const named = lines.filter((l) => l.bankAccountId !== undefined);
     expect(named).toHaveLength(1);
@@ -953,20 +954,13 @@ describe("SCRUM-54 - the forward names the physical bank it left", () => {
     expect(lines.filter((l) => l.bankAccountId !== undefined)).toHaveLength(1);
   });
 
-  test("an event queued BEFORE the bank existed still drains: it posts the credit unnamed (the book balance withholds on it)", () => {
-    // A finance-company posting always names its payer; a queued event carried one and simply no bank.
-    const legacy = ruleFinanceCompanyForwardPaid({
+  test("a legacy queued bank forward without physical identity refuses instead of posting an unnamed credit", () => {
+    expect(() => ruleFinanceCompanyForwardPaid({
       forwardId: "f", applicationId: "a", payerNameSnapshot: "Legacy Finance Co", amountMinor: FORWARD, currency: "JOD", paymentMethod: "BANK_TRANSFER",
-    });
-    const credit = legacy.lines.find((l) => l.accountSystemKey === SYSTEM_KEYS.BANK_ACCOUNT);
-    expect(credit).toMatchObject({ creditMinor: FORWARD, debitMinor: 0 });
-    expect(credit?.bankAccountId).toBeUndefined();
-    expect(legacy.lines.filter((l) => l.bankAccountId !== undefined)).toEqual([]);
-    // Cash never carries a bank, even if a payload did.
-    const cash = ruleFinanceCompanyForwardPaid({
+    })).toThrow(/physical bank account is required/);
+    expect(() => ruleFinanceCompanyForwardPaid({
       forwardId: "f", applicationId: "a", payerNameSnapshot: "Legacy Finance Co", amountMinor: FORWARD, currency: "JOD", paymentMethod: "CASH", bankAccountId: "stray",
-    });
-    expect(cash.lines.filter((l) => l.bankAccountId !== undefined)).toEqual([]);
+    })).toThrow(/cash finance-company forward/);
   });
 
   test("the bank list is served to the forward's own permission pair and to nobody without it", async () => {
