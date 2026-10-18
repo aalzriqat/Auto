@@ -449,6 +449,10 @@ type Defects = {
   financeReceiptWrongRefusalReason?: boolean;
   /** SCRUM-54: the backend implements the physical-bank receipt contract (main does not yet). */
   bankContract?: boolean;
+  /** The old backend accepts no physical-bank arguments. */
+  legacyBackend?: boolean;
+  /** A receipt without a physical bank is incorrectly accepted. */
+  acceptsReceiptWithoutBank?: boolean;
   /** The direct-fee and cheque commands can change independently of the receipt contract. */
   directFeeBankContract?: boolean;
   chequeBankContract?: boolean;
@@ -1270,7 +1274,7 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: null };
       }
       case "collections:clearCheque": {
-        const chequeBankContract = defects.chequeBankContract ?? defects.bankContract ?? false;
+        const chequeBankContract = defects.chequeBankContract ?? defects.bankContract ?? !defects.legacyBackend;
         if (!chequeBankContract && Object.hasOwn(args, "bankAccountId")) {
           return { ok: false as const, error: "Unexpected argument: bankAccountId" };
         }
@@ -1975,7 +1979,7 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: fee._id };
       }
       case "financeDealCosts:recordDirectFeePayment": {
-        const directFeeBankContract = defects.directFeeBankContract ?? defects.bankContract ?? false;
+        const directFeeBankContract = defects.directFeeBankContract ?? defects.bankContract ?? !defects.legacyBackend;
         if (!directFeeBankContract && Object.hasOwn(args, "bankAccountId")) {
           return { ok: false as const, error: "Unexpected argument: bankAccountId" };
         }
@@ -2340,7 +2344,7 @@ const recordCase = (
       });
     });
 
-async function runAgainst(defects: Defects = {}, source: { declaresBank?: boolean; directFeeBank?: boolean; chequeBank?: boolean; requireBank?: boolean } = { declaresBank: !!defects.bankContract }) {
+async function runAgainst(defects: Defects = {}, source: { declaresBank?: boolean; directFeeBank?: boolean; chequeBank?: boolean; requireBank?: boolean } = { declaresBank: !defects.legacyBackend }) {
   const backend = makeBackend(defects);
   const results: Array<Record<string, unknown>> = [];
   await runRehearsalCases({
@@ -2665,7 +2669,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
   });
 
   test.each([
-    ["candidate requires a bank but backend is legacy", {}, true],
+    ["candidate requires a bank but backend is legacy", { legacyBackend: true }, true],
     ["backend requires a bank but candidate is legacy", { chequeBankContract: true }, false],
   ] as const)("RV1 fails when %s", async (_name, defect, chequeBank) => {
     const results = await runAgainst(defect, { declaresBank: false, chequeBank });
@@ -3171,7 +3175,7 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     });
 
     test("source declares a bank but the deployed backend is legacy: FAIL, never a quiet legacy pass", async () => {
-      const results = await runAgainst({}, { declaresBank: true, directFeeBank: false, chequeBank: false });
+      const results = await runAgainst({ legacyBackend: true }, { declaresBank: true, directFeeBank: false, chequeBank: false });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(/absent or not deployed/);
     });
