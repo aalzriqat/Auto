@@ -24,6 +24,7 @@ import { RESET_TABLES_FOR_TEST, CHILD_TABLES_FOR_TEST } from "../convex/orgFinan
  * three financing tables went missing.
  */
 const RETAINED_BY_DESIGN: Record<string, string> = {
+  journalReportEligibility: "retained ledger index completeness and backfill evidence; owner forbids record cleanup (SCRUM-807)",
   // The platform's own deletion trail. Deleting it with the org would erase the
   // record that the deletion happened, which is the one row that must outlive
   // it.
@@ -34,6 +35,7 @@ const RETAINED_BY_DESIGN: Record<string, string> = {
   // no audit, leaving the organization half-deleted. It must outlive the org it
   // is deleting.
   organizationDeletionRequests: "the deletion driver's own state row",
+  taskAlarmDeliveries: "owner requires alarm delivery history to survive; terminal deliveries are never retried",
   // SCRUM-143. An attestation about the DEPLOYMENT, not tenant data — it says
   // "this is a disposable E2E preview", and it carries an `orgId` only as a
   // pointer to whatever dealership the seed created here.

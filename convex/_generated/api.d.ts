@@ -87,6 +87,7 @@ import type * as guarantors from "../guarantors.js";
 import type * as http from "../http.js";
 import type * as importMappings from "../importMappings.js";
 import type * as instagramEngagement from "../instagramEngagement.js";
+import type * as journalReportEligibility from "../journalReportEligibility.js";
 import type * as leadActivities from "../leadActivities.js";
 import type * as leads from "../leads.js";
 import type * as liveChat from "../liveChat.js";
@@ -217,6 +218,7 @@ import type * as utils_handoverDirectProof from "../utils/handoverDirectProof.js
 import type * as utils_idempotency from "../utils/idempotency.js";
 import type * as utils_importLimits from "../utils/importLimits.js";
 import type * as utils_instagramApi from "../utils/instagramApi.js";
+import type * as utils_journalReportEligibility from "../utils/journalReportEligibility.js";
 import type * as utils_leadActivity from "../utils/leadActivity.js";
 import type * as utils_leadAssignment from "../utils/leadAssignment.js";
 import type * as utils_leadStageHelpers from "../utils/leadStageHelpers.js";
@@ -368,6 +370,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   importMappings: typeof importMappings;
   instagramEngagement: typeof instagramEngagement;
+  journalReportEligibility: typeof journalReportEligibility;
   leadActivities: typeof leadActivities;
   leads: typeof leads;
   liveChat: typeof liveChat;
@@ -498,6 +501,7 @@ declare const fullApi: ApiFromModules<{
   "utils/idempotency": typeof utils_idempotency;
   "utils/importLimits": typeof utils_importLimits;
   "utils/instagramApi": typeof utils_instagramApi;
+  "utils/journalReportEligibility": typeof utils_journalReportEligibility;
   "utils/leadActivity": typeof utils_leadActivity;
   "utils/leadAssignment": typeof utils_leadAssignment;
   "utils/leadStageHelpers": typeof utils_leadStageHelpers;

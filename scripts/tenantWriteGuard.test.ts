@@ -675,14 +675,22 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-766 PR-B: + customerFinanceCompanyPayments.confirmPayment/voidPayment (+2) - 528 -> 530 total,
   // 354 -> 356 analysed (re-measured FROM THE ANALYSER). Each takes `orgId`, runs requireTenantAuth and reads
   // the application and (for void) the evidence row through requireOwnedRow before its only write.
-  // SCRUM-807 integration retains the period-held wake and range reminder child;
-  // operational prune was removed. Re-measure the analyzer surface after merging.
+  // SCRUM-807: + accountingOutbox.wakePeriodHeldRows (+1) - 530 -> 531 total, 356 -> 357 analysed (re-measured
+  // FROM THE ANALYSER). An internalMutation that takes `orgId`; it reads only through the `by_org_hold_date`
+  // index with `orgId` as its first equality and patches only the rows that read returned (no caller-supplied
+  // document id), so the unguarded-write audit stays empty.
+  // SCRUM-807: - adminSystem.pruneOperationalLogs (-1) - 530 -> 529 total, 159 -> 158 skippedNoOrgId, `analysed`
+  // unchanged at 356 (re-measured FROM THE ANALYSER). The removed internalMutation had no `orgId` and deleted
+  // deployment-global diagnostics; operational records are now never deleted.
+  // The two SCRUM-807 changes are independent; with both applied: 529 + 1 = 530 total, 356 + 1 = 357 analysed.
+  // SCRUM-807: deliverTaskAlarmToManagers is one retained internal mutation keyed by deliveryId, not orgId. Re-measured from the analyser after merging main: 534 total.
+  // SCRUM-807 (#608): the collections reminder child adds one orgId mutation - 535 total, 361 analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 531,
-      analysed: 358,
+      totalMutations: 535,
+      analysed: 361,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 158,
+      skippedNoOrgId: 159,
     });
   });
 });
