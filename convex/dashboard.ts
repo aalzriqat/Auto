@@ -1033,9 +1033,10 @@ export const stats = query({
     //
     // Each previous-window read is hard-bounded at PREVIOUS_PERIOD_CAP + 1. The
     // extra row separates a window holding exactly the cap (complete) from one
-    // holding more (unavailable). Sale rows are cut back to the cap because
-    // they are costed and feed published flags; ledger and expense rows only
-    // feed deltas that are withheld when over the cap.
+    // holding more (unavailable). Over the cap, every row of that read is
+    // discarded, never cut back to a prefix: sale rows are costed and feed
+    // published flags, and ledger and expense rows feed deltas that are
+    // withheld.
     //
     // A previous read is skipped when the current window it would be compared
     // against is itself unavailable: every figure it feeds is then withheld,
