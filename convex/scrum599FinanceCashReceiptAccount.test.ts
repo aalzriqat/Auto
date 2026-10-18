@@ -301,12 +301,13 @@ describe("SCRUM-599 - the finance company's payment is debited to the account it
     ).toThrow(/unsupported payment method/);
   });
 
-  test("a legacy event with no recorded method keeps its historical bank posting", () => {
-    const result = ruleFinanceCashReceived({
+  test("a legacy bank event without physical identity refuses instead of posting an unattributed bank line", () => {
+    expect(() => ruleFinanceCashReceived({
       applicationId: "legacy", payerNameSnapshot: "Legacy Co", amountMinor: G, currency: "JOD",
-    });
-    const debit = result.lines.find((l) => l.debitMinor > 0);
-    expect(debit?.accountSystemKey).toBe("BANK_ACCOUNT");
-    expect(debit?.debitMinor).toBe(G);
+    })).toThrow(/bank account is required/);
+    expect(() => ruleFinanceCashReceived({
+      applicationId: "cash", payerNameSnapshot: "Cash Co", amountMinor: G, currency: "JOD",
+      paymentMethod: "CASH", bankAccountId: "bankA",
+    })).toThrow(/cash finance receipt cannot name a bank/);
   });
 });

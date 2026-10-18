@@ -575,8 +575,8 @@ export interface CollectionPaymentPayload {
   paymentMethod?: string;
   /**
    * SCRUM-54: the physical bank a BANK_TRANSFER / CARD receipt reached. Optional only
-   * so an event queued before this field existed still drains; `recordPayment`
-   * requires it for every new bank receipt. Never set for CASH or CHEQUE.
+   * for old queued payload shapes; a bank receipt without it is refused at
+   * posting rather than attributed to a guessed physical account.
    */
   bankAccountId?: string;
 }
@@ -1901,6 +1901,12 @@ function assertReceiptSplit(p: CollectionPaymentPayload): void {
 export function ruleCollectionPayment(p: CollectionPaymentPayload): RuleResult {
   assertReceiptSplit(p);
   const cashKey = cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A bank account is required for a collection receipt posted to the bank.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A non-bank collection receipt cannot name a bank account.");
+  }
   const lines = [
     line(cashKey, p.receivedMinor, 0, "Payment received", {
       customerId: p.customerId,
@@ -2299,9 +2305,8 @@ export interface FinanceCashReceivedPayload {
   paymentMethod?: FinanceReceiptMethod;
   /**
    * SCRUM-54: the physical bank a BANK_TRANSFER / CHEQUE receipt reached.
-   * Optional only so an event queued before this field existed still drains;
-   * `confirmDisbursement` requires it for every new bank receipt. Never set for
-   * CASH, which is cash on hand.
+   * Optional only for old queued payload shapes; bank receipts without it
+   * fail closed at posting. Never set for CASH, which is cash on hand.
    */
   bankAccountId?: string;
 }
@@ -2314,8 +2319,10 @@ export type FinanceReceiptMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE";
  * hand. BANK_TRANSFER is the bank, and so is CHEQUE: confirmDisbursement clears
  * the cheque in the same transaction, so the money is never held as a cheque.
  *
- * Absent means an event emitted before the method was carried, which keeps the
- * bank posting it always had. Deliberately neither `cashAccountKey` (CHEQUE →
+ * Absent means an event emitted before the method was carried, which maps to
+ * the historical bank control. The posting rule then refuses it unless a
+ * physical bank identity is present; no legacy identity is guessed.
+ * Deliberately neither `cashAccountKey` (CHEQUE →
  * cheques in hand) nor `disbursementAccountKey` (absent → cash on hand). Any
  * other value is refused rather than guessed into the bank.
  */
@@ -2339,6 +2346,12 @@ export function ruleFinanceDisbursed(p: FinanceDisbursedPayload): RuleResult {
 
 export function ruleFinanceCashReceived(p: FinanceCashReceivedPayload): RuleResult {
   const receiptKey = financeReceiptAccountKey(p.paymentMethod);
+  if (receiptKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A bank account is required for a finance receipt posted to the bank.");
+  }
+  if (receiptKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A cash finance receipt cannot name a bank account.");
+  }
   return {
     lines: [
       // Actual receipt of funds from the finance company settles their receivable,

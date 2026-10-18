@@ -2990,7 +2990,9 @@ describe("SCRUM-54 recordPayment names the physical bank of a bank-bound receipt
       [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, undefined],
       [SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY, undefined],
     ]);
-    const cash = ruleCollectionPayment({ ...base, paymentMethod: "CASH", bankAccountId: "bankA" });
+    expect(() => ruleCollectionPayment({ ...base, paymentMethod: "BANK_TRANSFER" })).toThrow(/bank account is required/);
+    expect(() => ruleCollectionPayment({ ...base, paymentMethod: "CASH", bankAccountId: "bankA" })).toThrow(/non-bank/);
+    const cash = ruleCollectionPayment({ ...base, paymentMethod: "CASH" });
     expect(cash.lines.every((l) => l.bankAccountId === undefined)).toBe(true);
   });
 });
