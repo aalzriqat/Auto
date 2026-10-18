@@ -34,6 +34,7 @@ const RETAINED_BY_DESIGN: Record<string, string> = {
   // no audit, leaving the organization half-deleted. It must outlive the org it
   // is deleting.
   organizationDeletionRequests: "the deletion driver's own state row",
+  taskAlarmDeliveries: "owner requires alarm delivery history to survive; terminal deliveries are never retried",
   // SCRUM-143. An attestation about the DEPLOYMENT, not tenant data — it says
   // "this is a disposable E2E preview", and it carries an `orgId` only as a
   // pointer to whatever dealership the seed created here.

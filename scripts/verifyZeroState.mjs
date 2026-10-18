@@ -115,7 +115,7 @@ function readTable(table, component) {
 
 /**
  * A NONEMPTY root table in OPERATIONAL_DIAGNOSTIC_TABLES: read every row back
- * (one more than the table's retention-derived ceiling, so exceeding it is
+ * (one more than the table's fresh-launch ceiling, so exceeding it is
  * detected — the CLI pages through `--limit` without a cap) and validate each
  * as a cron self-report. Provenance labels and counts survive; values do not.
  * A table with no ceiling is never read; the validator refuses it.

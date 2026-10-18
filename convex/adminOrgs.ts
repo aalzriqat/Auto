@@ -34,7 +34,7 @@ type StorageDeletionStep =
   | { kind: "vehicleOwnershipConversionsWithStorage" }
   | { kind: "orgSettingsWithStorage" }
   | { kind: "socialPostsWithStorage" };
-type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" };
+type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" } | { kind: "retainTaskAlarmHistory" };
 type DeletionStep = OrgScopedDeletionStep | SpecialDeletionStep;
 
 const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "APPROVED", "RUNNING"];
@@ -232,11 +232,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // because the order is pinned; the index leads with orgId, so the read is a
   // prefix scan, and nothing references these rows.
   { kind: "orgRows", table: "financeCompanyForwardSlices", index: "by_org_forward" },
-  // SCRUM-807: task-alarm manager deliveries. Appended last because the order is
-  // pinned. A delivery page that runs after the purge marker is stamped deletes its
-  // own row; this removes the ones no page will visit again (a parked FAILED one),
-  // which keep the task title and the assignee's name.
-  { kind: "orgRows", table: "taskAlarmDeliveries", index: "by_org" },
+  // Preserve this slot so saved currentStepIndex values keep their meaning.
+  // Owner requires delivery history to survive; this step performs no deletion.
+  { kind: "retainTaskAlarmHistory" },
 ];
 
 async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {
@@ -705,6 +703,9 @@ async function deleteLiveChatThreadBatch(ctx: MutationCtx, orgId: Id<"organizati
 }
 
 async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"organizations">) {
+  if (step.kind === "retainTaskAlarmHistory") {
+    return {};
+  }
   if (step.kind === "dmConversations") {
     return await deleteDmConversationBatch(ctx, orgId);
   }

@@ -183,16 +183,13 @@ crons.interval(
   {}
 );
 
-// Delete cronHeartbeats/webhookLogs rows past their retention window. Both are
-// append-only diagnostics that nothing pruned, and the admin Cron Status panel
-// re-read every heartbeat on every insert — together the largest source of
-// database bandwidth on this deployment.
-crons.interval(
-  "prune-operational-logs",
-  { hours: 1 },
-  internal.adminSystem.pruneOperationalLogs,
-  {}
-);
+// SCRUM-807: operational history (cronHeartbeats, webhookLogs, notifications,
+// facebookRevocations) is deliberately NOT pruned on a schedule. The owner
+// requires every Convex record to be preserved while the I/O spike is being
+// diagnosed, and the hourly sweep itself cost up to four 1000-row reads plus
+// deletes per run. The sweep (`adminSystem.pruneOperationalLogs`) was removed
+// entirely; do not reintroduce a deleter or schedule without a new retention
+// ruling (see crons.test.ts and adminSystem.test.ts).
 
 // GL Phase 11: post one month of straight-line depreciation for every ACTIVE
 // fixed asset, across every org. Runs once a month; depreciateAssetForMonth
@@ -403,12 +400,12 @@ async function runTriggerAlarms(
 /**
  * Delivers one task alarm's warning to the org's managers, one page of memberships
  * per transaction. The page's notifications, the cursor past them and the next
- * page's kick commit together; the page that reaches the end deletes the row.
+ * page's kick commit together; the final page retains a COMPLETED history row.
  *
  * Every invocation takes its position from the row, never from an argument, so
  * duplicate kicks (the cron re-queued a delivery whose first kick was merely
  * slow) each advance the same cursor: the cohort is covered once, not once per
- * kick. A kick for a finished delivery finds no row and does nothing.
+ * kick. A kick for a terminal delivery does nothing and preserves its history.
  *
  * A page that throws rolls back whole (no notification of a half-delivered page
  * survives) and leaves the row where it was; the sweep re-kicks it a bounded number
@@ -432,16 +429,16 @@ export const deliverTaskAlarmToManagers = internalMutation({
     try {
       const delivery = await ctx.db.get(deliveryId);
       // A parked delivery is kept for the record and for org deletion, not retried.
-      if (!delivery || delivery.status === "FAILED") return null;
+      if (!delivery || delivery.status !== "ACTIVE") return null;
 
       const lifecycle = await orgEconomicLifecycleBlock(ctx, delivery.orgId);
       if (lifecycle?.permanent) {
-        await ctx.db.delete(deliveryId);
+        await ctx.db.patch(deliveryId, { status: "CANCELLED", completedAt: Date.now() });
         return null;
       }
       const task = await ctx.db.get(delivery.taskId);
       if (!task || task.status !== "PENDING") {
-        await ctx.db.delete(deliveryId);
+        await ctx.db.patch(deliveryId, { status: "CANCELLED", completedAt: Date.now() });
         return null;
       }
 
@@ -458,7 +455,7 @@ export const deliverTaskAlarmToManagers = internalMutation({
       }
 
       if (page.isDone) {
-        await ctx.db.delete(deliveryId);
+        await ctx.db.patch(deliveryId, { status: "COMPLETED", completedAt: Date.now() });
       } else {
         await ctx.db.patch(deliveryId, { cursor: page.continueCursor, lastProgressAt: Date.now(), attempts: 0 });
         await ctx.scheduler.runAfter(0, internal.crons.deliverTaskAlarmToManagers, { deliveryId });
