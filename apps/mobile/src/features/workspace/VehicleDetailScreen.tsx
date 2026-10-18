@@ -66,7 +66,11 @@ type EditableLandedItem = {
   label: string;
   amount: string;
   paymentMethod: MobileLandedCostPaymentMethod;
+  bankAccountId?: string;
 };
+
+const landedMethodUsesBank = (method: MobileLandedCostPaymentMethod) =>
+  method === "BANK_TRANSFER" || method === "CARD" || method === "CHEQUE";
 
 let landedItemKeyCounter = 0;
 
@@ -197,6 +201,11 @@ function VehicleDetailContent({
     api.vehicles.getLandedCosts,
     scopedArgs && activeTab === "costs" ? scopedArgs : "skip",
   );
+  const landedBankOptions = useQuery(
+    api.vehicles.listAcquisitionBankOptions,
+    canQuery && orgId && canEdit && activeTab === "costs" && vehicle?.sourceType !== "SOURCED"
+      ? { orgId, purpose: "EDIT" } : "skip",
+  );
   const pricingHistory = useQuery(
     api.vehicles.getPricingHistory,
     scopedArgs && activeTab === "pricing" ? scopedArgs : "skip",
@@ -259,6 +268,11 @@ function VehicleDetailContent({
     return choice && choice.generation === (deposit.releaseCount ?? 0) ? choice.method : undefined;
   };
   const [landedItems, setLandedItems] = useState<EditableLandedItem[]>([]);
+  const hasLegacyUnattributedBank = vehicle?.sourceType !== "SOURCED" && !!landedCosts?.items.some((item) =>
+    item.amount !== 0 && item.paymentMethod && landedMethodUsesBank(item.paymentMethod) && !item.bankAccountId);
+  const hasUnselectedLandedBank = vehicle?.sourceType !== "SOURCED" && landedItems.some((item) =>
+    (parseOptionalNumber(item.amount) ?? 0) !== 0 && landedMethodUsesBank(item.paymentMethod) &&
+    !landedBankOptions?.banks?.some((bank) => bank._id === item.bankAccountId));
   const [savingCosts, setSavingCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
@@ -274,6 +288,7 @@ function VehicleDetailContent({
           label: item.label,
           amount: String(item.amount),
           paymentMethod: item.paymentMethod ?? "CASH",
+          bankAccountId: item.bankAccountId,
         })),
       );
     } else if (landedCosts === null) {
@@ -458,12 +473,13 @@ function VehicleDetailContent({
   }
 
   async function saveLandedCosts() {
-    if (!orgId || !vehicleId) return;
+    if (!orgId || !vehicleId || hasLegacyUnattributedBank || hasUnselectedLandedBank || landedBankOptions?.truncated) return;
     const items = landedItems
       .map((item) => ({
         label: item.label.trim(),
         amount: parseOptionalNumber(item.amount) ?? 0,
         paymentMethod: item.paymentMethod,
+        bankAccountId: item.bankAccountId,
       }))
       .filter((item) => item.label.length > 0);
     setSavingCosts(true);
@@ -926,6 +942,13 @@ function VehicleDetailContent({
         {activeTab === "costs" ? (
           <View style={styles.detailSection}>
             <Text style={styles.sectionTitle}>{locale === "ar" ? "تفصيل التكلفة الكلية" : "Landed cost breakdown"}</Text>
+            {hasLegacyUnattributedBank ? (
+              <Text style={styles.mutedText} accessibilityRole="alert">
+                {locale === "ar"
+                  ? "توجد تكلفة سابقة دُفعت عبر البنك دون تسجيل الحساب الفعلي. يجب أن تراجع المالية الدفعة الأصلية قبل التعديل."
+                  : "An earlier bank-funded cost has no recorded physical bank. Finance must review its original payment before editing."}
+              </Text>
+            ) : null}
             {landedCosts === undefined ? (
               <Text style={styles.mutedText}>{loadingLabel}</Text>
             ) : (
@@ -938,7 +961,7 @@ function VehicleDetailContent({
                       <FormField
                         label={locale === "ar" ? "البند" : "Item"}
                         value={item.label}
-                        onChangeText={(label) =>
+                        onChangeText={(label) => !hasLegacyUnattributedBank &&
                           setLandedItems((items) =>
                             items.map((current, currentIndex) => (currentIndex === index ? { ...current, label } : current)),
                           )
@@ -948,7 +971,7 @@ function VehicleDetailContent({
                         keyboardType="numeric"
                         label={locale === "ar" ? "المبلغ" : "Amount"}
                         value={item.amount}
-                        onChangeText={(amount) =>
+                        onChangeText={(amount) => !hasLegacyUnattributedBank &&
                           setLandedItems((items) =>
                             items.map((current, currentIndex) => (currentIndex === index ? { ...current, amount } : current)),
                           )
@@ -958,17 +981,28 @@ function VehicleDetailContent({
                         label={locale === "ar" ? "طريقة الدفع" : "Payment method"}
                         value={item.paymentMethod}
                         options={paymentMethodOptions}
-                        onChange={(method) =>
+                        onChange={(method) => !hasLegacyUnattributedBank &&
                           setLandedItems((items) =>
                             items.map((current, currentIndex) =>
                               currentIndex === index
-                                ? { ...current, paymentMethod: method as MobileLandedCostPaymentMethod }
+                                ? { ...current, paymentMethod: method as MobileLandedCostPaymentMethod, bankAccountId: undefined }
                                 : current,
                             ),
                           )
                         }
                       />
-                      {canEdit ? (
+                      {landedMethodUsesBank(item.paymentMethod) && vehicle?.sourceType !== "SOURCED" ? (
+                        <SelectField
+                          label={locale === "ar" ? "الحساب المصرفي المدفوع منه" : "Bank account paid from"}
+                          value={landedBankOptions?.banks?.some((bank) => bank._id === item.bankAccountId) ? item.bankAccountId ?? "" : ""}
+                          options={(landedBankOptions?.banks ?? []).map((bank) => ({ value: bank._id, label: `${bank.name} · ${bank.currency}` }))}
+                          onChange={(bankAccountId) => {
+                            if (!hasLegacyUnattributedBank) setLandedItems((items) => items.map((current, currentIndex) =>
+                              currentIndex === index ? { ...current, bankAccountId: bankAccountId || undefined } : current));
+                          }}
+                        />
+                      ) : null}
+                      {canEdit && !hasLegacyUnattributedBank ? (
                         <PrimaryButton
                           label={locale === "ar" ? "إزالة" : "Remove"}
                           tone="danger"
@@ -989,11 +1023,18 @@ function VehicleDetailContent({
                     )}
                   </Text>
                 </View>
+                {landedBankOptions?.truncated ? (
+                  <Text style={styles.mutedText}>{locale === "ar" ? "عدد الحسابات المصرفية أكبر من أن يُعرض هنا. عطّل الحسابات غير المستخدمة قبل الحفظ." : "Too many active bank accounts to list. Deactivate unused accounts before saving."}</Text>
+                ) : null}
+                {landedBankOptions && !landedBankOptions.truncated && !landedBankOptions.banks?.length && hasUnselectedLandedBank ? (
+                  <Text style={styles.mutedText}>{locale === "ar" ? "لا يوجد حساب مصرفي نشط بهذه العملة." : "No active bank account is available in this currency."}</Text>
+                ) : null}
                 {canEdit ? (
                   <View style={styles.cardActions}>
                     <PrimaryButton
                       label={locale === "ar" ? "إضافة بند" : "Add item"}
                       tone="muted"
+                      disabled={hasLegacyUnattributedBank}
                       onPress={() =>
                         setLandedItems((items) => [
                           ...items,
@@ -1002,7 +1043,7 @@ function VehicleDetailContent({
                       }
                     />
                     <PrimaryButton
-                      disabled={savingCosts}
+                      disabled={savingCosts || hasLegacyUnattributedBank || hasUnselectedLandedBank || landedBankOptions?.truncated}
                       label={savingCosts ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ التكلفة" : "Save landed cost")}
                       onPress={saveLandedCosts}
                     />

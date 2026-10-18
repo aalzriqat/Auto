@@ -881,6 +881,12 @@ export interface MobileLandedCostItem {
   label: string;
   amount: number;
   paymentMethod?: MobileLandedCostPaymentMethod;
+  bankAccountId?: string;
+}
+
+export interface MobileAcquisitionBankOptions {
+  banks: Array<{ _id: string; name: string; currency: string }>;
+  truncated: boolean;
 }
 
 export interface MobileLandedCosts {
@@ -1661,6 +1667,9 @@ type VehicleCreateArgs = OrgScopedArgs & {
   sourceType?: MobileVehicleSourceType;
   sourcedFromName?: string;
   sourceCost?: number;
+  purchasePaymentMethod?: "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD" | "ON_ACCOUNT";
+  purchaseSupplierName?: string;
+  bankAccountId?: string;
   notes?: string;
   imageIds?: string[];
   inspectionStatus?: MobileInspectionStatus;
@@ -2904,6 +2913,11 @@ export const api = {
       VehicleScopedArgs,
       MobileLandedCosts | null
     >("vehicles:getLandedCosts"),
+    listAcquisitionBankOptions: makeFunctionReference<
+      "query",
+      OrgScopedArgs & { purpose: "CREATE" | "EDIT" },
+      MobileAcquisitionBankOptions
+    >("vehicles:listAcquisitionBankOptions"),
     upsertLandedCosts: makeFunctionReference<
       "mutation",
       VehicleScopedArgs & { items: MobileLandedCostItem[] },
@@ -3543,6 +3557,7 @@ export const api = {
     >;
     getRelations: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicleRelations>;
     getLandedCosts: FunctionReference<"query", "public", VehicleScopedArgs, MobileLandedCosts | null>;
+    listAcquisitionBankOptions: FunctionReference<"query", "public", OrgScopedArgs & { purpose: "CREATE" | "EDIT" }, MobileAcquisitionBankOptions>;
     upsertLandedCosts: FunctionReference<
       "mutation",
       "public",
