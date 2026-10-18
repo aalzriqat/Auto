@@ -11,7 +11,9 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { settleOutbox, makeDue } from "../test-utils/outboxWork";
+import {
+  settleOutbox, makeDue, outboxRows, quiesceScheduler, settleScheduledOnly, withFrozenScheduler,
+} from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 import { insertReceiptBank } from "../test-utils/financedDealFixture";
 
@@ -347,9 +349,10 @@ describe("Phase 9 — accounting outbox", () => {
     });
 
     // The org works through the year normally, opening one month at a time.
-    // Every open schedules an ORG-WIDE drain, which reaches the December entry
-    // even though December is nowhere near being open. The entry is not broken
-    // and nothing about it failed — it is simply waiting for its own period.
+    // Once parked, the December entry is invisible to the cron and to the
+    // generic drains every open schedules. Each open wakes only parked rows
+    // dated inside the period it opened, so the entry is never reached and
+    // never charged an attempt — it is simply waiting for its own period.
     for (let month = 0; month < 10; month++) {
       await asUser.mutation(api.accountingPeriods.create, {
         orgId,
@@ -368,20 +371,33 @@ describe("Phase 9 — accounting outbox", () => {
     const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
     expect(failed).toHaveLength(0);
 
-    // December finally opens — the entry must still be drainable and post.
-    await asUser.mutation(api.accountingPeriods.create, {
-      orgId, fiscalYear, periodNumber: 12,
-      startDate: Date.UTC(fiscalYear, 11, 1),
-      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    // Ten unrelated opens spent nothing: still pending, zero attempts, parked.
+    const waiting = await outboxRows(t, orgId);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0].status).toBe("PENDING");
+    expect(waiting[0].attempts).toBe(0);
+    expect(waiting[0].dispatchState).toBe("PERIOD_HELD");
+
+    // December finally opens. Only the wake that `open` itself scheduled may
+    // release the entry: no cron or test-supplied drain. The generic drain
+    // scheduled by open itself skips parked rows.
+    // The opens run under the frozen scheduler so the wake is drainable.
+    await quiesceScheduler(t);
+    await withFrozenScheduler(async () => {
+      await asUser.mutation(api.accountingPeriods.create, {
+        orgId, fiscalYear, periodNumber: 12,
+        startDate: Date.UTC(fiscalYear, 11, 1),
+        endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      });
+      const allPeriods = await asUser.query(api.accountingPeriods.list, { orgId });
+      const december = allPeriods.find((p) => p.periodNumber === 12)!;
+      await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: december._id });
+      await settleScheduledOnly(t, orgId);
     });
-    const allPeriods = await asUser.query(api.accountingPeriods.list, { orgId });
-    const december = allPeriods.find((p) => p.periodNumber === 12)!;
-    await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: december._id });
-    await makeDue(t, orgId);
-    await settleOutbox(t, orgId);
 
     const posted = await eventForSource(asUser, orgId, "expenses", decemberExpenseId.toString());
     expect(posted?.status).toBe("POSTED");
+    expect(await outboxRows(t, orgId)).toHaveLength(1);
   });
 
   test("retryFailed resets a FAILED event back to PENDING for another drain attempt", async () => {
