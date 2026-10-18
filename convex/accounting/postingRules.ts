@@ -1813,6 +1813,7 @@ export interface SupplierCostRecoveryReceivedPayload {
   currency: string;
   /** CASH or BANK_TRANSFER only — cheque receipts are SCRUM-400. */
   paymentMethod: string;
+  bankAccountId?: string;
   vehicleId: string;
 }
 
@@ -1829,9 +1830,15 @@ export function ruleSupplierCostRecoveryReceived(p: SupplierCostRecoveryReceived
     throw new Error(`A supplier cost recovery cannot be received by ${p.paymentMethod}.`);
   }
   const cashKey = cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Supplier recovery bank posting has no physical bank identity.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Supplier recovery unexpectedly names a physical bank.");
+  }
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, `Recovered from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+      line(cashKey, p.amountMinor, 0, `Recovered from ${p.sourcedFromName}`, { vehicleId: p.vehicleId, ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}) }),
       line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, 0, p.amountMinor, `Supplier-borne cost recovered from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
     ],
     memo: `Supplier-borne cost recovered — ${p.sourcedFromName}`,

@@ -13,6 +13,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { seedBank } from "../test-utils/bankFixture";
 import { deriveDealerPreparationExpenses } from "./utils/vehicleCostBasis";
 
 vi.mock("./rateLimit", () => ({
@@ -309,6 +310,61 @@ describe("profit readers exclude a supplier-borne cost", () => {
 });
 
 describe("recovery receipts", () => {
+  test("a bank transfer without a physical bank refuses before a receipt or journal is written", async () => {
+    const s = await seed("bankrequired");
+    const { recovery } = await paySupplierCost(s);
+    const before = await s.t.run(async (ctx) => ({
+      receipts: (await ctx.db.query("supplierCostRecoveryReceipts").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }));
+    await expect(s.as.mutation(api.supplierCostRecoveries.recordReceipt,
+      receiptArgs(s, recovery._id, { method: "BANK_TRANSFER" })
+    )).rejects.toThrow(/bank account/i);
+    expect(await s.t.run(async (ctx) => ({
+      receipts: (await ctx.db.query("supplierCostRecoveryReceipts").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }))).toEqual(before);
+  });
+
+  test("a banked receipt and its reversal keep the same physical bank", async () => {
+    const s = await seed("bankreversal");
+    const { recovery } = await paySupplierCost(s);
+    const bankAccountId = await seedBank(s.t, s.orgId);
+    const { receiptId } = await s.as.mutation(api.supplierCostRecoveries.recordReceipt,
+      receiptArgs(s, recovery._id, { method: "BANK_TRANSFER", bankAccountId }));
+    expect((await s.t.run((ctx) => ctx.db.get(receiptId)))?.bankAccountId).toBe(bankAccountId);
+    await s.as.mutation(api.supplierCostRecoveries.reverseReceipt,
+      reverseArgs(s, receiptId, "Wrong receipt"));
+    const bankLines = await s.t.run(async (ctx) => {
+      const account = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) =>
+        q.eq("orgId", s.orgId).eq("systemKey", SYSTEM_KEYS.BANK_ACCOUNT)).unique();
+      return (await ctx.db.query("journalLines").collect()).filter((line) => line.accountId === account?._id);
+    });
+    expect(bankLines.filter((line) => line.bankAccountId === bankAccountId)).toHaveLength(2);
+  });
+
+  test("receipt bank choices are currency scoped; cash, inactive and foreign bank IDs are refused", async () => {
+    const s = await seed("bankguards");
+    const { recovery } = await paySupplierCost(s);
+    const bankAccountId = await seedBank(s.t, s.orgId);
+    const options = await s.as.query(api.supplierCostRecoveries.listReceiptBankOptions, {
+      orgId: s.orgId, recoveryId: recovery._id,
+    });
+    expect(options).toMatchObject({ truncated: false, banks: [{ _id: bankAccountId, currency: "JOD" }] });
+    await expect(s.as.mutation(api.supplierCostRecoveries.recordReceipt,
+      receiptArgs(s, recovery._id, { method: "CASH", bankAccountId })
+    )).rejects.toThrow(/cash.*bank account/i);
+    await s.t.run((ctx) => ctx.db.patch(bankAccountId, { isActive: false }));
+    await expect(s.as.mutation(api.supplierCostRecoveries.recordReceipt,
+      receiptArgs(s, recovery._id, { method: "BANK_TRANSFER", bankAccountId })
+    )).rejects.toThrow(/inactive/);
+    const other = await addOrg(s.t, "bankguardother");
+    const foreignBankId = await seedBank(s.t, other.orgId);
+    await expect(s.as.mutation(api.supplierCostRecoveries.recordReceipt,
+      receiptArgs(s, recovery._id, { method: "BANK_TRANSFER", bankAccountId: foreignBankId })
+    )).rejects.toThrow(/not found in this organization/i);
+    expect((await s.t.run((ctx) => ctx.db.query("supplierCostRecoveryReceipts").collect()))).toHaveLength(0);
+  });
   test("a receipt posts Dr cash / Cr receivable and a retry under the same key records one receipt", async () => {
     const s = await seed("receipt");
     const { recovery } = await paySupplierCost(s);

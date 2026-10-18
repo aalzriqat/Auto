@@ -1554,6 +1554,7 @@ export default defineSchema({
     amountMinor: v.number(),
     currency: v.string(),
     method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     receivedDate: v.number(),
     reference: v.optional(v.string()),
     notes: v.optional(v.string()),
