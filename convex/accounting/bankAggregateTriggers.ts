@@ -86,7 +86,9 @@ async function validatePostedLine(
   ) {
     refuseBankLine("Line date or period differs from posted entry");
   }
-  if (!line.bankAccountId && !allowLegacyUnattributed) refuseBankLine("Missing physical bank identity on live write");
+  if (!line.bankAccountId && !allowLegacyUnattributed && !(await isExactLegacyReversal(ctx, line, entry))) {
+    refuseBankLine("Missing physical bank identity on live write");
+  }
   if (line.bankAccountId) {
     const bank = await ctx.db.get(line.bankAccountId);
     if (!bank || bank.orgId !== line.orgId || bank.currency !== line.currency) {
@@ -94,6 +96,31 @@ async function validatePostedLine(
     }
   }
   return true;
+}
+
+// Old dimensionless bank lines must remain unmatched, including when reversed.
+// Permit only the exact inverse of an existing legacy line, never a new
+// dimensionless bank posting disguised as a reversal.
+async function isExactLegacyReversal(
+  ctx: MutationCtx,
+  line: Doc<"journalLines">,
+  entry: Doc<"journalEntries">,
+): Promise<boolean> {
+  if (entry.category !== "REVERSAL" || !entry.reversalOfJournalEntryId || !entry.accountingEventId) return false;
+  const original = await ctx.db.get(entry.reversalOfJournalEntryId);
+  if (!original || original.orgId !== line.orgId || original.currency !== line.currency ||
+      !original.accountingEventId || (original.status !== "POSTED" && original.status !== "REVERSED")) return false;
+  const reversalEvent = await ctx.db.get(entry.accountingEventId);
+  if (!reversalEvent || reversalEvent.orgId !== line.orgId ||
+      reversalEvent.eventType !== "JOURNAL_REVERSAL" ||
+      reversalEvent.reversalOfEventId !== original.accountingEventId) return false;
+  const originals = await ctx.db.query("journalLines")
+    .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", original._id)).take(101);
+  if (originals.length > 100) return false;
+  const source = originals.find((candidate) => candidate.lineNumber === line.lineNumber);
+  return !!source && !source.bankAccountId && source.orgId === line.orgId &&
+    source.accountId === line.accountId && source.currency === line.currency &&
+    source.debitMinor === line.creditMinor && source.creditMinor === line.debitMinor;
 }
 
 async function stateForLiveLine(
