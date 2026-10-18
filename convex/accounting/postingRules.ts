@@ -2243,6 +2243,12 @@ export function ruleCommissionPaid(p: CommissionPaidPayload): RuleResult {
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
     : cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A commission bank posting requires its physical bank account.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A non-bank commission payment cannot name a physical bank account.");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.COMMISSION_PAYABLE, p.amountMinor, 0, "Commission settled", { salespersonId: p.salespersonId }),

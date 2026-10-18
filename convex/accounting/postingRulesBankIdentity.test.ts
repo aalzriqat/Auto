@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ruleCashDrawerDeposited, ruleExpensePosted } from "./postingRules";
+import { ruleCashDrawerDeposited, ruleCommissionPaid, ruleExpensePosted } from "./postingRules";
 
 describe("queued paid-expense bank identity", () => {
   const base = { expenseId: "expense-1", amountMinor: 1_000, currency: "JOD" };
@@ -43,5 +43,26 @@ describe("queued cash drawer deposit bank identity", () => {
       .toMatchObject({ bankAccountId: "bank-1", debitMinor: 1_000 });
     expect(result.lines.find((line) => line.accountSystemKey === "CASH_ON_HAND")?.bankAccountId)
       .toBeUndefined();
+  });
+});
+
+describe("queued direct commission payment bank identity", () => {
+  const base = {
+    saleId: "sale-1", salespersonId: "staff-1", amountMinor: 1_000, currency: "JOD",
+  };
+
+  test("refuses bank-funded and issued-cheque payments without a physical bank", () => {
+    for (const paymentMethod of ["BANK_TRANSFER", "CHEQUE"]) {
+      expect(() => ruleCommissionPaid({ ...base, paymentMethod }))
+        .toThrow(/physical bank account/i);
+    }
+  });
+
+  test("retains the bank on the payment credit and refuses one on cash", () => {
+    const result = ruleCommissionPaid({ ...base, paymentMethod: "CHEQUE", bankAccountId: "bank-1" });
+    expect(result.lines.find((line) => line.accountSystemKey === "BANK_ACCOUNT"))
+      .toMatchObject({ bankAccountId: "bank-1", creditMinor: 1_000 });
+    expect(() => ruleCommissionPaid({ ...base, paymentMethod: "CASH", bankAccountId: "bank-1" }))
+      .toThrow(/non-bank/i);
   });
 });
