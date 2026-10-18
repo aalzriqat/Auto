@@ -54,6 +54,17 @@ export const sendCollectionReminder = internalAction({
       reminderId: args.reminderId,
     });
 
+    // Re-read source state at dispatch. This cannot recall an accepted external
+    // message or make a later provider call atomic with a subsequent deletion.
+    if (payload?.sourceUnavailable) {
+      await ctx.runMutation(internal.collections.markReminderResult, {
+        reminderId: args.reminderId,
+        status: "SKIPPED",
+        error: "Linked collection record is unavailable.",
+      });
+      return { success: false, skipped: true };
+    }
+
     if (!payload || !payload.customer) {
       await ctx.runMutation(internal.collections.markReminderResult, {
         reminderId: args.reminderId,

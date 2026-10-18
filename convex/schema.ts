@@ -2451,7 +2451,38 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_status_alarm", ["status", "alarmTriggered"])
+    // SCRUM-807 — lets the alarm sweep read only the tasks that are due. Added
+    // alongside by_status_alarm; the older index is kept (indexes are never
+    // removed here).
+    .index("by_status_alarm_due", ["status", "alarmTriggered", "dueDate"])
     .index("by_org_customer", ["orgId", "customerId"]),
+
+  // SCRUM-807 — durable progress of ONE task alarm's manager notifications.
+  // Written in the same transaction that flags the task. Completed/cancelled
+  // deliveries retain their history and are excluded from the ACTIVE sweep.
+  // `cursor` is the memberships pagination cursor (null = not
+  // started); each page commits its notifications together with the cursor that
+  // says they were sent. `lastProgressAt` lets the alarm cron find a delivery whose
+  // continuation was lost; `attempts` counts those re-kicks since the last
+  // progress, because a page that throws rolls back and cannot count itself.
+  // A delivery that exhausts them is parked as FAILED. All delivery history,
+  // including the task title and assignee name, survives organization deletion
+  // by explicit owner policy; this table is not only in-flight work.
+  taskAlarmDeliveries: defineTable({
+    orgId: v.id("organizations"),
+    taskId: v.id("tasks"),
+    taskTitle: v.string(),
+    assigneeName: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    lastProgressAt: v.number(),
+    status: v.union(v.literal("ACTIVE"), v.literal("FAILED"), v.literal("COMPLETED"), v.literal("CANCELLED")),
+    completedAt: v.optional(v.number()),
+    attempts: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    // Status leads so terminal rows, which are never re-read by the sweep,
+    // cannot fill its batch ahead of live stalled ones.
+    .index("by_status_lastProgressAt", ["status", "lastProgressAt"]),
 
   taskHistory: defineTable({
     orgId: v.id("organizations"),
@@ -4954,6 +4985,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_status_and_dueDate", ["orgId", "status", "dueDate"])
+    .index("by_org_status_isDeleted_dueDate", ["orgId", "status", "isDeleted", "dueDate"])
     .index("by_org_dueDate", ["orgId", "dueDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
@@ -5079,6 +5111,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_status_and_chequeDate", ["orgId", "status", "chequeDate"])
+    .index("by_org_status_isDeleted_chequeDate", ["orgId", "status", "isDeleted", "chequeDate"])
     .index("by_org_chequeDate", ["orgId", "chequeDate"])
     .index("by_org_bank_and_chequeNumber", ["orgId", "bank", "chequeNumber"])
     .index("by_org_customer", ["orgId", "customerId"])
@@ -5182,6 +5215,11 @@ export default defineSchema({
     .index("by_org_status_and_scheduledAt", ["orgId", "status", "scheduledAt"])
     .index("by_receivable", ["receivableId"])
     .index("by_cheque", ["chequeId"])
+    // SCRUM-807: the reminder cooldown asks "is there a PENDING/SENT/SKIPPED row
+    // of this message type for this one document, newer than X" - an exact
+    // range per status, not a read of the document's whole reminder history.
+    .index("by_receivable_and_messageType_and_status_and_createdAt", ["receivableId", "messageType", "status", "createdAt"])
+    .index("by_cheque_and_messageType_and_status_and_createdAt", ["chequeId", "messageType", "status", "createdAt"])
     .index("by_org_customer", ["orgId", "customerId"]),
 
   companyDocumentRules: defineTable({
@@ -7336,7 +7374,9 @@ export default defineSchema({
   })
     .index("by_status", ["status"])
     .index("by_city", ["buyerCity"])
-    .index("by_publicId", ["publicId"]),
+    .index("by_publicId", ["publicId"])
+    // SCRUM-807 — lets the daily expiry sweep read only requests past expiresAt.
+    .index("by_status_expires", ["status", "expiresAt"]),
 
   // One row per matched dealer per request — not a flat array on
   // marketplaceRequests — so notify/respond timestamps are trackable per
