@@ -683,12 +683,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // unchanged at 356 (re-measured FROM THE ANALYSER). The removed internalMutation had no `orgId` and deleted
   // deployment-global diagnostics; operational records are now never deleted.
   // The two SCRUM-807 changes are independent; with both applied: 529 + 1 = 530 total, 356 + 1 = 357 analysed.
+  // SCRUM-807: deliverTaskAlarmToManagers is one retained internal mutation keyed by deliveryId, not orgId. Re-measured from the analyser after merging main: 534 total.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 533,
+      totalMutations: 534,
       analysed: 360,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 158,
+      skippedNoOrgId: 159,
     });
   });
 });
