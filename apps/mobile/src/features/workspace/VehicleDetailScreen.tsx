@@ -281,6 +281,13 @@ function VehicleDetailContent({
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
   const [reservationMethod, setReservationMethod] = useState("");
+  const [reservationBankAccountId, setReservationBankAccountId] = useState("");
+  const reservationNeedsBank = parseOptionalNumber(reservationDeposit) !== undefined &&
+    (reservationMethod === "BANK_TRANSFER" || reservationMethod === "CARD");
+  const receiptBankOptions = useQuery(api.deposits.listReceiptBankOptions,
+    canQuery && orgId && canRecordDeposit && reservationNeedsBank ? { orgId } : "skip");
+  const reservationBankReady = !reservationNeedsBank ||
+    (receiptBankOptions?.banks.some((bank) => bank._id === reservationBankAccountId) ?? false);
   const [reservationHoldDays, setReservationHoldDays] = useState("");
   const [savingReservation, setSavingReservation] = useState(false);
 
@@ -304,6 +311,7 @@ function VehicleDetailContent({
     setReservationCustomerId("");
     setReservationDeposit("");
     setReservationMethod("");
+    setReservationBankAccountId("");
     setReservationHoldDays("");
     setRefundChoiceByDeposit({});
   }, [vehicleId]);
@@ -514,7 +522,7 @@ function VehicleDetailContent({
   }
 
   async function handleCreateReservation() {
-    if (!orgId || !vehicleId || !reservationCustomerId) return;
+    if (!orgId || !vehicleId || !reservationCustomerId || !reservationBankReady) return;
     const holdDays = parseOptionalNumber(reservationHoldDays);
     setSavingReservation(true);
     try {
@@ -531,6 +539,8 @@ function VehicleDetailContent({
         customerId: reservationCustomerId,
         depositAmount: parseOptionalNumber(reservationDeposit),
         depositMethod: parseOptionalNumber(reservationDeposit) !== undefined ? (reservationMethod as "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE") : undefined,
+        depositBankAccountId: parseOptionalNumber(reservationDeposit) !== undefined && reservationNeedsBank
+          ? reservationBankAccountId : undefined,
         expiresAt: holdDays !== undefined && holdDays > 0 ? Date.now() + holdDays * 24 * 60 * 60 * 1000 : undefined,
       });
       // Only a CONFIRMED success retires this vehicle's identity.
@@ -538,6 +548,7 @@ function VehicleDetailContent({
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationMethod("");
+      setReservationBankAccountId("");
       setReservationHoldDays("");
       Alert.alert(locale === "ar" ? "تم إنشاء الحجز." : "Reservation created.");
     } catch (error) {
@@ -1162,7 +1173,7 @@ function VehicleDetailContent({
                         { label: locale === "ar" ? "بطاقة" : "Card", value: "CARD" },
                         { label: locale === "ar" ? "شيك" : "Cheque", value: "CHEQUE" },
                       ]}
-                      onChange={setReservationMethod}
+                      onChange={(method) => { setReservationMethod(method); setReservationBankAccountId(""); }}
                     />
                   ) : (
                     <Text style={styles.mutedText}>
@@ -1172,6 +1183,17 @@ function VehicleDetailContent({
                     </Text>
                   )
                 ) : null}
+                {parseOptionalNumber(reservationDeposit) !== undefined && canRecordDeposit && reservationNeedsBank && (
+                  <SelectField
+                    label={locale === "ar" ? "البنك الذي استلم العربون" : "Bank that received the deposit"}
+                    value={receiptBankOptions?.banks.some((bank) => bank._id === reservationBankAccountId) ? reservationBankAccountId : ""}
+                    options={(receiptBankOptions?.banks ?? []).map((bank) => ({ label: `${bank.name} · ${bank.currency}`, value: bank._id }))}
+                    onChange={setReservationBankAccountId}
+                  />
+                )}
+                {reservationNeedsBank && receiptBankOptions?.truncated && (
+                  <Text style={styles.mutedText}>{locale === "ar" ? "قائمة البنوك كبيرة جداً؛ اطلب مساعدة المسؤول." : "Too many banks to choose from; ask an administrator."}</Text>
+                )}
                 <FormField
                   keyboardType="numeric"
                   label={locale === "ar" ? "مدة الحجز بالأيام (اختياري)" : "Hold days (optional)"}
@@ -1184,7 +1206,7 @@ function VehicleDetailContent({
                     savingReservation ||
                     !reservationCustomerId ||
                     (parseOptionalNumber(reservationDeposit) !== undefined &&
-                      (!canRecordDeposit || !reservationMethod))
+                      (!canRecordDeposit || !reservationMethod || !reservationBankReady))
                   }
                   label={savingReservation ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "إنشاء الحجز" : "Create reservation")}
                   onPress={handleCreateReservation}
