@@ -685,8 +685,8 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // The two SCRUM-807 changes are independent; with both applied: 529 + 1 = 530 total, 356 + 1 = 357 analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 530,
-      analysed: 357,
+      totalMutations: 533,
+      analysed: 360,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 158,
     });

@@ -7,6 +7,7 @@ import { DataModel, Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { validateVinChecksum } from "../lib/vinHelpers";
 import { SOCIAL_CONVERSATION_GENERATION } from "./utils/materialization";
+import { synchronizeJournalLineEligibility, invalidateJournalParentEligibility } from "./utils/journalReportEligibility";
 
 /**
  * Maintained counts for vehicles, so the dashboard can answer "how many" and
@@ -410,6 +411,8 @@ export const aggregateTriggers = new Triggers<DataModel>();
 function registerCountingTriggers<Ctx extends MutationCtx>(
   triggers: Triggers<DataModel, Ctx>
 ): void {
+  triggers.register("journalLines", synchronizeJournalLineEligibility);
+  triggers.register("journalEntries", invalidateJournalParentEligibility);
   triggers.register("vehicles", vehiclesByOrg.idempotentTrigger());
   triggers.register("vehicles", vehicleQualityByOrg.idempotentTrigger());
   triggers.register("customers", customersByOrg.idempotentTrigger());
