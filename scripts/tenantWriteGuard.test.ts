@@ -159,12 +159,9 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `create`, which is requireSuperAdmin-gated, and its cross-org writes are
   // the entire point of a platform-wide broadcast.
   //
-  // Then 420→421 by `adminSystem.pruneOperationalLogs`, which also lands in
-  // `skippedNoOrgId` rather than `analysed`. Correct, not a hole: it takes no
-  // args at all, and the two tables it deletes from (cronHeartbeats,
-  // webhookLogs) are deployment-global diagnostics with no orgId column — there
-  // is no tenant boundary for a write to cross. It is an internalMutation
-  // reachable only from the `prune-operational-logs` cron.
+  // Then 420→421 by `adminSystem.pruneOperationalLogs`, a global-diagnostics
+  // sweep with no orgId. SCRUM-807 removed it (421→420 again) so no code path
+  // deletes operational records; the shifts recorded below are net of that.
   //
   // Then 421→422 by `migrations.backfillVehicleAggregate`, which seeds the
   // vehicle aggregate from existing rows. Also `skippedNoOrgId`, and also
@@ -678,12 +675,20 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-766 PR-B: + customerFinanceCompanyPayments.confirmPayment/voidPayment (+2) - 528 -> 530 total,
   // 354 -> 356 analysed (re-measured FROM THE ANALYSER). Each takes `orgId`, runs requireTenantAuth and reads
   // the application and (for void) the evidence row through requireOwnedRow before its only write.
+  // SCRUM-807: + accountingOutbox.wakePeriodHeldRows (+1) - 530 -> 531 total, 356 -> 357 analysed (re-measured
+  // FROM THE ANALYSER). An internalMutation that takes `orgId`; it reads only through the `by_org_hold_date`
+  // index with `orgId` as its first equality and patches only the rows that read returned (no caller-supplied
+  // document id), so the unguarded-write audit stays empty.
+  // SCRUM-807: - adminSystem.pruneOperationalLogs (-1) - 530 -> 529 total, 159 -> 158 skippedNoOrgId, `analysed`
+  // unchanged at 356 (re-measured FROM THE ANALYSER). The removed internalMutation had no `orgId` and deleted
+  // deployment-global diagnostics; operational records are now never deleted.
+  // The two SCRUM-807 changes are independent; with both applied: 529 + 1 = 530 total, 356 + 1 = 357 analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
       totalMutations: 530,
-      analysed: 356,
+      analysed: 357,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 159,
+      skippedNoOrgId: 158,
     });
   });
 });
