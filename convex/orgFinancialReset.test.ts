@@ -354,7 +354,11 @@ describe("resetOrgFinancialData", () => {
     // its receipt movement, invoice and sale parents.
     // 40 -> 41: `retainedCreditRefundRequests` (SCRUM-724) names a retained position,
     // its movement and the canonical payout, all of which the reset clears.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(41);
+    // 41 -> 43: bank aggregate line markers and readiness state are financial
+    // derivatives; reset must remove both with the underlying journal history.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(43);
+    expect(RESET_TABLES_FOR_TEST).toContain("bankBalanceAggregateItems");
+    expect(RESET_TABLES_FOR_TEST).toContain("bankBalanceAggregateStates");
   });
 });
 
