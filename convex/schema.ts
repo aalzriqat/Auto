@@ -5448,6 +5448,8 @@ export default defineSchema({
     resetGeneration: v.number(),
     status: v.union(v.literal("READY"), v.literal("BACKFILL_REQUIRED"), v.literal("BACKFILLING")),
     cursor: v.optional(v.string()),
+    // Tree layout the state certifies; absent means the original single-tree layout.
+    layout: v.optional(v.number()),
     // Legacy; written as 0 on rebuild. Gross flow lives in bankBalanceGrossShards.
     grossAbsMinor: v.number(),
     updatedAt: v.number(),

@@ -18,12 +18,44 @@ const attribution = new DirectAggregate<{
   Id: Id<"journalLines">;
 }>(components.bankAttributionByDate);
 
+/**
+ * Lines of one org are spread over hash buckets, each its own component
+ * namespace. Keys are dated, so in a single tree every posting lands on the
+ * same rightmost node and concurrent postings in one org fail on OCC; across
+ * buckets they touch different trees. Reads sum the buckets.
+ */
+export const BANK_AGGREGATE_BUCKETS = 16;
+/** Bumped when the tree layout changes; a state from another layout is never READY. */
+export const BANK_AGGREGATE_LAYOUT = 2;
+
 export function bankAggregateNamespace(
   orgId: Id<"organizations">,
   resetGeneration: number,
   mappingGeneration: number,
 ): string {
-  return `${orgId}:${resetGeneration}:${mappingGeneration}`;
+  return `${orgId}:${resetGeneration}:${mappingGeneration}:L${BANK_AGGREGATE_LAYOUT}`;
+}
+
+/** Deterministic FNV-1a hash of a document id, for spreading writes. */
+export function idHash(id: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash;
+}
+
+function bucketNamespace(namespace: string, bucket: number): string {
+  return `${namespace}#${bucket}`;
+}
+
+function lineNamespace(namespace: string, lineId: Id<"journalLines">): string {
+  return bucketNamespace(namespace, idHash(lineId) % BANK_AGGREGATE_BUCKETS);
+}
+
+function allBuckets(namespace: string): string[] {
+  return Array.from({ length: BANK_AGGREGATE_BUCKETS }, (_, bucket) => bucketNamespace(namespace, bucket));
 }
 
 export type BankAggregateLine = {
@@ -42,6 +74,7 @@ export async function addBankControlLine(
   namespace: string,
 ): Promise<void> {
   if (!Number.isSafeInteger(line.netMinor)) throw new Error("Bank aggregate line amount exceeds safe integer precision.");
+  namespace = lineNamespace(namespace, line.id);
   await control.insertIfDoesNotExist(ctx, {
     namespace,
     key: [line.accountId, line.currency, line.accountingDate],
@@ -63,6 +96,7 @@ export async function removeBankControlLine(
   line: BankAggregateLine,
   namespace: string,
 ): Promise<void> {
+  namespace = lineNamespace(namespace, line.id);
   await control.deleteIfExists(ctx, {
     namespace,
     key: [line.accountId, line.currency, line.accountingDate],
@@ -90,12 +124,10 @@ export async function readControlRange(
     lower: { key: [accountId, currency, range.fromInclusive ?? Number.MIN_SAFE_INTEGER] as ControlKey, inclusive: true },
     upper: { key: [accountId, currency, range.through] as ControlKey, inclusive: true },
   };
-  const [count, sum] = await Promise.all([
-    control.count(ctx, { namespace, bounds }),
-    control.sum(ctx, { namespace, bounds }),
-  ]);
-  if (!Number.isSafeInteger(sum)) throw new Error("Bank aggregate control sum lost integer precision.");
-  return { count, netMinor: sum };
+  return sumBuckets(await Promise.all(allBuckets(namespace).map((bucket) => Promise.all([
+    control.count(ctx, { namespace: bucket, bounds }),
+    control.sum(ctx, { namespace: bucket, bounds }),
+  ]))), "control");
 }
 
 export async function readAttributionRange(
@@ -110,17 +142,27 @@ export async function readAttributionRange(
     lower: { key: [accountId, currency, bankAccountId, range.fromInclusive ?? Number.MIN_SAFE_INTEGER] as AttributionKey, inclusive: true },
     upper: { key: [accountId, currency, bankAccountId, range.through] as AttributionKey, inclusive: true },
   };
-  const [count, sum] = await Promise.all([
-    attribution.count(ctx, { namespace, bounds }),
-    attribution.sum(ctx, { namespace, bounds }),
-  ]);
-  if (!Number.isSafeInteger(sum)) throw new Error("Bank aggregate attribution sum lost integer precision.");
-  return { count, netMinor: sum };
+  return sumBuckets(await Promise.all(allBuckets(namespace).map((bucket) => Promise.all([
+    attribution.count(ctx, { namespace: bucket, bounds }),
+    attribution.sum(ctx, { namespace: bucket, bounds }),
+  ]))), "attribution");
+}
+
+function sumBuckets(parts: Array<[number, number]>, tree: string): { count: number; netMinor: number } {
+  let count = 0;
+  let netMinor = 0;
+  for (const [bucketCount, bucketSum] of parts) {
+    if (!Number.isSafeInteger(bucketSum)) throw new Error(`Bank aggregate ${tree} sum lost integer precision.`);
+    count += bucketCount;
+    netMinor += bucketSum;
+  }
+  if (!Number.isSafeInteger(netMinor)) throw new Error(`Bank aggregate ${tree} sum lost integer precision.`);
+  return { count, netMinor };
 }
 
 export async function clearBankAggregateNamespace(ctx: MutationCtx, namespace: string): Promise<void> {
-  await Promise.all([
-    control.clear(ctx, { namespace }),
-    attribution.clear(ctx, { namespace }),
-  ]);
+  await Promise.all(allBuckets(namespace).flatMap((bucket) => [
+    control.clear(ctx, { namespace: bucket }),
+    attribution.clear(ctx, { namespace: bucket }),
+  ]));
 }

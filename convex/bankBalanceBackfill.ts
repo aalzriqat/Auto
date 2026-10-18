@@ -3,6 +3,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { onBankLineChange } from "./accounting/bankAggregateTriggers";
+import { BANK_AGGREGATE_LAYOUT } from "./accounting/bankLineAggregate";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
 const PAGE_SIZE = 16;
@@ -39,23 +40,25 @@ export const runPage = internalMutation({
     let state = await ctx.db.query("bankBalanceAggregateStates")
       .withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
     if (state && (state.resetGeneration !== resetGeneration ||
-        state.mappingGeneration !== mappingGeneration || state.controlAccountId !== mapped._id)) {
+        state.mappingGeneration !== mappingGeneration || state.controlAccountId !== mapped._id ||
+        state.layout !== BANK_AGGREGATE_LAYOUT)) {
       await ctx.db.patch(state._id, {
         controlAccountId: mapped._id,
         resetGeneration,
         mappingGeneration,
+        layout: BANK_AGGREGATE_LAYOUT,
         status: "BACKFILLING",
         cursor: undefined,
         grossAbsMinor: 0,
         updatedAt: Date.now(),
       });
       state = { ...state, controlAccountId: mapped._id, resetGeneration, mappingGeneration,
-        status: "BACKFILLING", cursor: undefined, grossAbsMinor: 0 };
+        layout: BANK_AGGREGATE_LAYOUT, status: "BACKFILLING", cursor: undefined, grossAbsMinor: 0 };
     }
     if (!state) {
       const id = await ctx.db.insert("bankBalanceAggregateStates", {
         orgId, controlAccountId: mapped._id, resetGeneration, mappingGeneration,
-        status: "BACKFILLING", grossAbsMinor: 0, updatedAt: Date.now(),
+        layout: BANK_AGGREGATE_LAYOUT, status: "BACKFILLING", grossAbsMinor: 0, updatedAt: Date.now(),
       });
       state = await ctx.db.get(id) as Doc<"bankBalanceAggregateStates">;
     }

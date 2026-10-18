@@ -4,7 +4,9 @@ import type { MutationCtx } from "../_generated/server";
 import { SYSTEM_KEYS } from "../utils/defaultChart";
 import {
   addBankControlLine,
+  BANK_AGGREGATE_LAYOUT,
   bankAggregateNamespace,
+  idHash,
   clearBankAggregateNamespace,
   removeBankControlLine,
   type BankAggregateLine,
@@ -18,12 +20,7 @@ const GROSS_SHARDS = 64;
 const MAX_SHARD_GROSS_MINOR = Math.floor(Number.MAX_SAFE_INTEGER / GROSS_SHARDS);
 
 function grossShard(lineId: Id<"journalLines">): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < lineId.length; i++) {
-    hash ^= lineId.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash % GROSS_SHARDS;
+  return idHash(lineId) % GROSS_SHARDS;
 }
 
 async function adjustGross(
@@ -166,7 +163,8 @@ async function stateForLiveLine(
   const existing = await ctx.db.query("bankBalanceAggregateStates")
     .withIndex("by_org", (q) => q.eq("orgId", line.orgId)).unique();
   if (existing && existing.controlAccountId === line.accountId &&
-      existing.mappingGeneration === gen.mapping && existing.resetGeneration === gen.reset) {
+      existing.mappingGeneration === gen.mapping && existing.resetGeneration === gen.reset &&
+      existing.layout === BANK_AGGREGATE_LAYOUT) {
     return existing;
   }
   const firstTwo = await ctx.db.query("journalLines")
@@ -179,6 +177,7 @@ async function stateForLiveLine(
     mappingGeneration: gen.mapping,
     resetGeneration: gen.reset,
     status: emptyBeforeThisInsert ? "READY" as const : "BACKFILL_REQUIRED" as const,
+    layout: BANK_AGGREGATE_LAYOUT,
     grossAbsMinor: 0,
     cursor: undefined,
     updatedAt: Date.now(),

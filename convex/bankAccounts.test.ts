@@ -13,6 +13,7 @@ import { api, internal } from "./_generated/api";
 import { BOOK_BALANCE_READ_BUDGET, computeBookBalance } from "./bankAccounts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
+import { BANK_AGGREGATE_BUCKETS, idHash } from "./accounting/bankLineAggregate";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -542,6 +543,26 @@ describe("bankAccounts.getBookBalance", () => {
     const expectedGross = 1_000 + Array.from({ length: 12 }, (_, i) => 2_000 + i).reduce((a, b) => a + b, 0) + 700;
     expect(shards.reduce((sum, row) => sum + row.grossAbsMinor, 0)).toBe(expectedGross);
     expect(await asOfBalance(fx, Date.now(), 200)).toMatchObject({ status: "OK" });
+  });
+
+  test("bank postings spread over separate aggregate trees, and a state from the old layout is withheld", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    for (let i = 0; i < 12; i++) await seedBankLine(fx, { debitMinor: 1_000 + i, bankAccountId: bankA });
+    const { bank } = await refs(fx);
+    const lines = await fx.t.run((ctx) =>
+      ctx.db.query("journalLines").filter((q) => q.eq(q.field("accountId"), bank._id)).collect());
+    // Dated keys put concurrent postings on one tree's newest node; separate trees don't share it.
+    const buckets = new Set(lines.map((line) => idHash(line._id) % BANK_AGGREGATE_BUCKETS));
+    expect(buckets.size).toBeGreaterThan(1);
+    const expected = Array.from({ length: 12 }, (_, i) => 1_000 + i).reduce((a, b) => a + b, 0);
+    expect(await asOfBalance(fx, Date.now(), 200)).toMatchObject({ status: "OK", balanceMinor: expected });
+
+    await fx.t.run(async (ctx) => {
+      const state = await ctx.db.query("bankBalanceAggregateStates").withIndex("by_org", (q) => q.eq("orgId", fx.orgId)).unique();
+      await ctx.db.patch(state!._id, { layout: undefined });
+    });
+    expect(await asOfBalance(fx, Date.now(), 200)).not.toMatchObject({ status: "OK" });
   });
 
   test("a large posted period stays readable without per-entry lookups", async () => {

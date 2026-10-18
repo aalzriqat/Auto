@@ -16,7 +16,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
-import { bankAggregateNamespace, readAttributionRange, readControlRange } from "./accounting/bankLineAggregate";
+import { BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRange, readControlRange } from "./accounting/bankLineAggregate";
 
 export const list = query({
   args: { orgId: v.id("organizations") },
@@ -250,6 +250,7 @@ async function readyBankAggregateNamespace(
   }
   if (state.status !== "READY" || state.controlAccountId !== accountId ||
       state.resetGeneration !== resetGeneration || state.mappingGeneration !== mappingGeneration ||
+      state.layout !== BANK_AGGREGATE_LAYOUT ||
       !Number.isSafeInteger(state.grossAbsMinor)) {
     throw new InconsistentHistory();
   }
