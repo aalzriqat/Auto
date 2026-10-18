@@ -53,6 +53,15 @@ const baseVehicle = {
   status: "AVAILABLE" as const,
 };
 
+async function addOperatingBank(d: Awaited<ReturnType<typeof seedDealer>>) {
+  const now = Date.now();
+  return await d.t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId: d.orgId, name: "Operating bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: now, isActive: true, isReconciliationTarget: false,
+    createdBy: d.ownerId, createdAt: now, updatedAt: now,
+  }));
+}
+
 async function seedDealer(suffix: string) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
@@ -230,6 +239,7 @@ describe("vehicles.create — an explicit ownership decision", () => {
 
   test("owned BANK_TRANSFER with a price and no supplier name posts one acquisition and no payable; the same car with no method is refused, writing nothing", async () => {
     const d = await seedDealer("c6b");
+    const bankAccountId = await addOperatingBank(d);
     const before = await worldCounts(d);
     await expectAppError(
       d.asOwner.mutation(api.vehicles.create, {
@@ -242,7 +252,7 @@ describe("vehicles.create — an explicit ownership decision", () => {
 
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "STOCK",
-      purchasePrice: 15000, purchasePaymentMethod: "BANK_TRANSFER",
+      purchasePrice: 15000, purchasePaymentMethod: "BANK_TRANSFER", bankAccountId,
     });
     const events = await acquisitionEvents(d, vehicleId);
     expect(events).toHaveLength(1);
@@ -531,12 +541,13 @@ describe("ownership flips", () => {
 
   test("an authorized buy-out writes the conversion audit row with the explicit terms and exactly one acquisition journal for the explicit amount", async () => {
     const d = await seedDealer("f6");
+    const bankAccountId = await addOperatingBank(d);
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
     });
     // The agreed buy-out differs from the consignment cost on purpose.
     await d.asOwner.mutation(api.vehicles.update, {
-      orgId: d.orgId, vehicleId, sourceType: "STOCK", purchasePrice: 8200, purchasePaymentMethod: "BANK_TRANSFER",
+      orgId: d.orgId, vehicleId, sourceType: "STOCK", purchasePrice: 8200, purchasePaymentMethod: "BANK_TRANSFER", bankAccountId,
     });
     const events = await acquisitionEvents(d, vehicleId);
     expect(events).toHaveLength(1);

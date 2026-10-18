@@ -346,6 +346,10 @@ class World {
         // The product's own guard: a dealership-paid cost with no recorded payment blocks the forward.
         if (!this.feePaid) throw new ConvexError("A dealership-paid cost has no recorded payment, so the forward is refused.");
         if (typeof a.paidAt !== "number" || a.paidAt > Date.now()) throw new ConvexError("paidAt is in the future");
+        // SCRUM-54: a bank transfer names the physical bank - the one the OWNER created (the manager cannot create one).
+        if (a.method !== "BANK_TRANSFER" || this.paidFromBankId === null || a.bankAccountId !== this.paidFromBankId) {
+          throw new ConvexError("Select the bank account this payment was made from. Nothing has been recorded.");
+        }
         if (this.faults.forwardRefused || a.expectedAmountMinor !== plan.forward) {
           throw new ConvexError("The amount due to the finance company has changed.");
         }
@@ -664,6 +668,10 @@ describe("SCRUM-350 MONEY_BOUNDARY handler: product answers that disagree with t
     expect(h.world.calls.indexOf("owner:bankAccounts:create")).toBeGreaterThanOrEqual(0);
     expect(h.world.calls.indexOf("owner:bankAccounts:create")).toBeLessThan(h.world.calls.indexOf("owner:financeDealCosts:recordDirectFeePayment"));
     expect(pay?.args.bankAccountId).toEqual(expect.any(String));
+    // The manager's forward leaves the SAME owner-created bank; the manager seat never creates one.
+    const forward = h.world.argsOf.find((entry) => entry.name === "financeCompanyForward:recordFinanceCompanyForward");
+    expect(forward?.args).toMatchObject({ method: "BANK_TRANSFER", bankAccountId: pay?.args.bankAccountId });
+    expect(h.world.calls).not.toContain("manager:bankAccounts:create");
     // The money oracle ran: the judged sale reached a verdict with its ledger read in full, not merely no throw.
     expect(h.world.calls).toContain("owner:applications:finalizeDeal");
     expect(h.evidence[0]).toMatchObject({ ledger: { complete: true }, violations: [] });

@@ -820,6 +820,7 @@ export async function hookDepositReceived(
     amountMinor: number;
     currency: string;
     paymentMethod: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -838,6 +839,7 @@ export async function hookDepositReceived(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId,
       customerId: args.customerId.toString(),
     },
   });
@@ -1076,6 +1078,7 @@ export async function hookSupplierReceivableCollected(
     amountMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     receiptSeq: number;
     actorId: Id<"users">;
     occurredAt: number;
@@ -1099,6 +1102,7 @@ export async function hookSupplierReceivableCollected(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
       vehicleId: args.vehicleId.toString(),
     },
   });
@@ -1114,6 +1118,7 @@ type DepositResolutionHookArgs = {
   occurredAt: number;
   /** Only meaningful for DEPOSIT_REFUNDED — forfeiture never moves cash. */
   paymentMethod?: string;
+  bankAccountId?: Id<"bankAccounts">;
   /**
    * Scopes the entry to ONE vehicle's slice of a shared quote deposit.
    *
@@ -1160,6 +1165,7 @@ function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORF
         currency: args.currency,
         customerId: args.customerId.toString(),
         paymentMethod: args.paymentMethod,
+        bankAccountId: args.bankAccountId?.toString(),
         holdId: args.sliceHoldId?.toString(),
       },
     });
@@ -1299,6 +1305,7 @@ export async function hookSupplierPaymentSettled(
     taxMinor?: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     /** See SupplierPaymentSettledPayload — defaults to "COGS" (sale-originated payables). */
     costOrigin?: "COGS" | "VEHICLE_INVENTORY";
     actorId: Id<"users">;
@@ -1328,6 +1335,7 @@ export async function hookSupplierPaymentSettled(
       taxMinor: args.taxMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
       costOrigin: args.costOrigin,
     },
   });
@@ -1340,6 +1348,7 @@ type CollectionHookArgs = {
   amountMinor: number;
   currency: string;
   paymentMethod: string;
+  bankAccountId?: Id<"bankAccounts">;
   actorId: Id<"users">;
   occurredAt: number;
 };
@@ -1386,6 +1395,7 @@ function makeCollectionHook(eventType: "COLLECTION_REFUND", keyPrefix: string) {
         currency: args.currency,
         customerId: args.customerId.toString(),
         paymentMethod: args.paymentMethod,
+        ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
       },
     });
 }
@@ -1428,6 +1438,7 @@ export async function hookExpensePosted(
     currency: string;
     category?: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
     vehicleId?: Id<"vehicles">;
@@ -1478,6 +1489,7 @@ export async function hookExpensePosted(
       currency: args.currency,
       category: args.category,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
       vehicleId: args.vehicleId?.toString(),
       capitalizeToInventory: args.capitalizeToInventory,
       isPrepaid: prepaid,
@@ -1499,6 +1511,7 @@ export async function hookVehicleAcquired(
     costMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -1517,6 +1530,7 @@ export async function hookVehicleAcquired(
       costMinor: args.costMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId,
     },
   });
 }
@@ -1583,7 +1597,7 @@ export async function hookVehicleLandedCostCapitalized(
     vehicleId: Id<"vehicles">;
     editToken: string;
     /** Per-account signed deltas — see VehicleLandedCostCapitalizedPayload. */
-    accountDeltas: Array<{ paymentMethod?: string; deltaMinor: number }>;
+    accountDeltas: Array<{ paymentMethod?: string; bankAccountId?: Id<"bankAccounts">; deltaMinor: number }>;
     currency: string;
     actorId: Id<"users">;
     occurredAt: number;
@@ -1621,6 +1635,7 @@ export async function hookVehicleAcquisitionCostCorrected(
     currency: string;
     correctionType?: AcquisitionCorrectionType;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -1640,6 +1655,7 @@ export async function hookVehicleAcquisitionCostCorrected(
       currency: args.currency,
       correctionType: args.correctionType,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -1717,6 +1733,7 @@ type CommissionHookArgs = {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: Id<"bankAccounts">;
   actorId: Id<"users">;
   occurredAt: number;
 };
@@ -1750,6 +1767,7 @@ function makeCommissionHook(
       salespersonId: args.salespersonId.toString(),
     };
     if (args.paymentMethod) payload.paymentMethod = args.paymentMethod;
+    if (args.bankAccountId) payload.bankAccountId = args.bankAccountId.toString();
     await postDomainEvent(ctx, {
       orgId: args.orgId,
       eventType,
@@ -2163,6 +2181,7 @@ export async function hookEmployeeAdvancePaid(
     amountMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2183,6 +2202,7 @@ export async function hookEmployeeAdvancePaid(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -2201,6 +2221,7 @@ export async function hookEmployeeAdvanceRecovered(
     amountMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2221,6 +2242,7 @@ export async function hookEmployeeAdvanceRecovered(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -2271,6 +2293,7 @@ export async function hookPayrollPaid(
     netMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2294,6 +2317,7 @@ export async function hookPayrollPaid(
       netMinor: args.netMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -2765,6 +2789,7 @@ export async function hookAssetCapitalized(
     costMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2774,6 +2799,7 @@ export async function hookAssetCapitalized(
     payload: {
       costMinor: args.costMinor,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -2912,6 +2938,7 @@ export async function hookPrepaidExpenseRefunded(
     taxMinor?: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2937,6 +2964,7 @@ export async function hookPrepaidExpenseRefunded(
       taxMinor: args.taxMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -3189,6 +3217,7 @@ export interface PartnerEquityHookArgs {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: Id<"bankAccounts">;
   actorId: Id<"users">;
   occurredAt: number;
 }
@@ -3213,6 +3242,7 @@ async function postPartnerEquityEvent(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -3321,6 +3351,7 @@ export async function hookAssetDisposed(
     costMinor: number;
     accumulatedDepreciationMinor: number;
     proceedsMinor: number;
+    bankAccountId?: Id<"bankAccounts">;
     currency: string;
     actorId: Id<"users">;
     occurredAt: number;
@@ -3332,6 +3363,7 @@ export async function hookAssetDisposed(
       costMinor: args.costMinor,
       accumulatedDepreciationMinor: args.accumulatedDepreciationMinor,
       proceedsMinor: args.proceedsMinor,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -3410,6 +3442,7 @@ export async function hookCustodyCashMoved(
       amountMinor: args.entry.amountMinor,
       currency: args.custody.currency,
       paymentMethod: args.entry.method,
+      bankAccountId: args.entry.bankAccountId?.toString(),
     },
   });
 }
@@ -3668,6 +3701,8 @@ export async function hookFinanceCompanyForwardPaid(
     currency: string;
     paymentMethod: string;
     cashKey: SystemKey;
+    /** SCRUM-54: the physical bank a BANK_ACCOUNT payment left; absent for cash. */
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -3695,6 +3730,7 @@ export async function hookFinanceCompanyForwardPaid(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }

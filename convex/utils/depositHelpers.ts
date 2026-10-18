@@ -6,6 +6,7 @@ import { assertVehicleNotDeleted } from "./vehicleLiveness";
 import { requireActorPermission } from "./tenancy";
 import { PERMISSIONS } from "./permissions";
 import { assertDifferentActors } from "./financialGuards";
+import { requireActiveBankInCurrency } from "./bankAccountGuards";
 import { normalizeCurrency, amountToMinorOrThrow, type DepositMethod } from "./depositRecording";
 import { fromMinorUnits } from "./money";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
@@ -873,6 +874,7 @@ export async function payOutDepositSlice(
     currency: string;
     resolution: "REFUNDED" | "FORFEITED";
     refundMethod?: DepositMethod;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     notes?: string;
     occurredAt: number;
@@ -910,6 +912,18 @@ export async function payOutDepositSlice(
     args.deposit.createdBy,
     "Deposit creator cannot resolve their own deposit refund or forfeiture."
   );
+
+  if (args.resolution === "REFUNDED" && args.refundMethod !== "CASH") {
+    await requireActiveBankInCurrency(ctx, {
+      orgId: args.orgId,
+      bankAccountId: args.bankAccountId,
+      currency: args.currency,
+      missingMessage: "Select the bank account that paid this deposit refund.",
+      currencySubject: "deposit refund",
+    });
+  } else if (args.bankAccountId) {
+    throw new ConvexError("A cash refund or forfeiture cannot name a bank account.");
+  }
 
   const amountMajor = fromMinorUnits(args.amountMinor, args.currency);
 
@@ -994,6 +1008,7 @@ export async function payOutDepositSlice(
     actorId: args.actorId,
     occurredAt: args.occurredAt,
     paymentMethod: args.refundMethod,
+    bankAccountId: args.bankAccountId,
     sliceHoldId: args.holdId,
   });
 }
@@ -1022,6 +1037,7 @@ export async function releaseHeldDeposit(
     resolution: "REFUNDED" | "FORFEITED";
     actorId: Id<"users">;
     refundMethod?: DepositMethod;
+    bankAccountId?: Id<"bankAccounts">;
     notes?: string;
     idempotencyKey?: string;
     occurredAt?: number;
@@ -1068,6 +1084,17 @@ export async function releaseHeldDeposit(
 
   const now = args.occurredAt ?? Date.now();
   const currency = normalizeCurrency(deposit.currency ?? (await getOrgCurrency(ctx, args.orgId)));
+  if (args.resolution === "REFUNDED" && args.refundMethod !== "CASH") {
+    await requireActiveBankInCurrency(ctx, {
+      orgId: args.orgId,
+      bankAccountId: args.bankAccountId,
+      currency,
+      missingMessage: "Select the bank account that paid this deposit refund.",
+      currencySubject: "deposit refund",
+    });
+  } else if (args.bankAccountId) {
+    throw new ConvexError("A cash refund or forfeiture cannot name a bank account.");
+  }
   const rowMinor = deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency);
 
   // Only the part of the row nobody has a claim on.
@@ -1247,6 +1274,7 @@ export async function releaseHeldDeposit(
       actorId: args.actorId,
       occurredAt: now,
       paymentMethod: args.refundMethod,
+      bankAccountId: args.bankAccountId,
       releaseSeq,
     });
   } else {

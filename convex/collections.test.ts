@@ -105,12 +105,18 @@ async function seedFinanceMember(t: ReturnType<typeof convexTestWithComponents>)
       phone: "+962790000000",
     })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Collection bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
   return {
     orgId,
     userId,
     approverId,
     customerId,
+    bankAccountId,
     asFinance: t.withIdentity({ subject: "collections_user", clerkId: "collections_user" }),
     asApprover: t.withIdentity({ subject: "collections_approver", clerkId: "collections_approver" }),
   };
@@ -289,7 +295,7 @@ describe("Collections", () => {
 
   test("cleared_cheque_pays_receivable_and_posts_cheque_payment", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -311,7 +317,7 @@ describe("Collections", () => {
       amount: 500,
     });
 
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
 
     await t.run(async (ctx) => {
       const cheque = await ctx.db.get(chequeId);
@@ -371,7 +377,7 @@ describe("Collections", () => {
 
   test("return_cleared_cheque_rejects_invalid_bank_fee_minor_units", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -392,7 +398,7 @@ describe("Collections", () => {
       chequeDate: Date.now() + 3 * 24 * 60 * 60 * 1000,
       amount: 500,
     });
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
 
     await expect(
       asFinance.mutation(api.collections.returnClearedCheque, {
@@ -692,7 +698,7 @@ describe("Collections", () => {
 
   test("bank_refund_posts_gl_entry_to_bank_account_not_cash_on_hand", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, bankAccountId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -718,6 +724,7 @@ describe("Collections", () => {
       requestType: "REFUND",
       requestedAmount: 500,
       disbursementMethod: "BANK_TRANSFER",
+      bankAccountId,
       reason: "Customer cancelled after bank payment",
     });
 
@@ -734,6 +741,7 @@ describe("Collections", () => {
         .collect();
       const refund = payments.find((p) => p.direction === "OUT");
       expect(refund?.method).toBe("BANK_TRANSFER");
+      expect(refund?.bankAccountId).toBe(bankAccountId);
 
       // In tests there is no chart of accounts, so the event is durably
       // enqueued in pendingAccountingEvents (the outbox) rather than posted
@@ -746,11 +754,44 @@ describe("Collections", () => {
       const refundEvent = pending.find((e) => e.eventType === "COLLECTION_REFUND");
       expect(refundEvent).toBeTruthy();
       expect((refundEvent?.payload as { paymentMethod?: string })?.paymentMethod).toBe("BANK_TRANSFER");
+      expect((refundEvent?.payload as { bankAccountId?: string })?.bankAccountId).toBe(bankAccountId);
 
       const canonicalRefund = refund?.canonicalPaymentId
         ? await ctx.db.get(refund.canonicalPaymentId)
         : null;
       expect(canonicalRefund?.method).toBe("BANK_TRANSFER");
+    });
+  });
+
+  test("bank refund request refuses a missing bank and approval refuses a bank deactivated while pending", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, bankAccountId, asFinance, asApprover } = await seedFinanceMember(t);
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(), orgId, customerId,
+      sourceType: "INTERNAL_INSTALLMENT", title: "Refund bank guard", amount: 50,
+      dueDate: Date.now() + 86_400_000, creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    await asFinance.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(), orgId, receivableId,
+      amount: 50, method: "CASH", paymentDate: Date.now(),
+    });
+    const refund = { orgId, receivableId, requestType: "REFUND" as const,
+      requestedAmount: 50, disbursementMethod: "BANK_TRANSFER" as const,
+      reason: "Return collected funds" };
+    await expect(asFinance.mutation(api.collections.requestApproval, refund))
+      .rejects.toThrow("Select the bank account");
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      ...refund, bankAccountId,
+    });
+    await t.run((ctx) => ctx.db.patch(bankAccountId, { isActive: false }));
+    await expect(asApprover.mutation(api.collections.respondToApproval, {
+      orgId, requestId, status: "APPROVED", idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow("inactive");
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(requestId))?.status).toBe("PENDING");
+      const payments = await ctx.db.query("collectionPayments")
+        .withIndex("by_receivable", (q) => q.eq("receivableId", receivableId)).collect();
+      expect(payments.filter((payment) => payment.direction === "OUT")).toHaveLength(0);
     });
   });
 
@@ -793,7 +834,7 @@ describe("Collections", () => {
 
   test("card_refund_routes_to_bank_account_not_cash_on_hand", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, bankAccountId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -819,6 +860,7 @@ describe("Collections", () => {
       requestType: "REFUND",
       requestedAmount: 300,
       disbursementMethod: "CARD",
+      bankAccountId,
       reason: "Customer requested card reversal",
     });
 
@@ -862,15 +904,17 @@ describe("Collections", () => {
       currency: "JOD",
       customerId: "cust-1" as any,
       paymentMethod: "CHEQUE",
+      bankAccountId: "bank-1",
     });
     const creditLine = result.lines.find((l) => l.creditMinor > 0 && l.debitMinor === 0);
     expect(creditLine?.accountSystemKey).toBe(SYSTEM_KEYS.BANK_ACCOUNT);
+    expect(creditLine?.bankAccountId).toBe("bank-1");
     expect(creditLine?.accountSystemKey).not.toBe(SYSTEM_KEYS.CHEQUES_IN_HAND);
   });
 
   test("cheque_refund_approval_posts_cheque_method_to_event_outbox", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, bankAccountId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -895,6 +939,7 @@ describe("Collections", () => {
       requestType: "REFUND",
       requestedAmount: 600,
       disbursementMethod: "CHEQUE",
+      bankAccountId,
       reason: "Refund by dealership cheque",
     });
 
@@ -1364,7 +1409,7 @@ describe("Collections", () => {
     // the scheduler on the real clock and runAllTimers with nothing to fire.
     vi.useFakeTimers();
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, bankAccountId, asFinance } = await seedFinanceMember(t);
     const { vehicleId, saleId, quoteId, applicationId } = await seedVehicleQuoteSaleAndApplication(t, {
       orgId,
       customerId,
@@ -1698,6 +1743,7 @@ describe("Collections", () => {
     await expect(asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId: returnedChequeId,
+      bankAccountId,
     })).rejects.toThrow("Only held or deposited cheques can be cleared");
 
     const smallReceivableId = await insertReceivable(t, {
@@ -1725,6 +1771,7 @@ describe("Collections", () => {
     await expect(asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId: oversizedChequeId,
+      bankAccountId,
     })).rejects.toThrow("Cheque amount cannot exceed");
     await expect(asFinance.mutation(api.collections.returnClearedCheque, {
       orgId,
@@ -1979,7 +2026,7 @@ describe("Collections", () => {
 
   test("return_cleared_cheque_defers_reversal_when_no_open_period_exists", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     await t.run((ctx) =>
       ctx.db.insert("subscriptions", {
@@ -2020,7 +2067,7 @@ describe("Collections", () => {
       chequeDate: Date.now(),
       amount: 250,
     });
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
     await asFinance.mutation(api.accountingPeriods.close, { orgId, periodId: period._id });
 
     await asFinance.mutation(api.collections.returnClearedCheque, {
@@ -2839,6 +2886,22 @@ async function insertBank(
   );
 }
 
+test("retained-credit payout bank options follow the requested currency", async () => {
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  const s = await seedFinanceMember(t);
+  const usdBankId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId: s.orgId, name: "USD payout bank", currency: "USD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  const usdOptions = await s.asFinance.query(api.collections.listReceiptBankOptions,
+    { orgId: s.orgId, currency: "USD" });
+  expect(usdOptions.banks.map((bank) => bank._id)).toEqual([usdBankId]);
+  const defaultOptions = await s.asFinance.query(api.collections.listReceiptBankOptions,
+    { orgId: s.orgId });
+  expect(defaultOptions.banks.map((bank) => bank._id)).toEqual([s.bankAccountId]);
+});
+
 describe("SCRUM-54 recordPayment names the physical bank of a bank-bound receipt", () => {
   const TRACKED = [
     "collectionPayments", "canonicalPayments", "paymentAllocations", "transactions", "accountingEvents",
@@ -2943,7 +3006,9 @@ describe("SCRUM-54 recordPayment names the physical bank of a bank-bound receipt
       [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, undefined],
       [SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY, undefined],
     ]);
-    const cash = ruleCollectionPayment({ ...base, paymentMethod: "CASH", bankAccountId: "bankA" });
+    expect(() => ruleCollectionPayment({ ...base, paymentMethod: "BANK_TRANSFER" })).toThrow(/bank account is required/);
+    expect(() => ruleCollectionPayment({ ...base, paymentMethod: "CASH", bankAccountId: "bankA" })).toThrow(/non-bank/);
+    const cash = ruleCollectionPayment({ ...base, paymentMethod: "CASH" });
     expect(cash.lines.every((l) => l.bankAccountId === undefined)).toBe(true);
   });
 });

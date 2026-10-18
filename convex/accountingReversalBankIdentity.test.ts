@@ -8,9 +8,8 @@
  * `getBookBalance` would withhold the balance of a bank whose only history is a
  * posting and its own reversal.
  *
- * No producer stamps `bankAccountId` on an event-backed posting yet, so the
- * original event, journal and lines are seeded directly. This proves the
- * reversal path only; it does not claim that opening-balance journals (which
+ * The original event, journal and lines are seeded directly to isolate the
+ * reversal path. This does not claim that opening-balance journals (which
  * are not accounting-event backed) can be reversed this way.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
@@ -98,8 +97,8 @@ async function seed() {
 
 type Fx = Awaited<ReturnType<typeof seed>>;
 
-/** A POSTED event whose journal debits the bank (stamped) and credits capital. */
-async function seedPostedBankEvent(fx: Fx, amountMinor: number) {
+/** A POSTED event whose journal debits the bank and credits capital. */
+async function seedPostedBankEvent(fx: Fx, amountMinor: number, bankAccountId: Id<"bankAccounts"> | null = fx.bankAccountId) {
   return fx.t.run(async (ctx) => {
     const now = Date.now();
     const eventId = await ctx.db.insert("accountingEvents", {
@@ -135,7 +134,7 @@ async function seedPostedBankEvent(fx: Fx, amountMinor: number) {
     });
     await ctx.db.patch(eventId, { journalEntryId: journalId });
     const lines = [
-      { accountId: fx.bankControlId, debitMinor: amountMinor, creditMinor: 0, bankAccountId: fx.bankAccountId },
+      { accountId: fx.bankControlId, debitMinor: amountMinor, creditMinor: 0, bankAccountId: bankAccountId ?? undefined },
       { accountId: fx.capitalId, debitMinor: 0, creditMinor: amountMinor, bankAccountId: undefined },
     ];
     for (let i = 0; i < lines.length; i++) {
@@ -199,6 +198,43 @@ describe("SCRUM-54 reversal keeps the physical bank", () => {
       balanceMinor: 0,
       unmatchedMinor: 0,
       unattributedLineCount: 0,
+    });
+  });
+
+  test("reversing an unstamped legacy bank line preserves its missing identity and never reports a physical bank balance", async () => {
+    const fx = await seed();
+    const { eventId } = await seedPostedBankEvent(fx, 500_000, null);
+
+    await expect(fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId, asOf: fx.asOf })).resolves.toMatchObject({
+      status: "UNATTRIBUTED_GL_ACTIVITY",
+      balanceMinor: null,
+      unmatchedMinor: 500_000,
+      unattributedLineCount: 1,
+    });
+
+    const { reversalJournalEntryId } = await fx.t.run((ctx) =>
+      reverseAccountingEvent(ctx, {
+        orgId: fx.orgId,
+        originalEventId: eventId,
+        reversalDate: fx.reversalDate,
+        reason: "Reverse legacy bank receipt without inventing an identity",
+        actorId: fx.userId,
+        idempotencyKey: "scrum54-legacy-bank-reversal-1",
+      })
+    );
+
+    const reversalLines = await fx.t.run((ctx) =>
+      ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", reversalJournalEntryId as Id<"journalEntries">))
+        .collect()
+    );
+    expect(reversalLines.find((line) => line.accountId === fx.bankControlId)?.bankAccountId).toBeUndefined();
+    await expect(fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId, asOf: fx.asOf })).resolves.toMatchObject({
+      status: "UNATTRIBUTED_GL_ACTIVITY",
+      balanceMinor: null,
+      unmatchedMinor: 0,
+      unattributedLineCount: 2,
     });
   });
 });

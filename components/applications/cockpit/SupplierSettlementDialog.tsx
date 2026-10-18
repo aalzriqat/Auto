@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import type { Id } from "@/convex/_generated/dataModel";
 import {
   Dialog,
   DialogContent,
@@ -39,11 +40,13 @@ type SupplierSettlementDialogProps = {
   /** What the supplier still owes, in MAJOR units — the server refuses more. */
   outstandingMajor: number;
   outstandingLabel: string;
+  bankOptions?: { banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean };
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
   onConfirm: (receipt: {
     amount: number;
     receiptMethod?: PaymentMethod;
+    bankAccountId?: Id<"bankAccounts">;
     receiptReference?: string;
     receivedAt?: number;
   }) => void;
@@ -55,6 +58,7 @@ export function SupplierSettlementDialog({
   supplierName,
   outstandingMajor,
   outstandingLabel,
+  bankOptions,
   t,
   onOpenChange,
   onConfirm,
@@ -66,6 +70,7 @@ export function SupplierSettlementDialog({
   // than in cash, so the default is the common case rather than the first
   // alphabetically.
   const [method, setMethod] = useState<PaymentMethod>("BANK_TRANSFER");
+  const [bankAccountId, setBankAccountId] = useState("");
 
   // Reset on the closed -> open TRANSITION, reading the current outstanding
   // figure in the same render. Not on `open` alone: the outstanding amount comes
@@ -85,6 +90,7 @@ export function SupplierSettlementDialog({
     setReference("");
     setReceivedOn("");
     setMethod("BANK_TRANSFER");
+    setBankAccountId("");
   }, [open]);
 
   const parsed = Number(amount);
@@ -93,7 +99,10 @@ export function SupplierSettlementDialog({
   // must count as invalid. `NaN <= 0` is false, which would let it through.
   const amountInvalid = entered && !(parsed > 0);
   const exceedsClaim = entered && parsed > 0 && parsed > outstandingMajor;
-  const canSubmit = entered && parsed > 0 && !exceedsClaim && !submitting;
+  const needsBank = method === "BANK_TRANSFER" || method === "CARD";
+  const chosenBank = bankOptions?.banks.find((bank) => bank._id === bankAccountId);
+  const canSubmit = entered && parsed > 0 && !exceedsClaim && !submitting &&
+    (!needsBank || (chosenBank !== undefined && bankOptions?.truncated === false));
 
   const withSupplier = (key: string) => t(key).replaceAll("{supplier}", supplierName);
 
@@ -142,10 +151,25 @@ export function SupplierSettlementDialog({
             <PaymentMethodSelect
               t={t}
               value={method}
-              onValueChange={setMethod}
+              onValueChange={(next) => { setMethod(next); setBankAccountId(""); }}
               ariaLabel={t("SupplierReceiptAccount")}
             />
           </div>
+
+          {needsBank && (
+            <div className="space-y-1.5">
+              <Label htmlFor="supplier-receipt-bank">{t("ReceiptBankAccount")}</Label>
+              <select id="supplier-receipt-bank" data-testid="supplier-receipt-bank"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={bankAccountId} disabled={!bankOptions || bankOptions.truncated || submitting}
+                onChange={(event) => setBankAccountId(event.target.value)}>
+                <option value="">{t(bankOptions ? "ReceiptSelectBank" : "CashDrawerLoadingBanks")}</option>
+                {(bankOptions?.banks ?? []).map((bank) => <option key={bank._id} value={bank._id}>{bank.name} ({bank.currency})</option>)}
+              </select>
+              {bankOptions?.truncated && <p role="alert" className="text-xs text-destructive">{t("ReceiptTooManyBanks")}</p>}
+              {bankOptions && !bankOptions.truncated && bankOptions.banks.length === 0 && <p role="alert" className="text-xs text-destructive">{t("ReceiptNoBank")}</p>}
+            </div>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -180,6 +204,7 @@ export function SupplierSettlementDialog({
               onConfirm({
                 amount: parsed,
                 receiptMethod: method,
+                bankAccountId: needsBank ? chosenBank?._id : undefined,
                 receiptReference: reference.trim() || undefined,
                 // Money in, so the emerald treatment is correct here — unlike
                 // the supplier-disbursement dialog, this really is a receipt.

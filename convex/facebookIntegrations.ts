@@ -226,7 +226,7 @@ export const disconnectByFacebookConnectedUserId = internalMutation({
     // still in flight has no row for the clear below to find, and without this
     // its exchange would store the tokens it already fetched after we replied 200.
     // One row per user; its time never moves backwards.
-    // Expired fences are removed by the hourly adminSystem.pruneOperationalLogs.
+    // Fences are retained, never deleted (SCRUM-807); stale ones are harmless.
     const now = Date.now();
     const fence = await findFacebookRevocation(ctx, args.facebookConnectedByUserId);
     if (fence) await ctx.db.patch(fence._id, { revokedAt: Math.max(fence.revokedAt, now) });

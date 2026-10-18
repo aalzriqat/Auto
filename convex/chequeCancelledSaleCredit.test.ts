@@ -65,6 +65,11 @@ async function seed(suffix: string) {
   const customerId = (await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Cust", lastName: suffix, createdAt: Date.now() })
   )) as Id<"customers">;
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "USD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
   const mkActor = async (name: string, permissions: string[]) => {
     const actorId = await t.run(async (ctx) => {
@@ -80,7 +85,7 @@ async function seed(suffix: string) {
   const approver = await mkActor("approver", ["view:sales", "edit:sales", "approve:requests", "manage:finance", "view:finance"]);
   const financeOnly = await mkActor("finance", ["manage:finance", "view:finance"]);
   const viewOnly = await mkActor("viewer", ["view:finance"]);
-  return { t, asOwner, orgId, userId, customerId, approver, financeOnly, viewOnly };
+  return { t, asOwner, orgId, userId, customerId, bankAccountId, approver, financeOnly, viewOnly };
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
@@ -110,7 +115,7 @@ async function registerCheque(s: Seeded, saleId: Id<"sales">, no: string, amount
 const deposit = (s: Seeded, chequeId: Id<"postDatedCheques">) =>
   s.asOwner.mutation(api.collections.depositCheque, { orgId: s.orgId, chequeId });
 const clear = (s: Seeded, chequeId: Id<"postDatedCheques">, key = crypto.randomUUID()) =>
-  s.asOwner.mutation(api.collections.clearCheque, { orgId: s.orgId, chequeId, idempotencyKey: key });
+  s.asOwner.mutation(api.collections.clearCheque, { orgId: s.orgId, chequeId, bankAccountId: s.bankAccountId, idempotencyKey: key });
 
 async function movementOf(t: TestHarness, orgId: Id<"organizations">, paymentId: Id<"collectionPayments">) {
   return (await t.run((ctx) => ctx.db.query("receiptMovements")
@@ -125,13 +130,14 @@ async function glLines(t: TestHarness, orgId: Id<"organizations">, sourceType: s
     const entries = await ctx.db.query("journalEntries")
       .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId))
       .collect();
-    const out: Array<{ key: string | undefined; debit: number; credit: number; status: string }> = [];
+    const out: Array<{ key: string | undefined; debit: number; credit: number; status: string; bankAccountId?: Id<"bankAccounts"> }> = [];
     for (const e of entries) {
       const lines = await ctx.db.query("journalLines")
         .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", e._id)).collect();
       for (const l of lines) {
         const acct = await ctx.db.get(l.accountId);
-        out.push({ key: acct?.systemKey, debit: l.debitMinor, credit: l.creditMinor, status: e.status });
+        out.push({ key: acct?.systemKey, debit: l.debitMinor, credit: l.creditMinor,
+          status: e.status, bankAccountId: l.bankAccountId });
       }
     }
     return out;
@@ -307,7 +313,8 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
       });
     const execute = (requestId: Id<"retainedCreditRefundRequests">, key = crypto.randomUUID(), as = s.asOwner) =>
       as.mutation(mutation("executeRetainedCreditRefund"), {
-        orgId: s.orgId, requestId, reference: "PV-1", paidAt, idempotencyKey: key,
+        orgId: s.orgId, requestId, bankAccountId: s.bankAccountId,
+        reference: "PV-1", paidAt, idempotencyKey: key,
       }) as Promise<{ paymentId: Id<"canonicalPayments">; eventId: Id<"accountingEvents"> }>;
     return { s, ...base, request, respond, execute };
   }
@@ -325,6 +332,7 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
       `${(await positionOf(s.t, s.orgId, movement._id))._id}:refund:${requestId}`);
     expect(lines.find((l) => l.key === SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)?.debit).toBe(1200);
     expect(lines.find((l) => l.key === SYSTEM_KEYS.BANK_ACCOUNT)?.credit).toBe(1200);
+    expect(lines.find((l) => l.key === SYSTEM_KEYS.BANK_ACCOUNT)?.bankAccountId).toBe(s.bankAccountId);
     expect((await positionOf(s.t, s.orgId, movement._id)).remainingUnappliedMinor).toBe(1800);
     // executing the same request again under a new key pays nothing more
     await expect(execute(requestId)).rejects.toThrow();
@@ -334,6 +342,18 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     // over-refund of the remainder refused
     await expect(request(1801)).rejects.toThrow();
   }, 30_000);
+
+  test("a bank credit refund without a selected physical bank leaves approval and credit intact", async () => {
+    const { s, movement, request, respond } = await refundFixture("e1bankmissing");
+    const requestId = await request(1200);
+    await respond(requestId);
+    await expect(s.asOwner.mutation(api.retainedCreditRefunds.executeRetainedCreditRefund, {
+      orgId: s.orgId, requestId, reference: "PV-MISSING", paidAt: Date.now() - 1000,
+      idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(/Select the bank account/i);
+    expect((await s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("APPROVED");
+    expect((await positionOf(s.t, s.orgId, movement._id)).remainingUnappliedMinor).toBe(3000);
+  });
 
   test("e2. self-approval, missing APPROVE_REQUESTS, view-only and unapproved execution are refused", async () => {
     const { s, movement, request, respond, execute } = await refundFixture("e2");
@@ -704,7 +724,8 @@ async function creditFixture(suffix: string) {
     });
   const execute = (requestId: Id<"retainedCreditRefundRequests">, as: unknown = s.asOwner) =>
     (as as any).mutation(refundApi().executeRetainedCreditRefund, {
-      orgId: s.orgId, requestId, reference: "PV-1", paidAt: Date.now() - 1000, idempotencyKey: crypto.randomUUID(),
+      orgId: s.orgId, requestId, bankAccountId: s.bankAccountId,
+      reference: "PV-1", paidAt: Date.now() - 1000, idempotencyKey: crypto.randomUUID(),
     });
   const cancel = (requestId: Id<"retainedCreditRefundRequests">, reason: string | undefined = "Customer withdrew", as: unknown = s.asOwner, orgId = s.orgId) =>
     (as as any).mutation(refundApi().cancelRetainedCreditRefund, { orgId, requestId, reason });

@@ -232,6 +232,10 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // because the order is pinned; the index leads with orgId, so the read is a
   // prefix scan, and nothing references these rows.
   { kind: "orgRows", table: "financeCompanyForwardSlices", index: "by_org_forward" },
+  // Appended so saved deletion cursors retain their meaning. Journal-line
+  // triggers remove projections before these residual cleanup steps run.
+  { kind: "orgRows", table: "bankBalanceAggregateItems", index: "by_org" },
+  { kind: "orgRows", table: "bankBalanceAggregateStates", index: "by_org" },
 ];
 
 async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {

@@ -575,6 +575,7 @@ export const finishDealUnwind = mutation({
     customerPaymentDisposition: v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT")),
     customerRefundAmountMinor: v.optional(v.number()),
     customerRefundMethod: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+    customerRefundBankAccountId: v.optional(v.id("bankAccounts")),
     customerRefundReference: v.optional(v.string()),
     customerRefundedAt: v.optional(v.number()),
     idempotencyKey: v.string(),
@@ -618,6 +619,7 @@ export const finishDealUnwind = mutation({
           customerPaymentDisposition: args.customerPaymentDisposition,
           customerRefundAmountMinor: args.customerRefundAmountMinor ?? null,
           customerRefundMethod: args.customerRefundMethod ?? null,
+          customerRefundBankAccountId: args.customerRefundBankAccountId ?? null,
           customerRefundReference: args.customerRefundReference ?? null,
           customerRefundedAt: args.customerRefundedAt ?? null,
         }),
@@ -642,7 +644,7 @@ export const finishDealUnwind = mutation({
         // any request that could pay the customer out also needs MANAGE_FINANCE,
         // checked BEFORE the pilot refusal and before any write below.
         const payoutFieldGiven = [args.customerRefundAmountMinor, args.customerRefundMethod,
-          args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined);
+          args.customerRefundBankAccountId, args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined);
         if (payoutFieldGiven || (args.customerPaymentDisposition === "REFUND" && invoicePlan.totalMinor > 0)) {
           await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
           assertCustomerCreditPayoutAllowed();
@@ -688,6 +690,7 @@ export const finishDealUnwind = mutation({
           ? {
               amountMinor: args.customerRefundAmountMinor,
               method: args.customerRefundMethod,
+              bankAccountId: args.customerRefundBankAccountId,
               reference: requiredText(
                 args.customerRefundReference,
                 MAX_DIRECT_PAYMENT_REFERENCE_CHARS,
@@ -698,7 +701,7 @@ export const finishDealUnwind = mutation({
           : undefined;
         if (
           [args.customerRefundAmountMinor, args.customerRefundMethod,
-            args.customerRefundReference, args.customerRefundedAt]
+            args.customerRefundBankAccountId, args.customerRefundReference, args.customerRefundedAt]
             .some((value) => value !== undefined) && !customerPayout
         ) {
           refuse("DEAL_UNWIND_EVIDENCE_REQUIRED");

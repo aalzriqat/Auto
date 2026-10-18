@@ -4,6 +4,7 @@ import { MutationCtx } from "../_generated/server";
 import { hookDepositReceived } from "../accounting/workflowHooks";
 import { createCanonicalPayment } from "../subledger";
 import { scaleForCurrency, toMinorUnits } from "./money";
+import { requireActiveBankInCurrency } from "./bankAccountGuards";
 
 export const depositMethodValidator = v.union(
   v.literal("CASH"),
@@ -83,6 +84,7 @@ export async function recordHeldDeposit(
     amountMinor: number;
     currency: string;
     method: DepositMethod;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     now?: number;
     notes?: string;
@@ -115,6 +117,24 @@ export async function recordHeldDeposit(
     usesVehicleHoldRows: boolean;
   },
 ): Promise<Id<"deposits">> {
+  // The event is queued after the operational deposit is written. Validate its
+  // physical bank here so a bank-funded deposit cannot be committed without a
+  // postable bank journal. An uncaught refusal rolls back the caller's mutation.
+  const bankMethod = args.method === "BANK_TRANSFER" || args.method === "CARD";
+  if (args.method === "PAYMENT_LINK") {
+    throw new ConvexError("Payment-link deposits are unavailable during the pilot.");
+  }
+  if (bankMethod) {
+    await requireActiveBankInCurrency(ctx, {
+      orgId: args.orgId,
+      bankAccountId: args.bankAccountId,
+      currency: args.currency,
+      missingMessage: "Choose the physical bank that received this deposit.",
+      currencySubject: "deposit",
+    });
+  } else if (args.bankAccountId) {
+    throw new ConvexError("This deposit method cannot name a physical bank account.");
+  }
   const now = args.now ?? Date.now();
   const [vehicle, customer] = await Promise.all([
     ctx.db.get(args.vehicleId),
@@ -207,6 +227,7 @@ export async function recordHeldDeposit(
     amountMinor: args.amountMinor,
     currency: args.currency,
     paymentMethod: args.method,
+    bankAccountId: args.bankAccountId,
     actorId: args.actorId,
     occurredAt: now,
   });

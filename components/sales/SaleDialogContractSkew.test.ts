@@ -95,8 +95,9 @@ const PANEL = ["components", "applications", "cockpit", "DealInvoiceReceiptsPane
 const SECTION = ["components", "accounting", "RetainedCreditRefundsSection.tsx"];
 const DEAL_CLIENT = ["app", "(dashboard)", "[orgId]", "sales", "[saleId]", "deal", "client.tsx"];
 const COLLECTIONS_TAB = ["components", "accounting", "CollectionsTab.tsx"];
+const CLEAR_CHEQUE_BANK_DIALOG = ["components", "accounting", "ClearChequeBankDialog.tsx"];
 const RECEIPT_BANK_SELECT = ["components", "accounting", "ReceiptBankSelect.tsx"];
-const MOUNTED_MONEY_UI = [PANEL, SECTION, DEAL_CLIENT, COLLECTIONS_TAB, RECEIPT_BANK_SELECT];
+const MOUNTED_MONEY_UI = [PANEL, SECTION, DEAL_CLIENT, COLLECTIONS_TAB, CLEAR_CHEQUE_BANK_DIALOG, RECEIPT_BANK_SELECT];
 
 /**
  * The arguments each mounted money mutation is sent by the panel / queue. Every
@@ -109,7 +110,7 @@ const SENT_ARGS: Record<string, string[]> = {
   "collections:activateSaleInvoiceReceipt": ["orgId", "applicationId", "amountMinor", "idempotencyKey"],
   "collections:registerSaleInvoiceCheque": ["orgId", "saleId", "bank", "chequeNumber", "chequeDate", "amountMinor"],
   "collections:depositCheque": ["orgId", "chequeId"],
-  "collections:clearCheque": ["orgId", "chequeId", "idempotencyKey"],
+  "collections:clearCheque": ["orgId", "chequeId", "bankAccountId", "idempotencyKey"],
   "retainedCreditRefunds:requestRetainedCreditRefund": ["orgId", "receiptMovementId", "amountMinor", "method", "reason"],
   "retainedCreditRefunds:respondToRetainedCreditRefund": ["orgId", "requestId", "status", "idempotencyKey"],
   "retainedCreditRefunds:executeRetainedCreditRefund": ["orgId", "requestId", "reference", "paidAt", "idempotencyKey"],
@@ -192,7 +193,7 @@ describe("SCRUM-724 mount: every backend function the mounted money UI calls exi
   });
 
   test("every money mutation the panel and the queue call has a sent-arguments row", () => {
-    const moneyMutations = [PANEL, SECTION]
+    const moneyMutations = [PANEL, SECTION, CLEAR_CHEQUE_BANK_DIALOG]
       .flatMap((file) => apiReferences(read(...file)))
       .filter((ref) => ref.hook === "mutation")
       .map((ref) => ref.path);
