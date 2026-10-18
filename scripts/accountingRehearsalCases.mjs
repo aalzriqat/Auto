@@ -266,9 +266,9 @@ export async function reconcileDealFeeCompat(call, { orgId, applicationId, feeId
  * imports or runs it. Returns undefined when the command block cannot be found, so
  * the caller treats "unknown" as UNPROVEN rather than as "legacy".
  */
-export function candidateNamesReceiptBank(source) {
+export function candidateCommandNamesBank(source, command) {
   if (typeof source !== "string") return undefined;
-  const at = source.indexOf("export const confirmDisbursement = mutation({");
+  const at = source.indexOf(`export const ${command} = mutation({`);
   if (at < 0) return undefined;
   // Bound everything to the target declaration so shared args (`args: sharedArgs`) can
   // never borrow a later declaration's inline args, exported or not. The body is
@@ -283,6 +283,10 @@ export function candidateNamesReceiptBank(source) {
   const handlerAt = declaration.indexOf("handler:", argsAt);
   if (argsAt < 0 || handlerAt < 0) return undefined;
   return /^[ \t]*bankAccountId[ \t]*:/m.test(declaration.slice(argsAt, handlerAt));
+}
+
+export function candidateNamesReceiptBank(source) {
+  return candidateCommandNamesBank(source, "confirmDisbursement");
 }
 
 export async function runRehearsalCases(ctx) {
@@ -1464,6 +1468,25 @@ export async function runRehearsalCases(ctx) {
       });
 
       await ownerMust("mutation", "collections:depositCheque", { orgId, chequeId });
+      // The trusted runner must support both the deployed main contract and a
+      // candidate which requires a physical bank on cheque clearing. Treat a
+      // missing source contract as unavailable, never as the legacy contract.
+      const candidateBankContract = ctx.candidateChequeClearNamesBank;
+      if (typeof candidateBankContract !== "boolean") {
+        unproven("the candidate bank contract could not be read from the tested source");
+      }
+      let clearingBankId;
+      if (candidateBankContract) {
+        const denom = await orgDenomination({ orgId, ownerMust });
+        clearingBankId = await ownerMust("mutation", "bankAccounts:create", {
+          orgId,
+          name: `Rehearsal cheque bank ${stamp}`,
+          currency: denom.currency,
+          openingBalanceMinor: 0,
+          openingBalanceDate: Date.now(),
+        });
+        if (!clearingBankId) fail("bankAccounts:create returned no id for the cheque clearing bank");
+      }
       // OWNER, not the MANAGER. `clearCheque` requires manage:finance and the
       // seated MANAGER does not hold it, so the cloud run refused with
       // "Forbidden: Missing required permissions: manage:finance".
@@ -1476,6 +1499,7 @@ export async function runRehearsalCases(ctx) {
       await ownerMust("mutation", "collections:clearCheque", {
         orgId,
         chequeId,
+        ...(clearingBankId ? { bankAccountId: clearingBankId } : {}),
         idempotencyKey: `rehearsal-rv1-clear-${stamp}`,
       });
 
@@ -1500,6 +1524,10 @@ export async function runRehearsalCases(ctx) {
       expectExactLines(cleared.lines, keyOf, clearingLines, {
         currency: denom.currency, decimals: denom.decimals, what: "the cheque clearing", customerId,
       });
+      if (clearingBankId) {
+        const bankLine = cleared.lines.find((line) => keyOf.get(String(line.accountId)) === "BANK_ACCOUNT");
+        expectEqual(String(bankLine?.bankAccountId), String(clearingBankId), "the cheque clearing's physical bank");
+      }
       const settled = await findReceivable({ orgId, ownerMust, receivableId });
       expectEqual(settled.outstandingAmount, 0, "outstanding on the receivable after the cheque cleared");
       expectEqual(settled.status, "PAID", "receivable status after the cheque cleared");
@@ -1553,6 +1581,10 @@ export async function runRehearsalCases(ctx) {
         ],
         { currency: denom.currency, decimals: denom.decimals, what: "the cheque-return reversal", customerId }
       );
+      if (clearingBankId) {
+        const bankLine = (reversal.lines ?? []).find((line) => keyOf.get(String(line.accountId)) === "BANK_ACCOUNT");
+        expectEqual(String(bankLine?.bankAccountId), String(clearingBankId), "the reversal's original physical bank");
+      }
 
       // THE DEBT IS OWED AGAIN — exactly, not approximately.
       const reopened = await findReceivable({ orgId, ownerMust, receivableId });
@@ -2865,12 +2897,31 @@ export async function runRehearsalCases(ctx) {
         expectedCurrency: denom.currency,
       });
       await reconcileFee({ orgId, applicationId, feeId, notes: "Matched.", expectedActualAmountMinor: dealerCost });
+      // The main backend still uses the legacy command. On a candidate that
+      // declares the direct-fee bank contract, exercise the stricter direct fee
+      // payment with an owned, same-currency physical bank before finalization.
+      const candidateBankContract = ctx.candidateDirectFeeNamesBank;
+      if (typeof candidateBankContract !== "boolean") {
+        unproven("the candidate bank contract could not be read from the tested source");
+      }
+      let receiptBankAccountId;
+      if (candidateBankContract) {
+        receiptBankAccountId = await ownerMust("mutation", "bankAccounts:create", {
+          orgId,
+          name: `Rehearsal receiving bank ${stamp}`,
+          currency: denom.currency,
+          openingBalanceMinor: 0,
+          openingBalanceDate: Date.now(),
+        });
+        if (!receiptBankAccountId) fail("bankAccounts:create returned no id for the receiving bank");
+      }
       // The full finance-company transfer does not pay this dealer-borne
       // handover cost. Record its separate bank payment before closing.
       await ownerMust("mutation", "financeDealCosts:recordDirectFeePayment", {
         orgId,
         feeId,
         method: "BANK_TRANSFER",
+        ...(receiptBankAccountId ? { bankAccountId: receiptBankAccountId } : {}),
         paidAt: fd1DirectPaymentTime(bookkeeping.openedAt),
         expectedAmountMinor: dealerCost,
         idempotencyKey: `rehearsal-fd1-direct-payment-${stamp}`,
@@ -2891,6 +2942,10 @@ export async function runRehearsalCases(ctx) {
         ],
         { currency: denom.currency, decimals: denom.decimals, what: "the dealer-paid handover cost posting" }
       );
+      if (receiptBankAccountId) {
+        const bankLine = costPayment.lines.find((line) => keyOf.get(String(line.accountId)) === "BANK_ACCOUNT");
+        expectEqual(String(bankLine?.bankAccountId), String(receiptBankAccountId), "the direct payment's physical bank");
+      }
       // SCRUM-407: no manual classification step — finalizeDeal checks the
       // deal's closing readiness itself.
       const saleId = await ownerMust("mutation", "applications:finalizeDeal", {
@@ -2980,16 +3035,17 @@ export async function runRehearsalCases(ctx) {
       // active bank in the deal's denomination, created through the authorized
       // public command; no existing bank is ever selected. The legacy contract
       // sends no bank, exactly as before.
-      let receiptBankAccountId;
       if (observedBank) {
-        receiptBankAccountId = await ownerMust("mutation", "bankAccounts:create", {
-          orgId,
-          name: `Rehearsal receiving bank ${stamp}`,
-          currency: denom.currency,
-          openingBalanceMinor: 0,
-          openingBalanceDate: Date.now(),
-        });
-        if (!receiptBankAccountId) fail("bankAccounts:create returned no id for the receiving bank");
+        if (!receiptBankAccountId) {
+          receiptBankAccountId = await ownerMust("mutation", "bankAccounts:create", {
+            orgId,
+            name: `Rehearsal receiving bank ${stamp}`,
+            currency: denom.currency,
+            openingBalanceMinor: 0,
+            openingBalanceDate: Date.now(),
+          });
+          if (!receiptBankAccountId) fail("bankAccounts:create returned no id for the receiving bank");
+        }
 
         // The correct amount with NO bank, while a valid bank exists, is refused for
         // the missing bank - never defaulted to the one bank there is - and writes nothing.
