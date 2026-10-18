@@ -18,7 +18,11 @@ export async function invalidateJournalEligibility(ctx: MutationCtx, orgIds: rea
   // Invalidate BOTH sides before a failure-prone scheduler call. A caught
   // scheduling failure must never leave the second org's certificate READY.
   for (const state of states) {
-    if (state && state.phase !== "BLOCKED") await ctx.db.patch(state._id, { phase: "BUILDING", cursor: null });
+    if (!state || state.phase === "BLOCKED") continue;
+    // Already reset and not yet advanced: rewriting it changes nothing and only
+    // conflicts with the running chain (e.g. once per row of an org reset).
+    if (state.phase === "BUILDING" && state.cursor === null) continue;
+    await ctx.db.patch(state._id, { phase: "BUILDING", cursor: null });
   }
   for (const state of states) {
     if (state?.phase === "READY") await ctx.scheduler.runAfter(0, eligibilityPage, { orgId: state.orgId });
