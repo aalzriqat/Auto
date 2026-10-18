@@ -349,20 +349,16 @@ if (phase !== "merge") {
       // authority suite must produce a V8 coverage blob on every covered path. It
       // is deliberately isolated so coverage instrumentation cannot reintroduce
       // the long-lived-process OOM that motivated this runner.
-      runVitest(
-        [
-          "run",
-          authorityTest,
-          ...reporterArgs(path.join(blobDir, authorityBlob)),
-          "--coverage",
-          coverageReportsArg,
-          "--maxWorkers=1",
-          ...runReporterArgs,
-          ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
-        ],
-        [],
-        unit,
-      );
+      runVitest([
+        "run",
+        authorityTest,
+        ...reporterArgs(path.join(blobDir, authorityBlob)),
+        "--coverage",
+        coverageReportsArg,
+        "--maxWorkers=1",
+        ...runReporterArgs,
+        ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
+      ], [], unit);
       continue;
     }
     const label = mode === "unit" ? "Coverage batch" : "Sonar coverage batch";
