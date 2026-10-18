@@ -24,6 +24,7 @@ import { RESET_TABLES_FOR_TEST, CHILD_TABLES_FOR_TEST } from "../convex/orgFinan
  * three financing tables went missing.
  */
 const RETAINED_BY_DESIGN: Record<string, string> = {
+  journalReportEligibility: "retained ledger index completeness and backfill evidence; owner forbids record cleanup (SCRUM-807)",
   // The platform's own deletion trail. Deleting it with the org would erase the
   // record that the deletion happened, which is the one row that must outlive
   // it.
