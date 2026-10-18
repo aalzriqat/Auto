@@ -3267,7 +3267,11 @@ function DirectPaymentForm({
             value={method}
             disabled={frozen || submitting}
             required
-            onChange={(event) => setMethod(event.target.value as DirectPaymentMethodChoice | "")}
+            onChange={(event) => {
+              setMethod(event.target.value as DirectPaymentMethodChoice | "");
+              setBankAccountId("");
+              setError(null);
+            }}
           >
             <option value="">{t("DirectPaymentMethodChoose")}</option>
             {DIRECT_PAYMENT_METHODS.map((option) => (
@@ -3310,7 +3314,10 @@ function DirectPaymentForm({
             disabled={frozen || submitting || bankOptions === undefined || noEligibleBank || bankListTruncated}
             required
             aria-invalid={error === t("DirectPaymentBankRequired")}
-            onChange={(event) => setBankAccountId(event.target.value)}
+            onChange={(event) => {
+              setBankAccountId(event.target.value);
+              setError(null);
+            }}
           >
             <option value="">{t(bankOptions === undefined ? "CashDrawerLoadingBanks" : "DirectPaymentBankChoose")}</option>
             {(bankOptions?.banks ?? []).map((bank) => (

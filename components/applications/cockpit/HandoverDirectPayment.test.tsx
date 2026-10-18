@@ -292,6 +292,22 @@ describe("SCRUM-54: a bank-method direct payment names the physical bank it left
     expect((onRecord.mock.calls[0] as unknown as [string, DirectHandoverPayment])[1].bankAccountId).toBe(BANK_B);
   });
 
+  test("switching bank methods requires a fresh bank choice and choosing one clears the error", async () => {
+    const onRecord = vi.fn(async () => {});
+    renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: onRecord });
+    open();
+    pick("BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+    await screen.findByText(commonEn.DirectPaymentBankRequired);
+    fireEvent.change(bankPicker() as HTMLSelectElement, { target: { value: BANK_A } });
+    expect(screen.queryByText(commonEn.DirectPaymentBankRequired)).toBeNull();
+    pick("CARD");
+    expect(bankPicker()).toHaveProperty("value", "");
+    fireEvent.click(screen.getByRole("button", { name: salesEn.SaveDirectPayment }));
+    await screen.findByText(commonEn.DirectPaymentBankRequired);
+    expect(onRecord).not.toHaveBeenCalled();
+  });
+
   test("cash shows no picker and sends no bank, even after a bank was picked for another method", async () => {
     const onRecord = vi.fn(async () => {});
     renderPanel([line()], { canRecordDirectPayment: true, onRecordDirectPayment: onRecord });
