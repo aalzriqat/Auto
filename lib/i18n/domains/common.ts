@@ -71,6 +71,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This organization already has posted ledger activity, so an opening balance cannot be posted. The cutover needs finance-owner review.",
     "لدى هذه المنشأة قيود مرحَّلة في دفتر الأستاذ، لذا لا يمكن ترحيل رصيد افتتاحي. يلزم أن يراجع المسؤول المالي تصحيح أرصدة الانتقال.",
   ],
+  ServerError_BANK_OPENING_BALANCE_VIA_GL: [
+    "This bank form cannot set a book balance. For initial setup, create every bank before posting the one-time opening journal in Accounting Setup.",
+    "لا يحدد هذا النموذج الرصيد الدفتري للبنك. عند الإعداد الأولي، أنشئ جميع الحسابات البنكية قبل ترحيل قيد الرصيد الافتتاحي لمرة واحدة في إعداد المحاسبة.",
+  ],
   ServerError_ASSET_EVENT_DATE_INVALID: [
     "The accounting date is not a valid date.",
     "التاريخ المحاسبي غير صالح.",
@@ -988,8 +992,7 @@ export const commonEn = {
   Claims: "Claims",
   AccountingSetup: "Setup",
   AccountingSetupDesc: "Review chart readiness, accounting periods, and pending posting events.",
-  // `OpeningBalance` itself is already defined below for the bank-account
-  // dialog; these extend it for the GL opening-balance entry in Setup.
+  // `OpeningBalance` is defined below; these extend it for the GL opening entry.
   OpeningBalanceDesc: "Seed the starting cash, bank, and other balances this dealership began with.",
   OpeningBalanceNotSet: "No opening balance has been recorded yet.",
   OpeningBalancePosted: "Opening balance recorded.",
@@ -1047,6 +1050,7 @@ export const commonEn = {
   // Phase 41 — Accounting Depth
   BankAccounts: "Bank Accounts",
   BankAccountsDesc: "Register bank accounts, reconcile statements, and track book balances.",
+  BankStartingBalanceInSetup: "For initial setup, create every bank before posting the one-time opening journal in Accounting Setup. This form does not change its book balance.",
   CreateBankAccount: "Add Bank Account",
   BankAccountName: "Account Name",
   BankName: "Bank Name",
@@ -1054,7 +1058,6 @@ export const commonEn = {
   AccountNumber: "Account Number",
   Currency: "Currency",
   OpeningBalance: "Opening Balance",
-  OpeningBalanceDate: "Opening Balance Date",
   SetAsReconciliationTarget: "Use this account for reconciliation",
   NoBankAccounts: "No bank accounts yet.",
   ReconciliationTarget: "Reconciliation Target",
@@ -2084,6 +2087,7 @@ export const commonAr = {
   // Phase 41 — Accounting Depth
   BankAccounts: "الحسابات البنكية",
   BankAccountsDesc: "سجّل الحسابات البنكية، وطابق كشوف الحساب، وتابع الأرصدة الدفترية.",
+  BankStartingBalanceInSetup: "عند الإعداد الأولي، أنشئ جميع الحسابات البنكية قبل ترحيل قيد الرصيد الافتتاحي لمرة واحدة في إعداد المحاسبة. لا يغيّر هذا النموذج الرصيد الدفتري للبنك.",
   CreateBankAccount: "إضافة حساب بنكي",
   BankAccountName: "اسم الحساب",
   BankName: "اسم البنك",
@@ -2091,7 +2095,6 @@ export const commonAr = {
   AccountNumber: "رقم الحساب",
   Currency: "العملة",
   OpeningBalance: "الرصيد الافتتاحي",
-  OpeningBalanceDate: "تاريخ الرصيد الافتتاحي",
   SetAsReconciliationTarget: "استخدام هذا الحساب للمطابقة",
   NoBankAccounts: "لا توجد حسابات بنكية بعد.",
   ReconciliationTarget: "حساب المطابقة",
