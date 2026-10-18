@@ -93,6 +93,19 @@ export async function getPostedLines(
   // rest of the report. Lines sharing a parent require only one point read.
   const maxTargetedParents = 512;
   const excludeSentinel = fromDate === undefined || toDate === undefined;
+  const eligibility = await ctx.db.query("journalReportEligibility")
+    .withIndex("by_org", q => q.eq("orgId", orgId)).unique();
+  if (eligibility?.phase === "READY") {
+    const lines = await ctx.db.query("journalLines")
+      .withIndex("by_org_reportPosted_date", q => {
+        const scoped = q.eq("orgId", orgId).eq("reportPosted", true);
+        if (fromDate !== undefined && toDate !== undefined) return scoped.gte("accountingDate", fromDate).lte("accountingDate", toDate);
+        if (fromDate !== undefined) return scoped.gte("accountingDate", fromDate);
+        if (toDate !== undefined) return scoped.lte("accountingDate", toDate);
+        return scoped;
+      }).collect();
+    return mergeByCreation([lines.filter(line => !excludeSentinel || line.accountingDate !== NO_ACCOUNTING_DATE_SENTINEL)]);
+  }
   const lineQuery = () => ctx.db
     .query("journalLines")
     .withIndex("by_org_date", (q) => {
