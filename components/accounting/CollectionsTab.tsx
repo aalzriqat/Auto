@@ -1004,6 +1004,12 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
   const needsBank = method === "BANK_TRANSFER" || method === "CARD";
   const bankOptions = useReceiptBankOptions(activeOrgId ?? undefined, needsBank && !!receivable, bankAccountId);
 
+  function handleOpenChange(open: boolean) {
+    // A new receipt must never inherit a bank; an uncertain retry keeps its original command.
+    if (!open && idempotencyKeyRef.current === null) setBankAccountId("");
+    onOpenChange(open);
+  }
+
   async function submit() {
     if (!activeOrgId || !receivable) return;
     if (needsBank && !bankOptions.chosenOffered) return;
@@ -1036,7 +1042,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
   }
 
   return (
-    <Dialog open={!!receivable} onOpenChange={onOpenChange}>
+    <Dialog open={!!receivable} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("RecordPayment" as any)}</DialogTitle>
@@ -1058,7 +1064,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
           <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={t("NotesLabel" as any)} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>{t("Cancel" as any)}</Button>
           <Button onClick={submit} disabled={submitting || !amount || (needsBank && !bankOptions.chosenOffered)}>{submitting ? t("Saving" as any) : t("Record" as any)}</Button>
         </DialogFooter>
       </DialogContent>

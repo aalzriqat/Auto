@@ -1578,7 +1578,7 @@ export const recordPayment = mutation({
           invoiceSaleId: args.invoiceSaleId ?? null,
           amount: args.amount,
           method: args.method,
-          bankAccountId: args.bankAccountId ?? null,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           paymentDate: args.paymentDate,
           reference: args.reference?.trim() || null,
         }),
