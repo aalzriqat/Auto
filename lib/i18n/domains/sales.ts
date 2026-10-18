@@ -2069,6 +2069,14 @@ const serverErrorMessages = defineBilingualMessages({
     "The bank fee must be a whole, non-negative amount in minor currency units. Nothing has been changed.",
     "يجب أن تكون رسوم البنك عددًا صحيحًا غير سالب بالوحدات الصغرى للعملة. لم يتم تغيير أي شيء.",
   ],
+  ServerError_CHEQUE_CLEAR_BANK_INVALID: [
+    "Select an active bank account in this organization's currency to clear the cheque. Nothing has been changed.",
+    "اختر حسابًا مصرفيًا نشطًا بعملة هذه المؤسسة لتصفية الشيك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_RETURN_FEE_BANK_INVALID: [
+    "Select an active bank account in this organization's currency for the return fee. Nothing has been changed.",
+    "اختر حسابًا مصرفيًا نشطًا بعملة هذه المؤسسة لدفع رسوم إرجاع الشيك. لم يتم تغيير أي شيء.",
+  ],
   ServerError_CHEQUE_RETURN_NO_RECEIPT_LINEAGE: [
     "This cleared cheque has no persisted receipt lineage, so what it moved cannot be determined, and returning it would reopen the debt without reversing the receipt. Nothing has been changed. An accountant reviews the deal.",
     "لا يوجد سجل محفوظ لقيد الاستلام المرتبط بهذا الشيك المصفّى، لذلك لا يمكن تحديد ما حرّكه، وإرجاعه سيعيد فتح الدين دون عكس الاستلام. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
@@ -2078,8 +2086,8 @@ const serverErrorMessages = defineBilingualMessages({
     "لا توجد دفعة تحصيل لهذا الشيك المصفّى ليتم عكسها، وإعادة فتح الدين ستجعله مستحقًا ومحصّلًا في الوقت نفسه. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
   ],
   ServerError_CHEQUE_RETURN_KEY_CONFLICT: [
-    "This same request was already sent with a different cheque, reason or bank fee. Nothing has been changed. Close and reopen the dialog to try again.",
-    "سبق إرسال هذا الطلب نفسه مع شيك أو سبب أو رسوم بنكية مختلفة. لم يتم تغيير أي شيء. أغلق النافذة وأعد فتحها للمحاولة مرة أخرى.",
+    "This same request was already sent with a different cheque, reason, bank fee or bank account. Nothing has been changed. Close and reopen the dialog to try again.",
+    "سبق إرسال هذا الطلب نفسه مع شيك أو سبب أو رسوم بنكية أو حساب مصرفي مختلف. لم يتم تغيير أي شيء. أغلق النافذة وأعد فتحها للمحاولة مرة أخرى.",
   ],
   // SCRUM-693: unwinding a paid finance deal (convex/utils/dealUnwindMessages.ts).
   ServerError_DEAL_CANCEL_USE_UNWIND: [

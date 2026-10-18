@@ -238,6 +238,8 @@ export default function VehiclesPage() {
 
   const pendingRequests = useQuery(api.vehicleRequests.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");
   const pendingEdits = useQuery(api.vehicleEdits.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");
+  const acquisitionBankOptions = useQuery(api.vehicles.listAcquisitionBankOptions,
+    activeOrgId && canEdit ? { orgId: activeOrgId, purpose: "EDIT" } : "skip");
   const createStatusRequest = useMutation(api.vehicleRequests.create);
   const resolveStatusRequest = useMutation(api.vehicleRequests.resolve);
   const resolveEditRequest = useMutation(api.vehicleEdits.resolve);
@@ -1109,6 +1111,7 @@ export default function VehiclesPage() {
                       </div>
                       {askOwnership && (
                         <ApprovalOwnershipChooser
+                          bankOptions={acquisitionBankOptions}
                           idPrefix={`own-${req._id}`}
                           draft={draft}
                           onChange={(next) => setOwnershipDrafts((prev) => ({ ...prev, [req._id]: next }))}

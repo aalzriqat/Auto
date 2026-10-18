@@ -28,6 +28,7 @@ import {
 } from "./utils/depositHelpers";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
+import { listEligibleBanks } from "./utils/bankAccountGuards";
 import { assertDepositNotInLiveForward } from "./utils/financeCompanyForward";
 import { hookDepositVoided, getOrgCurrency } from "./accounting/workflowHooks";
 import {
@@ -175,6 +176,15 @@ async function vehiclesHeldByDeposit(
   return [...seen.values()];
 }
 
+export const listRefundBankOptions = query({
+  args: { orgId: v.id("organizations"), currency: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    return listEligibleBanks(ctx, args.orgId,
+      args.currency?.trim().toUpperCase() || await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
 export const release = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -183,6 +193,7 @@ export const release = mutation({
     // Required when resolution is REFUNDED — real cash/bank/card/cheque moves
     // out, and the GL entry must credit the account it actually left from.
     refundMethod: v.optional(depositMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     notes: v.optional(v.string()),
     idempotencyKey: v.string(),
   },
@@ -203,6 +214,7 @@ export const release = mutation({
           depositId: args.depositId,
           resolution: args.resolution,
           refundMethod: args.refundMethod ?? null,
+          bankAccountId: args.bankAccountId ?? null,
           notes: args.notes ?? null,
         }),
         // Deliberately NOT discriminated by how much of the row is left.
@@ -232,6 +244,7 @@ export const release = mutation({
           resolution: args.resolution,
           actorId: user._id,
           refundMethod: args.refundMethod,
+          bankAccountId: args.bankAccountId,
           notes: args.notes,
           idempotencyKey: args.idempotencyKey,
         });
@@ -751,6 +764,7 @@ export const resolveReleasedAllocation = mutation({
     toVehicleId: v.optional(v.id("vehicles")),
     /** Required for REFUND_TO_CUSTOMER — real money leaves, so the account it left must be known. */
     refundMethod: v.optional(depositMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** Required for OTHER, and recorded for every treatment. */
     reason: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
@@ -967,6 +981,7 @@ export const resolveReleasedAllocation = mutation({
         currency,
         resolution: args.treatment === "FORFEITED" ? "FORFEITED" : "REFUNDED",
         refundMethod: args.refundMethod,
+        bankAccountId: args.bankAccountId,
         actorId: user._id,
         notes: args.reason,
         occurredAt: now,

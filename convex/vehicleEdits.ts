@@ -1,5 +1,6 @@
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
+import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -18,6 +19,8 @@ import { assertNoPendingBeforeAvailable } from "./utils/depositCancellationPendi
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
 import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
 import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure, throwVehicleCostPosted } from "./vehicles";
+import { getOrgCurrency } from "./accounting/workflowHooks";
+import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
 import { syncVehicleHoldStatus } from "./utils/depositHelpers";
 import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
@@ -43,6 +46,7 @@ const ownershipDecisionValidator = v.object({
   sourceCost: v.optional(v.number()),
   purchasePrice: v.optional(v.number()),
   purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+  bankAccountId: v.optional(v.id("bankAccounts")),
   purchaseSupplierName: v.optional(v.string()),
 });
 
@@ -64,6 +68,7 @@ type VehicleEditPayload = {
   transmission?: string;
   purchasePrice?: number;
   purchasePaymentMethod?: AcquisitionPaymentMethod;
+  bankAccountId?: Id<"bankAccounts">;
   /** SCRUM-717: the creditor of an owned car bought ON_ACCOUNT; never `sourcedFromName`. */
   purchaseSupplierName?: string;
   minimumProfit?: number;
@@ -89,6 +94,25 @@ function normalizeVehicleEditPayload(payload: VehicleEditPayload): NormalizedVeh
   const { status: _status, ...rest } = payload;
   if (!normalizedStatus) return rest;
   return { ...rest, status: normalizedStatus };
+}
+
+async function validateRequestedAcquisitionBank(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  payload: Pick<VehicleEditPayload, "purchasePaymentMethod" | "bankAccountId">
+) {
+  const bankMethod = payload.purchasePaymentMethod === "BANK_TRANSFER" ||
+    payload.purchasePaymentMethod === "CARD" || payload.purchasePaymentMethod === "CHEQUE";
+  if (bankMethod) {
+    await requireActiveBankInCurrency(ctx, {
+      orgId, bankAccountId: payload.bankAccountId,
+      currency: await getOrgCurrency(ctx, orgId),
+      missingMessage: "Choose the bank account used to purchase this vehicle.",
+      currencySubject: "vehicle purchase",
+    });
+  } else if (payload.bankAccountId) {
+    throw new ConvexError("A bank account is only valid for a bank-funded vehicle purchase.");
+  }
 }
 
 // The direct vehicles.create/update mutations reject a non-integer or
@@ -118,6 +142,7 @@ export const requestCreate = mutation({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
       purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
@@ -150,6 +175,9 @@ export const requestCreate = mutation({
     // `vehicles.create` requires — refused here so it never becomes a request a
     // manager is asked to approve.
     assertVehicleIntake(payload);
+    if (payload.sourceType === "STOCK" && (payload.purchasePrice ?? 0) > 0) {
+      await validateRequestedAcquisitionBank(ctx, args.orgId, payload);
+    }
 
     const requestId = await ctx.db.insert("vehicleEdits", {
       orgId: args.orgId,
@@ -189,6 +217,7 @@ export const requestUpdate = mutation({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
       purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
@@ -276,6 +305,11 @@ export const requestUpdate = mutation({
       throw new ConvexError("Payment method is required to post this vehicle's acquisition cost to accounting.");
     }
     assertOnAccountHasCreditor(payload.purchasePaymentMethod, payload.purchaseSupplierName);
+    if (mayRequestAffectAcquisition && effectiveSourceTypeForRequest !== "SOURCED" &&
+      effectivePurchasePriceForRequest != null && effectivePurchasePriceForRequest > 0 &&
+      !(await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId))) {
+      await validateRequestedAcquisitionBank(ctx, args.orgId, payload);
+    }
 
     const filteredPayload: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(payload)) {
@@ -419,6 +453,7 @@ export const resolve = mutation({
           : payload.purchasePrice;
         const {
           purchasePaymentMethod,
+          bankAccountId,
           purchaseSupplierName: createPurchaseSupplierName,
           sourcedFromName,
           sourceCost,
@@ -443,6 +478,7 @@ export const resolve = mutation({
           isSourced,
           purchasePrice: effectivePurchasePrice,
           purchasePaymentMethod,
+          bankAccountId,
           supplierName: createPurchaseSupplierName,
           vehicleLabel: `${payload.year ?? ""} ${payload.make ?? ""} ${payload.model ?? ""}`.trim(),
           vin: payload.vin ?? vehicleId.toString(),
@@ -533,6 +569,7 @@ export const resolve = mutation({
 
         const {
           purchasePaymentMethod: resolvePurchasePaymentMethod,
+          bankAccountId: resolveBankAccountId,
           purchaseSupplierName: resolvePurchaseSupplierName,
           ...vehiclePatchFields
         } = payload;
@@ -563,6 +600,7 @@ export const resolve = mutation({
             isSourced: false,
             purchasePrice: resolveAcquisitionPurchasePrice,
             purchasePaymentMethod: resolvePurchasePaymentMethod,
+            bankAccountId: resolveBankAccountId,
             supplierName: resolvePurchaseSupplierName,
             vehicleLabel: `${payload.year ?? previousVehicle.year} ${payload.make ?? previousVehicle.make} ${payload.model ?? previousVehicle.model}`,
             vin: payload.vin ?? previousVehicle.vin ?? "",

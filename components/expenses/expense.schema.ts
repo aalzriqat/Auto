@@ -25,6 +25,7 @@ export const expenseSchema = z
     vendor: z.string().optional(),
     payerId: z.string().optional(),
     paymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"]),
+    bankAccountId: z.string().optional(),
     notes: z.string().optional(),
     isPrepaid: z.boolean().optional(),
     amortizationMonths: z.coerce.number().int().min(1).max(600).optional(),

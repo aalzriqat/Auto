@@ -62,6 +62,7 @@ const DAY = 24 * 60 * 60 * 1000;
 interface Seed {
   t: TestConvex;
   orgId: Id<"organizations">;
+  bankAccountId: Id<"bankAccounts">;
   otherOrgId: Id<"organizations">;
   userId: Id<"users">;
   employeeId: Id<"users">;
@@ -159,7 +160,12 @@ async function seedDeal(
     });
     periodId = (await asUser.query(api.accountingPeriods.list, { orgId }))[0]._id;
   }
-  return { t, orgId, otherOrgId, userId, employeeId, viewerId, vehicleId, applicationId, periodId, asUser, asViewer };
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Custody bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  return { t, orgId, otherOrgId, bankAccountId, userId, employeeId, viewerId, vehicleId, applicationId, periodId, asUser, asViewer };
 }
 
 async function openCustody(seed: Seed, issued = jod(700), extra: { method?: "CASH" | "BANK_TRANSFER"; occurredAt?: number; idempotencyKey?: string } = {}) {
@@ -167,6 +173,7 @@ async function openCustody(seed: Seed, issued = jod(700), extra: { method?: "CAS
     idempotencyKey: extra.idempotencyKey ?? crypto.randomUUID(),
     orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId,
     issuedMinor: issued, method: extra.method ?? "CASH", occurredAt: extra.occurredAt,
+    bankAccountId: extra.method === "BANK_TRANSFER" ? seed.bankAccountId : undefined,
   });
 }
 
@@ -179,6 +186,7 @@ async function move(
 ) {
   return await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
     orgId: seed.orgId, custodyId, kind, amountMinor, method: extra.method ?? "CASH",
+    bankAccountId: extra.method === "BANK_TRANSFER" ? seed.bankAccountId : undefined,
     occurredAt: extra.occurredAt, idempotencyKey: extra.idempotencyKey ?? crypto.randomUUID(),
   });
 }
@@ -317,6 +325,61 @@ describe("the ledger boundary: no chart, no cash", () => {
 });
 
 describe("what each movement posts", () => {
+  test("bank custody requires an explicit physical account before any money row, and posts to the chosen bank", async () => {
+    const seed = await seedDeal("bankidentity");
+    const before = await seed.t.run(async (ctx) => ({
+      custody: (await ctx.db.query("financeDealCustody").collect()).length,
+      events: (await ctx.db.query("accountingEvents").collect()).length,
+    }));
+    await expect(seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId,
+      issuedMinor: jod(100), method: "BANK_TRANSFER", idempotencyKey: "missing-custody-bank",
+    })).rejects.toThrow(/physical bank account/);
+    expect(await seed.t.run(async (ctx) => ({
+      custody: (await ctx.db.query("financeDealCustody").collect()).length,
+      events: (await ctx.db.query("accountingEvents").collect()).length,
+    }))).toEqual(before);
+
+    const custodyId = await openCustody(seed);
+    await expect(seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(30),
+      method: "CARD", idempotencyKey: "missing-movement-bank",
+    })).rejects.toThrow(/physical bank account/);
+    const secondBankId = await seed.t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId: seed.orgId, name: "Second custody bank", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: seed.userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(30),
+      method: "CARD", bankAccountId: secondBankId, idempotencyKey: "banked-movement",
+    });
+    const bankLines = await seed.t.run(async (ctx) => {
+      const bankControl = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) =>
+        q.eq("orgId", seed.orgId).eq("systemKey", SYSTEM_KEYS.BANK_ACCOUNT)).unique();
+      return (await ctx.db.query("journalLines").collect()).filter((line) => line.accountId === bankControl?._id);
+    });
+    expect(bankLines).toHaveLength(1);
+    expect(bankLines[0]).toMatchObject({ bankAccountId: secondBankId, creditMinor: jod(30) });
+  });
+
+  test("a returned cheque is held as a cheque, without inventing a physical bank", async () => {
+    const seed = await seedDeal("returned-cheque");
+    const custodyId = await openCustody(seed, jod(100));
+    await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(20),
+      method: "CHEQUE", idempotencyKey: "returned-cheque",
+    });
+    const chequeLines = await seed.t.run(async (ctx) => {
+      const control = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) =>
+        q.eq("orgId", seed.orgId).eq("systemKey", SYSTEM_KEYS.CHEQUES_IN_HAND)).unique();
+      return (await ctx.db.query("journalLines").collect()).filter((line) => line.accountId === control?._id);
+    });
+    expect(chequeLines).toHaveLength(1);
+    expect(chequeLines[0].debitMinor).toBe(jod(20));
+    expect(chequeLines[0].bankAccountId).toBeUndefined();
+  });
+
   test("issuing cash: Dr custody clearing / Cr cash on hand (CASH) or bank (BANK_TRANSFER)", async () => {
     const seed = await seedDeal("issue");
     const custodyId = await openCustody(seed, jod(700), { method: "CASH" });
@@ -4398,10 +4461,10 @@ describe("R8-F3 — the worker proves a queued custody row IS the posting its ke
   }
 
   /** A cash leg dated into a CLOSED month: queued, canonical, waiting only on the period. */
-  async function queuedCashLeg(seed: Seed) {
+  async function queuedCashLeg(seed: Seed, method: "CASH" | "BANK_TRANSFER" = "CASH") {
     const { earlierId, boundary } = await splitPeriods(seed);
     await closePeriod(seed, earlierId);
-    const custodyId = await openCustody(seed, jod(700), { occurredAt: boundary - 3 * DAY });
+    const custodyId = await openCustody(seed, jod(700), { method, occurredAt: boundary - 3 * DAY });
     const entry = (await entries(seed, custodyId)).find((e) => e.kind === "ISSUED")!;
     const row = await queuedRow(seed, `custody_entry_${entry._id}`);
     expect([row.eventType, row.eventVersion, row.sourceType, row.sourceId]).toEqual(["CUSTODY_CASH_ISSUED", 1, "financeDealCustodyEntries", entry._id]);
@@ -4411,6 +4474,16 @@ describe("R8-F3 — the worker proves a queued custody row IS the posting its ke
   /** The worker's PERMANENT refusal, asked over an EDITED copy of a real queued row. */
   const refusal = (seed: Seed, row: Queued, edit: Partial<Queued> = {}) =>
     seed.t.run((ctx) => custodyPostingRefusal(ctx, { ...row, ...edit }));
+
+  test("a queued bank custody leg keeps its source bank and rejects a different payload bank", async () => {
+    const seed = await seedDeal("queued-bank-source");
+    const { entry, row } = await queuedCashLeg(seed, "BANK_TRANSFER");
+    expect(entry.bankAccountId).toBe(seed.bankAccountId);
+    expect((row.payload as { bankAccountId?: string }).bankAccountId).toBe(seed.bankAccountId);
+    expect(await refusal(seed, row)).toBeNull();
+    expect(await refusal(seed, row, { payload: { ...(row.payload as object), bankAccountId: undefined } }))
+      .toMatch(/names a physical bank account/);
+  });
 
   /** Another organization's custody record with one ISSUED movement and one cost line charged to it — what a raw-edited source could point at. */
   async function foreignFamily(seed: Seed) {
@@ -4565,6 +4638,7 @@ describe("R8-F3 — the worker proves a queued custody row IS the posting its ke
     expect(await refusal(seed, row, withPayload({ amountMinor: entry.amountMinor + 1 }))).toMatch(/names an amount .* that is not the source's/);
     expect(await refusal(seed, row, withPayload({ currency: "USD" }))).toMatch(/names a currency .* that is not the source's/);
     expect(await refusal(seed, row, withPayload({ paymentMethod: "BANK_TRANSFER" }))).toMatch(/names a payment method .* that is not the source's/);
+    expect(await refusal(seed, row, withPayload({ bankAccountId: seed.bankAccountId }))).toMatch(/names a physical bank account .* that is not the source's/);
     expect(await refusal(seed, row, {})).toBeNull();
     // Fee: the line, its payload, and the record the cost was paid out of.
     const feeRow = (edit: Partial<Queued> = {}, payloadEdit: Record<string, unknown> = {}): Queued => ({
@@ -5071,7 +5145,7 @@ describe("custody method rule: replay and legacy migration (SCRUM-469 round 1)",
   }, 60_000);
 
   // ---- SOL-03: legacy migration ------------------------------------------------
-  async function seedLegacy(seed: Seed, methods: Array<"CASH" | "BANK_TRANSFER" | undefined>) {
+  async function seedLegacy(seed: Seed, methods: Array<"CASH" | "BANK_TRANSFER" | undefined>, bankIdentityRecorded = true) {
     return await seed.t.run(async (ctx) => {
       const t0 = Date.now() - 10 * DAY;
       const total = methods.length * jod(100);
@@ -5083,6 +5157,7 @@ describe("custody method rule: replay and legacy migration (SCRUM-469 round 1)",
       for (const [i, method] of methods.entries()) {
         await ctx.db.insert("financeDealCustodyEntries", {
           orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(100), ...(method ? { method } : {}),
+          ...(method === "BANK_TRANSFER" && bankIdentityRecorded ? { bankAccountId: seed.bankAccountId } : {}),
           occurredAt: t0 + i * DAY, recordedBy: seed.userId, recordedAt: t0 + i * DAY,
         });
       }
@@ -5113,4 +5188,13 @@ describe("custody method rule: replay and legacy migration (SCRUM-469 round 1)",
     expect(bank(l)).toBe(-jod(100));
     expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))?.ledgerPosting).toBe("CANONICAL");
   }, 60_000);
+
+  test("a legacy bank movement with no physical identity refuses migration without posting any leg", async () => {
+    const seed = await seedDeal("legacy-bankless", { templates: false });
+    const custodyId = await seedLegacy(seed, ["CASH", "BANK_TRANSFER"], false);
+    const before = await counts(seed);
+    await expect(migrateIt(seed, custodyId)).rejects.toThrow(/physical bank account/);
+    expect(await counts(seed)).toEqual(before);
+    expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))?.ledgerPosting).toBeUndefined();
+  });
 });

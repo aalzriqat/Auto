@@ -1464,6 +1464,23 @@ export async function runRehearsalCases(ctx) {
       });
 
       await ownerMust("mutation", "collections:depositCheque", { orgId, chequeId });
+      const denom = await orgDenomination({ orgId, ownerMust });
+      const clearingBankId = await ownerMust("mutation", "bankAccounts:create", {
+        orgId,
+        name: `Rehearsal cheque bank ${stamp}`,
+        currency: denom.currency,
+        openingBalanceMinor: 0,
+        openingBalanceDate: Date.now(),
+      });
+      if (!clearingBankId) fail("bankAccounts:create returned no id for the cheque clearing bank");
+      const feeBankId = await ownerMust("mutation", "bankAccounts:create", {
+        orgId,
+        name: `Rehearsal cheque fee bank ${stamp}`,
+        currency: denom.currency,
+        openingBalanceMinor: 0,
+        openingBalanceDate: Date.now(),
+      });
+      if (!feeBankId || String(feeBankId) === String(clearingBankId)) fail("bankAccounts:create returned no distinct bank for the cheque return fee");
       // OWNER, not the MANAGER. `clearCheque` requires manage:finance and the
       // seated MANAGER does not hold it, so the cloud run refused with
       // "Forbidden: Missing required permissions: manage:finance".
@@ -1476,6 +1493,7 @@ export async function runRehearsalCases(ctx) {
       await ownerMust("mutation", "collections:clearCheque", {
         orgId,
         chequeId,
+        bankAccountId: clearingBankId,
         idempotencyKey: `rehearsal-rv1-clear-${stamp}`,
       });
 
@@ -1483,7 +1501,6 @@ export async function runRehearsalCases(ctx) {
       // (found by its chequeId, not by position in a list), whose ONE receipt
       // occurrence posts bank against the receivable — 1,200, in the org's
       // denomination, nothing else. The receivable itself reads PAID at zero.
-      const denom = await orgDenomination({ orgId, ownerMust });
       const scale = denom.minorPerMajor;
       const { keyOf } = await chartIndex({ orgId, ownerMust });
       const payments = await listCollectionPayments({ orgId, ownerMust });
@@ -1500,6 +1517,8 @@ export async function runRehearsalCases(ctx) {
       expectExactLines(cleared.lines, keyOf, clearingLines, {
         currency: denom.currency, decimals: denom.decimals, what: "the cheque clearing", customerId,
       });
+      const clearedBankLine = cleared.lines.find((line) => keyOf.get(String(line.accountId)) === "BANK_ACCOUNT");
+      expectEqual(String(clearedBankLine?.bankAccountId), String(clearingBankId), "the cheque clearing's physical bank");
       const settled = await findReceivable({ orgId, ownerMust, receivableId });
       expectEqual(settled.outstandingAmount, 0, "outstanding on the receivable after the cheque cleared");
       expectEqual(settled.status, "PAID", "receivable status after the cheque cleared");
@@ -1507,10 +1526,14 @@ export async function runRehearsalCases(ctx) {
         .map((l) => `${keyOf.get(String(l.accountId))}|${l.debitMinor}|${l.creditMinor}`)
         .sort((a, b) => a.localeCompare(b));
 
+      const preReturnEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", { orgId, limit: 200 });
+      const preReturnEventIds = new Set((preReturnEvents ?? []).map((event) => String(event._id)));
       const returned = await ownerCall("mutation", "collections:returnClearedCheque", {
         orgId,
         chequeId,
         returnReason: "Rehearsal bounce",
+        bankFeeMinor: 500,
+        bankFeeBankAccountId: feeBankId,
         idempotencyKey: `rehearsal-rv1-return-${stamp}`,
       });
       if (!returned.ok) {
@@ -1553,6 +1576,18 @@ export async function runRehearsalCases(ctx) {
         ],
         { currency: denom.currency, decimals: denom.decimals, what: "the cheque-return reversal", customerId }
       );
+      const reversedBankLine = (reversal.lines ?? []).find((line) => keyOf.get(String(line.accountId)) === "BANK_ACCOUNT");
+      expectEqual(String(reversedBankLine?.bankAccountId), String(clearingBankId), "the cheque reversal's original physical bank");
+      const fee = await eventAndJournal({
+        orgId, ownerMust, sourceType: "expenses", sourceId: "bank-return-fee", eventType: "EXPENSE_POSTED",
+        pick: (event) => event.sourceType === "expenses" && !preReturnEventIds.has(String(event._id)),
+      });
+      expectExactLines(fee.lines, keyOf, [
+        { key: "PROFESSIONAL_FEES_EXPENSE", debitMinor: 500 },
+        { key: "BANK_ACCOUNT", creditMinor: 500 },
+      ], { currency: denom.currency, decimals: denom.decimals, what: "the cheque return fee" });
+      const feeBankLine = fee.lines.find((line) => keyOf.get(String(line.accountId)) === "BANK_ACCOUNT");
+      expectEqual(String(feeBankLine?.bankAccountId), String(feeBankId), "the bank that paid the cheque return fee");
 
       // THE DEBT IS OWED AGAIN — exactly, not approximately.
       const reopened = await findReceivable({ orgId, ownerMust, receivableId });

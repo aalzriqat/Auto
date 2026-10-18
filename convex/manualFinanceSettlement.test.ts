@@ -22,6 +22,7 @@ import type { Id } from "./_generated/dataModel";
 import { deriveForwardState } from "./utils/financeCompanyForward";
 import { economicsStamp } from "./utils/financingEconomics";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -237,11 +238,13 @@ const record = (
   over: Partial<{ expectedAmountMinor: number; idempotencyKey: string }> = {},
   as = s.owner.as
 ) =>
-  as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-    expectedAmountMinor: over.expectedAmountMinor ?? c.S,
-    idempotencyKey: over.idempotencyKey ?? crypto.randomUUID(),
-  });
+  seedBank(s.t, s.orgId).then((bankAccountId) =>
+    as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId, paidAt: Date.now(),
+      expectedAmountMinor: over.expectedAmountMinor ?? c.S,
+      idempotencyKey: over.idempotencyKey ?? crypto.randomUUID(),
+    })
+  );
 
 const confirmTransfer = (s: Seeded, applicationId: Id<"financeApplications">, amount = G) =>
   insertReceiptBank(s).then((bankAccountId) =>

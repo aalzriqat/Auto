@@ -31,6 +31,7 @@ import { throwAppError, AppErrorCode } from "./utils/errors";
 import { SYSTEM_KEYS, type SystemKey } from "./utils/defaultChart";
 import { disbursementAccountKey } from "./accounting/postingRules";
 import { isSystemAccountMapped } from "./chartOfAccounts";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 
 /** The stock kinds `getAgingBuckets` sums over, in key order. */
 const STOCK_KINDS = [OWN_STOCK, SOURCED];
@@ -155,6 +156,7 @@ export async function postVehicleAcquisitionIfOwned(
     isSourced: boolean;
     purchasePrice: number | undefined;
     purchasePaymentMethod?: AcquisitionPaymentMethod;
+    bankAccountId?: Id<"bankAccounts">;
     /** Required when purchasePaymentMethod is "ON_ACCOUNT" — who the payable is owed to. */
     supplierName?: string;
     vehicleLabel: string;
@@ -179,6 +181,19 @@ export async function postVehicleAcquisitionIfOwned(
 
   const now = Date.now();
   const currency = await getOrgCurrency(ctx, args.orgId);
+  const bankMethod = args.purchasePaymentMethod === "BANK_TRANSFER" ||
+    args.purchasePaymentMethod === "CARD" || args.purchasePaymentMethod === "CHEQUE";
+  if (bankMethod) {
+    await requireActiveBankInCurrency(ctx, {
+      orgId: args.orgId,
+      bankAccountId: args.bankAccountId,
+      currency,
+      missingMessage: "Choose the bank account used to purchase this vehicle.",
+      currencySubject: "vehicle purchase",
+    });
+  } else if (args.bankAccountId) {
+    throw new ConvexError("A bank account is only valid for a bank-funded vehicle purchase.");
+  }
 
   if (isOnAccount) {
     // No cash actually moved — the legacy transactions table only records
@@ -190,6 +205,7 @@ export async function postVehicleAcquisitionIfOwned(
       costMinor: toMinorUnits(args.purchasePrice, currency),
       currency,
       paymentMethod: "ON_ACCOUNT",
+      bankAccountId: undefined,
       actorId: args.actorId,
       occurredAt: now,
     });
@@ -224,6 +240,7 @@ export async function postVehicleAcquisitionIfOwned(
     currency,
     // Excludes "ON_ACCOUNT" — handled in the early-return branch above.
     paymentMethod: normalizePaymentMethod(args.purchasePaymentMethod as Exclude<AcquisitionPaymentMethod, "ON_ACCOUNT"> | undefined),
+    bankAccountId: args.bankAccountId,
     actorId: args.actorId,
     occurredAt: now,
   });
@@ -904,6 +921,7 @@ export const create = mutation({
     imageIds: v.optional(v.array(v.id("_storage"))),
     /** How the dealer paid for the vehicle — drives the GL credit side (Cash/Bank/Cheque/Card/AP-Suppliers for ON_ACCOUNT). Ignored for SOURCED vehicles, which never capitalize into inventory. */
     purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** SCRUM-717: the creditor of an OWNED car bought ON_ACCOUNT. Never `sourcedFromName`, which is consignment only. */
     purchaseSupplierName: v.optional(v.string()),
     ...trustPassportFieldValidators,
@@ -941,6 +959,7 @@ export const create = mutation({
           sourceCost: args.sourceCost ?? null,
           sellingPrice: args.sellingPrice,
           purchasePaymentMethod: args.purchasePaymentMethod ?? null,
+          bankAccountId: args.bankAccountId ?? null,
           purchaseSupplierName: args.purchaseSupplierName?.trim() || null,
         }),
       },
@@ -1040,6 +1059,7 @@ export const create = mutation({
       isSourced,
       purchasePrice: effectivePurchasePrice,
       purchasePaymentMethod: args.purchasePaymentMethod,
+      bankAccountId: args.bankAccountId,
       supplierName: args.purchaseSupplierName,
       vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()}`,
       vin: normalizedVin,
@@ -1049,7 +1069,7 @@ export const create = mutation({
     // `idempotencyKey` is a TRANSPORT concern, not part of the vehicle payload:
     // this spread is persisted into a vehicleEdits row whose schema rejects
     // unknown fields, so leaving it in made every approval-path create fail.
-    const { orgId: _, idempotencyKey: __, ...payloadArgs } = args;
+    const { orgId: _, idempotencyKey: __, bankAccountId: ___, ...payloadArgs } = args;
     await ctx.db.insert("vehicleEdits", {
       orgId: args.orgId,
       requestedBy: user._id,
@@ -1216,6 +1236,7 @@ interface ProvenAcquisitionEvidence {
   costMinor: number | undefined;
   currency: string | undefined;
   paymentMethod: string | undefined;
+  bankAccountId: string | undefined;
 }
 
 async function provenAcquisitionEvidence(
@@ -1272,7 +1293,8 @@ function readAcquisitionEvidence(
   const costMinor = typeof p.costMinor === "number" && Number.isFinite(p.costMinor) ? p.costMinor : undefined;
   const payloadCurrency = typeof p.currency === "string" && p.currency.trim() ? p.currency : undefined;
   const paymentMethod = typeof p.paymentMethod === "string" && p.paymentMethod.trim() ? p.paymentMethod : undefined;
-  return { costMinor, currency: payloadCurrency ?? rowCurrency, paymentMethod };
+  const bankAccountId = typeof p.bankAccountId === "string" && p.bankAccountId.trim() ? p.bankAccountId : undefined;
+  return { costMinor, currency: payloadCurrency ?? rowCurrency, paymentMethod, bankAccountId };
 }
 
 /**
@@ -1302,6 +1324,7 @@ export const update = mutation({
     imageIds: v.optional(v.array(v.id("_storage"))),
     /** How the dealer paid — required if this update capitalizes an acquisition that hasn't posted yet (e.g. a SOURCED→STOCK flip, or a purchase price set for the first time). Ignored otherwise. */
     purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** SCRUM-717: the creditor when the acquisition above is ON_ACCOUNT. Never `sourcedFromName`. */
     purchaseSupplierName: v.optional(v.string()),
     ...trustPassportFieldValidators,
@@ -1430,7 +1453,7 @@ export const update = mutation({
     // purchasePaymentMethod and purchaseSupplierName are transient inputs for the
     // acquisition posting below, not persisted vehicle fields — exclude them from
     // the patch.
-    const { orgId: _, vehicleId: __, purchasePaymentMethod: ___, purchaseSupplierName: ____, ...updates } = args;
+    const { orgId: _, vehicleId: __, purchasePaymentMethod: ___, purchaseSupplierName: ____, bankAccountId: _____, ...updates } = args;
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
@@ -1553,6 +1576,7 @@ export const update = mutation({
           isSourced: false,
           purchasePrice: acquisitionPurchasePrice,
           purchasePaymentMethod: args.purchasePaymentMethod,
+          bankAccountId: args.bankAccountId,
           supplierName: args.purchaseSupplierName,
           vehicleLabel: `${(patch.year as number | undefined) ?? vehicle.year} ${(patch.make as string | undefined) ?? vehicle.make} ${(patch.model as string | undefined) ?? vehicle.model}`,
           vin: ((patch.vin as string | undefined) ?? vehicle.vin) || "",
@@ -1596,13 +1620,14 @@ export const upsertLandedCosts = mutation({
       amount: v.number(),
       /** How this specific item was paid — drives which account it capitalizes against and which account a later reduction/removal reverses against. Required for a non-zero item on a non-SOURCED vehicle. */
       paymentMethod: v.optional(paymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+    const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId, "Vehicle not found in this organization.");
+    if (vehicle.isDeleted) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
     if (vehicle.status === "SOLD") {
@@ -1618,8 +1643,11 @@ export const upsertLandedCosts = mutation({
     }
 
     const items = args.items
-      .map((item) => ({ label: item.label.trim(), amount: item.amount, paymentMethod: item.paymentMethod }))
+      .map((item) => ({ label: item.label.trim(), amount: item.amount, paymentMethod: item.paymentMethod, bankAccountId: item.bankAccountId }))
       .filter((item) => item.label.length > 0);
+    if (vehicle.sourceType === "SOURCED" && items.some((item) => item.bankAccountId)) {
+      throw new ConvexError("A physical bank account cannot be assigned to informational sourced-vehicle costs.");
+    }
     // Sourced/drop-ship vehicles never sit in physical inventory — their cost
     // basis is sourceCost only, so landed costs entered against one (kept for
     // informational tracking) never capitalize into the GL, and there's no
@@ -1638,6 +1666,32 @@ export const upsertLandedCosts = mutation({
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
       .unique();
     const previousItems = existing?.items ?? [];
+
+    if (vehicle.sourceType !== "SOURCED") {
+      // An old dimensionless bank cost cannot be reversed or reallocated to a
+      // physical bank truthfully. Hold the whole edit for reviewed correction.
+      if (previousItems.some((item) => item.amount !== 0 &&
+        (item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE") &&
+        !item.bankAccountId)) {
+        throw new ConvexError("Existing bank-funded landed costs lack a physical bank identity. Have finance review them before editing.");
+      }
+      const currency = await getOrgCurrency(ctx, args.orgId);
+      const checkedBanks = new Set<Id<"bankAccounts">>();
+      for (const item of items) {
+        const bankMethod = item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE";
+        if (bankMethod && (item.amount !== 0 || item.bankAccountId)) {
+          if (item.bankAccountId && checkedBanks.has(item.bankAccountId)) continue;
+          const bankId = await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId, bankAccountId: item.bankAccountId, currency,
+            missingMessage: `Choose a bank account for landed cost item "${item.label}".`,
+            currencySubject: "landed cost",
+          });
+          checkedBanks.add(bankId);
+        } else if (item.bankAccountId) {
+          throw new ConvexError(`A bank account is only valid for a bank-funded landed cost item "${item.label}".`);
+        }
+      }
+    }
 
     if (existing) {
       await ctx.db.patch(existing._id, { items, total, updatedAt: now, updatedBy: user._id });
@@ -1665,21 +1719,24 @@ export const upsertLandedCosts = mutation({
       // (or removing one paid from a different account than the others) posts
       // against the accounts actually affected, even when the net total is
       // unchanged.
-      const sumsByMethod = (list: ReadonlyArray<{ amount: number; paymentMethod?: PaymentMethod }>) => {
-        const sums = new Map<string, number>();
+      const sumsByMethodAndBank = (list: ReadonlyArray<{ amount: number; paymentMethod?: PaymentMethod; bankAccountId?: Id<"bankAccounts"> }>) => {
+        const sums = new Map<string, { paymentMethod: PaymentMethod; bankAccountId?: Id<"bankAccounts">; amount: number }>();
         for (const item of list) {
-          const key = item.paymentMethod ?? normalizePaymentMethod(undefined);
-          sums.set(key, (sums.get(key) ?? 0) + item.amount);
+          const paymentMethod = item.paymentMethod ?? normalizePaymentMethod(undefined);
+          const key = JSON.stringify([paymentMethod, item.bankAccountId ?? null]);
+          const prior = sums.get(key);
+          sums.set(key, { paymentMethod, bankAccountId: item.bankAccountId, amount: (prior?.amount ?? 0) + item.amount });
         }
         return sums;
       };
-      const oldSums = sumsByMethod(previousItems);
-      const newSums = sumsByMethod(items);
-      const allMethods = new Set([...oldSums.keys(), ...newSums.keys()]);
-      const accountDeltas = Array.from(allMethods)
-        .map((paymentMethod) => ({
-          paymentMethod,
-          deltaMinor: toMinorUnits((newSums.get(paymentMethod) ?? 0) - (oldSums.get(paymentMethod) ?? 0), currency),
+      const oldSums = sumsByMethodAndBank(previousItems);
+      const newSums = sumsByMethodAndBank(items);
+      const allAccounts = new Set([...oldSums.keys(), ...newSums.keys()]);
+      const accountDeltas = Array.from(allAccounts)
+        .map((key) => ({
+          paymentMethod: (newSums.get(key) ?? oldSums.get(key))!.paymentMethod,
+          bankAccountId: (newSums.get(key) ?? oldSums.get(key))!.bankAccountId,
+          deltaMinor: toMinorUnits((newSums.get(key)?.amount ?? 0) - (oldSums.get(key)?.amount ?? 0), currency),
         }))
         .filter((d) => d.deltaMinor !== 0);
 
@@ -1895,18 +1952,41 @@ function allowedAcquisitionCorrectionTypes(
 /** The account the correction's counter-line posts to — mirrors ruleVehicleAcquisitionCostCorrected. */
 export function costCorrectionCounterKey(
   correctionType: AcquisitionCostCorrectionType,
-  paymentMethod: string | undefined
+  paymentMethod: string | undefined,
+  deltaMinor?: number
 ): SystemKey {
   switch (correctionType) {
     case "SUPPLIER_INVOICE_ERROR":
     case "VENDOR_CREDIT":
       return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
     case "CASH_REFUND":
+      // A cheque received back from a supplier is held until cleared. An
+      // extra amount we pay out by cheque leaves our bank.
+      if (paymentMethod === "CHEQUE" && deltaMinor !== undefined && deltaMinor < 0) {
+        return SYSTEM_KEYS.CHEQUES_IN_HAND;
+      }
       return disbursementAccountKey(paymentMethod);
     case "PRIOR_PERIOD_RESTATEMENT":
       return SYSTEM_KEYS.RETAINED_EARNINGS;
   }
 }
+
+export const listAcquisitionBankOptions = query({
+  args: { orgId: v.id("organizations"), purpose: v.union(v.literal("CREATE"), v.literal("EDIT")) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [args.purpose === "CREATE" ? PERMISSIONS.CREATE_VEHICLES : PERMISSIONS.EDIT_VEHICLES]);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
+export const listAcquisitionCorrectionBankOptions = query({
+  args: { orgId: v.id("organizations"), vehicleId: v.id("vehicles") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, COST_CORRECTION_PERMISSIONS);
+    await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+  },
+});
 
 /**
  * Corrects a vehicle's acquisition cost after VEHICLE_ACQUIRED has already
@@ -1938,6 +2018,7 @@ export const correctAcquisitionCost = mutation({
     ),
     /** Required when correctionType is CASH_REFUND — which cash/bank account actually moved. Ignored otherwise. */
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
   },
   handler: async (ctx, args) => {
     // Both: the correction rewrites a figure that VIEW_COST_PRICE exists to withhold, and the
@@ -2021,6 +2102,13 @@ export const correctAcquisitionCost = mutation({
         "The new purchase cost is the same as the current cost, so there is nothing to correct."
       );
     }
+    // A supplier cheque RECEIVED needs a cheque-custody and clearing record,
+    // which this correction flow cannot create. Never book it directly to the
+    // bank or leave an untracked CHEQUES_IN_HAND balance.
+    if (args.correctionType === "CASH_REFUND" && args.paymentMethod === "CHEQUE" && deltaMinor < 0) {
+      throwAppError(AppErrorCode.COST_CORRECTION_HELD_CHEQUE_UNSUPPORTED,
+        "A received supplier cheque cannot be recorded here until its custody and clearing can be tracked. Record a bank or cash refund only after that money is actually received.");
+    }
 
     // ── The correction-type matrix, enforced from the ORIGINAL payment method.
     const { row, count: payableCount } = await loadAcquisitionPayable(ctx, vehicle);
@@ -2064,7 +2152,16 @@ export const correctAcquisitionCost = mutation({
     // ── It posts now or not at all. Both halves are checked BEFORE the first
     // write, so a refusal leaves the vehicle, the payable and the ledger as they were.
     const now = Date.now();
-    const counterKey = costCorrectionCounterKey(args.correctionType, args.paymentMethod);
+    const counterKey = costCorrectionCounterKey(args.correctionType, args.paymentMethod, deltaMinor);
+    if (counterKey === SYSTEM_KEYS.BANK_ACCOUNT) {
+      await requireActiveBankInCurrency(ctx, {
+        orgId: args.orgId, bankAccountId: args.bankAccountId, currency,
+        missingMessage: "Select the physical bank for this purchase cost correction.",
+        currencySubject: "vehicle cost correction", errorCode: AppErrorCode.COST_CORRECTION_BANK_INVALID,
+      });
+    } else if (args.bankAccountId) {
+      throwAppError(AppErrorCode.COST_CORRECTION_BANK_NOT_APPLICABLE, "A physical bank does not apply to this purchase cost correction.");
+    }
     const [counterMapped, inventoryMapped] = await Promise.all([
       isSystemAccountMapped(ctx, args.orgId, counterKey),
       isSystemAccountMapped(ctx, args.orgId, SYSTEM_KEYS.VEHICLE_INVENTORY),
@@ -2092,6 +2189,7 @@ export const correctAcquisitionCost = mutation({
       newCost: args.newCost,
       reason,
       correctionType: args.correctionType,
+      bankAccountId: args.bankAccountId,
       // What the supplier balance was before this correction rewrote it, so the audit trail can
       // reconstruct the payable from the correction row alone.
       ...(payableToAdjust
@@ -2132,6 +2230,7 @@ export const correctAcquisitionCost = mutation({
       currency,
       correctionType: args.correctionType,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId,
       actorId: user._id,
       occurredAt: now,
     });
@@ -3302,7 +3401,8 @@ async function importRowFingerprint(
     purchaseSupplierName?: string;
     valuations?: Array<{ companyId?: string; companyName?: string; valuationAmount: number }>;
   },
-  paymentMethod: AcquisitionPaymentMethod
+  paymentMethod: AcquisitionPaymentMethod,
+  bankAccountId?: Id<"bankAccounts">
 ): Promise<string> {
   const text = (value: string | undefined) => (value ?? "").trim().toLowerCase();
 
@@ -3373,6 +3473,7 @@ async function importRowFingerprint(
     sourceCost: row.sourceCost ?? null,
     purchaseSupplierName: text(row.purchaseSupplierName),
     paymentMethod,
+    bankAccountId: bankAccountId ?? null,
     valuations,
   });
 }
@@ -3466,7 +3567,8 @@ function acquisitionFingerprintMismatch(
   evidence: ProvenAcquisitionEvidence,
   incomingCostMinor: number,
   incomingCurrency: string,
-  incomingPaymentMethod: AcquisitionPaymentMethod
+  incomingPaymentMethod: AcquisitionPaymentMethod,
+  incomingBankAccountId?: Id<"bankAccounts">
 ): string | null {
   if (evidence.currency === undefined) return "the recorded purchase does not state a currency";
   if (evidence.currency !== incomingCurrency) {
@@ -3480,6 +3582,10 @@ function acquisitionFingerprintMismatch(
   if (evidence.paymentMethod !== incomingPaymentMethod) {
     return `recorded as paid by ${evidence.paymentMethod}, this import says ${incomingPaymentMethod}`;
   }
+  const bankMethod = incomingPaymentMethod === "BANK_TRANSFER" || incomingPaymentMethod === "CARD" || incomingPaymentMethod === "CHEQUE";
+  if (bankMethod && !evidence.bankAccountId) return "the recorded bank-funded purchase does not identify a physical bank";
+  if (bankMethod && evidence.bankAccountId !== incomingBankAccountId) return "the recorded purchase used a different physical bank";
+  if (!bankMethod && evidence.bankAccountId) return "the recorded purchase unexpectedly identifies a physical bank";
   return null;
 }
 
@@ -3496,6 +3602,7 @@ export const importBulk = mutation({
      * cell is exactly the silent guess this argument exists to prevent.
      */
     purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /**
      * Identifies the logical import. REQUIRED for PURCHASE, ignored otherwise.
      *
@@ -3866,7 +3973,7 @@ export const importBulk = mutation({
           orgId: args.orgId,
           operation: IMPORT_ROW_OPERATION,
           idempotencyKey: `${importId}:${row.rowId}`,
-          fingerprint: await importRowFingerprint(row, args.purchasePaymentMethod),
+          fingerprint: await importRowFingerprint(row, args.purchasePaymentMethod, args.bankAccountId),
           label: `Row ${row.rowId} (${normalized})`,
         });
         if (evidence) {
@@ -3923,7 +4030,8 @@ export const importBulk = mutation({
             acquisition,
             toMinorUnits(row.purchasePrice!, orgCurrency),
             orgCurrency,
-            args.purchasePaymentMethod
+            args.purchasePaymentMethod,
+            args.bankAccountId
           );
           if (moneyMismatch) {
             contradictions.push(`${normalized}: ${moneyMismatch}`);
@@ -3971,6 +4079,25 @@ export const importBulk = mutation({
         throw new ConvexError(
           `${unprovenBasis.length} vehicle(s) already exist here with no recorded purchase (${unprovenBasis.slice(0, 3).join(", ")}). They may already be covered by this dealership's opening balance, so importing them as a purchase could count them twice — and skipping them could leave them with no cost at all. Reconcile those vehicles' basis first, then import the rest.`
         );
+      }
+    }
+
+    // Validate before the first write, but after durable row evidence was read.
+    // A lost-response retry of a purchase remains a no-op even if its original
+    // bank was later deactivated. Any genuinely new row must still name a live bank.
+    if (postsAcquisitions && args.vehicles.some((row) => !provenRetries.has(row.rowId!))) {
+      const bankMethod = args.purchasePaymentMethod === "BANK_TRANSFER" ||
+        args.purchasePaymentMethod === "CARD" || args.purchasePaymentMethod === "CHEQUE";
+      if (bankMethod) {
+        await requireActiveBankInCurrency(ctx, {
+          orgId: args.orgId,
+          bankAccountId: args.bankAccountId,
+          currency: await getOrgCurrency(ctx, args.orgId),
+          missingMessage: "Choose the bank account used for this vehicle purchase import.",
+          currencySubject: "vehicle purchase import",
+        });
+      } else if (args.bankAccountId) {
+        throw new ConvexError("A bank account is only valid for a bank-funded vehicle purchase import.");
       }
     }
 
@@ -4160,6 +4287,7 @@ export const importBulk = mutation({
             isSourced,
             purchasePrice: isSourced ? sourceCost : row.purchasePrice,
             purchasePaymentMethod: args.purchasePaymentMethod,
+            bankAccountId: args.bankAccountId,
             supplierName: row.purchaseSupplierName?.trim(),
             vehicleLabel: `${row.year} ${row.make.trim()} ${row.model.trim()}`,
             vin: insertedVin,
@@ -4179,7 +4307,7 @@ export const importBulk = mutation({
             orgId: args.orgId,
             operation: IMPORT_ROW_OPERATION,
             idempotencyKey: `${importId}:${row.rowId}`,
-            fingerprint: await importRowFingerprint(row, args.purchasePaymentMethod!),
+            fingerprint: await importRowFingerprint(row, args.purchasePaymentMethod!, args.bankAccountId),
             result: { vehicleId },
             actorId: user._id,
           });

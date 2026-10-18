@@ -20,6 +20,9 @@ const state = vi.hoisted(() => ({
   releaseCalls: [] as Array<Record<string, unknown>>,
   /** Outcome of the next deposits.release call: a lost response, or success. */
   releaseOutcomes: [] as Array<"lost" | "refused" | "ok">,
+  landedCosts: null as null | { items: Array<{ label: string; amount: number; paymentMethod: string; bankAccountId?: string }>; total: number },
+  bankOptions: { banks: [{ _id: "bank_1", name: "Operating", currency: "JOD" }], truncated: false },
+  landedCostCalls: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@/components/ui/select", async () => {
@@ -48,9 +51,16 @@ vi.mock("convex/react", async () => {
       if (name === "deposits:listByVehicle") return state.deposits;
       if (name === "customers:list") return { page: [{ _id: "cust_1", firstName: "Dana", lastName: "K" }] };
       if (name === "vehicles:getRelations") return { testDrives: [], workOrders: [], leads: [], sales: [], tasks: [], expenses: [] };
+      if (name === "vehicles:getLandedCosts") return state.landedCosts;
+      if (name === "vehicles:listAcquisitionBankOptions") return state.bankOptions;
+      if (name === "deposits:listRefundBankOptions") return state.bankOptions;
       return undefined;
     },
     useMutation: (reference: never) => async (args: Record<string, unknown>) => {
+      if (getFunctionName(reference) === "vehicles:upsertLandedCosts") {
+        state.landedCostCalls.push(args);
+        return { total: 300 };
+      }
       if (getFunctionName(reference) === "deposits:release") {
         state.releaseCalls.push(args);
         const outcome = state.releaseOutcomes.shift();
@@ -167,12 +177,46 @@ beforeEach(() => {
   state.toastError = [];
   state.releaseCalls = [];
   state.releaseOutcomes = [];
+  state.landedCosts = null;
+  state.bankOptions = { banks: [{ _id: "bank_1", name: "Operating", currency: "JOD" }], truncated: false };
+  state.landedCostCalls = [];
   Element.prototype.hasPointerCapture = () => false;
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
   Element.prototype.scrollIntoView = () => {};
 });
 afterEach(cleanup);
+
+describe("vehicle landed-cost bank choice", () => {
+  test("a bank-funded item shows its amount and requires a chosen bank before saving", async () => {
+    render(ui());
+    fireEvent.click(screen.getByRole("button", { name: "AddCostItem", hidden: true }));
+    const amount = screen.getByText("CostItemAmount").parentElement?.querySelector("input") as HTMLInputElement;
+    fireEvent.change(amount, { target: { value: "300" } });
+    fireEvent.change(screen.getByTestId("method-undefined"), { target: { value: "BANK_TRANSFER" } });
+    const bank = document.querySelector('select[id^="landed-cost-bank-"]') as HTMLSelectElement;
+    expect(bank).toBeDefined();
+    const save = screen.getByRole("button", { name: "SaveLandedCost", hidden: true }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.change(bank, { target: { value: "bank_1" } });
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(state.landedCostCalls).toHaveLength(1));
+    expect(state.landedCostCalls[0]?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ amount: 300, paymentMethod: "BANK_TRANSFER", bankAccountId: "bank_1" }),
+    ]));
+  });
+
+  test("an older bank-funded item without bank identity is held for finance review", () => {
+    state.landedCosts = {
+      items: [{ label: "Legacy transport", amount: 300, paymentMethod: "BANK_TRANSFER" }], total: 300,
+    };
+    render(ui());
+    expect(screen.getByText("LandedCostLegacyBankReview", { exact: true })).toBeDefined();
+    const save = screen.getByRole("button", { name: "SaveLandedCost", hidden: true }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+  });
+});
 
 describe("vehicle dialog: method is per money movement (SCRUM-469 round 1)", () => {
   test("a partial payout (releaseCount advances) clears the refund method for the NEXT payout", () => {
@@ -264,6 +308,7 @@ describe("vehicle dialog: method is per money movement (SCRUM-469 round 1)", () 
 describe("vehicle dialog: an unconfirmed payout keeps its identity (SCRUM-469 round 3, F1)", () => {
   const chooseAndRefund = async (method: string) => {
     fireEvent.change(refundSelect(), { target: { value: method } });
+    if (method !== "CASH") fireEvent.click(screen.getByTestId("item-bank_1"));
     fireEvent.click(refundButton());
     await new Promise((resolve) => setTimeout(resolve, 0));
   };

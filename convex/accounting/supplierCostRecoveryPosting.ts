@@ -85,6 +85,7 @@ export async function postSupplierCostRecoveryReceipt(
     amountMinor: number;
     currency: string;
     paymentMethod: "CASH" | "BANK_TRANSFER";
+    bankAccountId?: Id<"bankAccounts">;
     receivedDate: number;
     actorId: Id<"users">;
   }
@@ -111,6 +112,7 @@ export async function postSupplierCostRecoveryReceipt(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
       vehicleId: args.vehicleId.toString(),
     },
   });

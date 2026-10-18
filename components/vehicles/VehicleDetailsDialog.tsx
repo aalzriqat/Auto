@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
-import { Doc } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -101,6 +101,9 @@ export function VehicleDetailsDialog({
     api.vehicles.getLandedCosts,
     activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
   );
+  const landedCostBanks = useQuery(api.vehicles.listAcquisitionBankOptions,
+    open && activeOrgId && vehicle && canEditVehicles && vehicle.sourceType !== "SOURCED"
+      ? { orgId: activeOrgId, purpose: "EDIT" } : "skip");
   const pricingHistory = useQuery(
     api.vehicles.getPricingHistory,
     activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
@@ -139,11 +142,16 @@ export function VehicleDetailsDialog({
   // it into the next payout, while a retry of the same unconfirmed attempt (same
   // generation) keeps both its method and its command identity.
   const [refundChoiceByDeposit, setRefundChoiceByDeposit] = useState<
-    Record<string, { method: PaymentMethod; generation: number }>
+    Record<string, { method: PaymentMethod; bankAccountId?: Id<"bankAccounts">; generation: number }>
   >({});
   const [landedCostItems, setLandedCostItems] = useState<
-    { id: string; label: string; amount: number; paymentMethod: PaymentMethod }[]
+    { id: string; label: string; amount: number; paymentMethod: PaymentMethod; bankAccountId?: Id<"bankAccounts"> }[]
   >([]);
+  const hasLegacyUnattributedBank = vehicle?.sourceType !== "SOURCED" && !!landedCosts?.items.some((item) =>
+    item.amount !== 0 && (item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE") && !item.bankAccountId);
+  const hasUnselectedLandedCostBank = vehicle?.sourceType !== "SOURCED" && landedCostItems.some((item) =>
+    item.amount !== 0 && (item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE") &&
+    !landedCostBanks?.banks?.some((bank) => bank._id === item.bankAccountId));
   const [savingLandedCosts, setSavingLandedCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
@@ -207,14 +215,14 @@ export function VehicleDetailsDialog({
 
   const updateLandedCostItem = (
     index: number,
-    patch: Partial<{ label: string; amount: number; paymentMethod: PaymentMethod }>
+    patch: Partial<{ label: string; amount: number; paymentMethod: PaymentMethod; bankAccountId: Id<"bankAccounts"> | undefined }>
   ) =>
     setLandedCostItems((items) =>
       items.map((current, currentIndex) => (currentIndex === index ? { ...current, ...patch } : current))
     );
 
   const handleSaveLandedCosts = async () => {
-    if (!activeOrgId || !vehicle) return;
+    if (!activeOrgId || !vehicle || hasLegacyUnattributedBank || hasUnselectedLandedCostBank || landedCostBanks?.truncated) return;
     setSavingLandedCosts(true);
     try {
       await upsertLandedCosts({
@@ -290,7 +298,8 @@ export function VehicleDetailsDialog({
     // SCRUM-469: the method the operator CHOSE, handed in by the control that
     // refuses to offer Refund without one. Never read back from state with a
     // fallback: a refund with no method has no account to leave by.
-    chosenRefundMethod?: PaymentMethod
+    chosenRefundMethod?: PaymentMethod,
+    chosenRefundBankAccountId?: Id<"bankAccounts">
   ) => {
     if (!activeOrgId) return;
     if (resolution === "REFUNDED" && !isChosenMethod(chosenRefundMethod)) return;
@@ -298,7 +307,8 @@ export function VehicleDetailsDialog({
     // An earlier attempt on this deposit that never confirmed keeps its identity.
     // A DIFFERENT decision is refused here (the notice explains) rather than
     // minting a new key that could pay the same or newly freed money out twice.
-    const gate = pendingPayouts.check(String(depositId), resolution, String(refundMethod));
+    const bankAccountId = resolution === "REFUNDED" && refundMethod !== "CASH" ? chosenRefundBankAccountId : undefined;
+    const gate = pendingPayouts.check(String(depositId), resolution, String(refundMethod), bankAccountId);
     if (gate.status === "blocked") return;
     setReleasingDepositId(depositId);
     // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
@@ -335,14 +345,15 @@ export function VehicleDetailsDialog({
     // attempt this call belongs to, so a late failure cannot settle a newer record.
     const intent =
       gate.recordedIntent ??
-      `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${observedReleaseCount}`;
-    pendingPayouts.record(String(depositId), { resolution, method: String(refundMethod), intent });
+      `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:${bankAccountId ?? "none"}:gen${observedReleaseCount}`;
+    pendingPayouts.record(String(depositId), { resolution, method: String(refundMethod), bankAccountId, intent });
     try {
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? chosenRefundMethod : undefined,
+        bankAccountId,
         idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
@@ -606,20 +617,32 @@ export function VehicleDetailsDialog({
                           {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
                             <HeldDepositActions
                               t={t as any}
+                              orgId={activeOrgId ?? undefined}
+                              currency={deposit.currency}
                               method={
                                 refundChoiceByDeposit[deposit._id]?.generation === (deposit.releaseCount ?? 0)
                                   ? refundChoiceByDeposit[deposit._id]?.method
                                   : undefined
                               }
+                              bankAccountId={refundChoiceByDeposit[deposit._id]?.generation === (deposit.releaseCount ?? 0)
+                                ? String(refundChoiceByDeposit[deposit._id]?.bankAccountId ?? "") : ""}
                               onMethodChange={(method) =>
                                 setRefundChoiceByDeposit((prev) => ({
                                   ...prev,
                                   [deposit._id]: { method, generation: deposit.releaseCount ?? 0 },
                                 }))
                               }
+                              onBankChange={(bankAccountId) => setRefundChoiceByDeposit((prev) => {
+                                const choice = prev[deposit._id];
+                                if (!choice) return prev;
+                                return { ...prev, [deposit._id]: {
+                                  ...choice,
+                                  bankAccountId: bankAccountId ? bankAccountId as Id<"bankAccounts"> : undefined,
+                                } };
+                              })}
                               busy={releasingDepositId === deposit._id}
-                              onRefund={(method) =>
-                                handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0, method)
+                              onRefund={(method, bankAccountId) =>
+                                handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0, method, bankAccountId)
                               }
                               onForfeit={() => handleReleaseDeposit(deposit._id, "FORFEITED", deposit.releaseCount ?? 0)}
                             />
@@ -635,7 +658,8 @@ export function VehicleDetailsDialog({
                                   deposit._id,
                                   recorded.resolution,
                                   deposit.releaseCount ?? 0,
-                                  recorded.resolution === "REFUNDED" ? (recorded.method as PaymentMethod) : undefined
+                                  recorded.resolution === "REFUNDED" ? (recorded.method as PaymentMethod) : undefined,
+                                  recorded.bankAccountId as Id<"bankAccounts"> | undefined
                                 );
                               }}
                               onDismiss={() => pendingPayouts.dismiss(deposit._id)}
@@ -880,9 +904,12 @@ export function VehicleDetailsDialog({
             </section>
             <section hidden={activeGroup !== "financials"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none space-y-4">
               <h2 className="text-base font-semibold">{t("LandedCost")}</h2>
+              {hasLegacyUnattributedBank && (
+                <p role="status" className="text-sm text-destructive">{t("LandedCostLegacyBankReview" as any)}</p>
+              )}
               <div className="flex items-center justify-between gap-3">
                 <h3 className="font-semibold text-sm">{t("LandedCostBreakdown" as any)}</h3>
-                {canEditVehicles && (
+                {canEditVehicles && !hasLegacyUnattributedBank && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -905,12 +932,12 @@ export function VehicleDetailsDialog({
               ) : (
                 <div className="space-y-3">
                   {landedCostItems.map((item, index) => (
-                    <div key={item.id} className="grid grid-cols-[1fr_140px_160px_auto] gap-2 items-end">
+                    <div key={item.id} className="grid min-w-0 grid-cols-1 gap-2 items-end sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_140px_160px_minmax(0,180px)_auto]">
                       <div className="space-y-1">
                         <Label>{t("CostItemLabel" as any)}</Label>
                         <Input
                           value={item.label}
-                          disabled={!canEditVehicles}
+                          disabled={!canEditVehicles || hasLegacyUnattributedBank}
                           onChange={(event) => updateLandedCostItem(index, { label: event.target.value })}
                         />
                       </div>
@@ -920,7 +947,7 @@ export function VehicleDetailsDialog({
                           type="number"
                           min="0"
                           value={item.amount}
-                          disabled={!canEditVehicles}
+                          disabled={!canEditVehicles || hasLegacyUnattributedBank}
                           onChange={(event) => updateLandedCostItem(index, { amount: Number(event.target.value) })}
                         />
                       </div>
@@ -929,10 +956,29 @@ export function VehicleDetailsDialog({
                         <PaymentMethodSelect
                           t={t as any}
                           value={item.paymentMethod}
-                          onValueChange={(method) => updateLandedCostItem(index, { paymentMethod: method })}
+                          disabled={!canEditVehicles || hasLegacyUnattributedBank}
+                          onValueChange={(method) => {
+                            if (!hasLegacyUnattributedBank) updateLandedCostItem(index, { paymentMethod: method, bankAccountId: undefined });
+                          }}
                         />
                       </div>
-                      {canEditVehicles && (
+                      {(item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE") && vehicle?.sourceType !== "SOURCED" ? (
+                        <div className="min-w-0 space-y-1">
+                          <Label htmlFor={`landed-cost-bank-${item.id}`}>{t("DirectPaymentBankLabel" as any)} *</Label>
+                          <select
+                            id={`landed-cost-bank-${item.id}`}
+                            className="flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                            value={landedCostBanks?.banks?.some((bank) => bank._id === item.bankAccountId) ? item.bankAccountId : ""}
+                            onChange={(event) => updateLandedCostItem(index, { bankAccountId: event.target.value ? event.target.value as Id<"bankAccounts"> : undefined })}
+                            disabled={!canEditVehicles || !landedCostBanks || landedCostBanks.truncated || !landedCostBanks.banks?.length || hasLegacyUnattributedBank}
+                            required
+                          >
+                            <option value="">{t((landedCostBanks ? "DirectPaymentBankChoose" : "CashDrawerLoadingBanks") as any)}</option>
+                            {(landedCostBanks?.banks ?? []).map((bank) => <option key={bank._id} value={bank._id}>{bank.name} · {bank.currency}</option>)}
+                          </select>
+                        </div>
+                      ) : <div className="hidden lg:block" />}
+                      {canEditVehicles && !hasLegacyUnattributedBank && (
                         <Button
                           type="button"
                           variant="ghost"
@@ -949,9 +995,12 @@ export function VehicleDetailsDialog({
                     <span className="text-sm font-semibold">{t("Total" as any)}</span>
                     <span className="font-bold">{formatMoney(landedCostItems.reduce((sum, item) => sum + item.amount, 0))}</span>
                   </div>
+                  {landedCostBanks?.truncated && <p role="status" className="text-sm text-muted-foreground">{t("DirectPaymentTooManyBanks" as any)}</p>}
+                  {landedCostBanks && !landedCostBanks.truncated && !landedCostBanks.banks?.length && hasUnselectedLandedCostBank &&
+                    <p role="status" className="text-sm text-muted-foreground">{t("DirectPaymentNoBank" as any)}</p>}
                   {canEditVehicles && (
                     <div className="flex items-end justify-end gap-2">
-                      <Button onClick={handleSaveLandedCosts} disabled={savingLandedCosts}>
+                      <Button onClick={handleSaveLandedCosts} disabled={savingLandedCosts || hasLegacyUnattributedBank || hasUnselectedLandedCostBank || landedCostBanks?.truncated}>
                         <Save className="h-4 w-4 me-2" />
                         {t("SaveLandedCost" as any)}
                       </Button>

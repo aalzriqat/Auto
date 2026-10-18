@@ -14,6 +14,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
+import type { Id } from "@/convex/_generated/dataModel";
+import { BANK_PAYMENT_METHODS, type DirectPaymentBankOptions } from "./cockpit/HandoverCostsPanel";
 
 /**
  * SCRUM-435 - record that the dealership paid the customer's deposit and its own
@@ -39,36 +41,55 @@ const selectClass =
 
 export type ForwardPaymentValues = {
   method: ForwardPaymentMethod;
+  /** SCRUM-54: the physical bank, for a bank-account method only. */
+  bankAccountId?: Id<"bankAccounts">;
   /** UTC midnight of the calendar day the operator picked. */
   paidAt: number;
   reference?: string;
+  /** The amount due when this attempt was first submitted; a same-command retry re-sends it, never the live figure. */
+  expectedAmountMinor: number;
 };
+
+type PinnedFigures = { totalLabel: string; depositLabel: string; contributionLabel: string };
+
+/** "UNKNOWN": the response was lost, so the payment may be recorded - the form freezes for a same-command retry. */
+export type ForwardConfirmOutcome = "UNKNOWN" | void;
 
 type RecordForwardToFinanceCompanyDialogProps = {
   open: boolean;
   submitting: boolean;
+  /** The live amount owed onward, in minor units; pinned into the attempt at first submit. */
+  dueMinor: number;
   /** The total owed onward, already formatted in the deal's currency. */
   totalLabel: string;
   depositLabel: string;
   contributionLabel: string;
+  /** Banks a bank-account method may name, in the deal's currency; `undefined` while loading. */
+  bankOptions: DirectPaymentBankOptions;
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
-  onConfirm: (values: ForwardPaymentValues) => void | Promise<void>;
+  onConfirm: (values: ForwardPaymentValues) => ForwardConfirmOutcome | Promise<ForwardConfirmOutcome>;
 };
 
 export function RecordForwardToFinanceCompanyDialog({
   open,
   submitting,
+  dueMinor,
   totalLabel,
   depositLabel,
   contributionLabel,
+  bankOptions,
   t,
   onOpenChange,
   onConfirm,
 }: Readonly<RecordForwardToFinanceCompanyDialogProps>) {
   const [method, setMethod] = useState<ForwardPaymentMethod | "">("");
+  const [bankAccountId, setBankAccountId] = useState("");
   const [paidOn, setPaidOn] = useState(economicTodayDateInput());
   const [reference, setReference] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  // The attempt whose outcome is unknown: every field is frozen and a retry re-sends exactly this.
+  const [unknownSent, setUnknownSent] = useState<{ values: ForwardPaymentValues; figures: PinnedFigures } | null>(null);
 
   // Reset on the closed -> open transition only, so a live re-render of the deal
   // never wipes what the operator is typing.
@@ -78,12 +99,48 @@ export function RecordForwardToFinanceCompanyDialog({
     wasOpenRef.current = open;
     if (!justOpened) return;
     setMethod("");
+    setBankAccountId("");
     setPaidOn(economicTodayDateInput());
     setReference("");
+    setError(null);
+    setUnknownSent(null);
   }, [open]);
 
   const paidAt = paidOn === "" ? Number.NaN : economicDateInputToMs(paidOn);
-  const ready = method !== "" && Number.isFinite(paidAt);
+  const frozen = unknownSent !== null;
+  const needsBank = method !== "" && BANK_PAYMENT_METHODS.includes(method);
+  // A choice the server no longer offers (the list moved while the form was open) cannot be sent.
+  const chosenBank = bankOptions?.banks.find((bank) => bank._id === bankAccountId);
+  const bankListTruncated = needsBank && bankOptions?.truncated === true;
+  const noEligibleBank = needsBank && bankOptions !== undefined && !bankListTruncated && bankOptions.banks.length === 0;
+  const ready = frozen || (method !== "" && Number.isFinite(paidAt));
+
+  // While an attempt is unknown the breakdown shows what that attempt was sent with, not the live deal.
+  const shown = unknownSent?.figures ?? { totalLabel, depositLabel, contributionLabel };
+
+  const submit = async () => {
+    let attempt = unknownSent;
+    if (attempt === null) {
+      if (method === "" || !Number.isFinite(paidAt)) return;
+      if (needsBank && chosenBank === undefined) {
+        setError(t("DirectPaymentBankRequired"));
+        return;
+      }
+      const trimmed = reference.trim();
+      attempt = {
+        values: {
+          method,
+          ...(needsBank && chosenBank ? { bankAccountId: chosenBank._id } : {}),
+          paidAt,
+          reference: trimmed === "" ? undefined : trimmed,
+          expectedAmountMinor: dueMinor,
+        },
+        figures: { totalLabel, depositLabel, contributionLabel },
+      };
+    }
+    setError(null);
+    setUnknownSent((await onConfirm(attempt.values)) === "UNKNOWN" ? attempt : null);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -96,16 +153,16 @@ export function RecordForwardToFinanceCompanyDialog({
         <div className="rounded-md border bg-muted/50 p-3" data-testid="forward-breakdown">
           <p className="text-xs text-muted-foreground">{t("RecordForwardAmount")}</p>
           <p className="mt-1 text-lg font-semibold tabular-nums">
-            <bdi dir="ltr">{totalLabel}</bdi>
+            <bdi dir="ltr">{shown.totalLabel}</bdi>
           </p>
           <dl className="mt-2 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 border-t pt-2 text-sm">
             <dt className="text-muted-foreground">{t("RecordForwardDeposit")}</dt>
             <dd className="tabular-nums">
-              <bdi dir="ltr">{depositLabel}</bdi>
+              <bdi dir="ltr">{shown.depositLabel}</bdi>
             </dd>
             <dt className="text-muted-foreground">{t("RecordForwardContribution")}</dt>
             <dd className="tabular-nums">
-              <bdi dir="ltr">{contributionLabel}</bdi>
+              <bdi dir="ltr">{shown.contributionLabel}</bdi>
             </dd>
           </dl>
         </div>
@@ -113,11 +170,12 @@ export function RecordForwardToFinanceCompanyDialog({
         <form
           id="record-forward-form"
           className="grid gap-3 sm:grid-cols-2"
+          // `required` stays for assistive tech; submit() owns validation so the
+          // refusal is the translated in-form alert, not a browser tooltip.
+          noValidate
           onSubmit={(event) => {
             event.preventDefault();
-            if (method === "" || !Number.isFinite(paidAt)) return;
-            const trimmed = reference.trim();
-            void onConfirm({ method, paidAt, reference: trimmed === "" ? undefined : trimmed });
+            void submit();
           }}
         >
           <div className="space-y-1.5">
@@ -127,8 +185,12 @@ export function RecordForwardToFinanceCompanyDialog({
               className={selectClass}
               value={method}
               required
-              disabled={submitting}
-              onChange={(event) => setMethod(event.target.value as ForwardPaymentMethod | "")}
+              disabled={submitting || frozen}
+              onChange={(event) => {
+                setMethod(event.target.value as ForwardPaymentMethod | "");
+                setBankAccountId("");
+                setError(null);
+              }}
             >
               <option value="">{t("DirectPaymentMethodChoose")}</option>
               {METHODS.map((option) => (
@@ -146,20 +208,55 @@ export function RecordForwardToFinanceCompanyDialog({
               required
               max={economicTodayDateInput()}
               value={paidOn}
-              disabled={submitting}
+              disabled={submitting || frozen}
               onChange={(event) => setPaidOn(event.target.value)}
             />
           </div>
+          {needsBank && (
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="record-forward-bank">{t("DirectPaymentBankLabel")}</Label>
+              <select
+                id="record-forward-bank"
+                className={selectClass}
+                value={chosenBank?._id ?? ""}
+                disabled={submitting || frozen || bankOptions === undefined || noEligibleBank || bankListTruncated}
+                required
+                aria-invalid={error === t("DirectPaymentBankRequired")}
+                onChange={(event) => {
+                  setBankAccountId(event.target.value);
+                  setError(null);
+                }}
+              >
+                <option value="">{t(bankOptions === undefined ? "CashDrawerLoadingBanks" : "DirectPaymentBankChoose")}</option>
+                {(bankOptions?.banks ?? []).map((bank) => (
+                  <option key={bank._id} value={bank._id}>
+                    {bank.name} · {bank.currency}
+                  </option>
+                ))}
+              </select>
+              {noEligibleBank && (
+                <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("DirectPaymentNoBank")}</p>
+              )}
+              {bankListTruncated && (
+                <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("DirectPaymentTooManyBanks")}</p>
+              )}
+            </div>
+          )}
           <div className="space-y-1.5 sm:col-span-2">
             <Label htmlFor="record-forward-reference">{t("ReceiptReferenceLabel")}</Label>
             <Input
               id="record-forward-reference"
               maxLength={MAX_REFERENCE_CHARS}
               value={reference}
-              disabled={submitting}
+              disabled={submitting || frozen}
               onChange={(event) => setReference(event.target.value)}
             />
           </div>
+          {error && (
+            <p role="alert" className="text-xs font-medium text-destructive sm:col-span-2">
+              {error}
+            </p>
+          )}
         </form>
 
         <DialogFooter>

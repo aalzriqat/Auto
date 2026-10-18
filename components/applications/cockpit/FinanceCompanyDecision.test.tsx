@@ -59,6 +59,10 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
+vi.mock("convex/react", async (importOriginal) => ({
+  ...await importOriginal<typeof import("convex/react")>(),
+  useQuery: () => undefined,
+}));
 
 import { DealCockpitView } from "./DealCockpit";
 import { RecordSubmittedQuotationDialog } from "./RecordSubmittedQuotationDialog";

@@ -1,6 +1,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 import { forwardPostKey } from "./utils/financeCompanyForward";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
@@ -1411,6 +1412,7 @@ async function setupFinalizedFinancedDeal() {
         orgId,
         applicationId,
         method: "BANK_TRANSFER",
+        bankAccountId: await seedBank(t, orgId),
         paidAt: Date.now(),
         expectedAmountMinor: due,
         idempotencyKey: crypto.randomUUID(),

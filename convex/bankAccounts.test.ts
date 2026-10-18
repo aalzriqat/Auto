@@ -626,6 +626,23 @@ describe("bankAccounts.getBookBalance", () => {
     expect(await asOfBalance(fx, Date.now(), BOOK_BALANCE_READ_BUDGET)).toMatchObject({ status: "OK", balanceMinor: 100_000 });
   });
 
+  test("adopting an existing bank-control chart row includes lines posted before its system mapping", async () => {
+    const fx = await seedDealer();
+    const bankId = await createBank(fx, "Operating", true);
+    const { bank } = await refs(fx);
+    // This is the legacy adoption case: the candidate has the bank-control
+    // code and valid economics, but does not yet carry the system key.
+    await fx.t.run((ctx) => ctx.db.patch(bank._id, { systemKey: undefined }));
+    await seedBankLine(fx, { debitMinor: 125_000, bankAccountId: bankId });
+
+    await fx.asOwner.mutation(api.chartOfAccounts.confirmSystemAccountAdoption, {
+      orgId: fx.orgId, systemKey: "BANK_ACCOUNT", decision: "ADOPT",
+    });
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "OK", bankAccountId: bankId, balanceMinor: 125_000, unattributedLineCount: 0,
+    });
+  });
+
   test("an unbounded chart lookup cannot hide from the budget: three mappings exhaust a budget one mapping fits", async () => {
     const fx = await seedDealer();
     await createBank(fx, "Bank A", true);

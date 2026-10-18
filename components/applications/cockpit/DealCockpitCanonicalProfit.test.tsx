@@ -26,6 +26,10 @@ vi.mock("@/hooks/useCurrency", () => ({
   useCurrency: () => ({ code: "JOD", symbol: "JD", displayLabel: "JOD", format: (n: number) => `${n} JOD`, formatCompact: String }),
 }));
 vi.mock("@/components/accounting/AccountingTabShared", () => ({ scaleForCurrency: () => 3 }));
+vi.mock("convex/react", async (importOriginal) => ({
+  ...await importOriginal<typeof import("convex/react")>(),
+  useQuery: () => undefined,
+}));
 
 import { DealCockpitView } from "./DealCockpit";
 

@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ReceiptBankSelect, useReceiptBankOptions } from "@/components/accounting/ReceiptBankSelect";
+import { ClearChequeBankDialog } from "@/components/accounting/ClearChequeBankDialog";
 
 type ReceiptMethod = "CASH" | "BANK_TRANSFER";
 type PaymentAttempt = {
@@ -53,7 +54,6 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const activate = useMutation(api.collections.activateSaleInvoiceReceipt);
   const registerCheque = useMutation(api.collections.registerSaleInvoiceCheque);
   const depositCheque = useMutation(api.collections.depositCheque);
-  const clearCheque = useMutation(api.collections.clearCheque);
   const requestRefund = useMutation(api.retainedCreditRefunds.requestRetainedCreditRefund);
   const [pendingCursor, setPendingCursor] = useState<string | null>(null);
   const status = useQuery(api.collections.saleInvoiceReceiptStatus,
@@ -73,6 +73,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const [chequeNumber, setChequeNumber] = useState("");
   const [chequeAmount, setChequeAmount] = useState("");
   const [chequeDate, setChequeDate] = useState(todayDateInput);
+  const [clearTarget, setClearTarget] = useState<{ id: Id<"postDatedCheques">; label: string } | null>(null);
   const [reserveAmount, setReserveAmount] = useState("");
   const [selectedMovement, setSelectedMovement] = useState("");
   const [paymentAttempt, setPaymentAttempt] = useState<PaymentAttempt | null>(null);
@@ -243,27 +244,15 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
     } finally { setBusy(false); }
   }
 
-  async function onAdvanceCheque(chequeId: Id<"postDatedCheques">, state: "HELD" | "DEPOSITED", chequeAmountMajor: number) {
-    // A HELD cheque is deposited only while the live invoice can still cover it
-    // (the server refuses otherwise). A DEPOSITED one is already at the bank, so
-    // it can always be cleared: the server books it as invoice receipt or, when
-    // the sale was cancelled or is now covered, as unreserved customer credit.
-    // Neither is a pilot-switched door on the server, so neither is here.
+  async function onAdvanceCheque(chequeId: Id<"postDatedCheques">, chequeAmountMajor: number) {
+    // A held cheque is deposited only while the live invoice can still cover it.
+    // Clearing a deposited cheque uses the separate bank-selection dialog.
     if (!canManage || busy) return;
-    if (state === "HELD" && !invoiceCoversCheque(chequeAmountMajor)) return;
+    if (!invoiceCoversCheque(chequeAmountMajor)) return;
     setBusy(true); setError(""); setNotice("");
     try {
-      if (state === "HELD") {
-        await depositCheque({ orgId, chequeId });
-        setNotice(t("DealReceiptChequeDepositNotice"));
-      } else {
-        const intent = `sale-clear-cheque:${chequeId}`;
-        await clearCheque({ orgId, chequeId, idempotencyKey: command.for(intent) });
-        command.retire(intent);
-        // Never "reserved for this invoice": the server reserves only on a live
-        // intent with the doors open; otherwise the face is unreserved credit.
-        setNotice(t("DealReceiptChequeClearedToCredit"));
-      }
+      await depositCheque({ orgId, chequeId });
+      setNotice(t("DealReceiptChequeDepositNotice"));
     } catch (error_) {
       showFailure(error_, "DealReceiptChequeActionFailed");
     } finally { setBusy(false); }
@@ -353,7 +342,9 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
                 {uncovered && <span className="text-muted-foreground">{t("DealReceiptChequeExceedsInvoice")}</span>}
                 {canManage && (!held || depositable) &&
                   <Button size="sm" variant="outline" disabled={busy}
-                    onClick={() => onAdvanceCheque(cheque.chequeId, held ? "HELD" : "DEPOSITED", cheque.amount)}>
+                    onClick={() => held
+                      ? onAdvanceCheque(cheque.chequeId, cheque.amount)
+                      : setClearTarget({ id: cheque.chequeId, label: `${cheque.bank} #${cheque.chequeNumber}` })}>
                     {t(held ? "DealReceiptDepositCheque" : "DealReceiptClearCheque")}</Button>}
               </li>
             );
@@ -467,6 +458,9 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
       </CardHeader>
       <CardContent className="space-y-5">
         {body}
+        <ClearChequeBankDialog orgId={orgId} chequeId={clearTarget?.id ?? null}
+          chequeLabel={clearTarget?.label ?? ""} onClose={() => setClearTarget(null)}
+          onCleared={() => { setError(""); setNotice(t("DealReceiptChequeClearedToCredit")); }} />
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {notice && <output className="block text-sm">{notice}</output>}
       </CardContent>

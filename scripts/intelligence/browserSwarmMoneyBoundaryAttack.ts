@@ -263,12 +263,14 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
       }
       // H + D must reach the financier before the sale can close. `expectedAmountMinor` is the independently
       // derived figure: the product refuses unless it equals its own due amount, which cross-checks both.
+      // SCRUM-54: the approver may lack MANAGE_FINANCE and so cannot create a bank; it pays from the one the OWNER created above.
       await refusalIsInconclusive(
         () =>
           approver.client.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
             orgId: org,
             applicationId,
             method: "BANK_TRANSFER",
+            bankAccountId: paidFromBankId,
             paidAt: Date.now() - PAID_AT_SKEW_MS,
             expectedAmountMinor: scenario.forwardDueMinor,
             idempotencyKey: `${nonce}-forward`,
