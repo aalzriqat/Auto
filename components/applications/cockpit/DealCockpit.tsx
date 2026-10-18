@@ -1472,6 +1472,12 @@ export function DealCockpit({
       ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
       : "skip"
   );
+  const custodyBankOptions = useQuery(
+    api.financeDealCosts.listCustodyBankOptions,
+    app && deal && canConfirmFinanceDisbursement
+      ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
+      : "skip"
+  );
   const handoverCosts =
     app && deal
       ? {
@@ -2915,6 +2921,7 @@ export function DealCockpit({
     app && custodyCommandsOffered
       ? {
           members: custodyCandidates?.candidates,
+          bankOptions: custodyBankOptions,
           eligibleFees: (dealCosts?.fees ?? [])
             .filter((fee) => fee.custodyEligible && fee.custodyId === undefined && fee.actualAmountMinor !== undefined && fee.actualAmountMinor > 0)
             .map((fee) => ({
@@ -2943,6 +2950,7 @@ export function DealCockpit({
                 userId: values.userId,
                 issuedMinor: values.amountMinor,
                 method: values.method,
+                ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                 reference: values.reference,
                 note: values.note,
                 occurredAt: values.occurredAt,
@@ -2957,6 +2965,7 @@ export function DealCockpit({
                 kind,
                 amountMinor: values.amountMinor,
                 method: values.method,
+                ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                 reference: values.reference,
                 note: values.note,
                 occurredAt: values.occurredAt,

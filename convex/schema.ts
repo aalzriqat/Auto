@@ -3864,6 +3864,7 @@ export default defineSchema({
         v.literal("CARD")
       )
     ),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     reference: v.optional(v.string()),
     note: v.optional(v.string()),
     occurredAt: v.number(),

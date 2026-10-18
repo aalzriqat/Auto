@@ -3110,6 +3110,7 @@ export interface CustodyCashPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 function assertCustodyAmount(p: { amountMinor: number }, what: string): void {
@@ -3119,13 +3120,24 @@ function assertCustodyAmount(p: { amountMinor: number }, what: string): void {
   }
 }
 
+function assertCustodyBankIdentity(p: CustodyCashPayload, cashKey: SystemKey): void {
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Custody bank posting has no physical bank identity; refusing the journal.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Custody cash posting unexpectedly names a physical bank; refusing the journal.");
+  }
+}
+
 /** Cash handed to the employee: Dr Custody Clearing / Cr cash or bank (outbound). */
 export function ruleCustodyCashIssued(p: CustodyCashPayload): RuleResult {
   assertCustodyAmount(p, "CUSTODY_CASH_ISSUED");
+  const cashKey = disbursementAccountKey(p.paymentMethod);
+  assertCustodyBankIdentity(p, cashKey);
   return {
     lines: [
       line(CUSTODY_CLEARING_KEY, p.amountMinor, 0, "Deal custody cash issued to employee"),
-      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash handed to employee for deal custody"),
+      line(cashKey, 0, p.amountMinor, "Cash handed to employee for deal custody", p.bankAccountId ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Deal custody cash issued",
     category: "SYSTEM",
@@ -3135,9 +3147,11 @@ export function ruleCustodyCashIssued(p: CustodyCashPayload): RuleResult {
 /** Unspent cash the employee gave back: Dr cash or bank (inbound) / Cr Custody Clearing. */
 export function ruleCustodyCashReturned(p: CustodyCashPayload): RuleResult {
   assertCustodyAmount(p, "CUSTODY_CASH_RETURNED");
+  const cashKey = cashAccountKey(p.paymentMethod);
+  assertCustodyBankIdentity(p, cashKey);
   return {
     lines: [
-      line(cashAccountKey(p.paymentMethod), p.amountMinor, 0, "Deal custody cash returned by employee"),
+      line(cashKey, p.amountMinor, 0, "Deal custody cash returned by employee", p.bankAccountId ? { bankAccountId: p.bankAccountId } : undefined),
       line(CUSTODY_CLEARING_KEY, 0, p.amountMinor, "Custody balance returned"),
     ],
     memo: "Deal custody cash returned",
@@ -3153,10 +3167,12 @@ export function ruleCustodyCashReturned(p: CustodyCashPayload): RuleResult {
  */
 export function ruleCustodyReimbursed(p: CustodyCashPayload): RuleResult {
   assertCustodyAmount(p, "CUSTODY_REIMBURSED");
+  const cashKey = disbursementAccountKey(p.paymentMethod);
+  assertCustodyBankIdentity(p, cashKey);
   return {
     lines: [
       line(CUSTODY_CLEARING_KEY, p.amountMinor, 0, "Employee reimbursed for deal costs paid out of pocket"),
-      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Reimbursement paid to employee"),
+      line(cashKey, 0, p.amountMinor, "Reimbursement paid to employee", p.bankAccountId ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Deal custody reimbursement paid",
     category: "SYSTEM",

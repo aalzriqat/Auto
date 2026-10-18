@@ -3432,6 +3432,7 @@ export async function hookCustodyCashMoved(
       amountMinor: args.entry.amountMinor,
       currency: args.custody.currency,
       paymentMethod: args.entry.method,
+      bankAccountId: args.entry.bankAccountId?.toString(),
     },
   });
 }
