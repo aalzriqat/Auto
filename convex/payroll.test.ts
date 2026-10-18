@@ -92,6 +92,22 @@ describe("payroll posting rules", () => {
     expect(payroll).toMatchObject({ creditMinor: 20000, bankAccountId: "bank-a" });
   });
 
+  test("queued payroll events refuse bankless bank legs and unexpected bank IDs on cash legs", () => {
+    const advance = { advanceId: "a1", userId: "u1", amountMinor: 20000, currency: "JOD" };
+    expect(() => ruleEmployeeAdvancePaid({ ...advance, paymentMethod: "CHEQUE" }))
+      .toThrow(/physical bank account is required/);
+    expect(() => ruleEmployeeAdvanceRecovered({ ...advance, paymentMethod: "BANK_TRANSFER" }))
+      .toThrow(/physical bank account is required/);
+    expect(() => ruleEmployeeAdvanceRecovered({ ...advance, paymentMethod: "CASH", bankAccountId: "bank-a" }))
+      .toThrow(/non-bank payroll posting/);
+    const payslip = { itemId: "i1", userId: "u1", salaryMinor: 20000,
+      commissionMinor: 0, advanceRecoveredMinor: 0, netMinor: 20000, currency: "JOD" };
+    expect(() => rulePayrollPaid({ ...payslip, paymentMethod: "CARD" }))
+      .toThrow(/physical bank account is required/);
+    expect(() => rulePayrollPaid({ ...payslip, paymentMethod: "CASH", bankAccountId: "bank-a" }))
+      .toThrow(/non-bank payroll posting/);
+  });
+
   test("a received repayment cheque stays in cheques in hand until it clears", () => {
     const result = ruleEmployeeAdvanceRecovered({
       advanceId: "a1", userId: "u1", amountMinor: 20000,
@@ -139,9 +155,11 @@ describe("payroll posting rules", () => {
       netMinor: 50000,
       currency: "JOD",
       paymentMethod: "CHEQUE",
+      bankAccountId: "bank-a",
     });
     const credit = r.lines.find((l) => l.creditMinor > 0)!;
     expect(credit.accountSystemKey).toBe(SYSTEM_KEYS.BANK_ACCOUNT);
+    expect(credit.bankAccountId).toBe("bank-a");
     expect(credit.accountSystemKey).not.toBe(SYSTEM_KEYS.CHEQUES_IN_HAND);
   });
 
@@ -152,9 +170,11 @@ describe("payroll posting rules", () => {
       amountMinor: 20000,
       currency: "JOD",
       paymentMethod: "CHEQUE",
+      bankAccountId: "bank-a",
     });
     const credit = r.lines.find((l) => l.creditMinor > 0)!;
     expect(credit.accountSystemKey).toBe(SYSTEM_KEYS.BANK_ACCOUNT);
+    expect(credit.bankAccountId).toBe("bank-a");
     expect(credit.accountSystemKey).not.toBe(SYSTEM_KEYS.CHEQUES_IN_HAND);
   });
 

@@ -3047,11 +3047,21 @@ export interface EmployeeAdvancePaidPayload {
   bankAccountId?: string;
 }
 
+function assertPayrollBankDimension(cashKey: SystemKey, bankAccountId: string | undefined): void {
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !bankAccountId) {
+    throw new Error("A physical bank account is required for a payroll bank posting.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && bankAccountId) {
+    throw new Error("A non-bank payroll posting cannot name a bank account.");
+  }
+}
+
 /** Advance issued to an employee: Dr Employee Advances (asset) / Cr cash. */
 export function ruleEmployeeAdvancePaid(p: EmployeeAdvancePaidPayload): RuleResult {
   // Outbound: a CHEQUE here is one the dealership WRITES, so it comes out of
   // the bank — never out of CHEQUES_IN_HAND (customer cheques we hold).
   const cashKey = disbursementAccountKey(p.paymentMethod);
+  assertPayrollBankDimension(cashKey, p.bankAccountId);
   return {
     lines: [
       line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, p.amountMinor, 0, "Employee advance issued"),
@@ -3066,6 +3076,7 @@ export function ruleEmployeeAdvancePaid(p: EmployeeAdvancePaidPayload): RuleResu
 /** Advance repaid directly by an employee (outside payroll): Dr cash / Cr Employee Advances. */
 export function ruleEmployeeAdvanceRecovered(p: EmployeeAdvancePaidPayload): RuleResult {
   const cashKey = cashAccountKey(p.paymentMethod);
+  assertPayrollBankDimension(cashKey, p.bankAccountId);
   return {
     lines: [
       line(cashKey, p.amountMinor, 0, "Advance repaid by employee",
@@ -3122,6 +3133,7 @@ export function rulePayrollPaid(p: PayrollPaidPayload): RuleResult {
   // Outbound: a payroll CHEQUE is written by the dealership → credit the bank,
   // never CHEQUES_IN_HAND (that asset is customer cheques we hold).
   const cashKey = disbursementAccountKey(p.paymentMethod);
+  assertPayrollBankDimension(cashKey, p.bankAccountId);
   const lines: LineSpec[] = [];
   if (p.salaryMinor > 0) lines.push(line(SYSTEM_KEYS.SALARIES_PAYABLE, p.salaryMinor, 0, "Salary settled"));
   if (p.commissionMinor > 0) {
