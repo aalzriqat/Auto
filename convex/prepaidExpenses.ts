@@ -729,7 +729,12 @@ export const redriveScheduleEvents = mutation({
     // answer "nothing queued for this schedule" on the very schedule it was
     // actively posting — so the caller gets all three states and does not have
     // to infer one from the schedule's own totals.
-    const { scheduled, alreadyInFlight } = await drainEntries(ctx, stored);
+    //
+    // SCRUM-807: this is an operator's redrive, so rows parked for a missing or
+    // unopened period are RELEASED and claimed (and counted in `scheduled`). That is
+    // the recovery for a period whose own wake never ran; the worker re-proves the
+    // period and re-parks a row whose period is still missing, burning no attempt.
+    const { scheduled, alreadyInFlight } = await drainEntries(ctx, stored, { releaseParked: true });
     return { revived, scheduled, alreadyInFlight };
   },
 });
