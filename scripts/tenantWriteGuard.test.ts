@@ -683,10 +683,12 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // unchanged at 356 (re-measured FROM THE ANALYSER). The removed internalMutation had no `orgId` and deleted
   // deployment-global diagnostics; operational records are now never deleted.
   // The two SCRUM-807 changes are independent; with both applied: 529 + 1 = 530 total, 356 + 1 = 357 analysed.
+  // SCRUM-54: bankBalanceBackfill.runPage is one additional org-scoped internal
+  // mutation; it reads the mapped account and bounded journal page by org.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 530,
-      analysed: 357,
+      totalMutations: 531,
+      analysed: 358,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 158,
     });
