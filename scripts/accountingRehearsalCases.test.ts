@@ -449,6 +449,9 @@ type Defects = {
   financeReceiptWrongRefusalReason?: boolean;
   /** SCRUM-54: the backend implements the physical-bank receipt contract (main does not yet). */
   bankContract?: boolean;
+  /** The direct-fee and cheque commands can change independently of the receipt contract. */
+  directFeeBankContract?: boolean;
+  chequeBankContract?: boolean;
   /** Bank contract: a receipt that names no bank is accepted and silently defaulted. */
   bankDefaultedWhenMissing?: boolean;
   /** Bank contract: the bank-less receipt is refused only AFTER it marked the application disbursed. */
@@ -1267,11 +1270,15 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: null };
       }
       case "collections:clearCheque": {
+        const chequeBankContract = defects.chequeBankContract ?? defects.bankContract ?? false;
+        if (!chequeBankContract && Object.hasOwn(args, "bankAccountId")) {
+          return { ok: false as const, error: "Unexpected argument: bankAccountId" };
+        }
+        if (chequeBankContract && !args.bankAccountId) {
+          return { ok: false as const, error: "Select the bank account this cheque was deposited into." };
+        }
         if (!canManageFinance) {
           return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
-        }
-        if (defects.bankContract && !args.bankAccountId) {
-          return { ok: false as const, error: "Select the bank account this cheque was deposited into." };
         }
         const made = replayableCreate("clr", args, true);
         if (made) return made;
@@ -1968,6 +1975,13 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: fee._id };
       }
       case "financeDealCosts:recordDirectFeePayment": {
+        const directFeeBankContract = defects.directFeeBankContract ?? defects.bankContract ?? false;
+        if (!directFeeBankContract && Object.hasOwn(args, "bankAccountId")) {
+          return { ok: false as const, error: "Unexpected argument: bankAccountId" };
+        }
+        if (directFeeBankContract && !args.bankAccountId) {
+          return { ok: false as const, error: "Select the bank account this payment was made from." };
+        }
         defects.captureDirectPaymentDate?.(Number(args.paidAt));
         if (defects.clockRolloverAfterBookOpen && openedPeriodEndDate !== null &&
             Number(args.paidAt) > openedPeriodEndDate) {
@@ -2634,6 +2648,14 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     expect(statusOf(results, "RV1")).toBe("UNPROVEN");
   });
 
+  test.each([
+    ["candidate requires a bank but backend is legacy", {}, true],
+    ["backend requires a bank but candidate is legacy", { chequeBankContract: true }, false],
+  ] as const)("RV1 fails when %s", async (_name, defect, chequeBank) => {
+    const results = await runAgainst(defect, { declaresBank: false, chequeBank });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+  });
+
   test("RV1 catches a cheque that bounces with no accounting effect at all", async () => {
     const results = await runAgainst({ silentChequeReturn: true });
     expect(statusOf(results, "RV1")).toBe("FAIL");
@@ -3119,6 +3141,14 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
       expect(statusOf(results, "FD1")).toBe("UNPROVEN");
     });
 
+    test.each([
+      ["candidate requires a bank but backend is legacy", {}, true],
+      ["backend requires a bank but candidate is legacy", { directFeeBankContract: true }, false],
+    ] as const)("FD1 fails when %s", async (_name, defect, directFeeBank) => {
+      const results = await runAgainst(defect, { declaresBank: false, directFeeBank });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+    });
+
     test("legacy economics are still strict: a short receipt accepted on legacy main fails", async () => {
       const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
       expect(statusOf(results, "FD1")).toBe("FAIL");
@@ -3126,13 +3156,13 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     });
 
     test("source declares a bank but the deployed backend is legacy: FAIL, never a quiet legacy pass", async () => {
-      const results = await runAgainst({}, { declaresBank: true });
+      const results = await runAgainst({}, { declaresBank: true, directFeeBank: false, chequeBank: false });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(/absent or not deployed/);
     });
 
     test("deployed backend takes a bank but the source does not declare one: FAIL", async () => {
-      const results = await runAgainst({ bankContract: true }, { declaresBank: false });
+      const results = await runAgainst({ bankContract: true }, { declaresBank: false, directFeeBank: true, chequeBank: true });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(/does not declare one/);
     });
