@@ -5,7 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
-import type { Doc } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
@@ -86,6 +86,7 @@ function CorrectionForm({
   const [newCost, setNewCost] = useState("");
   const [type, setType] = useState<CorrectionType | undefined>(undefined);
   const [method, setMethod] = useState<PaymentMethod | undefined>(undefined);
+  const [bankAccountId, setBankAccountId] = useState<Id<"bankAccounts"> | undefined>();
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -95,6 +96,16 @@ function CorrectionForm({
   const amountValid = Number.isFinite(parsed) && parsed >= 0;
   const unchanged = amountValid && parsed === currentCost;
   const needsMethod = type === "CASH_REFUND";
+  const needsBank = needsMethod && (
+    method === "BANK_TRANSFER" || method === "CARD" ||
+    (method === "CHEQUE" && parsed > currentCost)
+  );
+  const unsupportedReceivedCheque = needsMethod && method === "CHEQUE" && parsed < currentCost;
+  const bankOptions = useQuery(
+    api.vehicles.listAcquisitionCorrectionBankOptions,
+    activeOrgId && needsBank ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
+  );
+  const selectedBank = bankOptions?.banks.find((bank) => bank._id === bankAccountId);
   const canCorrect = context !== undefined && context.blockedReason === null;
   const canSubmit =
     !busy &&
@@ -103,6 +114,8 @@ function CorrectionForm({
     !unchanged &&
     type !== undefined &&
     (!needsMethod || method !== undefined) &&
+    !unsupportedReceivedCheque &&
+    (!needsBank || Boolean(selectedBank)) &&
     reason.trim().length > 0;
 
   const submit = async () => {
@@ -116,6 +129,7 @@ function CorrectionForm({
         reason: reason.trim(),
         correctionType: type,
         ...(needsMethod ? { paymentMethod: method } : {}),
+        ...(needsBank ? { bankAccountId: selectedBank?._id } : {}),
       });
       toast.success(tx("CostCorrectionDone"));
       onOpenChange(false);
@@ -191,7 +205,11 @@ function CorrectionForm({
 
                 <div className="space-y-1.5">
                   <Label>{tx("CostCorrectionTypeLabel")}</Label>
-                  <Select value={type} onValueChange={(value) => setType(value as CorrectionType)}>
+                  <Select value={type} onValueChange={(value) => {
+                    setType(value as CorrectionType);
+                    setMethod(undefined);
+                    setBankAccountId(undefined);
+                  }}>
                     <SelectTrigger aria-label={tx("CostCorrectionTypeLabel")}>
                       <SelectValue placeholder={tx("CostCorrectionTypePlaceholder")} />
                     </SelectTrigger>
@@ -217,10 +235,50 @@ function CorrectionForm({
                     <PaymentMethodSelect
                       t={tx}
                       value={method}
-                      onValueChange={setMethod}
+                      onValueChange={(value) => {
+                        setMethod(value);
+                        setBankAccountId(undefined);
+                      }}
                       ariaLabel={tx("CostCorrectionPaymentMethod")}
                       placeholder={tx("CostCorrectionPaymentMethodPlaceholder")}
                     />
+                  </div>
+                )}
+
+                {unsupportedReceivedCheque && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {tx("ServerError_COST_CORRECTION_HELD_CHEQUE_UNSUPPORTED")}
+                  </p>
+                )}
+
+                {needsBank && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="cost-correction-bank">
+                      {tx(parsed < currentCost ? "ReceiptBankAccount" : "DirectPaymentBankLabel")}
+                    </Label>
+                    <select
+                      id="cost-correction-bank"
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                      value={selectedBank?._id ?? ""}
+                      onChange={(event) => setBankAccountId(event.target.value ? event.target.value as Id<"bankAccounts"> : undefined)}
+                      disabled={bankOptions === undefined || bankOptions.truncated || bankOptions.banks.length === 0}
+                      required
+                    >
+                      <option value="">{tx(bankOptions === undefined ? "CashDrawerLoadingBanks" : parsed < currentCost ? "ReceiptSelectBank" : "DirectPaymentBankChoose")}</option>
+                      {(bankOptions?.banks ?? []).map((bank) => (
+                        <option key={bank._id} value={bank._id}>{bank.name} · {bank.currency}</option>
+                      ))}
+                    </select>
+                    {bankOptions?.truncated && (
+                      <p role="status" className="text-sm text-muted-foreground">
+                        {tx(parsed < currentCost ? "ReceiptTooManyBanks" : "DirectPaymentTooManyBanks")}
+                      </p>
+                    )}
+                    {bankOptions && !bankOptions.truncated && bankOptions.banks.length === 0 && (
+                      <p role="status" className="text-sm text-muted-foreground">
+                        {tx(parsed < currentCost ? "ReceiptNoBank" : "DirectPaymentNoBank")}
+                      </p>
+                    )}
                   </div>
                 )}
 

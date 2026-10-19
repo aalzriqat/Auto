@@ -57,10 +57,16 @@ async function seedFinance(t: TestConvex) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Idx", lastName: "Customer", phone: "+962790000001" })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
   return {
     orgId,
     userId,
     customerId,
+    bankAccountId,
     asFinance: t.withIdentity({ subject: "idx_collections_user", clerkId: "idx_collections_user" }),
     asApprover: t.withIdentity({ subject: "idx_collections_approver", clerkId: "idx_collections_approver" }),
   };
@@ -173,7 +179,7 @@ describe("reverseAllocationsForRefund - ACTIVE allocations, newest first", () =>
 describe("returnClearedCheque - the POSTED collection payment is the one acted on", () => {
   test("a non-POSTED payment on the same cheque, created first, is skipped and left untouched", async () => {
     const t = convexTestWithComponents(schema, MODULES);
-    const { orgId, customerId, userId, asFinance } = await seedFinance(t);
+    const { orgId, customerId, userId, bankAccountId, asFinance } = await seedFinance(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -217,6 +223,7 @@ describe("returnClearedCheque - the POSTED collection payment is the one acted o
       idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId,
+      bankAccountId,
     });
     await asFinance.mutation(api.collections.returnClearedCheque, {
       orgId,

@@ -65,21 +65,22 @@
  *   tests so neither can quietly grow. A pass means business, component and
  *   storage state is empty and the diagnostics were VERIFIED and disclosed by
  *   provenance and count — not that every table is literally empty.
- * · **The row ceiling is derived from retention, not from "a few minutes of
- *   noise".** A single 500-row bound was crossed by an honest deployment:
- *   production run 34859139237 (2026-09-14) stopped on 1,146 `cronHeartbeats`
- *   rows — 573 per declared job, every one valid — after two five-minute jobs
- *   had run for 47 hours since the push. Two jobs every five minutes under
- *   seven-day retention is ~4,032 rows at steady state, so 500 stops being
+ * · **The row ceiling is derived from a fresh-launch window, not from "a few
+ *   minutes of noise".** A single 500-row bound was crossed by an honest
+ *   deployment: production run 34859139237 (2026-09-14) stopped on 1,146
+ *   `cronHeartbeats` rows — 573 per declared job, every one valid — after two
+ *   five-minute jobs had run for 47 hours since the push, so 500 stops being
  *   true about 21 hours after any deploy. Each table's ceiling
- *   (`DIAGNOSTIC_ROW_BOUNDS`) is now what its declared writers can accrue
- *   under their documented schedule and retention (`convex/crons.ts`,
- *   `adminSystem.pruneOperationalLogs`: heartbeats 7 days, webhook logs 30
- *   days), plus one day of prune lag — 4,608 and 3,049 rows. Every row up to
- *   the ceiling is still read and validated; nothing is sampled. Beyond it the
- *   table is holding more than its own crons can explain, and that is a
- *   refusal. The ceilings are pinned by tests, as is the 1,146-row shape that
- *   stopped the run.
+ *   (`DIAGNOSTIC_ROW_BOUNDS`) is what its declared writers accrue under their
+ *   documented schedule (`convex/crons.ts`) within a fixed fresh-launch window
+ *   — heartbeats 8 days, webhook logs 31 days — 4,608 and 3,049 rows. Nothing
+ *   prunes these tables (SCRUM-807 preserves operational history), so the
+ *   window, not retention, is the bound: an older deployment holds more than a
+ *   fresh launch can explain and the checkpoint refuses, which is the intended
+ *   fail-closed answer for a one-time launch check. Every row up to the
+ *   ceiling is still read and validated, with the read capped at ceiling + 1;
+ *   nothing is sampled and nothing is deleted. The ceilings are pinned by
+ *   tests, as is the 1,146-row shape that stopped the run.
  *
  * Nothing here remediates. A failed verdict is a stop, not a reset.
  */
@@ -116,12 +117,12 @@ export const CRON_SELF_REPORT_SOURCES: ReadonlySet<string> = new Set([
 /**
  * How many rows each declared diagnostic table may hold and still be validated
  * row by row. Each ceiling is what the table's declared writers can accrue
- * under their documented schedule (`convex/crons.ts`) and retention
- * (`adminSystem.pruneOperationalLogs`), plus one day of prune lag as slack
- * (the prune runs hourly; the slack also absorbs the extra tick a redeploy
- * fires). Every row up to the ceiling is read and validated — nothing is
- * sampled. More than the ceiling means the table holds more than its own
- * crons can explain, and the checkpoint refuses.
+ * under their documented schedule (`convex/crons.ts`) within a fixed
+ * fresh-launch window (the window includes one day of slack that absorbs the
+ * extra tick a redeploy fires). Nothing prunes these tables, so the window is
+ * the bound. Every row up to the ceiling is read and validated — nothing is
+ * sampled. More than the ceiling means the table holds more than a fresh
+ * launch's crons can explain, and the checkpoint refuses.
  *
  * Do not lower these back toward "a few minutes of noise": production run
  * 34859139237 (2026-09-14) stopped on 1,146 valid `cronHeartbeats` rows under
@@ -133,7 +134,7 @@ const RUNS_PER_DAY = {
   everyFifteenMinutes: DAY_MS / (15 * 60 * 1000),
   daily: 1,
 } as const;
-/** `adminSystem.ts` CRON_HEARTBEAT_RETENTION_MS / WEBHOOK_LOG_RETENTION_MS in days, plus one day of prune lag. */
+/** Fresh-launch accrual windows in days (7 / 30 plus one day of slack); nothing prunes these tables, so they are fixed here, not derived from retention. */
 const HEARTBEAT_WINDOW_DAYS = 7 + 1;
 const WEBHOOK_LOG_WINDOW_DAYS = 30 + 1;
 export const DIAGNOSTIC_ROW_BOUNDS: Readonly<Record<string, number>> = {
@@ -335,7 +336,7 @@ export function validateDiagnosticRow(table: string, row: unknown): { ok: true; 
  * `convex data <table> --limit <ceiling + 1> --format jsonl` on a declared
  * diagnostic table that the limit-one read found NONEMPTY. Every line must be a
  * JSON document and every document must validate; more rows than the table's
- * retention-derived ceiling (`DIAGNOSTIC_ROW_BOUNDS`), a failed read, silence,
+ * fresh-launch ceiling (`DIAGNOSTIC_ROW_BOUNDS`), a failed read, silence,
  * or any unparseable line refuses. Values are never kept. `bound` overrides the
  * ceiling for tests only; a table with no ceiling is refused outright.
  */
@@ -361,7 +362,7 @@ export function validateDiagnosticRows(
       rows: lines.length,
       provenance: {},
       reasons: [
-        `${table} holds more than ${bound} rows — more than its declared cron writers can accrue under their schedule and retention; that is not empty-deployment cron noise, and the checkpoint does not sample.`,
+        `${table} holds more than ${bound} rows — more than its declared cron writers can accrue under their schedule within a fresh-launch window (nothing prunes it); that is not empty-deployment cron noise, and the checkpoint does not sample.`,
       ],
     };
   }
@@ -412,15 +413,6 @@ export function schemaTableNames(schemaSource: string): string[] {
   const names: string[] = [];
   for (const match of schemaSource.matchAll(/^\s{2}([A-Za-z_][A-Za-z0-9_]*):\s*defineTable\(/gm)) {
     names.push(match[1]);
-  }
-  return names;
-}
-
-/** The components `convex.config.ts` mounts, by the name the CLI addresses them with. */
-export function componentNames(configSource: string): string[] {
-  const names: string[] = [];
-  for (const match of configSource.matchAll(/app\.use\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:,\s*\{[^}]*?\bname:\s*"([^"]+)"[^}]*\})?\s*\)/g)) {
-    names.push(match[2] ?? match[1]);
   }
   return names;
 }

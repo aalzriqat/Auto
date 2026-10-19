@@ -317,6 +317,67 @@ export function computeFundingComposition(
   };
 }
 
+export interface CustomerPaymentToFinanceCompanyInput {
+  /** What the showroom must put in at the approved amount, before any customer payment to the company. */
+  requiredContributionMinor: number;
+  /** The customer's allocated share of the net shortfall. */
+  customerGapShareMinor: number;
+  /** The part of that share the customer AGREED to pay the finance company directly. A promise, not money. */
+  customerGapToFinanceCompanyMinor: number;
+  /** What has been CONFIRMED paid to the finance company, from recorded evidence. Absent evidence is zero. */
+  confirmedPaymentMinor: number;
+}
+
+export interface CustomerPaymentToFinanceCompany {
+  /** What the showroom still puts in: the required contribution less the CONFIRMED payment. */
+  dealerContributionMinor: number;
+  /** The customer's confirmed payment actually credited against the contribution. */
+  appliedMinor: number;
+  /** Agreed and creditable but not yet confirmed; the contribution still includes it. */
+  unconfirmedMinor: number;
+  /** Agreed payment beyond what could ever be credited; non-zero means the agreement is inconsistent. */
+  excessMinor: number;
+}
+
+/**
+ * Credits the customer's CONFIRMED direct payment to the finance company
+ * against the showroom's contribution (SCRUM-766 PR-B, owner ruling).
+ *
+ * The company is paid the same purchase amount either way - the customer's
+ * money simply replaces that much of the showroom's. What the customer agreed
+ * to pay is capped by their allocated share (they cannot pay toward more than
+ * they agreed to) and by the contribution itself (the showroom's cost never goes
+ * below zero); an agreement above both caps is reported as `excessMinor` rather
+ * than silently dropped. Only the CONFIRMED part of what could be credited
+ * reduces the contribution: until the payment is evidenced the showroom still
+ * owes the company the full amount, and the unconfirmed remainder is reported
+ * as `unconfirmedMinor`.
+ *
+ * Always applied to the required contribution and never to a stored, already
+ * reduced one, so a recompute cannot subtract the same payment twice.
+ */
+export function applyCustomerPaymentToFinanceCompany(
+  input: CustomerPaymentToFinanceCompanyInput
+): CustomerPaymentToFinanceCompany {
+  assertNonNegativeMinor(input.requiredContributionMinor, "Required contribution");
+  assertNonNegativeMinor(input.customerGapShareMinor, "Customer gap share");
+  assertNonNegativeMinor(input.customerGapToFinanceCompanyMinor, "Customer payment to the finance company");
+  assertNonNegativeMinor(input.confirmedPaymentMinor, "Confirmed customer payment to the finance company");
+
+  const creditableMinor = Math.min(
+    input.customerGapToFinanceCompanyMinor,
+    input.customerGapShareMinor,
+    input.requiredContributionMinor
+  );
+  const appliedMinor = Math.min(creditableMinor, input.confirmedPaymentMinor);
+  return {
+    dealerContributionMinor: input.requiredContributionMinor - appliedMinor,
+    appliedMinor,
+    unconfirmedMinor: creditableMinor - appliedMinor,
+    excessMinor: input.customerGapToFinanceCompanyMinor - creditableMinor,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Submitted quotation
 // ---------------------------------------------------------------------------

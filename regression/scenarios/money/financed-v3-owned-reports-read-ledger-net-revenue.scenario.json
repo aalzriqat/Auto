@@ -1,0 +1,61 @@
+{
+  "id": "financed-v3-owned-reports-read-ledger-net-revenue",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "approvedMinor": 12500000,
+        "contributionMinor": 1375000,
+        "ownedCostMinor": 9000000
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "timeRange": "ALL_TIME"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "ledger.netRevenueMinor",
+      "value": 11125000
+    },
+    {
+      "observable": "report.recognizedRevenueMinor",
+      "value": 11125000
+    },
+    {
+      "observable": "report.netProfitMinor",
+      "value": 2125000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum411ReportBasis.test.ts",
+    "testName": "A 12,500, D 1,375, R 0: ledger net 11,125; every report says 11,125, profit 11,125 - 9,000 = 2,125"
+  },
+  "matrixRow": "pilot-financed-v3-report-net-basis",
+  "fingerprint": "573d28d35be66400393f32dd6ac2a31bbc50307478e8753899fc8804bc0eb526",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum411-server-economics",
+    "firstSeen": "2026-10-14"
+  }
+}

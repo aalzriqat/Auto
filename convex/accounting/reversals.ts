@@ -328,6 +328,9 @@ export async function reverseAccountingEvent(
       salespersonId: l.salespersonId,
       cashierId: l.cashierId,
       financeCompanyId: l.financeCompanyId,
+      // SCRUM-54: the reversal returns money to the SAME physical bank; an
+      // unstamped reversal line would leave the bank's balance unattributable.
+      bankAccountId: l.bankAccountId,
       payerNameSnapshot: l.payerNameSnapshot,
       description: l.description ? `[REVERSAL] ${l.description}` : "[REVERSAL]",
     });

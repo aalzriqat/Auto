@@ -16,6 +16,11 @@ export const dashboardEn = {
   SalesPerformance: "Sales Performance",
   PartialTotalExplain:
     "Partial — some sales could not be classified and are left out of this figure.",
+  // The period holds more records than can be totalled exactly, so the figure
+  // is withheld rather than shown as a zero or as a total of some of them.
+  FigureUnavailable: "Unavailable",
+  FiguresUnavailableExplain:
+    "Too many records in this period to total exactly — the unavailable figures are not shown. Choose a shorter period.",
   // Said as a limit on the COMPARISON rather than on any one person: the name
   // shown is genuinely the best of those whose earnings are fully known.
   RankingIncompleteExplain:
@@ -145,6 +150,9 @@ export const dashboardAr = {
   SalesPerformance: "أداء المبيعات",
   PartialTotalExplain:
     "جزئي — تعذّر تصنيف بعض المبيعات ولم تُدرج في هذا الرقم.",
+  FigureUnavailable: "غير متاح",
+  FiguresUnavailableExplain:
+    "عدد السجلات في هذه الفترة كبير جدًا لحساب إجمالي دقيق — الأرقام غير المتاحة غير معروضة. اختر فترة أقصر.",
   RankingIncompleteExplain:
     "الترتيب يشمل الأرباح المؤكدة فقط — لا يظهر فيه من لديه صفقة تعذّر تحديد ربحها.",
   TopPerformer: "الأفضل أداءً",

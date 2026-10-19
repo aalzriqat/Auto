@@ -82,6 +82,11 @@ async function seedPhase0Dealer() {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Dana", lastName: "Saleh" })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
   return {
     t,
@@ -91,6 +96,7 @@ async function seedPhase0Dealer() {
     approverId,
     vehicleId,
     customerId,
+    bankAccountId,
     asUser: t.withIdentity({ subject: "phase0_user", clerkId: "phase0_user" }),
     asApprover: t.withIdentity({ subject: "phase0_approver", clerkId: "phase0_approver" }),
   };
@@ -275,7 +281,7 @@ describe("Phase 0 financial safety controls", () => {
   });
 
   test("duplicate_cheque_clear_key_posts_cheque_payment_once", async () => {
-    const { t, orgId, customerId, asUser } = await seedPhase0Dealer();
+    const { t, orgId, customerId, bankAccountId, asUser } = await seedPhase0Dealer();
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -299,11 +305,13 @@ describe("Phase 0 financial safety controls", () => {
     const firstPaymentId = await asUser.mutation(api.collections.clearCheque, {
       orgId,
       chequeId,
+      bankAccountId,
       idempotencyKey: "cheque-clear-1",
     });
     const secondPaymentId = await asUser.mutation(api.collections.clearCheque, {
       orgId,
       chequeId,
+      bankAccountId,
       idempotencyKey: "cheque-clear-1",
     });
 

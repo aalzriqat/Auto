@@ -519,7 +519,7 @@ describe("E6 on the real path: collections.clearCheque after a partial pass", ()
   test("the surviving cheque still meets its receivable's outstanding-amount check", async () => {
     const t = setup();
     // The receivable owes LESS than the cheque face: clearing must be refused.
-    const { orgId } = await t.run(async (ctx) => {
+    const { orgId, userId } = await t.run(async (ctx) => {
       const b = await seedBase(ctx, "ClearCheque");
       await ctx.db.insert("subscriptions", {
         orgId: b.orgId, plan: "professional", status: "active", createdAt: b.now, updatedAt: b.now,
@@ -533,7 +533,7 @@ describe("E6 on the real path: collections.clearCheque after a partial pass", ()
         orgId: b.orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"],
       });
       await seedE6(ctx, b, 100);
-      return { orgId: b.orgId };
+      return { orgId: b.orgId, userId: b.userId };
     });
 
     await onePass(t, orgId);
@@ -542,6 +542,11 @@ describe("E6 on the real path: collections.clearCheque after a partial pass", ()
     // receivableId would skip the outstanding-amount check and insert a payment
     // naming a deleted receivable.
     await t.run((ctx) => ctx.db.patch(orgId, { suspended: false }));
+    const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId, name: "Surviving cheque bank", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
     const survivor = await t.run(async (ctx) =>
       (await rowsOf(ctx.db as unknown as LooseDb, "postDatedCheques", orgId))[0]
     );
@@ -552,6 +557,7 @@ describe("E6 on the real path: collections.clearCheque after a partial pass", ()
       asUser.mutation(api.collections.clearCheque, {
         orgId,
         chequeId: survivor._id as Id<"postDatedCheques">,
+        bankAccountId,
         idempotencyKey: "clear-559",
       })
     ).rejects.toThrow(/cannot exceed the outstanding receivable amount/);

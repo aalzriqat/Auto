@@ -32,6 +32,8 @@ import {
 } from "./utils/depositHelpers";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
+import { listEligibleBanks } from "./utils/bankAccountGuards";
+import { assertDepositNotInLiveForward } from "./utils/financeCompanyForward";
 import { hookDepositVoided, getOrgCurrency } from "./accounting/workflowHooks";
 import {
   amountToMinorOrThrow,
@@ -57,6 +59,7 @@ export const create = mutation({
     amount: v.number(),
     currency: v.optional(v.string()),
     method: v.optional(depositMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     notes: v.optional(v.string()),
     idempotencyKey: v.string(),
     /**
@@ -108,6 +111,7 @@ export const create = mutation({
           amountMinor,
           currency,
           method,
+          bankAccountId: args.bankAccountId ?? null,
           notes: args.notes ?? null,
           adoptReservationId: args.adoptReservationId ?? null,
         }),
@@ -135,6 +139,7 @@ export const create = mutation({
           amountMinor,
           currency,
           method,
+          bankAccountId: args.bankAccountId,
           notes: args.notes,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,
@@ -178,6 +183,24 @@ async function vehiclesHeldByDeposit(
   return [...seen.values()];
 }
 
+export const listRefundBankOptions = query({
+  args: { orgId: v.id("organizations"), currency: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    return listEligibleBanks(ctx, args.orgId,
+      args.currency?.trim().toUpperCase() || await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
+export const listReceiptBankOptions = query({
+  args: { orgId: v.id("organizations"), currency: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    return listEligibleBanks(ctx, args.orgId,
+      args.currency?.trim().toUpperCase() || await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
 export const release = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -186,6 +209,7 @@ export const release = mutation({
     // Required when resolution is REFUNDED — real cash/bank/card/cheque moves
     // out, and the GL entry must credit the account it actually left from.
     refundMethod: v.optional(depositMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     notes: v.optional(v.string()),
     idempotencyKey: v.string(),
   },
@@ -206,6 +230,7 @@ export const release = mutation({
           depositId: args.depositId,
           resolution: args.resolution,
           refundMethod: args.refundMethod ?? null,
+          bankAccountId: args.bankAccountId ?? null,
           notes: args.notes ?? null,
         }),
         // Deliberately NOT discriminated by how much of the row is left.
@@ -223,6 +248,9 @@ export const release = mutation({
           throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
         }
 
+        // SCRUM-411 P2-02: a deposit already paid to the finance company before the sale cannot
+        // also leave as a refund or forfeiture - `releaseHeldDeposit` refuses it before any write.
+
         // A row that carries a cancelled-sale share decides its follow-up through the
         // exact liveness reader (SCRUM-712 Q34); every other row is unchanged.
         const carriesShare = await hasPendingDispositionForDeposit(ctx, args.orgId, args.depositId);
@@ -232,6 +260,7 @@ export const release = mutation({
           resolution: args.resolution,
           actorId: user._id,
           refundMethod: args.refundMethod,
+          bankAccountId: args.bankAccountId,
           notes: args.notes,
           idempotencyKey: args.idempotencyKey,
         });
@@ -282,6 +311,9 @@ export const voidDeposit = mutation({
     if (deposit.status !== "HELD") {
       throwAppError(AppErrorCode.DEPOSIT_ALREADY_RESOLVED, "Only HELD deposits can be voided.");
     }
+    // SCRUM-411 P2-02: voiding reverses the receipt; the same money is already inside the
+    // payment to the finance company, so it would be reversed twice.
+    await assertDepositNotInLiveForward(ctx, deposit);
     // A row can now be released in part and stay HELD, so the status above no
     // longer means "nothing has happened to this money". Voiding says the
     // payment was recorded in error and reverses the receipt — which, after a
@@ -748,6 +780,7 @@ export const resolveReleasedAllocation = mutation({
     toVehicleId: v.optional(v.id("vehicles")),
     /** Required for REFUND_TO_CUSTOMER — real money leaves, so the account it left must be known. */
     refundMethod: v.optional(depositMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** Required for OTHER, and recorded for every treatment. */
     reason: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
@@ -799,6 +832,10 @@ export const resolveReleasedAllocation = mutation({
     if (!deposit || deposit.orgId !== args.orgId) {
       throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
     }
+    // SCRUM-411 P2-02: a slice that is FORWARDED to the finance company can be neither spent
+    // (refund, forfeit, write-off) nor moved (another car, back to the pool) until the payment
+    // is recovered - moving it would commit the same H to a second sale.
+    await assertDepositNotInLiveForward(ctx, deposit, hold._id);
 
     const currency = normalizeCurrency(
       deposit.currency ?? (await getOrgCurrency(ctx, args.orgId))
@@ -965,6 +1002,7 @@ export const resolveReleasedAllocation = mutation({
         currency,
         resolution: args.treatment === "FORFEITED" ? "FORFEITED" : "REFUNDED",
         refundMethod: args.refundMethod,
+        bankAccountId: args.bankAccountId,
         actorId: user._id,
         notes: args.reason,
         occurredAt: now,

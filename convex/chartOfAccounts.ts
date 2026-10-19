@@ -864,6 +864,9 @@ export const update = mutation({
     if (account.systemKey && args.active === false) {
       throw new ConvexError(`System account "${account.systemKey}" cannot be deactivated.`);
     }
+    if (account.systemKey === SYSTEM_KEYS.BANK_ACCOUNT && args.allowManualPosting === true) {
+      throw new ConvexError("The bank control account cannot allow manual posting because manual journals cannot identify a physical bank.");
+    }
 
     await ctx.db.patch(args.accountId, {
       updatedAt: Date.now(),

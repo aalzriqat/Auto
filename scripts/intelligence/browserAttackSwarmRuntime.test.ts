@@ -5,6 +5,8 @@ import {
   browserSwarmManifestFromEnv,
 } from "./browserAttackSwarmRuntime";
 
+const egressEnv = { BROWSER_EGRESS_PROXY_SERVER: "http://127.0.0.1:3129" };
+
 const baseEnv = {
   BROWSER_SWARM_IMPACTED_INVARIANTS_JSON:
     '[{"id":"UI-1","severity":"HIGH"}]',
@@ -21,6 +23,7 @@ describe("SCRUM-350 browser swarm runtime config", () => {
       assertBrowserSwarmExecutionEnvironment({
         BROWSER_SWARM_ENABLED: "1",
         CI: "true",
+        ...egressEnv,
       }),
     ).not.toThrow();
 
@@ -46,8 +49,21 @@ describe("SCRUM-350 browser swarm runtime config", () => {
         PLAYWRIGHT_SKIP_WEBSERVER: "1",
         BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER: "1",
         PLAYWRIGHT_BASE_URL: "http://127.0.0.1:3000",
+        ...egressEnv,
       }),
     ).not.toThrow();
+
+    // SCRUM-784: the same otherwise-valid environment without the trusted egress
+    // proxy must be refused, never run with open egress.
+    expect(() =>
+      assertBrowserSwarmExecutionEnvironment({
+        BROWSER_SWARM_ENABLED: "1",
+        CI: "true",
+        PLAYWRIGHT_SKIP_WEBSERVER: "1",
+        BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER: "1",
+        PLAYWRIGHT_BASE_URL: "http://127.0.0.1:3000",
+      }),
+    ).toThrow(/open egress/);
 
     expect(() =>
       assertBrowserSwarmExecutionEnvironment({
@@ -110,9 +126,9 @@ describe("SCRUM-350 browser swarm runtime config", () => {
         BROWSER_SWARM_WORKER_COUNT: "3",
         BROWSER_SWARM_WORKER_ID: "worker-3",
         BROWSER_SWARM_JEV_SUGGESTIONS_JSON:
-          '[{"family":"TENANT_ESCAPE","probability":0.91}]',
+          '[{"family":"FINANCE_REORDERING","probability":0.91}]',
       }),
-    ).toThrow(/no executable handler.*TENANT_ESCAPE/i);
+    ).toThrow(/no executable handler.*FINANCE_REORDERING/i);
   });
 
   it("rejects unknown Jev attack families before planning", () => {

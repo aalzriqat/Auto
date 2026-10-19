@@ -906,7 +906,7 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
       expectedCurrency: "JOD",
       idempotencyKey: crypto.randomUUID(),
     });
-    await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId: zeroLine, notes: "Nothing to match." });
+    await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId: zeroLine, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
     return applicationId;
   }
 
@@ -962,8 +962,8 @@ describe("finalization re-checks configured fees, whichever rule the deal was cl
       expectedCurrency: "JOD",
       idempotencyKey: crypto.randomUUID(),
     });
-    for (const feeId of [first, second]) {
-      await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked" });
+    for (const [feeId, actualAmountMinor] of [[first, jod(80)], [second, 0]] as const) {
+      await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked", expectedActualAmountMinor: actualAmountMinor, expectedActualEvidenceRevision: 0 });
     }
     expect((await readinessOf(s, applicationId)).state).toBe("READY");
 
@@ -1020,15 +1020,7 @@ describe("the bounded fee read behind every closure rule", () => {
     const seed = await seedDealer("cap");
     const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
     const applicationId = await createApplicationFor(seed, companyId);
-    // An invoice on file, so nothing but the bound stands in the way.
-    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: seed.orgId,
-      applicationId,
-      legalInvoiceAmountMinor: jod(20_000),
-      legalInvoiceNumber: "INV-CAP",
-      legalInvoiceDate: Date.now(),
-      issuedTo: "FINANCE_COMPANY",
-    });
+    // No invoice is needed (SCRUM-411), so nothing but the bound stands in the way.
 
     // One past the cap, every one of them live.
     const seeded = await seedLiveLines(seed, applicationId, MAX_LIVE_DEAL_FEE_LINES + 1);
@@ -1228,16 +1220,8 @@ describe("the fee-template cap", () => {
         companyRuleSnapshot: { ...app.companyRuleSnapshot, feeTemplates: templates(MAX_LIVE_DEAL_FEE_LINES + 1) },
       });
     });
-    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: seed.orgId,
-      applicationId,
-      legalInvoiceAmountMinor: jod(20_000),
-      legalInvoiceNumber: "INV-OVERSIZE",
-      legalInvoiceDate: Date.now(),
-      issuedTo: "FINANCE_COMPANY",
-    });
     const feeId = await recordTemplateActual(seed, applicationId, 0, "LICENSING", jod(250));
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "checked" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "checked", expectedActualAmountMinor: jod(250), expectedActualEvidenceRevision: 0 });
     const configuredReason = async () =>
       (await closingCheck(seed, applicationId, "CONFIGURED_FEES_RECORDED"))?.reason ?? "";
 
@@ -1259,21 +1243,13 @@ describe("the fee-template cap", () => {
 });
 
 describe("closing the deal", () => {
-  async function invoiced(seed: Seed, applicationId: Id<"financeApplications">) {
-    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: seed.orgId,
-      applicationId,
-      legalInvoiceAmountMinor: jod(20_000),
-      legalInvoiceNumber: `INV-${applicationId}`,
-      legalInvoiceDate: Date.now(),
-      issuedTo: "FINANCE_COMPANY",
-    });
-  }
-  async function reconcile(seed: Seed, feeId: Id<"financeDealFees">) {
+  async function reconcile(seed: Seed, feeId: Id<"financeDealFees">, actualAmountMinor: number) {
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId,
       feeId,
       notes: "checked against the receipt",
+      expectedActualAmountMinor: actualAmountMinor,
+      expectedActualEvidenceRevision: 0,
     });
   }
   const configured = (seed: Seed, applicationId: Id<"financeApplications">) =>
@@ -1290,10 +1266,9 @@ describe("closing the deal", () => {
     const seed = await seedDealer("close");
     const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
     const applicationId = await createApplicationFor(seed, companyId);
-    await invoiced(seed, applicationId);
 
     const first = await recordTemplateActual(seed, applicationId, 0, "APPRAISAL_FEE", jod(80));
-    await reconcile(seed, first);
+    await reconcile(seed, first, jod(80));
     // The line-based counts are satisfied — that is the point.
     const costs = await costsOf(seed, applicationId);
     expect(costs.summary?.linesAwaitingActual).toBe(0);
@@ -1305,7 +1280,7 @@ describe("closing the deal", () => {
 
     // Not charged is a fact too: zero, recorded, reconciled.
     const second = await recordTemplateActual(seed, applicationId, 1, "COMMISSION", 0);
-    await reconcile(seed, second);
+    await reconcile(seed, second, 0);
     expect(await configured(seed, applicationId)).toMatchObject({ status: "READY", reason: null });
   });
 
@@ -1346,12 +1321,11 @@ describe("closing the deal", () => {
     const seed = await seedDealer("spoofClose");
     const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
     const applicationId = await createApplicationFor(seed, companyId);
-    await invoiced(seed, applicationId);
 
     // One exact actual, one line that only LOOKS like the other template:
     // the legacy shape, written straight to the table with no position.
     const exact = await recordTemplateActual(seed, applicationId, 0, "APPRAISAL_FEE", jod(80));
-    await reconcile(seed, exact);
+    await reconcile(seed, exact, jod(80));
     const lookalike = await seed.t.run((ctx) =>
       ctx.db.insert("financeDealFees", {
         orgId: seed.orgId,
@@ -1390,7 +1364,7 @@ describe("closing the deal", () => {
     // the recorded actual until somebody voids the look-alike: that is visible
     // in the totals, never hidden behind a filled row.
     const exactSecond = await recordTemplateActual(seed, applicationId, 1, "COMMISSION", jod(300));
-    await reconcile(seed, exactSecond);
+    await reconcile(seed, exactSecond, jod(300));
     const after = (await costsOf(seed, applicationId)).expected;
     expect(after.rows[1].actual).toMatchObject({ feeId: exactSecond });
     expect(after.unplannedLineIds).toEqual([lookalike]);
@@ -1423,7 +1397,6 @@ describe("closing the deal", () => {
     const seed = await seedDealer("closeNone");
     const companyId = await createCompany(seed, "Bare Company", []);
     const applicationId = await createApplicationFor(seed, companyId);
-    await invoiced(seed, applicationId);
     const feeId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
       orgId: seed.orgId,
       applicationId,
@@ -1436,9 +1409,11 @@ describe("closing the deal", () => {
       expectedCurrency: "JOD",
       idempotencyKey: crypto.randomUUID(),
     });
-    await reconcile(seed, feeId);
-    for (const key of ["CONFIGURED_FEES_RECORDED", "COSTS_CLOSABLE", "LEGAL_INVOICE_RECORDED"]) {
+    await reconcile(seed, feeId, 0);
+    for (const key of ["CONFIGURED_FEES_RECORDED", "COSTS_CLOSABLE"]) {
       expect(await closingCheck(seed, applicationId, key)).toMatchObject({ key, status: "READY", reason: null });
     }
+    // No legal invoice is recorded and none is needed (SCRUM-411).
+    expect(await closingCheck(seed, applicationId, "LEGAL_INVOICE_RECORDED")).toMatchObject({ status: "NOT_APPLICABLE", reason: null });
   });
 });

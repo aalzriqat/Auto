@@ -72,6 +72,11 @@ async function seedDealerWithPayable(amountDue = 5000) {
       status: "PENDING", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
     })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Supplier Operating", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: true,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
   async function accountBySystemKey(systemKey: string) {
     return await t.run((ctx) =>
@@ -82,14 +87,67 @@ async function seedDealerWithPayable(amountDue = 5000) {
     );
   }
 
-  return { t, orgId, asOwner, payableId, accountBySystemKey };
+  return { t, orgId, asOwner, payableId, bankAccountId, accountBySystemKey };
 }
 
 describe("sourcingPayables.markPaid VAT reclassification", () => {
-  test("without a VAT amount, settles AP and cash for the full amount with no VAT line", async () => {
-    const { t, orgId, asOwner, payableId, accountBySystemKey } = await seedDealerWithPayable(5000);
+  test("payment bank options expose only eligible banks in the payable currency", async () => {
+    const { t, orgId, asOwner, payableId, bankAccountId } = await seedDealerWithPayable(5000);
+    const options = await asOwner.query(api.sourcingPayables.listPaymentBankOptions, { orgId, payableId });
+    expect(options).toEqual({ banks: [{ _id: bankAccountId, name: "Supplier Operating", currency: "JOD" }], truncated: false });
+    await t.run((ctx) => ctx.db.patch(bankAccountId, { isActive: false }));
+    expect(await asOwner.query(api.sourcingPayables.listPaymentBankOptions, { orgId, payableId })).toEqual({ banks: [], truncated: false });
+  });
 
-    await asOwner.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "BANK_TRANSFER" });
+  test("bank-funded full and partial supplier payments refuse missing bank before any payable or ledger write", async () => {
+    const { t, orgId, asOwner, payableId } = await seedDealerWithPayable(5000);
+    await expect(asOwner.mutation(api.sourcingPayables.markPaid, {
+      idempotencyKey: "supplier-full-missing-bank", orgId, payableId, paymentMethod: "BANK_TRANSFER",
+    })).rejects.toThrow(/Choose the bank account/i);
+    await expect(asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+      idempotencyKey: "supplier-partial-missing-bank", orgId, payableId, amount: 1000, paymentMethod: "CHEQUE",
+    })).rejects.toThrow(/Choose the bank account/i);
+    expect((await t.run((ctx) => ctx.db.get(payableId)))?.status).toBe("PENDING");
+    const events = await t.run((ctx) => ctx.db.query("accountingEvents")
+      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleSupplierPayables").eq("sourceId", payableId.toString()))
+      .collect());
+    expect(events.filter((event) => event.eventType === "SUPPLIER_PAYMENT_SETTLED")).toHaveLength(0);
+  });
+
+  test("supplier payment refuses an inactive or wrong-currency bank and a bank on cash", async () => {
+    const { t, orgId, asOwner, payableId, bankAccountId } = await seedDealerWithPayable(5000);
+    await t.run((ctx) => ctx.db.patch(bankAccountId, { isActive: false }));
+    await expect(asOwner.mutation(api.sourcingPayables.markPaid, {
+      idempotencyKey: "supplier-inactive-bank", orgId, payableId, paymentMethod: "CARD", bankAccountId,
+    })).rejects.toThrow(/inactive/i);
+    await t.run((ctx) => ctx.db.patch(bankAccountId, { isActive: true, currency: "USD" }));
+    await expect(asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+      idempotencyKey: "supplier-wrong-currency", orgId, payableId, amount: 1000, paymentMethod: "CHEQUE", bankAccountId,
+    })).rejects.toThrow(/denominated in USD/i);
+    await expect(asOwner.mutation(api.sourcingPayables.markPaid, {
+      idempotencyKey: "supplier-cash-with-bank", orgId, payableId, paymentMethod: "CASH", bankAccountId,
+    })).rejects.toThrow(/only valid for a bank-funded/i);
+    expect((await t.run((ctx) => ctx.db.get(payableId)))?.status).toBe("PENDING");
+  });
+
+  test("partial bank payment retains its bank and the retry identity binds that bank", async () => {
+    const { t, orgId, asOwner, payableId, bankAccountId } = await seedDealerWithPayable(5000);
+    const args = { idempotencyKey: "supplier-partial-bank-1", orgId, payableId, amount: 1000, paymentMethod: "CARD" as const, bankAccountId };
+    await asOwner.mutation(api.sourcingPayables.recordPartialPayment, args);
+    await asOwner.mutation(api.sourcingPayables.recordPartialPayment, args);
+    expect((await t.run((ctx) => ctx.db.get(payableId)))?.amountPaid).toBe(1000);
+    const event = await t.run((ctx) => ctx.db.query("accountingEvents")
+      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleSupplierPayables").eq("sourceId", payableId.toString()))
+      .filter((q) => q.eq(q.field("eventType"), "SUPPLIER_PAYMENT_SETTLED"))
+      .first());
+    const lines = await t.run((ctx) => ctx.db.query("journalLines")
+      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!)).collect());
+    expect(lines.find((line) => line.bankAccountId === bankAccountId)?.creditMinor).toBe(1_000_000);
+  });
+  test("without a VAT amount, settles AP and cash for the full amount with no VAT line", async () => {
+    const { t, orgId, asOwner, payableId, bankAccountId, accountBySystemKey } = await seedDealerWithPayable(5000);
+
+    await asOwner.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "BANK_TRANSFER", bankAccountId });
 
     const event = await t.run((ctx) =>
       ctx.db
@@ -109,13 +167,14 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
     const bank = await accountBySystemKey("BANK_ACCOUNT");
     expect(lines.find((l) => l.accountId === ap!._id)?.debitMinor).toBe(5_000_000);
     expect(lines.find((l) => l.accountId === bank!._id)?.creditMinor).toBe(5_000_000);
+    expect(lines.find((l) => l.accountId === bank!._id)?.bankAccountId).toBe(bankAccountId);
   });
 
   test("with a VAT amount, AP and cash still settle in full, plus a self-balancing VAT reclass pair", async () => {
-    const { t, orgId, asOwner, payableId, accountBySystemKey } = await seedDealerWithPayable(5000);
+    const { t, orgId, asOwner, payableId, bankAccountId, accountBySystemKey } = await seedDealerWithPayable(5000);
 
     await asOwner.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(),
-      orgId, payableId, paymentMethod: "BANK_TRANSFER", taxAmount: 500,
+      orgId, payableId, paymentMethod: "BANK_TRANSFER", bankAccountId, taxAmount: 500,
     });
 
     const payable = await t.run((ctx) => ctx.db.get(payableId));
@@ -147,6 +206,7 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
     // AP + cash settle for the FULL gross amount — not netted by the VAT portion.
     expect(lines.find((l) => l.accountId === ap!._id)?.debitMinor).toBe(5_000_000);
     expect(lines.find((l) => l.accountId === bank!._id)?.creditMinor).toBe(5_000_000);
+    expect(lines.find((l) => l.accountId === bank!._id)?.bankAccountId).toBe(bankAccountId);
     // VAT reclass is a separate, self-balancing pair.
     expect(lines.find((l) => l.accountId === vat!._id)?.debitMinor).toBe(500_000);
     expect(lines.find((l) => l.accountId === cogs!._id)?.creditMinor).toBe(500_000);

@@ -1,6 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
+import {
+  EGRESS_CONTEXT_OPTIONS,
+  browserEgressLaunchOptions,
+} from "./scripts/intelligence/browserEgressLaunch.mjs";
 
 function loadEnvLocal(): void {
   const envFile = resolve(process.cwd(), ".env.local");
@@ -30,6 +34,12 @@ loadEnvLocal();
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 
+// SCRUM-784: when the trusted workflow supplies the egress proxy, every browser
+// (including `browser.newContext()` ones that carry saved QA storageState) is
+// launched through it and service workers are blocked. BROWSER_EGRESS_REQUIRED=1
+// makes a missing proxy a config-load error rather than open egress.
+const egress = browserEgressLaunchOptions(process.env);
+
 export default defineConfig({
   testDir: "./playwright/tests",
   fullyParallel: false,
@@ -46,6 +56,7 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
+    ...(egress ? { launchOptions: egress, ...EGRESS_CONTEXT_OPTIONS } : {}),
   },
   projects: [
     {

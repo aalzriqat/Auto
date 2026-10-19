@@ -1,0 +1,31 @@
+{
+  "$comment": "SCRUM-752 coverage scheduling model for scripts/runVitestCoverageShards.mjs. Seconds are approximate per-file costs on a GitHub-hosted runner under V8 coverage. They decide only which suites get a process of their own (cost >= isolateAtSeconds) and how batches are spread across slices; every test file still runs exactly once per mode whatever these numbers say. Refresh them from the coverage-timings artifact when a suite's cost changes materially. A path that no longer exists fails the runner.",
+  "defaultFileSeconds": 4,
+  "isolateAtSeconds": 40,
+  "processSeconds": { "unit": 15, "sonar": 25 },
+  "files": {
+    "scripts/contractSkew/census.test.ts": 215,
+    "scripts/contractSkew/cliExit.test.ts": 110,
+    "scripts/contractSkew/transmissionReachability.test.ts": 70,
+    "scripts/contractSkew/clientCoverage.test.ts": 60,
+    "components/applications/cockpit/DealCockpitReviewParity.test.tsx": 48,
+    "scripts/intelligence/browserSwarmDuplicateSubmitHandler.test.ts": 36,
+    "scripts/contractSkew/specDiff.test.ts": 34,
+    "scripts/autoflowInvariantCatalog.test.ts": 30,
+    "convex/consignedReporting.test.ts": 29,
+    "convex/socialInboxConversations.test.ts": 29,
+    "convex/financedConsignedSettlement.test.ts": 26,
+    "convex/depositRequests.test.ts": 24,
+    "convex/dashboardWindowCaps.test.ts": 21,
+    "scripts/intelligence/sonarPrReportBehavior.test.ts": 21,
+    "convex/dealCustodyAccounting.test.ts": 20,
+    "convex/dealReadsBoundedUnderLimits.test.ts": 19,
+    "convex/dealUnwind.test.ts": 18,
+    "lib/supportMail.test.ts": 17,
+    "scripts/economicCommandCensus.test.ts": 17,
+    "convex/chequeCancelledSaleCredit.test.ts": 16,
+    "components/applications/cockpit/FinanceCompanyDecision.test.tsx": 16,
+    "scripts/receiptAuthorityStructuralRatchet.test.ts": 15,
+    "components/applications/cockpit/DealCockpitVisualFixture.test.tsx": 14
+  }
+}

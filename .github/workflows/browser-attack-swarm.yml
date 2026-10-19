@@ -9,10 +9,22 @@ permissions:
   contents: read
 
 concurrency:
-  # Deliberately the same PR-level group used by the triggering Playwright
-  # workflow. A newer E2E run therefore cancels an older swarm before it can
-  # recreate the same named preview underneath that swarm.
-  group: playwright-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  # SCRUM-777: never the Playwright group. Workflow-level concurrency is
+  # evaluated before any job `if`, so a swarm run that ends `skipped` (its
+  # Playwright run was cancelled or failed) used to cancel the live Playwright
+  # run of the newer head. Only a run that can actually provision joins the
+  # per-PR group, where a newer swarm replaces an older one before it recreates
+  # the shared named preview; every other run is alone in a group of its own.
+  # A swarm for a superseded head is refused by the live-head checks below.
+  group: >-
+    browser-attack-swarm-${{
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0].number &&
+      format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
+      format('run-{0}', github.run_id)
+    }}
   cancel-in-progress: true
 
 jobs:
@@ -166,6 +178,29 @@ jobs:
           BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
 
+      # SCRUM-826: refuse an impact set whose mandatory deterministic missions
+      # include a family with no executable handler BEFORE a preview is
+      # recreated, a candidate is built or E2E runs. Unconditional on purpose.
+      # The attack workers keep their own independent refusal.
+      - name: Refuse mandatory missions without executable handlers before provisioning
+        id: coverage_gate
+        working-directory: trusted
+        run: pnpm browser-swarm:coverage-gate
+        env:
+          BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+
+      - name: Publish coverage refusal evidence
+        if: failure() && steps.coverage_gate.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-browser-swarm-coverage-refusal
+          path: |
+            trusted/artifacts/browser-swarm-trusted-impact.json
+            trusted/artifacts/browser-swarm-coverage.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Download triggering E2E preview descriptor
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -208,6 +243,19 @@ jobs:
             echo "Descriptor JSON exceeds the 8 KiB trusted parsing limit." >&2
             exit 1
           fi
+
+      # SCRUM-777: `provenance` read the PR refs once, at the start of this job.
+      # Install, impact and the descriptor download take minutes, so re-read them
+      # immediately before the first preview write (`convex deploy
+      # --preview-create` below); a superseded head must not recreate the preview.
+      - name: Refuse a superseded PR head before creating the disposable preview
+        working-directory: trusted
+        run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          EXPECTED_TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
 
       - name: Recreate disposable Convex preview from trusted main
         working-directory: trusted
@@ -299,6 +347,7 @@ jobs:
           name: trusted-browser-swarm-plan
           path: |
             trusted/artifacts/browser-swarm-trusted-impact.json
+            trusted/artifacts/browser-swarm-coverage.json
             trusted/artifacts/browser-swarm-convex-authority.json
             trusted/artifacts/browser-swarm-jev-suggestions.json
             trusted/artifacts/browser-swarm-trusted-run.json
@@ -473,6 +522,19 @@ jobs:
       - name: Install trusted Chromium
         working-directory: trusted
         run: pnpm exec playwright install --with-deps chromium
+
+      # SCRUM-777: the first step of this job that writes to the disposable
+      # preview (`prepare` created it, behind its own check). A run planned
+      # against a head the PR has since left must stop here; the verdict job
+      # would fail it later, but only after it had deployed over the preview.
+      - name: Refuse a superseded PR head before touching the disposable preview
+        working-directory: trusted
+        run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          EXPECTED_TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
 
       - name: Scrub disposable preview environment before candidate execution
         working-directory: trusted
@@ -734,7 +796,6 @@ jobs:
           docker run --detach \
             --name "$CANDIDATE_CONTAINER" \
             --network "$CANDIDATE_NETWORK" \
-            --publish 127.0.0.1:3000:3000 \
             --cap-drop ALL \
             --security-opt no-new-privileges \
             --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro" \
@@ -745,14 +806,52 @@ jobs:
             --env NEXT_PUBLIC_CONVEX_URL \
             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
             --env CLERK_JWT_KEY \
+            --env AUTOFLOW_OFFLINE_SWARM_CLERK=1 \
+            --env CLERK_SECRET_KEY=sk_test_autoflow_offline_swarm_placeholder_nonfunctional \
             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY \
             --env NEXT_PUBLIC_APP_URL \
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
             node server.js
 
+          # Docker may silently drop published ports on --internal networks.
+          # A trusted host-only byte relay preserves the candidate's no-egress
+          # network while keeping the browser origin at 127.0.0.1:3000.
+          CANDIDATE_IP="$(docker inspect --format "{{(index .NetworkSettings.Networks \"$CANDIDATE_NETWORK\").IPAddress}}" "$CANDIDATE_CONTAINER")"
+
+          # Fail closed if anything already holds port 3000 on loopback: a
+          # non-candidate listener would answer /api/health while the relay
+          # died of EADDRINUSE, and the suite would test the wrong app.
+          if (exec 3<>/dev/tcp/127.0.0.1/3000) 2>/dev/null \
+            || (exec 3<>/dev/tcp/::1/3000) 2>/dev/null \
+            || [ -n "$(ss -Hltn 'sport = :3000' 2>/dev/null)" ]; then
+            echo "::error::Port 3000 is already in use on the runner; refusing to test a non-candidate app"
+            exit 1
+          fi
+
+          CANDIDATE_DOCKER_IP="$CANDIDATE_IP" node trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs > "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 &
+          CANDIDATE_RELAY_PID=$!
+          echo "CANDIDATE_RELAY_PID=$CANDIDATE_RELAY_PID" >> "$GITHUB_ENV"
+
+          # The health probe runs only after our own relay process is alive AND has printed
+          # its readiness line from the server 'listening' event.
+          RELAY_READY=0
           for attempt in $(seq 1 60); do
-            if curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
-              exit 0
+            if ! kill -0 "$CANDIDATE_RELAY_PID" 2>/dev/null; then
+              echo "::error::Trusted loopback relay exited before /api/health"
+              break
+            fi
+            if [ "$RELAY_READY" != "1" ] && grep -Fxq 'relay-listening 127.0.0.1:3000' "$RUNNER_TEMP/browser-swarm-relay.log"; then
+              RELAY_READY=1
+            fi
+            if [ "$RELAY_READY" = "1" ] && curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
+              # /api/health is outside the Clerk proxy matcher, so it stays green
+              # even when every page 500s (the SCRUM-350 G4 failure). Require a
+              # page that runs through the proxy to answer below 500 as well.
+              PAGE_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/sign-in || true)"
+              if [ "${PAGE_STATUS:-000}" -ge 200 ] && [ "${PAGE_STATUS:-000}" -lt 500 ]; then
+                exit 0
+              fi
+              echo "::warning::/api/health is up but a Clerk-proxied page answered HTTP ${PAGE_STATUS:-000}"
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
               echo "::error::Candidate container exited before answering /api/health"
@@ -768,13 +867,80 @@ jobs:
           echo "::stop-commands::$LOG_FENCE"
           docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$CANDIDATE_CONTAINER" 2>&1 || true
           docker logs --tail 200 "$CANDIDATE_CONTAINER" 2>&1 | tail -c 20000 || true
+          tail -c 2000 "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 || true
           echo "::$LOG_FENCE::"
           exit 1
+
+      # SCRUM-784: the browser below holds saved QA storageState and loads
+      # candidate-controlled pages. Everything it does goes through this trusted
+      # deny-by-default proxy (exact host:port allowlist), proven before any
+      # authenticated candidate traffic. Any failure here fails the job, so the
+      # verdict can never be PASS without verified egress containment.
+      - name: Start trusted browser egress proxy
+        working-directory: trusted
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p egress-evidence
+          # The raw proxy log never leaves the runner: the order of its lines is a
+          # candidate-selectable channel (G4R2-01), so it lives under RUNNER_TEMP,
+          # is read only by this step and by the proof, and is never uploaded.
+          node scripts/intelligence/browserEgressContainment.mjs > "$RUNNER_TEMP/browser-egress-proxy.log" 2>&1 &
+          EGRESS_PID=$!
+          echo "BROWSER_EGRESS_PROXY_PID=$EGRESS_PID" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 40); do
+            if ! kill -0 "$EGRESS_PID" 2>/dev/null; then
+              echo "::error::Trusted egress proxy exited before listening"
+              cat "$RUNNER_TEMP/browser-egress-proxy.log" >&2 || true
+              exit 1
+            fi
+            if grep -Fxq 'egress-proxy-listening 127.0.0.1:3129' "$RUNNER_TEMP/browser-egress-proxy.log"; then
+              echo "BROWSER_EGRESS_PROXY_SERVER=http://127.0.0.1:3129" >> "$GITHUB_ENV"
+              echo "BROWSER_EGRESS_REQUIRED=1" >> "$GITHUB_ENV"
+              grep -F 'egress-allowlist' "$RUNNER_TEMP/browser-egress-proxy.log"
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::Trusted egress proxy did not report listening"
+          exit 1
+
+      - name: Prove browser egress containment before authenticated traffic
+        working-directory: trusted
+        env:
+          BROWSER_EGRESS_PROXY_LOG: ${{ runner.temp }}/browser-egress-proxy.log
+        run: |
+          # pipefail: a failing proof must fail this step, not be masked by tee.
+          set -euo pipefail
+          node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
+          node scripts/intelligence/browserEgressProofVerify.mjs egress-evidence/browser-egress-proof.json
+
+      # SCRUM-411: main's financed-deal spec closes a deal against the candidate
+      # backend, and the server refuses handover (HANDOVER_PERIOD_OPEN) without an
+      # open period (finance PR #585, run 38693332010). Establish and verify the
+      # current period BEFORE the full suite; the same setup runs again after it.
+      # Distinct report/results directories keep both runs' evidence.
+      - name: Establish the open accounting period before the full trusted E2E suite
+        working-directory: trusted
+        run: >-
+          pnpm exec playwright test playwright/tests/browser-swarm-accounting-period.spec.ts
+          --project=chromium --no-deps --output=test-results-swarm-period-pre
+        env:
+          BROWSER_EGRESS_REQUIRED: "1"
+          BROWSER_SWARM_PERIOD_SETUP: "1"
+          CI: true
+          PLAYWRIGHT_HTML_REPORT: playwright-report-swarm-period-pre
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
 
       - name: Run full trusted E2E suite against exact candidate
         working-directory: trusted
         run: pnpm exec playwright test --project=chromium --no-deps
         env:
+          BROWSER_EGRESS_REQUIRED: "1"
           CI: true
           PLAYWRIGHT_SKIP_WEBSERVER: "1"
           PLAYWRIGHT_BASE_URL: http://localhost:3000
@@ -782,9 +948,36 @@ jobs:
           E2E_APPROVER_USER: trusted-attested
           E2E_APPROVER_PASSWORD: trusted-attested
 
+      # SCRUM-350 G4: the preview is seeded with a chart and, on purpose, no
+      # accounting period, so every swarm posting stayed QUEUED and ACC-2 could
+      # not judge reversal. The current period is opened before the full trusted
+      # E2E suite and verified again here, after it and before any attack worker;
+      # refuse to continue until the backend reports it open with nothing dated
+      # inside it still pending. The full suite's report and results are left
+      # untouched: this run writes its own.
+      - name: Open the swarm accounting period and drain its pending outbox
+        working-directory: trusted
+        run: >-
+          pnpm exec playwright test playwright/tests/browser-swarm-accounting-period.spec.ts
+          --project=chromium --no-deps --output=test-results-swarm-period
+        env:
+          BROWSER_EGRESS_REQUIRED: "1"
+          BROWSER_SWARM_PERIOD_SETUP: "1"
+          CI: true
+          PLAYWRIGHT_HTML_REPORT: playwright-report-swarm-period
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+
       - name: Stop isolated trusted E2E candidate frontend
         if: always()
         run: |
+          if [ -n "${CANDIDATE_RELAY_PID:-}" ] && ps -p "$CANDIDATE_RELAY_PID" -o args= | grep -Fq 'browserSwarmLoopbackRelay.mjs'; then
+            kill "$CANDIDATE_RELAY_PID" >/dev/null 2>&1 || true
+          fi
+          if [ -n "${BROWSER_EGRESS_PROXY_PID:-}" ] && ps -p "$BROWSER_EGRESS_PROXY_PID" -o args= | grep -Fq 'browserEgressContainment.mjs'; then
+            kill "$BROWSER_EGRESS_PROXY_PID" >/dev/null 2>&1 || true
+          fi
           if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
             docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
           fi
@@ -800,6 +993,11 @@ jobs:
           path: |
             trusted/playwright-report/
             trusted/test-results/
+            trusted/playwright-report-swarm-period-pre/
+            trusted/test-results-swarm-period-pre/
+            trusted/playwright-report-swarm-period/
+            trusted/test-results-swarm-period/
+            trusted/egress-evidence/
           if-no-files-found: warn
           retention-days: 14
 
@@ -943,15 +1141,65 @@ jobs:
           echo "CANDIDATE_CONTAINER=$CANDIDATE_CONTAINER" >> "$GITHUB_ENV"
           echo "CANDIDATE_NETWORK=$CANDIDATE_NETWORK" >> "$GITHUB_ENV"
 
-          # Runtime candidate code gets no default route to the Internet. The
-          # trusted host can still reach its published loopback port.
+          # Runtime candidate code gets no default route to the Internet.
           docker network create --internal "$CANDIDATE_NETWORK" >/dev/null
 
-          docker run --detach             --name "$CANDIDATE_CONTAINER"             --network "$CANDIDATE_NETWORK"             --publish 127.0.0.1:3000:3000             --cap-drop ALL             --security-opt no-new-privileges             --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro"             --workdir /app             --env HOME=/tmp/home             --env HOSTNAME=0.0.0.0             --env PORT=3000             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env CLERK_JWT_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             node server.js
+          docker run --detach \
+            --name "$CANDIDATE_CONTAINER" \
+            --network "$CANDIDATE_NETWORK" \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            --env HOSTNAME=0.0.0.0 \
+            --env PORT=3000 \
+            --env NEXT_PUBLIC_CONVEX_URL \
+            --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
+            --env CLERK_JWT_KEY \
+            --env AUTOFLOW_OFFLINE_SWARM_CLERK=1 \
+            --env CLERK_SECRET_KEY=sk_test_autoflow_offline_swarm_placeholder_nonfunctional \
+            --env NEXT_PUBLIC_TURNSTILE_SITE_KEY \
+            --env NEXT_PUBLIC_APP_URL \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            node server.js
 
+          CANDIDATE_IP="$(docker inspect --format "{{(index .NetworkSettings.Networks \"$CANDIDATE_NETWORK\").IPAddress}}" "$CANDIDATE_CONTAINER")"
+
+          # Fail closed if anything already holds port 3000 on loopback: a
+          # non-candidate listener would answer /api/health while the relay
+          # died of EADDRINUSE, and the swarm would attack the wrong app.
+          if (exec 3<>/dev/tcp/127.0.0.1/3000) 2>/dev/null \
+            || (exec 3<>/dev/tcp/::1/3000) 2>/dev/null \
+            || [ -n "$(ss -Hltn 'sport = :3000' 2>/dev/null)" ]; then
+            echo "::error::Port 3000 is already in use on the runner; refusing to test a non-candidate app"
+            exit 1
+          fi
+
+          CANDIDATE_DOCKER_IP="$CANDIDATE_IP" node trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs > "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 &
+          CANDIDATE_RELAY_PID=$!
+          echo "CANDIDATE_RELAY_PID=$CANDIDATE_RELAY_PID" >> "$GITHUB_ENV"
+
+          # The health probe runs only after our own relay process is alive AND has printed
+          # its readiness line from the server 'listening' event.
+          RELAY_READY=0
           for attempt in $(seq 1 60); do
-            if curl --fail --silent --show-error               http://127.0.0.1:3000/api/health > /dev/null; then
-              exit 0
+            if ! kill -0 "$CANDIDATE_RELAY_PID" 2>/dev/null; then
+              echo "::error::Trusted loopback relay exited before /api/health"
+              break
+            fi
+            if [ "$RELAY_READY" != "1" ] && grep -Fxq 'relay-listening 127.0.0.1:3000' "$RUNNER_TEMP/browser-swarm-relay.log"; then
+              RELAY_READY=1
+            fi
+            if [ "$RELAY_READY" = "1" ] && curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
+              # /api/health is outside the Clerk proxy matcher, so it stays green
+              # even when every page 500s (the SCRUM-350 G4 failure). Require a
+              # page that runs through the proxy to answer below 500 as well.
+              PAGE_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/sign-in || true)"
+              if [ "${PAGE_STATUS:-000}" -ge 200 ] && [ "${PAGE_STATUS:-000}" -lt 500 ]; then
+                exit 0
+              fi
+              echo "::warning::/api/health is up but a Clerk-proxied page answered HTTP ${PAGE_STATUS:-000}"
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
               echo "::error::Candidate container exited before answering /api/health"
@@ -968,6 +1216,7 @@ jobs:
           echo "::stop-commands::$LOG_FENCE"
           docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$CANDIDATE_CONTAINER" 2>&1 || true
           docker logs --tail 200 "$CANDIDATE_CONTAINER" 2>&1 | tail -c 20000 || true
+          tail -c 2000 "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 || true
           echo "::$LOG_FENCE::"
           echo "Exact candidate frontend did not become healthy on isolated loopback." >&2
           exit 1
@@ -977,10 +1226,63 @@ jobs:
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
 
+      # SCRUM-784: see the matching step in trusted-e2e.
+      - name: Start trusted browser egress proxy
+        working-directory: trusted
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p egress-evidence
+          # The raw proxy log never leaves the runner: the order of its lines is a
+          # candidate-selectable channel (G4R2-01), so it lives under RUNNER_TEMP,
+          # is read only by this step and by the proof, and is never uploaded.
+          node scripts/intelligence/browserEgressContainment.mjs > "$RUNNER_TEMP/browser-egress-proxy.log" 2>&1 &
+          EGRESS_PID=$!
+          echo "BROWSER_EGRESS_PROXY_PID=$EGRESS_PID" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 40); do
+            if ! kill -0 "$EGRESS_PID" 2>/dev/null; then
+              echo "::error::Trusted egress proxy exited before listening"
+              cat "$RUNNER_TEMP/browser-egress-proxy.log" >&2 || true
+              exit 1
+            fi
+            if grep -Fxq 'egress-proxy-listening 127.0.0.1:3129' "$RUNNER_TEMP/browser-egress-proxy.log"; then
+              echo "BROWSER_EGRESS_PROXY_SERVER=http://127.0.0.1:3129" >> "$GITHUB_ENV"
+              echo "BROWSER_EGRESS_REQUIRED=1" >> "$GITHUB_ENV"
+              grep -F 'egress-allowlist' "$RUNNER_TEMP/browser-egress-proxy.log"
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::Trusted egress proxy did not report listening"
+          exit 1
+
+      - name: Prove browser egress containment before authenticated traffic
+        working-directory: trusted
+        env:
+          BROWSER_EGRESS_PROXY_LOG: ${{ runner.temp }}/browser-egress-proxy.log
+        run: |
+          # pipefail: a failing proof must fail this step, not be masked by tee.
+          set -euo pipefail
+          node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
+          node scripts/intelligence/browserEgressProofVerify.mjs egress-evidence/browser-egress-proof.json
+
+      # SCRUM-777: the last trusted boundary before candidate code is attacked.
+      - name: Refuse a superseded PR head before attacking
+        working-directory: trusted
+        run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          EXPECTED_TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+
       - name: Execute trusted browser missions
         working-directory: trusted
         run: pnpm exec playwright test playwright/tests/browser-swarm.spec.ts --project=chromium --no-deps
         env:
+          BROWSER_EGRESS_REQUIRED: "1"
           CI: true
           PLAYWRIGHT_SKIP_WEBSERVER: "1"
           BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER: "1"
@@ -998,6 +1300,12 @@ jobs:
       - name: Stop isolated candidate frontend
         if: always()
         run: |
+          if [ -n "${CANDIDATE_RELAY_PID:-}" ] && ps -p "$CANDIDATE_RELAY_PID" -o args= | grep -Fq 'browserSwarmLoopbackRelay.mjs'; then
+            kill "$CANDIDATE_RELAY_PID" >/dev/null 2>&1 || true
+          fi
+          if [ -n "${BROWSER_EGRESS_PROXY_PID:-}" ] && ps -p "$BROWSER_EGRESS_PROXY_PID" -o args= | grep -Fq 'browserEgressContainment.mjs'; then
+            kill "$BROWSER_EGRESS_PROXY_PID" >/dev/null 2>&1 || true
+          fi
           if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
             docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
           fi
@@ -1014,6 +1322,7 @@ jobs:
             trusted/swarm/
             trusted/playwright-report/
             trusted/test-results/
+            trusted/egress-evidence/
           if-no-files-found: warn
           retention-days: 14
 

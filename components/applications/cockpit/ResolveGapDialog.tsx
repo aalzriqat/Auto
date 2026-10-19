@@ -56,6 +56,7 @@ type Draft = {
   customerShare: string;
   cash: string;
   installments: string;
+  toFinanceCompany: string;
   notes: string;
 };
 
@@ -64,6 +65,7 @@ const EMPTY: Draft = {
   customerShare: "",
   cash: "",
   installments: "",
+  toFinanceCompany: "",
   notes: "",
 };
 
@@ -115,6 +117,7 @@ export function ResolveGapDialog({
   shortfallMinor,
   breakdown,
   grossLabel,
+  allowFinanceCompany,
   submittedQuotationMinor,
   approvedPurchaseAmountMinor,
   economicsStamp,
@@ -132,6 +135,12 @@ export function ResolveGapDialog({
   breakdown: { valuationMinor: number; termsMinor: number } | null;
   /** True when the figure is the gross quotation-minus-approval, not a net one. */
   grossLabel: boolean;
+  /**
+   * Whether the customer's part may be paid straight to the finance company.
+   * False for a manually recorded approval: its company never receives the
+   * shortfall (OR-12), so the box is not offered.
+   */
+  allowFinanceCompany: boolean;
   /** The quotation sent to the company — shown for context; null when withheld from this caller. */
   submittedQuotationMinor: number | null;
   /** What the company approved — shown for context; null when withheld from this caller. */
@@ -148,7 +157,6 @@ export function ResolveGapDialog({
     dealerGapShareMinor: number;
     customerGapCashToDealerMinor: number;
     customerGapInstallmentToDealerMinor: number;
-    /** Always 0 until a customer-pays-the-finance-company route exists (SCRUM-766 PR-B). */
     customerGapToFinanceCompanyMinor: number;
     notes: string;
     economicsStamp: string | undefined;
@@ -222,16 +230,18 @@ export function ResolveGapDialog({
   const noCustomerPart = draft.mode === "DEALER_ABSORBS";
   const cashMinor = noCustomerPart ? 0 : toMinor(draft.cash, factor);
   const installmentsMinor = noCustomerPart ? 0 : toMinor(draft.installments, factor);
-  // Not a choice any more: recording the customer's part as paid to the finance
-  // company is refused by the server until its own route exists (SCRUM-766 PR-B).
-  const toFinanceCompanyMinor = 0;
+  const toFinanceCompanyMinor =
+    noCustomerPart || !allowFinanceCompany ? 0 : toMinor(draft.toFinanceCompany, factor);
 
-  const destinationsDecided = cashMinor !== null && installmentsMinor !== null;
+  const destinationsDecided =
+    cashMinor !== null && installmentsMinor !== null && toFinanceCompanyMinor !== null;
   // Only the boxes this mode actually reads.
   const shareTooPrecise = draft.mode === "SPLIT" && isTooPrecise(draft.customerShare, factor);
   const destinationTooPrecise =
     !noCustomerPart &&
-    [draft.cash, draft.installments].some((v) => isTooPrecise(v, factor));
+    [draft.cash, draft.installments, ...(allowFinanceCompany ? [draft.toFinanceCompany] : [])].some((v) =>
+      isTooPrecise(v, factor)
+    );
 
   /**
    * ONE readiness verdict, consumed by both the message and the button.
@@ -301,7 +311,8 @@ export function ResolveGapDialog({
       customerShareMinor === null ||
       dealerShareMinor === null ||
       cashMinor === null ||
-      installmentsMinor === null
+      installmentsMinor === null ||
+      toFinanceCompanyMinor === null
     ) {
       return;
     }
@@ -444,9 +455,11 @@ export function ResolveGapDialog({
           {!noCustomerPart && (
             <fieldset className="space-y-3">
               <legend className="text-sm font-medium">{t("GapWhereCustomerPays")}</legend>
-              <p className="text-xs text-muted-foreground">{t("GapWhereCustomerPaysHint")}</p>
+              <p className="text-xs text-muted-foreground">
+                {t(allowFinanceCompany ? "GapWhereCustomerPaysHint" : "GapWhereCustomerPaysManualHint")}
+              </p>
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className={allowFinanceCompany ? "grid gap-3 sm:grid-cols-3" : "grid gap-3 sm:grid-cols-2"}>
                 <div className="space-y-1.5">
                   <Label htmlFor="gap-cash" className="text-xs">
                     {t("GapCashToDealer")}
@@ -471,6 +484,20 @@ export function ResolveGapDialog({
                     className="tabular-nums"
                   />
                 </div>
+                {allowFinanceCompany && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="gap-financier" className="text-xs">
+                      {t("GapToFinanceCompany")}
+                    </Label>
+                    <Input
+                      id="gap-financier"
+                      inputMode="decimal"
+                      value={draft.toFinanceCompany}
+                      onChange={(event) => set({ toFinanceCompany: event.target.value })}
+                      className="tabular-nums"
+                    />
+                  </div>
+                )}
               </div>
             </fieldset>
           )}

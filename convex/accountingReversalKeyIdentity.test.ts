@@ -91,7 +91,10 @@ async function rawPosted(
   e: { eventType: string; sourceType: string; sourceId: string; key: string }
 ) {
   return await s.t.run(async (ctx) => {
-    const accounts = await ctx.db.query("chartOfAccounts").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).take(2);
+    const accounts = (await ctx.db.query("chartOfAccounts")
+      .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).take(50))
+      .filter((account) => account.systemKey !== "BANK_ACCOUNT").slice(0, 2);
+    if (accounts.length !== 2) throw new Error("Two non-bank chart accounts are required");
     const eventId = await ctx.db.insert("accountingEvents", {
       orgId: s.orgId, eventType: e.eventType, sourceType: e.sourceType, sourceId: e.sourceId,
       eventVersion: 1, idempotencyKey: e.key, occurredAt: s.now, accountingDate: s.now,

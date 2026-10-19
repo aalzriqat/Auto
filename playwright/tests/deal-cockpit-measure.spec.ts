@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 import { APPROVER_AUTH_FILE, USER_AUTH_FILE } from "../utils";
 import { buildDealWithRecordedEconomics, openDealDetails } from "../fixtures/financedDeal";
 
@@ -160,8 +161,8 @@ test.describe("the deal cockpit's reading measure", () => {
     // NOT inherit the project's `storageState` — that reaches the built-in
     // fixtures only, and `beforeAll` has none — so omitting it opens an
     // anonymous browser that fails at the sign-in redirect.
-    const salesContext = await browser.newContext({ storageState: USER_AUTH_FILE });
-    const approverContext = await browser.newContext({
+    const salesContext = await newContainedContext(browser, { storageState: USER_AUTH_FILE });
+    const approverContext = await newContainedContext(browser, {
       storageState: APPROVER_AUTH_FILE,
     });
     try {
@@ -181,7 +182,7 @@ test.describe("the deal cockpit's reading measure", () => {
       test(`${locale} @ ${viewport.name}: a figure stays beside the label that names it`, async ({
         browser,
       }) => {
-        const context = await browser.newContext({
+        const context = await newContainedContext(browser, {
           storageState: USER_AUTH_FILE,
           viewport: { width: viewport.width, height: viewport.height },
         });

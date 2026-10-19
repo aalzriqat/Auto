@@ -126,8 +126,13 @@ export function treatmentPosting(
   return TREATMENT_POSTING[treatment];
 }
 
-/** The legal-invoice refusals — absent, unusable, wrong recipient — each a distinct action for the operator. */
-export type LegalInvoiceRefusalCode = "LEGAL_INVOICE_MISSING" | "LEGAL_INVOICE_UNUSABLE" | "LEGAL_INVOICE_WRONG_RECIPIENT";
+/** The legal-invoice refusals — absent, unusable, wrong recipient, and (v3 evidence) amount / issuer — each a distinct action for the operator. */
+export type LegalInvoiceRefusalCode =
+  | "LEGAL_INVOICE_MISSING"
+  | "LEGAL_INVOICE_UNUSABLE"
+  | "LEGAL_INVOICE_WRONG_RECIPIENT"
+  | "LEGAL_INVOICE_AMOUNT_MISMATCH"
+  | "LEGAL_INVOICE_WRONG_ISSUER";
 
 export type PlanRefusalCode =
   | LegalInvoiceRefusalCode
@@ -144,7 +149,9 @@ export type PlanRefusalCode =
   | "SETTLEMENT_DEDUCTIONS_NOT_ALLOWED"
   | "DEPOSIT_EXCEEDS_FIRST_PAYMENT"
   | "CONTRIBUTION_INVALID"
-  | "DEPOSIT_INVALID";
+  | "DEPOSIT_INVALID"
+  // v3 (SCRUM-411, server-derived consideration)
+  | "CONSIDERATION_UNUSABLE";
 
 export interface PlanRefusal {
   code: PlanRefusalCode;
@@ -276,6 +283,79 @@ export function checkLegalInvoice(
     };
   }
   return { ok: true, amountMinor: legalInvoiceMinor };
+}
+
+export interface LegalInvoiceEvidenceInput {
+  /** What is recorded on the deal; every field is optional because the document is. */
+  legalInvoiceAmountMinor: number | undefined;
+  legalInvoiceIssuedTo: "CUSTOMER" | "FINANCE_COMPANY" | "OTHER" | undefined;
+  legalInvoiceIssuedBy: "DEALERSHIP" | "THIRD_PARTY" | undefined;
+  legalInvoiceIssuerName: string | undefined;
+  /** A - the frozen approved purchase amount the invoice to the company is for. */
+  approvedAmountMinor: number | undefined;
+  /** True when the car is the supplier's/importer's (agent sale), not dealer-owned stock. */
+  vehicleIsConsigned: boolean;
+}
+
+/**
+ * v3 (SCRUM-411): validates a legal invoice that was ACTUALLY issued, as optional
+ * evidence. Absent is fine (`recorded: false`) - the sale never needs it. When one
+ * is recorded it must describe the transaction the server derives:
+ *  - issued to the finance company, which is the legal buyer of the car;
+ *  - for exactly the approved amount A. The customer's gap R is owed to the
+ *    showroom separately and is not on the company's invoice;
+ *  - issued by the dealership on dealer-owned stock, or by a NAMED third party
+ *    (the importer/supplier) on a consigned car - the dealership issues no
+ *    invoice for its margin, and an importer's document is never represented as
+ *    the dealership's.
+ * It never yields an amount or date for the posting; it can only accept or refuse.
+ */
+export function checkLegalInvoiceEvidence(
+  input: LegalInvoiceEvidenceInput
+): { ok: true; recorded: boolean } | { ok: false; refusal: PlanRefusal & { code: LegalInvoiceRefusalCode } } {
+  const amount = input.legalInvoiceAmountMinor;
+  if (amount === undefined) return { ok: true, recorded: false };
+  const fail = (code: LegalInvoiceRefusalCode, message: string) => ({
+    ok: false as const,
+    refusal: { code, message } as PlanRefusal & { code: LegalInvoiceRefusalCode },
+  });
+  if (!isWholeMinorAmount(amount) || amount <= 0) {
+    return fail("LEGAL_INVOICE_UNUSABLE", "The recorded legal invoice amount is not a usable figure. Record the invoice again with the real document's amount; recording it again replaces the stored one.");
+  }
+  if (input.legalInvoiceIssuedTo !== "FINANCE_COMPANY") {
+    return fail(
+      "LEGAL_INVOICE_WRONG_RECIPIENT",
+      `The financing company is the legal buyer on this deal, but the recorded invoice was issued to ${
+        input.legalInvoiceIssuedTo?.toLowerCase().replace(/_/g, " ") ?? "nobody recorded"
+      }. Record the invoice again with its real recipient; recording it again replaces the stored one.`
+    );
+  }
+  if (input.approvedAmountMinor === undefined) {
+    return fail(
+      "LEGAL_INVOICE_AMOUNT_MISMATCH",
+      "A legal invoice is recorded, but the finance company's approved amount it must match is not recorded yet. Record the approval first."
+    );
+  }
+  if (amount !== input.approvedAmountMinor) {
+    return fail(
+      "LEGAL_INVOICE_AMOUNT_MISMATCH",
+      "The recorded legal invoice does not match the amount the finance company approved. The company's invoice is for the approved amount only (the customer's own gap is not on it). Record the invoice again with the real document's amount; recording it again replaces the stored one."
+    );
+  }
+  if (input.vehicleIsConsigned) {
+    if (input.legalInvoiceIssuedBy !== "THIRD_PARTY" || !input.legalInvoiceIssuerName?.trim()) {
+      return fail(
+        "LEGAL_INVOICE_WRONG_ISSUER",
+        "This car belongs to a supplier or importer, so the vehicle invoice to the finance company is theirs - the dealership issues none for its margin. Record the invoice again with who really issued it (the importer's or supplier's name); recording it again replaces the stored one."
+      );
+    }
+  } else if (input.legalInvoiceIssuedBy !== undefined && input.legalInvoiceIssuedBy !== "DEALERSHIP") {
+    return fail(
+      "LEGAL_INVOICE_WRONG_ISSUER",
+      "This car is dealer-owned stock, so the invoice to the finance company is the dealership's own. A third party's document cannot stand as the sale invoice here. Record the invoice again as the dealership's own; recording it again replaces the stored one."
+    );
+  }
+  return { ok: true, recorded: true };
 }
 
 /**
@@ -526,6 +606,12 @@ export interface FinancedSalePlanV2Input {
   depositLiabilityAppliedMinor: number;
   /** C — the dealership's contribution to the finance company. */
   dealerContributionMinor: number;
+  /**
+   * What the customer paid the finance company directly toward the shortfall
+   * (SCRUM-766 PR-B). C is already net of it; it is carried only so the
+   * commissionable margin can use C before the credit. Absent means none.
+   */
+  customerPaymentToFinanceCompanyMinor?: number;
   /** The customer's first payment; H may not exceed it. Undefined = not known. */
   customerFirstPaymentMinor: number | undefined;
 }
@@ -544,6 +630,12 @@ export interface FinancedSalePostingPlanV2 {
   depositLiabilityAppliedMinor: number;
   forwardDepositMinor: number;
   forwardContributionMinor: number;
+  /**
+   * C before the customer's direct payment to the company: the contribution the
+   * commissionable margin is measured on, so the commission does not depend on
+   * where the customer's money went (SCRUM-766 PR-B, Batch 2 Q-A).
+   */
+  commissionContributionMinor: number;
   /** H + C — what the dealership owes the company. */
   forwardDueMinor: number;
   components: PlannedComponent[];
@@ -562,16 +654,47 @@ export type BuildPlanV2Result =
 export function planVersionOf(app: {
   financedSalePlanVersion?: number;
   financedSaleRecognitionFingerprint?: string;
-}): 0 | 1 | 2 {
-  if (app.financedSalePlanVersion === 1 || app.financedSalePlanVersion === 2) {
+}): 0 | 1 | 2 | 3 {
+  if (
+    app.financedSalePlanVersion === 1 ||
+    app.financedSalePlanVersion === 2 ||
+    app.financedSalePlanVersion === 3
+  ) {
     return app.financedSalePlanVersion;
   }
   const fp = app.financedSaleRecognitionFingerprint;
   if (typeof fp === "string") {
+    if (fp.startsWith("v3;")) return 3;
     if (fp.startsWith("v2;")) return 2;
     if (fp.startsWith("v1;")) return 1;
   }
   return 0;
+}
+
+/**
+ * True for the plans that forward the deposit H and the contribution to the
+ * finance company (v2 and v3): they share the forward ledger, the transfer gate,
+ * the cancel/unwind rules and the frozen forward fields. The ONE predicate every
+ * forward reader asks, so a future version cannot be missed by an `=== 2` test.
+ */
+export function isForwardPlanVersion(version: number): version is 2 | 3 {
+  return version === 2 || version === 3;
+}
+
+/**
+ * True for plan v3 alone: the sale consideration is the server's own A + R rather
+ * than a legal invoice's figure. The ONE predicate for that, so no reader spells
+ * it as a `>= 3` that a later version would silently satisfy.
+ */
+export function isServerDerivedPlanVersion(version: number): version is 3 {
+  return version === 3;
+}
+
+/** `isForwardPlanVersion` for a built plan: narrows the plan union to v2 | v3 and accepts an absent plan. */
+export function isForwardPlan<P extends { version: number }>(
+  plan: P | undefined
+): plan is Extract<P, { version: 2 | 3 }> {
+  return plan !== undefined && isForwardPlanVersion(plan.version);
 }
 
 export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): BuildPlanV2Result {
@@ -605,6 +728,13 @@ export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): 
     return refuseV2(
       "CONTRIBUTION_INVALID",
       "The dealership contribution recorded on this deal is not a usable amount. Correct it before finalizing."
+    );
+  }
+  const credited = input.customerPaymentToFinanceCompanyMinor ?? 0;
+  if (!isWholeMinorAmount(credited) || credited < 0) {
+    return refuseV2(
+      "CONTRIBUTION_INVALID",
+      "The customer's payment to the finance company recorded on this deal is not a usable amount. Correct it before finalizing."
     );
   }
   const h = input.depositLiabilityAppliedMinor;
@@ -641,6 +771,7 @@ export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): 
       depositLiabilityAppliedMinor: h,
       forwardDepositMinor: h,
       forwardContributionMinor: c,
+      commissionContributionMinor: c + credited,
       forwardDueMinor,
       components: [],
       fingerprint: [
@@ -652,6 +783,213 @@ export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): 
         `D${h}`,
         `C${c}`,
         `R${input.customerReceivableMinor}`,
+        // Appended only when there is one, so every plan without it keeps its
+        // stored fingerprint byte for byte.
+        ...(credited > 0 ? [`K${credited}`] : []),
+      ].join(";"),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// v3 — server-derived consideration (SCRUM-411, owner ruling c21031 / 2026-10-14)
+// ---------------------------------------------------------------------------
+//
+// v2 posted revenue from a typed legal-invoice amount and demanded that amount
+// equal A + R, so an employee had to invent a figure the server already knew.
+// v3 keeps v2's journal SHAPE and its forward lifecycle exactly, and changes
+// only where the vehicle consideration comes from:
+//
+//     K  consideration = A + R      A: the approved amount the company transfers
+//                                   in full; R: the customer's gap owed to the
+//                                   showroom. Nothing else - never an invoice,
+//                                   never the appraisal, never the quote price.
+//
+//     Dr AR-Finance A                 Cr Sales revenue K
+//     Dr Customer receivable R        Cr AP-Finance H   (deposit forwarded)
+//     Dr Deposit liability H          Cr AP-Finance D   (contribution forwarded)
+//     Dr Consideration reductions D
+//
+// Net revenue is therefore A + R - D, the owner's figure. A genuine invoice may
+// still be recorded as evidence, but it is validated against the deal and never
+// read here. v1/v2 rows are never recomputed and keep their own builders.
+
+export const FINANCED_SALE_PLAN_VERSION_V3 = 3 as const;
+
+export interface FinancedSalePlanV3Input {
+  currency: string;
+  /** A - the approved dealer purchase amount the company transfers in full. */
+  approvedAmountMinor: number | undefined;
+  /** True when a settlement deduction (fee deducted from settlement) exists. */
+  hasSettlementComponents: boolean;
+  /** R - what the customer owes the showroom for the gap; part of the consideration. */
+  customerReceivableMinor: number;
+  /** H - deposit rows held against this vehicle that this deal consumes. */
+  depositLiabilityAppliedMinor: number;
+  /** D - the dealership's contribution to the finance company (contra-revenue). */
+  dealerContributionMinor: number;
+  /**
+   * What the customer paid the finance company directly toward the shortfall
+   * (SCRUM-766 PR-B). D is already net of it; it is carried only so the
+   * commissionable margin can use D before the credit. Absent means none.
+   */
+  customerPaymentToFinanceCompanyMinor?: number;
+  /** The customer's first payment; H may not exceed it. Undefined = not known. */
+  customerFirstPaymentMinor: number | undefined;
+  /**
+   * True on a consigned car settled DIRECT to the supplier: the finance company
+   * pays the SUPPLIER the approved amount A, so the dealership is owed none of it
+   * and the plan opens no finance receivable. K, D, R and a held deposit H are
+   * derived exactly as on the through route: H is the customer's money the
+   * dealership still forwards to the company (with D), so the forward due is
+   * H + D here too and the supplier claim is A - E.
+   */
+  settlesDirect?: boolean;
+}
+
+export interface FinancedSalePostingPlanV3 {
+  version: typeof FINANCED_SALE_PLAN_VERSION_V3;
+  currency: string;
+  /** K = A + R, derived here and nowhere else. */
+  considerationMinor: number;
+  grossDealerSettlementMinor: number;
+  totalDeductionsMinor: 0;
+  /** A in full on the through route; 0 on the direct route, where the company pays the supplier. */
+  financeCompanyReceivableMinor: number;
+  /** Present (true) only on the direct route. */
+  settlesDirect?: true;
+  financeCompanyPayableMinor: 0;
+  customerReceivableMinor: number;
+  depositLiabilityAppliedMinor: number;
+  forwardDepositMinor: number;
+  forwardContributionMinor: number;
+  /**
+   * D before the customer's direct payment to the company: the contribution the
+   * commissionable margin is measured on, so the commission does not depend on
+   * where the customer's money went (SCRUM-766 PR-B, Batch 2 Q-A).
+   */
+  commissionContributionMinor: number;
+  /** H + D - what the dealership owes the company. */
+  forwardDueMinor: number;
+  components: PlannedComponent[];
+  fingerprint: string;
+}
+
+export type BuildPlanV3Result =
+  | { ok: true; plan: FinancedSalePostingPlanV3 }
+  | { ok: false; refusal: PlanRefusal };
+
+export function buildFinancedSalePostingPlanV3(input: FinancedSalePlanV3Input): BuildPlanV3Result {
+  const refuseV3 = (code: PlanRefusalCode, message: string): BuildPlanV3Result => ({
+    ok: false,
+    refusal: { code, message },
+  });
+  const a = input.approvedAmountMinor;
+  if (a === undefined || !isWholeMinorAmount(a) || a < 0) {
+    return refuseV3(
+      "GROSS_SETTLEMENT_UNKNOWN",
+      "The amount the finance company approved for this deal is not recorded. Record the approved amount before finalizing."
+    );
+  }
+  if (input.hasSettlementComponents) {
+    return refuseV3(
+      "SETTLEMENT_DEDUCTIONS_NOT_ALLOWED",
+      "The finance company transfers the full approved amount, so a cost cannot be deducted from its transfer. Record the cost as a normal deal cost and finalize again."
+    );
+  }
+  const d = input.dealerContributionMinor;
+  if (!isWholeMinorAmount(d) || d < 0) {
+    return refuseV3(
+      "CONTRIBUTION_INVALID",
+      "The dealership contribution recorded on this deal is not a usable amount. Correct it before finalizing."
+    );
+  }
+  const credited = input.customerPaymentToFinanceCompanyMinor ?? 0;
+  if (!isWholeMinorAmount(credited) || credited < 0) {
+    return refuseV3(
+      "CONTRIBUTION_INVALID",
+      "The customer's payment to the finance company recorded on this deal is not a usable amount. Correct it before finalizing."
+    );
+  }
+  const h = input.depositLiabilityAppliedMinor;
+  if (!isWholeMinorAmount(h) || h < 0) {
+    return refuseV3(
+      "DEPOSIT_INVALID",
+      "The deposit held for this deal is not a usable amount. Have accounting review it before finalizing."
+    );
+  }
+  const r = input.customerReceivableMinor;
+  if (!isWholeMinorAmount(r) || r < 0) {
+    return refuseV3(
+      "CONSIDERATION_UNUSABLE",
+      "The customer's gap owed to the dealership is not a usable amount. Correct the gap resolution before finalizing."
+    );
+  }
+  const direct = input.settlesDirect === true;
+  if (input.customerFirstPaymentMinor !== undefined && h > input.customerFirstPaymentMinor) {
+    return refuseV3(
+      "DEPOSIT_EXCEEDS_FIRST_PAYMENT",
+      "The deposit held on this deal is larger than the customer's first payment. Correct the first payment or resolve the deposit before finalizing."
+    );
+  }
+  const consideration = a + r;
+  if (!Number.isSafeInteger(consideration) || consideration <= 0) {
+    return refuseV3(
+      "CONSIDERATION_UNUSABLE",
+      "The approved amount plus the customer's gap does not give a usable sale consideration. Check the approved amount before finalizing."
+    );
+  }
+  // A contribution larger than the consideration would book negative revenue:
+  // a loss the contribution rules do not describe, so it needs a decision rather
+  // than a plug.
+  if (d > consideration) {
+    return refuseV3(
+      "CONTRIBUTION_INVALID",
+      "The dealership contribution is larger than the sale consideration (approved amount plus the customer's gap). Correct the contribution before finalizing."
+    );
+  }
+  const forwardDueMinor = h + d;
+  // Each term is whole, but their sum can leave the safe-integer range and would
+  // be frozen (and forwarded to the company) as a rounded figure.
+  if (!Number.isSafeInteger(forwardDueMinor)) {
+    return refuseV3(
+      "DEPOSIT_INVALID",
+      "The deposit held for this deal plus the dealership contribution is not a representable amount, so what the dealership owes the finance company cannot be recorded. Have accounting review the deposit and the contribution before finalizing."
+    );
+  }
+  return {
+    ok: true,
+    plan: {
+      version: FINANCED_SALE_PLAN_VERSION_V3,
+      currency: input.currency,
+      considerationMinor: consideration,
+      grossDealerSettlementMinor: a,
+      totalDeductionsMinor: 0,
+      // The company pays the supplier on the direct route: nothing is owed to the dealership.
+      financeCompanyReceivableMinor: direct ? 0 : a,
+      ...(direct ? { settlesDirect: true as const } : {}),
+      financeCompanyPayableMinor: 0,
+      customerReceivableMinor: r,
+      depositLiabilityAppliedMinor: h,
+      forwardDepositMinor: h,
+      forwardContributionMinor: d,
+      commissionContributionMinor: d + credited,
+      forwardDueMinor,
+      components: [],
+      fingerprint: [
+        "v3",
+        input.currency,
+        `K${consideration}`,
+        `G${a}`,
+        `F${forwardDueMinor}`,
+        `D${h}`,
+        `C${d}`,
+        `R${r}`,
+        ...(direct ? ["DIRECT"] : []),
+        // Appended only when there is one, so every plan without it keeps its
+        // stored fingerprint byte for byte. `K` is already the consideration
+        // above, so the credit gets its own letter here.
+        ...(credited > 0 ? [`P${credited}`] : []),
       ].join(";"),
     },
   };

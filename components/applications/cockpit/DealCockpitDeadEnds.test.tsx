@@ -347,39 +347,30 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
       deposits: [{ _id: "d1", amount: 500, status: "HELD", method: "CASH" }],
     });
 
-  test("a held vehicle deposit links to the vehicles page for a caller who may resolve it", () => {
+  // A held reservation deposit used to hold the direct-route close behind the
+  // deposit manager. Plan v3 forwards it to the finance company with the
+  // contribution (SCRUM-407 c21033, SCRUM-411), so nothing on this screen sends
+  // the operator to the vehicles page for it any more.
+  test("a held vehicle deposit on the direct route does not hold the close or link to the deposit manager", () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.APPROVE_REQUESTS);
     permissions.add(PERMISSIONS.VIEW_VEHICLES);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     queryResults.set(COCKPIT_QUERY, settlement());
     queryResults.set(APP_QUERY, heldDepositApp());
+    queryResults.set("applications:getClosingReadiness", {
+      state: "READY",
+      open: true,
+      checks: [{ key: "CUSTODY_SETTLED", status: "READY", reason: null }],
+      unavailableReason: null,
+      moneyWithheld: false,
+    });
     renderCockpit();
-    expect(step().textContent).toContain("FinalizeNeedsHeldDepositResolved");
-    expect(link()?.getAttribute("href")).toBe(`/${ORG}/vehicles`);
+    expect(stepButton()?.textContent).toBe("FinalizeDealAction");
+    expect(step().textContent).not.toContain("FinalizeNeedsHeldDepositResolved");
+    expect(link()).toBeNull();
     expect(linkNote()).toBeNull();
-  });
-
-  test("a caller who cannot resolve deposits gets no link and is told who does", () => {
-    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
-    permissions.add(PERMISSIONS.VIEW_VEHICLES);
-    queryResults.set(COCKPIT_QUERY, settlement());
-    queryResults.set(APP_QUERY, heldDepositApp());
-    renderCockpit();
-    expect(link()).toBeNull();
-    expect(linkNote()?.textContent).toBe("DepositManagerNeedsApprover");
-  });
-
-  test("a resolver who cannot open the vehicles page is told, rather than linked to a refusal", () => {
-    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
-    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
-    queryResults.set(COCKPIT_QUERY, settlement());
-    queryResults.set(APP_QUERY, heldDepositApp());
-    renderCockpit();
-    expect(link()).toBeNull();
-    expect(linkNote()).not.toBeNull();
   });
 
   test("CONTROL -- a step with a working button carries no link", () => {

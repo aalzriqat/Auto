@@ -121,11 +121,15 @@ export interface MobileOrgSummary {
 
 export type MobileDashboardTimeRange = "DAY" | "MONTH" | "YEAR" | "ALL_TIME";
 
+/**
+ * A figure is `null` when the window it sums exceeded its read cap: it is
+ * UNAVAILABLE, never zero. Render an explicit marker, not a number.
+ */
 export interface MobileDashboardTrendPoint {
   name: string;
-  Revenue: number;
-  Profit: number;
-  Expenses: number;
+  Revenue: number | null;
+  Profit: number | null;
+  Expenses: number | null;
 }
 
 export interface MobileDashboardTeamTask {
@@ -142,8 +146,9 @@ export interface MobileDashboardStats {
   totalVehicles: number;
   availableVehicles: number;
   activeLeads: number;
-  salesThisMonth: number;
-  salesVolumeThisMonth: number;
+  /** `null` = unavailable: the dated sale window exceeded its read cap. */
+  salesThisMonth: number | null;
+  salesVolumeThisMonth: number | null;
   teamMembers: number;
   salesTrend: MobileDashboardTrendPoint[];
   /**
@@ -171,6 +176,11 @@ export interface MobileDashboardStats {
     turnover?: boolean;
     /** Same, for the profit figures. */
     profit?: boolean;
+    /**
+     * The current window's expense read exceeded its cap: the trend's
+     * Expenses, CashOut and Profit are `null` (unavailable), not zero.
+     */
+    expenses?: boolean;
   };
   taskStats: {
     total: number;
@@ -881,6 +891,12 @@ export interface MobileLandedCostItem {
   label: string;
   amount: number;
   paymentMethod?: MobileLandedCostPaymentMethod;
+  bankAccountId?: string;
+}
+
+export interface MobileAcquisitionBankOptions {
+  banks: Array<{ _id: string; name: string; currency: string }>;
+  truncated: boolean;
 }
 
 export interface MobileLandedCosts {
@@ -1481,6 +1497,7 @@ type DepositReleaseArgs = OrgScopedArgs & {
   depositId: string;
   resolution: "REFUNDED" | "FORFEITED";
   refundMethod?: MobileDepositMethod;
+  bankAccountId?: string;
   notes?: string;
   /** REQUIRED on the backend — see ExpenseCreateArgs. */
   idempotencyKey: string;
@@ -1490,6 +1507,7 @@ type ReservationCreateArgs = VehicleScopedArgs & {
   customerId: string;
   depositAmount?: number;
   depositMethod?: MobileDepositMethod;
+  depositBankAccountId?: string;
   expiresAt?: number;
   /**
    * REQUIRED, matching the backend contract (SCRUM-313). This façade is a
@@ -1661,6 +1679,9 @@ type VehicleCreateArgs = OrgScopedArgs & {
   sourceType?: MobileVehicleSourceType;
   sourcedFromName?: string;
   sourceCost?: number;
+  purchasePaymentMethod?: "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD" | "ON_ACCOUNT";
+  purchaseSupplierName?: string;
+  bankAccountId?: string;
   notes?: string;
   imageIds?: string[];
   inspectionStatus?: MobileInspectionStatus;
@@ -2545,6 +2566,7 @@ export const api = {
         payableId: string;
         paymentNotes?: string;
         paymentMethod?: MobilePaymentMethod;
+        bankAccountId?: string;
         taxAmount?: number;
         idempotencyKey?: string;
       },
@@ -2670,6 +2692,7 @@ export const api = {
         amount: number;
         /** Required by the backend (SCRUM-444): the method picks the account debited. */
         method?: MobileDepositMethod;
+        bankAccountId?: string;
         notes?: string;
         idempotencyKey?: string;
       },
@@ -2680,6 +2703,8 @@ export const api = {
       VehicleScopedArgs,
       MobileVehicleDeposit[]
     >("deposits:listByVehicle"),
+    listRefundBankOptions: makeFunctionReference<"query", OrgScopedArgs & { currency?: string }, MobileAcquisitionBankOptions>("deposits:listRefundBankOptions"),
+    listReceiptBankOptions: makeFunctionReference<"query", OrgScopedArgs & { currency?: string }, MobileAcquisitionBankOptions>("deposits:listReceiptBankOptions"),
     release: makeFunctionReference<"mutation", DepositReleaseArgs, unknown>("deposits:release"),
   },
   depositRequests: {
@@ -2904,6 +2929,11 @@ export const api = {
       VehicleScopedArgs,
       MobileLandedCosts | null
     >("vehicles:getLandedCosts"),
+    listAcquisitionBankOptions: makeFunctionReference<
+      "query",
+      OrgScopedArgs & { purpose: "CREATE" | "EDIT" },
+      MobileAcquisitionBankOptions
+    >("vehicles:listAcquisitionBankOptions"),
     upsertLandedCosts: makeFunctionReference<
       "mutation",
       VehicleScopedArgs & { items: MobileLandedCostItem[] },
@@ -3342,12 +3372,15 @@ export const api = {
         quoteId: string;
         amount: number;
         method?: MobileDepositMethod;
+        bankAccountId?: string;
         notes?: string;
         idempotencyKey?: string;
       },
       string
     >;
     listByVehicle: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicleDeposit[]>;
+    listRefundBankOptions: FunctionReference<"query", "public", OrgScopedArgs & { currency?: string }, MobileAcquisitionBankOptions>;
+    listReceiptBankOptions: FunctionReference<"query", "public", OrgScopedArgs & { currency?: string }, MobileAcquisitionBankOptions>;
     release: FunctionReference<"mutation", "public", DepositReleaseArgs, unknown>;
   };
   depositRequests: {
@@ -3543,6 +3576,7 @@ export const api = {
     >;
     getRelations: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicleRelations>;
     getLandedCosts: FunctionReference<"query", "public", VehicleScopedArgs, MobileLandedCosts | null>;
+    listAcquisitionBankOptions: FunctionReference<"query", "public", OrgScopedArgs & { purpose: "CREATE" | "EDIT" }, MobileAcquisitionBankOptions>;
     upsertLandedCosts: FunctionReference<
       "mutation",
       "public",
