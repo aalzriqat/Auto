@@ -26,7 +26,7 @@ import { forwardPostKey, forwardReversalKey } from "../utils/financeCompanyForwa
 import { financeDisbursementKeys } from "../utils/financeDisbursementKeys";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
-import { MAX_DEAL_COMMISSION_LINES } from "../utils/dealCommissionLines";
+import { allLinesForSale } from "../utils/dealCommissionLineReads";
 import {
   assertStoredVersion,
   custodyDependenciesPayload,
@@ -2523,10 +2523,7 @@ export async function reverseCommissionForSale(
   // The extra deal commission lines are part of the same commission: back each
   // unpaid one out and mark it removed. A paid line is refused, like the
   // salesperson's own paid commission.
-  const lines = await ctx.db
-    .query("dealCommissionLines")
-    .withIndex("by_org_sale", (q) => q.eq("orgId", args.orgId).eq("saleId", args.saleId))
-    .take(MAX_DEAL_COMMISSION_LINES * 5);
+  const lines = await allLinesForSale(ctx, args.orgId, args.saleId);
   for (const line of lines) {
     if (line.removedAt !== undefined) continue;
     if (line.paidAt !== undefined) {

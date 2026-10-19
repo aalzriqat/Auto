@@ -29,7 +29,7 @@ import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { auditLog } from "../financialAudit";
 import { AppErrorCode, throwAppError } from "./errors";
 import { toMinorUnits } from "./money";
-import { MAX_DEAL_COMMISSION_LINES } from "./dealCommissionLines";
+import { allLinesForSale } from "./dealCommissionLineReads";
 import { settlementView } from "./supplierSettlement";
 import { cancelPendingInvoiceReceiptsForSale } from "../accounting/invoiceReceiptReservation";
 
@@ -893,10 +893,7 @@ export async function assertNoPaidCommissionLines(
   orgId: Id<"organizations">,
   saleId: Id<"sales">
 ): Promise<void> {
-  const lines = await ctx.db
-    .query("dealCommissionLines")
-    .withIndex("by_org_sale", (q) => q.eq("orgId", orgId).eq("saleId", saleId))
-    .take(MAX_DEAL_COMMISSION_LINES * 5);
+  const lines = await allLinesForSale(ctx, orgId, saleId);
   if (lines.some((line) => line.removedAt === undefined && line.paidAt !== undefined)) {
     throw new ConvexError(
       "Cannot automatically cancel a sale after a commission line has been paid. Use a manual accounting correction."

@@ -14,6 +14,7 @@ import {
   hookDealCommissionLineReversed,
 } from "./accounting/workflowHooks";
 import { checkPostingAllowed } from "./accountingPeriods";
+import { allLinesForSale, MAX_DEAL_COMMISSION_LINE_ROWS } from "./utils/dealCommissionLineReads";
 import {
   scaleForCurrency,
   supportedCurrencyScale,
@@ -54,10 +55,7 @@ async function activeLines(
 ): Promise<Doc<"dealCommissionLines">[]> {
   // Bounded: add refuses past MAX_DEAL_COMMISSION_LINES active lines, and a
   // removed line is kept, so the read allows for them without an unbounded scan.
-  const rows = await ctx.db
-    .query("dealCommissionLines")
-    .withIndex("by_org_sale", (q) => q.eq("orgId", orgId).eq("saleId", saleId))
-    .take(MAX_DEAL_COMMISSION_LINES * 5);
+  const rows = await allLinesForSale(ctx, orgId, saleId);
   return rows.filter((row) => row.removedAt === undefined);
 }
 
@@ -220,7 +218,16 @@ export const addLine = mutation({
         throwAppError(AppErrorCode.VALIDATION_FAILED, "The employee is not an active member of this organization.");
       }
 
-      const existing = await activeLines(ctx, args.orgId, args.saleId);
+      // Removed rows are kept, so the sale's total row count is capped too:
+      // every safety read below and in cancel/unwind then sees all of them.
+      const allRows = await allLinesForSale(ctx, args.orgId, args.saleId);
+      if (allRows.length >= MAX_DEAL_COMMISSION_LINE_ROWS) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "This deal has too many commission entries in its history. Ask an administrator to review it."
+        );
+      }
+      const existing = allRows.filter((row) => row.removedAt === undefined);
       if (existing.length >= MAX_DEAL_COMMISSION_LINES) {
         throwAppError(AppErrorCode.VALIDATION_FAILED, "This deal has the maximum number of commission lines.");
       }
@@ -278,7 +285,7 @@ export const removeLine = mutation({
       if (DEAL_COMMISSION_LINES_PILOT_DISABLED) {
         throwAppError(
           AppErrorCode.DEAL_COMMISSION_LINES_DISABLED,
-          "Adding commission lines to a deal is not available during the pilot. Nothing has been changed."
+          "Removing commission lines from a deal is not available during the pilot. Nothing has been changed."
         );
       }
       const line = await ctx.db.get(args.lineId);

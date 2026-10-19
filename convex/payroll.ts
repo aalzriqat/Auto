@@ -751,6 +751,18 @@ async function assertAccrualsPosted(
 ): Promise<void> {
   for (const item of items) {
     for (const lineId of item.commissionLineIds ?? []) {
+      const failed = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_line_accrued_${lineId}`)
+        )
+        .filter((q) => q.eq(q.field("status"), "FAILED"))
+        .first();
+      if (failed) {
+        throw new ConvexError(
+          "A ledger entry for a commission line in this run has failed and needs to be retried before you can pay. Ask an administrator to retry it from Accounting → Setup."
+        );
+      }
       if (await accrualStillQueued(ctx, orgId, `commission_line_accrued_${lineId}`)) {
         throw new ConvexError(
           "A commission line in this run hasn't posted to the ledger yet (its accounting period may be closed). Open the period so it posts, then pay."

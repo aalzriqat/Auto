@@ -306,3 +306,20 @@ describe("reconciliation with a line-only payment", () => {
     expect(recon.isReconciled).toBe(true);
   });
 });
+
+describe("row cap", () => {
+  test("a sale past the row cap refuses new lines, so cancel can never miss one", async () => {
+    const d = await seedDealer("rowcap");
+    const saleId = await completedSale(d);
+    for (let i = 0; i < 100; i++) {
+      await d.t.run((ctx) =>
+        ctx.db.insert("dealCommissionLines", {
+          orgId: d.orgId, saleId, kind: "PURCHASE", employeeId: d.buyerId, amountMinor: 1000, currency: "JOD",
+          createdBy: d.userId, removedAt: Date.now(), removedBy: d.userId,
+        })
+      );
+    }
+    await expect(addLine(d, saleId, "PURCHASE", d.buyerId, 50)).rejects.toThrow(/too many/i);
+    expect(await payable(d)).toBe(0);
+  });
+});

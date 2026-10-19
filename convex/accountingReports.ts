@@ -1344,10 +1344,10 @@ async function computeRecognizedCommissionAsOf(
   // the sale's own commission so the divergence control (recognized vs the
   // decided sale amount) is not disturbed by them.
   const recognizedLines = new Map<string, Map<string, number>>();
-  const add = (saleId: unknown, minor: unknown, currency: string, lineId?: unknown) => {
+  const add = (saleId: unknown, minor: unknown, currency: string, lineId?: string) => {
     if (typeof saleId !== "string" || typeof minor !== "number" || !Number.isFinite(minor)) return;
-    const target = typeof lineId === "string" ? recognizedLines : recognized;
-    const key = typeof lineId === "string" ? lineId : saleId;
+    const target = lineId !== undefined ? recognizedLines : recognized;
+    const key = lineId ?? saleId;
     const byCurrency = target.get(key) ?? new Map<string, number>();
     byCurrency.set(currency, (byCurrency.get(currency) ?? 0) + minor);
     target.set(key, byCurrency);
@@ -1362,7 +1362,7 @@ async function computeRecognizedCommissionAsOf(
   };
 
   for (const e of await inWindow("COMMISSION_ACCRUED")) {
-    if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.amountMinor, e.currency, e.payload?.lineId);
+    if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.amountMinor, e.currency, e.sourceType === "dealCommissionLines" ? e.sourceId : undefined);
   }
   for (const e of await inWindow("COMMISSION_ADJUSTED")) {
     if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.deltaMinor, e.currency);
