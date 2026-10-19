@@ -66,6 +66,13 @@ describe("parallel coverage workflow (SCRUM-359)", () => {
     expect(run.run).toContain("set -euo pipefail");
   });
 
+  test("slices overlap at most two batch processes, and the merge stays a single process", () => {
+    const run = step(slices, "Run unit + integration tests with coverage");
+    expect(run.env?.VITEST_COVERAGE_CONCURRENCY).toBe("2");
+    const merge = step(aggregator, "Merge coverage from every slice");
+    expect(merge.env?.VITEST_COVERAGE_CONCURRENCY).toBeUndefined();
+  });
+
   test("slices and aggregator use separate unit and Sonar blob directories and the same modes", () => {
     const run = step(slices, "Run unit + integration tests with coverage").run ?? "";
     const merge = step(aggregator, "Merge coverage from every slice");
