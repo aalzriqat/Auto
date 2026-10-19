@@ -48,7 +48,8 @@ export function DealCommissionsRow({
     return <p className="text-sm text-muted-foreground">{t("DealCommissionsLoading")}</p>;
   }
 
-  const net = netProfitAfterCommissionsMinor(profitMinor, view.totalMinor);
+  // An undecided salesperson commission is UNKNOWN, so no net figure (never a net that treats it as zero).
+  const net = view.salePending ? null : netProfitAfterCommissionsMinor(profitMinor, view.totalMinor);
   const rows: Array<{ key: string; label: string; who: string; amountMinor: number | null; note?: string | null }> = [
     {
       key: "salesperson",
@@ -110,7 +111,9 @@ export function DealCommissionsRow({
         <div className="flex items-baseline justify-between gap-3 border-t pt-1.5">
           <span className="text-sm text-muted-foreground">{t("DealCommissionsNetAfter")}</span>
           {net === null ? (
-            <span className="text-xs text-muted-foreground">{t("DealCommissionsNetUnavailable")}</span>
+            <span className="text-xs text-muted-foreground">
+              {view.salePending ? t("DealCommissionsNetPending") : t("DealCommissionsNetUnavailable")}
+            </span>
           ) : (
             <span className={`text-sm font-semibold tabular-nums ${net < 0 ? "text-profit-negative" : ""}`}>{money(net)}</span>
           )}

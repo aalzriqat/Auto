@@ -56,6 +56,51 @@ async function activeLines(
 }
 
 /**
+ * One deal's commission total in minor units, from the salesperson's commission
+ * (on the sale row) and its active lines.
+ *
+ * `totalMinor` is null when a figure cannot be read; `salePending` is true when
+ * the salesperson's commission is undecided (UNKNOWN, never zero). A cancelled
+ * sale owes nothing, so its total is zero.
+ */
+export function dealCommissionTotals(
+  sale: Pick<Doc<"sales">, "status" | "commissionAmount">,
+  lines: ReadonlyArray<Pick<Doc<"dealCommissionLines">, "amountMinor" | "currency">>,
+  currency: string
+): { totalMinor: number | null; salePending: boolean; saleCommissionMinor: number | null } {
+  const salePending = sale.commissionAmount == null;
+  const saleCommissionMinor = salePending
+    ? null
+    : (toMinorSameCurrencyOrUndefined(sale.commissionAmount as number, currency, currency) ?? null);
+  const linesTotal = lines.every((line) => line.currency === currency) ? sumCommissionMinor(lines) : null;
+  if (sale.status === "CANCELLED") return { totalMinor: 0, salePending, saleCommissionMinor };
+  if (linesTotal === null || (!salePending && saleCommissionMinor === null)) {
+    return { totalMinor: null, salePending, saleCommissionMinor };
+  }
+  const total = linesTotal + (saleCommissionMinor ?? 0);
+  return { totalMinor: Number.isSafeInteger(total) ? total : null, salePending, saleCommissionMinor };
+}
+
+/**
+ * Commission totals for many sales, for the reports. Display-only: nothing here
+ * writes. One bounded index read per sale.
+ */
+export async function dealCommissionTotalsBySale(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  sales: ReadonlyArray<Doc<"sales">>,
+  currency: string
+): Promise<Map<Id<"sales">, ReturnType<typeof dealCommissionTotals>>> {
+  const entries = await Promise.all(
+    sales.map(async (sale) => {
+      const lines = await activeLines(ctx, orgId, sale._id);
+      return [sale._id, dealCommissionTotals(sale, lines, currency)] as const;
+    })
+  );
+  return new Map(entries);
+}
+
+/**
  * The commissions of one deal: the salesperson's commission (still held on the
  * sale row) plus every registered line, in minor units of the deal's currency.
  *
@@ -84,22 +129,7 @@ export const forSale = query({
       });
     }
 
-    const saleCommissionMinor =
-      sale.commissionAmount == null
-        ? null
-        : (toMinorSameCurrencyOrUndefined(sale.commissionAmount, currency, currency) ?? null);
-    const salePending = sale.commissionAmount == null;
-    const sameCurrency = out.every((line) => line.currency === currency);
-    const linesTotal = sameCurrency ? sumCommissionMinor(out) : null;
-    const counted = sale.status !== "CANCELLED";
-    let totalMinor: number | null = 0;
-    if (counted) {
-      if (linesTotal === null || (!salePending && saleCommissionMinor === null)) totalMinor = null;
-      else {
-        totalMinor = linesTotal + (saleCommissionMinor ?? 0);
-        if (!Number.isSafeInteger(totalMinor)) totalMinor = null;
-      }
-    }
+    const { totalMinor, salePending, saleCommissionMinor } = dealCommissionTotals(sale, out, currency);
 
     return {
       currency,

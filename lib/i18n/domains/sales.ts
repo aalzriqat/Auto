@@ -2529,6 +2529,16 @@ const dealCommissionMessages = defineBilingualMessages({
     "Net profit after commissions is not available until the profit is known.",
     "صافي الربح بعد العمولات غير متاح قبل معرفة الربح.",
   ],
+  DealCommissionsNetPending: [
+    "Set the salesperson's commission (0 if none) to see the net profit after commissions.",
+    "حدّد عمولة البائع (صفر إن لم تكن هناك عمولة) لعرض صافي الربح بعد العمولات.",
+  ],
+  ReportNetAfterCommissions: ["Net after commissions", "الصافي بعد العمولات"],
+  ReportCommissionsColumn: ["Commissions", "العمولات"],
+  ReportCommissionsIncomplete: [
+    "sales are left out of the commission totals because their margin or the salesperson's commission is not known.",
+    "عمليات بيع مستثناة من إجماليات العمولات لأن هامشها أو عمولة البائع فيها غير معروفة.",
+  ],
   DealCommissionsPendingSale: [
     "The salesperson's commission is not decided yet, so this total is incomplete.",
     "عمولة البائع لم تُحدد بعد، لذلك هذا الإجمالي غير مكتمل.",

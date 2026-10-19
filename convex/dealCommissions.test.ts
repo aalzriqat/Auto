@@ -215,3 +215,56 @@ describe("dealCommissions: refusals", () => {
     expect(actions).toEqual(expect.arrayContaining(["ADD_DEAL_COMMISSION_LINE", "REMOVE_DEAL_COMMISSION_LINE"]));
   });
 });
+
+describe("reports show the margin after commissions (display only)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const range = () => ({ startDate: Date.now() - DAY, endDate: Date.now() + DAY });
+
+  async function costedSale(suffix: string, permissions: string[]) {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const s = await seed(t, suffix, permissions);
+    const sale = await t.run((ctx) => ctx.db.get(s.saleId));
+    await t.run((ctx) => ctx.db.patch(sale!.vehicleId, { purchasePrice: 10000 }));
+    return { t, s };
+  }
+
+  test("net after commissions = margin - (sale commission + lines); the margin itself is unchanged", async () => {
+    const { s } = await costedSale("rep1", [...ADMIN, "view:reports"]);
+    await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
+    await s.asAdmin.mutation(api.dealCommissions.addLine, { orgId: s.orgId, saleId: s.saleId, kind: "PURCHASE", employeeId: s.buyerAgent, amount: 50 });
+    await s.asAdmin.mutation(api.dealCommissions.addLine, { orgId: s.orgId, saleId: s.saleId, kind: "EXECUTION", employeeId: s.executor, amount: 25 });
+
+    const report = await s.asAdmin.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+    const row = report.sales[0];
+    expect(row.netProfit).toBe(5000);
+    expect(row.commissionsTotal).toBe(125);
+    expect(row.netProfitAfterCommissions).toBe(4875);
+    expect(report.totalProfit).toBe(5000);
+    expect(report.totalCommissions).toBe(125);
+    expect(report.totalNetProfitAfterCommissions).toBe(4875);
+    expect(report.commissionIncompleteSaleCount).toBe(0);
+
+    const perf = await s.asAdmin.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, ...range() });
+    expect(perf[0].totalProfit).toBe(5000);
+    expect(perf[0].totalNetProfitAfterCommissions).toBe(4875);
+  });
+
+  test("an undecided salesperson commission gives no net figure and is counted, not zeroed", async () => {
+    const { s } = await costedSale("rep2", [...ADMIN, "view:reports"]);
+    const report = await s.asAdmin.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+    expect(report.sales[0].commissionPending).toBe(true);
+    expect(report.sales[0].netProfitAfterCommissions).toBeNull();
+    expect(report.totalNetProfitAfterCommissions).toBe(0);
+    expect(report.commissionIncompleteSaleCount).toBe(1);
+  });
+
+  test("a caller without view:commissions gets no commission figures", async () => {
+    const { s } = await costedSale("rep3", ["view:reports", "create:sales", "view:sales", "view:vehicles"]);
+    const report = await s.asAdmin.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+    expect(report.sales[0].commissionsTotal).toBeNull();
+    expect(report.sales[0].netProfitAfterCommissions).toBeNull();
+    expect(report.totalCommissions).toBeNull();
+    const perf = await s.asAdmin.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, ...range() });
+    expect(perf[0].totalCommissions).toBeNull();
+  });
+});

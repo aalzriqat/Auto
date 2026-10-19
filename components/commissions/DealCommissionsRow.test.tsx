@@ -58,6 +58,8 @@ describe("DealCommissionsRow", () => {
     useQueryMock.mockReturnValue(view({ salePending: true, salesperson: { employeeId: "u1", employeeName: "Sam", amountMinor: null } }));
     render(<DealCommissionsRow orgId={orgId} saleId={saleId} profitMinor={1_000_000} money={money} t={t} />);
     expect(screen.getByText("DealCommissionsPendingSale")).toBeTruthy();
+    // Unknown is not zero: no net figure while the salesperson's commission is undecided.
+    expect(screen.getByText("DealCommissionsNetPending")).toBeTruthy();
   });
 
   test("a caller without view:commissions sees nothing and runs no query", () => {
