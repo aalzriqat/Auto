@@ -32,7 +32,7 @@ const profitApprovalMessages = defineBilingualMessages({
   ],
   ProfitApprovalApproved: ["A manager approved this price.", "اعتمد المدير هذا السعر."],
   MinimumPriceUplift: ["Minimum Price Uplift", "الحد الأدنى للزيادة فوق سعر القائمة"],
-  MinimumPriceUpliftHelp: ["A financed sale priced less than this amount above the vehicle's list price, or below it, needs a manager's approval. It is not a loss check: it does not stop a sale below cost, and cash sales are not covered. A minimum of 0 turns it off.", "يحتاج البيع بالتمويل إلى موافقة المدير إذا كان سعره أعلى من سعر قائمة المركبة بأقل من هذا المبلغ، أو أقل من سعر القائمة. هذا ليس فحصاً للخسارة: لا يمنع بيعاً بأقل من التكلفة، ولا يشمل البيع النقدي. الحد الأدنى 0 يعطّل الفحص."],
+  MinimumPriceUpliftHelp: ["A financed sale priced less than this amount above the vehicle's list price, or below it, needs a manager's approval. It is not a loss check: it does not stop a sale below cost, and cash quotes are not covered. A minimum of 0 turns it off.", "يحتاج البيع بالتمويل إلى موافقة المدير إذا كان سعره أعلى من سعر قائمة المركبة بأقل من هذا المبلغ، أو أقل من سعر القائمة. هذا ليس فحصاً للخسارة: لا يمنع بيعاً بأقل من التكلفة، ولا يشمل عروض الأسعار النقدية. الحد الأدنى 0 يعطّل الفحص."],
   ApprovalSalePrice: ["Sale price", "سعر البيع"],
   ApprovalListPrice: ["List price", "سعر القائمة"],
 });
