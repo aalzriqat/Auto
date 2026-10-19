@@ -283,7 +283,9 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("a deposit paid in two instalments, on screen", () => {
+// Renders the screen over a full deposit-and-sale backend run; under coverage
+// it takes over 3 s, too close to the 5 s default (SCRUM-752).
+describe("a deposit paid in two instalments, on screen", { timeout: 30_000 }, () => {
   /** Two payments, both cars allocated, A sold and then cancelled. */
   async function twoPaymentsWithACancelled(tag: string) {
     const s = await seedQuote(tag);

@@ -2554,7 +2554,9 @@ describe("Collections", () => {
 // budget however large a tenant's receivable book is, WITHOUT dropping reminders
 // or marking the wrong rows. These tests drive the public internal mutation and
 // the scheduler only; they assert what customers and ledgers observe.
-describe("daily collection reminders stay bounded without losing work (SCRUM-807)", () => {
+// These suites seed hundreds of receivables and cheques and drain the scheduler;
+// under coverage they take 3-4.5 s each, too close to the 5 s default (SCRUM-752).
+describe("daily collection reminders stay bounded without losing work (SCRUM-807)", { timeout: 30_000 }, () => {
   const DAY = 24 * 60 * 60 * 1000;
   const NOW = Date.UTC(2026, 9, 17, 6, 30);
   type Statuses = Doc<"receivables">["status"];
