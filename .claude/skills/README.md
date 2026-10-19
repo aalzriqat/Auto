@@ -10,9 +10,14 @@ Shared skills for every agent session in this repository. Claude Code loads `.cl
 
 A skill never lowers a gate. In particular:
 
-- Money-touching changes still need the two-seat review (defined in the project instructions; if you do not have them, ask before merging any money change) on the final head SHA (Seat 1: Opus 5.5 plus `/simplify` in a session separate from the implementer; Seat 2: Codex sol6 at medium effort or lower). Any subagent or "second opinion" a skill suggests is advisory and is not a seat.
+- Money-touching changes still need the two-seat review (defined in the project instructions; if you do not have them, ask before merging any money change) on the final head SHA, or carried forward to it under the re-certification rule below (Seat 1: Opus 5.5 plus `/simplify` in a session separate from the implementer; Seat 2: Codex sol6 at medium effort or lower). Any subagent or "second opinion" a skill suggests is advisory and is not a seat.
 - Never write `review-evidence/*.json`. Never claim a human review.
 - The Production deploy approval in GitHub stays a human action.
+- **Re-certification after the head moves (owner rule, 2026-10-19, set in the project chat).** A seat certifies one head SHA.
+  - The PR's own code changed, or updating from main hit a merge conflict: both seats fully re-certify the new head.
+  - The only change is a clean update from main and the PR's own diff is identical (same `git patch-id`, and no whitespace-only edits in the PR's own files): carry the certification forward. Re-run CI on the new head and note the carried SHA on the PR and the Jira issue.
+  - That clean update brought in main changes to code the PR touches or depends on: run one short, scoped re-review of only the interaction, recorded against the new head SHA before merging. On a money PR, both seats do it, Seat 1 in a session separate from the implementer. On other PRs, one independent read-only reviewer does it.
+  - A re-check that was not run is recorded as not run. Never claim a seat for a head it did not read.
 - Skills that ask a person a question are answered by the decision rule in the project instructions (consult Codex sol6, medium effort at most). Codex quota is low, so skills do not trigger extra Codex runs.
 
 ## Which skill when
