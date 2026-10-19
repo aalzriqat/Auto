@@ -1297,6 +1297,38 @@ describe("SCRUM-716 reverseCostCorrection", () => {
     expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
   });
 
+  test("soft-deleted cashbook rows are ignored: a live row beside a deleted twin reverses, and a deleted-only match where none is expected is accepted", async () => {
+    const d = await seedDealer("r18");
+    const cashVehicleId = await createCashVehicle(d);
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId: cashVehicleId, newCost: 9800, reason: "Wrong", correctionType: "CASH_REFUND", paymentMethod: "CASH",
+    });
+    const [cashRow] = await correctionRows(d, cashVehicleId);
+    await d.t.run(async (ctx) => {
+      const live = (await ctx.db.query("transactions").collect()).find((r) => r.idempotencyKey === `vehicle_cost_correction_${cashRow._id}`)!;
+      const { _id, _creationTime, ...twin } = live;
+      void _id; void _creationTime;
+      await ctx.db.insert("transactions", { ...twin, isDeleted: true });
+    });
+    await d.asOwner.mutation(api.vehicles.reverseCostCorrection, { orgId: d.orgId, correctionId: cashRow._id, reason: "Undo", commandId: "cmd-18a" });
+    expect((await d.t.run((ctx) => ctx.db.get(cashVehicleId)))?.purchasePrice).toBe(12500);
+
+    const d2 = await seedDealer("r18b");
+    const apVehicleId = await createOnAccountVehicle(d2, 12500);
+    await d2.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d2.orgId, vehicleId: apVehicleId, newCost: 9800, reason: "Invoice wrong", correctionType: "SUPPLIER_INVOICE_ERROR",
+    });
+    const [apRow] = await correctionRows(d2, apVehicleId);
+    await d2.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: d2.orgId, type: "IN", amount: 2700, date: Date.now(), category: "VEHICLE_PURCHASE",
+        description: "deleted stray", idempotencyKey: `vehicle_cost_correction_${apRow._id}`, vehicleId: apVehicleId, isDeleted: true,
+      })
+    );
+    await d2.asOwner.mutation(api.vehicles.reverseCostCorrection, { orgId: d2.orgId, correctionId: apRow._id, reason: "Undo", commandId: "cmd-18b" });
+    expect((await payableOf(d2.t, apVehicleId))?.amountDue).toBe(12500);
+  });
+
   test("a stray cashbook row on a correction that wrote none refuses instead of creating cash", async () => {
     const d = await seedDealer("r16");
     const vehicleId = await createOnAccountVehicle(d, 12500);

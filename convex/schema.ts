@@ -5407,7 +5407,9 @@ export default defineSchema({
     // Searching the vehicle range and filtering on category meant an edit to
     // either field moved a row out of reach while it kept its `saleId`, so a
     // cancelled deal could leave live revenue behind — SCRUM-212-R2.
-    .index("by_org_sale", ["orgId", "saleId"]),
+    .index("by_org_sale", ["orgId", "saleId"])
+    // SCRUM-716: exact lookup of a correction's cashbook row by its idempotency key, never a vehicle scan.
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
 
   fixedAssets: defineTable({
     orgId: v.id("organizations"),

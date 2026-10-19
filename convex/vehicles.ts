@@ -2378,22 +2378,22 @@ export const reverseCostCorrection = mutation({
     const cashbookKey = `vehicle_cost_correction_${correction._id}`;
     const cashbookRows = await ctx.db
       .query("transactions")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", correction.vehicleId))
-      .filter((q) => q.eq(q.field("idempotencyKey"), cashbookKey))
-      .take(2);
+      .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", cashbookKey))
+      .take(5);
+    // Soft-deleted rows are not part of the cashbook: only live rows are counted.
+    const liveCashbookRows = cashbookRows.filter((row) => row.isDeleted !== true);
     const expectsCashbook =
       correction.correctionType === "CASH_REFUND" &&
       resolveOriginalPaymentMethod(acquisitionEvent, payableCount) !== "ON_ACCOUNT";
     const deltaMinor = toMinorUnits(correction.newCost, currency) - toMinorUnits(correction.previousCost, currency);
-    const [cashbookRow] = cashbookRows;
+    const [cashbookRow] = liveCashbookRows;
     // Exactly the row the correction wrote when it wrote one, and none where it wrote none: a
     // missing, duplicated, mismatched or unexpected row refuses before anything moves.
     const cashbookConsistent = expectsCashbook
-      ? cashbookRows.length === 1 &&
-        cashbookRow.isDeleted !== true &&
+      ? liveCashbookRows.length === 1 &&
         cashbookRow.type === (deltaMinor < 0 ? "IN" : "OUT") &&
         toMinorUnits(cashbookRow.amount, currency) === Math.abs(deltaMinor)
-      : cashbookRows.length === 0;
+      : liveCashbookRows.length === 0;
     if (!cashbookConsistent) {
       throwAppError(
         AppErrorCode.COST_CORRECTION_REVERSAL_CASHBOOK_MISSING,
