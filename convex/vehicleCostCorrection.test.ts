@@ -1241,6 +1241,62 @@ describe("SCRUM-716 reverseCostCorrection", () => {
     expect((await correctionRows(d, vehicleId))[0].status).toBeUndefined();
   });
 
+  test("a cashbook row that is duplicated, has the wrong amount or direction, or exists where none was written refuses", async () => {
+    const d = await seedDealer("r15");
+    const vehicleId = await createCashVehicle(d);
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Wrong", correctionType: "CASH_REFUND", paymentMethod: "CASH",
+    });
+    const [row] = await correctionRows(d, vehicleId);
+    const key = `vehicle_cost_correction_${row._id}`;
+    const cashRow = async () =>
+      d.t.run(async (ctx) => (await ctx.db.query("transactions").collect()).find((r) => r.idempotencyKey === key)!);
+    const original = await cashRow();
+    const attempt = async (commandId: string) =>
+      (await refusalOf(d.asOwner.mutation(api.vehicles.reverseCostCorrection, {
+        orgId: d.orgId, correctionId: row._id, reason: "Undo", commandId,
+      })))?.code;
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+
+    await d.t.run((ctx) => ctx.db.patch(original._id, { type: "OUT" }));
+    expect(await attempt("cmd-15a")).toBe("COST_CORRECTION_REVERSAL_CASHBOOK_MISSING");
+    await d.t.run((ctx) => ctx.db.patch(original._id, { type: "IN", amount: original.amount + 1 }));
+    expect(await attempt("cmd-15b")).toBe("COST_CORRECTION_REVERSAL_CASHBOOK_MISSING");
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(original._id, { amount: original.amount });
+      const { _id, _creationTime, ...copy } = original;
+      void _id; void _creationTime;
+      await ctx.db.insert("transactions", copy);
+    });
+    expect(await attempt("cmd-15c")).toBe("COST_CORRECTION_REVERSAL_CASHBOOK_MISSING");
+
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+    expect((await correctionRows(d, vehicleId))[0].status).toBeUndefined();
+  });
+
+  test("a stray cashbook row on a correction that wrote none refuses instead of creating cash", async () => {
+    const d = await seedDealer("r16");
+    const vehicleId = await createOnAccountVehicle(d, 12500);
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Invoice wrong", correctionType: "SUPPLIER_INVOICE_ERROR",
+    });
+    const [row] = await correctionRows(d, vehicleId);
+    await d.t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId: d.orgId, type: "IN", amount: 2700, date: Date.now(), category: "VEHICLE_PURCHASE",
+        description: "stray", idempotencyKey: `vehicle_cost_correction_${row._id}`, vehicleId,
+      })
+    );
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+
+    const data = await refusalOf(d.asOwner.mutation(api.vehicles.reverseCostCorrection, {
+      orgId: d.orgId, correctionId: row._id, reason: "Undo", commandId: "cmd-16",
+    }));
+
+    expect(data?.code).toBe("COST_CORRECTION_REVERSAL_CASHBOOK_MISSING");
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+  });
+
   test("a commandId replays only with the same reason, and is never reusable on another correction", async () => {
     const d = await seedDealer("r11");
     const vehicleId = await createCashVehicle(d, 12500);
@@ -1308,6 +1364,7 @@ describe("SCRUM-716 reverseCostCorrection", () => {
   test("the account snapshots that closed-period reports read return to their pre-correction values", async () => {
     const d = await seedDealer("r14");
     const vehicleId = await createCashVehicle(d, 12500);
+    // Net per accounting period, so a reversal posted into the wrong period cannot hide in a grand total.
     const snapshotNet = async (systemKey: string) =>
       d.t.run(async (ctx) => {
         const account = await ctx.db
@@ -1315,22 +1372,24 @@ describe("SCRUM-716 reverseCostCorrection", () => {
           .withIndex("by_org_systemKey", (q) => q.eq("orgId", d.orgId).eq("systemKey", systemKey))
           .unique();
         const rows = await ctx.db.query("accountBalanceSnapshots").collect();
-        return rows
-          .filter((r) => r.accountId === account!._id)
-          .reduce((sum, r) => sum + r.runningDebitMinor - r.runningCreditMinor, 0);
+        const byPeriod: Record<string, number> = {};
+        for (const r of rows.filter((x) => x.accountId === account!._id)) {
+          byPeriod[r.periodId] = (byPeriod[r.periodId] ?? 0) + r.runningDebitMinor - r.runningCreditMinor;
+        }
+        return byPeriod;
       });
     const inventory0 = await snapshotNet("VEHICLE_INVENTORY");
     const cash0 = await snapshotNet("CASH_ON_HAND");
     await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId: d.orgId, vehicleId, newCost: 9800, reason: "Wrong", correctionType: "CASH_REFUND", paymentMethod: "CASH",
     });
-    expect(await snapshotNet("VEHICLE_INVENTORY")).not.toBe(inventory0);
+    expect(await snapshotNet("VEHICLE_INVENTORY")).not.toEqual(inventory0);
     const [row] = await correctionRows(d, vehicleId);
 
     await d.asOwner.mutation(api.vehicles.reverseCostCorrection, { orgId: d.orgId, correctionId: row._id, reason: "Undo", commandId: "cmd-14" });
 
-    expect(await snapshotNet("VEHICLE_INVENTORY")).toBe(inventory0);
-    expect(await snapshotNet("CASH_ON_HAND")).toBe(cash0);
+    expect(await snapshotNet("VEHICLE_INVENTORY")).toEqual(inventory0);
+    expect(await snapshotNet("CASH_ON_HAND")).toEqual(cash0);
   });
 
   test("a user without MANAGE_FINANCE and a foreign org are refused", async () => {

@@ -2376,23 +2376,28 @@ export const reverseCostCorrection = mutation({
     }
     const { count: payableCount } = await loadAcquisitionPayable(ctx, vehicle);
     const cashbookKey = `vehicle_cost_correction_${correction._id}`;
-    const cashbookRow = await ctx.db
+    const cashbookRows = await ctx.db
       .query("transactions")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", correction.vehicleId))
       .filter((q) => q.eq(q.field("idempotencyKey"), cashbookKey))
-      .first();
-    if (correction.correctionType === "CASH_REFUND" && resolveOriginalPaymentMethod(acquisitionEvent, payableCount) !== "ON_ACCOUNT") {
-      const deltaMinor = toMinorUnits(correction.newCost, currency) - toMinorUnits(correction.previousCost, currency);
-      const cashbookIntact =
-        cashbookRow !== null &&
+      .take(2);
+    const expectsCashbook =
+      correction.correctionType === "CASH_REFUND" &&
+      resolveOriginalPaymentMethod(acquisitionEvent, payableCount) !== "ON_ACCOUNT";
+    const deltaMinor = toMinorUnits(correction.newCost, currency) - toMinorUnits(correction.previousCost, currency);
+    const [cashbookRow] = cashbookRows;
+    // Exactly the row the correction wrote when it wrote one, and none where it wrote none: a
+    // missing, duplicated, mismatched or unexpected row refuses before anything moves.
+    const cashbookConsistent = expectsCashbook
+      ? cashbookRows.length === 1 &&
         cashbookRow.type === (deltaMinor < 0 ? "IN" : "OUT") &&
-        toMinorUnits(cashbookRow.amount, currency) === Math.abs(deltaMinor);
-      if (!cashbookIntact) {
-        throwAppError(
-          AppErrorCode.COST_CORRECTION_REVERSAL_CASHBOOK_MISSING,
-          "The cash record for this correction is missing, so it can't be reversed automatically. Contact finance. Nothing has been changed."
-        );
-      }
+        toMinorUnits(cashbookRow.amount, currency) === Math.abs(deltaMinor)
+      : cashbookRows.length === 0;
+    if (!cashbookConsistent) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_REVERSAL_CASHBOOK_MISSING,
+        "The cash record for this correction is missing or does not match, so it can't be reversed automatically. Contact finance. Nothing has been changed."
+      );
     }
 
     const now = Date.now();
@@ -2418,7 +2423,7 @@ export const reverseCostCorrection = mutation({
     }
 
     // The correction's cashbook row, if it wrote one, is offset by an inverse row rather than edited.
-    if (cashbookRow) {
+    if (expectsCashbook) {
       await ctx.db.insert("transactions", {
         orgId: args.orgId,
         type: cashbookRow.type === "IN" ? "OUT" : "IN",

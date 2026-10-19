@@ -374,8 +374,8 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "تم استخدام طلب العكس هذا مسبقاً لتصحيح أو سبب مختلف. ابدأ عملية العكس من جديد.",
   ],
   ServerError_COST_CORRECTION_REVERSAL_CASHBOOK_MISSING: [
-    "The cash record for this correction is missing, so it can't be reversed automatically. Contact finance. Nothing has been changed.",
-    "سجل النقد الخاص بهذا التصحيح غير موجود، لذلك لا يمكن عكسه تلقائياً. تواصل مع المحاسبة. لم يتم تغيير أي شيء.",
+    "The cash record for this correction is missing or does not match, so it can't be reversed automatically. Contact finance. Nothing has been changed.",
+    "سجل النقد الخاص بهذا التصحيح غير موجود أو لا يطابقه، لذلك لا يمكن عكسه تلقائياً. تواصل مع المحاسبة. لم يتم تغيير أي شيء.",
   ],
   ServerError_COST_CORRECTION_NOT_POSTED: [
     "This vehicle's purchase hasn't been posted to accounting yet, so its cost can't be corrected.",
