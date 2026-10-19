@@ -67,6 +67,10 @@ import {
   dealModeOf,
 } from "./utils/financedSaleRecognition";
 import {
+  DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED,
+  refuseDepositOtherTreatment,
+} from "./utils/depositOtherContainment";
+import {
   reasonOf,
   redactClosingReason,
   withheldReasonCode,
@@ -4796,6 +4800,15 @@ export const finalizeDeal = mutation({
     // redacts for the same caller (SCRUM-414 R1): below the finance tier every
     // readiness refusal is a WITHHELD_* code, no params, generic English.
     const mayReadMoney = mayReadFinanceEconomics(auth.role);
+
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the
+    // pilot has switched off. Refused after auth and ahead of every read, so no
+    // earlier readiness or plan refusal (e.g. FIRST_PAYMENT_UNFUNDED) can answer
+    // for it. The shared choke point in resolveReservationDeposits still backs
+    // this up for the other completion doors.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
 
     return await runWithIdempotency(
       ctx,
