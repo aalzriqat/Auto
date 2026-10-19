@@ -1,5 +1,8 @@
 export type MobileCommissionModeValue = "AUTO_TIERS" | "AUTO_MEMBER" | "MANUAL";
 
+/** SCRUM-778: an org that never chose a mode runs MANUAL. Mirrors convex/utils/commissionMode.ts. */
+export const DEFAULT_MOBILE_COMMISSION_MODE: MobileCommissionModeValue = "MANUAL";
+
 export type SettingsWithModeSaveResult = "saved" | "settingsSavedModeFailed";
 
 /**
@@ -22,7 +25,7 @@ export async function saveSettingsThenCommissionMode({
   selectedMode: MobileCommissionModeValue;
 }): Promise<SettingsWithModeSaveResult> {
   await saveSettings();
-  if (selectedMode === (currentMode ?? "MANUAL")) return "saved";
+  if (selectedMode === (currentMode ?? DEFAULT_MOBILE_COMMISSION_MODE)) return "saved";
   try {
     await setCommissionMode(selectedMode);
   } catch (error) {

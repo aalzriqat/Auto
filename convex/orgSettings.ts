@@ -1,9 +1,12 @@
 import { v, ConvexError } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
+import { writeAuditLog } from "./utils/auditLog";
+import { AppErrorCode } from "./utils/errors";
 import { effectiveCommissionMode } from "./utils/commissionMode";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 
@@ -291,6 +294,18 @@ export const upsert = mutation({
   },
 });
 
+const ACCESS_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  AppErrorCode.UNAUTHENTICATED,
+  AppErrorCode.UNAUTHORIZED,
+  AppErrorCode.FORBIDDEN,
+]);
+
+function isAccessRefusal(error: unknown): boolean {
+  if (!(error instanceof ConvexError)) return false;
+  const data = error.data as { code?: unknown } | string | undefined;
+  return typeof data === "object" && data !== null && typeof data.code === "string" && ACCESS_REFUSAL_CODES.has(data.code);
+}
+
 /**
  * SCRUM-778: the commission mode in force, for anyone who reviews commissions.
  * `get` is gated on VIEW_SETTINGS and returns null without it, which the
@@ -306,8 +321,12 @@ export const getCommissionMode = query({
     if (!identity) return null;
     try {
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
-    } catch {
-      return null;
+    } catch (error) {
+      // Only an auth or permission refusal means "this caller may not see it".
+      // Anything else (a corrupt role, a database fault) must surface, not read
+      // as "no access".
+      if (isAccessRefusal(error)) return null;
+      throw error;
     }
     const settings = await ctx.db
       .query("orgSettings")
@@ -329,22 +348,34 @@ export const setCommissionMode = mutation({
   },
   returns: v.id("orgSettings"),
   handler: async (ctx, args) => {
-    await requireOwner(ctx, args.orgId);
+    const { user } = await requireOwner(ctx, args.orgId);
     const settings = await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
+    const before = effectiveCommissionMode(settings);
+    let settingsId: Id<"orgSettings">;
     if (settings) {
       await ctx.db.patch(settings._id, { commissionMode: args.commissionMode });
-      return settings._id;
+      settingsId = settings._id;
+    } else {
+      settingsId = await ctx.db.insert("orgSettings", {
+        orgId: args.orgId,
+        currency: DEFAULT_SETTINGS.currency,
+        currencySymbol: DEFAULT_SETTINGS.currencySymbol,
+        enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
+        commissionMode: args.commissionMode,
+      });
     }
-    return await ctx.db.insert("orgSettings", {
+    await writeAuditLog(ctx, user, {
+      action: "commission mode changed",
+      targetTable: "orgSettings",
+      targetId: settingsId,
       orgId: args.orgId,
-      currency: DEFAULT_SETTINGS.currency,
-      currencySymbol: DEFAULT_SETTINGS.currencySymbol,
-      enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
-      commissionMode: args.commissionMode,
+      before: { commissionMode: before },
+      after: { commissionMode: args.commissionMode },
     });
+    return settingsId;
   },
 });
 

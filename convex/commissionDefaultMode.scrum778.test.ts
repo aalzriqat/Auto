@@ -231,10 +231,51 @@ describe("SCRUM-778: an automatic mode needs a deliberate choice", () => {
     await d.t.run((ctx) => ctx.db.insert("memberships", { orgId: d.orgId, userId: managerId, roleId }));
     const asManager = d.t.withIdentity({ subject: "s778_mgr", clerkId: "s778_mgr" });
 
-    await expect(
-      asManager.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" })
-    ).rejects.toThrow();
+    const refusal = await asManager
+      .mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" })
+      .then(() => null, (e: unknown) => e as { data?: { code?: string } });
+    expect(refusal?.data?.code).toBe("FORBIDDEN");
     expect(await storedMode(d)).toBe("MANUAL");
+    expect(await d.t.run((ctx) => ctx.db.query("adminAuditLog").collect())).toHaveLength(0);
+  });
+
+  test("an owner's mode change is audited with the before and after mode", async () => {
+    const d = await seedDealer("audit");
+    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" });
+    const rows = await d.t.run((ctx) => ctx.db.query("adminAuditLog").collect());
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: "commission mode changed",
+      targetTable: "orgSettings",
+      orgId: d.orgId,
+      before: { commissionMode: "MANUAL" },
+      after: { commissionMode: "AUTO_MEMBER" },
+    });
+  });
+
+  // An access refusal reads as "no mode visible"; any other failure must surface.
+  test("getCommissionMode returns null on an access refusal but rethrows other errors", async () => {
+    const d = await seedDealer("rethrow", "AUTO_MEMBER");
+    const strangerId = await d.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "s778_stranger", email: "s778stranger@example.com", name: "Stranger" })
+    );
+    const asStranger = d.t.withIdentity({ subject: "s778_stranger", clerkId: "s778_stranger" });
+    expect(strangerId).toBeTruthy();
+    expect(await asStranger.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBeNull();
+
+    // A membership whose role row is gone is corrupt data, not "no access".
+    const brokenId = await d.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "s778_broken", email: "s778broken@example.com", name: "Broken" })
+    );
+    const goneRoleId = await d.t.run(async (ctx) => {
+      const id = await ctx.db.insert("roles", { orgId: d.orgId, name: "GONE", permissions: [] });
+      await ctx.db.insert("memberships", { orgId: d.orgId, userId: brokenId, roleId: id });
+      await ctx.db.delete(id);
+      return id;
+    });
+    expect(goneRoleId).toBeTruthy();
+    const asBroken = d.t.withIdentity({ subject: "s778_broken", clerkId: "s778_broken" });
+    await expect(asBroken.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).rejects.toThrow(/role not found/i);
   });
 
   // Seat finding F2 (Opus): a commissions reviewer without VIEW_SETTINGS read

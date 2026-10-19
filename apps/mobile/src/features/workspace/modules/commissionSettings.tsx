@@ -4,7 +4,7 @@ import { Alert, Text } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileOrgSettings } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { saveResultMessage, saveSettingsThenCommissionMode } from "./commissionModeSave";
+import { DEFAULT_MOBILE_COMMISSION_MODE, saveResultMessage,saveSettingsThenCommissionMode } from "./commissionModeSave";
 import { money, parseOptionalNumber, splitLinesOrCommas, useGenericError, PrimaryButton, FormField, SelectField, RecordCard, ModuleScroll } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
@@ -22,7 +22,7 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
 
   useEffect(() => {
     if (!settings) return;
-    setMode(settings.commissionMode ?? "MANUAL");
+    setMode(settings.commissionMode ?? DEFAULT_MOBILE_COMMISSION_MODE);
     setTiersText((settings.commissionTiers ?? [])
       .slice()
       .sort((a, b) => a.minProfitAmount - b.minProfitAmount)
@@ -51,7 +51,7 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
       // are accepted, so a refused save never switches it.
       const result = await saveSettingsThenCommissionMode({
         currentMode: settings?.commissionMode,
-        selectedMode: mode ?? "MANUAL",
+        selectedMode: mode ?? DEFAULT_MOBILE_COMMISSION_MODE,
         setCommissionMode: (commissionMode) => setCommissionMode({ orgId, commissionMode }),
         saveSettings: () => upsertSettings({ orgId, commissionTiers: parsedTiers }),
       });
@@ -71,7 +71,7 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
     <ModuleScroll>
       <SelectField
         label={locale === "ar" ? "نظام العمولة" : "Commission mode"}
-        value={mode ?? "MANUAL"}
+        value={mode ?? DEFAULT_MOBILE_COMMISSION_MODE}
         options={[
           { label: "AUTO_MEMBER", value: "AUTO_MEMBER" },
           { label: "AUTO_TIERS", value: "AUTO_TIERS" },

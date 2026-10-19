@@ -4,7 +4,7 @@ import { Alert, Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileMyMembership, type MobileOrgSummary, type MobileOrgSettings } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { saveResultMessage, saveSettingsThenCommissionMode, type MobileCommissionModeValue } from "./commissionModeSave";
+import { DEFAULT_MOBILE_COMMISSION_MODE, saveResultMessage,saveSettingsThenCommissionMode, type MobileCommissionModeValue } from "./commissionModeSave";
 import { maybeText, parseOptionalNumber, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, FormField, SelectField, RecordCard, ModuleScroll } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
@@ -56,7 +56,7 @@ export function SettingsModule({
       timezone: next.timezone ?? "",
       approvalThresholdEnabled: next.approvalThresholdEnabled ? "true" : "false",
       approvalMinProfitPercent: next.approvalMinProfitPercent != null ? String(next.approvalMinProfitPercent) : "",
-      commissionMode: next.commissionMode ?? "MANUAL",
+      commissionMode: next.commissionMode ?? DEFAULT_MOBILE_COMMISSION_MODE,
       generatedLeadAutoAssignmentEnabled: next.generatedLeadAutoAssignmentEnabled ? "true" : "false",
       reservationHoldDays: next.reservationHoldDays != null ? String(next.reservationHoldDays) : "",
     });
