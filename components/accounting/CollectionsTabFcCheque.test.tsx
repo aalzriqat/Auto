@@ -24,6 +24,7 @@ const stubs = vi.hoisted(() => ({
 // CLEARED customer cheque with the pilot block OFF; the shipped-state test turns it ON.
 const pilot = vi.hoisted(() => ({
   clearedChequeReturn: false,
+  financeChequeReturn: false,
 }));
 vi.mock("@/convex/utils/postDeliveryDoorContainment", async (importOriginal) =>
   (await import("@/test-utils/postDeliveryDoorSwitches")).withPostDeliverySwitches(await importOriginal(), pilot));

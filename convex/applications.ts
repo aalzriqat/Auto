@@ -78,6 +78,7 @@ import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
 import { MAX_IDEMPOTENCY_KEY_LENGTH, runWithIdempotency } from "./utils/idempotency";
+import { assertFinanceChequeReturnAllowed } from "./utils/postDeliveryDoorContainment";
 import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
 import {
   hookFinanceDisbursed,
@@ -5685,6 +5686,10 @@ export const returnFinanceDisbursementCheque = mutation({
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
       PERMISSIONS.VIEW_FINANCE,
     ]);
+    // SCRUM-760 decision B: reversing a finance-company cheque after the bank cleared it is a
+    // post-delivery money reversal excluded from the narrow pilot. Refused right after tenant auth,
+    // before any read or write and before the idempotency wrapper (a stored replay is refused too).
+    assertFinanceChequeReturnAllowed();
     // The default idempotency refusals are plain strings; a dialog key that is
     // blank or too long is refused here, coded and translated, before any read.
     const keyLength = args.idempotencyKey.trim().length;

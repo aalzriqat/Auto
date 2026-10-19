@@ -307,6 +307,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Returning a cheque that has already cleared is not available during the pilot. Nothing has been changed.",
     "إرجاع شيك تمت تسويته بالفعل غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
   ],
+  ServerError_FINANCE_CHEQUE_RETURN_PILOT_DISABLED: [
+    "Returning a cleared finance-company cheque is not available during the pilot. Nothing has been changed.",
+    "إرجاع شيك شركة التمويل بعد تسويته غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
   ServerError_PAYMENT_LINKS_DISABLED: [
     "Payment links are not available yet. Nothing has been changed.",
     "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",
