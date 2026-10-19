@@ -29,8 +29,12 @@
  * throw.
  */
 
-/** The production deployment. Delivery there must never be sunk. */
-export const PRODUCTION_DEPLOYMENT_NAME = "kindly-hound-172";
+/**
+ * The production deployments. Delivery there must never be sunk. The live one is
+ * `clever-mockingbird-719`; `kindly-hound-172` is the earlier production
+ * deployment and stays protected so a stale name can never loosen this check.
+ */
+export const PRODUCTION_DEPLOYMENT_NAMES: readonly string[] = ["clever-mockingbird-719", "kindly-hound-172"];
 
 export type EgressChannel = "email" | "whatsapp" | "sms" | "web-push" | "expo-push";
 
@@ -53,7 +57,7 @@ function deploymentName(url: string | undefined): string | null {
 export function isEgressSinkActive(): boolean {
   if (process.env.AUTOFLOW_DEPLOYMENT_CLASS !== "preview") return false;
   const name = deploymentName(process.env.CONVEX_CLOUD_URL);
-  return name !== null && name !== PRODUCTION_DEPLOYMENT_NAME;
+  return name !== null && !PRODUCTION_DEPLOYMENT_NAMES.includes(name);
 }
 
 /**
