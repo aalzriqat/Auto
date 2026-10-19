@@ -5,7 +5,8 @@ import { seedOrgWithMember } from "../test-utils/seedOrg";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { MAX_SUMMARY_MONTHS, toThousandths } from "./utils/dashboardExpenseSummary";
+import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
+import { ExactSum, MAX_SUMMARY_MONTHS, readSummaryDays, toThousandths } from "./utils/dashboardExpenseSummary";
 
 /**
  * SCRUM-807: the expense month summary must give the dashboard exactly what the
@@ -294,6 +295,38 @@ describe("dashboard expense month summary", () => {
     await s.drain();
     await s.expectSummaryServes();
     expect(await s.stats()).toEqual(raw);
+  });
+
+  test("a window whose months are each exact but together pass 2^53 thousandths falls back to raw", async () => {
+    const s = await setup();
+    // 5e12 is 5e15 thousandths: exact on its own, but two of them pass 2^53.
+    await s.add([
+      { ...base, amount: 5e12, date: Date.UTC(2026, 4, 3) },
+      { ...base, amount: 5e12, date: Date.UTC(2026, 5, 3) },
+    ]);
+    await s.t.mutation(begin, { orgId: s.orgId });
+    await s.drain();
+    const state = (await s.state())!;
+    expect(state.phase).toBe("READY");
+    const read = (from: number | undefined, until: number | undefined) =>
+      s.t.run((ctx) => readSummaryDays(ctx, state, from, until));
+    expect(await read(Date.UTC(2026, 4, 1), Date.UTC(2026, 5, 1))).not.toBeNull();
+    expect(await read(undefined, undefined)).toBeNull();
+  });
+
+  test("ExactSum keeps counting past 2^53 thousandths without rounding the integer part", () => {
+    const sum = new ExactSum();
+    sum.addThousandths(Number.MAX_SAFE_INTEGER);
+    sum.addThousandths(1000);
+    expect(Math.abs(sum.value() - (Number.MAX_SAFE_INTEGER / 1000 + 1))).toBeLessThan(0.01);
+  });
+
+  test("org deletion purges the summary tables after the expenses that feed them", () => {
+    const order = ORGANIZATION_DELETION_STEPS.flatMap((step) => (step.kind === "orgRows" ? [step.table as string] : []));
+    const expenses = order.indexOf("expenses");
+    expect(expenses).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("dashboardExpenseMonths")).toBeGreaterThan(expenses);
+    expect(order.indexOf("dashboardExpenseSummaryState")).toBeGreaterThan(expenses);
   });
 
   test("BUILDING and BLOCKED generations are never read, and a newer generation stops an older chain", async () => {

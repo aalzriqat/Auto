@@ -30,8 +30,8 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
  * not a number) sorts below every real month, a date after 9999 above it, so
  * any window that could hold the row reaches its sentinel and is refused.
  */
-export const UNPLACEABLE_EARLY_MONTH = 0;
-export const UNPLACEABLE_LATE_MONTH = 99_999_999;
+const UNPLACEABLE_EARLY_MONTH = 0;
+const UNPLACEABLE_LATE_MONTH = 99_999_999;
 const DAYS = 31;
 
 export const expenseSummaryPage = makeFunctionReference<
@@ -43,7 +43,7 @@ export type SummaryState = Doc<"dashboardExpenseSummaryState">;
 type MonthDoc = Doc<"dashboardExpenseMonths">;
 
 /** UTC month key, e.g. 202610. */
-export function monthKeyOf(at: number): number {
+function monthKeyOf(at: number): number {
   const d = new Date(at);
   return d.getUTCFullYear() * 100 + d.getUTCMonth() + 1;
 }
@@ -60,7 +60,7 @@ export function toThousandths(amount: number): number | null {
   return t;
 }
 
-export function isLiveExpense(exp: Doc<"expenses">): boolean {
+function isLiveExpense(exp: Doc<"expenses">): boolean {
   return exp.isDeleted !== true && exp.reversedAt === undefined;
 }
 
@@ -192,7 +192,7 @@ export async function applyContributions(
       row.showroomCount[c.day] += sign * c.showroomCount;
       row.unrepresentable += sign * c.unrepresentable;
       row.absTotal += sign * c.abs;
-      if (!Number.isSafeInteger(row.absTotal) || row.absTotal > Number.MAX_SAFE_INTEGER) row.overflowed = true;
+      if (!Number.isSafeInteger(row.absTotal)) row.overflowed = true;
     }
     if (existing) await ctx.db.replace(existing._id, row);
     else await ctx.db.insert("dashboardExpenseMonths", row);
@@ -267,8 +267,13 @@ export async function readSummaryDays(
     .take(MAX_SUMMARY_MONTHS + 1);
   if (rows.length > MAX_SUMMARY_MONTHS) return null;
   const buckets: ExpenseDayBucket[] = [];
+  // Each row's absTotal bounds its own partial sums; the window adds rows, so
+  // the running total of those bounds must stay exact too.
+  let windowAbs = 0;
   for (const row of rows) {
     if (row.unrepresentable !== 0 || row.overflowed) return null;
+    windowAbs += row.absTotal;
+    if (!Number.isSafeInteger(windowAbs)) return null;
     const year = Math.floor(row.month / 100);
     const monthIndex = (row.month % 100) - 1;
     for (let d = 0; d < DAYS; d++) {
@@ -298,10 +303,14 @@ export class ExactSum {
   addAmount(amount: number): void {
     const t = toThousandths(amount);
     if (t === null) this.extra += amount;
-    else this.milli += t;
+    else this.addThousandths(t);
   }
   addThousandths(t: number): void {
-    this.milli += t;
+    const next = this.milli + t;
+    // Past 2^53 thousandths the integer sum would silently round; carry the
+    // term as a plain number instead, like an amount that is not representable.
+    if (Number.isSafeInteger(next)) this.milli = next;
+    else this.extra += t / 1000;
   }
   value(): number {
     return this.milli / 1000 + this.extra;
