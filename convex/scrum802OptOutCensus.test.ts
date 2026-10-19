@@ -58,7 +58,6 @@ const ALLOWED_OPT_OUTS: readonly string[] = [
   "convex/scrum641DeletedVehicleDoors.test.ts",
   "convex/scrum693VehicleNotReadyForSale.test.ts",
   "convex/scrum69FinanceDoor.test.ts",
-  "convex/scrum761CashReceiptDoors.test.ts",
   "convex/supplierPayableSettlement.test.ts",
   "convex/supplierPayablesReconciliation.scrum651.test.ts",
   "convex/supplierReceivables.test.ts",
@@ -72,21 +71,42 @@ const MUST_RUN_WITH_REAL_SWITCH = [
   "convex/ownedSaleTaxEndToEnd.test.ts",
 ] as const;
 
+// Mirrors vitest.config.ts: include **/*.test.ts(x) from the repository root, exclude these directories.
+const EXCLUDED_DIRS = new Set(["node_modules", ".next", "out", "build", "apps", "packages"]);
+
 function testFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name === ".next" || name.startsWith(".")) continue;
-    const path = join(dir, name);
+    if (EXCLUDED_DIRS.has(name) || name.startsWith(".")) continue;
+    const path = dir === "." ? name : join(dir, name);
     if (statSync(path).isDirectory()) testFiles(path, out);
     else if (/\.test\.tsx?$/.test(name)) out.push(path);
   }
   return out;
 }
 
+// Anything that turns the switch off or replaces the gate module, however it is spelled.
+const SWITCH_OFF = /CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED\s*:\s*false|vi\.(?:mock|doMock)\(\s*["'][^"']*(?:saleDebtContainment|cashSalePilotGate)["']/;
+
 describe("SCRUM-802 opt-out census", () => {
-  const optedOut = ["convex", "components", "lib", "scripts", "test-utils"]
-    .flatMap((dir) => testFiles(dir))
-    .filter((path) => path !== "convex/scrum802OptOutCensus.test.ts" && readFileSync(path, "utf8").includes(MARK))
-    .sort();
+  const SELF = "convex/scrum802OptOutCensus.test.ts";
+  const all = testFiles(".").filter((path) => path !== SELF);
+  const optedOut = all.filter((path) => readFileSync(path, "utf8").includes(MARK)).sort();
+
+  test("the scan covers every test directory vitest runs (convex, components, lib, scripts, test-utils and the rest)", () => {
+    expect(all).toContain("convex/sales.test.ts");
+    expect(all).toContain("components/deposits/QuoteDepositManager.test.tsx");
+    expect(all.some((path) => path.startsWith("scripts/"))).toBe(true);
+    expect(all.some((path) => path.startsWith("lib/"))).toBe(true);
+  });
+
+  test("no test file turns the switch off or mocks the gate modules without carrying the opt-out marker", () => {
+    // "importOriginal()" pass-through mocks are harmless no-ops but are still flagged: there is nothing to opt back in to.
+    const unmarked = all.filter((path) => {
+      const src = readFileSync(path, "utf8");
+      return SWITCH_OFF.test(src) && !src.includes(MARK);
+    });
+    expect(unmarked).toEqual([]);
+  });
 
   test("exactly the listed suites run with the containment off", () => {
     expect(optedOut).toEqual([...ALLOWED_OPT_OUTS].sort());
@@ -94,8 +114,11 @@ describe("SCRUM-802 opt-out census", () => {
 
   test("certification and rehearsal files run with the real switch", () => {
     for (const path of MUST_RUN_WITH_REAL_SWITCH) {
+      expect(all).toContain(path); // a renamed or deleted certification file must fail here, not silently drop out
       expect(optedOut).not.toContain(path);
-      expect(readFileSync(path, "utf8")).not.toContain("CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false");
+      const src = readFileSync(path, "utf8");
+      expect(SWITCH_OFF.test(src)).toBe(false);
+      expect(src).not.toContain(MARK);
     }
     expect(readFileSync("vitest.setup.ts", "utf8")).not.toContain("CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED");
   });

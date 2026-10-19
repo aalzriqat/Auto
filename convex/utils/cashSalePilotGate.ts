@@ -55,6 +55,11 @@ async function isOpenSaleInvoice(ctx: QueryCtx | MutationCtx, doc: Doc<"receivab
   const sale = saleId ? await ctx.db.get(saleId) : null;
   // The same predicate as the completion guard. The plan marker is not stored on the sale row; it lives on the
   // sale's finance application (`financedSalePlanVersion`), so it is read from there.
+  // The two markers can differ in form without differing in outcome: completion sees the in-flight plan object
+  // (`args.financedSalePlan`), this reader sees the stored version, which is written only for forward plans. Any plan
+  // is built for a named financier, so the sale it completes is stored as FINANCED and is excluded by `financingType`
+  // alone; the stored marker is a second, independent exclusion. Pinned by "a sale governed by a financed plan..." in
+  // scrum802CashSaleContainment.test.ts, which asserts the FINANCED label on a plan-governed sale.
   if (sale) {
     const app = sale.applicationId ? await ctx.db.get(sale.applicationId) : null;
     if (!isCashCompletion({ financingType: sale.financingType, financedSalePlan: app?.financedSalePlanVersion })) return false;

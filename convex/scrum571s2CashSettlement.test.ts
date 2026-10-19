@@ -14,10 +14,12 @@ import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { getReceivableOutstandingMinor } from "./subledger";
 
-// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
-// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
-// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
-// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+// SCRUM-802 legacy-cash-lifecycle opt-out. Audited with the real switch (SCRUM-802 Option A): the 12 cells that
+// fail are SETTLEMENT-READER cells (cockpit settlement state, invoice summary, no-GL readiness) that need an OPEN or
+// part-paid cash invoice, the legacy shape that completion can no longer leave open. They read state that existing
+// data may still hold; none asserts unlinked-receipt or partial-cash completion behaviour (those are pinned with the
+// real switch in scrum802CashSaleContainment.test.ts and scrum761CashReceiptDoors.test.ts). The census in
+// convex/scrum802OptOutCensus.test.ts allows only the listed files.
 vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
   CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,

@@ -1320,6 +1320,11 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(applications).toHaveLength(1);
     expect(applications[0]).toMatchObject({ treatment: "CUSTOMER_RECEIVABLE", amountMinor: 12_500_000 });
     const rows = await journalRows(s);
+    // Reading the rows, in order: (1) deposit received, Dr 1100 cash / Cr 2100 customer deposits; (2) completion applies
+    // the deposit, Dr 2100 / Cr 1200 customer receivable (the 1200 credit is the deposit settling the invoice);
+    // (3) the sale posts the invoice, Dr 1200 / Cr 2400 supplier payable 10,000,000 + Cr 4170 commission 2,500,000.
+    // The 1200 debit and credit net to zero: customer AR is settled by the deposit, not by a receipt, which is why
+    // SCRUM-802 can require the full price as a deposit before a cash sale completes.
     expectLiteralRows(rows, [
       { account: "1100", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
       { account: "2100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },

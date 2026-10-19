@@ -23,8 +23,7 @@ vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }), check: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
-// Opt back in to the REAL containment constant (vitest.setup.ts mocks it off for the rest of the suite).
-vi.mock("./utils/saleDebtContainment", async (importOriginal) => await importOriginal());
+// No opt-out here: this file runs with the REAL containment constant (nothing mocks it off; the census pins that).
 
 const MODULES = import.meta.glob("./**/*.*s");
 const jod = (major: number): number => Math.round(major * 1000);
@@ -284,7 +283,9 @@ describe("SCRUM-802 item 2: an UNLINKED customer receipt is refused while the cu
   test("the release rehearsal keeps the real switch (certification files must not run with the containment off)", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync("convex/accountingReleaseRehearsal.test.ts", "utf8");
-    expect(src).toContain('vi.mock("./utils/saleDebtContainment", async (importOriginal) => await importOriginal())');
+    expect(src).not.toMatch(/vi\.mock\([^)]*(saleDebtContainment|cashSalePilotGate)/);
+    expect(src).not.toContain("CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED");
+    expect(src).not.toContain("legacy-cash-lifecycle" + " opt-out");
   });
 
   const cheque = (s: Seeded) =>
@@ -435,12 +436,14 @@ describe("SCRUM-802: one definition of a cash sale invoice", () => {
     });
     const { applicationId } = await readyDeal(f);
     await finalizeAsOwner(f, applicationId);
-    const { saleId, customerId, planVersion } = await f.t.run(async (ctx) => {
+    const { saleId, customerId, planVersion, financingType } = await f.t.run(async (ctx) => {
       const app = (await ctx.db.get(applicationId))!;
       const sale = (await ctx.db.query("sales").collect()).find((x) => x.applicationId === applicationId)!;
-      return { saleId: sale._id, customerId: app.customerId, planVersion: app.financedSalePlanVersion };
+      return { saleId: sale._id, customerId: app.customerId, planVersion: app.financedSalePlanVersion, financingType: sale.financingType };
     });
     expect(planVersion).toBeTruthy();
+    // A plan-governed sale is stored FINANCED, so the gate excludes it on financingType alone as well as on the marker.
+    expect(financingType).toBe("FINANCED");
     // Strip the sale's own financing label and add a clearly open invoice: only the plan marker can keep it non-cash.
     await f.t.run(async (ctx) => {
       await ctx.db.patch(saleId, { financingType: "CASH" });

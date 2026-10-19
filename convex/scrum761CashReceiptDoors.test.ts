@@ -3,15 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
-
-// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
-// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
-// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
-// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
-vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
-  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
-}));
+import { dbSnapshot } from "../test-utils/dbSnapshot";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -134,15 +126,45 @@ async function glNet(t: Awaited<ReturnType<typeof seedDealer>>["t"]) {
   });
 }
 
+/**
+ * A completed cash sale, made the pilot way (SCRUM-802, owner ruling Option A): the full 20,000 is taken as a deposit
+ * on the quote first, and the sale is then completed against it, so its invoice is PAID. An unpaid cash completion is
+ * refused by the backend, so an OPEN cash invoice can no longer be produced through the product.
+ */
 async function cashSale(tag: string) {
   const seeded = await seedDealer(tag);
   const { orgId, userId, customerId, vehicleId, asUser } = seeded;
+  const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+    orgId, customerId, vehicleId, vehiclePrice: 20_000, downPayment: 0, termMonths: 0,
+  });
+  await asUser.mutation(api.deposits.create, {
+    method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 20_000,
+  });
   const saleId = await asUser.mutation(api.sales.create, {
-    idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId,
+    idempotencyKey: crypto.randomUUID(), orgId, quoteId, vehicleId, customerId, salespersonId: userId,
     salePrice: 20_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
   });
   return { ...seeded, saleId };
 }
+
+/** A legacy-shaped OPEN cash invoice (written raw: completion can no longer leave one open). */
+async function openCashInvoice(s: Awaited<ReturnType<typeof seedDealer>>) {
+  return await s.t.run(async (ctx) => {
+    const now = Date.now();
+    const saleId = await ctx.db.insert("sales", {
+      orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 20_000, saleDate: now,
+      status: "COMPLETED", financingType: "CASH",
+    } as never);
+    await ctx.db.insert("receivableDocuments", {
+      orgId: s.orgId, documentType: "INVOICE", documentNumber: `INV-${crypto.randomUUID()}`, payerType: "CUSTOMER", customerId: s.customerId,
+      sourceType: "sales", sourceId: String(saleId), originalAmountMinor: jod(20_000), currency: "JOD", scale: 3,
+      issueDate: now, dueDate: now, status: "OPEN", createdAt: now, createdBy: s.userId,
+    });
+    return saleId;
+  });
+}
+
+const ALL_TABLES = Object.keys(schema.tables);
 
 /**
  * SCRUM-761 pilot-path finding (SCRUM-571): the cash sale's customer invoice has no product door that applies a
@@ -154,6 +176,7 @@ describe("SCRUM-571 gap: no product door applies a customer's payment to a cash 
   test("recordPayment naming the sale is refused with SALE_DEBT_RECEIPT_REFUSED, and nothing is written", async () => {
     const { t, orgId, customerId, saleId, asUser } = await cashSale("bySale");
     const before = await glNet(t);
+    const snapshotBefore = await dbSnapshot(t, ALL_TABLES);
 
     await expect(
       asUser.mutation(api.collections.recordPayment, {
@@ -161,25 +184,42 @@ describe("SCRUM-571 gap: no product door applies a customer's payment to a cash 
       })
     ).rejects.toThrow(/SALE_DEBT_RECEIPT_REFUSED/);
 
-    expect(await t.run((ctx) => ctx.db.query("collectionPayments").collect())).toHaveLength(0);
     expect(await glNet(t)).toEqual(before);
-    expect(await invoiceState(t, saleId)).toMatchObject({ status: "OPEN", paid: 0, outstanding: jod(20_000) });
+    expect(await dbSnapshot(t, ALL_TABLES)).toEqual(snapshotBefore);
+    expect(await invoiceState(t, saleId)).toMatchObject({ status: "PAID", paid: jod(20_000), outstanding: 0 });
   });
 
-  test("recordPayment without the sale is ACCEPTED but parks the cash as unapplied: the invoice stays fully owed", async () => {
-    const { t, orgId, customerId, vehicleId, saleId, asUser } = await cashSale("unapplied");
+  test("recordPayment without the sale is REFUSED while the customer owes a cash sale invoice (SCRUM-802): nothing parks as unapplied", async () => {
+    const s = await seedDealer("unapplied");
+    const saleId = await openCashInvoice(s);
+    const { t, orgId, customerId, vehicleId, asUser } = s;
+    const snapshotBefore = await dbSnapshot(t, ALL_TABLES);
+
+    await expect(
+      asUser.mutation(api.collections.recordPayment, {
+        orgId, customerId, vehicleId, amount: 20_000, method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(/UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED/);
+
+    // Full-table snapshot: no payment, no journal, no allocation, no idempotency row, and the invoice never moved.
+    expect(await dbSnapshot(t, ALL_TABLES)).toEqual(snapshotBefore);
+    const doc = await t.run(async (ctx) => (await ctx.db.query("receivableDocuments").collect())[0]);
+    expect(doc).toMatchObject({ status: "OPEN", originalAmountMinor: jod(20_000) });
+    expect(saleId).toBeTruthy();
+  });
+
+  test("for a customer with no open cash invoice an unlinked receipt is still accepted and parks as unapplied (the cash stays recordable)", async () => {
+    const { t, orgId, customerId, vehicleId, saleId, asUser } = await cashSale("parked");
+    expect(await invoiceState(t, saleId)).toMatchObject({ status: "PAID", outstanding: 0 });
 
     await asUser.mutation(api.collections.recordPayment, {
-      orgId, customerId, vehicleId, amount: 20_000, method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
+      orgId, customerId, vehicleId, amount: 5_000, method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
     });
 
     const net = await glNet(t);
-    // The cash is real and on the books, but as a liability to the customer, not against what they owe.
-    expect(net[SYSTEM_KEYS.CASH_ON_HAND]).toBe(jod(20_000));
-    expect(net[SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY]).toBe(-jod(20_000));
-    expect(net[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]).toBe(jod(20_000));
-    // And the sale's own invoice never moved.
-    expect(await invoiceState(t, saleId)).toMatchObject({ status: "OPEN", paid: 0, outstanding: jod(20_000) });
+    // The extra cash is real, held as a liability to the customer; the paid invoice never moved.
+    expect(net[SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY]).toBe(-jod(5_000));
+    expect(await invoiceState(t, saleId)).toMatchObject({ status: "PAID", paid: jod(20_000), outstanding: 0 });
   });
 });
 
@@ -252,15 +292,28 @@ describe("SCRUM-571 workaround: the customer's cash taken as a deposit, then app
     expect(r.settlement).toBe("COMPLETE");
   });
 
-  test("a PARTIAL deposit (5,000 of 20,000) leaves 15,000 owed that no door can collect: invoice PARTIALLY_PAID, cockpit BLOCKED", async () => {
-    const r = await depositFlow("part", 5_000);
+  test("a PARTIAL deposit (5,000 of 20,000) is REFUSED at completion (SCRUM-802): nothing is sold, the deposit stays held", async () => {
+    const s = await seedDealer("part");
+    const { t, orgId, customerId, vehicleId, asUser } = s;
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId, customerId, vehicleId, vehiclePrice: 20_000, downPayment: 0, termMonths: 0,
+    });
+    await asUser.mutation(api.deposits.create, {
+      method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 5_000,
+    });
+    const snapshotBefore = await dbSnapshot(t, ALL_TABLES);
 
-    expect(r.invoice).toMatchObject({ status: "PARTIALLY_PAID", paid: jod(5_000), outstanding: jod(15_000) });
-    const gl = r.glAfterComplete as Record<string, number>;
-    expect(gl[SYSTEM_KEYS.CASH_ON_HAND]).toBe(jod(5_000));
-    expect(gl[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS]).toBe(jod(15_000));
-    expect(r.settlement).toBe("BLOCKED");
-    // The 15,000 can only be collected through recordPayment, which refuses a sale-linked target (test above).
+    await expect(
+      asUser.mutation(api.sales.completeFromQuote, {
+        orgId, quoteId, idempotencyKey: crypto.randomUUID(),
+        depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" },
+      })
+    ).rejects.toThrow(/CASH_SALE_BALANCE_UNPAID_REFUSED/);
+
+    // No sale, no invoice, no application: every table is exactly as it was after the deposit.
+    expect(await dbSnapshot(t, ALL_TABLES)).toEqual(snapshotBefore);
+    expect(await t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(0);
+    // The 15,000 balance is therefore never left "owed that no door can collect": it must be paid in as a deposit first.
   });
 
   test("cancelling the deposit-paid sale is ACCEPTED: revenue and cost reverse, the deposit returns to HELD as a 20,000 liability, and a refund through deposits.release clears it", async () => {

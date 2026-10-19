@@ -34,16 +34,15 @@
  * NOT claimed here.
  */
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
-// SCRUM-802: a rehearsal drives the production path, so it runs with the real pilot containment ON
-// (vitest.setup.ts turns it off for the rest of the suite). A CASH sale here is completed the pilot way:
-// the customer's full payment is recorded as a deposit, then the quote is completed.
-vi.mock("./utils/saleDebtContainment", async (importOriginal) => await importOriginal());
+// SCRUM-802: a rehearsal drives the production path, so it runs with the real pilot containment ON (nothing in
+// this file or vitest.setup.ts turns it off; convex/scrum802OptOutCensus.test.ts pins that). A CASH sale here is
+// completed the pilot way: the customer's full payment is recorded as a deposit, then the quote is completed.
 
 /** The pilot cash-sale procedure: record the full payment as a deposit, then complete the quote. */
 async function completePaidCashSale(
