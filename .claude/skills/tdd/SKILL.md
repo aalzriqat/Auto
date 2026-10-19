@@ -43,3 +43,13 @@ Report the evidence, not just the outcome:
 - Name the failing-before test or executable check and the failure it produced.
 - Name the passing-after test run and any nearby validation performed.
 - If failing-before evidence could not be demonstrated, state why and describe the closest regression check used instead.
+
+## Loop discipline
+
+> From Matt Pocock's `tdd` skill (MIT), mattpocock/skills@49dd158. See ../MATTPOCOCK-LICENSE.
+
+- **Vertical slices.** One failing test, then the code to pass it, then the next. Writing all the tests first verifies imagined behavior and fixes the test structure before you understand the code.
+- **Test at the public seam.** For Convex, that is the function a client or cron calls, driven through `convex-test` with real documents. Do not assert on internal helpers or call counts.
+- **No tautologies.** Take the expected value from the owner ruling, the spec or a worked example, never from the arithmetic the code performs. For money, write the expected cents as literals.
+- **Mock only at system boundaries**: external APIs (payment, email, WhatsApp), time and randomness. Never mock your own modules.
+- **Refactor after green**, in a separate commit from the behavior change.
