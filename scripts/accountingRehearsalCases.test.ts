@@ -22,6 +22,7 @@ import {
   CURRENCY_SCALES,
   DEFAULT_ORG_CURRENCY,
   assertBothAttemptsExecuted,
+  candidateCommandNamesBank,
   candidateNamesReceiptBank,
   createVehicleForRehearsal,
   REQUIRED_REHEARSAL_CASE_IDS,
@@ -3227,6 +3228,23 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
       expect(candidateNamesReceiptBank(sharedArgsThenHelper)).toBeUndefined();
       expect(candidateNamesReceiptBank("export const nothing = 1;")).toBeUndefined();
       expect(candidateNamesReceiptBank(undefined)).toBeUndefined();
+    });
+
+    test("every name the preview runner imports from this module is an exported function", async () => {
+      // The runner loads this module with a dynamic import, so a renamed or dropped
+      // export type-checks and only fails inside the cloud rehearsal itself.
+      const runner = fs.readFileSync(path.join(__dirname, "accountingPreviewRehearsal.mjs"), "utf8");
+      const match = /const \{([^}]+)\} = await import\("\.\/accountingRehearsalCases\.mjs"\)/.exec(runner);
+      expect(match).not.toBeNull();
+      const names = match![1].split(",").map((name) => name.trim()).filter(Boolean);
+      expect(names).toContain("candidateCommandNamesBank");
+      const casesModule = await import("./accountingRehearsalCases.mjs");
+      for (const name of names) {
+        expect(typeof (casesModule as Record<string, unknown>)[name], name).toBe("function");
+      }
+      const clearCheque = "export const clearCheque = mutation({\n  args: {\n    bankAccountId: v.id(\"bankAccounts\"),\n  },\n  handler: async () => {},\n});";
+      expect(candidateCommandNamesBank(clearCheque, "clearCheque")).toBe(true);
+      expect(candidateCommandNamesBank(clearCheque, "recordDirectFeePayment")).toBeUndefined();
     });
   });
 
