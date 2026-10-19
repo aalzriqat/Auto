@@ -10,6 +10,8 @@ import {
   effectiveMobileQuoteVehiclePrice,
   manualExecutionFeeInputValue,
   mobileFinancingTermIsValid,
+  priceUpliftNeedsApproval,
+  priceUpliftOverList,
 } from "./salesWizardQuote";
 
 describe("Mobile Quote Contract & Wizard (S1-R11-H1)", () => {
@@ -111,3 +113,20 @@ describe("Mobile Quote Contract & Wizard (S1-R11-H1)", () => {
 
 });
 
+describe("SCRUM-260 price uplift is final price minus list price", () => {
+  test("an edited base price moves the uplift, so the markup input alone is not the figure", () => {
+    // list 20000, base lowered to 19000, markup 1500: final 20500, uplift 500 (not 1500).
+    expect(priceUpliftOverList(19000, 1500, 20000)).toBe(500);
+  });
+
+  test("a price below list gives a negative uplift", () => {
+    expect(priceUpliftOverList(19000, 0, 20000)).toBe(-1000);
+  });
+
+  test("approval is needed only when the minimum is above 0 and the uplift is below it", () => {
+    expect(priceUpliftNeedsApproval(500, 1000)).toBe(true);
+    expect(priceUpliftNeedsApproval(1000, 1000)).toBe(false);
+    expect(priceUpliftNeedsApproval(-5, 0)).toBe(false);
+    expect(priceUpliftNeedsApproval(-5, 1000)).toBe(true);
+  });
+});

@@ -11,8 +11,8 @@ const NO_PROFIT_KEYS = ["RequestedProfit", "AllCaughtUp", "DealerProfit"] as con
 
 // Per language: the help text says LESS than the minimum above list, and not the old wording.
 const HELP_WORDING = {
-  en: { present: /less than this amount above/, absent: /before it needs/ },
-  ar: { present: /بأقل من هذا المبلغ/, absent: /قبل أن يحتاج/ },
+  en: { present: /final sale price minus the vehicle's list price/, absent: /less than this amount above/ },
+  ar: { present: /سعر البيع النهائي مطروحاً منه سعر قائمة المركبة/, absent: /بأقل من هذا المبلغ/ },
 } as const;
 
 describe("minimum price uplift copy", () => {

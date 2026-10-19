@@ -6,13 +6,13 @@
 export type UpliftLocale = "ar" | "en";
 
 export function upliftFieldLabel(locale: UpliftLocale): string {
-  return locale === "ar" ? "الزيادة فوق سعر القائمة" : "Price uplift";
+  return locale === "ar" ? "الإضافة على السعر الأساسي" : "Markup added to base price";
 }
 
 export function upliftBelowMinimumBody(locale: UpliftLocale, uplift: string, minimum: string): string {
   return locale === "ar"
-    ? `الزيادة فوق سعر القائمة (${uplift}) أقل من الحد الأدنى للزيادة فوق سعر القائمة لهذه المركبة (${minimum}). هذا الفحص لا يمنع بيعاً بخسارة.`
-    : `The uplift over the list price (${uplift}) is below this vehicle's Minimum Price Uplift (${minimum}). This check does not prevent a loss-making sale.`;
+    ? `سعر البيع النهائي مطروحاً منه سعر القائمة (${uplift}) أقل من الحد الأدنى للزيادة فوق سعر القائمة لهذه المركبة (${minimum}). هذا الفحص لا يمنع بيعاً بخسارة.`
+    : `The final sale price minus the list price (${uplift}) is below this vehicle's Minimum Price Uplift (${minimum}). This check does not prevent a loss-making sale.`;
 }
 
 export function upliftRejectedText(locale: UpliftLocale): string {

@@ -24,6 +24,26 @@ export function effectiveMobileQuoteVehiclePrice(
 }
 
 /**
+ * The figure the backend compares with the vehicle's Minimum Price Uplift
+ * (convex/utils/profitApproval.ts): the final sale price minus the list price.
+ * It is NOT the "markup added to base price" input, because the base price is
+ * editable and need not equal the list price. Rounded so float noise cannot
+ * flip a comparison.
+ */
+export function priceUpliftOverList(
+  vehiclePrice: number,
+  desiredProfit: number,
+  listPrice: number
+): number {
+  return Math.round((effectiveMobileQuoteVehiclePrice(vehiclePrice, desiredProfit) - listPrice) * 1000) / 1000;
+}
+
+/** The backend rule: approval is required when the minimum is above 0 and the uplift is below it. */
+export function priceUpliftNeedsApproval(uplift: number, minimumUplift: number): boolean {
+  return minimumUplift > 0 && uplift < minimumUplift;
+}
+
+/**
  * Mirrors the backend financing-term authority before the mobile wizard allows
  * a financed quote to advance or submit.
  */

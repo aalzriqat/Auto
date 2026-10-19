@@ -45,6 +45,8 @@ import {
   effectiveMobileQuoteVehiclePrice,
   manualExecutionFeeInputValue,
   mobileFinancingTermIsValid,
+  priceUpliftNeedsApproval,
+  priceUpliftOverList,
 } from "./salesWizardQuote";
 
 export type WizardPaymentType = "CASH" | "INSTALLMENT";
@@ -253,9 +255,12 @@ export function SalesWizardScreen({
   const effectivePrice = effectiveMobileQuoteVehiclePrice(price, profit);
 
   const minimumProfit = selectedVehicle?.minimumProfit ?? 0;
-  const isProfitBelowMinimum = !isCash && Boolean(vehicleId) && profit < minimumProfit;
+  // The server compares final price minus list price with the minimum, so the
+  // alert, the gate and the approval match use that same figure.
+  const uplift = priceUpliftOverList(price, profit, selectedVehicle?.sellingPrice ?? 0);
+  const isProfitBelowMinimum = !isCash && Boolean(vehicleId) && priceUpliftNeedsApproval(uplift, minimumProfit);
   const hasValidApproval =
-    pendingApproval?.status === "APPROVED" && profit >= pendingApproval.requestedProfit;
+    pendingApproval?.status === "APPROVED" && uplift >= pendingApproval.requestedProfit;
   const isBlockedByProfit = isProfitBelowMinimum && !hasValidApproval;
 
   // Mirrors useFinanceComparison: gate on customer statuses, filter by each
@@ -1030,13 +1035,13 @@ export function SalesWizardScreen({
                       {locale === "ar" ? "موافقة مطلوبة" : "Approval required"}
                     </Text>
                     <Text style={styles.approvalBody}>
-                      {upliftBelowMinimumBody(locale, money(profit, locale), money(minimumProfit, locale))}
+                      {upliftBelowMinimumBody(locale, money(uplift, locale), money(minimumProfit, locale))}
                     </Text>
-                    {pendingApproval?.status === "PENDING" && pendingApproval.requestedProfit === profit ? (
+                    {pendingApproval?.status === "PENDING" && pendingApproval.requestedProfit === uplift ? (
                       <Text style={styles.approvalPending}>
                         {locale === "ar" ? "الطلب قيد الانتظار — بانتظار المدير." : "Approval request pending — waiting for a manager."}
                       </Text>
-                    ) : pendingApproval?.status === "REJECTED" && pendingApproval.requestedProfit === profit ? (
+                    ) : pendingApproval?.status === "REJECTED" && pendingApproval.requestedProfit === uplift ? (
                       <Text style={styles.approvalRejected}>
                         {upliftRejectedText(locale)}
                       </Text>
