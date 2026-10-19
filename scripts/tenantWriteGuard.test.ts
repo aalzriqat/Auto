@@ -692,10 +692,12 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // recordWeeklySendOutcome and cancelWeeklyRun. Measured from the analyser: +6 total and skippedNoOrgId.
   // SCRUM-807: + dashboardExpenseSummary.{begin,blockForImport,buildPage} (+3). All three take `orgId` and
   // write only that org's summary rows, found by index - 545 total, 365 analysed.
+  // SCRUM-716: + vehicles.reverseCostCorrection (+1 total, +1 analysed): takes `orgId` and proves the
+  // correction and vehicle through requireOwnedRow - 546 total, 366 analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 545,
-      analysed: 365,
+      totalMutations: 546,
+      analysed: 366,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 165,
     });

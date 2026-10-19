@@ -19,6 +19,7 @@ import { validateInput } from "./utils/validation";
 import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { internal } from "./_generated/api";
+import { reverseAccountingEvent } from "./accounting/reversals";
 import { getOrgCurrency, isPostableNow, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber, assertMajorAmountRepresentable, toMinorSameCurrencyOrUndefined } from "./utils/money";
 import { settlementView, deriveSettlementStatus } from "./utils/supplierSettlement";
@@ -2249,6 +2250,164 @@ export const correctAcquisitionCost = mutation({
 });
 
 /**
+ * SCRUM-716: reverses one posted acquisition-cost correction, once, through one audited command.
+ * Atomically it posts the mirror journal, restores the vehicle's purchasePrice and any supplier
+ * payable the correction rewrote, writes the inverse cashbook row when the correction wrote one,
+ * and marks the correction REVERSED. Idempotent by `commandId`, never by value.
+ *
+ * Refused before the first write: a SOLD car (COGS has consumed the corrected cost), a closed
+ * period or unmapped account, a payable that has been paid, part paid or disputed since, a
+ * correction that is not the latest applied one (or whose cost the vehicle no longer carries),
+ * and a correction already reversed by another command. A reversed row is never edited; a fresh
+ * correction posts as a new row. Same gate as `correctAcquisitionCost`.
+ */
+export const reverseCostCorrection = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    correctionId: v.id("vehicleCostCorrections"),
+    reason: v.string(),
+    commandId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, COST_CORRECTION_PERMISSIONS);
+
+    const reason = args.reason.trim();
+    const commandId = args.commandId.trim();
+    if (!reason) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_REASON_REQUIRED,
+        "A reason is required to correct a vehicle's purchase cost."
+      );
+    }
+    if (!commandId) {
+      throwAppError(AppErrorCode.COST_CORRECTION_REASON_REQUIRED, "A command id is required to reverse a correction.");
+    }
+
+    const correction = await requireOwnedRow(ctx, args.orgId, "vehicleCostCorrections", args.correctionId);
+    if (correction.orgId !== args.orgId) {
+      throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
+    }
+    const outcome = (reversalJournalEntryId: Id<"journalEntries"> | undefined) => ({
+      previousCost: correction.newCost,
+      restoredCost: correction.previousCost,
+      reversalJournalEntryId,
+    });
+    if (correction.status === "REVERSED") {
+      if (correction.reversalCommandId === commandId) {
+        const reversalEvent = await ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_idempotency", (q) =>
+            q.eq("orgId", args.orgId).eq("idempotencyKey", `vehicle_cost_correction_reversal_${correction._id}`)
+          )
+          .unique();
+        return outcome(reversalEvent?.journalEntryId);
+      }
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_ALREADY_REVERSED,
+        "This correction has already been reversed. Post a new correction if the cost is still wrong."
+      );
+    }
+
+    const vehicle = await loadOwnedLiveVehicle(ctx, args.orgId, correction.vehicleId);
+    if (vehicle.status === "SOLD") {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_SOLD,
+        "This vehicle has already been sold, so its cost can no longer be corrected here. Ask your accountant for a manual journal entry."
+      );
+    }
+
+    const latest = (
+      await ctx.db
+        .query("vehicleCostCorrections")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", correction.vehicleId))
+        .order("desc")
+        .take(50)
+    ).find((row) => row.status !== "REVERSED");
+    if (latest?._id !== correction._id || vehicle.purchasePrice !== correction.newCost) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_REVERSAL_NOT_LATEST,
+        "Only the most recent correction on a vehicle can be reversed, and only while the vehicle's cost still matches it. Reverse the later correction first."
+      );
+    }
+
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    const originalEvent = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_idempotency", (q) =>
+        q.eq("orgId", args.orgId).eq("idempotencyKey", `vehicle_cost_corrected_${correction.vehicleId}_${correction._id}`)
+      )
+      .unique();
+    if (!originalEvent || originalEvent.status !== "POSTED" || !originalEvent.journalEntryId) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_NOT_POSTED,
+        "This vehicle's purchase hasn't been posted to accounting yet, so its cost can't be corrected."
+      );
+    }
+
+    // The supplier balance must still be exactly what the correction left it: unpaid, undisputed.
+    const payable = correction.payableId ? await ctx.db.get(correction.payableId) : null;
+    if (correction.payableId && (!payable || payable.orgId !== args.orgId || !isPayableAdjustable(payable, currency, correction.newCost))) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE,
+        "The supplier balance for this vehicle has been partly paid, disputed or settled, so the invoice can't be corrected automatically. Contact finance to record a supplier credit or adjustment."
+      );
+    }
+
+    const now = Date.now();
+    if (!(await isPostableNow(ctx, args.orgId, now))) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_NOT_POSTABLE_NOW,
+        "This correction can't be posted right now because the accounting period is closed or the required account is missing. Ask your accountant to open the period or set up the account, then try again."
+      );
+    }
+
+    const reversal = await reverseAccountingEvent(ctx, {
+      orgId: args.orgId,
+      originalEventId: originalEvent._id,
+      reversalDate: now,
+      reason,
+      actorId: user._id,
+      idempotencyKey: `vehicle_cost_correction_reversal_${correction._id}`,
+    });
+
+    await ctx.db.patch(vehicle._id, { purchasePrice: correction.previousCost, updatedAt: now, updatedBy: user._id });
+    if (payable && correction.previousAmountDue !== undefined) {
+      await ctx.db.patch(payable._id, { amountDue: correction.previousAmountDue, updatedAt: now });
+    }
+
+    // The correction's cashbook row, if it wrote one, is offset by an inverse row rather than edited.
+    const cashbookKey = `vehicle_cost_correction_${correction._id}`;
+    const cashbookRow = await ctx.db
+      .query("transactions")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", correction.vehicleId))
+      .filter((q) => q.eq(q.field("idempotencyKey"), cashbookKey))
+      .first();
+    if (cashbookRow) {
+      await ctx.db.insert("transactions", {
+        orgId: args.orgId,
+        type: cashbookRow.type === "IN" ? "OUT" : "IN",
+        amount: cashbookRow.amount,
+        date: now,
+        category: "VEHICLE_PURCHASE",
+        description: `Reversal of purchase cost correction for vehicle ${vehicle.year} ${vehicle.make} ${vehicle.model} (VIN: ${vehicle.vin})`,
+        idempotencyKey: `vehicle_cost_correction_reversal_${correction._id}`,
+        vehicleId: correction.vehicleId,
+      });
+    }
+
+    await ctx.db.patch(correction._id, {
+      status: "REVERSED",
+      reversedBy: user._id,
+      reversedAt: now,
+      reversalReason: reason,
+      reversalCommandId: commandId,
+    });
+
+    return outcome(reversal.reversalJournalEntryId);
+  },
+});
+
+/**
  * Whether this vehicle's purchase price is locked (SCRUM-650). Uses the exact
  * semantics of the `vehicles.update` / `vehicleEdits.resolve` lock, so the edit
  * dialog can show the price read-only precisely when the backend would refuse a
@@ -2296,7 +2455,13 @@ export const getAcquisitionCostCorrectionContext = query({
         .take(5),
       findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId),
     ]);
+    // SCRUM-716: only the latest applied correction can be reversed, and only while the car is
+    // unsold and still carries that correction's cost. The mutation re-checks all of it.
+    const latestApplied = correctionRows.find((row) => row.status !== "REVERSED");
     const corrections = correctionRows.map((row) => ({
+      id: row._id,
+      status: row.status ?? "APPLIED",
+      canReverse: row._id === latestApplied?._id && vehicle.status !== "SOLD" && vehicle.purchasePrice === row.newCost,
       previousCost: row.previousCost,
       newCost: row.newCost,
       reason: row.reason,

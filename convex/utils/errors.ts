@@ -217,6 +217,10 @@ export const AppErrorCode = {
   // SCRUM-725 (D-44 c). A restatement through Retained Earnings is only offered, and only
   // accepted, for an acquisition recorded in a CLOSED or LOCKED accounting period.
   COST_CORRECTION_RESTATEMENT_PERIOD_OPEN: "COST_CORRECTION_RESTATEMENT_PERIOD_OPEN",
+  // SCRUM-716. Reversing a posted correction: refused when it was already reversed by another
+  // command, or when a later correction on the same vehicle is still applied.
+  COST_CORRECTION_ALREADY_REVERSED: "COST_CORRECTION_ALREADY_REVERSED",
+  COST_CORRECTION_REVERSAL_NOT_LATEST: "COST_CORRECTION_REVERSAL_NOT_LATEST",
   // SCRUM-717 (D-45). Every door that creates or reshapes a vehicle's ownership refuses a shape
   // that contradicts itself (convex/utils/vehicleSourceShape.ts). Translated under
   // ServerError_<code>.

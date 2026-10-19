@@ -1332,6 +1332,16 @@ export default defineSchema({
     previousAmountDue: v.optional(v.number()),
     correctedBy: v.id("users"),
     createdAt: v.number(),
+    // SCRUM-716. Absent means APPLIED, so every existing row reads correctly with no backfill. A
+    // REVERSED row is never edited again; a fresh correction posts as a new row.
+    status: v.optional(v.union(v.literal("APPLIED"), v.literal("REVERSED"))),
+    reversedBy: v.optional(v.id("users")),
+    reversedAt: v.optional(v.number()),
+    reversalReason: v.optional(v.string()),
+    // Idempotency key of the reversal command: a replay returns the stored result.
+    reversalCommandId: v.optional(v.string()),
+    // The mirror journal is found through its accounting event, key `vehicle_cost_correction_reversal_<id>`;
+    // no journalEntries reference is stored here, which would add an org-reset ordering edge.
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),
 
   /**
