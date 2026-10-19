@@ -84,8 +84,15 @@ function testFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-// Anything that turns the switch off or replaces the gate module, however it is spelled.
-const SWITCH_OFF = /CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED\s*:\s*false|vi\.(?:mock|doMock)\(\s*["'][^"']*(?:saleDebtContainment|cashSalePilotGate)["']/;
+// Anything that turns the switch off or replaces the gate module, however it is spelled. Two independent detectors:
+// (1) any vi.mock / vi.doMock call that names either gate module (optional extension, import(...) form, any quote or
+//     backtick), and (2) the switch's name used as an object key with any value other than the literal `true`
+//     (false, !1, 0, undefined, null, a variable...).
+const MOCKS_GATE_MODULE = /vi\.(?:mock|doMock)\s*\(\s*(?:import\s*\(\s*)?["'`][^"'`]*(?:saleDebtContainment|cashSalePilotGate)/;
+const SETS_SWITCH_NOT_TRUE = /CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED\s*:\s*(?!\s|true\b)/;
+function turnsSwitchOff(src: string): boolean {
+  return MOCKS_GATE_MODULE.test(src) || SETS_SWITCH_NOT_TRUE.test(src);
+}
 
 describe("SCRUM-802 opt-out census", () => {
   const SELF = "convex/scrum802OptOutCensus.test.ts";
@@ -103,7 +110,7 @@ describe("SCRUM-802 opt-out census", () => {
     // "importOriginal()" pass-through mocks are harmless no-ops but are still flagged: there is nothing to opt back in to.
     const unmarked = all.filter((path) => {
       const src = readFileSync(path, "utf8");
-      return SWITCH_OFF.test(src) && !src.includes(MARK);
+      return turnsSwitchOff(src) && !src.includes(MARK);
     });
     expect(unmarked).toEqual([]);
   });
@@ -117,9 +124,32 @@ describe("SCRUM-802 opt-out census", () => {
       expect(all).toContain(path); // a renamed or deleted certification file must fail here, not silently drop out
       expect(optedOut).not.toContain(path);
       const src = readFileSync(path, "utf8");
-      expect(SWITCH_OFF.test(src)).toBe(false);
+      expect(turnsSwitchOff(src)).toBe(false);
       expect(src).not.toContain(MARK);
     }
     expect(readFileSync("vitest.setup.ts", "utf8")).not.toContain("CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED");
+  });
+
+  test("the detector goes red on every spelling vitest honours (self-test)", () => {
+    const N = "CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED";
+    const escapes = [
+      `vi.mock("./utils/saleDebtContainment", async () => ({ ${N}: false }));`,
+      `vi.mock("./utils/saleDebtContainment.ts", async o => ({...(await o()), ${N}: !1}));`,
+      `vi.mock("./utils/saleDebtContainment.js", async (o) => ({...(await o()), ${N}: 0}));`,
+      `vi.mock(import("./utils/saleDebtContainment"), async (o) => ({...(await o()), ${N}: undefined}));`,
+      "vi.mock(`./utils/saleDebtContainment`, async (o) => await o());",
+      `vi.doMock('../utils/cashSalePilotGate', () => ({}));`,
+      `vi.mock( "./utils/cashSalePilotGate.ts" , () => ({}));`,
+      `const m = { ${N}: null };`,
+      `const m = { ${N}:flag };`,
+    ];
+    for (const src of escapes) expect(turnsSwitchOff(src), src).toBe(true);
+    const harmless = [
+      `import { ${N} } from "./utils/saleDebtContainment";`,
+      `expect(${N}).toBe(true);`,
+      `const m = { ${N}: true };`,
+      `vi.mock("./rateLimit", () => ({}));`,
+    ];
+    for (const src of harmless) expect(turnsSwitchOff(src), src).toBe(false);
   });
 });
