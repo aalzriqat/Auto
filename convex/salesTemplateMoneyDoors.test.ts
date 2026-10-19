@@ -131,9 +131,25 @@ async function setup() {
     amount: 40,
   })) as Id<"postDatedCheques">;
 
+  // A quote and a deposit request: a salesperson is allowed to make both, and they
+  // are the rows the deposit doors act on.
+  const quoteId = await sales.mutation(api.quotes.saveQuote, {
+    orgId,
+    customerId,
+    vehicleId,
+    vehiclePrice: 22000,
+    downPayment: 2000,
+    termMonths: 0,
+  });
+  const requestId = (await sales.mutation(api.depositRequests.request, {
+    orgId,
+    quoteId,
+    amount: 1500,
+    idempotencyKey: crypto.randomUUID(),
+  })) as Id<"depositRequests">;
   vi.useRealTimers();
 
-  return { t, orgId, owner, sales, customerId, vehicleId, receivableId, receiptMovementId: receiptMovement._id, chequeId };
+  return { t, orgId, owner, sales, quoteId, requestId, customerId, vehicleId, receivableId, receiptMovementId: receiptMovement._id, chequeId };
 }
 
 type Fixture = Awaited<ReturnType<typeof setup>>;
@@ -149,11 +165,10 @@ async function expectRefusedWithoutWriting(
 }
 
 describe("SCRUM-444: a default SALES-template actor cannot move money through any door", () => {
-  test("control: the owner's preparatory rows exist, so each refusal below is about the actor, not missing data", async () => {
+  test("control: the setup rows exist, so each refusal below is about the actor, not missing data", async () => {
     const s = await setup();
-    expect((await dbSnapshot(s.t, ["receivables"])).receivables).toHaveLength(1);
-    expect((await dbSnapshot(s.t, ["receiptMovements"])).receiptMovements).toHaveLength(1);
-    expect((await dbSnapshot(s.t, ["postDatedCheques"])).postDatedCheques).toHaveLength(1);
+    const rows = await dbSnapshot(s.t, ["receivables", "receiptMovements", "postDatedCheques", "quotes", "depositRequests"]);
+    for (const table of Object.keys(rows)) expect(rows[table], table).toHaveLength(1);
   });
 
   test("collections.recordPayment is refused and nothing is written", async () => {
@@ -241,5 +256,39 @@ describe("SCRUM-444: a default SALES-template actor cannot move money through an
         }),
       `${PERMISSIONS.EDIT_VEHICLES}, ${PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT}`
     );
+  });
+
+  test.each([
+    ["deposits.create", (s: Fixture) =>
+      s.sales.mutation(api.deposits.create, {
+        orgId: s.orgId,
+        quoteId: s.quoteId,
+        amount: 500,
+        method: "CASH",
+        idempotencyKey: crypto.randomUUID(),
+      })],
+    ["deposits.allocateToVehicles", (s: Fixture) =>
+      s.sales.mutation(api.deposits.allocateToVehicles, {
+        orgId: s.orgId,
+        quoteId: s.quoteId,
+        allocations: [{ vehicleId: s.vehicleId, amount: 100 }],
+      })],
+    ["deposits.releaseVehicleAllocation", (s: Fixture) =>
+      s.sales.mutation(api.deposits.releaseVehicleAllocation, {
+        orgId: s.orgId,
+        quoteId: s.quoteId,
+        vehicleId: s.vehicleId,
+      })],
+    ["depositRequests.confirm", (s: Fixture) =>
+      s.sales.mutation(api.depositRequests.confirm, {
+        orgId: s.orgId,
+        requestId: s.requestId,
+        amount: 1500,
+        method: "CASH",
+        idempotencyKey: crypto.randomUUID(),
+      })],
+  ])("%s is refused for the SALES template and nothing is written", async (_door, call) => {
+    const s = await setup();
+    await expectRefusedWithoutWriting(s, () => call(s), PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   });
 });
