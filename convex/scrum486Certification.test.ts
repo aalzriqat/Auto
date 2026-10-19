@@ -2342,6 +2342,18 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
       await expectRefusedAndUnchanged(s, () => returnForward(d, unwindId, `${tag}-late-forward`), {
         code: "DEAL_UNWIND_NOT_ACTIVE",
       });
+      // A fresh-key cancel of the already-cancelled deal, even by a plain salesperson, must not touch the deposit hold
+      // the unwind reinstated: the only table that may change is the idempotency record.
+      for (const [who, as] of [["salesperson", s.actors.salesperson.as], ["owner", s.owner.as]] as const) {
+        const beforeRecancel = await everyTable();
+        await as.mutation(api.applications.cancelApplication, {
+          orgId: s.orgId, applicationId: d.applicationId, reason: "Cancel again", idempotencyKey: `${tag}-recancel-${who}`,
+        });
+        const afterRecancel = await everyTable();
+        expect(ALL_TABLES.filter((table) =>
+          JSON.stringify(afterRecancel[table]) !== JSON.stringify(beforeRecancel[table]))).toEqual(["commandIdempotency"]);
+        expect((await dealRows(d)).deposit).toMatchObject({ status: "HELD", holdActive: true });
+      }
       // The reversed deal cannot be re-posted by a late or repeated money step: each is refused and writes nothing.
       const approver = s.approver.as;
       await expectRefusedAndUnchanged(s, () => approver.mutation(api.applications.confirmDisbursement, {
