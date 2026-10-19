@@ -777,22 +777,48 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(await d.bankBalance()).toBe(12_500_000);
   }, 30_000);
 
-  test("owned configured financier × CHEQUE tender × cleared cheque return: another tenant's authorized owner cannot return this tenant's cheque and nothing changes", async () => {
+  test("owned configured financier × CHEQUE tender × cleared cheque return: foreign tenant legs (foreign caller, foreign cheque id, foreign application id) are each refused and nothing changes", async () => {
     const d = await clearedFinanceChequeDeal("s486fcforeign");
     const other = await authorizedOtherTenant(d.s, "s486fcforeign");
-    // Named in their own org with this org's application and cheque ids: refused as not found, nothing leaks.
+    // Copies of this tenant's rows that belong to the other tenant (same table, other orgId).
+    const foreign = await d.s.t.run(async (ctx) => {
+      const { _id: _a, _creationTime: _ac, ...applicationRow } = (await ctx.db.get(d.applicationId))!;
+      const { _id: _c, _creationTime: _cc, ...chequeRow } = (await ctx.db.get(d.cleared._id))!;
+      return {
+        applicationId: await ctx.db.insert("financeApplications", { ...applicationRow, orgId: other.orgId }),
+        chequeId: await ctx.db.insert("postDatedCheques", { ...chequeRow, orgId: other.orgId }),
+      };
+    });
+    const asThisTenant = d.s.owner.as;
+    type ReturnArgs = ReturnType<typeof d.returnArgs>;
+    const call = (as: { mutation: typeof asThisTenant.mutation }, args: Record<string, unknown>) => () =>
+      as.mutation(api.applications.returnFinanceDisbursementCheque, args as ReturnArgs);
+
+    // (1) The other tenant's owner names their own org with this org's application and cheque ids.
     await expectRefusedAndUnchanged(
       d.s,
-      () => other.owner.mutation(api.applications.returnFinanceDisbursementCheque, {
-        ...d.returnArgs("s486fcforeign-return"), orgId: other.orgId,
-      }),
+      call(other.owner, { ...d.returnArgs("s486fcforeign-caller"), orgId: other.orgId }),
       { code: "FINANCE_RETURN_NOT_FOUND" },
     );
-    // Named in this org: they hold no membership there, so tenant authorization refuses first.
-    const notMember = await refusalDataOf(other.owner.mutation(
-      api.applications.returnFinanceDisbursementCheque, d.returnArgs("s486fcforeign-member")));
-    expect(notMember).not.toBeNull();
-    expect(notMember?.code).not.toBe("FINANCE_RETURN_NOT_FOUND");
+    // (2) This org's application with a cheque id that belongs to the other org.
+    await expectRefusedAndUnchanged(
+      d.s,
+      call(asThisTenant, { ...d.returnArgs("s486fcforeign-cheque"), chequeId: foreign.chequeId }),
+      { code: "FINANCE_RETURN_NOT_FOUND" },
+    );
+    // (3) This org's cheque with an application id that belongs to the other org.
+    await expectRefusedAndUnchanged(
+      d.s,
+      call(asThisTenant, { ...d.returnArgs("s486fcforeign-application"), applicationId: foreign.applicationId }),
+      { code: "FINANCE_RETURN_NOT_FOUND" },
+    );
+    // (4) The other tenant's owner names THIS org: they hold no membership there, so tenant authorization
+    // refuses before any row is read.
+    await expectRefusedAndUnchanged(
+      d.s,
+      call(other.owner, d.returnArgs("s486fcforeign-member")),
+      { code: "UNAUTHORIZED" },
+    );
     expect((await d.chequesOf())[0].status).toBe("CLEARED");
     expect(await d.bankBalance()).toBe(12_500_000);
   }, 30_000);
