@@ -328,15 +328,6 @@ describe("SCRUM-795 manual-journals-off handler: the discriminating scenario", (
     expect(h.world.calls.filter((call) => /reject|accountingPeriods:/.test(call))).toEqual([]);
   });
 
-  it("PASSES with the approve refusal stated as NOT EXERCISED when the preview holds no legacy pending draft", async () => {
-    const h = harness({ noLegacyDraft: true });
-    const result = (await h.run()) as { oracle: { passed: boolean } };
-    expect(result.oracle.passed).toBe(true);
-    expect(h.world.calls.filter((call) => /approveManualJournal/.test(call))).toEqual([]);
-    expect(h.evidence[0]).toMatchObject({ legacyPendingDraftPresent: false, approveAttempt: null });
-    expect(h.evidence[0]?.notExercised).toContain("APPROVE_REFUSAL_NO_LEGACY_PENDING_DRAFT");
-  });
-
   it("PASSES a correct product whose journal pages hold one row each", async () => {
     const result = (await harness({ smallPages: true }).run()) as { oracle: { passed: boolean } };
     expect(result.oracle.passed).toBe(true);
@@ -373,14 +364,58 @@ describe("SCRUM-795 manual-journals-off handler: negative controls", () => {
   });
 });
 
-describe("SCRUM-795 manual-journals-off handler: inconclusive, never a pass", () => {
-  it("is INCONCLUSIVE when create is refused for another reason than the pilot switch", async () => {
-    await inconclusive({ createOtherRefusal: true }, /not an authorization refusal/);
+describe("SCRUM-795 manual-journals-off handler: a door that cannot be exercised FAILS (AGENTS.md: cannot run is a failure, never a skip)", () => {
+  const notIncomplete = (h: ReturnType<typeof harness>) => {
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0]).not.toMatchObject({ outcome: "INCONCLUSIVE" });
+    expect(h.opened.every((entry) => entry.finished)).toBe(true);
+  };
+
+  it("FAILS, never passes, when the preview holds no legacy pending draft, so the approval door is never exercised", async () => {
+    const h = await breach({ noLegacyDraft: true }, /approving a legacy pending manual journal while manual journals are off was not exercised/);
+    expect(h.world.calls.filter((call) => /approveManualJournal/.test(call))).toEqual([]);
+    // The create door was still attempted and refused: only the approval is missing.
+    expect(h.world.calls.filter((call) => /createManualJournal/.test(call))).toHaveLength(1);
+    expect(h.evidence[0]).toMatchObject({ legacyPendingDraftPresent: false, approveAttempt: null, violations: [expect.stringMatching(/was not exercised/)] });
+    notIncomplete(h);
   });
 
-  it("is INCONCLUSIVE when approve is refused for another reason than the pilot switch", async () => {
-    await inconclusive({ approveOtherRefusal: true }, /not an authorization refusal/);
+  it("FAILS when create is refused for another reason than the pilot switch", async () => {
+    const h = await breach({ createOtherRefusal: true }, /preparing a manual journal while manual journals are off was not exercised: it failed for a reason other than the pilot refusal/);
+    notIncomplete(h);
   });
+
+  it("FAILS when approve is refused for another reason than the pilot switch", async () => {
+    const h = await breach({ approveOtherRefusal: true }, /approving a legacy pending manual journal while manual journals are off was not exercised: it failed for a reason other than the pilot refusal/);
+    notIncomplete(h);
+  });
+
+  it("FAILS, with nothing attempted, when the chart has fewer than two manual-posting accounts", async () => {
+    const h = await breach({ fewAccounts: true }, /nothing was attempted/, /never observed/);
+    expect(h.world.calls.filter((call) => /financialAudit:/.test(call))).toEqual([]);
+    notIncomplete(h);
+  });
+
+  it("FAILS, with nothing attempted, when the second seat signs in to another organization", async () => {
+    const h = await breach({ seatsSplit: true }, /nothing was attempted/, /never observed/);
+    expect(h.world.calls.filter((call) => /financialAudit:/.test(call))).toEqual([]);
+    notIncomplete(h);
+  });
+
+  it("FAILS when the pending list cannot be read, so no draft could be approved", async () => {
+    const h = await breach({ pendingMalformed: true }, /approving a legacy pending manual journal while manual journals are off was not exercised/);
+    expect(h.world.calls.filter((call) => /approveManualJournal/.test(call))).toEqual([]);
+    notIncomplete(h);
+  });
+
+  it("FAILS when the pending list holds a malformed legacy draft, so it could not be approved", async () => {
+    const h = await breach({ pendingRowMalformed: true }, /approving a legacy pending manual journal while manual journals are off was not exercised/);
+    expect(h.world.calls.filter((call) => /approveManualJournal/.test(call))).toEqual([]);
+    notIncomplete(h);
+  });
+});
+
+describe("SCRUM-795 manual-journals-off handler: inconclusive, never a pass", () => {
 
   it("is INCONCLUSIVE when another source writes a journal during the attempts", async () => {
     await inconclusive({ strayJournalAppears: true }, /no link to another source/);
@@ -390,17 +425,8 @@ describe("SCRUM-795 manual-journals-off handler: inconclusive, never a pass", ()
     await inconclusive({ existingJournalChanges: true }, /changed during the refused approval/);
   });
 
-  it("is INCONCLUSIVE, with nothing attempted, when the chart has fewer than two manual-posting accounts or the seats are split", async () => {
-    for (const faults of [{ fewAccounts: true }, { seatsSplit: true }]) {
-      const h = await inconclusive(faults, /nothing was attempted/);
-      expect(h.world.calls.filter((call) => /financialAudit:/.test(call))).toEqual([]);
-    }
-  });
-
-  it("is INCONCLUSIVE when the journal list or the pending list is malformed", async () => {
+  it("is INCONCLUSIVE when the organization journal list is malformed", async () => {
     await inconclusive({ orgListMalformed: true }, /came back malformed/);
-    await inconclusive({ pendingMalformed: true }, /listPendingManualJournals/);
-    await inconclusive({ pendingRowMalformed: true }, /pending drafts were not read/);
   });
 
   it("is INCONCLUSIVE when the accounting screen cannot be opened for the screenshot", async () => {

@@ -406,7 +406,7 @@ export interface ManualJournalsOffObservation {
   /** The memo the refused create carried: a journal or draft bearing it is the attempt having written something. */
   memo: string;
   createAttempt: ProbeOutcome;
-  /** The approval of a legacy pending draft by a second seat; null when the preview held none, which is stated, not passed. */
+  /** The approval of a legacy pending draft by a second seat; null when it could not be attempted, which is a FAIL, never a pass or a skip. */
   approveAttempt: ProbeOutcome | null;
   approvedDraftId: string | null;
   /** Every journal of the organization, read to completion immediately before the first attempt and after the last. */
@@ -421,11 +421,32 @@ export interface ManualJournalsOffObservation {
  * SCRUM-795: with manual journals off, create and approve are each refused with the pilot message and the refusal
  * leaves no trace: no journal appears or changes, no draft appears, every pending draft keeps its fields and stays
  * pending. A read that is missing makes the matching claim unjudged, never clean.
+ *
+ * A DOOR THAT WAS NOT EXERCISED IS A FAILURE (AGENTS.md: a scenario that cannot run is a failure, never a skip).
+ * The only pass for a door is a refusal carrying the expected pilot message: an approval that was never attempted
+ * (no legacy pending draft), a lapsed session, or a refusal for any other reason are violations, not unjudged.
  */
+function judgeDoorRefused(label: string, outcome: ProbeOutcome | null): Judgement {
+  if (outcome === null) return violation(`${label} was not exercised, so the refusal it must raise was never observed`);
+  switch (outcome.kind) {
+    case "ACCEPTED":
+      return violation(`${label} was accepted`);
+    case "REFUSED":
+      return { violations: [], unjudged: [] };
+    case "LAPSED":
+      return violation(`${label} was not exercised: the harness session lapsed, so the refusal it must raise was never observed`);
+    default:
+      return violation(`${label} was not exercised: it failed for a reason other than the pilot refusal (${outcome.message})`);
+  }
+}
+
+/** SCRUM-795 verdict on one observation; see the note above. */
 export function evaluateManualJournalsOff(observation: ManualJournalsOffObservation): Judgement {
   const { memo, createAttempt, approveAttempt, entriesBefore, entriesAfter, draftsBefore, draftsAfter } = observation;
-  const verdicts: Judgement[] = [judgeRefusedAttempt("preparing a manual journal while manual journals are off", createAttempt)];
-  if (approveAttempt !== null) verdicts.push(judgeRefusedAttempt("approving a legacy pending manual journal while manual journals are off", approveAttempt));
+  const verdicts: Judgement[] = [
+    judgeDoorRefused("preparing a manual journal while manual journals are off", createAttempt),
+    judgeDoorRefused("approving a legacy pending manual journal while manual journals are off", approveAttempt),
+  ];
 
   if (entriesBefore === null || entriesAfter === null) {
     verdicts.push(unjudged("the organization's journals were not read on both sides of the refused attempts, so a write could not be ruled out"));

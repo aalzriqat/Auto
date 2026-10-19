@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   CLOSED_PERIOD_REFUSAL,
   evaluateAccountingDate,
+  evaluateManualJournalsOff,
   type AccountingDateObservation,
+  type ManualJournalsOffObservation,
   type DraftView,
   type EntryView,
   type JournalView,
@@ -682,5 +684,52 @@ describe("SCRUM-849 ACC-3 oracle: absent or unparseable evidence is unjudged, ne
       evaluateAccountingDate(observation({ closedDeclaredDate: DECLARED })),
       /declared date 1581768000000 is outside the closed window/,
     );
+  });
+});
+
+describe("SCRUM-795 evaluateManualJournalsOff: an unexercised door is a violation, never unjudged or clean", () => {
+  const refused = { kind: "REFUSED", message: "Manual journal entries are turned off during the pilot." } as const;
+  const base = (over: Partial<ManualJournalsOffObservation> = {}): ManualJournalsOffObservation => ({
+    memo: "m",
+    createAttempt: refused,
+    approveAttempt: refused,
+    approvedDraftId: "draft-1",
+    entriesBefore: [],
+    entriesAfter: [],
+    draftsBefore: [],
+    draftsAfter: [],
+    ...over,
+  });
+
+  it("passes only when both doors were refused with the pilot message and nothing changed", () => {
+    expect(evaluateManualJournalsOff(base())).toEqual({ violations: [], unjudged: [] });
+  });
+
+  it("fails, with no unjudged escape, when the approval was never attempted", () => {
+    const verdict = evaluateManualJournalsOff(base({ approveAttempt: null, approvedDraftId: null }));
+    expect(verdict.unjudged).toEqual([]);
+    expect(verdict.violations).toEqual([expect.stringMatching(/approving a legacy pending manual journal .* was not exercised/)]);
+  });
+
+  it("fails when the create was never attempted", () => {
+    const verdict = evaluateManualJournalsOff(base({ createAttempt: null as never }));
+    expect(verdict.violations.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["a lapsed session", { kind: "LAPSED" } as const],
+    ["a refusal for another reason", { kind: "UNCLASSIFIED", message: "Rate limit exceeded" } as const],
+  ])("fails each door on %s", (_name, outcome) => {
+    for (const over of [{ createAttempt: outcome }, { approveAttempt: outcome }]) {
+      const verdict = evaluateManualJournalsOff(base(over));
+      expect(verdict.unjudged).toEqual([]);
+      expect(verdict.violations).toEqual([expect.stringMatching(/was not exercised/)]);
+    }
+  });
+
+  it("fails an accepted door", () => {
+    expect(evaluateManualJournalsOff(base({ approveAttempt: { kind: "ACCEPTED", value: null } })).violations).toEqual([
+      expect.stringMatching(/was accepted/),
+    ]);
   });
 });

@@ -33,15 +33,15 @@ import type { Id } from "../../convex/_generated/dataModel";
  * approver seat (a different user from the draft's creator), so it is the pilot
  * switch and not separation of duties.
  *
- * RETIRED (SCRUM-795 switch): the former 10-step lifecycle. Steps 1-6 (browser
- * create, second-identity approve) and steps 7-10 (the GL register row, date,
- * period label and line rendering of a posted MANUAL journal) cannot run because
- * the pilot build cannot post a manual journal. No other Playwright spec replays
- * the GL register date/period/line rendering; GeneralLedgerTabCurrency.test.tsx
- * covers currency/scale and pagination only. The enabled backend behaviour stays
- * proven with the switch mocked off (convex/manualJournalAccountingDate.test.ts,
- * accountingPhase10.test.ts).
- * FOLLOW-UP: SCRUM-800 GL register browser replay using an automated posting.
+ * RETIRED (SCRUM-795 switch): the former 10-step lifecycle's steps 1-6 (browser
+ * create, second-identity approve), because the pilot build cannot post a manual
+ * journal. Steps 7-10 (the GL register row's accounting date, the period label
+ * and the balanced debit/credit lines of a POSTED journal) are NOT retired: the
+ * second test below replays them through a path that stays enabled, an owner's
+ * opening balance (accountingCutover.postOpeningBalanceDirect), or, when the
+ * ledger already holds a posted journal, that existing posted journal. The
+ * enabled manual-journal backend behaviour stays proven with the switch mocked
+ * off (convex/manualJournalAccountingDate.test.ts, accountingPhase10.test.ts).
  */
 const REFUSAL_CODE = "MANUAL_JOURNALS_DISABLED";
 const LEGACY_MEMO = "E2E legacy pending draft (SCRUM-795)";
@@ -194,5 +194,165 @@ test.describe("accounting workspace", () => {
     await expect(
       page.getByRole("heading", { name: /chart of accounts|accounting/i }).first()
     ).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Posted-row replay (formerly steps 7-10 of the retired manual-journal lifecycle)
+// ---------------------------------------------------------------------------
+
+type JournalRow = {
+  _id: Id<"journalEntries">;
+  status: string;
+  memo: string;
+  accountingDate: number;
+};
+type JournalDetail = {
+  entry: { _id: Id<"journalEntries">; memo: string; currency?: string; accountingDate: number; periodId?: Id<"accountingPeriods">; status: string };
+  period: { fiscalYear: number; periodNumber: number; startDate: number; endDate: number } | null;
+  lines: Array<{ debitMinor: number; creditMinor: number; accountingDate?: number; scale?: number }>;
+};
+
+// Written out by hand, never taken from the product: 15 Aug 2026 12:00 UTC, in
+// the 2026 period 8 window (1 Aug 00:00 UTC to 31 Aug 23:59:59.999 UTC).
+const OPENING_DATE = Date.UTC(2026, 7, 15, 12);
+const OPENING_UNITS = 100;
+// Minor-unit scale per currency, hand-written: 3 for JOD/KWD/BHD/OMR, 2 otherwise.
+const scaleOf = (currency: string): number => (["JOD", "KWD", "BHD", "OMR"].includes(currency) ? 3 : 2);
+
+async function listPostedJournals(
+  client: Awaited<ReturnType<typeof authenticatedConvexClient>>,
+  orgId: Id<"organizations">
+): Promise<JournalRow[]> {
+  const page = (await client.query(api.accountingLedger.listJournalEntries, {
+    orgId,
+    paginationOpts: { numItems: 100, cursor: null },
+  })) as { page: JournalRow[] };
+  return page.page.filter((row) => row.status === "POSTED");
+}
+
+test.describe("accounting register: a posted journal", () => {
+  test("shows its accounting date, period and balanced debit/credit totals", async ({ page }) => {
+    await gotoOrgRoute(page, "accounting");
+    const orgId = (await resolveOrgId(page)) as Id<"organizations">;
+    const client = await authenticatedConvexClient(page);
+
+    // 1. A POSTED journal to look at. A scenario that finds none FAILS; it never skips.
+    let known: { memo: string; debitMinor: number } | null = null;
+    let posted = await listPostedJournals(client, orgId);
+    if (posted.length === 0) {
+      const periods = (await client.query(api.accountingPeriods.list, { orgId })) as Array<{
+        _id: Id<"accountingPeriods">;
+        fiscalYear: number;
+        periodNumber: number;
+        status: string;
+      }>;
+      const p8 = periods.find((p) => p.fiscalYear === 2026 && p.periodNumber === 8);
+      if (!p8) {
+        await client.mutation(api.accountingPeriods.create, {
+          orgId,
+          fiscalYear: 2026,
+          periodNumber: 8,
+          startDate: Date.UTC(2026, 7, 1, 0, 0, 0, 0),
+          endDate: Date.UTC(2026, 8, 0, 23, 59, 59, 999),
+          openImmediately: true,
+        });
+      } else if (p8.status !== "OPEN") {
+        await client.mutation(api.accountingPeriods.open, { orgId, periodId: p8._id });
+      }
+      const status = (await client.query(api.accountingCutover.openingBalanceStatus, { orgId })) as {
+        canPostDirectly: boolean;
+        currency: string;
+      };
+      expect(status.canPostDirectly, "the owner seat must be able to post an opening balance").toBe(true);
+      const accounts = (await client.query(api.chartOfAccounts.list, { orgId })) as Array<{
+        _id: Id<"chartOfAccounts">;
+        allowManualPosting: boolean;
+        active: boolean;
+      }>;
+      const usable = accounts.filter((a) => a.allowManualPosting && a.active);
+      expect(usable.length).toBeGreaterThanOrEqual(2);
+      const minor = OPENING_UNITS * 10 ** scaleOf(status.currency);
+      const memo = `E2E opening balance register replay ${Date.now()}`;
+      await client.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId,
+        asOfDate: OPENING_DATE,
+        memo,
+        expectedCurrency: status.currency,
+        lines: [
+          { accountId: usable[0]._id, debitMinor: minor, creditMinor: 0 },
+          { accountId: usable[1]._id, debitMinor: 0, creditMinor: minor },
+        ],
+      });
+      known = { memo, debitMinor: minor };
+      posted = await listPostedJournals(client, orgId);
+    }
+    const target = known ? posted.find((row) => row.memo === known!.memo) : posted[0];
+    expect(target, "a posted journal must exist to replay the register assertions").toBeDefined();
+
+    // 2. What the backend holds for it, and the invariants that must hold whatever its source.
+    const detail = (await client.query(api.accountingLedger.getJournalEntry, {
+      orgId,
+      journalEntryId: target!._id,
+    })) as JournalDetail | null;
+    expect(detail, "the posted journal must be readable").not.toBeNull();
+    const { entry, period, lines } = detail!;
+    expect(period, "a posted journal sits in an accounting period").not.toBeNull();
+    expect(entry.accountingDate).toBeGreaterThanOrEqual(period!.startDate);
+    expect(entry.accountingDate).toBeLessThanOrEqual(period!.endDate);
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    for (const line of lines) expect(line.accountingDate).toBe(entry.accountingDate);
+    const debitMinor = lines.reduce((sum, line) => sum + line.debitMinor, 0);
+    const creditMinor = lines.reduce((sum, line) => sum + line.creditMinor, 0);
+    expect(debitMinor).toBeGreaterThan(0);
+    expect(debitMinor, "debits equal credits").toBe(creditMinor);
+    if (known) {
+      // The journal this test posted: every figure is a hand-written literal.
+      expect(entry.accountingDate).toBe(OPENING_DATE);
+      expect(period!.fiscalYear).toBe(2026);
+      expect(period!.periodNumber).toBe(8);
+      expect(debitMinor).toBe(known.debitMinor);
+      expect(creditMinor).toBe(known.debitMinor);
+    }
+
+    // 3. The register shows the same date, period and lines.
+    await page.getByRole("tab", { name: /journal/i }).first().click();
+    const registerTab = page.getByRole("tab", { name: /register|general ledger/i }).first();
+    await expect(registerTab).toBeVisible();
+    await registerTab.click();
+
+    const row = page.locator(`[data-testid='journal-entry-row'][data-entry-id='${entry._id}']`);
+    for (let loads = 0; loads < 50 && !(await row.isVisible()); loads += 1) {
+      const more = page.getByTestId("gl-load-more-btn");
+      if (!(await more.isVisible())) break;
+      await more.click();
+    }
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId("journal-entry-date")).toContainText(
+      new Date(entry.accountingDate).toLocaleDateString("en-US")
+    );
+    if (known) await expect(row.getByTestId("journal-entry-date")).toContainText(/8\/15\/2026|Aug 15, 2026/);
+
+    await row.getByTestId("view-entry-lines-btn").click();
+    await expect(page.getByTestId("dialog-entry-memo")).toContainText(entry.memo);
+    await expect(page.getByTestId("dialog-entry-period")).toContainText(
+      `${period!.fiscalYear}-P${period!.periodNumber}`
+    );
+    const lineRows = page.getByTestId("journal-line-row");
+    await expect(lineRows).toHaveCount(lines.length);
+
+    // Debit and credit columns, summed off the screen, equal the backend's totals in major units.
+    const scale = lines[0].scale ?? scaleOf(entry.currency ?? "JOD");
+    const columnTotal = async (testId: "line-debit" | "line-credit"): Promise<number> => {
+      const texts = await page.getByTestId(testId).allTextContents();
+      return texts.reduce((sum, text) => {
+        const amount = Number(text.replace(/[^0-9.]/g, ""));
+        return sum + (Number.isFinite(amount) ? amount : 0);
+      }, 0);
+    };
+    expect(await columnTotal("line-debit")).toBeCloseTo(debitMinor / 10 ** scale, scale);
+    expect(await columnTotal("line-credit")).toBeCloseTo(creditMinor / 10 ** scale, scale);
+
+    await page.keyboard.press("Escape");
   });
 });

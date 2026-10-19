@@ -8,15 +8,19 @@
  * public commands and across two seats (the OWNER prepares, the MANAGER approves):
  *   1. createManualJournal, with a well-formed balanced request and a declared date, is refused with the
  *      pilot message (MANUAL_JOURNALS_DISABLED) and not for any other reason;
- *   2. when a legacy PENDING draft already exists (seeded only by trusted-main E2E), approveManualJournal on
- *      it, by the second seat, is refused with the same message;
+ *   2. approveManualJournal on a legacy PENDING draft (seeded only by trusted-main E2E), by the second seat,
+ *      is refused with the same message;
  *   3. between two complete organization-wide journal reads and two reads of the pending list, no journal
  *      appears, none changes, no draft appears, and every pending draft keeps its fields and stays pending.
  *
+ * CANNOT RUN IS FAIL (AGENTS.md: a scenario that cannot run is a failure, never a skip). Both doors must be
+ * exercised and refused with the pilot message, and that refusal is the only pass. A preview with no legacy
+ * pending draft, a pending list that cannot be read, a chart with no usable accounts, a second seat in another
+ * organization, a lapsed session, or a refusal for any other reason leaves a door unexercised and the mission
+ * FAILS (oracle.passed = false), never INCONCLUSIVE and never a pass. Run it only where the legacy draft is seeded.
+ *
  * Not covered, and recorded as such in the evidence: the manual-journal form (the commands are the product's
- * public API; the accounting screen is only opened for its screenshot), the approval when the preview holds
- * no legacy pending draft (the mandatory real-backend approval refusal is the trusted-main Playwright spec),
- * the declared-date and closed-period posting rules (proven against the enabled code with the switch mocked
+ * public API; the accounting screen is only opened for its screenshot), the declared-date and closed-period posting rules (proven against the enabled code with the switch mocked
  * off in convex/manualJournalAccountingDate.test.ts; the GL replay is SCRUM-800), a LOCKED period, outbox
  * posting and reopening a closed period. The original date/period judgement stays in
  * browserSwarmAccountingDateOracle.ts (evaluateAccountingDate) for the day the switch is lifted.
@@ -27,7 +31,7 @@
  */
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { describeError, probe, type ProbeOutcome } from "./browserSwarmBoundaryOracle";
+import { describeError, probe, type Judgement, type ProbeOutcome } from "./browserSwarmBoundaryOracle";
 import type { BoundaryMissionEnv } from "./browserSwarmBoundaryHarness";
 import type { BrowserAttackHandlerRegistry } from "./browserAttackSwarmExecutor";
 import { MISSION_TIMING_DEFAULTS, missionCommands, realSleep, type MissionTiming } from "./browserSwarmConsignmentAttack";
@@ -141,30 +145,32 @@ function manualAccounts(chart: readonly unknown[]): string[] {
   return ids.sort((left, right) => left.localeCompare(right)).slice(0, 2);
 }
 
+/** A door the mission could not exercise: a failure, because a scenario that cannot run is never a skip. */
+const notExercised = (reason: string): Judgement => ({ violations: [`${reason}; the refusal this mission requires was never observed`], unjudged: [] });
+
 export function accountingDateSpec(options: MissionTiming) {
   return {
     attack: "ACCOUNTING_DATE_BOUNDARY",
     seat: "primary" as const,
     oracles: ["STATE_TRANSITION" as const],
     passSummary:
-      "With manual journals off for the pilot, createManualJournal was refused with the pilot message, and, where a legacy pending draft existed, approveManualJournal on it from a second seat was refused with the same message. Between two complete organization-wide journal reads and two reads of the pending list, no journal appeared or changed and no draft appeared; every pending draft kept its fields and stayed pending. A journal or draft that appeared or changed for any other reason is reported as unjudged, never as a pass. Not read: the manual-journal form, the approval refusal when the preview holds no legacy pending draft, the declared-date and closed-period posting rules (disabled for the pilot), a LOCKED period, outbox posting, and reopening a closed period.",
-    breachSummary: "A manual journal was prepared or approved while manual journals are off for the pilot, or a refusal still changed journals or drafts",
+      "With manual journals off for the pilot, createManualJournal was refused with the pilot message and approveManualJournal on a legacy pending draft from a second seat was refused with the same message; both doors were exercised. Between two complete organization-wide journal reads and two reads of the pending list, no journal appeared or changed and no draft appeared; every pending draft kept its fields and stayed pending. A journal or draft that appeared or changed for any other reason is reported as unjudged, never as a pass. Not read: the manual-journal form, the declared-date and closed-period posting rules (disabled for the pilot), a LOCKED period, outbox posting, and reopening a closed period.",
+    breachSummary: "Manual journals off for the pilot was not proven: a door was accepted or never exercised (a mission that cannot run fails), or a refusal still changed journals or drafts",
     async run(env: BoundaryMissionEnv): Promise<void> {
       const { client, orgId, nonce, signal, detail, page } = env;
       const org = orgId as Id<"organizations">;
       const { command } = missionCommands(env, options);
-      const notExercised = ["MANUAL_JOURNAL_FORM", "POSTING_RULES_WHILE_OFF", "LOCKED_PERIOD", "OUTBOX_POSTING", "PERIOD_REOPEN"];
-      detail.notExercised = notExercised;
+      detail.notExercised = ["MANUAL_JOURNAL_FORM", "POSTING_RULES_WHILE_OFF", "LOCKED_PERIOD", "OUTBOX_POSTING", "PERIOD_REOPEN"];
 
       const approver = await env.openSeat("approver");
       if (approver.orgId !== orgId) {
-        env.unjudged("the approver seat signed in to a different organization, so no second person could attempt an approval; nothing was attempted");
+        env.judge(notExercised("the approver seat signed in to a different organization, so no second person could attempt an approval and nothing was attempted"));
         return;
       }
 
       const accountIds = manualAccounts(asArray(await command(() => client.query(api.chartOfAccounts.list, { orgId: org })), "chartOfAccounts.list"));
       if (accountIds.length < 2) {
-        env.unjudged("the chart holds fewer than two active, currency-free accounts that accept manual posting, so no well-formed journal could be attempted; nothing was attempted");
+        env.judge(notExercised("the chart holds fewer than two active, currency-free accounts that accept manual posting, so no well-formed journal could be attempted and nothing was attempted"));
         return;
       }
       const sentLines: SentLine[] = [
@@ -175,7 +181,17 @@ export function accountingDateSpec(options: MissionTiming) {
 
       // Baselines, read immediately before the first attempt.
       const entriesBefore = await readEntries(env, command, null);
-      const draftsBefore = await readPendingDrafts(env, command);
+      // A pending list that cannot be read leaves no draft to approve: the approval door is unexercised (a FAIL below).
+      const readDrafts = async (when: "Before" | "After"): Promise<DraftView[] | null> => {
+        try {
+          return await readPendingDrafts(env, command);
+        } catch (error) {
+          if (signal.aborted) throw error;
+          detail[`pendingListReadFailure${when}`] = describeError(error);
+          return null;
+        }
+      };
+      const draftsBefore = await readDrafts("Before");
       const legacyDraft = draftsBefore?.find((draft) => draft.status === "PENDING_APPROVAL") ?? null;
       detail.legacyPendingDraftPresent = legacyDraft !== null;
 
@@ -199,12 +215,11 @@ export function accountingDateSpec(options: MissionTiming) {
               MANUAL_JOURNALS_DISABLED_REFUSAL,
               signal,
             );
-      if (approveAttempt === null) detail.notExercised = [...notExercised, "APPROVE_REFUSAL_NO_LEGACY_PENDING_DRAFT"];
       detail.createAttempt = createAttempt;
       detail.approveAttempt = approveAttempt;
 
       const entriesAfter = await readEntries(env, command, null);
-      const draftsAfter = await readPendingDrafts(env, command);
+      const draftsAfter = await readDrafts("After");
       env.judge(
         evaluateManualJournalsOff({
           memo,
