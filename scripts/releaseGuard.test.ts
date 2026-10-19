@@ -1491,7 +1491,9 @@ describe("rebuildBankBalances (SCRUM-54 rollout phase)", () => {
   });
 
   test("the page cap ends the whole phase for an org that never finishes", () => {
-    const { result } = run(() => ok("MORE"), { maxPages: 3 });
+    let calls = 0;
+    const { result } = run(() => { calls += 1; return ok("MORE"); }, { maxPages: 3 });
+    expect(calls).toBe(3);
     expect(result.stopped).toEqual({ kind: "pageCap", ref: opaqueOrgRef("org-a") });
     expect(result.ready).toBe(0);
   });
@@ -1521,6 +1523,7 @@ describe("bank rebuild failure messages (SCRUM-54 rollout phase)", () => {
 
   test("a refusal fails a run whose Social Inbox verified, with the count only", () => {
     expect(bankRefusalMessage(base)).toBeNull();
+    expect(bankRefusalMessage({ ...base, refused: ["org-x: why"] })).toMatch(/but 1 organization\(s\) refused/);
     const message = bankRefusalMessage({ ...base, refused: ["org-x: why", "org-y: why"] });
     expect(message).toMatch(/Social Inbox is verified, but 2 organization\(s\) refused/);
     expect(message).not.toMatch(/org-x|why/);
