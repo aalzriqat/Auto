@@ -175,6 +175,8 @@ const RESET_TABLES = [
   "dashboardExpenseSummaryState",
   // Payroll. ⚠️ SCRUM-546: `payrollItems.runId` is REQUIRED, so items go BEFORE
   // their run (and `CHILD_TABLES` defers the run while any item remains).
+  // Extra deal commission lines point at sales and are paid through payslips.
+  "dealCommissionLines",
   "payrollItems",
   "payrollRuns",
   "employeeCompensation",
@@ -338,6 +340,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     "transactions",
     // payrollItems.commissionSaleIds is a REQUIRED v.array(v.id("sales")).
     "payrollItems",
+    "dealCommissionLines",
     "commitmentAuthorityWork",
     "depositCancellationPendings",
     // SCRUM-724: `receiptRetainedPositions.originatingSaleId` (immutable lineage).
@@ -403,6 +406,7 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   expenses: "by_org",
   dashboardExpenseMonths: "by_org_generation_month",
   dashboardExpenseSummaryState: "by_org_generation",
+  dealCommissionLines: "by_org_sale",
   payrollItems: "by_org",
   payrollRuns: "by_org",
   employeeCompensation: "by_org",

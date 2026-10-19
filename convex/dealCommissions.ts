@@ -7,7 +7,13 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { auditLog } from "./financialAudit";
-import { getOrgCurrency } from "./accounting/workflowHooks";
+import {
+  getOrgCurrency,
+  commissionAccountingDate,
+  hookDealCommissionLineAccrued,
+  hookDealCommissionLineReversed,
+} from "./accounting/workflowHooks";
+import { checkPostingAllowed } from "./accountingPeriods";
 import {
   scaleForCurrency,
   supportedCurrencyScale,
@@ -190,8 +196,20 @@ export const addLine = mutation({
       }
 
       const sale = await loadSale(ctx, args.orgId, args.saleId);
-      if (sale.status === "CANCELLED") {
-        throwAppError(AppErrorCode.VALIDATION_FAILED, "A cancelled sale cannot be given a commission.");
+      if (sale.status !== "COMPLETED") {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "A commission can be registered once the sale is completed. A draft or cancelled sale has earned nothing yet."
+        );
+      }
+      // The accrual is dated at the sale. A closed period would queue it, burn
+      // every retry and dead-letter, so refuse before anything is written.
+      const periodCheck = await checkPostingAllowed(ctx, args.orgId, sale.saleDate);
+      if (!periodCheck.ok && !periodCheck.waiting) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "This sale's accounting period is closed, so a commission entry for it could never post. Reopen the period before you add a commission."
+        );
       }
 
       const membership = await ctx.db
@@ -222,6 +240,16 @@ export const addLine = mutation({
         currency,
         ...(note ? { note } : {}),
         createdBy: user._id,
+      });
+      await hookDealCommissionLineAccrued(ctx, {
+        orgId: args.orgId,
+        lineId,
+        saleId: args.saleId,
+        employeeId: args.employeeId,
+        amountMinor,
+        currency,
+        actorId: user._id,
+        occurredAt: await commissionAccountingDate(ctx, args.orgId, args.saleId, sale.saleDate),
       });
       await auditLog(ctx, {
         orgId: args.orgId,
@@ -257,7 +285,29 @@ export const removeLine = mutation({
       if (!line || line.orgId !== args.orgId || line.removedAt !== undefined) {
         throw new ConvexError("Commission line not found.");
       }
-      await ctx.db.patch(args.lineId, { removedAt: Date.now(), removedBy: user._id });
+      if (line.paidAt !== undefined) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "This commission has already been paid through payroll, so it can no longer be removed."
+        );
+      }
+      const now = Date.now();
+      // The reversal is dated today; a closed current period could never take it.
+      const todayCheck = await checkPostingAllowed(ctx, args.orgId, now);
+      if (!todayCheck.ok && !todayCheck.waiting) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "Today's accounting period is closed, so the reversal could never post. Reopen it before you remove this commission."
+        );
+      }
+      await hookDealCommissionLineReversed(ctx, {
+        orgId: args.orgId,
+        lineId: args.lineId,
+        reason: "Commission line removed",
+        actorId: user._id,
+        reversalDate: now,
+      });
+      await ctx.db.patch(args.lineId, { removedAt: now, removedBy: user._id });
       await auditLog(ctx, {
         orgId: args.orgId,
         actorId: user._id,

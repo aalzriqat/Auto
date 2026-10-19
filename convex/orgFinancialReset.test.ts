@@ -391,7 +391,10 @@ describe("resetOrgFinancialData", () => {
     // same kind of derivative and go with it.
     // 44 -> 46: the dashboard expense month totals and their generation state
     // (SCRUM-807) are derived from `expenses`, which the reset deletes.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(46);
+    // 46 -> 47: `dealCommissionLines`, the extra per-deal commission lines. Each names
+    // a sale (which the reset deletes) and is paid through a payslip (also
+    // deleted), so leaving them would strand rows pointing at nothing.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(47);
     expect(RESET_TABLES_FOR_TEST).toContain("dashboardExpenseMonths");
     expect(RESET_TABLES_FOR_TEST).toContain("dashboardExpenseSummaryState");
     expect(RESET_TABLES_FOR_TEST.indexOf("dashboardExpenseMonths")).toBeGreaterThan(RESET_TABLES_FOR_TEST.indexOf("expenses"));

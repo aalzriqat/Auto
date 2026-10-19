@@ -1024,6 +1024,10 @@ export default defineSchema({
     createdBy: v.id("users"),
     removedAt: v.optional(v.number()),
     removedBy: v.optional(v.id("users")),
+    /** Set when payroll pays the line. A paid line can no longer be removed. */
+    paidAt: v.optional(v.number()),
+    paidBy: v.optional(v.id("users")),
+    payrollItemId: v.optional(v.id("payrollItems")),
   })
     .index("by_org_sale", ["orgId", "saleId"])
     .index("by_org_employee", ["orgId", "employeeId"]),
@@ -5966,6 +5970,8 @@ export default defineSchema({
     // Unpaid commission sales this payslip settles (Option A: commissions are
     // paid through payroll). Marked paid when the run is paid.
     commissionSaleIds: v.array(v.id("sales")),
+    /** Extra deal commission lines paid on this payslip (see dealCommissionLines). */
+    commissionLineIds: v.optional(v.array(v.id("dealCommissionLines"))),
     createdAt: v.number(),
   })
     .index("by_org", ["orgId"])

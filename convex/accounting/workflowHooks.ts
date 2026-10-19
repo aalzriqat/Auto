@@ -26,6 +26,7 @@ import { forwardPostKey, forwardReversalKey } from "../utils/financeCompanyForwa
 import { financeDisbursementKeys } from "../utils/financeDisbursementKeys";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
+import { MAX_DEAL_COMMISSION_LINES } from "../utils/dealCommissionLines";
 import {
   assertStoredVersion,
   custodyDependenciesPayload,
@@ -1786,6 +1787,45 @@ export const hookCommissionAccrued = makeCommissionHook("COMMISSION_ACCRUED", "c
 export const hookCommissionPaid = makeCommissionHook("COMMISSION_PAID", "commission_paid", "commission_paid");
 
 /**
+ * Accrues one extra deal commission line (purchase / execution / another sale
+ * commission). Keyed on the LINE, not the sale, so it never collides with the
+ * salesperson's own `commission_accrued_<saleId>`. The payload still names the
+ * sale, which keeps the outbox guard holding it behind the sale's own entry.
+ */
+export async function hookDealCommissionLineAccrued(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    lineId: Id<"dealCommissionLines">;
+    saleId: Id<"sales">;
+    employeeId: Id<"users">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensureCommissionAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "COMMISSION_ACCRUED",
+    sourceType: "dealCommissionLines",
+    sourceId: args.lineId.toString(),
+    idempotencyKey: `commission_line_accrued_${args.lineId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      saleId: args.saleId.toString(),
+      lineId: args.lineId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      salespersonId: args.employeeId.toString(),
+    },
+  });
+}
+
+/**
  * Corrects an already-recognized commission by a SIGNED delta. Each correction
  * is its own economic event, so — like hookVehicleLandedCostCapitalized's
  * editToken — the source and idempotency keys carry a `sequence` discriminator
@@ -2382,6 +2422,15 @@ export const hookCommissionReversed = makeReversalHook<{ saleId: Id<"sales"> }>(
   pendingPostKey: (a) => `commission_accrued_${a.saleId}`,
 });
 
+/** Reverses (or cancels the queued post of) one extra deal commission line's accrual. */
+export const hookDealCommissionLineReversed = makeReversalHook<{ lineId: Id<"dealCommissionLines"> }>({
+  eventType: "COMMISSION_ACCRUED",
+  sourceType: "dealCommissionLines",
+  sourceId: (a) => a.lineId.toString(),
+  reversalKey: (a) => `commission_line_reversed_${a.lineId}`,
+  pendingPostKey: (a) => `commission_line_accrued_${a.lineId}`,
+});
+
 /**
  * Reverses ONE COMMISSION_ADJUSTED entry. A voided sale must back out every
  * correction as well as the original accrual — reversing only the accrual
@@ -2470,6 +2519,29 @@ export async function reverseCommissionForSale(
       actorId: args.actorId,
       reversalDate: args.reversalDate,
     });
+  }
+  // The extra deal commission lines are part of the same commission: back each
+  // unpaid one out and mark it removed. A paid line is refused, like the
+  // salesperson's own paid commission.
+  const lines = await ctx.db
+    .query("dealCommissionLines")
+    .withIndex("by_org_sale", (q) => q.eq("orgId", args.orgId).eq("saleId", args.saleId))
+    .take(MAX_DEAL_COMMISSION_LINES * 5);
+  for (const line of lines) {
+    if (line.removedAt !== undefined) continue;
+    if (line.paidAt !== undefined) {
+      throw new ConvexError(
+        "Cannot automatically cancel a sale after a commission line has been paid. Use a manual accounting correction."
+      );
+    }
+    await hookDealCommissionLineReversed(ctx, {
+      orgId: args.orgId,
+      lineId: line._id,
+      reason: args.reason,
+      actorId: args.actorId,
+      reversalDate: args.reversalDate,
+    });
+    await ctx.db.patch(line._id, { removedAt: args.reversalDate, removedBy: args.actorId });
   }
 }
 

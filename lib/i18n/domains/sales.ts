@@ -2548,8 +2548,8 @@ const dealCommissionMessages = defineBilingualMessages({
     "تعذّرت قراءة مبلغ عمولة، لذلك لا يظهر الإجمالي.",
   ],
   DealCommissionsRegisteredNote: [
-    "Registered amounts. They are paid with salary and are not posted to the ledger yet.",
-    "مبالغ مسجلة. تُدفع مع الراتب ولم تُرحّل إلى دفتر الأستاذ بعد.",
+    "Registered amounts. Each is recorded in the books when added and paid with the employee's salary.",
+    "مبالغ مسجلة. يُسجَّل كل مبلغ في الدفاتر عند إضافته ويُدفع مع راتب الموظف.",
   ],
   DealCommissionsOpenPage: ["Manage on the Commissions page", "إدارة العمولات من صفحة العمولات"],
   DealCommissionKindSALE: ["Sale commission", "عمولة بيع"],

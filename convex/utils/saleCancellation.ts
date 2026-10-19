@@ -29,6 +29,7 @@ import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { auditLog } from "../financialAudit";
 import { AppErrorCode, throwAppError } from "./errors";
 import { toMinorUnits } from "./money";
+import { MAX_DEAL_COMMISSION_LINES } from "./dealCommissionLines";
 import { settlementView } from "./supplierSettlement";
 import { cancelPendingInvoiceReceiptsForSale } from "../accounting/invoiceReceiptReservation";
 
@@ -883,6 +884,26 @@ function assertCommissionNotPaid(sale: Doc<"sales">) {
  * closing step still refuses them atomically (ruling B), so the preview can only be optimistic
  * about those, never wrong about the ones listed here.
  */
+/**
+ * A paid extra deal commission line cannot be recovered automatically, exactly
+ * like the salesperson's own paid commission.
+ */
+export async function assertNoPaidCommissionLines(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  saleId: Id<"sales">
+): Promise<void> {
+  const lines = await ctx.db
+    .query("dealCommissionLines")
+    .withIndex("by_org_sale", (q) => q.eq("orgId", orgId).eq("saleId", saleId))
+    .take(MAX_DEAL_COMMISSION_LINES * 5);
+  if (lines.some((line) => line.removedAt === undefined && line.paidAt !== undefined)) {
+    throw new ConvexError(
+      "Cannot automatically cancel a sale after a commission line has been paid. Use a manual accounting correction."
+    );
+  }
+}
+
 export async function assertSaleTeardownPreflight(
   ctx: QueryCtx | MutationCtx,
   args: {
@@ -894,6 +915,7 @@ export async function assertSaleTeardownPreflight(
   const { orgId, sale } = args;
   await assertNoSaleLinkedLegacyReceivable(ctx, orgId, sale._id);
   assertCommissionNotPaid(sale);
+  await assertNoPaidCommissionLines(ctx, orgId, sale._id);
   await assertNoSupplierReceiptsForSale(ctx, orgId, sale._id);
   await assertNoPaidSupplierPayable(ctx, orgId, sale._id);
   if (sale.canonicalReceivableDocumentId) {

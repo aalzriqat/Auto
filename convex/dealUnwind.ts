@@ -35,6 +35,7 @@ import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeD
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
 import { assertSaleTeardownPreflight } from "./utils/saleCancellation";
+import { MAX_DEAL_COMMISSION_LINES } from "./utils/dealCommissionLines";
 import { assertNoActiveAllocations } from "./collections";
 import { manualPayerOf } from "./utils/manualFinancePayer";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
@@ -212,6 +213,14 @@ async function assertDealUnwindable(
   if (!sale || sale.orgId !== app.orgId || sale.status !== "COMPLETED") refuse("DEAL_UNWIND_SALE_NOT_COMPLETED");
   // D1: paid commission cannot be recovered here yet; an unpaid one is reversed by the teardown.
   if (sale.commissionPaidAt !== undefined) refuse("DEAL_UNWIND_COMMISSION_PAID");
+  // Same rule for a paid extra commission line.
+  const paidLine = await ctx.db
+    .query("dealCommissionLines")
+    .withIndex("by_org_sale", (q) => q.eq("orgId", app.orgId).eq("saleId", sale._id))
+    .take(MAX_DEAL_COMMISSION_LINES * 5);
+  if (paidLine.some((line) => line.removedAt === undefined && line.paidAt !== undefined)) {
+    refuse("DEAL_UNWIND_COMMISSION_PAID");
+  }
 
   const openCustody = (await loadCustodyRecords(ctx, app._id, action)).find((row) => row.status === "OPEN");
   if (openCustody) refuse("DEAL_UNWIND_OPEN_CUSTODY");
