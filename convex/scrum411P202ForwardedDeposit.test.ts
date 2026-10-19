@@ -353,9 +353,11 @@ describe("P2-02 - every door that spends or moves the deposit honours the dispos
       active: false, allocationStatus: "RELEASED_AWAITING_DECISION", allocatedAmountMinor: H,
     });
     const before = await untouched(s, depositId);
-    for (const treatment of ["REFUND_TO_CUSTOMER", "FORFEITED", "OTHER", "RETURN_TO_UNALLOCATED"] as const) {
+    for (const treatment of ["REFUND_TO_CUSTOMER", "FORFEITED", "RETURN_TO_UNALLOCATED"] as const) {
       expect((await refusalDataOf(resolveSlice(s, releasedHold, treatment)))?.code).toBe(GUARD);
     }
+    // SCRUM-801: OTHER is refused first by the pilot containment, before the forward guard is consulted. Still a refusal, still no write.
+    expect((await refusalDataOf(resolveSlice(s, releasedHold, "OTHER")))?.code).toBe("DEPOSIT_OTHER_TREATMENT_DISABLED");
     expect(await untouched(s, depositId)).toEqual(before);
     expect((await s.t.run((ctx) => ctx.db.get(releasedHold)))?.allocationStatus).toBe("RELEASED_AWAITING_DECISION");
   });
@@ -550,9 +552,10 @@ describe("P2-02 - the legacy deposit treatments cannot reach a forwarded deposit
       expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("APPROVED");
     };
 
-    // The plan reads the deposit as NOT applied, so the first payment it founded is unfunded: refused before any write.
+    // SCRUM-801: OTHER is refused at the start of finalize by the pilot containment, ahead of the plan's
+    // FIRST_PAYMENT_UNFUNDED readiness refusal. Still refused before any write.
     const other = await refusalDataOf(finalizeWith(s, applicationId, { treatment: "OTHER", reason: "Approved by the owner." }));
-    expect(other?.code).toBe("FIRST_PAYMENT_UNFUNDED");
+    expect(other?.code).toBe("DEPOSIT_OTHER_TREATMENT_DISABLED");
     await stillUntouched();
 
     // Option A: the deposit is forwarded to the company, never applied against the dealer's amount.

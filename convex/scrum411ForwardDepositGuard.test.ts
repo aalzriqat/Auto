@@ -149,9 +149,11 @@ describe("B1 - a deposit already inside an on-books forward cannot also leave as
       };
     });
     const before = await untouched(s, depositId);
-    for (const treatment of ["REFUND_TO_CUSTOMER", "FORFEITED", "OTHER"] as const) {
+    for (const treatment of ["REFUND_TO_CUSTOMER", "FORFEITED"] as const) {
       expect((await refusalDataOf(resolveSlice(s, releasedHold, treatment)))?.code).toBe(GUARD);
     }
+    // SCRUM-801: OTHER is refused first by the pilot containment, before the forward guard is consulted. Still a refusal, still no write.
+    expect((await refusalDataOf(resolveSlice(s, releasedHold, "OTHER")))?.code).toBe("DEPOSIT_OTHER_TREATMENT_DISABLED");
     expect((await refusalDataOf(release(s, depositId, "REFUNDED")))?.code).toBe(GUARD);
     expect((await refusalDataOf(voidDeposit(s, depositId)))?.code).toBe(GUARD);
     expect(await untouched(s, depositId)).toEqual(before);
