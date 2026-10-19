@@ -53,21 +53,30 @@ Two gates now exist and must not be confused:
 - **Pilot launch gate (SCRUM-760).** One dealer (Bloom Cars), CASH and FINANCED
   deals through delivery, and only certified financial operations enabled. The
   full receipt, refund and correction lifecycle is **not** required to launch.
-  The gate passes only when the narrow scope is independently verified, with
+  The gate passes only when the narrow scope is independently verified (the
+  three bug hunters, the scenario library run against a real backend under
+  SCRUM-762, and the trusted cloud rehearsal; there is no second person), with
   evidence that:
   - every enabled workflow preserves the accounting invariants;
   - every excluded or uncertified financial mutation is blocked **server-side**
     (hiding it in the UI is not a block) and cannot corrupt financial state;
   - no critical financial defect is open against an enabled workflow;
-  - any refund or correction capability judged indispensable for launch is
-    certified before launch.
+  - any refund or correction capability the owner rules indispensable for
+    launch is certified and owner-approved before launch. An agent does not
+    make that call.
 - **Full-lifecycle production certification (post-pilot).** The original 30-day
   no-code lifecycle (customer invoice receipt application, unwind/refund,
   operator correction, SCRUM-813 / 714 / 716 / 722 / 723 / 724 / 571) is a set of
   **post-pilot activation gates**. Each deferred workflow stays disabled, and is
   enabled only by its own implemented, reviewed, deployed and certified change
   plus separate owner approval. The compile-time switches in
-  `convex/utils/customerCreditPayoutContainment.ts` stay as they are until then.
+  `convex/utils/customerCreditPayoutContainment.ts` stay as they are until then,
+  and dark helpers without a public caller stay uncalled.
+
+The narrowed CASH and configured FINANCED controls may be enabled for the pilot
+only once certified; that certification is part of SCRUM-760's evidence. For the
+pilot, item 1 above means the enabled scope is correct and every excluded door
+refuses truthfully, server-side.
 
 Do not broaden the pilot scope or enable a deferred financial operation without
 that separate certification and approval. A green test of only the narrowed path
