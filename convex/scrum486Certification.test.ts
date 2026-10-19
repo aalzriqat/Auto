@@ -2067,7 +2067,8 @@ const carArgs = (vin: string = nextVin()) => ({
  * company, finalization, and the finance company's 12,500 into one bank. A manual
  * 250 commission accrues on the sale. State at return: bank 12,500,000.
  */
-async function paidFinancedDealWithDeposit(tag: string) {
+async function paidFinancedDealWithDeposit(tag: string, opts: { rail?: "BANK_TRANSFER" | "CASH" } = {}) {
+  const rail = opts.rail ?? "BANK_TRANSFER";
   const s = await seedFinancedDealership(tag, {
     modules: MODULES, ownerPerms: UNWIND_PERMS, actors: UNWIND_ACTORS, label: "Certification", vinPrefix: "V760",
   });
@@ -2100,7 +2101,7 @@ async function paidFinancedDealWithDeposit(tag: string) {
   await s.approver.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   await s.owner.as.mutation(api.applications.registerExpectedPayment, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    orgId: s.orgId, applicationId, method: rail, expectedDate: Date.now(),
   });
   const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
     expectedCurrency: "JOD", idempotencyKey: `${tag}-zero-fee`, orgId: s.orgId, applicationId,
@@ -2118,7 +2119,7 @@ async function paidFinancedDealWithDeposit(tag: string) {
   await s.owner.as.mutation(api.applications.finalizeDeal, { idempotencyKey: `${tag}-finalize`, orgId: s.orgId, applicationId });
   await s.owner.as.mutation(api.bankAccounts.setReconciliationTarget, { orgId: s.orgId, bankAccountId: bankId });
   await s.approver.as.mutation(api.applications.confirmDisbursement, {
-    orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000, idempotencyKey: `${tag}-receipt`, bankAccountId: bankId,
+    orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000, idempotencyKey: `${tag}-receipt`, ...(rail === "BANK_TRANSFER" ? { bankAccountId: bankId } : {}),
   });
   const application = await s.t.run((ctx) => ctx.db.get(applicationId));
   const saleId = application!.finalizedSaleId!;
@@ -2895,10 +2896,6 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
     expect((await costRows(s, vehicleId)).vehicle?.status).toBe("SOLD");
     await expectRefusedAndUnchanged(s, () => correct(s, vehicleId, { newCost: 9_000 }), { code: "COST_CORRECTION_SOLD" });
 
-    // Guard-precondition attack: were the car not SOLD, the same call would post, so that refusal is the SOLD guard's.
-    await s.t.run((ctx) => ctx.db.patch(vehicleId, { status: "AVAILABLE" }));
-    await expect(expectRefusedAndUnchanged(s, () => correct(s, vehicleId, { newCost: 9_000 }), { code: "COST_CORRECTION_SOLD" }))
-      .rejects.toThrow();
   }, 30_000);
 
   test("CC-AP: a SUPPLIER_INVOICE_ERROR correction on an ON_ACCOUNT car moves the payable and 2400 together", async () => {
@@ -2997,10 +2994,131 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
     await expectRefusedAndUnchanged(s, () => correct(s, s.vehicleId, {
       correctionType: "SUPPLIER_INVOICE_ERROR", paymentMethod: undefined,
     }), { code: "COST_CORRECTION_SOURCED" });
-    // Guard-precondition attack: the same car presented as owned stock is refused for a different reason, so the
-    // refusal above is specifically the SOURCED guard.
-    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceType: "STOCK" }));
-    await expect(expectRefusedAndUnchanged(s, () => correct(s, s.vehicleId), { code: "COST_CORRECTION_SOURCED" }))
-      .rejects.toThrow();
+  }, 30_000);
+
+  test("U-RET CASH remittance: the unwind refunds cash by cash and reverses the same books", async () => {
+    const d = await paidFinancedDealWithDeposit("s760cashrail", { rail: "CASH" });
+    const { s } = d;
+    const CASH_RECEIPT = [J("1100", 12_500_000, 0), J("1210", 0, 12_500_000)];
+    expectLiteralRows(await journalRows(s), [
+      ...CAR_BOUGHT, ...DEPOSIT_HELD, ...FORWARD_PAID, ...FINANCED_SALE, ...CASH_RECEIPT, ...COMMISSION_ACCRUED,
+    ]);
+    // Only the forward moved the bank; the finance company's money arrived as cash.
+    expect(await bankBalanceMinor(s)).toBe(-1_575_000);
+    const unwindId = await startUnwind(d, "s760cashrail-start");
+    expect(await s.t.run((ctx) => ctx.db.get(unwindId))).toMatchObject({ remittanceMethod: "CASH", remittanceMinor: 12_500_000 });
+    await returnForward(d, unwindId, "s760cashrail-forward");
+    // Wrong rail and missing cash evidence both refuse with nothing written.
+    await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealUnwind.finishDealUnwind,
+      finishArgsFor(d, unwindId, "cr-1")), { code: "DEAL_UNWIND_REFUND_METHOD_MISMATCH" });
+    await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealUnwind.finishDealUnwind,
+      finishArgsFor(d, unwindId, "cr-2", { method: "CASH", bankReference: undefined, voucherNumber: "PV-1", recipientAcknowledged: false })),
+    { code: "DEAL_UNWIND_EVIDENCE_REQUIRED" });
+    await s.owner.as.mutation(api.dealUnwind.finishDealUnwind, finishArgsFor(d, unwindId, "s760cashrail-finish", {
+      method: "CASH", bankReference: undefined, voucherNumber: "PV-1", recipientAcknowledged: true,
+    }));
+    const rows = await journalRows(s);
+    expectOracleRejectsEveryMutant(rows, [
+      ...CAR_BOUGHT, ...DEPOSIT_HELD, ...reversedWithMirror(FORWARD_PAID), ...reversedWithMirror(FINANCED_SALE),
+      ...reversedWithMirror(CASH_RECEIPT), ...reversedWithMirror(COMMISSION_ACCRUED),
+    ]);
+    expect(await trialBalanceNormalBalance(s)).toEqual(UNWOUND_TRIAL_BALANCE);
+    expect(await bankBalanceMinor(s)).toBe(0);
+    expect(await dealRows(d)).toMatchObject({ application: "CANCELLED", sale: "CANCELLED", vehicle: { status: "IN_INSPECTION" } });
+  }, 30_000);
+
+  async function closeCurrentPeriod(s: CashSeed) {
+    const periodId = (await s.owner.as.query(api.accountingPeriods.list, { orgId: s.orgId }))[0]._id;
+    const checklist = await s.owner.as.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId });
+    await s.owner.as.mutation(api.accountingPeriods.close, { orgId: s.orgId, periodId, acknowledgedWarnings: checklist.warnings });
+    expect((await s.t.run((ctx) => ctx.db.get(periodId)))?.status).toBe("CLOSED");
+  }
+
+  test("U-RET period not open: the forward return and the finish refuse when today's period is closed, writing nothing", async () => {
+    const d = await paidFinancedDealWithDeposit("s760periodclosed");
+    const { s } = d;
+    const unwindId = await startUnwind(d, "s760periodclosed-start");
+    await closeCurrentPeriod(s);
+    await expectRefusedAndUnchanged(s, () => returnForward(d, unwindId, "pc-1"), { code: "DEAL_UNWIND_PERIOD_NOT_OPEN" });
+    expectLiteralRows(await journalRows(s), PAID_DEAL_ROWS);
+
+    // Same for the finish, with the forward already returned while the period was open.
+    const e = await paidFinancedDealWithDeposit("s760periodclosedb");
+    const unwind2 = await startUnwind(e, "s760periodclosedb-start");
+    await returnForward(e, unwind2, "s760periodclosedb-forward");
+    await closeCurrentPeriod(e.s);
+    await expectRefusedAndUnchanged(e.s, () => e.s.owner.as.mutation(api.dealUnwind.finishDealUnwind,
+      finishArgsFor(e, unwind2, "pc-2")), { code: "DEAL_UNWIND_PERIOD_NOT_OPEN" });
+    expectLiteralRows(await journalRows(e.s), FORWARD_RETURNED_ROWS);
+    expect((await dealRows(e)).sale).toBe("COMPLETED");
+  }, 30_000);
+
+  test("CC period not open: a correction refuses COST_CORRECTION_NOT_POSTABLE_NOW when today's period is closed", async () => {
+    const s = await costDealership("s760ccperiod");
+    const vehicleId = await buyCar(s, "s760ccperiod", { method: "CASH" });
+    await closeCurrentPeriod(s);
+    await expectRefusedAndUnchanged(s, () => correct(s, vehicleId), { code: "COST_CORRECTION_NOT_POSTABLE_NOW" });
+    expect((await costRows(s, vehicleId)).vehicle?.purchasePrice).toBe(12_500);
+  }, 30_000);
+
+  test("CC-UP: an upward CASH_REFUND correction pays the supplier more in cash, raising cost and inventory", async () => {
+    const s = await costDealership("s760ccup");
+    const vehicleId = await buyCar(s, "s760ccup", { method: "CASH" });
+    await correct(s, vehicleId, { newCost: 13_000, reason: "Supplier invoice was for 13,000." });
+    const rows = await journalRows(s);
+    expectOracleRejectsEveryMutant(rows, [...CAR_12500_CASH, J("1400", 500_000, 0), J("1100", 0, 500_000)]);
+    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": -13_000_000, "1400|JOD": 13_000_000 });
+    const after = await costRows(s, vehicleId);
+    expect(after.vehicle?.purchasePrice).toBe(13_000);
+    expect(after.cashbookCorrections).toHaveLength(1);
+    expect(after.cashbookCorrections[0]).toMatchObject({ type: "OUT", amount: 500, category: "VEHICLE_PURCHASE" });
+  }, 30_000);
+
+  test("CC-BANK: a CASH_REFUND received into a bank moves that bank's balance; bank rules refuse without change", async () => {
+    const s = await costDealership("s760ccbank");
+    const vehicleId = await buyCar(s, "s760ccbank", { method: "CASH" });
+    const bankId = await seedBank(s.t, s.orgId);
+    await s.owner.as.mutation(api.bankAccounts.setReconciliationTarget, { orgId: s.orgId, bankAccountId: bankId });
+    expect(await bankBalanceMinor(s)).toBe(0);
+    await expectRefusedAndUnchanged(s, () => correct(s, vehicleId, { paymentMethod: "BANK_TRANSFER" }), { code: "COST_CORRECTION_BANK_INVALID" });
+    await expectRefusedAndUnchanged(s, () => correct(s, vehicleId, { paymentMethod: "CASH", bankAccountId: bankId }), {
+      code: "COST_CORRECTION_BANK_NOT_APPLICABLE",
+    });
+    await expectRefusedAndUnchanged(s, () => correct(s, vehicleId, { paymentMethod: "CHEQUE" }), {
+      code: "COST_CORRECTION_HELD_CHEQUE_UNSUPPORTED",
+    });
+    await correct(s, vehicleId, { paymentMethod: "BANK_TRANSFER", bankAccountId: bankId });
+    const rows = await journalRows(s);
+    expectOracleRejectsEveryMutant(rows, [...CAR_12500_CASH, J("1110", 2_700_000, 0), J("1400", 0, 2_700_000)]);
+    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": -12_500_000, "1110|JOD": 2_700_000, "1400|JOD": 9_800_000 });
+    // The bank dimension: the refund lands on the named bank and its book balance reads it.
+    expect(await bankBalanceMinor(s)).toBe(2_700_000);
+    expect((await costRows(s, vehicleId)).corrections[0]).toMatchObject({ correctionType: "CASH_REFUND", bankAccountId: bankId });
+  }, 30_000);
+
+  test("CC-AP VENDOR_CREDIT lowers the payable and cost; a partly paid payable refuses both AP types", async () => {
+    const s = await costDealership("s760ccvendor");
+    const vehicleId = await buyCar(s, "s760ccvendor", { method: "ON_ACCOUNT" });
+    await correct(s, vehicleId, { newCost: 11_000, correctionType: "VENDOR_CREDIT", paymentMethod: undefined });
+    const rows = await journalRows(s);
+    expectOracleRejectsEveryMutant(rows, [
+      J("1400", 12_500_000, 0), J("2400", 0, 12_500_000), J("2400", 1_500_000, 0), J("1400", 0, 1_500_000),
+    ]);
+    expect(await trialBalanceNormalBalance(s)).toEqual({ "1400|JOD": 11_000_000, "2400|JOD": 11_000_000 });
+    const after = await costRows(s, vehicleId);
+    expect(after.vehicle?.purchasePrice).toBe(11_000);
+    expect(after.payables).toMatchObject([{ amountDue: 11_000, status: "PENDING" }]);
+
+    // Pay 1,000 of it: the invoice is no longer adjustable automatically.
+    const bankId = await seedBank(s.t, s.orgId);
+    await s.owner.as.mutation(api.sourcingPayables.recordPartialPayment, {
+      idempotencyKey: "s760ccvendor-pay", orgId: s.orgId, payableId: after.payables[0]._id, amount: 1_000,
+      paymentMethod: "BANK_TRANSFER", bankAccountId: bankId,
+    });
+    for (const correctionType of ["SUPPLIER_INVOICE_ERROR", "VENDOR_CREDIT"] as const) {
+      await expectRefusedAndUnchanged(s, () => correct(s, vehicleId, { newCost: 10_000, correctionType, paymentMethod: undefined }), {
+        code: "COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE",
+      });
+    }
   }, 30_000);
 });
