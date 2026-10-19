@@ -3059,7 +3059,9 @@ describe("daily collection reminders stay bounded without losing work (SCRUM-807
       // Per org: 14 sends + 1 window child + 1 resume = 16 (the 15 budget units plus the
       // resume); plus the single page continuation. 50 * 16 + 1, below the 1000 limit.
       expect(await pendingFunctions(t)).toHaveLength(801);
-    });
+      // Seeds 50 tenants x 41 rows: about 3s on an idle machine, past the 5s default
+      // under CI load, so it carries the explicit budget other heavy suites use.
+    }, 30_000);
 
     test("a window step that is not a due-soon or cheque window is rejected before anything is read", async () => {
       const t = startClock();
