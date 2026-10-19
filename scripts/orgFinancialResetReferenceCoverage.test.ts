@@ -113,6 +113,10 @@ function allReferences(): Ref[] {
  * preflight blocks every non-internal caller, and the reason must say so.
  */
 const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
+  "dealCommissionLines.payrollItemId->payrollItems":
+    "Written only (payroll.ts payItem patch when a line is paid); no reader dereferences it. The reset deletes lines before payroll items anyway.",
+  "payrollItems.commissionLineIds[]->dealCommissionLines":
+    "Optional array; every dereference null-guards the get (payroll.ts settleItemCommissions and approveRun skip a missing line), and the outbox guard and assertAccrualsPosted only build an idempotency key from the id. The reset deletes lines before payroll items.",
   "accountingEvents.reversalOfEventId->accountingEvents":
     "Self-reference; read only as an id compare (utils/financeCompanyForward.ts:154) and passed to a null-guarded get (utils/prepaidRecognitionEvents.ts:179-182); never a hard dereference.",
   "accountingEvents.reversedByEventId->accountingEvents":
