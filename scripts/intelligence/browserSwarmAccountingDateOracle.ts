@@ -14,6 +14,9 @@ import { judgeRefusedAttempt, type Judgement, type ProbeOutcome } from "./browse
 /** The refusal `approveManualJournal` raises for a CLOSED period (the state this scenario sets up), and no other refusal. */
 export const CLOSED_PERIOD_REFUSAL = /\bis CLOSED\. Manual journal posting not allowed/;
 
+/** The refusal createManualJournal and approveManualJournal raise while manual journals are off (SCRUM-795), and no other refusal. */
+export const MANUAL_JOURNALS_DISABLED_REFUSAL = /turned off during the pilot/;
+
 export interface PeriodView {
   id: string;
   startDate: number;
@@ -191,7 +194,7 @@ function judgeDuplicateIds(lists: readonly [string, readonly EntryView[] | null]
 
 const show = (value: unknown): string => (value === null ? "nothing" : String(value));
 
-function judgeDraftUnchanged(refused: AccountingDateObservation["refused"]): Judgement {
+function judgeDraftUnchanged(refused: Pick<AccountingDateObservation["refused"], "draftBefore" | "draftAfter" | "draftStillPending">): Judgement {
   const { draftBefore, draftAfter, draftStillPending } = refused;
   if (draftBefore === null) return unjudged("the refused draft was not read before the approval, so its fields could not be compared");
   // A draft that left the pending list is already a violation; there is no row left to compare.
@@ -397,4 +400,75 @@ export function evaluateAccountingDate(observation: AccountingDateObservation): 
   // A scenario that cannot tell a right date from a wrong one is judged on nothing: nothing else is reported as clean.
   if (premise.unjudged.length > 0) return premise;
   return merge(judgePosted(observation), judgeRefused(observation));
+}
+
+export interface ManualJournalsOffObservation {
+  /** The memo the refused create carried: a journal or draft bearing it is the attempt having written something. */
+  memo: string;
+  createAttempt: ProbeOutcome;
+  /** The approval of a legacy pending draft by a second seat; null when the preview held none, which is stated, not passed. */
+  approveAttempt: ProbeOutcome | null;
+  approvedDraftId: string | null;
+  /** Every journal of the organization, read to completion immediately before the first attempt and after the last. */
+  entriesBefore: readonly EntryView[] | null;
+  entriesAfter: readonly EntryView[] | null;
+  /** Every pending draft, read at the same moments; null when a row could not be reduced to the compared fields. */
+  draftsBefore: readonly DraftView[] | null;
+  draftsAfter: readonly DraftView[] | null;
+}
+
+/**
+ * SCRUM-795: with manual journals off, create and approve are each refused with the pilot message and the refusal
+ * leaves no trace: no journal appears or changes, no draft appears, every pending draft keeps its fields and stays
+ * pending. A read that is missing makes the matching claim unjudged, never clean.
+ */
+export function evaluateManualJournalsOff(observation: ManualJournalsOffObservation): Judgement {
+  const { memo, createAttempt, approveAttempt, entriesBefore, entriesAfter, draftsBefore, draftsAfter } = observation;
+  const verdicts: Judgement[] = [judgeRefusedAttempt("preparing a manual journal while manual journals are off", createAttempt)];
+  if (approveAttempt !== null) verdicts.push(judgeRefusedAttempt("approving a legacy pending manual journal while manual journals are off", approveAttempt));
+
+  if (entriesBefore === null || entriesAfter === null) {
+    verdicts.push(unjudged("the organization's journals were not read on both sides of the refused attempts, so a write could not be ruled out"));
+  } else {
+    verdicts.push(judgeDuplicateIds([["organization before", entriesBefore], ["organization after", entriesAfter]]));
+    const pair = comparable(entriesBefore, entriesAfter);
+    if (pair !== null) {
+      const unattributed: EntryView[] = [];
+      for (const row of newRows(...pair)) {
+        if (row.memo === memo) verdicts.push(violation(`a journal carrying the refused memo was posted anyway as ${row.id}`));
+        else unattributed.push(row);
+      }
+      verdicts.push(judgeExistingRows(...pair));
+      if (unattributed.length > 0) {
+        verdicts.push(
+          unjudged(
+            `new journal(s) [${sortedIds(unattributed).join(", ")}] appeared in the organization during the refused attempts and carry no link to another source, so a write by the refused attempts could not be ruled out`,
+          ),
+        );
+      }
+    }
+  }
+
+  if (draftsBefore === null || draftsAfter === null) {
+    verdicts.push(unjudged("the pending drafts were not read on both sides of the refused attempts, or a row was malformed, so a change could not be ruled out"));
+  } else {
+    const known = new Set(draftsBefore.map((draft) => draft.id));
+    for (const draft of draftsAfter) {
+      if (known.has(draft.id)) continue;
+      verdicts.push(
+        draft.memo === memo
+          ? violation(`a draft carrying the refused memo was prepared anyway as ${draft.id}`)
+          : unjudged(`a new pending draft ${draft.id} appeared during the refused attempts, so a write by them could not be ruled out`),
+      );
+    }
+    for (const before of draftsBefore) {
+      const after = draftsAfter.find((draft) => draft.id === before.id) ?? null;
+      if (after === null) {
+        verdicts.push(violation(`pending draft ${before.id} left the pending list though every attempt was refused`));
+      } else {
+        verdicts.push(judgeDraftUnchanged({ draftBefore: before, draftAfter: after, draftStillPending: true }));
+      }
+    }
+  }
+  return merge(...verdicts);
 }

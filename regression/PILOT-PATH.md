@@ -31,7 +31,7 @@ Plus, from earlier PRs: three `saleEconomics` rule records and the financed-fina
 
 ## Waiting on others
 
-- SCRUM-795 off-switches (manual journal approval, refund payout, salesperson cash receipt): each refusal gets a permission record once it lands, with its failing-first test.
+- SCRUM-795 off-switches (refund payout, salesperson cash receipt): each refusal gets a permission record once it lands, with its failing-first test. The manual journal off-switch is recorded below.
 - SCRUM-413b refusal list: needs a SCRUM-413#description digest; deferred behind this.
 - Parameterized tests (SCRUM-704 matrix, SCRUM-27 `describe.each`) need per-case titles or the S3 census.
 
@@ -44,3 +44,8 @@ Plus, from earlier PRs: three `saleEconomics` rule records and the financed-fina
 
 - Added (AF-98 verified, I re-read both bodies): sales-member-cannot-confirm-a-deposit-request (depositRequests.confirm; refusal + no money rows) and sales-member-cannot-allocate-or-release-a-deposit-hold (the test calls allocateToVehicles, releaseVehicleAllocation and resolveReleasedAllocation x2; the record's single step names allocateToVehicles as the representative and claims only that the hold row is unchanged, NOT the money tables).
 - vehicles.createReservation with a deposit stays a GAP: its test (DA-01) uses a custom-permission editor, not the SALES template, so it proves 'lacking confirm:finance_disbursement is refused', not 'SALES is refused'. The SALES half needs PR #518's template pin.
+
+## SCRUM-795 item 1 (manual journals off)
+
+- Five records bind exact titles in convex/manualJournalsPilotOff.scrum795.test.ts and cite SCRUM-760#c22474 (digest added to rulings.json): create refused, approve refused with the legacy draft left pending, the legacy draft still rejectable (permission domain, matrix row label `SCRUM-50-manual-journal-off`), and both opening-balance paths still posting (money domain, label `SCRUM-50-opening-balance-paths`). The matrix labels are descriptive, not joined SCRUM-486 row ids.
+- Gaps, stated: the create record claims the refusal and unchanged database as the bound test asserts them; it does not claim the refusal precedes every read, which the test does not observe separately. The real-backend approve refusal runs only in trusted-main E2E (the legacy draft is seeded there only); on other previews the swarm mission ACCOUNTING_DATE_BOUNDARY records it as not exercised. The declared-date and closed-period posting rules are proven against the enabled code with the switch mocked off, and the GL register replay is SCRUM-800.
