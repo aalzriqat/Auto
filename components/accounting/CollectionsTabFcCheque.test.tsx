@@ -20,6 +20,14 @@ const stubs = vi.hoisted(() => ({
   nextCommand: 0,
 }));
 
+// SCRUM-760: the cleared-cheque return switch is a live handle. Tests here drive the deferred Return on a
+// CLEARED customer cheque with the pilot block OFF; the shipped-state test turns it ON.
+const pilot = vi.hoisted(() => ({
+  clearedChequeReturn: false,
+}));
+vi.mock("@/convex/utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("@/test-utils/postDeliveryDoorSwitches")).withPostDeliverySwitches(await importOriginal(), pilot));
+
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: false, locale: "en" }),
 }));
@@ -83,6 +91,7 @@ const cheque = (over: Record<string, unknown>) =>
   }) as unknown as Doc<"postDatedCheques">;
 
 afterEach(() => {
+  pilot.clearedChequeReturn = false;
   cleanup();
   stubs.queryResults.clear();
   stubs.paginated.clear();
@@ -265,6 +274,28 @@ describe("Collections, Cheques tab: Return", () => {
       expect(ret.disabled).toBe(true);
     },
   );
+
+  test("SCRUM-760 shipped state: a CLEARED customer cheque has Return disabled with the pilot notice", async () => {
+    pilot.clearedChequeReturn = true;
+    stubs.paginated.set("collections:listCheques", [
+      cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "CLEARED" }),
+    ]);
+    await openChequesTab();
+    expect((screen.getByRole("button", { name: "Return" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("cheque-return-pilot-disabled").textContent).toBe(
+      "ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED"
+    );
+  });
+
+  test("SCRUM-760 shipped state, CONTROL: a DEPOSITED customer cheque keeps an enabled Return (returnCheque is not blocked)", async () => {
+    pilot.clearedChequeReturn = true;
+    stubs.paginated.set("collections:listCheques", [
+      cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "DEPOSITED" }),
+    ]);
+    await openChequesTab();
+    expect((screen.getByRole("button", { name: "Return" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId("cheque-return-pilot-disabled")).toBeNull();
+  });
 
   test("a customer's cheque keeps Return", async () => {
     stubs.paginated.set("collections:listCheques", [
