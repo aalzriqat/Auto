@@ -30,7 +30,7 @@ Look for the originating spec, in this order:
 
 1. SCRUM-xxx keys in the commit messages, branch name and PR body, fetched from Jira along with any owner ruling they cite (for example SCRUM-813).
 2. A path the user passed as an argument.
-3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
+3. A spec file under `docs/` or `specs/` matching the branch name or feature.
 4. If nothing is found, say so in the report. The **Spec** sub-agent skips and reports "no spec available". Never ask the user to supply it.
 
 ### 3. Identify the standards sources

@@ -29,12 +29,12 @@ Spend disproportionate effort here. **Be aggressive. Be creative. Refuse to give
 2. **Curl / HTTP script** against a running dev server.
 3. **CLI invocation** with a fixture input, diffing stdout against a known-good snapshot.
 4. **Headless browser script** (Playwright / Puppeteer) that drives the UI and asserts on DOM/console/network.
-5. **Replay a captured trace.** Save a real network request / payload / event log to disk; replay it through the code path in isolation.
+5. **Replay a captured trace.** Save a real network request / payload / event log to disk, redacted and outside the repository, never committed; replay it through the code path in isolation.
 6. **Throwaway harness.** Spin up a minimal subset of the system (one service, mocked deps) that exercises the bug code path with a single function call.
 7. **Property / fuzz loop.** If the bug is "sometimes wrong output", run 1000 random inputs and look for the failure mode.
 8. **Bisection harness.** If the bug appeared between two known states (commit, dataset, version), automate "boot at state X, check, repeat" so you can `git bisect run` it.
 9. **Differential loop.** Run the same input through old-version vs new-version (or two configs) and diff outputs.
-10. **Human in the loop.** Last resort. If a human must click, give them numbered steps and ask for the exact observations back.
+10. **Human in the loop.** Last resort. If a human must click, give them numbered steps and name the exact observations you need back, then continue with other work.
 
 Build the right feedback loop, and the bug is 90% fixed.
 
@@ -54,7 +54,7 @@ The goal is not a clean repro but a **higher reproduction rate**. Loop the trigg
 
 ### When you genuinely cannot build a loop
 
-Stop and say so explicitly. List what you tried. Ask for: (a) access to whatever environment reproduces it, or (b) a redacted captured artifact (HAR file, log dump, screen recording with timestamps). Never add instrumentation to production directly. Production changes go through a normal PR and the Production deploy workflow. Do **not** proceed to hypothesise without a loop.
+Report what you tried and what is missing, then end the turn or fall back to the decision rule in the project instructions. Name what is needed: (a) access to whatever environment reproduces it, or (b) a redacted captured artifact (HAR file, log dump, screen recording with timestamps). Never add instrumentation to production directly. Production changes go through a normal PR and the Production deploy workflow. Do **not** proceed to hypothesise without a loop.
 
 ### Completion criterion: a tight loop that goes red
 
@@ -119,7 +119,7 @@ Write the regression test **before the fix**, but only if there is a **correct s
 
 A correct seam is one where the test exercises the **real bug pattern** as it occurs at the call site. If the only available seam is too shallow (single-caller test when the bug needs multiple callers, unit test that can't replicate the chain that triggered the bug), a regression test there gives false confidence.
 
-**If no correct seam exists, that itself is the finding.** Note it. The codebase architecture is preventing the bug from being locked down. Flag this for the next phase.
+**If no correct seam exists, that itself is the finding.** Note it. The codebase architecture is preventing the bug from being locked down. Report it in the thread.
 
 If a correct seam exists:
 
@@ -136,7 +136,7 @@ Required before declaring done:
 - [ ] Original repro no longer reproduces (re-run the Phase 1 loop)
 - [ ] Regression test passes (or absence of seam is documented)
 - [ ] All `[DEBUG-...]` instrumentation removed (`grep` the prefix)
-- [ ] Throwaway prototypes deleted (or moved to a clearly-marked debug location)
+- [ ] Throwaway prototypes deleted, never committed
 - [ ] The hypothesis that turned out correct is stated in the commit / PR message, so the next debugger learns
 - [ ] For an I/O or performance bug, the before and after numbers are vetted with the `benchmark-checklist` skill
 - [ ] For a money, permission or schema bug, the `blast-radius` skill has been run on the fix

@@ -46,7 +46,7 @@ From pstack (56 skills): These were read and left out on purpose:
 From Matt Pocock's skills (27 listed at aihero.dev/skills, MIT, `mattpocock/skills`):
 
 - `grilling`, `grill-me`, `grill-with-docs`, `to-questionnaire`: interview the user and wait for answers. Threads here work without approval waits and use the decision rule instead.
-- `to-spec`, `to-tickets`, `implement`, `implement-spec`, `triage`, `setup-matt-pocock-skills`, `wizard`: built around GitHub or GitLab issues and parallel worktree fleets that merge themselves. The tracker here is Jira, and merges follow the repository gates.
+- `to-spec`, `to-tickets`, `implement`, `implement-spec`, `triage`, `setup-matt-pocock-skills`: built around GitHub or GitLab issues and parallel worktree fleets that merge themselves. `wizard` generates a script that writes `.env` values and GitHub secrets, so it is rejected on security grounds. The tracker here is Jira, and merges follow the repository gates.
 - `pr`: its PR body template conflicts with the required attribution block and Before/After/How format. Its one-way or two-way door and blast radius idea is already covered by `blast-radius`.
 - `domain-modeling`, `codebase-design`, `improve-codebase-architecture`: would create a glossary and decision records, or propose refactors, in a money codebase without an owner ruling. Revisit if the owner wants a glossary.
 - `wayfinder`, `prototype`, `research`, `retro`, `handoff`, `teach`, `wait-what`, `ask-matt`, `writing-for-agents`: overlap `correct`, the existing handoff flow, or what Claude does by default.
