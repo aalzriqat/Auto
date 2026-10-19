@@ -7,7 +7,7 @@ description: "Write a failing regression test before fixing a bug. Required for 
 
 > Adapted from pstack by Lauren Tan (MIT), cursor/plugins@d457567. See ../PSTACK-LICENSE and ../README.md.
 
-**AutoFlow rule.** A fix for a money or permission bug always gets a regression test that fails before the fix and passes after it (SCRUM-761). The "impractical" escape below does not apply to those. Add the scenario to the backend test suite, and to the certification matrix row where one exists. Screen-only behavior gets a browser replay.
+**AutoFlow rule.** A fix for a money or permission bug always gets a regression test that fails before the fix and passes after it (SCRUM-761). The "impractical" escape below does not apply to those, nor to any scenario found by the SCRUM-760 bug hunters: each becomes a permanent backend test or browser replay, and a scenario that cannot run is a failure, never a skip. Add the scenario to the backend test suite, and to the certification matrix row where one exists. Screen-only behavior gets a browser replay.
 
 When fixing a bug with a clear, cheap test path, make the broken behavior executable before changing production code. The goal is a focused regression test that fails before the fix and passes after it.
 
