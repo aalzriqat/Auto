@@ -25,6 +25,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { settleOutbox } from "../test-utils/outboxWork";
@@ -1725,14 +1726,7 @@ describe("SCRUM-801: resolving a released share as OTHER is refused during the p
       vehicleId: s.vehicleA,
     });
     const [holdA] = await holdsFor(s, s.vehicleA);
-    const snapshot = () =>
-      s.t.run(async (ctx) => {
-        const out: Record<string, unknown[]> = {};
-        for (const name of Object.keys(schema.tables)) {
-          out[name] = await ctx.db.query(name as any).collect();
-        }
-        return out;
-      });
+    const snapshot = () => dbSnapshot(s.t, Object.keys(schema.tables));
     const before = await snapshot();
 
     await expect(

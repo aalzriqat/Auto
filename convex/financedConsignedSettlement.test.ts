@@ -19,6 +19,7 @@
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
 import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { payInvoice, seedSaleCompletedPosting } from "../test-utils/saleInvoiceFixtures";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
@@ -7485,6 +7486,8 @@ describe("the closing matrix c16216 requires", () => {
 
   test("SCRUM-801: finalizing with the OTHER treatment is refused during the pilot", async () => {
     const s = await seedDealership("p801finalize");
+    // Taken immediately before finalizeDeal, after the deal has been built.
+    let before: Awaited<ReturnType<typeof dbSnapshot>> | undefined;
 
     // finalizeDeal is the third completion door. OTHER posts nothing and leaves
     // the liability for a manual journal, which the pilot has switched off.
@@ -7495,6 +7498,9 @@ describe("the closing matrix c16216 requires", () => {
         downPayment: 3_000,
         depositTakenBy: "approver",
         depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
+        beforeFinalize: async () => {
+          before = await dbSnapshot(s.t, Object.keys(schema.tables));
+        },
       })
     ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
 
@@ -7503,6 +7509,9 @@ describe("the closing matrix c16216 requires", () => {
     const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
     expect(deposits[0].status).toBe("HELD");
     expect(deposits[0].holdActive).toBe(true);
+    // Every row of every table is unchanged, not only the three read above.
+    expect(before).toBeDefined();
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
     const after = await ledgerBySystemKey(s);
     expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(-3_000 * SCALE);
   });

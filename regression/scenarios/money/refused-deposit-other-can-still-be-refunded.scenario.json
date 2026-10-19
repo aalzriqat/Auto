@@ -1,6 +1,6 @@
 {
   "id": "refused-deposit-other-can-still-be-refunded",
-  "fingerprint": "608af6ef3c47ddc3cee171ee988cfc710b6a889656042b7ebacc56003f5c7974",
+  "fingerprint": "0a4b7eb6293d22c677b6dd127102eda812f0eb21c8081cfaa422bdac715b6857",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -43,7 +43,7 @@
       "value": "REFUNDED"
     },
     {
-      "observable": "deposit.liabilityCleared",
+      "observable": "refund.liabilityDebited",
       "value": true
     }
   ],

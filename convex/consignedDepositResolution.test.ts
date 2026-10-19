@@ -16,6 +16,7 @@
  * it can be nothing at all. So the treatment has to be stated.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -1068,15 +1069,8 @@ describe("REFUND_TO_CUSTOMER and FORFEITED keep every control they carry elsewhe
 });
 
 /** Every row of every schema table, so a refusal can be shown to have written nothing. */
-async function snapshotAllTables(t: ReturnType<typeof convexTestWithComponents>) {
-  return await t.run(async (ctx) => {
-    const out: Record<string, unknown[]> = {};
-    for (const name of Object.keys(schema.tables)) {
-      out[name] = await ctx.db.query(name as any).collect();
-    }
-    return out;
-  });
-}
+const snapshotAllTables = (t: ReturnType<typeof convexTestWithComponents>) =>
+  dbSnapshot(t, Object.keys(schema.tables));
 
 describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on", () => {
   test("the shipped switch is on", async () => {
@@ -1107,6 +1101,33 @@ describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on
         orgId: s.orgId,
         quoteId: s.quoteId,
         supplierSettlementRoute: "THROUGH_DEALERSHIP",
+        depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(await snapshotAllTables(s.t)).toEqual(before);
+  });
+
+  test("sales.completeDraft refuses OTHER with the pilot code and writes nothing", async () => {
+    const s = await seed("p801draft");
+    // `createDraft` never names a quote (SCRUM-425), so a quote-linked draft is
+    // legacy data: link one directly, which is the only way a draft reaches
+    // the deposit resolution at completion.
+    const saleId = await s.asUser.mutation(api.sales.createDraft, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      salespersonId: s.userId,
+      salePrice: SALE_PRICE,
+      saleDate: Date.now(),
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+    });
+    await s.t.run((ctx) => ctx.db.patch(saleId, { quoteId: s.quoteId }));
+    const before = await snapshotAllTables(s.t);
+    await expect(
+      s.asUser.mutation(api.sales.completeDraft, {
+        orgId: s.orgId,
+        saleId,
+        idempotencyKey: crypto.randomUUID(),
         depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
       })
     ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
