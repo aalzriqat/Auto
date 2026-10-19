@@ -9,7 +9,11 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import type { TranslationKey } from "@/lib/i18n/dictionaries";
 import { Info, Eye, EyeOff } from "lucide-react";
+
+// Typed against the dictionary, so a renamed or removed key fails the typecheck.
+const RECORDED_INPUTS_HEADING: TranslationKey = "RecordedCostInputs";
 
 interface VehicleCostBarProps {
   vehicleId: string;
@@ -62,7 +66,7 @@ export function VehicleCostBar({ vehicleId, purchasePrice }: Readonly<VehicleCos
       <div className="flex items-center justify-between gap-1.5 mb-2">
         <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">
           <Info className="h-3.5 w-3.5" />
-          {t("RecordedCostInputs")}
+          {t(RECORDED_INPUTS_HEADING)}
         </div>
         <button
           type="button"
