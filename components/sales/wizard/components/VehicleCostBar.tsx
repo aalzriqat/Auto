@@ -53,10 +53,9 @@ export function VehicleCostBar({ vehicleId, purchasePrice }: Readonly<VehicleCos
     );
   }
 
-  // SCRUM-55: this panel shows the two stored inputs only. It used to add them up as "Total Cost" and subtract from the sale price as "Profit", but `totalByVehicle` is every vehicle expense at its gross amount, while the books cost the vehicle from landed cost plus only the capitalized net expenses. A second profit formula in the client disagreed with the ledger (owner 2026-10-08, SCRUM-795 c22479); the authoritative margin lives in accounting, not here.
-  const hasCostData = purchasePrice != null;
-
-
+  // SCRUM-55: shows the two stored inputs only. It derives no cost or profit;
+  // the authoritative margin lives in accounting (SCRUM-795 c22479).
+  const hasPurchasePrice = purchasePrice != null;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-slate-700 p-3 text-sm">
@@ -79,27 +78,16 @@ export function VehicleCostBar({ vehicleId, purchasePrice }: Readonly<VehicleCos
 
       {isRevealed && (
         <div className="space-y-1">
-          {hasCostData ? (
-            <>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t("PurchasePrice" as any)}</span>
-                <span className="tabular-nums font-medium">{formatCurrency(purchasePrice!)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t("TotalExpenses" as any)}</span>
-                <span className="tabular-nums font-medium text-amber-600">
-                  {formatCurrency(totalExpenses)}
-                </span>
-              </div>
-            </>
-          ) : (
+          {hasPurchasePrice && (
             <div className="flex justify-between">
-              <span className="text-muted-foreground">{t("TotalExpenses" as any)}</span>
-              <span className="tabular-nums font-medium text-amber-600">
-                {formatCurrency(totalExpenses)}
-              </span>
+              <span className="text-muted-foreground">{t("PurchasePrice" as any)}</span>
+              <span className="tabular-nums font-medium">{formatCurrency(purchasePrice)}</span>
             </div>
           )}
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t("TotalExpenses" as any)}</span>
+            <span className="tabular-nums font-medium text-amber-600">{formatCurrency(totalExpenses)}</span>
+          </div>
         </div>
       )}
     </div>
