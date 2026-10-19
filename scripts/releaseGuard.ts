@@ -1111,3 +1111,149 @@ export function renderReleaseSummary(input: {
 
   return lines.join("\n");
 }
+
+// ─── Bank balance aggregate backfill (SCRUM-54) ─────────────────────────────
+
+export type BankBackfillStep =
+  | { kind: "ready" }
+  | { kind: "more" }
+  | { kind: "notApplicable" }
+  | { kind: "refused"; reason: string };
+
+/**
+ * Classifies one `bankBalanceBackfill:runPage` result.
+ *
+ * Bank balances read from per-org aggregate trees that a release must rebuild
+ * once for the current layout; until it does, every bank balance in that org
+ * reads as unavailable. `UNAVAILABLE` is an org with no bank control account,
+ * which has nothing to rebuild. Anything else that is not progress refuses:
+ * a reset in progress, a historical line the aggregate cannot accept, or a
+ * shape this script does not know. The reasons are fixed text, never the
+ * backend's, because this output is public.
+ */
+export function classifyBankBackfillStep(value: unknown): BankBackfillStep {
+  const status = typeof value === "object" && value !== null ? (value as { status?: unknown }).status : undefined;
+  switch (status) {
+    case "READY":
+      return { kind: "ready" };
+    case "MORE":
+      return { kind: "more" };
+    case "UNAVAILABLE":
+      return { kind: "notApplicable" };
+    case "RESET_IN_PROGRESS":
+      return { kind: "refused", reason: "the organization is being reset; re-run once the reset has finished" };
+    case "INCONSISTENT_HISTORY":
+      return {
+        kind: "refused",
+        reason: "a historical bank line was refused by the aggregate; its balance stays unavailable until that line is corrected",
+      };
+    default:
+      return { kind: "refused", reason: "the backfill returned a result this script does not recognise" };
+  }
+}
+
+export type BankRebuildResult = {
+  ready: number;
+  notApplicable: number;
+  /** `<opaque ref>: <fixed reason>` per org that refused; never backend text. */
+  refused: string[];
+  /** Set when the deadline or page cap ended the whole phase early. */
+  stopped?: { kind: "deadline" | "pageCap"; ref: string };
+};
+
+type BankRebuildInput = {
+  orgs: { orgId: string }[];
+  runPage: (orgId: string) => { ok: true; value: unknown } | { ok: false; reason: string };
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  maxPages: number;
+  log: (level: "info" | "error", line: string) => void;
+};
+
+/** How one organization's rebuild ended: a final step, or a stop for the whole phase. */
+type BankOrgOutcome =
+  | { kind: "ready"; pages: number }
+  | { kind: "notApplicable" }
+  | { kind: "refused"; reason: string }
+  | { kind: "deadline" | "pageCap" };
+
+function rebuildOneOrg(input: BankRebuildInput, orgId: string): BankOrgOutcome {
+  for (let pages = 0; ; ) {
+    if (input.now() - input.startedAt > input.timeoutMs) return { kind: "deadline" };
+    if (pages >= input.maxPages) return { kind: "pageCap" };
+    const page = input.runPage(orgId);
+    pages += 1;
+    const step: BankBackfillStep = page.ok
+      ? classifyBankBackfillStep(page.value)
+      : { kind: "refused", reason: page.reason };
+    if (step.kind === "ready") return { kind: "ready", pages };
+    if (step.kind !== "more") return step;
+  }
+}
+
+/**
+ * Rebuilds every organization's bank balance aggregates, one `runPage` call at
+ * a time, and never lets one organization keep the others from running.
+ *
+ * A refusal (bad history, a reset in progress, a failed call) is recorded and
+ * the loop moves on; only the deadline and the page cap end the whole phase.
+ * `runPage` is injected so this is testable without a deployment, and `log`
+ * receives only opaque refs and fixed text because its output is public.
+ */
+export function rebuildBankBalances(input: BankRebuildInput): BankRebuildResult {
+  const result: BankRebuildResult = { ready: 0, notApplicable: 0, refused: [] };
+  for (const org of input.orgs) {
+    const ref = opaqueOrgRef(org.orgId);
+    const outcome = rebuildOneOrg(input, org.orgId);
+    if (outcome.kind === "deadline" || outcome.kind === "pageCap") {
+      result.stopped = { kind: outcome.kind, ref };
+      return result;
+    }
+    if (outcome.kind === "refused") {
+      result.refused.push(`${ref}: ${outcome.reason}`);
+      input.log("error", `  ${ref}: refused (${outcome.reason})`);
+    } else if (outcome.kind === "ready") {
+      result.ready += 1;
+      input.log("info", `  ${ref}: ready after ${outcome.pages} page(s)`);
+    } else {
+      result.notApplicable += 1;
+      input.log("info", `  ${ref}: no bank control account`);
+    }
+  }
+  return result;
+}
+
+/** The "Bank balances" job-summary text for a finished or stopped rebuild. */
+export function renderBankRebuildSummary(result: BankRebuildResult): string {
+  const refusedLines = result.refused.map((line) => `- ${line}`).join("\n");
+  const list = result.refused.length > 0 ? `\n\n${refusedLines}` : "";
+  if (result.stopped) {
+    const why = result.stopped.kind === "deadline" ? "before the deadline" : "at the page cap";
+    return `Stopped at ${result.stopped.ref}: ${result.ready} organizations rebuilt ${why}.${list}`;
+  }
+  return (
+    `${result.ready} organizations rebuilt, ${result.notApplicable} without a bank control account, ` +
+    `${result.refused.length} refused.${list}`
+  );
+}
+
+/** Why the rebuild phase must end the run, or null when it may go on to verification. */
+export function bankRebuildStopMessage(result: BankRebuildResult, maxPages: number): string | null {
+  if (result.stopped?.kind === "deadline") {
+    return "Production is DEPLOYED, but the bank balance rebuild did not finish within the deadline. A re-run resumes it.";
+  }
+  if (result.stopped?.kind === "pageCap") {
+    return `Production is DEPLOYED, but ${result.stopped.ref}'s bank balance rebuild exceeded ${maxPages} pages.`;
+  }
+  return null;
+}
+
+/** Why a run whose Social Inbox verified must still fail, or null when no organization refused. */
+export function bankRefusalMessage(result: BankRebuildResult): string | null {
+  if (result.refused.length === 0) return null;
+  return (
+    `Production is DEPLOYED and the Social Inbox is verified, but ${result.refused.length} organization(s) ` +
+    `refused the bank balance rebuild; their bank balances stay unavailable. A re-run retries them.`
+  );
+}

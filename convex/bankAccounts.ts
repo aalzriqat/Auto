@@ -16,7 +16,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
-import { BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRange, readControlRange } from "./accounting/bankLineAggregate";
+import { BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRanges, readControlRanges } from "./accounting/bankLineAggregate";
 
 export const list = query({
   args: { orgId: v.id("organizations") },
@@ -353,23 +353,26 @@ export async function computeBookBalance(ctx: QueryCtx, orgId: Id<"organizations
       }
     }
     if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
-    if (containing && containingFromLines) {
-      const current = await readControlRange(ctx, namespace, bankChartAccountId, currency, {
-        fromInclusive: containing.startDate, through: asOf,
-      });
-      controlNetMinor += current.netMinor;
-      if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
-    }
-
     // Counts detect two equal-and-opposite legacy lines even when their net is
     // zero. Deactivated or soft-deleted banks still own their historical lines.
-    const allControl = await readControlRange(ctx, namespace, bankChartAccountId, currency, { through: asOf });
+    // One walk per tree: the control ranges together, every bank together.
+    const currentRange = containing && containingFromLines
+      ? [{ fromInclusive: containing.startDate, through: asOf }]
+      : [];
+    const sameCurrency = accounts.filter((bank) => bank.currency === currency);
+    const [controlTotals, attributions] = await Promise.all([
+      readControlRanges(ctx, namespace, bankChartAccountId, currency, [{ through: asOf }, ...currentRange]),
+      readAttributionRanges(ctx, namespace, bankChartAccountId, currency,
+        sameCurrency.map((bank) => ({ bankAccountId: bank._id, range: { through: asOf } }))),
+    ]);
+    const allControl = controlTotals[0];
+    if (currentRange.length > 0) {
+      controlNetMinor += controlTotals[1].netMinor;
+      if (!Number.isSafeInteger(controlNetMinor)) throw new InconsistentHistory();
+    }
     let identifiedCount = 0;
     let identifiedNetMinor = 0;
     let targetNetMinor = 0;
-    const sameCurrency = accounts.filter((bank) => bank.currency === currency);
-    const attributions = await Promise.all(sameCurrency.map((bank) =>
-      readAttributionRange(ctx, namespace, bankChartAccountId, currency, bank._id, { through: asOf })));
     for (const [index, bank] of sameCurrency.entries()) {
       const identified = attributions[index];
       identifiedCount += identified.count;

@@ -485,6 +485,62 @@ describe("bankAccounts.getBookBalance", () => {
     expect(await asOfBalance(fx, Date.now(), BOOK_BALANCE_READ_BUDGET)).toMatchObject({ status: "OK", balanceMinor: 600_000 });
   });
 
+  test("a balance read walks each aggregate tree once, for count and sum together", async () => {
+    // I/O: countBatch and sumBatch each ran the same walk over every bucket, and
+    // each bank and each control range ran its own. Two component calls now
+    // cover both control ranges and every bank.
+    const fx = await seedDealer();
+    const { bankA } = await multiPeriodMultiBank(fx);
+    await seedBankLine(fx, { debitMinor: 7_000, bankAccountId: bankA, accountingDate: Date.now() + 600_000, snapshot: false });
+    let componentCalls = 0;
+    const result = await fx.t.run((ctx) => {
+      const counted = new Proxy(ctx, {
+        get(target, prop, receiver) {
+          if (prop === "runQuery") {
+            return (fn: unknown, args: unknown) => {
+              componentCalls += 1;
+              return (target.runQuery as (f: unknown, a: unknown) => Promise<unknown>)(fn, args);
+            };
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      return computeBookBalance(counted, fx.orgId, Date.now(), BOOK_BALANCE_READ_BUDGET);
+    });
+    expect(result).toMatchObject({ status: "OK", bankAccountId: bankA, balanceMinor: 600_000 });
+    expect(componentCalls).toBe(2);
+  });
+
+  test("a balance read whose component answer has an unexpected shape is withheld, never OK", async () => {
+    const fx = await seedDealer();
+    await multiPeriodMultiBank(fx);
+    // Sized from the request, so the row guard runs rather than the length check.
+    const sized = (row: object) => (n: number) => Array.from({ length: n }, () => row);
+    for (const answer of [
+      [], [{ count: 1 }], "nope",
+      sized({ sum: 0 }),
+      sized({ count: 1 }),
+      sized({ count: Number.NaN, sum: 0 }),
+      sized({ count: Number.POSITIVE_INFINITY, sum: 0 }),
+      sized({ count: -1, sum: 0 }),
+      sized({ count: 0.5, sum: 0 }),
+    ]) {
+      const result = await fx.t.run((ctx) => {
+        const broken = new Proxy(ctx, {
+          get(target, prop, receiver) {
+            if (prop === "runQuery") {
+              return async (_fn: unknown, args: { queries: unknown[] }) =>
+                typeof answer === "function" ? answer(args.queries.length) : answer;
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+        });
+        return computeBookBalance(broken, fx.orgId, Date.now(), BOOK_BALANCE_READ_BUDGET);
+      });
+      expect(result).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
+    }
+  });
+
   test("multi-period, multi-bank history over the budget is withheld as incomplete, never OK", async () => {
     const fx = await seedDealer();
     await multiPeriodMultiBank(fx);

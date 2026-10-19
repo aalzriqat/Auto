@@ -289,6 +289,41 @@ describe("guarantees that live outside the reach of a normal unit test", () => {
     expect(source).toMatch(/describeConvexFailure\(args\[0\], result\.status\)/);
   });
 
+  test("the rollout script exits non-zero on a bank rebuild stop or refusal, before it can report success", () => {
+    // ⚠️ The decision text is unit-tested in releaseGuard.test.ts, but nothing
+    // runs this script, so deleting a `fail(...)` call would leave every other
+    // test green and a run that stopped or refused would end as a success.
+    // Pin the wiring and its order: rebuild -> stop exit -> verification ->
+    // refusal exit -> success exit.
+    // Comments are stripped first and each anchor must be a whole line, so a
+    // commented-out call or a string that merely contains it cannot satisfy the pin.
+    const source = readRepoFile("scripts/rolloutRelease.mjs")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    const at = (line: RegExp) => {
+      const match = line.exec(source);
+      expect(match, `missing from rolloutRelease.mjs: ${line}`).not.toBeNull();
+      return match!.index;
+    };
+
+    const rebuild = at(/^const bank = rebuildBankBalances\(\{$/m);
+    const stopExit = at(/^if \(bankStop\) fail\(bankStop\);$/m);
+    const verification = at(/^const startedAt = rolloutStartedAt;$/m);
+    const refusalExit = at(/^ {2}fail\(bankRefusal\);$/m);
+    const successExit = at(/^if \(lastOutcome === "verified"\) \{$/m);
+
+    expect(rebuild).toBeLessThan(stopExit);
+    expect(stopExit).toBeLessThan(verification);
+    expect(verification).toBeLessThan(refusalExit);
+    expect(refusalExit).toBeLessThan(successExit);
+    expect(source).toMatch(/^const bankRefusal = lastOutcome === "verified" \? bankRefusalMessage\(bank\) : null;$/m);
+    expect(source).toMatch(/^if \(bankRefusal\) \{\s*lastOutcome = "failed";\s*fail\(bankRefusal\);\s*\}$/m);
+    // `fail` must end the process, or none of the above stops anything.
+    const failBody = /^function fail\([^)]*\) \{\n([\s\S]*?)^\}$/m.exec(source);
+    expect(failBody, "fail() not found in rolloutRelease.mjs").not.toBeNull();
+    expect(failBody![1]).toMatch(/^ {2}process\.exit\(1\);$/m);
+  });
+
   test("the deploy workflow re-verifies AFTER approval and before the deploy", () => {
     // ⚠️ Ordering is load-bearing and invisible to every other test here.
     //
