@@ -15,8 +15,13 @@ import os from "node:os";
 import path from "node:path";
 
 const childBoundary = vi.hoisted(() => ({
-  calls: [] as Array<{ file: string; args: string[]; options: Record<string, unknown> }>,
+  calls: [] as Array<{ file: string; args: string[]; options: Record<string, unknown>; async?: boolean }>,
   results: [] as Array<{ status: number | null; signal: string | null; error?: Error }>,
+  // Overlap bookkeeping for asynchronous children (SCRUM-752 pool).
+  active: 0,
+  maxActive: 0,
+  // Each async child's start, and every "a call was made while N children ran".
+  events: [] as string[],
 }));
 
 // The runner's child processes are the system boundary under test. Keep the
@@ -30,15 +35,42 @@ vi.mock("node:child_process", async (importOriginal) => {
     options: Record<string, unknown>,
   ) => {
     childBoundary.calls.push({ file, args: [...args], options });
+    childBoundary.events.push(`sync with ${childBoundary.active} running`);
     return childBoundary.results.shift() ?? { status: 0, signal: null };
+  };
+  const { EventEmitter } = await import("node:events");
+  const { basename } = await import("node:path");
+  // An asynchronous child that finishes on a later timer tick, so children the
+  // runner starts together really are alive at the same time.
+  const interceptedSpawn = (file: string, args: readonly string[], options: Record<string, unknown>) => {
+    childBoundary.calls.push({ file, args: [...args], options, async: true });
+    const result = childBoundary.results.shift() ?? { status: 0, signal: null };
+    const blob = args.find((arg) => arg.startsWith("--outputFile.blob=")) ?? "";
+    childBoundary.events.push(`start ${basename(blob)}`);
+    childBoundary.active += 1;
+    childBoundary.maxActive = Math.max(childBoundary.maxActive, childBoundary.active);
+    const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() });
+    setTimeout(() => {
+      childBoundary.active -= 1;
+      if (result.error) {
+        child.emit("error", result.error);
+        return;
+      }
+      child.stdout.emit("data", Buffer.from(`child output for ${basename(blob)}\n`));
+      child.stderr.emit("data", Buffer.from(`child stderr for ${basename(blob)}\n`));
+      child.emit("close", result.status, result.signal);
+    }, 2);
+    return child;
   };
   return {
     ...actual,
     default: {
       ...(actual as unknown as { default?: Record<string, unknown> }).default,
       ...actual,
+      spawn: interceptedSpawn,
       spawnSync: interceptedSpawnSync,
     },
+    spawn: interceptedSpawn,
     spawnSync: interceptedSpawnSync,
   };
 });
@@ -146,6 +178,7 @@ async function run(mode: string, env: Record<string, string | undefined> = {}) {
     "VITEST_COVERAGE_BATCH_SIZE",
     "AUTOFLOW_COVERAGE_WORKLOAD",
     "AUTOFLOW_COVERAGE_TIMINGS",
+    "VITEST_COVERAGE_CONCURRENCY",
     "AUTOFLOW_COVERAGE_BLOB_DIR",
     "AUTOFLOW_COVERAGE_REPORTS_DIR",
     "AUTOFLOW_COVERAGE_DISCOVERY_ROOT",
@@ -167,6 +200,9 @@ async function run(mode: string, env: Record<string, string | undefined> = {}) {
 beforeEach(() => {
   childBoundary.calls.length = 0;
   childBoundary.results.length = 0;
+  childBoundary.active = 0;
+  childBoundary.maxActive = 0;
+  childBoundary.events.length = 0;
   // Regression control for c33ee35cc: without the child-process boundary,
   // importing the real runner below recursively launches this suite again and
   // CI never reaches a verdict. Probe the boundary before any test can import
@@ -176,6 +212,7 @@ beforeEach(() => {
     throw new Error("Coverage runner tests must intercept child processes before importing the runner.");
   }
   childBoundary.calls.length = 0;
+  childBoundary.events.length = 0;
   stdout = [];
   stderr = [];
   process.exit = ((code?: number) => {
@@ -669,6 +706,172 @@ describe("runVitestCoverageShards", () => {
       expect(output).toMatch(/Errors\s+1 error/);
       expect(output).toContain("late teardown boom");
       expect(readdirSync(fixture)).toContain("blob.json");
+    });
+  });
+
+  describe("SCRUM-752 overlapping batch processes", () => {
+    const reportsDirOf = (call: (typeof childBoundary.calls)[number]) =>
+      rawArgs(call).find((arg) => arg.startsWith("--coverage.reportsDirectory="))!;
+    const blobOf = (call: (typeof childBoundary.calls)[number]) =>
+      rawArgs(call).find((arg) => arg.startsWith("--outputFile.blob="))!;
+    const tested = () => childBoundary.calls.filter((call) => !rawArgs(call).some((arg) => arg.startsWith("--merge-reports=")));
+
+    test("the default stays strictly serial: no overlapping child is ever started", async () => {
+      await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16" });
+      expect(childBoundary.calls.some((call) => call.async)).toBe(false);
+      expect(childBoundary.maxActive).toBe(0);
+    });
+
+    test.each(["unit", "sonar"])(
+      "%s mode with two lanes runs the same batches with the same arguments, never more than two at once",
+      async (mode) => {
+        const env = { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_SONAR_BATCH_SIZE: "64" };
+        await run(mode, env);
+        const serial = tested().map((call) => rawArgs(call));
+        childBoundary.calls.length = 0;
+        childBoundary.events.length = 0;
+        childBoundary.maxActive = 0;
+
+        await run(mode, { ...env, VITEST_COVERAGE_CONCURRENCY: "2" });
+        const pooled = tested();
+        expect(childBoundary.maxActive).toBe(2);
+        // Only the reports directory differs, and only for overlapping batches:
+        // the census, blobs, thresholds and scope are argument-for-argument equal.
+        const withoutReports = (args: string[]) => args.filter((arg) => !arg.startsWith("--coverage.reportsDirectory="));
+        const key = (args: string[]) => JSON.stringify(withoutReports(args));
+        expect(pooled.map((call) => key(rawArgs(call))).sort()).toEqual(serial.map(key).sort());
+        expect(new Set(pooled.map(blobOf)).size).toBe(pooled.length);
+      },
+    );
+
+    test("the authority control runs alone, before any overlapping batch starts", async () => {
+      await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
+      expect(childBoundary.calls[0].async).toBeUndefined();
+      expect(rawArgs(childBoundary.calls[0])).toContain("convex/unifiedDealFeeAuthority.test.ts");
+      expect(childBoundary.events[0]).toBe("sync with 0 running");
+      expect(childBoundary.events[1]).toMatch(/^start unit-batch-/);
+      // The merge, too, starts only after every batch has finished.
+      expect(childBoundary.events.at(-1)).toBe("sync with 0 running");
+      const merge = rawArgs(childBoundary.calls.at(-1)!);
+      expect(merge.some((arg) => arg.startsWith("--merge-reports="))).toBe(true);
+    });
+
+    test("every overlapping batch gets its own coverage directory, outside the blob directory", async () => {
+      await run("sonar", { VITEST_COVERAGE_CONCURRENCY: "2" });
+      const batches = childBoundary.calls.filter((call) => call.async);
+      expect(batches.length).toBeGreaterThan(2);
+      const dirs = batches.map(reportsDirOf);
+      expect(new Set(dirs).size).toBe(dirs.length);
+      const coverageRoot = path.join(process.cwd(), TEST_COVERAGE_DIR, "units");
+      const blobRoot = path.join(process.cwd(), TEST_BLOB_DIR);
+      for (const dir of dirs) {
+        const value = dir.slice("--coverage.reportsDirectory=".length);
+        expect(path.dirname(value)).toBe(coverageRoot);
+        expect(value.startsWith(blobRoot)).toBe(false);
+      }
+      // The merge still writes the one shared directory the workflow reads.
+      expect(reportsDirOf(childBoundary.calls.at(-1)!)).toBe(
+        `--coverage.reportsDirectory=${path.join(process.cwd(), TEST_COVERAGE_DIR)}`,
+      );
+    });
+
+    test("the most expensive batch starts first", async () => {
+      await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
+      const heaviest = Object.entries(WORKLOAD.files).sort((a, b) => b[1] - a[1])[0][0];
+      const first = childBoundary.calls.find((call) => call.async)!;
+      expect(batchTestFiles(first)).toEqual([heaviest]);
+    });
+
+    test("each overlapping batch's output is written in one piece under its own header", async () => {
+      await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
+      const text = stdout.join("");
+      const pieces = stdout.filter((chunk) => chunk.startsWith("Coverage batch "));
+      expect(pieces.length).toBe(childBoundary.calls.filter((call) => call.async).length);
+      for (const piece of pieces) {
+        const blob = /child output for (unit-batch-\d+\.json)/.exec(piece)?.[1];
+        expect(blob).toBeDefined();
+        expect(piece).toContain(`child stderr for ${blob}`);
+      }
+      expect(text).not.toMatch(/child output for [^\n]+\n(?!child stderr)/);
+    });
+
+    test.each(["0", "3", "1.5", "two"])(
+      "rejects an invalid concurrency (%s) before any subprocess",
+      async (value) => {
+        await expect(run("unit", { VITEST_COVERAGE_CONCURRENCY: value })).rejects.toThrow(
+          "VITEST_COVERAGE_CONCURRENCY must be an integer between 1 and 2.",
+        );
+        expect(childBoundary.calls).toHaveLength(0);
+      },
+    );
+
+    test("a failing overlapping batch stops new batches, drains the running one, reruns for diagnostics and exits with its status", async () => {
+      // Authority, then two overlapping batches: the first fails.
+      childBoundary.results.push({ status: 0, signal: null }, { status: 7, signal: null }, { status: 0, signal: null });
+      let error: unknown;
+      try {
+        await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(ExitSignal);
+      expect((error as ExitSignal).code).toBe(7);
+      const batches = childBoundary.calls.filter((call) => call.async);
+      // The batch beside the failure was already running and finished; the
+      // failing lane started nothing more. Only the surviving lane may have
+      // started one more batch before it saw the failure.
+      expect(batches.length).toBeLessThanOrEqual(3);
+      expect(childBoundary.active).toBe(0);
+      const diagnostic = rawArgs(childBoundary.calls.at(-1)!);
+      expect(childBoundary.calls.at(-1)!.async).toBeUndefined();
+      expect(diagnostic).not.toContain("--coverage");
+      expect(diagnostic).toEqual(["run", ...batchTestFiles(batches[0]), "--maxWorkers=1"]);
+      expect(childBoundary.events.at(-1)).toBe("sync with 0 running");
+      expect(stderr.join("")).toContain("Vitest coverage subprocess failed (status=7");
+    });
+
+    test("an overlapping batch killed by a signal fails the slice", async () => {
+      childBoundary.results.push({ status: 0, signal: null }, { status: null, signal: "SIGKILL" });
+      await expect(
+        run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" }),
+      ).rejects.toMatchObject({ code: 1 });
+      expect(stderr.join("")).toContain("signal=SIGKILL");
+    });
+
+    test("an overlapping batch that cannot be launched propagates the launch error", async () => {
+      childBoundary.results.push({ status: 0, signal: null }, { status: null, signal: null, error: new Error("spawn exploded") });
+      await expect(
+        run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" }),
+      ).rejects.toThrow("spawn exploded");
+      expect(childBoundary.active).toBe(0);
+    });
+
+    test("two failures report both, and the first in plan order decides the status", async () => {
+      childBoundary.results.push({ status: 0, signal: null }, { status: 3, signal: null }, { status: 5, signal: null });
+      let error: unknown;
+      try {
+        await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
+      } catch (caught) {
+        error = caught;
+      }
+      const batches = childBoundary.calls.filter((call) => call.async);
+      expect(batches).toHaveLength(2);
+      expect(error).toBeInstanceOf(ExitSignal);
+      // Statuses were handed out in start order; the batch earlier in the plan wins.
+      const order = (call: (typeof childBoundary.calls)[number]) => Number(/unit-batch-(\d+)\.json/.exec(blobOf(call))![1]);
+      const [earlier, later] = order(batches[0]) < order(batches[1]) ? [3, 5] : [5, 3];
+      expect((error as ExitSignal).code).toBe(earlier);
+      expect(stderr.join("")).toMatch(new RegExp(`Also failed: unit-batch-\\d+\\.json \\(status=${later}`));
+    });
+
+    test("telemetry records the concurrency each process ran under", async () => {
+      const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-timings-"));
+      tempDiscoveryRoots.push(directory);
+      const timings = path.join(directory, "timings.jsonl");
+      await run("sonar", { AUTOFLOW_COVERAGE_TIMINGS: timings, VITEST_COVERAGE_CONCURRENCY: "2" });
+      const lines = readFileSync(timings, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(lines).toHaveLength(tested().length);
+      for (const line of lines) expect(line.concurrency).toBe(2);
     });
   });
 

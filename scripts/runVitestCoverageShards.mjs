@@ -1,5 +1,5 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 
 const mode = process.argv[2];
@@ -102,6 +102,40 @@ const reporterArgs = (blobPath) => ["--reporter=blob", "--reporter=dot", `--outp
 // written outside the blob directory, which must hold blobs only.
 const timingsFile = process.env.AUTOFLOW_COVERAGE_TIMINGS;
 
+function recordTiming(unit, started, status) {
+  if (!timingsFile || !unit) return;
+  appendFileSync(
+    timingsFile,
+    `${JSON.stringify({
+      mode,
+      unit: unit.blob,
+      slice: phase === "run" ? `${sliceIndex}/${sliceCount}` : "all",
+      files: unit.files,
+      estimatedSeconds: Math.round(unit.cost),
+      wallSeconds: Math.round((performance.now() - started) / 100) / 10,
+      status,
+      concurrency,
+    })}\n`,
+  );
+}
+
+function failVitest(result, diagnosticFiles) {
+  process.stderr.write(
+    `Vitest coverage subprocess failed (status=${String(result.status)}, signal=${String(result.signal)}).\n`,
+  );
+  if (diagnosticFiles.length > 0) {
+    process.stderr.write(
+      `Re-running failing batch without coverage to expose assertion output: ${diagnosticFiles.join(" ")}\n`,
+    );
+    spawnSync(process.execPath, [vitestBin, "run", ...diagnosticFiles, "--maxWorkers=1"], {
+      cwd: root,
+      env: process.env,
+      stdio: "inherit",
+    });
+  }
+  process.exit(result.status ?? 1);
+}
+
 function runVitest(args, diagnosticFiles = [], unit = undefined) {
   const started = performance.now();
   const result = spawnSync(process.execPath, [vitestBin, ...args], {
@@ -109,37 +143,36 @@ function runVitest(args, diagnosticFiles = [], unit = undefined) {
     env: process.env,
     stdio: "inherit",
   });
-  if (timingsFile && unit) {
-    appendFileSync(
-      timingsFile,
-      `${JSON.stringify({
-        mode,
-        unit: unit.blob,
-        slice: phase === "run" ? `${sliceIndex}/${sliceCount}` : "all",
-        files: unit.files,
-        estimatedSeconds: Math.round(unit.cost),
-        wallSeconds: Math.round((performance.now() - started) / 100) / 10,
-        status: result.status,
-      })}\n`,
-    );
-  }
+  recordTiming(unit, started, result.status);
   if (result.error) throw result.error;
-  if (result.status !== 0) {
-    process.stderr.write(
-      `Vitest coverage subprocess failed (status=${String(result.status)}, signal=${String(result.signal)}).\n`,
-    );
-    if (diagnosticFiles.length > 0) {
-      process.stderr.write(
-        `Re-running failing batch without coverage to expose assertion output: ${diagnosticFiles.join(" ")}\n`,
-      );
-      spawnSync(process.execPath, [vitestBin, "run", ...diagnosticFiles, "--maxWorkers=1"], {
-        cwd: root,
-        env: process.env,
-        stdio: "inherit",
-      });
-    }
-    process.exit(result.status ?? 1);
-  }
+  if (result.status !== 0) failVitest(result, diagnosticFiles);
+}
+
+// One overlapping Vitest process. Its output is held until it exits and then
+// written in one piece, so a failure's dot report and stack traces stay
+// together instead of interleaving with the processes running beside it.
+function runVitestBuffered(header, args, unit) {
+  const started = performance.now();
+  return new Promise((resolve) => {
+    const output = [];
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      recordTiming(unit, started, result.status ?? null);
+      process.stdout.write(`${header}\n${Buffer.concat(output).toString("utf8")}`);
+      resolve(result);
+    };
+    const child = spawn(process.execPath, [vitestBin, ...args], {
+      cwd: root,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.on("data", (chunk) => output.push(chunk));
+    child.stderr.on("data", (chunk) => output.push(chunk));
+    child.on("error", (error) => finish({ status: null, signal: null, error }));
+    child.on("close", (status, signal) => finish({ status, signal }));
+  });
 }
 
 const excludedDirs = new Set([
@@ -318,6 +351,14 @@ assertWorkloadNamesRealFiles(census);
 const plan = slicePlan(census);
 const modeUnits = plan.units.filter((unit) => unit.mode === mode);
 
+// SCRUM-752: how many batch processes a slice runs at once. 1 (the default)
+// is the original strictly serial runner. Each process keeps --maxWorkers=1,
+// its own blob and the fixed 5.5 GiB heap ceiling. The bound is 2 because two
+// ceilings fit inside a 16 GB CI runner and a third would not: measured peaks
+// are ~1.3 GB per process, but the guarantee must hold at the ceiling.
+const concurrency = boundedInteger("VITEST_COVERAGE_CONCURRENCY", "1", 1, 2);
+
+
 rmSync(coverageDir, { recursive: true, force: true });
 if (phase === "merge") {
   assertCompleteBlobSet(modeUnits);
@@ -340,15 +381,65 @@ if (phase === "run") {
   );
 }
 
+const batchArgs = (unit, reportsArg) => [
+  "run",
+  ...unit.files,
+  ...reporterArgs(path.join(blobDir, unit.blob)),
+  ...sharedCoverageArgs,
+  reportsArg,
+  ...runReporterArgs,
+  ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
+];
+
+// Vitest cleans its reports directory before every covered run and keeps its
+// raw V8 data there until the run ends, so overlapping processes sharing one
+// directory would delete each other's coverage. Each gets its own, outside the
+// blob directory; like the shared one, nothing ever reads it.
+const unitReportsArg = (unit) =>
+  `--coverage.reportsDirectory=${path.join(coverageDir, "units", unit.blob.replace(/\.json$/, ""))}`;
+
+async function runBatchPool(batches, total, label) {
+  // Most expensive first, so the longest batch does not start last.
+  const queue = [...batches].sort((a, b) => b.unit.cost - a.unit.cost || a.index - b.index);
+  const failures = [];
+  const lane = async () => {
+    // Once any batch fails no further batch starts; the ones already running
+    // are drained, so no process outlives the decision.
+    while (queue.length > 0 && failures.length === 0) {
+      const { index, unit } = queue.shift();
+      const result = await runVitestBuffered(
+        `${label} ${index}/${total}: ${unit.files.join(" ")}`,
+        batchArgs(unit, unitReportsArg(unit)),
+        unit,
+      );
+      if (result.error || result.status !== 0) failures.push({ index, unit, result });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, lane));
+  if (failures.length === 0) return;
+  failures.sort((a, b) => a.index - b.index);
+  for (const { unit, result } of failures.slice(1)) {
+    process.stderr.write(
+      `Also failed: ${unit.blob} (status=${String(result.status)}, signal=${String(result.signal)}): ${unit.files.join(" ")}\n`,
+    );
+  }
+  const [first] = failures;
+  if (first.result.error) throw first.result.error;
+  failVitest(first.result, first.unit.files);
+}
+
 if (phase !== "merge") {
   const total = modeUnits.length - 1;
+  const label = mode === "unit" ? "Coverage batch" : "Sonar coverage batch";
+  const batches = [];
   for (const [index, unit] of modeUnits.entries()) {
     if (phase === "run" && plan.owner.get(unit) !== sliceIndex) continue;
     if (unit.authority) {
       // Negative control for the coverage pipeline itself: the release-critical
       // authority suite must produce a V8 coverage blob on every covered path. It
       // is deliberately isolated so coverage instrumentation cannot reintroduce
-      // the long-lived-process OOM that motivated this runner.
+      // the long-lived-process OOM that motivated this runner. It is the first
+      // unit and runs synchronously, so it always runs alone, before any batch.
       runVitest([
         "run",
         authorityTest,
@@ -361,21 +452,15 @@ if (phase !== "merge") {
       ], [], unit);
       continue;
     }
-    const label = mode === "unit" ? "Coverage batch" : "Sonar coverage batch";
-    process.stdout.write(`${label} ${index}/${total}: ${unit.files.join(" ")}\n`);
-    runVitest(
-      [
-        "run",
-        ...unit.files,
-        ...reporterArgs(path.join(blobDir, unit.blob)),
-        ...sharedCoverageArgs,
-        coverageReportsArg,
-        ...runReporterArgs,
-        ...(mode === "sonar" ? sonarCoverageArgs : thresholdZeroArgs),
-      ],
-      unit.files,
-      unit,
-    );
+    batches.push({ index, unit });
+  }
+  if (concurrency === 1) {
+    for (const { index, unit } of batches) {
+      process.stdout.write(`${label} ${index}/${total}: ${unit.files.join(" ")}\n`);
+      runVitest(batchArgs(unit, coverageReportsArg), unit.files, unit);
+    }
+  } else {
+    await runBatchPool(batches, total, label);
   }
 }
 
