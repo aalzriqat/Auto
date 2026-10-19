@@ -690,10 +690,12 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // Weekly Workpool (#610) adds six internal mutations keyed by run/delivery IDs, not orgId:
   // sendWeeklyProofReports, produceWeeklyDeliveries, freezeWeeklyDelivery, beginWeeklySend,
   // recordWeeklySendOutcome and cancelWeeklyRun. Measured from the analyser: +6 total and skippedNoOrgId.
+  // SCRUM-807: + dashboardExpenseSummary.{begin,blockForImport,buildPage} (+3). All three take `orgId` and
+  // write only that org's summary rows, found by index - 545 total, 365 analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 542,
-      analysed: 362,
+      totalMutations: 545,
+      analysed: 365,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 165,
     });
