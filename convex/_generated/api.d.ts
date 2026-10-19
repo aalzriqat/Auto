@@ -169,6 +169,7 @@ import type * as utils_authorityDispatchScheduler from "../utils/authorityDispat
 import type * as utils_bankAccountGuards from "../utils/bankAccountGuards.js";
 import type * as utils_closeWarnings from "../utils/closeWarnings.js";
 import type * as utils_commission from "../utils/commission.js";
+import type * as utils_commissionMode from "../utils/commissionMode.js";
 import type * as utils_commissionSourceLedger from "../utils/commissionSourceLedger.js";
 import type * as utils_commitmentCutover from "../utils/commitmentCutover.js";
 import type * as utils_commitmentKernel from "../utils/commitmentKernel.js";
@@ -462,6 +463,7 @@ declare const fullApi: ApiFromModules<{
   "utils/bankAccountGuards": typeof utils_bankAccountGuards;
   "utils/closeWarnings": typeof utils_closeWarnings;
   "utils/commission": typeof utils_commission;
+  "utils/commissionMode": typeof utils_commissionMode;
   "utils/commissionSourceLedger": typeof utils_commissionSourceLedger;
   "utils/commitmentCutover": typeof utils_commitmentCutover;
   "utils/commitmentKernel": typeof utils_commitmentKernel;
