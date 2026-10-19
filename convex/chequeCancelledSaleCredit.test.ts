@@ -16,6 +16,12 @@ import type { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
+
 /**
  * Both pilot switches ship ON. This suite exercises the doors' BEHAVIOR, so it
  * opens them by default; the "pilot containment" blocks below close them again

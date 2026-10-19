@@ -28,6 +28,12 @@ import { reservePendingInvoiceReceipt } from "./accounting/invoiceReceiptReserva
 import { activatePendingInvoiceReceipt, planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
 import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
 
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),

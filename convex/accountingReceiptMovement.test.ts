@@ -70,6 +70,12 @@ import { activatePendingInvoiceReceipt, requirePostedInvoiceReceiptOrigins } fro
 import { saleCompletedKey } from "./accounting/postingRules";
 import { getReceivableOutstandingMinor } from "./subledger";
 
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
+
 /** Test-only handle on the pilot switch; the shipped value is `true` and no client input reaches this. */
 const payoutSwitch = vi.hoisted(() => ({ disabled: true, invoiceDoorsDisabled: false }));
 vi.mock("./utils/customerCreditPayoutContainment", async (importOriginal) => {

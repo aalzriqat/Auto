@@ -3,12 +3,18 @@ import { registerHandover } from "../test-utils/convexTest";
 import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { seedBank } from "../test-utils/bankFixture";
 import { forwardPostKey } from "./utils/financeCompanyForward";
-import { expect, test, describe } from "vitest";
+import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { transferFinancedAmountFromCustomerReceivable } from "./applications";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
 
 const MODULES = import.meta.glob("./**/*.ts");
 
