@@ -449,7 +449,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
   }, 15_000);
 
-  async function ownedFinancedOpening(tag: string) {
+  async function ownedFinancedOpening(tag: string, tender: "BANK_TRANSFER" | "CHEQUE" = "BANK_TRANSFER") {
     const s = await seedFinancedDealership(tag, {
       modules: MODULES,
       ownerPerms: OWNER_PERMS,
@@ -473,9 +473,15 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       notes: "Certification approval of the full vehicle price.",
     });
     await registerHandover(s.owner.as, api, s.orgId, applicationId);
-    await s.owner.as.mutation(api.applications.registerExpectedPayment, {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-    });
+    await s.owner.as.mutation(
+      api.applications.registerExpectedPayment,
+      tender === "CHEQUE"
+        ? {
+            orgId: s.orgId, applicationId, method: "CHEQUE", expectedDate: Date.now(),
+            chequeDetails: { bank: "Arab Bank", chequeNumber: `${tag}-chq` }, faceAmount: "12500",
+          }
+        : { orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now() }
+    );
     const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
       expectedCurrency: "JOD", idempotencyKey: `${tag}-zero-fee`, orgId: s.orgId, applicationId,
       feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER",
@@ -588,6 +594,147 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       netIncome: 2_500_000,
     });
   });
+
+  test("owned configured financier × CHEQUE tender × cleared cheque returned by the bank: the receipt is undone exactly", async () => {
+    const { s, applicationId } = await ownedFinancedOpening("s486fcreturn", "CHEQUE");
+    const bankAccountId = await insertReceiptBank(s);
+    await s.t.run((ctx) => ctx.db.patch(bankAccountId, { isReconciliationTarget: true }));
+    await s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000, idempotencyKey: "s486fcreturn-receipt", bankAccountId,
+    });
+    const chequesOf = () => s.t.run((ctx) => ctx.db.query("postDatedCheques")
+      .withIndex("by_application", (q) => q.eq("applicationId", applicationId)).collect());
+    const [cleared] = await chequesOf();
+    expect(cleared.status).toBe("CLEARED");
+    const financeReceivable = () => s.t.run((ctx) => ctx.db.query("receivableDocuments")
+      .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
+        .eq("sourceType", "finance_application").eq("sourceId", applicationId)).unique());
+    const bankBalance = async () => (await s.owner.as.query(api.bankAccounts.getBookBalance, { orgId: s.orgId })).balanceMinor;
+
+    // Opening facts after the receipt: the financier paid 12,500,000 into the named bank.
+    expect(await bankBalance()).toBe(12_500_000);
+    expect((await financeReceivable())?.status).toBe("PAID");
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.disbursedAmountMinor).toBe(12_500_000);
+    expectLiteralRows(await journalRows(s), [
+      { account: "1210", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "4100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+      { account: "5100", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
+      { account: "1110", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1210", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+    ]);
+    const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+
+    const returnArgs = {
+      orgId: s.orgId, applicationId, chequeId: cleared._id,
+      returnReason: "Bank returned: insufficient funds", idempotencyKey: "s486fcreturn-return",
+    };
+    const result = await s.owner.as.mutation(api.applications.returnFinanceDisbursementCheque, returnArgs);
+    expect(result).toMatchObject({
+      chequeId: cleared._id, returnedDisbursementVersion: 1, nextDisbursementVersion: 2, reversal: "REVERSED",
+    });
+
+    // Ledger: the receipt entry is REVERSED and an exact inverse is POSTED; the sale rows are untouched.
+    const afterRows = await journalRows(s);
+    expectLiteralRows(afterRows, [
+      { account: "1210", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "4100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+      { account: "5100", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
+      { account: "1110", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "REVERSED" },
+      { account: "1210", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "REVERSED" },
+      { account: "1210", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1110", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(afterRows);
+    // Subledger and bank: the financier owes the full 12,500,000 again and the named bank is back to zero.
+    expect(await bankBalance()).toBe(0);
+    const reopened = await financeReceivable();
+    expect(reopened).toMatchObject({ payerType: "FINANCE_COMPANY", originalAmountMinor: 12_500_000, status: "OPEN" });
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1210|JOD": 12_500_000,
+      "1400|JOD": -10_000_000,
+      "4100|JOD": 12_500_000,
+      "5100|JOD": 10_000_000,
+    });
+    // Deal and cheque state: the deal stays CLOSED and expects the next receipt; the cheque is RETURNED.
+    const application = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(application).toMatchObject({ status: "CLOSED", settlementStatus: "EXPECTED", disbursementVersion: 2 });
+    expect(application?.disbursedAt).toBeUndefined();
+    expect(application?.disbursedAmountMinor).toBeUndefined();
+    expect((await chequesOf())[0]).toMatchObject({
+      status: "RETURNED", returnedAfterClearing: true, disbursementVersion: 1, returnReason: "Bank returned: insufficient funds",
+    });
+    const payments = await s.t.run((ctx) => ctx.db.query("canonicalPayments").collect());
+    expect(payments.filter((payment) => payment.orgId === s.orgId).map((payment) => payment.status)).toEqual(["VOIDED"]);
+    const allocations = await s.t.run((ctx) => ctx.db.query("paymentAllocations").collect());
+    expect(allocations.filter((allocation) => allocation.receivableDocumentId === reopened?._id)
+      .map((allocation) => allocation.status)).not.toContain("ACTIVE");
+    const audit = await s.t.run(async (ctx) => (await ctx.db.query("financialAuditLog").collect())
+      .filter((row) => row.orgId === s.orgId && row.actionType === "RETURN_FINANCE_DISBURSEMENT_CHEQUE"));
+    expect(audit).toHaveLength(1);
+    expect(audit[0].resourceId).toBe(applicationId);
+
+    // Full-table snapshot: only the tables a disbursement return owns changed; the sale, customer,
+    // vehicle, commission, forward and every other table are identical to before the return.
+    const after = await dbSnapshot(s.t, Object.keys(schema.tables));
+    const changed = Object.keys(before).filter((table) => JSON.stringify(before[table]) !== JSON.stringify(after[table])).sort();
+    expect(changed).toEqual([
+      "accountBalanceSnapshots", "accountingEvents", "bankBalanceAggregateItems", "bankBalanceGrossShards",
+      "canonicalPayments", "commandIdempotency", "financeApplications", "financialAuditLog", "journalEntries",
+      "journalLines", "paymentAllocations", "postDatedCheques", "receivableDocuments",
+    ]);
+
+    // Replay: the same key and command is one effect.
+    const replay = await s.owner.as.mutation(api.applications.returnFinanceDisbursementCheque, returnArgs);
+    expect(replay).toEqual(result);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(after);
+    expect(await bankBalance()).toBe(0);
+  }, 20_000);
+
+  test("owned configured financier × CHEQUE tender × cleared cheque return: a non-privileged role is refused and nothing changes", async () => {
+    const { s, applicationId } = await ownedFinancedOpening("s486fcperm", "CHEQUE");
+    const bankAccountId = await insertReceiptBank(s);
+    await s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000, idempotencyKey: "s486fcperm-receipt", bankAccountId,
+    });
+    const [cleared] = await s.t.run((ctx) => ctx.db.query("postDatedCheques")
+      .withIndex("by_application", (q) => q.eq("applicationId", applicationId)).collect());
+    expect(cleared.status).toBe("CLEARED");
+    const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+    await expect(s.actors.salesperson.as.mutation(api.applications.returnFinanceDisbursementCheque, {
+      orgId: s.orgId, applicationId, chequeId: cleared._id,
+      returnReason: "Bank returned: insufficient funds", idempotencyKey: "s486fcperm-return",
+    })).rejects.toThrow();
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+  }, 20_000);
+
+  test("owned configured financier × CHEQUE tender × cleared cheque return with no open period: the return succeeds and the reversal is DEFERRED", async () => {
+    const { s, applicationId } = await ownedFinancedOpening("s486fcperiod", "CHEQUE");
+    const bankAccountId = await insertReceiptBank(s);
+    await s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000, idempotencyKey: "s486fcperiod-receipt", bankAccountId,
+    });
+    const [cleared] = await s.t.run((ctx) => ctx.db.query("postDatedCheques")
+      .withIndex("by_application", (q) => q.eq("applicationId", applicationId)).collect());
+    await s.t.run(async (ctx) => {
+      for (const period of await ctx.db.query("accountingPeriods").collect()) {
+        if (period.orgId === s.orgId) await ctx.db.patch(period._id, { status: "CLOSED" });
+      }
+    });
+    const rowsBefore = await journalRows(s);
+    const result = await s.owner.as.mutation(api.applications.returnFinanceDisbursementCheque, {
+      orgId: s.orgId, applicationId, chequeId: cleared._id,
+      returnReason: "Bank returned: insufficient funds", idempotencyKey: "s486fcperiod-return",
+    });
+    expect(result).toMatchObject({ reversal: "DEFERRED", returnedDisbursementVersion: 1, nextDisbursementVersion: 2 });
+    // The closed period is not written into: no journal row changed, and the reversal waits, queued.
+    expect(await journalRows(s)).toEqual(rowsBefore);
+    const pending = await s.t.run(async (ctx) => (await ctx.db.query("pendingAccountingEvents").collect())
+      .filter((row) => row.orgId === s.orgId && row.kind === "REVERSE"));
+    expect(pending.map((row) => row.status)).toEqual(["PENDING"]);
+    expect((await s.t.run((ctx) => ctx.db.get(cleared._id)))?.status).toBe("RETURNED");
+  }, 20_000);
 
   test("owned configured financier × no deposit × cancellation before receipt: finance AR and sale reverse", async () => {
     const { s, applicationId } = await ownedFinancedOpening("s486financecancel");
