@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Doc } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -508,6 +508,9 @@ function ImportAccountingChoice({
   setPosting,
   paymentMethod,
   setPaymentMethod,
+  bankOptions,
+  bankAccountId,
+  setBankAccountId,
 }: {
   validRows: Record<string, any>[];
   invalidCount: number;
@@ -516,6 +519,9 @@ function ImportAccountingChoice({
   setPosting: (p: AcquisitionPosting) => void;
   paymentMethod: AcquisitionPaymentMethod | null;
   setPaymentMethod: (m: AcquisitionPaymentMethod) => void;
+  bankOptions?: { banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean };
+  bankAccountId?: Id<"bankAccounts">;
+  setBankAccountId: (id: Id<"bankAccounts"> | undefined) => void;
 }) {
   const { t } = useLanguage();
   const currency = useCurrency();
@@ -643,6 +649,25 @@ function ImportAccountingChoice({
             {t("ImportPaidFromAppliesToAll" as any)}
           </p>
 
+          {(paymentMethod === "BANK_TRANSFER" || paymentMethod === "CARD" || paymentMethod === "CHEQUE") && (
+            <div className="space-y-1">
+              <label htmlFor="vehicle-import-bank" className="text-xs font-medium">{t("DirectPaymentBankLabel" as any)} *</label>
+              <select
+                id="vehicle-import-bank"
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                value={bankOptions?.banks?.some((bank) => bank._id === bankAccountId) ? bankAccountId : ""}
+                onChange={(event) => setBankAccountId(event.target.value ? event.target.value as Id<"bankAccounts"> : undefined)}
+                disabled={!bankOptions || bankOptions.truncated || !bankOptions.banks?.length}
+                required
+              >
+                <option value="">{t((bankOptions ? "DirectPaymentBankChoose" : "CashDrawerLoadingBanks") as any)}</option>
+                {(bankOptions?.banks ?? []).map((bank) => <option key={bank._id} value={bank._id}>{bank.name} · {bank.currency}</option>)}
+              </select>
+              {bankOptions?.truncated && <p role="status" className="text-xs text-muted-foreground">{t("DirectPaymentTooManyBanks" as any)}</p>}
+              {bankOptions && !bankOptions.truncated && !bankOptions.banks?.length && <p role="status" className="text-xs text-muted-foreground">{t("DirectPaymentNoBank" as any)}</p>}
+            </div>
+          )}
+
           {/* The ledger consequence, stated before it happens. The amount leads
               on narrow screens instead of being squeezed to the far edge of a
               row it shares with two lines of explanation — at 390px that put the
@@ -741,11 +766,17 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
   // convex/vehicles.ts. Both possible defaults corrupt somebody's books.
   const [posting, setPosting] = useState<AcquisitionPosting | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<AcquisitionPaymentMethod | null>(null);
+  const [bankAccountId, setBankAccountId] = useState<Id<"bankAccounts"> | undefined>();
+  const importBankMethod = paymentMethod === "BANK_TRANSFER" || paymentMethod === "CARD" || paymentMethod === "CHEQUE";
+  const bankOptions = useQuery(api.vehicles.listAcquisitionBankOptions,
+    open && activeOrgId && posting === "PURCHASE" && importBankMethod ? { orgId: activeOrgId, purpose: "CREATE" } : "skip");
+  const selectedBank = bankOptions?.banks?.find((bank) => bank._id === bankAccountId);
 
   const isBlocked = ({ validRows, invalidCount, totalCount }: ImportPreflightInfo) => {
     if (posting === null) return true;
     if (posting !== "PURCHASE") return false;
     if (paymentMethod === null) return true;
+    if (importBankMethod && (!selectedBank || bankOptions?.truncated)) return true;
     const blockers = purchaseBlockers(validRows, paymentMethod, { invalidCount, totalCount });
     return (
       blockers.missingVin > 0 ||
@@ -760,6 +791,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
     if (!next) {
       setPosting(null);
       setPaymentMethod(null);
+      setBankAccountId(undefined);
     }
     onOpenChange(next);
   };
@@ -809,7 +841,10 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
           posting={posting}
           setPosting={setPosting}
           paymentMethod={paymentMethod}
-          setPaymentMethod={setPaymentMethod}
+          setPaymentMethod={(method) => { setPaymentMethod(method); setBankAccountId(undefined); }}
+          bankOptions={bankOptions}
+          bankAccountId={bankAccountId}
+          setBankAccountId={setBankAccountId}
         />
       )}
       onImport={(vehicles, { importId, sourceRows }) => {
@@ -900,6 +935,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
                 orgId: activeOrgId,
                 acquisitionPosting: posting,
                 purchasePaymentMethod: posting === "PURCHASE" ? paymentMethod! : undefined,
+                bankAccountId: posting === "PURCHASE" && importBankMethod ? selectedBank?._id : undefined,
                 // Same identity for every chunk and every retry of this upload.
                 // A purchase import refuses outright without it.
                 importId,

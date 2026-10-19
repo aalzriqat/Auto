@@ -135,6 +135,8 @@ export default defineSchema({
     /** SCRUM-563 — financial reset counters; absent means 0. Protocol: `convex/utils/orgResetGeneration.ts`. */
     financialResetGeneration: v.optional(v.number()),
     financialResetCompletedGeneration: v.optional(v.number()),
+    /** Incremented whenever journal/period facts or BANK_ACCOUNT mapping change. */
+    bankAggregateMappingGeneration: v.optional(v.number()),
   }),
 
   organizationDeletionRequests: defineTable({
@@ -766,6 +768,12 @@ export default defineSchema({
     payerNameSnapshot: v.optional(v.string()),
     salespersonId: v.optional(v.id("users")),
     cashierId: v.optional(v.id("users")),
+    /**
+     * SCRUM-54: the physical bank account a BANK_ACCOUNT control line moved
+     * money through, captured by the money-moving producer. Absent on legacy
+     * lines — those are unmatched and never inferred by amount/date.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     description: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
@@ -1036,6 +1044,10 @@ export default defineSchema({
       debitMinor: v.number(),
       creditMinor: v.number(),
       description: v.optional(v.string()),
+      // SCRUM-54: the physical bank a BANK_ACCOUNT-control line seeds. Required
+      // by the mutations for that account, absent on every other line and on
+      // drafts saved before this field existed (which approval refuses).
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
@@ -1288,6 +1300,7 @@ export default defineSchema({
       // written before this field existed have none, treated as CASH (the
       // old normalizePaymentMethod default) wherever it's read.
       paymentMethod: v.optional(paymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     total: v.number(),
     updatedAt: v.number(),
@@ -1301,6 +1314,7 @@ export default defineSchema({
   vehicleCostCorrections: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     previousCost: v.number(),
     newCost: v.number(),
     reason: v.string(),
@@ -1467,6 +1481,7 @@ export default defineSchema({
      */
     amountReceived: v.optional(v.number()),
     receiptMethod: v.optional(paymentMethodValidator),
+    receiptBankAccountId: v.optional(v.id("bankAccounts")),
     /** Cheque number or transfer reference for the most recent receipt. */
     receiptReference: v.optional(v.string()),
     /** The bank or cash account the money arrived in. */
@@ -1563,6 +1578,7 @@ export default defineSchema({
     amountMinor: v.number(),
     currency: v.string(),
     method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     receivedDate: v.number(),
     reference: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -1651,6 +1667,8 @@ export default defineSchema({
     paidAt: v.optional(v.number()),
     paidBy: v.optional(v.id("users")),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Last payment's physical bank; each instalment also retains its bank on its accounting event. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** Cheque number or transfer reference. */
     paymentReference: v.optional(v.string()),
     /** The bank or cash account the payment left. */
@@ -1816,6 +1834,7 @@ export default defineSchema({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
       purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
@@ -2156,6 +2175,7 @@ export default defineSchema({
     commissionPaidAt: v.optional(v.number()),
     commissionPaidBy: v.optional(v.id("users")),
     commissionPaymentMethod: v.optional(paymentMethodValidator),
+    commissionBankAccountId: v.optional(v.id("bankAccounts")),
     commissionPaymentIdempotencyKey: v.optional(v.string()),
     // A sale is either live (unset) or soft-deleted (true); `false` is
     // unrepresentable, so the by_org_deleted / by_org_salesperson_deleted index
@@ -2274,6 +2294,7 @@ export default defineSchema({
     refundMinor: v.number(), // cash/bank refund received for the unused portion, 0 if none
     refundTaxMinor: v.optional(v.number()), // VAT portion of the refund, 0/undefined if none
     refundPaymentMethod: v.optional(paymentMethodValidator),
+    refundBankAccountId: v.optional(v.id("bankAccounts")),
     writeOffMinor: v.number(), // non-refundable unused portion expensed immediately, 0 if none
     previousTermMonths: v.number(),
     newTermMonths: v.number(),
@@ -2303,6 +2324,7 @@ export default defineSchema({
     refundMinor: v.number(),
     refundTaxMinor: v.optional(v.number()),
     refundPaymentMethod: v.optional(paymentMethodValidator),
+    refundBankAccountId: v.optional(v.id("bankAccounts")),
     writeOffMinor: v.number(),
     newTermMonths: v.number(),
     reason: v.string(),
@@ -2354,6 +2376,8 @@ export default defineSchema({
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     idempotencyKey: v.optional(v.string()),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Physical bank used by a paid transfer, issued cheque or card expense. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
@@ -3619,6 +3643,7 @@ export default defineSchema({
    */
   financeCompanyForwards: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     applicationId: v.id("financeApplications"),
     // SCRUM-27: exactly ONE of the two is set - a configured company by id, a manual one by the name on its letter.
     financeCompanyId: v.optional(v.id("financeCompanies")),
@@ -3906,6 +3931,7 @@ export default defineSchema({
         v.literal("CARD")
       )
     ),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     reference: v.optional(v.string()),
     note: v.optional(v.string()),
     occurredAt: v.number(),
@@ -4970,6 +4996,7 @@ export default defineSchema({
 
   collectionPayments: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     branchId: v.optional(v.id("branches")),
     receivableId: v.optional(v.id("receivables")),
     customerId: v.id("customers"),
@@ -5120,6 +5147,7 @@ export default defineSchema({
 
   collectionApprovalRequests: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     receivableId: v.id("receivables"),
     customerId: v.id("customers"),
     requestedBy: v.id("users"),
@@ -5393,6 +5421,7 @@ export default defineSchema({
   fixedAssetEvents: defineTable({
     orgId: v.id("organizations"),
     assetId: v.id("fixedAssets"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     type: v.union(
       v.literal("CAPITALIZE"),
       v.literal("DEPRECIATE"),
@@ -5466,6 +5495,50 @@ export default defineSchema({
     .index("by_org_account_currency_period_shard", ["orgId", "accountId", "currency", "periodId", "shard"])
     .index("by_org_period", ["orgId", "periodId"]),
 
+  // A bank-control aggregate is usable only after the organization, chart
+  // mapping and reset generation behind it have been fully validated.
+  bankBalanceAggregateStates: defineTable({
+    orgId: v.id("organizations"),
+    controlAccountId: v.id("chartOfAccounts"),
+    mappingGeneration: v.number(),
+    resetGeneration: v.number(),
+    status: v.union(v.literal("READY"), v.literal("BACKFILL_REQUIRED"), v.literal("BACKFILLING")),
+    cursor: v.optional(v.string()),
+    // Tree layout the state certifies; absent means the original single-tree layout.
+    layout: v.optional(v.number()),
+    // Legacy; written as 0 on rebuild. Gross flow lives in bankBalanceGrossShards.
+    grossAbsMinor: v.number(),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  // Sharded gross absolute bank flow per aggregate namespace, so concurrent
+  // postings in one org write different documents. Each shard is capped at its
+  // share of the safe-integer range (see bankAggregateTriggers.ts).
+  bankBalanceGrossShards: defineTable({
+    orgId: v.id("organizations"),
+    namespace: v.string(),
+    shard: v.number(),
+    grossAbsMinor: v.number(),
+  })
+    .index("by_namespace_shard", ["namespace", "shard"])
+    .index("by_org", ["orgId"]),
+
+  // Transactional membership record for each line projected into the two
+  // component trees. The backfill and live trigger share this exact-once key.
+  bankBalanceAggregateItems: defineTable({
+    orgId: v.id("organizations"),
+    journalLineId: v.id("journalLines"),
+    namespace: v.string(),
+    accountId: v.id("chartOfAccounts"),
+    currency: v.string(),
+    accountingDate: v.number(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
+    netMinor: v.number(),
+    absMinor: v.number(),
+  })
+    .index("by_line", ["journalLineId"])
+    .index("by_org", ["orgId"]),
+
   // GL Phase 15: full cash-drawer lifecycle. Distinct from the simpler,
   // pre-existing cashierReconciliations (open-float-free count-vs-expected
   // snapshot with no movement ledger) — this is the fuller open→count→
@@ -5508,6 +5581,8 @@ export default defineSchema({
     occurredAt: v.number(),
     notes: v.optional(v.string()),
     accountingEventId: v.optional(v.id("accountingEvents")),
+    /** SCRUM-54: the physical bank a BANK_DEPOSIT movement went into. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     actorId: v.id("users"),
     createdAt: v.number(),
     idempotencyKey: v.string(),
@@ -5542,7 +5617,9 @@ export default defineSchema({
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_active", ["orgId", "isActive"]),
+    // SCRUM-54: the receipt / deposit bank pickers read only the banks in the one currency a
+    // bank must match, so a long list in other currencies cannot crowd out an eligible bank.
+    .index("by_org_active_currency", ["orgId", "isActive", "currency"]),
 
   // Uploaded bank-statement rows for the reconciliation-target bank account,
   // matched against posted journalLines on SYSTEM_KEYS.BANK_ACCOUNT.
@@ -5626,6 +5703,8 @@ export default defineSchema({
     ),
     amountMinor: v.number(),
     currency: v.string(),
+    paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     occurredAt: v.number(),
     notes: v.optional(v.string()),
     accountingEventId: v.optional(v.id("accountingEvents")),
@@ -5690,6 +5769,7 @@ export default defineSchema({
     amountMinor: v.number(),
     recoveredMinor: v.number(),
     currency: v.string(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     date: v.number(),
     method: v.optional(
       v.union(
@@ -5726,6 +5806,7 @@ export default defineSchema({
     userId: v.id("users"),
     amountMinor: v.number(),
     currency: v.string(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     method: v.optional(
       v.union(
         v.literal("CASH"),
@@ -5789,6 +5870,7 @@ export default defineSchema({
     approvedNetMinor: v.optional(v.number()),
     // The method the whole run was paid with (per-employee split not supported).
     paidMethod: v.optional(v.string()),
+    paidBankAccountId: v.optional(v.id("bankAccounts")),
     createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
     approvedBy: v.optional(v.id("users")),

@@ -33,4 +33,10 @@ app.use(aggregate, { name: "instagramEventsByOrg" });
 app.use(aggregate, { name: "facebookEventsByOrg" });
 app.use(aggregate, { name: "socialContactsByOrg" });
 
+// SCRUM-54: date-bounded counts and minor-unit sums for the bank control.
+// Separate trees retain every control line and every line with a physical
+// bank dimension, so zero-net legacy activity still fails reconciliation.
+app.use(aggregate, { name: "bankControlByDate" });
+app.use(aggregate, { name: "bankAttributionByDate" });
+
 export default app;

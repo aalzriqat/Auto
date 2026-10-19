@@ -77,8 +77,11 @@ function HeldHarness() {
           <p className="text-xs text-muted-foreground">HELD</p>
         </div>
         <HeldDepositActions
+          orgId={"org_1" as never}
           method={method}
+          bankAccountId=""
           onMethodChange={setMethod}
+          onBankChange={() => undefined}
           busy={false}
           onRefund={() => undefined}
           onForfeit={() => undefined}
@@ -110,6 +113,7 @@ describe.skipIf(!ENABLED)("money-method visual fixtures (SCRUM-469)", () => {
     // 2. The stopped-deal refund confirmation.
     render(
       <StoppedDealDepositsPanel
+        orgId={"org_1" as never}
         deposits={[{ _id: "dep1", amount: 500, status: "HELD", method: "CASH", releaseCount: 0 }]}
         canResolve
         faceValueIsReleasable

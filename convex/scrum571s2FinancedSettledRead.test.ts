@@ -8,7 +8,7 @@
  */
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { payInvoice } from "../test-utils/saleInvoiceFixtures";
-import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -161,6 +161,7 @@ describe("SCRUM-571 s2a: finalize, confirmDisbursement, read (the live false-COM
 
     await s.asUser.mutation(api.applications.confirmDisbursement, {
       idempotencyKey: key(), orgId: s.orgId, applicationId, disbursedAmountMinor: approved * SCALE,
+      bankAccountId: await insertReceiptBank({ t: s.t, orgId: s.orgId, owner: { userId: s.userId } }),
     });
 
     const read = await readDeal(s, applicationId);
@@ -175,6 +176,7 @@ describe("SCRUM-571 s2a: finalize, confirmDisbursement, read (the live false-COM
     const { applicationId, approved } = await prepareDeal(s, { gap: GAP });
     await s.asUser.mutation(api.applications.confirmDisbursement, {
       idempotencyKey: key(), orgId: s.orgId, applicationId, disbursedAmountMinor: approved * SCALE,
+      bankAccountId: await insertReceiptBank({ t: s.t, orgId: s.orgId, owner: { userId: s.userId } }),
     });
     const { receivableId } = await invoiceOf(s, applicationId);
     await s.t.run((ctx) =>

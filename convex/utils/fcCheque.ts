@@ -179,9 +179,9 @@ export const FC_RETURN_MESSAGES = {
     "This cleared cheque has no persisted receipt lineage, so what it moved cannot be determined, and returning it would reopen the debt without reversing the receipt. Nothing has been changed. An accountant reviews the deal.",
   CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE:
     "This cleared cheque has no collection payment to reverse, so reopening the debt would leave it owed and collected at the same time. Nothing has been changed. An accountant reviews the deal.",
-  // SCRUM-239 round 4: `collections.returnClearedCheque` fingerprints the bank fee too.
+  // The return key binds both the fee and the physical bank charged for it.
   CHEQUE_RETURN_KEY_CONFLICT:
-    "This same request was already sent with a different cheque, reason or bank fee. Nothing has been changed. Close and reopen the dialog to try again.",
+    "This same request was already sent with a different cheque, reason, bank fee or bank account. Nothing has been changed. Close and reopen the dialog to try again.",
 } as const;
 /** SCRUM-447 B4: longest operator note kept with a face attestation. */
 export const ATTESTATION_NOTE_MAX_LENGTH = 500;

@@ -30,6 +30,7 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { finalizeAsOwner, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 import { deriveSettlementStatus } from "./utils/supplierSettlement";
 
 vi.mock("./rateLimit", () => ({
@@ -149,7 +150,7 @@ async function closeDeal(s: Seeded) {
   await recordReconciledZeroCost(owner.as, api, orgId, applicationId);
   // H + D = 2,700, an amount the product must itself agree is due.
   await approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now() - 5_000,
+    orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: await seedBank(s.t, orgId), paidAt: Date.now() - 5_000,
     expectedAmountMinor: jod(2_700), idempotencyKey: crypto.randomUUID(),
   });
   await finalizeAsOwner(s, applicationId, { payForward: false });

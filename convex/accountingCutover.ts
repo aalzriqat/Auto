@@ -32,6 +32,54 @@ import { validateManualJournalLines, auditLog, type ManualJournalLine } from "./
 import { toMinorUnits, denominationOf } from "./utils/money";
 import { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+
+/**
+ * SCRUM-54: an opening line on the BANK_ACCOUNT control account must name the
+ * physical bank it seeds — `getBookBalance` withholds any balance that has a
+ * control line without one. The identity is supplied by the user, never
+ * defaulted or inferred from amount/date, and no other account may carry one.
+ *
+ * The bank must be a live (not deleted, active) bank of this organization in
+ * the currency the opening is denominated in. Callers invoke this before their
+ * first write, and the shared poster repeats it as the chokepoint so a bank
+ * removed between draft and approval, or a draft saved before this field
+ * existed, cannot post an unattributed bank line.
+ */
+async function assertOpeningBankIdentities(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  lines: ReadonlyArray<{ accountId: Id<"chartOfAccounts">; bankAccountId?: Id<"bankAccounts"> }>,
+  currency: string
+): Promise<void> {
+  for (const line of lines) {
+    const account = await ctx.db.get(line.accountId);
+    if (!account || account.orgId !== orgId) {
+      throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
+    }
+    if (account.systemKey !== SYSTEM_KEYS.BANK_ACCOUNT) {
+      if (line.bankAccountId) {
+        throw new ConvexError("Only a bank account line can name a bank account.");
+      }
+      continue;
+    }
+    if (!line.bankAccountId) {
+      throw new ConvexError("Select a bank account for every bank opening-balance line.");
+    }
+    const bank = await ctx.db.get(line.bankAccountId);
+    if (!bank || bank.orgId !== orgId || bank.isDeleted) {
+      throw new ConvexError("The selected bank account was not found in this organization.");
+    }
+    if (!bank.isActive) {
+      throw new ConvexError("The selected bank account is inactive.");
+    }
+    if (bank.currency !== currency) {
+      throw new ConvexError(
+        `The selected bank account is denominated in ${bank.currency}, but this opening balance is in ${currency}.`
+      );
+    }
+  }
+}
 
 /**
  * One refusal, worded for the two things that are actually different to the
@@ -210,6 +258,7 @@ export const draftOpeningBalance = mutation({
       debitMinor: v.number(),
       creditMinor: v.number(),
       description: v.optional(v.string()),
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
@@ -256,6 +305,8 @@ export const draftOpeningBalance = mutation({
         throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
       }
     }
+
+    await assertOpeningBankIdentities(ctx, args.orgId, args.lines, args.expectedCurrency);
 
     if (!(await getOpenPeriodForDate(ctx, args.orgId, args.asOfDate))) {
       throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
@@ -422,6 +473,7 @@ async function postOpeningBalanceDraft(
     throw new ConvexError(unvouchableDenominationMessage(draft.currency));
   }
   const currency = denomination.code;
+  await assertOpeningBankIdentities(ctx, orgId, draft.lines, currency);
   const now = Date.now();
 
   const journalId = await ctx.db.insert("journalEntries", {
@@ -458,6 +510,7 @@ async function postOpeningBalanceDraft(
       scale,
       accountingDate: draft.asOfDate,
       description: line.description,
+      bankAccountId: line.bankAccountId,
     });
     // GL Phase 18: this is a direct journalLines insert (not routed through
     // postAccountingEvent), so it must keep the running snapshot in sync
@@ -531,6 +584,7 @@ export const postOpeningBalanceDirect = mutation({
       debitMinor: v.number(),
       creditMinor: v.number(),
       description: v.optional(v.string()),
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
@@ -554,7 +608,16 @@ export const postOpeningBalanceDirect = mutation({
       throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
     }
 
+    // Same preflight as draftOpeningBalance, so the stable coded refusal for
+    // late openings still wins over the bank check below (the poster repeats it).
+    if (await hasPostedLedgerActivity(ctx, args.orgId)) {
+      refuseOpeningAfterLedgerActivity();
+    }
+
     validateManualJournalLines(args.lines as ManualJournalLine[]);
+
+    // Before the draft insert: a refused bank identity must leave no row behind.
+    await assertOpeningBankIdentities(ctx, args.orgId, args.lines, args.expectedCurrency);
 
     // The denomination to stamp on the row. Already proved vouchable AND equal
     // to what the caller converted under by the assertion above, which is why
@@ -677,15 +740,34 @@ export const listPendingOpeningBalanceDrafts = query({
         // the preparer as "Unknown" on the very screen where identifying them
         // is the control.
         const preparer = draft.preparedByName ? null : await ctx.db.get(draft.createdBy);
+        const draftCurrency = draft.currency ?? orgCurrency;
+        // SCRUM-54: the approver must see WHICH physical bank each bank line
+        // seeds. The name is reported only for a bank approval would accept
+        // (same org, live, in the draft's currency); `null` on a line that
+        // requires a bank means approval will refuse it.
+        const lines = await Promise.all(
+          draft.lines.map(async (line) => {
+            const account = await ctx.db.get(line.accountId);
+            const bank = line.bankAccountId ? await ctx.db.get(line.bankAccountId) : null;
+            const usable =
+              bank !== null && bank.orgId === args.orgId && !bank.isDeleted && bank.isActive && bank.currency === draftCurrency;
+            return {
+              ...line,
+              requiresBankAccount: account?.systemKey === SYSTEM_KEYS.BANK_ACCOUNT,
+              bankAccountName: usable ? bank.name : null,
+            };
+          })
+        );
         return {
           ...draft,
+          lines,
           // `null`, never an English literal. The client renders this inside a
           // <bdi> on a screen this PR hardened for Arabic bidi — shipping
           // "Unknown" there would put untranslated English in the RTL run.
           // Translation is the client's job; the server reports absence.
           preparedByName:
             draft.preparedByName || preparer?.name || preparer?.email || null,
-          currency: draft.currency ?? orgCurrency,
+          currency: draftCurrency,
           // The SAME authority the server refuses on, not a lookalike. This was
           // `Boolean(draft.currency)` to match the old `!draft.currency` guard,
           // and both were truthiness: a draft denominated "JD" reported

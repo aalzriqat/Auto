@@ -96,7 +96,12 @@ async function seedAccountingDealer() {
   const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
-  return { t, orgId, userId, customerId, asOwner };
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  return { t, orgId, userId, customerId, bankAccountId, asOwner };
 }
 
 type Dealer = Awaited<ReturnType<typeof seedAccountingDealer>>;
@@ -209,7 +214,7 @@ describe("SCRUM-234 — modern collection receipts can no longer be double-poste
 
   test("clearCheque leaves a legacy row, and the retired migration cannot post a second journal for it", async () => {
     const dealer = await seedAccountingDealer();
-    const { t, orgId, customerId, asOwner } = dealer;
+    const { t, orgId, customerId, bankAccountId, asOwner } = dealer;
 
     const receivableId = await asOwner.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -220,7 +225,7 @@ describe("SCRUM-234 — modern collection receipts can no longer be double-poste
       orgId, receivableId, customerId, bank: "Arab Bank", chequeNumber: "S234-1",
       chequeDate: Date.now() + 86_400_000, amount: 800,
     });
-    await asOwner.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asOwner.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
 
     const collectionEvents = await eventsOfType(t, orgId, "COLLECTION_PAYMENT");
     expect(collectionEvents).toHaveLength(1);

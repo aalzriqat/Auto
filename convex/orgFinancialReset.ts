@@ -91,6 +91,9 @@ const RESET_TABLES = [
   "accountingEvents",
   // ⚠️ SCRUM-549: `journalLines.journalEntryId` and `.accountId` are REQUIRED, so
   // lines go BEFORE their entry and their account (CHILD_TABLES defers both).
+  "bankBalanceAggregateItems",
+  "bankBalanceAggregateStates",
+  "bankBalanceGrossShards",
   "journalLines",
   "journalEntries",
   "financialAuditLog",
@@ -291,8 +294,9 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // `original.journalEntryId` (`ctx.db.patch`, throws on a deleted row) and
   // loads its lines through it. The reverse edge (`journalEntries.accountingEventId`)
   // is deliberately NOT added: it would make the graph cyclic.
+  journalLines: ["bankBalanceAggregateItems"],
   journalEntries: ["journalLines", "accountingEvents"],
-  chartOfAccounts: ["journalLines", "accountBalanceSnapshots"],
+  chartOfAccounts: ["journalLines", "accountBalanceSnapshots", "bankBalanceAggregateItems", "bankBalanceAggregateStates"],
   // `paymentVouchers.depositId` is REQUIRED; `commitmentAuthorityWork.depositId`
   // is too (not behaviour-tested: the authority preflight refuses a destructive
   // reset while those rows exist).
@@ -365,6 +369,9 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   pendingAccountingEvents: "by_org_status",
   journalEntries: "by_org",
   journalLines: "by_org",
+  bankBalanceAggregateItems: "by_org",
+  bankBalanceAggregateStates: "by_org",
+  bankBalanceGrossShards: "by_org",
   financialAuditLog: "by_org",
   accountBalanceSnapshots: "by_org_period",
   chartOfAccounts: "by_org",

@@ -40,6 +40,7 @@ import {
 } from "./utils/settlementDeductions";
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
+import { seedBank } from "../test-utils/bankFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
@@ -1008,6 +1009,7 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         orgId,
         feeId,
         method: "BANK_TRANSFER",
+        bankAccountId: await seedBank(t, orgId),
         paidAt: Date.now(),
         expectedAmountMinor: 700 * 1000,
         idempotencyKey: `fee-direct-${applicationId}`,

@@ -69,6 +69,7 @@ import { applicationProvesFinancing, hasVerifiedFinancingApplication } from "./u
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
 import { planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
@@ -106,6 +107,7 @@ const depositResolutionValidator = v.object({
   // Required for REFUND_TO_CUSTOMER: the deposit's own recorded method may be
   // OTHER, which the release path refuses because it cannot be paid out.
   refundMethod: v.optional(depositMethodValidator),
+  bankAccountId: v.optional(v.id("bankAccounts")),
 });
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
@@ -953,6 +955,7 @@ export const update = mutation({
     customerPaymentDisposition: v.optional(v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT"))),
     customerRefundAmountMinor: v.optional(v.number()),
     customerRefundMethod: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+    customerRefundBankAccountId: v.optional(v.id("bankAccounts")),
     customerRefundReference: v.optional(v.string()),
     customerRefundedAt: v.optional(v.number()),
   },
@@ -989,6 +992,7 @@ export const update = mutation({
     const isCancellingCompletedSale = args.status === "CANCELLED" && sale.status === "COMPLETED";
     const customerDispositionProvided = args.customerPaymentDisposition !== undefined ||
       args.customerRefundAmountMinor !== undefined || args.customerRefundMethod !== undefined ||
+      args.customerRefundBankAccountId !== undefined ||
       args.customerRefundReference !== undefined || args.customerRefundedAt !== undefined;
     if (customerDispositionProvided && !isCancellingCompletedSale) {
       throwAppError(AppErrorCode.VALIDATION_FAILED, "Customer receipt disposition requires cancellation of a completed sale.");
@@ -1177,7 +1181,7 @@ export const update = mutation({
         // after the MANAGE_FINANCE check above; the shared helper refuses too.
         if ((args.customerPaymentDisposition === "REFUND" && invoicePlan.totalMinor > 0) ||
             [args.customerRefundAmountMinor, args.customerRefundMethod,
-              args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined)) {
+              args.customerRefundBankAccountId, args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined)) {
           assertCustomerCreditPayoutAllowed();
         }
         if (invoicePlan.totalMinor > 0 && !args.customerPaymentDisposition) {
@@ -1207,6 +1211,7 @@ export const update = mutation({
           payout: allRefundFields ? {
             amountMinor: args.customerRefundAmountMinor!,
             method: args.customerRefundMethod!,
+            bankAccountId: args.customerRefundBankAccountId,
             reference: refundReference!,
             paidAt: args.customerRefundedAt!,
           } : undefined,
@@ -1843,11 +1848,21 @@ async function assertCommissionRecognitionMatches(
   }
 }
 
+/** Eligible physical banks for a direct commission payment; names only. */
+export const listCommissionBankOptions = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
 export const markCommissionPaid = mutation({
   args: {
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -1862,7 +1877,10 @@ export const markCommissionPaid = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ saleId: args.saleId, paymentMethod }),
+        fingerprint: JSON.stringify({
+          saleId: args.saleId, paymentMethod,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
+        }),
       },
       async () => {
         const sale = await ctx.db.get(args.saleId);
@@ -1881,6 +1899,18 @@ export const markCommissionPaid = mutation({
         }
         if (sale.commissionAmount == null || sale.commissionAmount <= 0) {
           throwAppError(AppErrorCode.VALIDATION_FAILED, "This sale has no commission amount to pay.");
+        }
+        if (paymentMethod !== "CASH") {
+          await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId,
+            bankAccountId: args.bankAccountId,
+            currency: await getOrgCurrency(ctx, args.orgId),
+            missingMessage: "Select the physical bank account used to pay this commission.",
+            currencySubject: "commission payment",
+            errorCode: AppErrorCode.COMMISSION_BANK_INVALID,
+          });
+        } else if (args.bankAccountId) {
+          throwAppError(AppErrorCode.COMMISSION_BANK_INVALID, "A cash commission cannot name a bank account.");
         }
         // Only when the accrual is genuinely absent. The safety-net accrual
         // below is dated to the sale, so for a sale that never accrued, a closed
@@ -1919,6 +1949,7 @@ export const markCommissionPaid = mutation({
           commissionPaidAt: now,
           commissionPaidBy: user._id,
           commissionPaymentMethod: paymentMethod,
+          commissionBankAccountId: args.bankAccountId,
           commissionPaymentIdempotencyKey: args.idempotencyKey,
         });
         const currency = await getOrgCurrency(ctx, args.orgId);
@@ -1951,6 +1982,7 @@ export const markCommissionPaid = mutation({
           amountMinor,
           currency,
           paymentMethod,
+          bankAccountId: args.bankAccountId,
           actorId: user._id,
           occurredAt: now,
         });

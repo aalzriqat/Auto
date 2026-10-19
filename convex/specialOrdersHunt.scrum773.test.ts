@@ -9,6 +9,7 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { seedBank } from "../test-utils/bankFixture";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 const newTest = () => convexTestWithComponents(schema, MODULE_GLOB);
@@ -100,6 +101,7 @@ describe("SCRUM-773 special orders: supplier payable settlement", () => {
     const { orgId, userId, as } = await seedOrg(t, "own");
     const other = await seedOrg(t, "other");
     const { payableId } = await seedSourcedPayable(t, orgId, userId);
+    const bankAccountId = await seedBank(t, orgId);
     const foreignBank = await t.run((ctx) =>
       ctx.db
         .query("chartOfAccounts")
@@ -110,13 +112,13 @@ describe("SCRUM-773 special orders: supplier payable settlement", () => {
 
     await expect(
       as.mutation(api.sourcingPayables.markPaid, {
-        idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "BANK_TRANSFER", paymentAccountId: foreignBank!._id,
+        idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "BANK_TRANSFER", bankAccountId, paymentAccountId: foreignBank!._id,
       })
     ).rejects.toThrow(/Payment account not found/);
 
     await expect(
       as.mutation(api.sourcingPayables.recordPartialPayment, {
-        idempotencyKey: crypto.randomUUID(), orgId, payableId, amount: 1000, paymentMethod: "BANK_TRANSFER", paymentAccountId: foreignBank!._id,
+        idempotencyKey: crypto.randomUUID(), orgId, payableId, amount: 1000, paymentMethod: "BANK_TRANSFER", bankAccountId, paymentAccountId: foreignBank!._id,
       })
     ).rejects.toThrow(/Payment account not found/);
 
@@ -133,6 +135,7 @@ describe("SCRUM-773 special orders: supplier payable settlement", () => {
     const t = newTest();
     const { orgId, userId, as } = await seedOrg(t, "ctl");
     const { payableId } = await seedSourcedPayable(t, orgId, userId);
+    const bankAccountId = await seedBank(t, orgId);
     const ownBank = await t.run((ctx) =>
       ctx.db
         .query("chartOfAccounts")
@@ -142,10 +145,10 @@ describe("SCRUM-773 special orders: supplier payable settlement", () => {
     expect(ownBank).not.toBeNull();
 
     await as.mutation(api.sourcingPayables.recordPartialPayment, {
-      idempotencyKey: crypto.randomUUID(), orgId, payableId, amount: 1000, paymentMethod: "BANK_TRANSFER", paymentAccountId: ownBank!._id,
+      idempotencyKey: crypto.randomUUID(), orgId, payableId, amount: 1000, paymentMethod: "BANK_TRANSFER", bankAccountId, paymentAccountId: ownBank!._id,
     });
     await as.mutation(api.sourcingPayables.markPaid, {
-      idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "BANK_TRANSFER", paymentAccountId: ownBank!._id,
+      idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "BANK_TRANSFER", bankAccountId, paymentAccountId: ownBank!._id,
     });
 
     const payable = await t.run((ctx) => ctx.db.get(payableId));

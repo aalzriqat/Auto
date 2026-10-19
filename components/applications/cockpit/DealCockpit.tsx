@@ -163,6 +163,7 @@ import {
 import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialog";
 import {
   RecordForwardToFinanceCompanyDialog,
+  type ForwardConfirmOutcome,
   type ForwardPaymentValues,
 } from "../RecordForwardToFinanceCompanyDialog";
 import { ForwardCorrectionDialog, type ForwardCorrectionKind } from "../ForwardCorrectionDialog";
@@ -185,6 +186,7 @@ import {
   type ExpectedHandoverRow,
   type ActualHandoverCost,
   type DirectHandoverPayment,
+  type DirectPaymentBankOptions,
   type HandoverCostsData,
   type HandoverCostSource,
   type NewHandoverCost,
@@ -1288,8 +1290,22 @@ export function DealCockpit({
   // `app` is undefined while loading or reconnecting and null if not found: no
   // version is observed then, and `?? 1` above must not read as "moved to v1".
   const appObserved = app != null;
+  // SCRUM-54: the physical bank a BANK_TRANSFER / CHEQUE receipt reached, named
+  // by the operator on every open - never preselected, never carried over. The
+  // kept confirm key is bound to the bank it was minted for (like the version):
+  // a different bank is a different command, and the server's already-confirmed
+  // refusal keeps a changed bank from double-posting after a lost response.
+  const [disbursementBankId, setDisbursementBankId] = useState("");
+  const confirmDisbursementKeyBankRef = useRef("");
+  const disbursementBankOptions = useQuery(
+    api.applications.listDisbursementBankOptions,
+    confirmingDisbursement && canConfirmFinanceDisbursement ? { orgId, applicationId } : "skip"
+  );
   const setConfirmingDisbursementObserved = (open: boolean) => {
-    if (open) setConfirmObservedVersion(observedDisbursementVersion);
+    if (open) {
+      setConfirmObservedVersion(observedDisbursementVersion);
+      setDisbursementBankId("");
+    }
     setConfirmingDisbursement(open);
   };
   useEffect(() => {
@@ -1449,6 +1465,19 @@ export function DealCockpit({
    * idempotent by construction (a set and a void) and the server takes no
    * identity for them.
    */
+  // SCRUM-54: banks a bank-method handover payment may name, in the deal's cost currency.
+  const directPaymentBankOptions = useQuery(
+    api.financeDealCosts.listDirectPaymentBankOptions,
+    app && deal && canConfirmFinanceDisbursement
+      ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
+      : "skip"
+  );
+  const custodyBankOptions = useQuery(
+    api.financeDealCosts.listCustodyBankOptions,
+    app && deal && canConfirmFinanceDisbursement
+      ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
+      : "skip"
+  );
   const handoverCosts =
     app && deal
       ? {
@@ -1719,6 +1748,7 @@ export function DealCockpit({
           // caller who may confirm a finance disbursement is offered it (R1);
           // the server refuses anyone else regardless.
           canRecordDirectPayment: canConfirmFinanceDisbursement,
+          directPaymentBankOptions,
           // The reconcile mutation checks the same permission (confirm:finance_disbursement).
           canReconcile: canConfirmFinanceDisbursement,
           onRecordDirectPayment: async (feeId: string, values: DirectHandoverPayment) => {
@@ -1728,6 +1758,8 @@ export function DealCockpit({
                 orgId,
                 feeId: feeId as Id<"financeDealFees">,
                 method: values.method,
+                // SCRUM-54: the physical bank, frozen in the form's attempt so a replay sends the same one.
+                ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                 paidAt: values.paidAt,
                 // The amount the operator saw when they chose to pay: the
                 // server refuses if the line has changed since (R1).
@@ -1974,6 +2006,15 @@ export function DealCockpit({
       : preFinalizeForward?.state === "UNPAID" && preFinalizeForward.mayRecord
         ? preFinalizeForward.money
         : null;
+  // SCRUM-54: banks a bank-method forward may name. The query needs the SAME pair of
+  // permissions as the payment (a manager can hold both without MANAGE_FINANCE), so
+  // it is asked only for a caller who holds both.
+  const forwardBankOptions = useQuery(
+    api.financeCompanyForward.listForwardBankOptions,
+    forwardPayment && canConfirmFinanceDisbursement && hasPermission(PERMISSIONS.VIEW_FINANCE)
+      ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
+      : "skip"
+  );
   /**
    * The payment the take-back / report-returned control acts on. A finalized
    * deal's comes from the cockpit; before the close, from the server's status of
@@ -1988,6 +2029,7 @@ export function DealCockpit({
     amount: deposit.amount,
     status: deposit.status,
     method: deposit.method,
+    currency: deposit.currency,
     releasedAmountMinor: deposit.releasedAmountMinor,
     releaseCount: deposit.releaseCount,
   }));
@@ -2880,6 +2922,7 @@ export function DealCockpit({
     app && custodyCommandsOffered
       ? {
           members: custodyCandidates?.candidates,
+          bankOptions: custodyBankOptions,
           eligibleFees: (dealCosts?.fees ?? [])
             .filter((fee) => fee.custodyEligible && fee.custodyId === undefined && fee.actualAmountMinor !== undefined && fee.actualAmountMinor > 0)
             .map((fee) => ({
@@ -2908,6 +2951,7 @@ export function DealCockpit({
                 userId: values.userId,
                 issuedMinor: values.amountMinor,
                 method: values.method,
+                ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                 reference: values.reference,
                 note: values.note,
                 occurredAt: values.occurredAt,
@@ -2922,6 +2966,7 @@ export function DealCockpit({
                 kind,
                 amountMinor: values.amountMinor,
                 method: values.method,
+                ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                 reference: values.reference,
                 note: values.note,
                 occurredAt: values.occurredAt,
@@ -3013,6 +3058,7 @@ export function DealCockpit({
   return (
     <>
       <DealCockpitView
+        orgId={orgId}
       deal={deal}
       stageDeepLink={stageDeepLink}
       backHref={`/${orgId}/deals`}
@@ -3405,17 +3451,17 @@ export function DealCockpit({
               resolvingId: resolvingDepositId,
               unconfirmed: pendingPayouts.blocked,
               onDismissUnconfirmed: pendingPayouts.dismiss,
-              onResolve: async (depositId, resolution, refundMethod, observedReleaseCount) => {
+              onResolve: async (depositId, resolution, refundMethod, observedReleaseCount, bankAccountId) => {
                 const method = resolution === "REFUNDED" ? refundMethod : "NONE";
                 // A DIFFERENT decision than an unconfirmed earlier attempt is not
                 // sent: it would mint a new key and could pay out twice. The panel
                 // shows the reconciliation notice instead.
-                const gate = pendingPayouts.check(depositId, resolution, String(method));
+                const gate = pendingPayouts.check(depositId, resolution, String(method), bankAccountId);
                 if (gate.status === "blocked") return;
                 const releaseIntent =
                   gate.recordedIntent ??
-                  `release-deposit:${depositId}:${resolution}:${method}:gen${observedReleaseCount}`;
-                pendingPayouts.record(depositId, { resolution, method: String(method), intent: releaseIntent });
+                  `release-deposit:${depositId}:${resolution}:${method}:${bankAccountId ?? "none"}:gen${observedReleaseCount}`;
+                pendingPayouts.record(depositId, { resolution, method: String(method), bankAccountId, intent: releaseIntent });
                 setResolvingDepositId(depositId);
                 try {
                   await trackRecorded(
@@ -3425,6 +3471,7 @@ export function DealCockpit({
                         depositId: depositId as Id<"deposits">,
                         resolution,
                         refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
+                        bankAccountId,
                         idempotencyKey: commandId.for(releaseIntent),
                       }),
                     resolution === "REFUNDED" ? "DepositRefundedSuccess" : "DepositForfeitedSuccess",
@@ -3452,9 +3499,26 @@ export function DealCockpit({
                 confirming: confirmingDisbursement,
                 submitting: disbursementSubmitting,
                 amountLabel: expectedDisbursementLabel,
+                // Only a receipt that reached a bank names one; the server's own
+                // answer (CASH needs none) decides, not a guess made here.
+                bank:
+                  disbursementBankOptions?.needsBank === false
+                    ? undefined
+                    : {
+                        options: disbursementBankOptions?.banks,
+                        value: disbursementBankId,
+                        onChange: setDisbursementBankId,
+                        truncated: disbursementBankOptions?.truncated === true,
+                        receivableMissing: disbursementBankOptions?.receivableMissing === true,
+                      },
                 onOpenChange: setConfirmingDisbursementObserved,
                 onConfirm: async () => {
                   if (!expectedDisbursementMinor) return;
+                  // The bank this request is for, fixed at click time. Absent
+                  // for CASH; a bank receipt cannot be sent without one.
+                  const bankAccountId =
+                    disbursementBankOptions?.needsBank === false ? "" : disbursementBankId;
+                  if (disbursementBankOptions?.needsBank !== false && bankAccountId === "") return;
                   // The version captured when the dialog OPENED, not the one the
                   // screen shows now (the dialog closes itself if that moves).
                   // Held in the closure so this request's answer, however late,
@@ -3491,10 +3555,14 @@ export function DealCockpit({
                   const generation = confirmGenerationRef.current;
                   const superseded = () => confirmGenerationRef.current !== generation;
                   try {
-                    if (confirmDisbursementKeyVersionRef.current !== observedVersion) {
+                    if (
+                      confirmDisbursementKeyVersionRef.current !== observedVersion ||
+                      confirmDisbursementKeyBankRef.current !== bankAccountId
+                    ) {
                       confirmDisbursementKeyRef.current = null;
                     }
                     confirmDisbursementKeyVersionRef.current = observedVersion;
+                    confirmDisbursementKeyBankRef.current = bankAccountId;
                     confirmDisbursementKeyRef.current ??= `confirm-disbursement:${crypto.randomUUID()}`;
                     const disbursementKey = confirmDisbursementKeyRef.current;
                     // Sent: until the server answers, the outcome is unknown here.
@@ -3513,6 +3581,7 @@ export function DealCockpit({
                           // argument, so a v1 confirm must look exactly like the old
                           // call. The server already refuses an omitted value at v2+.
                           ...(observedVersion > 1 ? { expectedDisbursementVersion: observedVersion } : {}),
+                          ...(bankAccountId !== "" ? { bankAccountId: bankAccountId as Id<"bankAccounts"> } : {}),
                         }),
                       "DisbursementConfirmedSuccess",
                       { reflectedWhen: financeDisbursementReflected }
@@ -3582,22 +3651,27 @@ export function DealCockpit({
                   ? {
                       confirming: recordingForward,
                       submitting: forwardSubmitting,
+                      dueMinor: forwardPayment.dueMinor,
                       totalLabel: formatEconomics(forwardPayment.dueMinor),
                       depositLabel: formatEconomics(forwardPayment.depositMinor),
                       contributionLabel: formatEconomics(forwardPayment.contributionMinor),
+                      bankOptions: forwardBankOptions,
                       onOpenChange: setRecordingForward,
-                      onConfirm: async (values) => {
-                        const dueMinor = forwardPayment.dueMinor;
+                      onConfirm: async (values): Promise<ForwardConfirmOutcome> => {
+                        // The amount pinned with the first attempt, never the live due: a retry
+                        // after a lost response must be byte-identical (same key, same args).
+                        const dueMinor = values.expectedAmountMinor;
                         if (!dueMinor) return;
                         setForwardSubmitting(true);
                         // One key per attempt: a retry after a lost response is the
-                        // SAME command, and a changed input is a new one.
-                        const intent = `record-forward:${applicationId}:${dueMinor}:${values.method}:${values.paidAt}:${values.reference ?? ""}`;
+                        // SAME command, and a changed input (the bank included) is a new one.
+                        const intent = `record-forward:${applicationId}:${dueMinor}:${values.method}:${values.bankAccountId ?? ""}:${values.paidAt}:${values.reference ?? ""}`;
                         try {
                           await recordFinanceCompanyForward({
                             orgId,
                             applicationId,
                             method: values.method,
+                            ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                             paidAt: values.paidAt,
                             expectedAmountMinor: dueMinor,
                             reference: values.reference,
@@ -3607,8 +3681,10 @@ export function DealCockpit({
                           toast.success(t("ForwardRecordedSuccess"));
                           setRecordingForward(false);
                         } catch (error) {
-                          if (isConvexError(error)) commandId.retire(intent);
                           toast.error(getErrorMessage(error));
+                          // The server's own answer committed nothing; anything else may have.
+                          if (isConvexError(error)) commandId.retire(intent);
+                          else return "UNKNOWN";
                         } finally {
                           setForwardSubmitting(false);
                         }
@@ -3894,6 +3970,7 @@ export function DealCockpit({
           receivableId,
           amount: receipt.amount,
           receiptMethod: receipt.receiptMethod,
+          ...(receipt.bankAccountId ? { bankAccountId: receipt.bankAccountId } : {}),
           receiptReference: receipt.receiptReference,
           receivedAt: receipt.receivedAt,
           idempotencyKey: receipt.idempotencyKey,
@@ -4195,6 +4272,7 @@ export function SaleDealCockpit({
   return (
     <>
       <DealCockpitView
+        orgId={orgId}
         deal={deal}
         stageDeepLink={stageDeepLink}
         backHref={`/${orgId}/deals`}
@@ -4211,6 +4289,7 @@ export function SaleDealCockpit({
             receivableId,
             amount: receipt.amount,
             receiptMethod: receipt.receiptMethod,
+            ...(receipt.bankAccountId ? { bankAccountId: receipt.bankAccountId } : {}),
             receiptReference: receipt.receiptReference,
             receivedAt: receipt.receivedAt,
             idempotencyKey: receipt.idempotencyKey,
@@ -4903,6 +4982,7 @@ export type FinanceDecisionWiring = {
 };
 
 export function DealCockpitView({
+  orgId,
   deal,
   stageDeepLink,
   backHref,
@@ -4942,6 +5022,7 @@ export function DealCockpitView({
   disbursement,
   closingChecklist,
 }: Readonly<{
+  orgId?: Id<"organizations">;
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
   /**
@@ -5082,7 +5163,8 @@ export function DealCockpitView({
       depositId: string,
       resolution: DepositResolution,
       refundMethod: PaymentMethod | undefined,
-      observedReleaseCount: number
+      observedReleaseCount: number,
+      bankAccountId?: Id<"bankAccounts">
     ) => Promise<void>;
     /** SCRUM-469 F1: earlier unconfirmed payouts blocking a different decision, by deposit id. */
     unconfirmed: Readonly<Record<string, PendingPayout>>;
@@ -5094,6 +5176,8 @@ export function DealCockpitView({
       confirming: boolean;
       submitting: boolean;
       amountLabel: string;
+      /** SCRUM-54: present while the receipt must name its bank (not CASH). */
+      bank?: React.ComponentProps<typeof DisbursementConfirmationDialog>["bank"];
       onOpenChange: (open: boolean) => void;
       onConfirm: () => void | Promise<void>;
     };
@@ -5101,11 +5185,13 @@ export function DealCockpitView({
     forward?: {
       confirming: boolean;
       submitting: boolean;
+      dueMinor: number;
       totalLabel: string;
       depositLabel: string;
       contributionLabel: string;
+      bankOptions: DirectPaymentBankOptions;
       onOpenChange: (open: boolean) => void;
-      onConfirm: (values: ForwardPaymentValues) => void | Promise<void>;
+      onConfirm: (values: ForwardPaymentValues) => ForwardConfirmOutcome | Promise<ForwardConfirmOutcome>;
     };
     supplier: {
       confirming: boolean;
@@ -5315,6 +5401,7 @@ export function DealCockpitView({
     receipt: {
       amount: number;
       receiptMethod?: PaymentMethod;
+      bankAccountId?: Id<"bankAccounts">;
       receiptReference?: string;
       receivedAt?: number;
       /**
@@ -5577,6 +5664,12 @@ export function DealCockpitView({
     supplierRow?.position === "OWED_TO_DEALERSHIP" &&
     supplierReceipt?.actionable === true;
   const canSettleSupplier = callerMaySettleSupplier && supplierClaimSettleable;
+  const supplierReceiptBankOptions = useQuery(
+    api.supplierReceivables.listReceiptBankOptions,
+    orgId && canSettleSupplier && settlingSupplier && supplierRow?.receivableId
+      ? { orgId, receivableId: supplierRow.receivableId as Id<"vehicleSupplierReceivables"> }
+      : "skip"
+  );
   // Named guidance for the one refusal the operator can act on. Every other
   // reason simply withholds the button, as before.
   const supplierGuidance =
@@ -5889,6 +5982,7 @@ export function DealCockpitView({
   const handleSupplierReceipt = async (receipt: {
     amount: number;
     receiptMethod?: PaymentMethod;
+    bankAccountId?: Id<"bankAccounts">;
     receiptReference?: string;
     receivedAt?: number;
   }) => {
@@ -7157,6 +7251,7 @@ export function DealCockpitView({
               lists, formatted the way that dialog formatted them. */}
           {deposits && (
             <StoppedDealDepositsPanel
+              orgId={orgId}
               deposits={deposits.items}
               canResolve={deposits.canResolve}
               faceValueIsReleasable={deposits.faceValueIsReleasable}
@@ -7352,6 +7447,7 @@ export function DealCockpitView({
           supplierName={supplierRow.name}
           outstandingMajor={supplierRow.amountMinor / factor}
           outstandingLabel={money(supplierRow.amountMinor)}
+          bankOptions={supplierReceiptBankOptions}
           t={t}
           onOpenChange={setSettlingSupplier}
           onConfirm={handleSupplierReceipt}
@@ -7561,8 +7657,9 @@ export function DealCockpitView({
           onConfirm={chequeReturn.onConfirm}
         />
       )}
-      {unwind?.offered && (
+      {unwind?.offered && orgId && (
         <UnwindDealDialog
+          orgId={orgId}
           open={unwind.open}
           status={unwind.status}
           submitting={unwind.submitting}
@@ -7599,9 +7696,11 @@ export function DealCockpitView({
             <RecordForwardToFinanceCompanyDialog
               open={disbursement.forward.confirming}
               submitting={disbursement.forward.submitting}
+              dueMinor={disbursement.forward.dueMinor}
               totalLabel={disbursement.forward.totalLabel}
               depositLabel={disbursement.forward.depositLabel}
               contributionLabel={disbursement.forward.contributionLabel}
+              bankOptions={disbursement.forward.bankOptions}
               t={t}
               onOpenChange={disbursement.forward.onOpenChange}
               onConfirm={disbursement.forward.onConfirm}
@@ -7613,6 +7712,7 @@ export function DealCockpitView({
             disabled={disbursement.financeCompany.submitting}
             submitting={disbursement.financeCompany.submitting}
             amountLabel={disbursement.financeCompany.amountLabel}
+            bank={disbursement.financeCompany.bank}
             t={t}
             onOpenChange={disbursement.financeCompany.onOpenChange}
             onConfirm={disbursement.financeCompany.onConfirm}

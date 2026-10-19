@@ -3,6 +3,7 @@ import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { createCanonicalPayment } from "../subledger";
 import { postAccountingEvent } from "./postingEngine";
+import { requireActiveBankInCurrency } from "../utils/bankAccountGuards";
 import { loadRetainedPosition } from "./receiptMovement";
 import {
   assertCustomerCreditPayoutAllowed,
@@ -16,6 +17,7 @@ import {
 type CustomerPayout = {
   amountMinor: number;
   method: "BANK_TRANSFER" | "CASH";
+  bankAccountId?: Id<"bankAccounts">;
   reference: string;
   paidAt: number;
 };
@@ -62,6 +64,19 @@ export async function disposeActiveSaleInvoiceReceipts(
     }
   } else if (payout !== undefined) {
     throw new ConvexError("Customer payout details require an active refund.");
+  }
+  if (payout?.method === "BANK_TRANSFER") {
+    for (const { application } of args.applications) {
+      await requireActiveBankInCurrency(ctx, {
+        orgId: args.orgId,
+        bankAccountId: payout.bankAccountId,
+        currency: application.currency,
+        missingMessage: "Select the bank account that paid this customer refund.",
+        currencySubject: "customer refund",
+      });
+    }
+  } else if (payout?.bankAccountId) {
+    throw new ConvexError("A cash customer refund cannot name a bank account.");
   }
 
   await reverseActiveInvoiceReceiptApplications(ctx, {
@@ -132,6 +147,7 @@ export async function disposeActiveSaleInvoiceReceipts(
         applicationId: String(application._id), paymentId: String(paymentId),
         amountMinor: refundMinor, currency: application.currency,
         customerId: String(application.customerId), paymentMethod: payout.method,
+        ...(payout.bankAccountId ? { bankAccountId: String(payout.bankAccountId) } : {}),
       },
       actorId: args.actorId,
     });

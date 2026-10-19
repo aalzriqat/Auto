@@ -11,6 +11,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { seedBank } from "../test-utils/bankFixture";
 
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
@@ -84,7 +85,8 @@ async function seedAssetDealer() {
   const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
-  return { t, orgId, userId, viewerId, asOwner, asViewer };
+  const bankAccountId = await seedBank(t, orgId);
+  return { t, orgId, userId, viewerId, asOwner, asViewer, bankAccountId };
 }
 
 async function eventsOfType(t: Awaited<ReturnType<typeof seedAssetDealer>>["t"], orgId: Id<"organizations">, eventType: string) {
@@ -216,7 +218,7 @@ describe("Phase 11 — asset capitalization", () => {
   });
 
   test("capitalize paid by cheque credits the bank account, not cheques-in-hand", async () => {
-    const { t, orgId, asOwner } = await seedAssetDealer();
+    const { t, orgId, asOwner, bankAccountId } = await seedAssetDealer();
     await asOwner.mutation(api.fixedAssets.capitalize, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -225,6 +227,7 @@ describe("Phase 11 — asset capitalization", () => {
       costMinor: 250_000,
       usefulLifeMonths: 36,
       paymentMethod: "CHEQUE",
+      bankAccountId,
     });
 
     const events = await eventsOfType(t, orgId, "ASSET_CAPITALIZED");
@@ -235,7 +238,19 @@ describe("Phase 11 — asset capitalization", () => {
     const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
     const chequesInHand = await accountBySystemKey(t, orgId, "CHEQUES_IN_HAND");
     expect(lines.find((l) => l.accountId === bank?._id)?.creditMinor).toBe(250_000);
+    expect(lines.find((l) => l.accountId === bank?._id)?.bankAccountId).toBe(bankAccountId);
     expect(lines.find((l) => l.accountId === chequesInHand?._id)).toBeUndefined();
+  });
+
+  test("bank-funded capitalization refuses a missing bank before creating an asset or event", async () => {
+    const { t, orgId, asOwner } = await seedAssetDealer();
+    await expect(asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(), orgId, name: "Unbanked lift",
+      purchaseDate: Date.now(), costMinor: 250_000, usefulLifeMonths: 36,
+      paymentMethod: "BANK_TRANSFER",
+    })).rejects.toThrow(/select the physical bank/i);
+    expect((await asOwner.query(api.fixedAssets.list, { orgId, paginationOpts: { numItems: 100, cursor: null } })).page).toHaveLength(0);
+    expect(await eventsOfType(t, orgId, "ASSET_CAPITALIZED")).toHaveLength(0);
   });
 
   test("capitalize requires manage:finance — a view-only member is rejected", async () => {
@@ -343,7 +358,7 @@ describe("Phase 11 — monthly depreciation", () => {
   });
 
   test("skips a non-ACTIVE asset", async () => {
-    const { t, orgId, userId, asOwner } = await seedAssetDealer();
+    const { t, orgId, userId, asOwner, bankAccountId } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -352,7 +367,7 @@ describe("Phase 11 — monthly depreciation", () => {
       costMinor: 200_000,
       usefulLifeMonths: 24,
     });
-    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 200_000 });
+    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 200_000, bankAccountId });
 
     const result = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
       orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
@@ -589,7 +604,7 @@ describe("Phase 11 — impairment", () => {
 
 describe("Phase 11 — disposal", () => {
   test("disposing at a loss posts a balanced entry with a loss line", async () => {
-    const { t, orgId, asOwner } = await seedAssetDealer();
+    const { t, orgId, asOwner, bankAccountId } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -599,7 +614,7 @@ describe("Phase 11 — disposal", () => {
       usefulLifeMonths: 50,
     });
 
-    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 300_000 });
+    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 300_000, bankAccountId });
 
     const asset = await t.run((ctx) => ctx.db.get(assetId));
     expect(asset?.status).toBe("DISPOSED");
@@ -615,11 +630,51 @@ describe("Phase 11 — disposal", () => {
     const lossAccount = await accountBySystemKey(t, orgId, "LOSS_ON_DISPOSAL");
     const gainAccount = await accountBySystemKey(t, orgId, "GAIN_ON_DISPOSAL");
     expect(lines.find((l) => l.accountId === lossAccount?._id)?.debitMinor).toBe(200_000);
+    const bankAccount = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    expect(lines.find((l) => l.accountId === bankAccount?._id)?.bankAccountId).toBe(bankAccountId);
     expect(lines.find((l) => l.accountId === gainAccount?._id)).toBeUndefined();
   });
 
+  test("proceeds refuse a missing bank without disposing or posting", async () => {
+    const { t, orgId, asOwner } = await seedAssetDealer();
+    const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(), orgId, name: "Unsold van",
+      purchaseDate: Date.now(), costMinor: 300_000, usefulLifeMonths: 36,
+    });
+    await expect(asOwner.mutation(api.fixedAssets.dispose, {
+      orgId, assetId, proceedsMinor: 100_000,
+    })).rejects.toThrow(/select the physical bank/i);
+    expect((await t.run((ctx) => ctx.db.get(assetId)))?.status).toBe("ACTIVE");
+    expect(await eventsOfType(t, orgId, "ASSET_DISPOSED")).toHaveLength(0);
+  });
+
+  test("purchase and disposal can use different physical banks and retain each ledger identity", async () => {
+    const { t, orgId, userId, asOwner, bankAccountId: purchaseBank } = await seedAssetDealer();
+    const disposalBank = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId, name: "Disposal bank", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(), orgId, name: "Two-bank vehicle",
+      purchaseDate: Date.now(), costMinor: 300_000, usefulLifeMonths: 36,
+      paymentMethod: "BANK_TRANSFER", bankAccountId: purchaseBank,
+    });
+    await asOwner.mutation(api.fixedAssets.dispose, {
+      orgId, assetId, proceedsMinor: 250_000, bankAccountId: disposalBank,
+    });
+    const bankAccount = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const purchaseLines = await linesForEvent(t, (await eventsOfType(t, orgId, "ASSET_CAPITALIZED"))[0]);
+    const disposalLines = await linesForEvent(t, (await eventsOfType(t, orgId, "ASSET_DISPOSED"))[0]);
+    expect(purchaseLines.find((line) => line.accountId === bankAccount?._id)?.bankAccountId).toBe(purchaseBank);
+    expect(disposalLines.find((line) => line.accountId === bankAccount?._id)?.bankAccountId).toBe(disposalBank);
+    const assetEvents = await asOwner.query(api.fixedAssets.listEvents, { orgId, assetId });
+    expect(assetEvents.find((event) => event.type === "CAPITALIZE")?.bankAccountId).toBe(purchaseBank);
+    expect(assetEvents.find((event) => event.type === "DISPOSE")?.bankAccountId).toBe(disposalBank);
+  });
+
   test("disposing at a gain posts a balanced entry with a gain line", async () => {
-    const { t, orgId, userId, asOwner } = await seedAssetDealer();
+    const { t, orgId, userId, asOwner, bankAccountId } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -632,7 +687,7 @@ describe("Phase 11 — disposal", () => {
       orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
     });
 
-    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 550_000 });
+    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 550_000, bankAccountId });
 
     const events = await eventsOfType(t, orgId, "ASSET_DISPOSED");
     const lines = await linesForEvent(t, events[0]);
@@ -647,7 +702,7 @@ describe("Phase 11 — disposal", () => {
   });
 
   test("disposing at exactly net book value posts no gain/loss line but stays balanced", async () => {
-    const { t, orgId, userId, asOwner } = await seedAssetDealer();
+    const { t, orgId, userId, asOwner, bankAccountId } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -660,7 +715,7 @@ describe("Phase 11 — disposal", () => {
       orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
     });
 
-    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 490_000 });
+    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 490_000, bankAccountId });
 
     const events = await eventsOfType(t, orgId, "ASSET_DISPOSED");
     const lines = await linesForEvent(t, events[0]);
@@ -675,7 +730,7 @@ describe("Phase 11 — disposal", () => {
   });
 
   test("rejects disposing an asset that has already been disposed", async () => {
-    const { orgId, asOwner } = await seedAssetDealer();
+    const { orgId, asOwner, bankAccountId } = await seedAssetDealer();
     const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -684,7 +739,7 @@ describe("Phase 11 — disposal", () => {
       costMinor: 200_000,
       usefulLifeMonths: 20,
     });
-    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 200_000 });
+    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 200_000, bankAccountId });
 
     await expect(
       asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 0 })
@@ -726,7 +781,7 @@ describe("Phase 11 — soft delete guard", () => {
   });
 
   test("a disposed asset and a legacy asset can both be removed", async () => {
-    const { t, orgId, asOwner } = await seedAssetDealer();
+    const { t, orgId, asOwner, bankAccountId } = await seedAssetDealer();
 
     const disposedId = await asOwner.mutation(api.fixedAssets.capitalize, {
       idempotencyKey: crypto.randomUUID(),
@@ -736,7 +791,7 @@ describe("Phase 11 — soft delete guard", () => {
       costMinor: 200_000,
       usefulLifeMonths: 24,
     });
-    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId: disposedId, proceedsMinor: 200_000 });
+    await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId: disposedId, proceedsMinor: 200_000, bankAccountId });
     await asOwner.mutation(api.fixedAssets.remove, { orgId, assetId: disposedId });
 
     const legacyId = await t.run((ctx) =>

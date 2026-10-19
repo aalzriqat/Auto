@@ -13,8 +13,8 @@
  * localized message stands in for it. These tests use the real dictionaries so
  * the EN and AR text is the shipped text.
  */
-import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ConvexError } from "convex/values";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
@@ -49,9 +49,13 @@ vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
     useQuery: (reference: never, args: unknown) => {
-      stubs.queryArgs.set(getFunctionName(reference), args);
-      return args === "skip" || getFunctionName(reference) !== "collections:saleInvoiceReceiptStatus"
-        ? undefined : stubs.status;
+      const name = getFunctionName(reference);
+      stubs.queryArgs.set(name, args);
+      if (args === "skip") return undefined;
+      if (name === "collections:listReceiptBankOptions") {
+        return { banks: [{ _id: "bank1", name: "Operating bank", currency: "JOD" }], truncated: false };
+      }
+      return name === "collections:saleInvoiceReceiptStatus" ? stubs.status : undefined;
     },
     usePaginatedQuery: (reference: never, args: unknown) => {
       const name = getFunctionName(reference);
@@ -97,6 +101,13 @@ const mutation = (name: string) => stubs.mutations.get(name);
 function renderPanel() {
   render(<DealInvoiceReceiptsPanel orgId={"org1" as never} saleId={"sale1" as never} />);
 }
+
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = () => {};
+});
 
 afterEach(() => {
   cleanup();
@@ -191,7 +202,16 @@ describe("DealInvoiceReceiptsPanel under the SCRUM-724 pilot switches", () => {
     stubs.cheques = [depositedCheque];
     renderPanel();
     fireEvent.click(button("DealReceiptClearCheque"));
+    const dialog = await screen.findByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: t("Clear") }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    const trigger = within(dialog).getByRole("combobox", { name: t("ReceiptBankAccount") });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: /Operating bank/ }));
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
     await vi.waitFor(() => expect(mutation("collections:clearCheque")).toHaveBeenCalledTimes(1));
+    expect(mutation("collections:clearCheque")).toHaveBeenCalledWith(expect.objectContaining({ bankAccountId: "bank1" }));
     const notice = await screen.findByText(CLEARED[locale]);
     expect(notice.tagName).toBe("OUTPUT");
     // The pre-review copy, as literals: it claimed a reservation the server may not make.

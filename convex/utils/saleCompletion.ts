@@ -267,6 +267,7 @@ type SaleCompletionArgs = {
     reason?: string;
     /** Required for REFUND_TO_CUSTOMER — the deposit's own method may be OTHER, which cannot be paid out. */
     refundMethod?: DepositMethod;
+    bankAccountId?: Id<"bankAccounts">;
   };
   // MANUAL commission mode carries the manager-entered amount through
   // completion untouched. Populated from the existing sale when completing a
@@ -1218,6 +1219,7 @@ async function resolveReservationDeposits(
           resolution: treatment === "REFUND_TO_CUSTOMER" ? "REFUNDED" : "FORFEITED",
           actorId: args.actorId,
           refundMethod: args.depositResolution?.refundMethod,
+          bankAccountId: args.depositResolution?.bankAccountId,
           occurredAt: args.saleDate,
           saleId,
           treatment,
@@ -2243,6 +2245,7 @@ export async function completeSalesForLineItems(
     reason?: string;
     /** Required for REFUND_TO_CUSTOMER — the deposit's own method may be OTHER, which cannot be paid out. */
     refundMethod?: DepositMethod;
+    bankAccountId?: Id<"bankAccounts">;
   };
     idempotencyKey?: string;
     actorId: Id<"users">;
@@ -2296,6 +2299,7 @@ export async function completeExistingSale(
     reason?: string;
     /** Required for REFUND_TO_CUSTOMER — the deposit's own method may be OTHER, which cannot be paid out. */
     refundMethod?: DepositMethod;
+    bankAccountId?: Id<"bankAccounts">;
   };
     idempotencyKey?: string;
   }

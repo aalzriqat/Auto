@@ -22,6 +22,8 @@ import {
   type ReversalOutcome,
 } from "./accounting/workflowHooks";
 import { disbursementAccountKey } from "./accounting/postingRules";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import {
   dealCustodyAccountingReadiness,
   ensureFinancedSettlementAccounts,
@@ -2962,6 +2964,18 @@ export const setFeeCustody = mutation({
 });
 
 /**
+ * SCRUM-54: the banks a direct payment of a cost in `currency` may name - this org's
+ * active banks, id/name/currency only. Same permission as `recordDirectFeePayment`.
+ */
+export const listDirectPaymentBankOptions = query({
+  args: { orgId: v.id("organizations"), currency: v.string() },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    return await listEligibleBanks(ctx, args.orgId, args.currency);
+  },
+});
+
+/**
  * Records that the DEALERSHIP itself paid a handover cost (SCRUM-443) — bank
  * transfer, e-payment, cash or an issued cheque — rather than an employee out
  * of custody cash. Posts `HANDOVER_COST_PAID_DIRECT`: DR the treatment's
@@ -3001,6 +3015,12 @@ export const recordDirectFeePayment = mutation({
     feeId: v.id("financeDealFees"),
     /** REQUIRED, no default — it decides which account the money left. */
     method: directPaymentMethodValidator,
+    /**
+     * SCRUM-54: the physical bank the money left from. Required for every method that
+     * credits the bank control account (bank transfer, card, issued cheque); never
+     * defaulted or inferred, and refused for cash.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** When the dealership paid it. Dates the posting. */
     paidAt: v.number(),
     /**
@@ -3038,6 +3058,10 @@ export const recordDirectFeePayment = mutation({
         `The payment reference is too long (${reference.length} characters; the most is ${MAX_DIRECT_PAYMENT_REFERENCE_CHARS}). Shorten it and try again. Nothing has been recorded.`
       );
     }
+    const paidFromBank = disbursementAccountKey(args.method) === SYSTEM_KEYS.BANK_ACCOUNT;
+    if (args.bankAccountId && !paidFromBank) {
+      throw new ConvexError("A bank account applies only to a bank transfer, card or cheque payment. Nothing has been recorded.");
+    }
 
     return await runWithIdempotency(
       ctx,
@@ -3053,6 +3077,8 @@ export const recordDirectFeePayment = mutation({
         fingerprint: JSON.stringify({
           feeId: args.feeId,
           method: args.method,
+          // Present only when named, so a payment recorded before banks were named still replays.
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           paidAt: args.paidAt,
           reference: reference ?? null,
           expectedAmountMinor: args.expectedAmountMinor,
@@ -3088,6 +3114,16 @@ export const recordDirectFeePayment = mutation({
             `The amount of this cost changed to ${fromMinorUnits(amountMinor, fee.currency)} ${fee.currency} since you opened the form (you were about to pay ${fromMinorUnits(args.expectedAmountMinor, fee.currency)} ${fee.currency}). Review the cost and record the payment again. Nothing has been recorded.`
           );
         }
+        // Before the first write, so a refused bank leaves nothing behind.
+        const bankAccountId = paidFromBank
+          ? await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId,
+              bankAccountId: args.bankAccountId,
+              currency: fee.currency,
+              missingMessage: "Select the bank account this payment was made from. Nothing has been recorded.",
+              currencySubject: "cost",
+            })
+          : undefined;
         const expense = custodyFeeExpenseKey(fee.accountingTreatment);
         if (expense.systemKey === null) throw new ConvexError(expense.refusal);
         const cashKey = disbursementAccountKey(args.method);
@@ -3157,6 +3193,7 @@ export const recordDirectFeePayment = mutation({
           version,
           amountMinor,
           paymentMethod: args.method,
+          bankAccountId,
           expenseKey: expense.systemKey,
           cashKey,
           actorId: user._id,
@@ -3201,6 +3238,36 @@ function isRecordedCustodyMethod(method: string | undefined | null): boolean {
   return method === "CASH" || method === "BANK_TRANSFER" || method === "CHEQUE" || method === "CARD";
 }
 
+async function requireCustodyBank(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  kind: "ISSUED" | "RETURNED" | "REIMBURSED",
+  method: "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD" | undefined,
+  bankAccountId: Id<"bankAccounts"> | undefined,
+  currency: string
+): Promise<Id<"bankAccounts"> | undefined> {
+  if (method === "CASH" || (kind === "RETURNED" && method === "CHEQUE")) {
+    if (bankAccountId) throw new ConvexError("This custody movement does not post to a bank account; remove the bank selection.");
+    return undefined;
+  }
+  return await requireActiveBankInCurrency(ctx, {
+    orgId,
+    bankAccountId,
+    currency,
+    missingMessage: "Choose the physical bank account for this custody movement. Nothing has been recorded.",
+    currencySubject: "custody movement",
+  });
+}
+
+/** Bank choices for custody cash movements in the deal's currency. */
+export const listCustodyBankOptions = query({
+  args: { orgId: v.id("organizations"), currency: v.string() },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    return await listEligibleBanks(ctx, args.orgId, args.currency);
+  },
+});
+
 /** Posts one freshly inserted cash entry (ISSUED / RETURNED / REIMBURSED) against its custody record. */
 async function postCustodyEntry(
   ctx: MutationCtx,
@@ -3231,6 +3298,7 @@ export const openDealCustody = mutation({
     applicationId: v.id("financeApplications"),
     userId: v.id("users"),
     issuedMinor: v.number(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     method: v.optional(
       v.union(
         v.literal("CASH"),
@@ -3300,6 +3368,7 @@ export const openDealCustody = mutation({
           userId: args.userId,
           issuedMinor: args.issuedMinor,
           method: args.method ?? null,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           reference: args.reference?.trim() || null,
           note: args.note?.trim() || null,
           occurredAt: args.occurredAt ?? null,
@@ -3348,6 +3417,7 @@ export const openDealCustody = mutation({
 
 
         const currency = await resolveDealCurrency(ctx, app, "opening custody on this deal");
+        const bankAccountId = await requireCustodyBank(ctx, args.orgId, "ISSUED", args.method, args.bankAccountId, currency);
         const now = Date.now();
         const custodyId = await ctx.db.insert("financeDealCustody", {
           orgId: args.orgId,
@@ -3372,6 +3442,7 @@ export const openDealCustody = mutation({
           kind: "ISSUED",
           amountMinor: args.issuedMinor,
           method: args.method,
+          bankAccountId,
           reference: args.reference?.trim() || undefined,
           note: args.note?.trim() || undefined,
           occurredAt: args.occurredAt ?? now,
@@ -3406,6 +3477,7 @@ export const recordCustodyMovement = mutation({
     /** Required on a REVERSAL, rejected otherwise. */
     reversesEntryId: v.optional(v.id("financeDealCustodyEntries")),
     amountMinor: v.number(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     method: v.optional(
       v.union(
         v.literal("CASH"),
@@ -3474,6 +3546,7 @@ export const recordCustodyMovement = mutation({
           reversesEntryId: args.reversesEntryId ?? null,
           amountMinor: args.amountMinor,
           method: args.method ?? null,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           reference: args.reference?.trim() || null,
           note: args.note?.trim() || null,
           occurredAt: args.occurredAt ?? null,
@@ -3486,6 +3559,8 @@ export const recordCustodyMovement = mutation({
         // REVERSAL is exempt: it is the inverse of its target's journal.
         if (args.kind !== "REVERSAL") {
           requireCustodyMethod(args.method, "recording this custody movement");
+        } else if (args.bankAccountId) {
+          throw new ConvexError("A reversal uses the original movement's bank account; do not choose another one.");
         }
         // Re-read inside the section: the row loaded for ownership above is
         // the same row, but the state it carries is what this attempt acts on.
@@ -3556,6 +3631,10 @@ export const recordCustodyMovement = mutation({
           }
         }
 
+        const bankAccountId = args.kind === "REVERSAL"
+          ? undefined
+          : await requireCustodyBank(ctx, args.orgId, args.kind, args.method, args.bankAccountId, current.currency);
+
         const now = Date.now();
         const entryId = await ctx.db.insert("financeDealCustodyEntries", {
           orgId: args.orgId,
@@ -3564,6 +3643,7 @@ export const recordCustodyMovement = mutation({
           ...(args.reversesEntryId ? { reversesEntryId: args.reversesEntryId } : {}),
           amountMinor: args.amountMinor,
           method: args.method,
+          bankAccountId,
           reference: args.reference?.trim() || undefined,
           note: args.note?.trim() || undefined,
           occurredAt: args.occurredAt ?? now,
@@ -3828,6 +3908,10 @@ export const migrateLegacyCustodyToLedger = mutation({
           throw new ConvexError(
             `${methodless.length === 1 ? "A movement" : `${methodless.length} movements`} on this custody record has no method recorded (cash, bank transfer, cheque or card), so it cannot be posted to the ledger without guessing the account: ${named}. Have the movement reviewed and its method recorded; nothing has been posted.`
           );
+        }
+        for (const entry of entries) {
+          if (entry.kind === "REVERSAL") continue;
+          await requireCustodyBank(ctx, args.orgId, entry.kind, entry.method, entry.bankAccountId, custody.currency);
         }
         const fees = await loadActiveFees(ctx, custody.applicationId);
         const linked = fees.filter((fee) => fee.custodyId === custody._id);

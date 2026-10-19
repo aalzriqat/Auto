@@ -9,6 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { postReceiptOccurrence, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, hookReceivableCancelled, hookReceiptCreditApplied, findPostedReceiptOccurrence, getOrgCurrency, revokeReceiptOccurrence, revokeReceiptApplicationOccurrence } from "./accounting/workflowHooks";
 import { directCollectionReceipt, rehydrateReceiptOccurrence } from "./accounting/receiptOccurrence";
 import {
@@ -1463,6 +1464,19 @@ export const createInstallmentPlan = mutation({
   },
 });
 
+/**
+ * SCRUM-54: the banks a bank-bound receipt may name - active banks in the organization
+ * currency, id/name/currency only. Same permission as `recordPayment`.
+ */
+export const listReceiptBankOptions = query({
+  args: { orgId: v.id("organizations"), currency: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    return await listEligibleBanks(ctx, args.orgId,
+      args.currency?.trim().toUpperCase() || await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
 export const recordPayment = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1474,6 +1488,11 @@ export const recordPayment = mutation({
     invoiceSaleId: v.optional(v.id("sales")),
     amount: v.number(),
     method: paymentMethodValidator,
+    /**
+     * SCRUM-54: the physical bank a BANK_TRANSFER / CARD receipt reached. Required for
+     * those methods (never defaulted or inferred), refused for the others.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     paymentDate: v.number(),
     reference: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -1481,6 +1500,10 @@ export const recordPayment = mutation({
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const receiptReachesBank = args.method === "BANK_TRANSFER" || args.method === "CARD";
+    if (args.bankAccountId && !receiptReachesBank) {
+      throw new ConvexError("A bank account applies only to bank transfer or card receipts.");
+    }
     // SCRUM-724 Sol 6 Q1: a receipt bound to a sale invoice is a new claim on
     // 2110 credit. Refused before anything else and before the idempotency
     // wrapper; a plain receipt (no invoiceSaleId) is the existing door.
@@ -1556,6 +1579,7 @@ export const recordPayment = mutation({
           invoiceSaleId: args.invoiceSaleId ?? null,
           amount: args.amount,
           method: args.method,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           paymentDate: args.paymentDate,
           reference: args.reference?.trim() || null,
         }),
@@ -1659,6 +1683,16 @@ export const recordPayment = mutation({
         }
 
         const currency = await getOrgCurrency(ctx, args.orgId);
+        // SCRUM-54: a receipt that reaches a bank names it; checked before the first write.
+        const bankAccountId = receiptReachesBank
+          ? await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId,
+              bankAccountId: args.bankAccountId,
+              currency,
+              missingMessage: "Select the bank account this payment was received into.",
+              currencySubject: "organization",
+            })
+          : undefined;
         const now = Date.now();
         const paymentId = await ctx.db.insert("collectionPayments", {
           orgId: args.orgId,
@@ -1770,6 +1804,7 @@ export const recordPayment = mutation({
             currency,
             customerId: customerId.toString(),
             paymentMethod: args.method,
+            ...(bankAccountId ? { bankAccountId: bankAccountId.toString() } : {}),
           },
         });
 
@@ -2293,6 +2328,7 @@ export const clearCheque = mutation({
   args: {
     orgId: v.id("organizations"),
     chequeId: v.id("postDatedCheques"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     clearedAt: v.optional(v.number()),
     idempotencyKey: v.string(),
   },
@@ -2302,12 +2338,19 @@ export const clearCheque = mutation({
     // receipt against sale lineage. Refused BEFORE the idempotency wrapper so a
     // stored replay is refused too. A missing/foreign cheque falls through to the
     // body's own "Cheque not found."
-    const chequeToClear = await ctx.db.get(args.chequeId);
-    if (chequeToClear && chequeToClear.orgId === args.orgId && !chequeToClear.isDeleted) {
-      await assertCustomerChequeNotSaleLinked(ctx, chequeToClear);
-      if (chequeToClear.status === "HELD" || chequeToClear.status === "DEPOSITED") {
-        await assertChequeInvoiceIntentLive(ctx, chequeToClear);
-      }
+    const chequeToClear = await requireOwnedRow(ctx, args.orgId, "postDatedCheques", args.chequeId, "Cheque not found.");
+    if (chequeToClear.isDeleted) throw new ConvexError("Cheque not found.");
+    await assertCustomerChequeNotSaleLinked(ctx, chequeToClear);
+    if (chequeToClear.status === "HELD" || chequeToClear.status === "DEPOSITED") {
+      await assertChequeInvoiceIntentLive(ctx, chequeToClear);
+    }
+    if (isFcLineage(chequeToClear)) {
+      throw new ConvexError("This finance-company cheque cannot be cleared from customer collections — confirm disbursement from the Applications page instead.");
+    }
+    // Also refuse an old unbanked idempotency replay: a prior completion without
+    // physical-bank evidence cannot become a valid banked clearance by replay.
+    if (!args.bankAccountId) {
+      throwAppError(AppErrorCode.CHEQUE_CLEAR_BANK_INVALID, "Select the bank account this cheque was cleared into.");
     }
     return await runWithIdempotency(
       ctx,
@@ -2317,10 +2360,22 @@ export const clearCheque = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ chequeId: args.chequeId, clearedAt: args.clearedAt ?? null }),
+        fingerprint: JSON.stringify({
+          chequeId: args.chequeId,
+          clearedAt: args.clearedAt ?? null,
+          bankAccountId: args.bankAccountId,
+        }),
       },
       async () => {
         const currency = await getOrgCurrency(ctx, args.orgId);
+        const bankAccountId = await requireActiveBankInCurrency(ctx, {
+          orgId: args.orgId,
+          bankAccountId: args.bankAccountId,
+          currency,
+          missingMessage: "Select the bank account this cheque was cleared into.",
+          currencySubject: "organization",
+          errorCode: AppErrorCode.CHEQUE_CLEAR_BANK_INVALID,
+        });
         const existingCheque = await ctx.db.get(args.chequeId);
         if (!existingCheque || existingCheque.orgId !== args.orgId || existingCheque.isDeleted) {
           throw new ConvexError("Cheque not found.");
@@ -2457,6 +2512,7 @@ export const clearCheque = mutation({
             currency,
             customerId: cheque.customerId.toString(),
             paymentMethod: "BANK_TRANSFER",
+            bankAccountId: bankAccountId.toString(),
           },
         });
 
@@ -2687,6 +2743,7 @@ export const returnClearedCheque = mutation({
     chequeId: v.id("postDatedCheques"),
     returnReason: v.optional(v.string()),
     bankFeeMinor: v.optional(v.number()),
+    bankFeeBankAccountId: v.optional(v.id("bankAccounts")),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -2696,6 +2753,12 @@ export const returnClearedCheque = mutation({
       (!Number.isSafeInteger(args.bankFeeMinor) || args.bankFeeMinor < 0)
     ) {
       throwAppError(AppErrorCode.CHEQUE_BANK_FEE_INVALID, FC_RETURN_MESSAGES.CHEQUE_BANK_FEE_INVALID);
+    }
+    if ((args.bankFeeMinor ?? 0) > 0 && !args.bankFeeBankAccountId) {
+      throwAppError(AppErrorCode.CHEQUE_RETURN_FEE_BANK_INVALID, "Select the bank account that paid the return fee.");
+    }
+    if ((args.bankFeeMinor ?? 0) === 0 && args.bankFeeBankAccountId) {
+      throwAppError(AppErrorCode.CHEQUE_RETURN_FEE_BANK_INVALID, "A fee bank account applies only when a return fee is charged.");
     }
 
     return await runWithIdempotency(
@@ -2710,6 +2773,7 @@ export const returnClearedCheque = mutation({
           chequeId: args.chequeId,
           bankFeeMinor: args.bankFeeMinor ?? 0,
           returnReason: args.returnReason ?? null,
+          ...(args.bankFeeBankAccountId ? { bankFeeBankAccountId: args.bankFeeBankAccountId } : {}),
         }),
         // Coded, so the operator reads it in their language instead of the
         // default English key-reuse text.
@@ -2766,6 +2830,16 @@ export const returnClearedCheque = mutation({
 
         const reason = args.returnReason ?? "Cheque returned after clearing";
         const currency = await getOrgCurrency(ctx, args.orgId);
+        const feeBankAccountId = args.bankFeeMinor && args.bankFeeMinor > 0
+          ? await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId,
+              bankAccountId: args.bankFeeBankAccountId,
+              currency,
+              missingMessage: "Select the bank account that paid the return fee.",
+              currencySubject: "organization",
+              errorCode: AppErrorCode.CHEQUE_RETURN_FEE_BANK_INVALID,
+            })
+          : undefined;
 
         /**
          * Reopen ONE legacy debt by ONE exact amount.
@@ -3009,7 +3083,7 @@ export const returnClearedCheque = mutation({
         // Post bank fee as expense if provided. Convert minor→major units with
         // the central currency-aware helper (the old `JOD ? 3 : 2` was wrong for
         // KWD/BHD/OMR/JPY) and route it through the posting engine so it hits the
-        // GL (DR General Expenses / CR Bank) instead of only the legacy tables.
+        // GL (DR Professional Fees / CR Bank) instead of only the legacy tables.
         if (args.bankFeeMinor && args.bankFeeMinor > 0) {
           const currency = await getOrgCurrency(ctx, args.orgId);
           const feeAmount = fromMinorUnits(args.bankFeeMinor, currency);
@@ -3037,6 +3111,7 @@ export const returnClearedCheque = mutation({
             currency,
             category: "FEES",
             paymentMethod: "BANK_TRANSFER",
+            bankAccountId: feeBankAccountId,
             actorId: user._id,
             occurredAt: now,
           });
@@ -3077,6 +3152,7 @@ export const requestApproval = mutation({
     requestedAmount: v.optional(v.number()),
     requestedDueDate: v.optional(v.number()),
     disbursementMethod: v.optional(disbursementMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     reason: v.string(),
   },
   handler: async (ctx, args) => {
@@ -3108,6 +3184,17 @@ export const requestApproval = mutation({
     }
 
     const currency = await getOrgCurrency(ctx, args.orgId);
+    const refundNeedsBank = args.requestType === "REFUND" && args.disbursementMethod !== "CASH";
+    const bankAccountId = refundNeedsBank
+      ? await requireActiveBankInCurrency(ctx, {
+          orgId: args.orgId,
+          bankAccountId: args.bankAccountId,
+          currency,
+          missingMessage: "Select the bank account that will pay this refund.",
+          currencySubject: "organization",
+        })
+      : undefined;
+    if (!refundNeedsBank && args.bankAccountId) throw new ConvexError("This request cannot name a bank account.");
     const now = Date.now();
     const requestId = await ctx.db.insert("collectionApprovalRequests", {
       orgId: args.orgId,
@@ -3119,6 +3206,7 @@ export const requestApproval = mutation({
       requestedAmount: args.requestedAmount ? roundMoney(args.requestedAmount, currency) : undefined,
       requestedDueDate: args.requestedDueDate,
       disbursementMethod: args.requestType === "REFUND" ? args.disbursementMethod : undefined,
+      bankAccountId,
       reason: args.reason.trim(),
       createdAt: now,
       updatedAt: now,
@@ -3205,6 +3293,17 @@ export const respondToApproval = mutation({
 
         const currency = await getOrgCurrency(ctx, args.orgId);
         const now = Date.now();
+        // Recheck a pending refund's physical bank before changing the approval.
+        // A bank can become inactive after the requester selects it.
+        const refundBankAccountId = args.status === "APPROVED" && request.requestType === "REFUND" && request.disbursementMethod && request.disbursementMethod !== "CASH"
+          ? await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId,
+              bankAccountId: request.bankAccountId,
+              currency,
+              missingMessage: "This refund request has no bank account. Reject it and submit a new request.",
+              currencySubject: "organization",
+            })
+          : undefined;
         await ctx.db.patch(args.requestId, {
           status: args.status,
           decisionNotes: args.decisionNotes,
@@ -3346,9 +3445,13 @@ export const respondToApproval = mutation({
               );
             }
             const refundDisbursementMethod = request.disbursementMethod;
+            if (refundDisbursementMethod === "CASH" && request.bankAccountId) {
+              throw new ConvexError("A cash refund request cannot name a bank account.");
+            }
 
             const refundPaymentId = await ctx.db.insert("collectionPayments", {
               orgId: args.orgId,
+              bankAccountId: refundBankAccountId,
               branchId: membership.branchId,
               receivableId: receivable._id,
               customerId: receivable.customerId,
@@ -3420,6 +3523,7 @@ export const respondToApproval = mutation({
               amountMinor: refundAmountMinor,
               currency,
               paymentMethod: refundDisbursementMethod,
+              bankAccountId: refundBankAccountId,
               actorId: user._id,
               occurredAt: now,
             });
