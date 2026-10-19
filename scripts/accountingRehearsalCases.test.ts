@@ -408,10 +408,6 @@ type Defects = {
   retainedPositionDriftsFromGl?: boolean;
   /** Applying a retained credit reduces the position but posts nothing to the GL. */
   applicationPostsNothing?: boolean;
-  /** The reversal entry exists but nothing links it to the clearing it reverses. */
-  reversalUnlinked?: boolean;
-  /** The reversal is for HALF the clearing — linked, and wrong. */
-  reversalWrongAmount?: boolean;
   /** A replayed create hands back the SAME id and posts its footprint AGAIN. */
   doubleFootprintOnReplay?: boolean;
   /** The same, for createReceivable / createInstallmentPlan ONLY — the six other steps stay healthy (Sonnet MAX R4-A1). */
@@ -451,10 +447,12 @@ type Defects = {
   bankMissingWritesBeforeRefusing?: boolean;
   /** Bank contract: the receipt posts, but its BANK_ACCOUNT line loses the named bank. */
   bankIdentityDroppedFromJournal?: boolean;
+  /** RV1: the refused return still posts a stray accounting event. */
+  chequeReturnAddsEvent?: boolean;
+  /** RV1: the refused return still changes an amount on the clearing entry's lines. */
+  chequeReturnAltersClearingLines?: boolean;
   /** RV1: a cleared customer cheque loses its named destination bank. */
   chequeClearingBankDropped?: boolean;
-  /** A reversal of a cleared cheque's collection drops the clearing bank. */
-  chequeReversalBankDropped?: boolean;
   /** RV1: the blocked cleared-cheque return is ACCEPTED and reverses the clearing. */
   chequeReturnAccepted?: boolean;
   /** RV1: the return is refused, but only after it already marked the cheque RETURNED. */
@@ -648,21 +646,19 @@ function makeBackend(defects: Defects = {}) {
     const original = events.find((e) => e._id === eventId)!;
     const entry = journalEntries.find((j) => j._id === original.journalEntryId)!;
     const lines = journalLines.get(entry._id) ?? [];
-    const factor = defects.reversalWrongAmount ? 0.5 : 1;
     const reversal = post(
       original.eventType,
       original.sourceType,
       original.sourceId,
       lines.map((l) => ({
         key: CHART.find((a) => a._id === l.accountId)!.systemKey,
-        debitMinor: Math.round(l.creditMinor * factor),
-        creditMinor: Math.round(l.debitMinor * factor),
+        debitMinor: l.creditMinor,
+        creditMinor: l.debitMinor,
         customerId: l.customerId,
         vehicleId: l.vehicleId,
         financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
-        bankAccountId: defects.chequeReversalBankDropped && original.eventType === "COLLECTION_PAYMENT" &&
-          CHART.find((a) => a._id === l.accountId)?.systemKey === "BANK_ACCOUNT" ? undefined : l.bankAccountId,
+        bankAccountId: l.bankAccountId,
       })),
       { category: "REVERSAL" }
     );
@@ -674,11 +670,9 @@ function makeBackend(defects: Defects = {}) {
     reversalEvent.reversalOfEventId = eventId;
     original.status = "REVERSED";
     entry.status = "REVERSED";
-    if (!defects.reversalUnlinked) {
-      original.reversedByEventId = reversal.eventId;
-      entry.reversedByJournalEntryId = reversal.entryId;
-      journalEntries.find((j) => j._id === reversal.entryId)!.reversalOfJournalEntryId = entry._id;
-    }
+    original.reversedByEventId = reversal.eventId;
+    entry.reversedByJournalEntryId = reversal.entryId;
+    journalEntries.find((j) => j._id === reversal.entryId)!.reversalOfJournalEntryId = entry._id;
     return reversal;
   }
 
@@ -1314,6 +1308,15 @@ function makeBackend(defects: Defects = {}) {
           return { ok: true as const, value: null };
         }
         if (defects.chequeReturnWritesThenRefuses) cheque.status = "RETURNED";
+        if (defects.chequeReturnAddsEvent) {
+          const stray = events.find((e) => e._id === cheque.clearingEventId)!;
+          events.push({ ...stray, _id: id("evt"), eventType: "STRAY" });
+        }
+        if (defects.chequeReturnAltersClearingLines) {
+          const clearing = events.find((e) => e._id === cheque.clearingEventId)!;
+          const first = (journalLines.get(clearing.journalEntryId) ?? [])[0];
+          if (first) first.debitMinor += 1;
+        }
         return {
           ok: false as const,
           error: "Returning a cheque that has already cleared is not available during the pilot. Nothing has been changed.",
@@ -2652,6 +2655,23 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ chequeReturnWritesThenRefuses: true });
     expect(statusOf(results, "RV1")).toBe("FAIL");
     expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/cheque status after the refused return: expected CLEARED, got RETURNED/);
+  });
+
+  test("RV1 catches a refused return that added an accounting event", async () => {
+    const results = await runAgainst({ chequeReturnAddsEvent: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/changed the set of accounting events/);
+  });
+
+  test("RV1 catches a refused return that altered the clearing entry's lines", async () => {
+    const results = await runAgainst({ chequeReturnAltersClearingLines: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/clearing entry's lines changed/);
+  });
+
+  test("RV1 catches a cleared cheque whose clearing lost its named bank", async () => {
+    const results = await runAgainst({ chequeClearingBankDropped: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
   });
 
   test("RV1 catches a refusal that carries a generic code instead of the pilot containment code", async () => {

@@ -110,6 +110,9 @@ describe("the shipped switches are ON (unmocked pin)", () => {
     expect(() => real.assertClearedChequeReturnAllowed()).toThrow();
     // The pure guard passes when its switch is off, so a flipped switch is observable.
     expect(() => real.assertClearedChequeReturnAllowed(false)).not.toThrow();
+    // The read-only accessor the collections screen uses follows the same switch.
+    expect(real.isClearedChequeReturnDisabled()).toBe(true);
+    expect(real.isClearedChequeReturnDisabled(false)).toBe(false);
   });
 
   test("each refusal code has its own message and every code is an AppErrorCode", async () => {
