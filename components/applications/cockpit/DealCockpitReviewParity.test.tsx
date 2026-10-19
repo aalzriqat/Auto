@@ -18,12 +18,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import type { Id } from "../../../convex/_generated/dataModel";
 import { pickMethod as pickPaymentMethod } from "@/test-utils/paymentMethodSelect";
 
-// SCRUM-760: the finance-cheque return switch is a live handle. The cheque-return tests below drive the
-// deferred action with the pilot block OFF; the "shipped state" tests turn it ON (the real constant decides).
-const pilot = vi.hoisted(() => ({ clearedChequeReturn: false, financeChequeReturn: false }));
-vi.mock("@/convex/utils/postDeliveryDoorContainment", async (importOriginal) =>
-  (await import("@/test-utils/postDeliveryDoorSwitches")).withPostDeliverySwitches(await importOriginal(), pilot));
-
 vi.mock("@/components/deposits/DepositRefundBankSelect", () => ({
   useDepositRefundBanks: (_orgId: unknown, _currency: unknown, _enabled: boolean, value: string) => ({
     banks: [{ _id: "bank_1", name: "Test bank", currency: "JOD" }],
@@ -243,7 +237,6 @@ function application(overrides: Record<string, unknown> = {}) {
 // A closed deal's unwind status, once read: nothing active, nothing offered. The controls an active unwind
 // bars stay off until it resolves, so a closed deal needs one to be seen as the settled deal these tests mean.
 beforeEach(() => {
-  pilot.financeChequeReturn = false;
   // SCRUM-54: the server's answer for the receipt's bank. Defaults to "no bank
   // needed" (a CASH-like receipt) so the key/version cases below stay about
   // the key and version; the bank path has its own describe.
@@ -3293,26 +3286,6 @@ describe("cheque returned by the bank - applications.returnFinanceDisbursementCh
     fireEvent.click(screen.getByTestId(ACTION));
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.getByText("ChequeReturnedByBankDesc")).toBeTruthy();
-  });
-
-  test("SCRUM-760 shipped state: the action is withheld and the pilot notice says why", () => {
-    pilot.financeChequeReturn = true;
-    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    setDeal();
-    renderCockpit();
-    expect(screen.queryByTestId(ACTION)).toBeNull();
-    expect(screen.getByTestId("deal-cheque-return-pilot-disabled").textContent).toBe(
-      "ServerError_FINANCE_CHEQUE_RETURN_PILOT_DISABLED"
-    );
-  });
-
-  test("SCRUM-760 shipped state: no notice where the server never offered the action", () => {
-    pilot.financeChequeReturn = true;
-    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    setDeal({ disbursementReturn: { mayReturn: false, chequeId: "chq_fc1", lastReturnedChequeId: null } });
-    renderCockpit();
-    expect(screen.queryByTestId(ACTION)).toBeNull();
-    expect(screen.queryByTestId("deal-cheque-return-pilot-disabled")).toBeNull();
   });
 
   test("the server withholds the gate (CONFIRM without VIEW_FINANCE, or no cleared cheque): no action", () => {

@@ -148,7 +148,6 @@ import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { CreditDecisionDialog, type CreditDecision } from "./CreditDecisionDialog";
 import { CancelApplicationDialog, type CancelApplicationValues } from "./CancelApplicationDialog";
 import { UnwindDealDialog, type UnwindFinishValues, type UnwindStatusView } from "./UnwindDealDialog";
-import { isFinanceChequeReturnDisabled } from "@/convex/utils/postDeliveryDoorContainment";
 import {
   SettlementRouteControl,
   type DirectRouteRefusal,
@@ -3235,16 +3234,7 @@ export function DealCockpit({
             }
           : undefined
       }
-      chequePilotBlocked={
-        // SCRUM-760: returning a cleared finance-company cheque is blocked server-side for the pilot;
-        // the action is withheld and this notice says why (only where the action would have been offered).
-        isFinanceChequeReturnDisabled() &&
-        deal?.disbursementReturn?.mayReturn === true &&
-        !!deal.disbursementReturn.chequeId &&
-        deal.forward?.transferConfirmed === true
-      }
       chequeReturn={
-        !isFinanceChequeReturnDisabled() &&
         deal?.disbursementReturn?.mayReturn === true &&
         deal.disbursementReturn.chequeId &&
         deal.forward?.transferConfirmed === true
@@ -5026,7 +5016,6 @@ export function DealCockpitView({
   unwind,
   forwardCorrection,
   chequeReturn,
-  chequePilotBlocked,
   settlementRoute,
   documents,
   deposits,
@@ -5132,8 +5121,6 @@ export function DealCockpitView({
    * Present only when the server says this caller may (`disbursementReturn.mayReturn`)
    * AND the transfer is confirmed AND a cleared cheque is linked.
    */
-  /** SCRUM-760: the return is offered by the server but blocked for the pilot; shows the notice instead. */
-  chequePilotBlocked?: boolean;
   chequeReturn?: {
     open: boolean;
     submitting: boolean;
@@ -7066,11 +7053,6 @@ export function DealCockpitView({
               {t("ForwardReturnedAction")}
             </Button>
           </div>
-        )}
-        {!chequeReturn && chequePilotBlocked && (
-          <span className="ms-auto text-xs text-muted-foreground" data-testid="deal-cheque-return-pilot-disabled">
-            {t("ServerError_FINANCE_CHEQUE_RETURN_PILOT_DISABLED")}
-          </span>
         )}
         {chequeReturn && (
           <Button
