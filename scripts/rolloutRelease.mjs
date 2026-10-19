@@ -22,7 +22,6 @@ import process from "node:process";
 import {
   assertDeploymentIdentity,
   captureRunBaseline,
-  classifyBankBackfillStep,
   classifyMaterializationReport,
   decideEmptyRollout,
   decidePollOutcome,

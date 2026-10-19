@@ -514,7 +514,16 @@ describe("bankAccounts.getBookBalance", () => {
   test("a balance read whose component answer has an unexpected shape is withheld, never OK", async () => {
     const fx = await seedDealer();
     await multiPeriodMultiBank(fx);
-    for (const answer of [[], [{ count: 1 }], "nope"]) {
+    const sixteen = (row: object) => Array.from({ length: 16 }, () => row);
+    for (const answer of [
+      [], [{ count: 1 }], "nope",
+      sixteen({ sum: 0 }),
+      sixteen({ count: 1 }),
+      sixteen({ count: Number.NaN, sum: 0 }),
+      sixteen({ count: Number.POSITIVE_INFINITY, sum: 0 }),
+      sixteen({ count: -1, sum: 0 }),
+      sixteen({ count: 0.5, sum: 0 }),
+    ]) {
       const result = await fx.t.run((ctx) => {
         const broken = new Proxy(ctx, {
           get(target, prop, receiver) {

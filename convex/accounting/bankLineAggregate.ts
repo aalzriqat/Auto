@@ -137,7 +137,7 @@ async function countAndSumBatch<K extends ControlKey | AttributionKey>(
     },
   } as QueryCtx, queries);
   if (walks !== 1 || !Array.isArray(rows) || rows.length !== queries.length ||
-      rows.some((row) => typeof row?.count !== "number" || typeof row?.sum !== "number")) {
+      rows.some((row) => !Number.isSafeInteger(row?.count) || row.count < 0 || !Number.isSafeInteger(row?.sum))) {
     throw new Error("Bank aggregate batch read returned an unexpected shape.");
   }
   return rows as { count: number; sum: number }[];
@@ -179,7 +179,6 @@ export async function readAttributionRanges(
       upper: { key: [accountId, currency, bankAccountId, range.through] as AttributionKey, inclusive: true as const },
     },
   })));
-  if (queries.length === 0) return [];
   const rows = await countAndSumBatch(ctx, attribution, queries);
   return banks.map((_, index) => sumBuckets(rows.slice(index * buckets.length, (index + 1) * buckets.length), "attribution"));
 }

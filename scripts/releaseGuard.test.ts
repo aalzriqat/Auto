@@ -1475,6 +1475,19 @@ describe("rebuildBankBalances (SCRUM-54 rollout phase)", () => {
     expect(result.stopped).toEqual({ kind: "deadline", ref: opaqueOrgRef("org-a") });
   });
 
+  test("one deadline covers every org, so time spent on earlier orgs counts", () => {
+    let clock = 0;
+    const seen: string[] = [];
+    const { result } = run((orgId) => {
+      seen.push(orgId);
+      clock += 900;
+      return ok("READY");
+    }, { now: () => clock });
+    expect(seen).toEqual(["org-a", "org-b"]);
+    expect(result.ready).toBe(2);
+    expect(result.stopped).toEqual({ kind: "deadline", ref: opaqueOrgRef("org-c") });
+  });
+
   test("the page cap ends the whole phase for an org that never finishes", () => {
     const { result } = run(() => ok("MORE"), { maxPages: 3 });
     expect(result.stopped).toEqual({ kind: "pageCap", ref: opaqueOrgRef("org-a") });
