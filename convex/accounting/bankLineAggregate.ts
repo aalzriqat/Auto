@@ -112,51 +112,88 @@ export async function removeBankControlLine(
 }
 
 type Range = { fromInclusive?: number; through: number };
+type Totals = { count: number; netMinor: number };
 
-export async function readControlRange(
+/**
+ * Count and sum of every query in ONE component call.
+ *
+ * The client's countBatch and sumBatch each run the same aggregateBetweenBatch
+ * walk and keep half of its answer, so asking for both walked every bucket
+ * twice. countBatch is used only to build the walk's arguments; the walk's
+ * full {count, sum} rows are captured on their way back.
+ */
+async function countAndSumBatch<K extends ControlKey | AttributionKey>(
+  ctx: QueryCtx,
+  aggregate: DirectAggregate<{ Namespace: string; Key: K; Id: Id<"journalLines"> }>,
+  queries: { namespace: string; bounds: { lower: { key: K; inclusive: true }; upper: { key: K; inclusive: true } } }[],
+): Promise<{ count: number; sum: number }[]> {
+  let rows: unknown;
+  let walks = 0;
+  await aggregate.countBatch({
+    runQuery: async (fn, args) => {
+      walks += 1;
+      rows = await ctx.runQuery(fn, args);
+      return rows;
+    },
+  } as QueryCtx, queries);
+  if (walks !== 1 || !Array.isArray(rows) || rows.length !== queries.length ||
+      rows.some((row) => typeof row?.count !== "number" || typeof row?.sum !== "number")) {
+    throw new Error("Bank aggregate batch read returned an unexpected shape.");
+  }
+  return rows as { count: number; sum: number }[];
+}
+
+/** Totals for each range of the bank control tree, every bucket, one walk. */
+export async function readControlRanges(
   ctx: QueryCtx,
   namespace: string,
   accountId: Id<"chartOfAccounts">,
   currency: string,
-  range: Range,
-): Promise<{ count: number; netMinor: number }> {
-  const bounds = {
-    lower: { key: [accountId, currency, range.fromInclusive ?? Number.MIN_SAFE_INTEGER] as ControlKey, inclusive: true },
-    upper: { key: [accountId, currency, range.through] as ControlKey, inclusive: true },
-  };
-  // One component call per measure covers every bucket.
-  const queries = allBuckets(namespace).map((bucket) => ({ namespace: bucket, bounds }));
-  const [counts, sums] = await Promise.all([control.countBatch(ctx, queries), control.sumBatch(ctx, queries)]);
-  return sumBuckets(counts, sums, "control");
+  ranges: Range[],
+): Promise<Totals[]> {
+  const buckets = allBuckets(namespace);
+  const queries = ranges.flatMap((range) => buckets.map((bucket) => ({
+    namespace: bucket,
+    bounds: {
+      lower: { key: [accountId, currency, range.fromInclusive ?? Number.MIN_SAFE_INTEGER] as ControlKey, inclusive: true as const },
+      upper: { key: [accountId, currency, range.through] as ControlKey, inclusive: true as const },
+    },
+  })));
+  const rows = await countAndSumBatch(ctx, control, queries);
+  return ranges.map((_, index) => sumBuckets(rows.slice(index * buckets.length, (index + 1) * buckets.length), "control"));
 }
 
-export async function readAttributionRange(
+/** Totals for each physical bank's range of the attribution tree, every bucket, one walk. */
+export async function readAttributionRanges(
   ctx: QueryCtx,
   namespace: string,
   accountId: Id<"chartOfAccounts">,
   currency: string,
-  bankAccountId: Id<"bankAccounts">,
-  range: Range,
-): Promise<{ count: number; netMinor: number }> {
-  const bounds = {
-    lower: { key: [accountId, currency, bankAccountId, range.fromInclusive ?? Number.MIN_SAFE_INTEGER] as AttributionKey, inclusive: true },
-    upper: { key: [accountId, currency, bankAccountId, range.through] as AttributionKey, inclusive: true },
-  };
-  const queries = allBuckets(namespace).map((bucket) => ({ namespace: bucket, bounds }));
-  const [counts, sums] = await Promise.all([attribution.countBatch(ctx, queries), attribution.sumBatch(ctx, queries)]);
-  return sumBuckets(counts, sums, "attribution");
+  banks: { bankAccountId: Id<"bankAccounts">; range: Range }[],
+): Promise<Totals[]> {
+  const buckets = allBuckets(namespace);
+  const queries = banks.flatMap(({ bankAccountId, range }) => buckets.map((bucket) => ({
+    namespace: bucket,
+    bounds: {
+      lower: { key: [accountId, currency, bankAccountId, range.fromInclusive ?? Number.MIN_SAFE_INTEGER] as AttributionKey, inclusive: true as const },
+      upper: { key: [accountId, currency, bankAccountId, range.through] as AttributionKey, inclusive: true as const },
+    },
+  })));
+  if (queries.length === 0) return [];
+  const rows = await countAndSumBatch(ctx, attribution, queries);
+  return banks.map((_, index) => sumBuckets(rows.slice(index * buckets.length, (index + 1) * buckets.length), "attribution"));
 }
 
-function sumBuckets(counts: number[], sums: number[], tree: string): { count: number; netMinor: number } {
-  if (counts.length !== BANK_AGGREGATE_BUCKETS || sums.length !== BANK_AGGREGATE_BUCKETS) {
+function sumBuckets(rows: { count: number; sum: number }[], tree: string): Totals {
+  if (rows.length !== BANK_AGGREGATE_BUCKETS) {
     throw new Error(`Bank aggregate ${tree} read did not cover every bucket.`);
   }
   let count = 0;
   let netMinor = 0;
-  for (let bucket = 0; bucket < BANK_AGGREGATE_BUCKETS; bucket++) {
-    if (!Number.isSafeInteger(sums[bucket])) throw new Error(`Bank aggregate ${tree} sum lost integer precision.`);
-    count += counts[bucket];
-    netMinor += sums[bucket];
+  for (const row of rows) {
+    if (!Number.isSafeInteger(row.sum)) throw new Error(`Bank aggregate ${tree} sum lost integer precision.`);
+    count += row.count;
+    netMinor += row.sum;
   }
   if (!Number.isSafeInteger(netMinor)) throw new Error(`Bank aggregate ${tree} sum lost integer precision.`);
   return { count, netMinor };
