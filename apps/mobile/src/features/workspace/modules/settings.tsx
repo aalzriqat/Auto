@@ -35,7 +35,7 @@ export function SettingsModule({
     timezone: "",
     approvalThresholdEnabled: "false",
     approvalMinProfitPercent: "",
-    commissionMode: "MANUAL",
+    commissionMode: DEFAULT_MOBILE_COMMISSION_MODE as string,
     generatedLeadAutoAssignmentEnabled: "false",
     reservationHoldDays: "",
   });

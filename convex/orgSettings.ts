@@ -309,7 +309,7 @@ function isAccessRefusal(error: unknown): boolean {
 /**
  * SCRUM-778: the commission mode in force, for anyone who reviews commissions.
  * `get` is gated on VIEW_SETTINGS and returns null without it, which the
- * resolver would read as MANUAL — so a commissions reviewer in an automatic
+ * resolver would read as the default — so a commissions reviewer in an automatic
  * organization was shown the manual work queue. Returns null while signed out
  * or when the caller may not view commissions.
  */
@@ -355,7 +355,7 @@ export const setCommissionMode = mutation({
       .unique();
     const before = effectiveCommissionMode(settings);
     // Already stored as this mode: nothing to patch and nothing to audit. An
-    // unset org choosing MANUAL still writes, because that pins the choice.
+    // unset org choosing a mode still writes, because that pins the choice.
     if (settings && settings.commissionMode === args.commissionMode) return settings._id;
     let settingsId: Id<"orgSettings">;
     if (settings) {

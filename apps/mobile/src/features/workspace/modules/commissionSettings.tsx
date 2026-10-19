@@ -16,7 +16,7 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
   const upsertSettings = useMutation(api.orgSettings.upsert);
   const setCommissionMode = useMutation(api.orgSettings.setCommissionMode);
   const [saving, setSaving] = useState(false);
-  const [mode, setMode] = useState<MobileOrgSettings["commissionMode"]>("MANUAL");
+  const [mode, setMode] = useState<MobileOrgSettings["commissionMode"]>(DEFAULT_MOBILE_COMMISSION_MODE);
   const [tiersText, setTiersText] = useState("");
   const [sampleProfit, setSampleProfit] = useState("1000");
 

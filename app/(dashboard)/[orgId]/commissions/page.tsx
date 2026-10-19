@@ -90,7 +90,7 @@ export default function CommissionsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   // SCRUM-778: the mode in force, resolved on the server (an unset mode is
-  // MANUAL) and readable by commission reviewers who cannot view settings.
+  // AUTO_MEMBER) and readable by commission reviewers who cannot view settings.
   // `undefined` is loading and `null` is no access — no queue banner for either.
   // A null read is deliberately treated as "not MANUAL": a caller who cannot read the mode
   // must not be shown a manual work queue that may not match the org's real mode.

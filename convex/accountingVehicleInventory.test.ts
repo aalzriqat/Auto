@@ -55,8 +55,7 @@ async function seedDealer(suffix: string) {
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId, commissionRate: 10 }));
   await t.run((ctx) =>
-    // Automatic commission is opted into explicitly: since SCRUM-778 an unset mode is MANUAL.
-    ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"], commissionMode: "AUTO_MEMBER" })
+    ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"] })
   );
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Jane", lastName: "Doe", email: `${suffix}.cust@example.com` })

@@ -37,7 +37,7 @@ describe("SCRUM-778: saving settings and the commission mode together", () => {
       saveSettings: async () => undefined,
       setCommissionMode,
       currentMode: undefined,
-      selectedMode: "MANUAL",
+      selectedMode: "AUTO_MEMBER",
     });
 
     expect(result).toBe("saved");
@@ -57,8 +57,8 @@ describe("SCRUM-778: saving settings and the commission mode together", () => {
     expect(result).toBe("settingsSavedModeFailed");
   });
 
-  test("an unset org's default mode is MANUAL", () => {
-    expect(DEFAULT_MOBILE_COMMISSION_MODE).toBe("MANUAL");
+  test("an unset org's default mode is AUTO_MEMBER, as before SCRUM-778", () => {
+    expect(DEFAULT_MOBILE_COMMISSION_MODE).toBe("AUTO_MEMBER");
   });
 
   test("the result message is truthful in English and Arabic", () => {

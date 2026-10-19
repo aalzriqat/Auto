@@ -97,61 +97,69 @@ async function seedDealer(suffix: string, commissionMode?: "MANUAL" | "AUTO_MEMB
   return { t, orgId, as, completeSale, commissionPayableMinor };
 }
 
-describe("SCRUM-778: an unset commission mode is MANUAL", () => {
-  test("the shared resolver reads an unset mode as MANUAL and keeps an explicit one", () => {
-    expect(effectiveCommissionMode(null)).toBe("MANUAL");
-    expect(effectiveCommissionMode(undefined)).toBe("MANUAL");
-    expect(effectiveCommissionMode({})).toBe("MANUAL");
-    expect(effectiveCommissionMode({ commissionMode: "AUTO_MEMBER" })).toBe("AUTO_MEMBER");
+describe("SCRUM-778: an unset commission mode keeps behaving as AUTO_MEMBER", () => {
+  test("the shared resolver reads an unset mode as AUTO_MEMBER and keeps an explicit one", () => {
+    expect(effectiveCommissionMode(null)).toBe("AUTO_MEMBER");
+    expect(effectiveCommissionMode(undefined)).toBe("AUTO_MEMBER");
+    expect(effectiveCommissionMode({})).toBe("AUTO_MEMBER");
     expect(effectiveCommissionMode({ commissionMode: "AUTO_TIERS" })).toBe("AUTO_TIERS");
     expect(effectiveCommissionMode({ commissionMode: "MANUAL" })).toBe("MANUAL");
   });
 
-  test("completing a sale with no mode chosen accrues no commission", async () => {
+  // Transition: an org that never stored a mode must behave exactly as it did
+  // before this PR, with no owner action and no migration.
+  test("completing a sale with no mode stored accrues the member-rate commission, as before", async () => {
     const d = await seedDealer("unset");
-    const saleId = await d.completeSale();
-
-    const sale = await d.t.run((ctx) => ctx.db.get(saleId));
-    expect(sale?.status).toBe("COMPLETED");
-    expect(sale?.commissionAmount ?? null).toBeNull();
-    expect(await d.commissionPayableMinor()).toBe(0);
-  });
-
-  test("with no mode chosen, the manager enters the amount and it accrues then", async () => {
-    const d = await seedDealer("unset_entry");
-    const saleId = await d.completeSale();
-
-    // The undecided sale is on the commissions work queue, as in MANUAL mode.
-    const queue = await d.as.query(api.sales.listCommissionsPaginated, {
-      orgId: d.orgId, paidStatus: "not_set", paginationOpts: { numItems: 50, cursor: null },
-    });
-    expect(queue.page.map((s: { _id: string }) => s._id)).toContain(saleId);
-
-    await d.as.mutation(api.sales.setCommissionAmount, { orgId: d.orgId, saleId, commissionAmount: 250 });
-
-    const sale = await d.t.run((ctx) => ctx.db.get(saleId));
-    expect(sale?.commissionAmount).toBe(250);
-    expect(await d.commissionPayableMinor()).toBe(25_000);
-  });
-
-  test("recalculation is refused when no mode was chosen — there is no calculator to run", async () => {
-    const d = await seedDealer("unset_recalc");
-    const saleId = await d.completeSale();
-
-    await expect(
-      d.as.mutation(api.sales.recalculateCommission, { orgId: d.orgId, saleId })
-    ).rejects.toThrow(/automatic commission modes/i);
-    expect(await d.commissionPayableMinor()).toBe(0);
-  });
-
-  // Control: the automatic option stays available as an explicit opt-in.
-  test("an explicit AUTO_MEMBER mode still accrues the member-rate commission at completion", async () => {
-    const d = await seedDealer("auto", "AUTO_MEMBER");
     const saleId = await d.completeSale();
 
     const sale = await d.t.run((ctx) => ctx.db.get(saleId));
     expect(sale?.commissionAmount).toBeGreaterThan(0);
     expect(await d.commissionPayableMinor()).toBe(Math.round(sale!.commissionAmount! * 100));
+  });
+
+  test("with no mode stored, recalculation is an automatic-mode door and a completed commission stays locked", async () => {
+    const d = await seedDealer("unset_recalc");
+    const saleId = await d.completeSale();
+    const before = await d.commissionPayableMinor();
+
+    // It passes the mode gate (an explicit MANUAL org is refused there, below) and stops
+    // at the existing "amount already set" rule, exactly as on an AUTO_MEMBER org.
+    await expect(
+      d.as.mutation(api.sales.recalculateCommission, { orgId: d.orgId, saleId })
+    ).rejects.toThrow(/correction workflow/i);
+    const manual = await seedDealer("manual_recalc", "MANUAL");
+    const manualSale = await manual.completeSale();
+    await expect(
+      manual.as.mutation(api.sales.recalculateCommission, { orgId: manual.orgId, saleId: manualSale })
+    ).rejects.toThrow(/automatic commission modes/i);
+
+    // A completed, unpaid commission is not hand-editable in an automatic mode.
+    await expect(
+      d.as.mutation(api.sales.setCommissionAmount, { orgId: d.orgId, saleId, commissionAmount: 1 })
+    ).rejects.toThrow(/locked/i);
+    expect(await d.commissionPayableMinor()).toBe(before);
+  });
+
+  test("no deploy-time write: an org with no stored mode still has none stored", async () => {
+    const d = await seedDealer("nowrite");
+    await d.completeSale();
+    const row = await d.t.run((ctx) =>
+      ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).unique()
+    );
+    expect(row?.commissionMode).toBeUndefined();
+    expect(await d.t.run((ctx) => ctx.db.query("adminAuditLog").collect())).toHaveLength(0);
+  });
+
+  // MANUAL is an explicit, audited owner choice.
+  test("an explicit MANUAL accrues nothing at completion; the manager enters the amount and it accrues then", async () => {
+    const d = await seedDealer("manual", "MANUAL");
+    const saleId = await d.completeSale();
+    const sale = await d.t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.commissionAmount ?? null).toBeNull();
+    expect(await d.commissionPayableMinor()).toBe(0);
+
+    await d.as.mutation(api.sales.setCommissionAmount, { orgId: d.orgId, saleId, commissionAmount: 250 });
+    expect(await d.commissionPayableMinor()).toBe(25_000);
   });
 });
 
@@ -172,29 +180,47 @@ describe("SCRUM-778: an automatic mode needs a deliberate choice", () => {
       return effectiveCommissionMode(row);
     });
 
-  test("a legacy general-settings save carrying AUTO_MEMBER cannot switch an unset org to automatic", async () => {
+  test("a legacy general-settings save carrying a different mode cannot switch an org that never chose one", async () => {
     const d = await seedDealer("legacy_save");
     await expect(
       d.as.mutation(api.orgSettings.upsert, {
-        orgId: d.orgId, dealershipPhone: "+962790000000", commissionMode: "AUTO_MEMBER",
+        orgId: d.orgId, dealershipPhone: "+962790000000", commissionMode: "MANUAL",
       })
     ).rejects.toThrow(/commission mode/i);
-    expect(await storedMode(d)).toBe("MANUAL");
+    expect(await storedMode(d)).toBe("AUTO_MEMBER");
 
     await d.completeSale();
-    expect(await d.commissionPayableMinor()).toBe(0);
+    expect(await d.commissionPayableMinor()).toBeGreaterThan(0);
   });
 
-  test("the same legacy save on an org with no settings row creates nothing automatic", async () => {
+  test("a legacy save never changes a stored mode", async () => {
+    const d = await seedDealer("legacy_stored", "MANUAL");
+    await expect(
+      d.as.mutation(api.orgSettings.upsert, { orgId: d.orgId, dealershipPhone: "+962790000003", commissionMode: "AUTO_TIERS" })
+    ).rejects.toThrow(/commission mode/i);
+    expect(await storedMode(d)).toBe("MANUAL");
+  });
+
+  test("a legacy save resending the effective default saves the other fields and stores no mode", async () => {
+    const d = await seedDealer("legacy_resend_default");
+    await d.as.mutation(api.orgSettings.upsert, { orgId: d.orgId, dealershipPhone: "+962790000004", commissionMode: "AUTO_MEMBER" });
+    const row = await d.t.run((ctx) =>
+      ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).unique()
+    );
+    expect(row?.dealershipPhone).toBe("+962790000004");
+    expect(row?.commissionMode).toBeUndefined();
+  });
+
+  test("the same legacy save on an org with no settings row creates no stored mode", async () => {
     const d = await seedDealer("legacy_norow");
     await d.t.run(async (ctx) => {
       const row = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).unique();
       if (row) await ctx.db.delete(row._id);
     });
     await expect(
-      d.as.mutation(api.orgSettings.upsert, { orgId: d.orgId, dealershipPhone: "+962790000001", commissionMode: "AUTO_MEMBER" })
+      d.as.mutation(api.orgSettings.upsert, { orgId: d.orgId, dealershipPhone: "+962790000001", commissionMode: "MANUAL" })
     ).rejects.toThrow(/commission mode/i);
-    expect(await storedMode(d)).toBe("MANUAL");
+    expect(await storedMode(d)).toBe("AUTO_MEMBER");
   });
 
   // Control: resending the mode already in force is not a change and still saves.
@@ -208,16 +234,23 @@ describe("SCRUM-778: an automatic mode needs a deliberate choice", () => {
     expect(phone).toBe("+962790000002");
   });
 
-  test("the owner opts into automatic deliberately with setCommissionMode, and it accrues", async () => {
-    const d = await seedDealer("optin");
-    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" });
-    expect(await storedMode(d)).toBe("AUTO_MEMBER");
-
-    await d.completeSale();
-    expect(await d.commissionPayableMinor()).toBeGreaterThan(0);
-
+  test("choosing MANUAL is an explicit owner action: it is stored, audited, and stops automatic accrual", async () => {
+    const d = await seedDealer("choose_manual");
     await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "MANUAL" });
     expect(await storedMode(d)).toBe("MANUAL");
+    const rows = await d.t.run((ctx) => ctx.db.query("adminAuditLog").collect());
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: "commission mode changed",
+      before: { commissionMode: "AUTO_MEMBER" },
+      after: { commissionMode: "MANUAL" },
+    });
+
+    await d.completeSale();
+    expect(await d.commissionPayableMinor()).toBe(0);
+
+    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_TIERS" });
+    expect(await storedMode(d)).toBe("AUTO_TIERS");
   });
 
   test("only the owner may change the commission mode", async () => {
@@ -232,35 +265,21 @@ describe("SCRUM-778: an automatic mode needs a deliberate choice", () => {
     const asManager = d.t.withIdentity({ subject: "s778_mgr", clerkId: "s778_mgr" });
 
     const refusal = await asManager
-      .mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" })
+      .mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "MANUAL" })
       .then(() => null, (e: unknown) => e as { data?: { code?: string } });
     expect(refusal?.data?.code).toBe("FORBIDDEN");
-    expect(await storedMode(d)).toBe("MANUAL");
+    expect(await storedMode(d)).toBe("AUTO_MEMBER");
     expect(await d.t.run((ctx) => ctx.db.query("adminAuditLog").collect())).toHaveLength(0);
   });
 
-  test("an owner's mode change is audited with the before and after mode", async () => {
-    const d = await seedDealer("audit");
-    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" });
-    const rows = await d.t.run((ctx) => ctx.db.query("adminAuditLog").collect());
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      action: "commission mode changed",
-      targetTable: "orgSettings",
-      orgId: d.orgId,
-      before: { commissionMode: "MANUAL" },
-      after: { commissionMode: "AUTO_MEMBER" },
-    });
-  });
-
-  test("setting the mode already stored writes no audit row, and an unset org choosing MANUAL pins it", async () => {
+  test("setting the mode already stored writes no audit row, and an unset org choosing the default pins it", async () => {
     const d = await seedDealer("noop", "AUTO_MEMBER");
     await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" });
     expect(await d.t.run((ctx) => ctx.db.query("adminAuditLog").collect())).toHaveLength(0);
 
     const unset = await seedDealer("pin");
-    await unset.as.mutation(api.orgSettings.setCommissionMode, { orgId: unset.orgId, commissionMode: "MANUAL" });
-    expect(await storedMode(unset)).toBe("MANUAL");
+    await unset.as.mutation(api.orgSettings.setCommissionMode, { orgId: unset.orgId, commissionMode: "AUTO_MEMBER" });
+    expect(await storedMode(unset)).toBe("AUTO_MEMBER");
     expect(await unset.t.run((ctx) => ctx.db.query("adminAuditLog").collect())).toHaveLength(1);
   });
 

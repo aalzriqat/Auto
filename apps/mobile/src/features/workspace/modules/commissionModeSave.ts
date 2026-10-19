@@ -1,7 +1,7 @@
 export type MobileCommissionModeValue = "AUTO_TIERS" | "AUTO_MEMBER" | "MANUAL";
 
-/** SCRUM-778: an org that never chose a mode runs MANUAL. Mirrors convex/utils/commissionMode.ts. */
-export const DEFAULT_MOBILE_COMMISSION_MODE: MobileCommissionModeValue = "MANUAL";
+/** SCRUM-778: an org that never chose a mode keeps AUTO_MEMBER. Mirrors convex/utils/commissionMode.ts. */
+export const DEFAULT_MOBILE_COMMISSION_MODE: MobileCommissionModeValue = "AUTO_MEMBER";
 
 export type SettingsWithModeSaveResult = "saved" | "settingsSavedModeFailed";
 

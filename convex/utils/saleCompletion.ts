@@ -557,7 +557,7 @@ async function prepareSaleCompletion(
     .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
     .unique();
 
-  // SCRUM-778: never chosen means MANUAL — nothing accrues until a manager decides.
+  // SCRUM-778: never chosen keeps the long-standing default (AUTO_MEMBER); MANUAL is an explicit owner choice.
   const commissionMode = effectiveCommissionMode(orgSettings);
 
   let commissionAmount: number | undefined;
