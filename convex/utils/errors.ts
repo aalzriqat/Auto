@@ -221,6 +221,8 @@ export const AppErrorCode = {
   // command, or when a later correction on the same vehicle is still applied.
   COST_CORRECTION_ALREADY_REVERSED: "COST_CORRECTION_ALREADY_REVERSED",
   COST_CORRECTION_REVERSAL_NOT_LATEST: "COST_CORRECTION_REVERSAL_NOT_LATEST",
+  COST_CORRECTION_COMMAND_REUSED: "COST_CORRECTION_COMMAND_REUSED",
+  COST_CORRECTION_REVERSAL_CASHBOOK_MISSING: "COST_CORRECTION_REVERSAL_CASHBOOK_MISSING",
   // SCRUM-717 (D-45). Every door that creates or reshapes a vehicle's ownership refuses a shape
   // that contradicts itself (convex/utils/vehicleSourceShape.ts). Translated under
   // ServerError_<code>.

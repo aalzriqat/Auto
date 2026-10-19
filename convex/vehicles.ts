@@ -2292,16 +2292,28 @@ export const reverseCostCorrection = mutation({
       restoredCost: correction.previousCost,
       reversalJournalEntryId,
     });
-    if (correction.status === "REVERSED") {
-      if (correction.reversalCommandId === commandId) {
-        const reversalEvent = await ctx.db
-          .query("accountingEvents")
-          .withIndex("by_org_idempotency", (q) =>
-            q.eq("orgId", args.orgId).eq("idempotencyKey", `vehicle_cost_correction_reversal_${correction._id}`)
-          )
-          .unique();
-        return outcome(reversalEvent?.journalEntryId);
+    // The command id is unique per organization: it replays only on the correction it reversed,
+    // with the same reason, and is never reusable on another correction or with other arguments.
+    const holder = await ctx.db
+      .query("vehicleCostCorrections")
+      .withIndex("by_org_reversalCommand", (q) => q.eq("orgId", args.orgId).eq("reversalCommandId", commandId))
+      .first();
+    if (holder) {
+      if (holder._id !== correction._id || holder.reversalReason !== reason) {
+        throwAppError(
+          AppErrorCode.COST_CORRECTION_COMMAND_REUSED,
+          "This reversal request was already used for a different correction or reason. Start the reversal again."
+        );
       }
+      const reversalEvent = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", args.orgId).eq("idempotencyKey", `vehicle_cost_correction_reversal_${correction._id}`)
+        )
+        .unique();
+      return outcome(reversalEvent?.journalEntryId);
+    }
+    if (correction.status === "REVERSED") {
       throwAppError(
         AppErrorCode.COST_CORRECTION_ALREADY_REVERSED,
         "This correction has already been reversed. Post a new correction if the cost is still wrong."
@@ -2353,6 +2365,36 @@ export const reverseCostCorrection = mutation({
       );
     }
 
+    // A cash/bank refund wrote a cashbook row unless the car was bought on account. That row must
+    // still be there, with the amount and direction the correction wrote, before anything moves.
+    const acquisitionEvent = await findPostedAcquisitionEvent(ctx, args.orgId, correction.vehicleId);
+    if (!acquisitionEvent) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_NOT_POSTED,
+        "This vehicle's purchase hasn't been posted to accounting yet, so its cost can't be corrected."
+      );
+    }
+    const { count: payableCount } = await loadAcquisitionPayable(ctx, vehicle);
+    const cashbookKey = `vehicle_cost_correction_${correction._id}`;
+    const cashbookRow = await ctx.db
+      .query("transactions")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", correction.vehicleId))
+      .filter((q) => q.eq(q.field("idempotencyKey"), cashbookKey))
+      .first();
+    if (correction.correctionType === "CASH_REFUND" && resolveOriginalPaymentMethod(acquisitionEvent, payableCount) !== "ON_ACCOUNT") {
+      const deltaMinor = toMinorUnits(correction.newCost, currency) - toMinorUnits(correction.previousCost, currency);
+      const cashbookIntact =
+        cashbookRow !== null &&
+        cashbookRow.type === (deltaMinor < 0 ? "IN" : "OUT") &&
+        toMinorUnits(cashbookRow.amount, currency) === Math.abs(deltaMinor);
+      if (!cashbookIntact) {
+        throwAppError(
+          AppErrorCode.COST_CORRECTION_REVERSAL_CASHBOOK_MISSING,
+          "The cash record for this correction is missing, so it can't be reversed automatically. Contact finance. Nothing has been changed."
+        );
+      }
+    }
+
     const now = Date.now();
     if (!(await isPostableNow(ctx, args.orgId, now))) {
       throwAppError(
@@ -2376,12 +2418,6 @@ export const reverseCostCorrection = mutation({
     }
 
     // The correction's cashbook row, if it wrote one, is offset by an inverse row rather than edited.
-    const cashbookKey = `vehicle_cost_correction_${correction._id}`;
-    const cashbookRow = await ctx.db
-      .query("transactions")
-      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", correction.vehicleId))
-      .filter((q) => q.eq(q.field("idempotencyKey"), cashbookKey))
-      .first();
     if (cashbookRow) {
       await ctx.db.insert("transactions", {
         orgId: args.orgId,

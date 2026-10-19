@@ -1342,7 +1342,10 @@ export default defineSchema({
     reversalCommandId: v.optional(v.string()),
     // The mirror journal is found through its accounting event, key `vehicle_cost_correction_reversal_<id>`;
     // no journalEntries reference is stored here, which would add an org-reset ordering edge.
-  }).index("by_org_vehicle", ["orgId", "vehicleId"]),
+  })
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    // SCRUM-716: a reversal command id is unique per organization, never reusable across corrections.
+    .index("by_org_reversalCommand", ["orgId", "reversalCommandId"]),
 
   /**
    * One row per historical consigned sale restated from principal to agent

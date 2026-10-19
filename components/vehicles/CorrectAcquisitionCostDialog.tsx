@@ -344,7 +344,11 @@ function CorrectionForm({
                             variant="outline"
                             size="sm"
                             disabled={busy}
-                            onClick={() => setReversingId(row.id)}
+                            onClick={() => {
+                              // A new reversal intent gets a new command id; one id never spans two corrections.
+                              reverseCommandId.current = undefined;
+                              setReversingId(row.id);
+                            }}
                           >
                             {tx("CostCorrectionReverse")}
                           </Button>

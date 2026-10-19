@@ -201,6 +201,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "vehicles.createReservation": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "vehicles.importBulk": { bucket: "IDENTITY_GUARDED", mechanism: "per-row import identity `${importId}:${row.rowId}` — a SECOND valid mechanism, not runWithIdempotency" },
   "vehicles.releaseReservation": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "vehicles.reverseCostCorrection": { bucket: "STATE_GUARDED", mechanism: "refuses unless the correction is the latest APPLIED one; the same mutation sets status REVERSED with the commandId, so a retry with that id replays the stored result and any other id is refused COST_CORRECTION_ALREADY_REVERSED before a write. The reversal event key `vehicle_cost_correction_reversal_<id>` is also deterministic" },
   "vehicles.update": { bucket: "STATE_GUARDED", mechanism: "hookVehicleAcquired keys on `vehicle_acquired_${vehicleId}` — pre-existing vehicle (contrast vehicles.create, where that id is minted in-call, which is why THAT one needs identity)" },
   "vehicles.upsertLandedCosts": { bucket: "STATE_GUARDED", mechanism: "convergent: accountDeltas = newSums - oldSums against the STORED items, so a retry yields zero deltas and never reaches the posting call. NOTE the posting mints `editToken: crypto.randomUUID()` server-side — that would be a retry hole if the deltas were absolute; it is safe ONLY because the guard above it is convergent" },
   "workOrders.create": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -678,7 +679,8 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 149 -> 150: `accountingPeriods.create` (SCRUM-807): a period created with openImmediately now
     // schedules `accountingOutbox.wakePeriodHeldRows`, which schedules `claimOutboxRow` and so reaches posting
     // by function reference. It is the same wake `open` performs; `accountingPeriods.lock` is still excluded.
-    expect(population).toHaveLength(150);
+    // 150 -> 151: `vehicles.reverseCostCorrection` (SCRUM-716), STATE_GUARDED by the correction's REVERSED status.
+    expect(population).toHaveLength(151);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {
