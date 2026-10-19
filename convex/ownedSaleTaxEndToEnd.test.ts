@@ -1,5 +1,16 @@
 /**
- * A taxed owned sale, from `sales.create` through to both books (SCRUM-22).
+ * SCRUM-802 RE-CUT (owner rulings 2026-10-19): the pilot does not offer a CASH sale that carries tax, dealer fees, a
+ * warranty or GAP, and the server refuses one (`CASH_SALE_TAX_FEES_WARRANTY_REFUSED`, before any write). A deposit is
+ * capped at the quote's vehiclePrice, so a taxed invoice (price plus tax) can never be held in full as a deposit.
+ *
+ * RETIRED, with the reason recorded here and not left skipped: the three cells that proved a COMPLETED taxed cash sale
+ * posts one agreed amount to both books ("the GL receivable, the subledger document and the invoice all agree", "a tax
+ * equal to the price is still allowed", "a sale queued against a closed period carries the convention marker and
+ * drains to the same number"). They could only run by inflating the quote's vehiclePrice to price plus tax, a test
+ * setup no user can reach, so they certified a path the pilot refuses. They are replaced below by the refusal cells.
+ * The taxed posting arithmetic itself stays pinned at the unit level (`accounting/ownedSaleTaxPosting.test.ts`).
+ *
+ * Original purpose (SCRUM-22): a taxed owned sale, from `sales.create` through to both books.
  *
  * The unit tests in `accounting/ownedSaleTaxPosting.test.ts` pin what
  * `ruleSaleCompleted` returns. They cannot catch the other half of the defect:
@@ -16,9 +27,10 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { settleOutbox } from "../test-utils/outboxWork";
 import { api } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
+import { refusalDataOf } from "../test-utils/financedDealFixture";
 import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
@@ -161,63 +173,62 @@ type Dealer = Awaited<ReturnType<typeof seedDealer>>;
  * (price plus tax) is already held as a deposit, so the quote is created and the customer's full payment recorded
  * as a deposit first; the sale is then completed against that quote.
  */
-async function payFullByDeposit(s: Dealer, price: number, tax = 0): Promise<Id<"quotes">> {
+async function payFullByDeposit(s: Dealer, price: number): Promise<Id<"quotes">> {
   const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, mode: "CASH",
-    // The quote carries the customer's whole bill (price plus tax): a deposit cannot exceed its quote.
-    vehiclePrice: price + tax, downPayment: 0, termMonths: 0,
+    vehiclePrice: price, downPayment: 0, termMonths: 0,
   });
   await s.asUser.mutation(api.deposits.create, {
-    orgId: s.orgId, quoteId, amount: price + tax, method: "CASH", idempotencyKey: crypto.randomUUID(),
+    orgId: s.orgId, quoteId, amount: price, method: "CASH", idempotencyKey: crypto.randomUUID(),
   });
   return quoteId;
 }
 
 describe("a taxed owned sale reaches both books with the same amount", () => {
-  test("the GL receivable, the subledger document and the invoice all agree", async () => {
-    const dealer = await seedDealer("agree");
+  test("a taxed CASH sale is refused with the specific code even when the full price is already held as a deposit; deposit and books untouched", async () => {
+    const dealer = await seedDealer("taxrefused");
     const { t, orgId, userId, customerId, vehicleId, asUser } = dealer;
-    const quoteId = await payFullByDeposit(dealer, 20_000, 3_200);
+    const quoteId = await payFullByDeposit(dealer, 20_000);
+    const before = await dbSnapshot(t, Object.keys(schema.tables));
 
-    const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      quoteId,
-      vehicleId,
-      customerId,
-      salespersonId: userId,
-      salePrice: 20_000,
-      taxAmount: 3_200,
-      saleDate: Date.now(),
-      status: "COMPLETED",
-      financingType: "CASH",
-    });
+    const refusal = await refusalDataOf(
+      asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
+        orgId,
+        quoteId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 20_000,
+        taxAmount: 3_200,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        financingType: "CASH",
+      })
+    );
 
-    // What the invoice says: SaleDialog bills salePrice + taxAmount.
-    const invoiceMinor = jod(23_200);
-
-    // The sale entry's own AR debit (the deposit then settles it, so the NET is zero: asserted below).
-    const arDebitMinor = await debitsOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
-    expect(arDebitMinor).toBe(invoiceMinor);
+    expect(refusal?.code).toBe("CASH_SALE_TAX_FEES_WARRANTY_REFUSED");
+    expect(await dbSnapshot(t, Object.keys(schema.tables))).toEqual(before);
+    // Both books untouched by the refused sale: the deposit is held (liability), no receivable, no tax payable.
     expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
+    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_TAX_PAYABLE)).toBe(0);
+    expect(await t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(0);
+  });
 
-    const receivable = await t.run(async (ctx) => {
-      const sale = await ctx.db.get(saleId);
-      const id = sale?.canonicalReceivableDocumentId;
-      return id ? await ctx.db.get(id) : null;
+  test("the deposit cap is why: a deposit for price plus tax cannot be recorded against a quote for the price", async () => {
+    // The refusal above is not arbitrary. A quote carries the vehicle price only, and a deposit may not exceed its
+    // quote, so the 23,200 a taxed 20,000 sale would need can never be held. (This cell used to inflate the quote to
+    // 23,200 to get a taxed sale through; that setup is not a reachable UI path and is retired.)
+    const dealer = await seedDealer("cap");
+    const quoteId = await dealer.asUser.mutation(api.quotes.saveQuote, {
+      orgId: dealer.orgId, customerId: dealer.customerId, vehicleId: dealer.vehicleId, mode: "CASH",
+      vehiclePrice: 20_000, downPayment: 0, termMonths: 0,
     });
-    // ANTI-VACUITY: a missing document would make the comparison below pass for
-    // the trivial reason.
-    expect(receivable).toBeTruthy();
-    expect(receivable!.status).toBe("PAID");
-    expect(receivable!.originalAmountMinor).toBe(invoiceMinor);
-
-    // Stated as its own assertion because this is the invariant, not the two
-    // amounts: one customer, one bill, two books.
-    expect(receivable!.originalAmountMinor).toBe(arDebitMinor);
-
-    // And the tax never became revenue.
-    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_REVENUE)).toBe(-jod(20_000));
-    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_TAX_PAYABLE)).toBe(-jod(3_200));
+    await expect(
+      dealer.asUser.mutation(api.deposits.create, {
+        orgId: dealer.orgId, quoteId, amount: 23_200, method: "CASH", idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow();
+    expect(await dealer.t.run((ctx) => ctx.db.query("deposits").collect())).toHaveLength(0);
   });
 
   test("a tax larger than the price is refused, and nothing reaches either book", async () => {
@@ -247,7 +258,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
         status: "COMPLETED",
         financingType: "CASH",
       })
-    ).rejects.toThrow(/tax/i);
+    ).rejects.toThrow(/CASH_SALE_TAX_FEES_WARRANTY_REFUSED/);
 
     // The refusal must be total. A mutation that threw after writing the
     // receivable would leave a 52,000 invoice with no journal behind it, which
@@ -255,30 +266,6 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
     const receivables = await t.run((ctx) => ctx.db.query("receivableDocuments").collect());
     expect(receivables).toHaveLength(0);
-  });
-
-  test("a tax equal to the price is still allowed — the bound is a ceiling, not a ban", async () => {
-    // ANTI-VACUITY for the refusal above: without this, a guard that rejected
-    // every taxed sale outright would pass it while breaking the ordinary case
-    // the whole ticket exists to make work.
-    const dealer = await seedDealer("edgetax");
-    const { t, orgId, userId, customerId, vehicleId, asUser } = dealer;
-    const quoteId = await payFullByDeposit(dealer, 20_000, 20_000);
-
-    await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      quoteId,
-      vehicleId,
-      customerId,
-      salespersonId: userId,
-      salePrice: 20_000,
-      taxAmount: 20_000,
-      saleDate: Date.now(),
-      status: "COMPLETED",
-      financingType: "CASH",
-    });
-
-    expect(await debitsOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(40_000));
   });
 
   test("a PENDING draft may carry no agreed price, and stays editable", async () => {
@@ -328,7 +315,6 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
         customerId: s.customerId,
         salespersonId: s.userId,
         salePrice: 0.0004,
-        dealerFees: 500,
         saleDate: Date.now(),
         status: "COMPLETED",
         financingType: "CASH",
@@ -384,7 +370,6 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
         customerId: s.customerId,
         salespersonId: s.userId,
         salePrice: 0.0004,
-        dealerFees: 500,
         saleDate: Date.UTC(priorYear, 5, 15),
         status: "COMPLETED",
         financingType: "CASH",
@@ -421,7 +406,6 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
         customerId: withFees.customerId,
         salespersonId: withFees.userId,
         salePrice: 0,
-        dealerFees: 500,
         saleDate: Date.now(),
         status: "COMPLETED",
         financingType: "CASH",
@@ -446,85 +430,6 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
         financingType: "CASH",
       })
     ).rejects.toThrow(/price/i);
-  });
-
-  test("a sale queued against a closed period carries the convention marker and drains to the same number", async () => {
-    // The marker is only load-bearing on the DEFERRED path, and every other
-    // test here posts immediately against an open period — so nothing proved
-    // the marker survives `pendingAccountingEvents`. It is stored as
-    // `v.optional(v.any())` today, but a later hardening of that validator, or
-    // any payload-normalising layer, would drop it silently: the immediate path
-    // would stay correct while every deferred taxed sale quietly reverted to
-    // the old convention, against a receivable sized under the new one. The
-    // journal would still balance, which is the exact blindness SCRUM-22 exists
-    // to close.
-    const dealer = await seedDealer("deferred");
-    const { t, orgId, userId, customerId, vehicleId, asUser } = dealer;
-    const quoteId = await payFullByDeposit(dealer, 20_000, 3_200);
-
-    // Deferral is driven by `shouldPost` → `getOpenPeriodForDate`. Dating the
-    // sale into a year the seed created no period for is the cleanest way to
-    // reach that branch; closing the seeded period instead runs an unrelated
-    // close checklist that has nothing to do with this invariant.
-    const priorYear = new Date().getUTCFullYear() - 1;
-    const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      quoteId,
-      vehicleId,
-      customerId,
-      salespersonId: userId,
-      salePrice: 20_000,
-      taxAmount: 3_200,
-      saleDate: Date.UTC(priorYear, 5, 15),
-      status: "COMPLETED",
-      financingType: "CASH",
-    });
-
-    // Nothing posted yet — the event is queued, not journalled.
-    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
-
-    const queued = await t.run(async (ctx) =>
-      (await ctx.db.query("pendingAccountingEvents").collect()).find(
-        (p) => p.eventType === "SALE_COMPLETED"
-      )
-    );
-    // ANTI-VACUITY: if the sale had posted immediately, or the outbox row were
-    // missing, every assertion below would pass for the wrong reason.
-    expect(queued).toBeTruthy();
-    expect((queued!.payload as { taxConventionExclusive?: boolean }).taxConventionExclusive).toBe(true);
-
-    await asUser.mutation(api.accountingPeriods.create, {
-      orgId,
-      startDate: Date.UTC(priorYear, 0, 1),
-      endDate: Date.UTC(priorYear, 11, 31, 23, 59, 59, 999),
-      fiscalYear: priorYear,
-      periodNumber: 1,
-    });
-    const priorPeriod = (await asUser.query(api.accountingPeriods.list, { orgId })).find(
-      (p) => p.fiscalYear === priorYear
-    );
-    expect(priorPeriod).toBeTruthy();
-    await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: priorPeriod!._id });
-    await asUser.mutation(api.accountingOutbox.redrive, { orgId });
-    // The redrive queues the work; the worker performs it in its own
-    // transaction, which is what makes a failure roll back (SCRUM-222).
-    await settleOutbox(t, orgId);
-
-    const invoiceMinor = jod(23_200);
-    const arDebitMinor = await debitsOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
-    expect(arDebitMinor).toBe(invoiceMinor);
-
-    const receivable = await t.run(async (ctx) => {
-      const sale = await ctx.db.get(saleId);
-      const id = sale?.canonicalReceivableDocumentId;
-      return id ? await ctx.db.get(id) : null;
-    });
-    expect(receivable).toBeTruthy();
-    // The invariant, on the deferred path this time: one customer, one bill,
-    // two books.
-    expect(receivable!.originalAmountMinor).toBe(arDebitMinor);
-    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_REVENUE)).toBe(-jod(20_000));
-    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.SALES_TAX_PAYABLE)).toBe(-jod(3_200));
   });
 
   test("an untaxed sale is unchanged in both books", async () => {

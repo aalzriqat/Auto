@@ -2,9 +2,9 @@
  * SCRUM-802 (owner ruling 2026-10-08, «إجراء + منع»): pilot cash-sale containment.
  *
  * Until the invoice receipt resolver (SCRUM-722) exists no door applies a customer's payment to a cash sale's
- * invoice, so (1) a CASH completion refuses when its invoice would stay outstanding after deposit and trade-in
- * allocation, and (2) collections.recordPayment WITHOUT a sale or receivable is refused while the customer owes a sale
- * invoice. These tests run with the switch ON (the suite-wide setup turns it off).
+ * invoice, so (1) a CASH completion refuses when its invoice would stay outstanding after DEPOSITS (a trade-in does not count, owner ruling
+ * 2026-10-19), and (2) collections.recordPayment WITHOUT a sale or receivable is refused while the customer owes a sale
+ * invoice. These tests run with the real switch ON (nothing mocks it off).
  * Evidence boundary: convex-test, not production.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
@@ -175,25 +175,19 @@ describe("SCRUM-802 item 1: a CASH completion refuses while its invoice would st
     expect(await s.t.run(async (ctx) => (await ctx.db.get(draftId))?.status)).toBe("PENDING");
   });
 
-  test("a trade-in worth the full price pays the invoice and the sale completes; a smaller trade-in is refused", async () => {
-    const full = await seedDealer("tradefull");
-    const tradeFull = await full.mkVehicle("VINTRADE_FULL");
-    const saleId = await full.asUser.mutation(api.sales.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: full.orgId, vehicleId: full.vehicleId, customerId: full.customerId, salespersonId: full.userId,
-      salePrice: 20_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH", tradeInVehicleId: tradeFull, tradeInValue: 20_000,
-    });
-    expect(saleId).toBeTruthy();
-
-    const small = await seedDealer("tradesmall");
-    const tradeSmall = await small.mkVehicle("VINTRADE_SMALL");
-    const before = await footprint(small);
-    await expect(
-      small.asUser.mutation(api.sales.create, {
-        idempotencyKey: crypto.randomUUID(), orgId: small.orgId, vehicleId: small.vehicleId, customerId: small.customerId, salespersonId: small.userId,
-        salePrice: 20_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH", tradeInVehicleId: tradeSmall, tradeInValue: 5_000,
-      })
-    ).rejects.toThrow(/CASH_SALE_BALANCE_UNPAID_REFUSED/);
-    expect(await footprint(small)).toEqual(before);
+  test("a trade-in does not count toward pay-in-full-first (owner: deposit only): a full-price trade-in and a smaller one are both refused", async () => {
+    for (const [tag, value] of [["tradefull", 20_000], ["tradesmall", 5_000]] as const) {
+      const s = await seedDealer(tag);
+      const trade = await s.mkVehicle(`VINTRADE_${tag}`);
+      const before = await footprint(s);
+      await expect(
+        s.asUser.mutation(api.sales.create, {
+          idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId,
+          salePrice: 20_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH", tradeInVehicleId: trade, tradeInValue: value,
+        })
+      ).rejects.toThrow(/CASH_SALE_BALANCE_UNPAID_REFUSED/);
+      expect(await footprint(s)).toEqual(before);
+    }
   });
 
   test("a FINANCED deal is NOT affected: finalizeDeal still completes with the finance company owing the balance", async () => {

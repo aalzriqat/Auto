@@ -1360,7 +1360,7 @@ function makeBackend(defects: Defects = {}) {
           const requiredMinor = Math.round(Number(args.salePrice) * MINOR_SCALE);
           const heldMinor = [...deposits.values()]
             .filter((row) => row.vehicleId === String(args.vehicleId) && row.customerId === String(args.customerId) && row.status === "HELD")
-            .reduce((sum, row) => sum + row.amountMinor, 0);
+            .reduce((sum, row) => sum + (row.amountMinor ?? 0), 0);
           if (heldMinor < requiredMinor) {
             return {
               ok: false as const,

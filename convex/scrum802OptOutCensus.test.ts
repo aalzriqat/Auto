@@ -67,9 +67,14 @@ const MUST_RUN_WITH_REAL_SWITCH = [
   "convex/scrum486Certification.test.ts",
   "convex/accountingReleaseRehearsal.test.ts",
   "convex/scrum802CashSaleContainment.test.ts",
-  // Bound to the regression scenario cash-taxed-owned-sale-gl-subledger-invoice-agree.
+  "convex/scrum802CashSaleExtras.test.ts",
+  // Bound to the regression scenario cash-taxed-owned-sale-gl-subledger-invoice-agree (re-cut to the refusal).
   "convex/ownedSaleTaxEndToEnd.test.ts",
 ] as const;
+
+// The mutation attacks on the extras switch (CASH_SALE_EXTRAS_PILOT_REFUSED): each mocks the gate module and flips ONLY
+// that switch, so it is neither an opt-out nor allowed to touch the full-payment switch.
+const EXTRAS_SWITCH_ATTACKS: readonly string[] = ["convex/scrum802CashSaleExtrasSwitchAttack.test.ts"];
 
 // Mirrors vitest.config.ts: include **/*.test.ts(x) from the repository root, exclude these directories.
 const EXCLUDED_DIRS = new Set(["node_modules", ".next", "out", "build", "apps", "packages"]);
@@ -89,9 +94,24 @@ function testFiles(dir: string, out: string[] = []): string[] {
 //     backtick), and (2) the switch's name used as an object key with any value other than the literal `true`
 //     (false, !1, 0, undefined, null, a variable...).
 const MOCKS_GATE_MODULE = /vi\.(?:mock|doMock)\s*\(\s*(?:import\s*\(\s*)?["'`][^"'`]*(?:saleDebtContainment|cashSalePilotGate)/;
-const SETS_SWITCH_NOT_TRUE = /CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED\s*:\s*(?!\s|true\b)/;
+const SETS_SWITCH_NOT_TRUE = /CASH_SALE_(?:FULL_PAYMENT_PILOT_REQUIRED|EXTRAS_PILOT_REFUSED)\s*:\s*(?!\s|true\b)/;
 function turnsSwitchOff(src: string): boolean {
   return MOCKS_GATE_MODULE.test(src) || SETS_SWITCH_NOT_TRUE.test(src);
+}
+
+// What a marked opt-out must actually DO, not merely say: mock the containment module and set the full-payment switch
+// to a falsy literal. A file that carries the marker text but mocks nothing runs with the real switch and is a lie.
+const MOCKS_CONTAINMENT_MODULE = /vi\.(?:mock|doMock)\s*\(\s*(?:import\s*\(\s*)?["'`][^"'`]*saleDebtContainment/;
+const FULL_PAYMENT_SET_FALSY = /CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED\s*:\s*(?:false|!1|0|null|undefined)\b/;
+function mocksFullPaymentSwitchOff(src: string): boolean {
+  return MOCKS_CONTAINMENT_MODULE.test(src) && FULL_PAYMENT_SET_FALSY.test(src);
+}
+function flipsOnlyTheExtrasSwitch(src: string): boolean {
+  return (
+    MOCKS_CONTAINMENT_MODULE.test(src) &&
+    /CASH_SALE_EXTRAS_PILOT_REFUSED\s*:\s*(?:false|!1|0|null|undefined)\b/.test(src) &&
+    !/CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED\s*:/.test(src)
+  );
 }
 
 describe("SCRUM-802 opt-out census", () => {
@@ -110,9 +130,23 @@ describe("SCRUM-802 opt-out census", () => {
     // "importOriginal()" pass-through mocks are harmless no-ops but are still flagged: there is nothing to opt back in to.
     const unmarked = all.filter((path) => {
       const src = readFileSync(path, "utf8");
+      if (EXTRAS_SWITCH_ATTACKS.includes(path)) return !flipsOnlyTheExtrasSwitch(src);
       return turnsSwitchOff(src) && !src.includes(MARK);
     });
     expect(unmarked).toEqual([]);
+  });
+
+  test("every opted-out suite really mocks the full-payment switch off (the marker alone is not an opt-out)", () => {
+    const notReal = optedOut.filter((path) => !mocksFullPaymentSwitchOff(readFileSync(path, "utf8")));
+    expect(notReal).toEqual([]);
+  });
+
+  test("the extras-switch attacks exist, flip only that switch, and are not opt-outs", () => {
+    for (const path of EXTRAS_SWITCH_ATTACKS) {
+      expect(all).toContain(path);
+      expect(optedOut).not.toContain(path);
+      expect(flipsOnlyTheExtrasSwitch(readFileSync(path, "utf8"))).toBe(true);
+    }
   });
 
   test("exactly the listed suites run with the containment off", () => {
@@ -151,5 +185,18 @@ describe("SCRUM-802 opt-out census", () => {
       `vi.mock("./rateLimit", () => ({}));`,
     ];
     for (const src of harmless) expect(turnsSwitchOff(src), src).toBe(false);
+    // The extras switch is covered by the same detector.
+    expect(turnsSwitchOff("const m = { CASH_SALE_EXTRAS_PILOT_REFUSED: false };")).toBe(true);
+    expect(turnsSwitchOff("const m = { CASH_SALE_EXTRAS_PILOT_REFUSED: !1 };")).toBe(true);
+  });
+
+  test("the opt-out verifier goes red on a marker with no real mock (self-test)", () => {
+    const real = `// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (importOriginal) => ({ ...(await importOriginal()), CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false }));`;
+    expect(mocksFullPaymentSwitchOff(real)).toBe(true);
+    expect(mocksFullPaymentSwitchOff(`// ${MARK}\nconst x = 1;`)).toBe(false); // marker only
+    expect(mocksFullPaymentSwitchOff(`// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (o) => await o());`)).toBe(false); // mock, switch still real
+    expect(mocksFullPaymentSwitchOff(`// ${MARK}\nconst m = { CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false };`)).toBe(false); // value set, nothing mocked
+    expect(flipsOnlyTheExtrasSwitch(`vi.mock("./utils/saleDebtContainment", async (o) => ({ ...(await o()), CASH_SALE_EXTRAS_PILOT_REFUSED: false }));`)).toBe(true);
+    expect(flipsOnlyTheExtrasSwitch(`vi.mock("./utils/saleDebtContainment", async (o) => ({ ...(await o()), CASH_SALE_EXTRAS_PILOT_REFUSED: false, CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false }));`)).toBe(false);
   });
 });

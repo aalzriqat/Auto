@@ -17,7 +17,7 @@ import {
 } from "./depositHelpers";
 import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
-import { assertCashSaleInvoiceFullyPaid } from "./cashSalePilotGate";
+import { assertCashSaleCarriesNoExtras, assertCashSaleInvoiceFullyPaid } from "./cashSalePilotGate";
 import { requireOrgMember } from "./tenancy";
 import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
@@ -1939,6 +1939,8 @@ async function applySaleCompletionSideEffects(
     });
   }
 
+  // What a trade-in allocated to the invoice in this completion; the pay-first rule reads it (owner: deposit only).
+  let tradeInAppliedMinor = 0;
   if (args.tradeInVehicleId && args.tradeInValue && args.tradeInValue > 0) {
     if (args.tradeInVehicleId === args.vehicleId) {
       throw new ConvexError("A vehicle cannot be traded in against its own sale.");
@@ -1970,6 +1972,7 @@ async function applySaleCompletionSideEffects(
     }
 
     const tradeInValueMinor = toMinorUnits(args.tradeInValue, prepared.currency);
+    tradeInAppliedMinor = tradeInValueMinor;
     const tradeInPaymentId = await createCanonicalPayment(ctx, {
       orgId: args.orgId,
       branchId: prepared.vehicle.branchId,
@@ -2010,11 +2013,12 @@ async function applySaleCompletionSideEffects(
   }
 
   // SCRUM-802: until the invoice receipt resolver exists, a cash sale completes
-  // only when deposits and trade-in have already paid its invoice in full.
+  // only when deposits have already paid its invoice in full.
   await assertCashSaleInvoiceFullyPaid(ctx, {
     financingType: args.financingType,
     financedSalePlan: args.financedSalePlan,
     saleReceivableId,
+    tradeInAppliedMinor,
   });
 
   // For sourced vehicles the dealership owes the supplier his entitlement out
@@ -2217,6 +2221,8 @@ export async function completeSale(
       "Sales completion must be explicit. Use createDraft for PENDING sales."
     );
   }
+  // SCRUM-802: the choke point behind every door's own early check; nothing below has written yet.
+  assertCashSaleCarriesNoExtras(args);
 
   // Amounts and the canonical commitment check both run inside this call,
   // before the insert, so a refusal leaves no sale row, no vehicle status
@@ -2366,6 +2372,9 @@ export async function completeExistingSale(
     // Preserve a manager-entered MANUAL commission across completion.
     existingCommissionAmount: sale.commissionAmount,
   };
+
+  // SCRUM-802: as `completeSale`; the draft's own money terms, before any write.
+  assertCashSaleCarriesNoExtras(completionArgs);
 
   // Same authority, same position: before the status patch, so a draft that
   // cannot legally complete stays a draft rather than becoming a COMPLETED sale
