@@ -687,12 +687,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-807 (#608): the collections reminder child adds one orgId mutation - 535 total, 361 analysed.
   // SCRUM-54: bankBalanceBackfill.runPage is one additional org-scoped internal
   // mutation; it reads the mapped account and bounded journal page by org - 536 total, 362 analysed.
+  // Weekly Workpool (#610) adds six internal mutations keyed by run/delivery IDs, not orgId:
+  // sendWeeklyProofReports, produceWeeklyDeliveries, freezeWeeklyDelivery, beginWeeklySend,
+  // recordWeeklySendOutcome and cancelWeeklyRun. Measured from the analyser: +6 total and skippedNoOrgId.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 536,
+      totalMutations: 542,
       analysed: 362,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 159,
+      skippedNoOrgId: 165,
     });
   });
 });

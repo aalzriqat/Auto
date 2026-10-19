@@ -7415,7 +7415,9 @@ export default defineSchema({
     contactUnlockedAt: v.optional(v.number()),
   })
     .index("by_request", ["requestId"])
-    .index("by_org", ["orgId"]),
+    .index("by_org", ["orgId"])
+    // Weekly proof report (SCRUM-807): range-bounds the read by date BEFORE any row cap.
+    .index("by_org_matchedAt", ["orgId", "matchedAt"]),
 
   // A matched dealer's reply to a buyer request (Phase 58). Reused across
   // both the dealer-facing inbox and the public buyer-status page.
@@ -7468,7 +7470,9 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_request", ["requestId"])
-    .index("by_org", ["orgId"]),
+    .index("by_org", ["orgId"])
+    // Weekly proof report (SCRUM-807): range-bounds the read by date BEFORE any row cap.
+    .index("by_org_createdAt", ["orgId", "createdAt"]),
 
   // Funnel telemetry (request submitted, offer sent/viewed/accepted, contact
   // unlocked, ...) — powers dealer response-SLA scoring and liquidity
@@ -7505,6 +7509,84 @@ export default defineSchema({
     sentAt: v.number(),
     sentBy: v.id("users"),
   }).index("by_org_week", ["orgId", "weekStart"]),
+
+  // SCRUM-807 — one row per business week of the automatic weekly proof-report
+  // email. The business-level idempotency/result/window binding: the frozen
+  // `since`/`until` window, the roster cursor and the run's own status. Not a
+  // lease or a queue (Workpool owns the queue). History is kept on purpose.
+  marketplaceWeeklyReportRuns: defineTable({
+    // `currentWeekStart(runStartedAt)`: one run per week, however often the cron fires.
+    weekKey: v.number(),
+    runStartedAt: v.number(),
+    since: v.number(),
+    until: v.number(),
+    status: v.union(
+      v.literal("PRODUCING"),
+      v.literal("PRODUCED"),
+      v.literal("COMPLETE"),
+      v.literal("CANCELED"),
+      v.literal("STALLED")
+    ),
+    // Roster pagination cursor; null before the first page and after the last.
+    cursor: v.union(v.string(), v.null()),
+    cancelRequestedAt: v.optional(v.number()),
+  }).index("by_weekKey", ["weekKey"]),
+
+  // One row per (run, dealer org): the frozen full email, the per-attempt send
+  // state, and the final honest result. Provider acceptance is not delivery.
+  marketplaceWeeklyReportDeliveries: defineTable({
+    runId: v.id("marketplaceWeeklyReportRuns"),
+    orgId: v.id("organizations"),
+    state: v.union(
+      v.literal("PENDING"),
+      v.literal("FROZEN"),
+      v.literal("SKIPPED"),
+      v.literal("SENDING"),
+      v.literal("ACCEPTED"),
+      v.literal("MOCK"),
+      v.literal("FAILED_TERMINAL"),
+      v.literal("AMBIGUOUS"),
+      v.literal("CANCELED")
+    ),
+    // Stable per (week, org); Resend returns the original for the same key and payload for 24 h.
+    idempotencyKey: v.string(),
+    envelope: v.optional(
+      v.object({ from: v.string(), to: v.string(), subject: v.string(), html: v.string() })
+    ),
+    report: v.optional(
+      v.object({
+        pageViews: v.number(),
+        vehicleDetailViews: v.number(),
+        requestsMatched: v.number(),
+        responsesSent: v.number(),
+        avgResponseMinutes: v.union(v.number(), v.null()),
+        mostViewedVehicle: v.union(
+          v.null(),
+          v.object({ make: v.string(), model: v.string(), year: v.number(), views: v.number() })
+        ),
+        requestsLost: v.number(),
+        lowerBound: v.optional(v.array(v.string())),
+        unavailable: v.optional(v.array(v.string())),
+      })
+    ),
+    firstAttemptAt: v.optional(v.number()),
+    attempts: v.number(),
+    // Per attempt: reset to "ambiguous" by `beginWeeklySend` before the provider call.
+    errorClass: v.optional(v.union(v.literal("rejected"), v.literal("ambiguous"))),
+    errorName: v.optional(v.string()),
+    // Monotonic: set once an earlier attempt may have been accepted; never cleared.
+    anyAttemptAmbiguous: v.boolean(),
+    providerEmailId: v.optional(v.string()),
+    // The Workpool id of this row's freeze job. Freeze jobs are enqueued as one
+    // batch per roster page, which shares a single onComplete context, so a
+    // failed/canceled freeze finds its row by this id.
+    freezeWorkId: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_run_org", ["runId", "orgId"])
+    .index("by_run_state", ["runId", "state"])
+    .index("by_freezeWorkId", ["freezeWorkId"]),
 
   // Phase 62 — buyer-submitted trade-in request, directed at a single dealer
   // (whichever listing the buyer was viewing), not fanned out like

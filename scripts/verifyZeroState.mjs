@@ -38,7 +38,6 @@ import {
   OPERATIONAL_DIAGNOSTIC_TABLES,
   classifyMarkerRead,
   classifyTableRead,
-  componentNames,
   decideZeroState,
   diagnosticRowBound,
   parseFunctionSpec,
@@ -47,6 +46,7 @@ import {
   schemaTableNames,
   validateDiagnosticRows,
 } from "./zeroState.ts";
+import { componentPaths } from "./zeroStateComponents.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -156,7 +156,13 @@ const listRaw = convex(["data"]);
 const listing = parseTableList(listRaw.stdout, listRaw.stderr, listRaw.status);
 if (!listing.ok) fail(`The table listing could not be read: ${listing.reason}`);
 const schemaTables = schemaTableNames(readFileSync(path.join(ROOT, "convex", "schema.ts"), "utf8"));
-const mounted = componentNames(readFileSync(path.join(ROOT, "convex", "convex.config.ts"), "utf8"));
+let mounted;
+try {
+  // Nested components included: a mount's own listing never names its children.
+  mounted = componentPaths(path.join(ROOT, "convex", "convex.config.ts"));
+} catch (error) {
+  fail(`The component inventory could not be established: ${error instanceof Error ? error.message : String(error)}`);
+}
 
 const components = [];
 const reads = [];
