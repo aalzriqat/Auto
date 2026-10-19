@@ -44,6 +44,20 @@ vi.mock("./utils/depositOtherContainment", async (importOriginal) => {
   };
 });
 
+// SCRUM-801: records every runWithIdempotency call, which is the first write
+// (the idempotency claim) of each completion door. Passthrough otherwise.
+const idempotency = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("./utils/idempotency", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/idempotency")>();
+  return {
+    ...actual,
+    runWithIdempotency: ((...args: Parameters<typeof actual.runWithIdempotency>) => {
+      idempotency.calls += 1;
+      return actual.runWithIdempotency(...args);
+    }) as typeof actual.runWithIdempotency,
+  };
+});
+
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 const PERMS = [
@@ -1134,6 +1148,103 @@ describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on
     expect(await snapshotAllTables(s.t)).toEqual(before);
   });
 
+  // convex-test rolls a throwing mutation back, so a snapshot alone cannot see a write that happened
+  // BEFORE the refusal. These cells record the writes themselves: the refusal must precede the first one.
+  describe("the refusal precedes the first write on every door", () => {
+    const WRITES = new Set(["insert", "patch", "replace", "delete"]);
+
+    test.each([
+      ["sales.create", "p801wCreate"],
+      ["sales.completeFromQuote", "p801wQuote"],
+      ["sales.completeDraft", "p801wDraft"],
+    ] as const)("%s refuses before its idempotency claim is written", async (door, tag) => {
+      const s = await seed(tag);
+      const depositResolution = { treatment: "OTHER" as const, reason: "Transferred to a replacement deal" };
+      let attempt: () => Promise<unknown>;
+      if (door === "sales.create") {
+        attempt = () => completeWith(s, "THROUGH_DEALERSHIP", depositResolution);
+      } else if (door === "sales.completeFromQuote") {
+        attempt = () =>
+          s.asUser.mutation(api.sales.completeFromQuote, {
+            idempotencyKey: crypto.randomUUID(), orgId: s.orgId, quoteId: s.quoteId,
+            supplierSettlementRoute: "THROUGH_DEALERSHIP", depositResolution,
+          });
+      } else {
+        const saleId = await s.asUser.mutation(api.sales.createDraft, {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId,
+          salePrice: SALE_PRICE, saleDate: Date.now(), supplierSettlementRoute: "THROUGH_DEALERSHIP",
+        });
+        await s.t.run((ctx) => ctx.db.patch(saleId, { quoteId: s.quoteId }));
+        attempt = () =>
+          s.asUser.mutation(api.sales.completeDraft, {
+            orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID(), depositResolution,
+          });
+      }
+      const before = await snapshotAllTables(s.t);
+      const claimsBefore = idempotency.calls;
+      await expect(attempt()).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+      expect(idempotency.calls).toBe(claimsBefore);
+      expect(await snapshotAllTables(s.t)).toEqual(before);
+    });
+
+    // The shared completion entry points, called directly: a recording db shows no write ran before the refusal.
+    const recordingCtx = (ctx: { db: object }, writes: string[]) =>
+      new Proxy(ctx, {
+        get(target, prop, receiver) {
+          if (prop !== "db") return Reflect.get(target, prop, receiver);
+          return new Proxy(target.db, {
+            get(db, method) {
+              const value = Reflect.get(db, method) as unknown;
+              if (typeof method === "string" && WRITES.has(method)) {
+                return (...args: unknown[]) => {
+                  writes.push(method);
+                  return (value as (...a: unknown[]) => unknown).apply(db, args);
+                };
+              }
+              return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(db) : value;
+            },
+          });
+        },
+      }) as never;
+
+    test("completeSale refuses OTHER before any db write", async () => {
+      const s = await seed("p801wUtilSale");
+      const { completeSale } = await import("./utils/saleCompletion");
+      const writes: string[] = [];
+      await expect(
+        s.t.run((ctx) =>
+          completeSale(recordingCtx(ctx, writes), {
+            orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId,
+            salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED", quoteId: s.quoteId,
+            supplierSettlementRoute: "THROUGH_DEALERSHIP", actorId: s.userId,
+            depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
+          })
+        )
+      ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+      expect(writes).toEqual([]);
+    });
+
+    test("completeExistingSale refuses OTHER before any db write", async () => {
+      const s = await seed("p801wUtilDraft");
+      const saleId = await s.asUser.mutation(api.sales.createDraft, {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId,
+        salePrice: SALE_PRICE, saleDate: Date.now(), supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      });
+      await s.t.run((ctx) => ctx.db.patch(saleId, { quoteId: s.quoteId }));
+      const { completeExistingSale } = await import("./utils/saleCompletion");
+      const writes: string[] = [];
+      await expect(
+        s.t.run((ctx) =>
+          completeExistingSale(recordingCtx(ctx, writes), {
+            orgId: s.orgId, saleId, actorId: s.userId,
+            depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
+          })
+        )
+      ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+      expect(writes).toEqual([]);
+    });
+  });
+
   test("the pilot refusal comes ahead of the missing-reason refusal", async () => {
     const s = await seed("p801noReason");
     await expect(
@@ -1160,13 +1271,17 @@ describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on
     expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(DEPOSIT * SCALE);
   });
 
-  test("a deal with no deposit that states OTHER still completes, because nothing is resolved", async () => {
+  test("a deal with no deposit that states OTHER is refused too: the refusal sits ahead of every read, so it does not depend on a deposit existing", async () => {
+    // Behaviour change from the first SCRUM-801 cut, which only refused once a deposit was resolved
+    // (and so completed this deal). The refusal now precedes the first write on every door, so it
+    // cannot wait to learn whether a deposit exists. finalizeDeal already refused the same way.
     const s = await seed("p801noDeposit", { instalments: [] });
+    const before = await snapshotAllTables(s.t);
     await expect(
       completeWith(s, "THROUGH_DEALERSHIP", { treatment: "OTHER", reason: "Nothing held" })
-    ).resolves.toBeDefined();
-    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
-    expect(sales).toHaveLength(1);
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(await snapshotAllTables(s.t)).toEqual(before);
+    expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(0);
   });
 
   test("an unapplied deposit's message no longer offers the other treatment", async () => {

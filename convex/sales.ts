@@ -44,6 +44,7 @@ import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment"
 import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
+import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED, refuseDepositOtherTreatment } from "./utils/depositOtherContainment";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertCustomerCreditPayoutAllowed } from "./utils/customerCreditPayoutContainment";
@@ -667,6 +668,12 @@ export const create = mutation({
     // here, before any write.
     assertOperatedDealMode(args.financingType);
 
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
+    // Ahead of the idempotency claim, so the refusal precedes the first write.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
+
     return await runWithIdempotency(
       ctx,
       {
@@ -747,6 +754,12 @@ export const completeFromQuote = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
+    // Refused after auth and ahead of the rate limiter and the idempotency claim, so it precedes the first write.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
 
     const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
@@ -885,6 +898,12 @@ export const completeDraft = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
+    // Refused after auth and ahead of the rate limiter and the idempotency claim, so it precedes the first write.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
 
     const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {

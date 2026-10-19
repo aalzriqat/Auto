@@ -2221,6 +2221,11 @@ export async function completeSale(
   // Amounts and the canonical commitment check both run inside this call,
   // before the insert, so a refusal leaves no sale row, no vehicle status
   // change, no receivable and no queued accounting event behind.
+  // SCRUM-801: OTHER is refused before the first read of the completion, so no door can write ahead of it.
+  // The shared choke point in resolveReservationDeposits still backs this up.
+  if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+    refuseDepositOtherTreatment();
+  }
   const prepared = await prepareSaleCompletion(ctx, args, "COMPLETION", door);
   const saleId = await insertSaleRecord(ctx, args, prepared, "COMPLETED", prepared.commissionAmount);
   await applySaleCompletionSideEffects(ctx, args, prepared, saleId);
@@ -2313,6 +2318,11 @@ export async function completeExistingSale(
     idempotencyKey?: string;
   }
 ): Promise<Id<"sales">> {
+  // SCRUM-801: OTHER is refused before the first read of the completion, so no door can write ahead of it.
+  // The shared choke point in resolveReservationDeposits still backs this up.
+  if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+    refuseDepositOtherTreatment();
+  }
   const sale = await ctx.db.get(args.saleId);
   if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
     throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");

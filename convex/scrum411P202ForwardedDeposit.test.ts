@@ -679,7 +679,7 @@ describe("P2-02 - a contribution-only payment (H = 0) carries no deposit", () =>
   });
 });
 
-describe("SCRUM-801 - OTHER and the forwarded deposit, with the pilot switch off and for a caller who may not finalize", () => {
+describe("SCRUM-801 - OTHER and the forwarded deposit: the older guards with the switch off, and authority ahead of the pilot refusal", () => {
   const finalizeOther = (s: Seeded, as: Seeded["owner"]["as"], applicationId: AppId) =>
     as.mutation(api.applications.finalizeDeal, {
       orgId: s.orgId, applicationId, depositResolution: { treatment: "OTHER", reason: "Approved by the owner." },
@@ -709,8 +709,10 @@ describe("SCRUM-801 - OTHER and the forwarded deposit, with the pilot switch off
     }
   });
 
-  test("a caller without the finalize authority who states OTHER gets FORBIDDEN, not the pilot code, and nothing is written", async () => {
-    const s = await seedFinancedDealership("s801c", {
+  test.each([true, false])("a caller without the finalize authority who states OTHER gets FORBIDDEN, not the pilot code, and nothing is written (switch on: %s)", async (switchOn) => {
+    pilot.otherDisabled = switchOn;
+    try {
+    const s = await seedFinancedDealership(`s801c${switchOn ? "on" : "off"}`, {
       modules: MODULES, ownerPerms: ALL_PERMS, label: "S411P", vinPrefix: "VIN411P", sourced: false,
       actors: { clerk: ["view:sales"] },
     });
@@ -723,5 +725,8 @@ describe("SCRUM-801 - OTHER and the forwarded deposit, with the pilot switch off
     const refusal = await refusalDataOf(finalizeOther(s, s.actors.clerk.as, applicationId));
     expect(refusal?.code).toBe("FORBIDDEN");
     expect(await snapshot()).toEqual(before);
+    } finally {
+      pilot.otherDisabled = true;
+    }
   });
 });
