@@ -359,6 +359,22 @@ describe("large realistic deal resolves under the platform limits (limits ENFORC
 // 2. The read that IS bounded by design, fed past the read ceiling.
 // ---------------------------------------------------------------------------
 describe("bounded read proof (limits ENFORCED)", () => {
+  test("sales-only overview skips vehicle expenses it cannot serve", async () => {
+    const s = await seedFinancedDeal();
+    await FINANCED_TABLES.expenses(s, FAT_ROWS, FAT);
+    const userId = await s.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "limits_sales", email: "sales@example.com", name: "Sales" })
+    );
+    const roleId = await s.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: s.orgId, name: "SALES", permissions: ["view:sales"] })
+    );
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
+    const asSales = s.t.withIdentity({ subject: "limits_sales", clerkId: "limits_sales" });
+    expect(await asSales.query(api.dealOverview.financedDealOverview, {
+      orgId: s.orgId, applicationId: s.applicationId,
+    })).toEqual({ financialSummary: null, vehicleCostBasis: null, dealerPreparation: null });
+  }, 240_000);
+
   test("financedDealOverview reads the vehicle's expenses with a cap: 4,500 x ~4 KB rows (~18 MiB) still resolve", async () => {
     const s = await seedFinancedDeal();
     await FINANCED_TABLES.expenses(s, FAT_ROWS, FAT);

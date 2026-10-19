@@ -6,6 +6,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  readlink,
   realpath,
   rm,
   stat,
@@ -142,12 +143,103 @@ function safeRelativePath(value) {
   return value;
 }
 
+const PNPM_PACKAGE_NAME_RE = /^[a-z0-9_~-][a-z0-9._~-]*$/i;
+const PNPM_SCOPE_NAME_RE = /^@[a-z0-9_~-][a-z0-9._~-]*$/i;
+
+/**
+ * Locate pnpm's hoist index (.pnpm/node_modules) and its virtual store (.pnpm)
+ * inside the standalone tree. Both must be real directories inside the
+ * candidate root, and the index must sit directly in the store; otherwise no
+ * dangling-link exception exists at all.
+ */
+async function resolvePnpmHoistIndex(standaloneRoot, candidateBoundary) {
+  const storePath = path.join(standaloneRoot, "node_modules", ".pnpm");
+  // lstat: a symlinked .pnpm is not a directory, so a forged store never qualifies.
+  if (!(await lstat(storePath).catch(() => null))?.isDirectory()) return null;
+  const store = await realpath(storePath).catch(() => null);
+  if (!store || !isInside(candidateBoundary, store)) return null;
+  const root = await realpath(path.join(store, "node_modules")).catch(() => null);
+  if (root !== path.join(store, "node_modules")) return null;
+  return { root, store };
+}
+
+/**
+ * SCRUM-824 (owner ruling c22957). Next's tracer can copy a pnpm hoist-index
+ * link without its target when the package was judged unneeded (PR #531:
+ * debug's optional supports-color). Such a link may be omitted only when it is
+ * a symlink, sits directly in the hoist index (or one @scope below it), has a
+ * relative target that stays inside the virtual store and outside the index,
+ * and that target genuinely does not exist. A realpath ENOENT alone is never
+ * enough; every other dangling, escaping, chained or looping link is refused.
+ */
+export async function isAllowedDanglingHoistLink(sourcePath, hoistIndex) {
+  if (!hoistIndex) return false;
+  const info = await lstat(sourcePath).catch(() => null);
+  if (!info?.isSymbolicLink()) return false;
+  if (!PNPM_PACKAGE_NAME_RE.test(path.basename(sourcePath))) return false;
+  const parentReal = await realpath(path.dirname(sourcePath)).catch(() => null);
+  if (!parentReal) return false;
+  const inIndex = parentReal === hoistIndex.root;
+  const inScope =
+    path.dirname(parentReal) === hoistIndex.root &&
+    PNPM_SCOPE_NAME_RE.test(path.basename(parentReal));
+  if (!inIndex && !inScope) return false;
+  const target = await readlink(sourcePath).catch(() => null);
+  if (typeof target !== "string" || !target || target.includes("\0") || path.isAbsolute(target)) {
+    return false;
+  }
+  // Only pnpm's canonical shape is accepted:
+  //   ../<store-dir>/node_modules/<name>                 (index leaf)
+  //   ../../<store-dir>/node_modules/@scope/<name>       (scoped leaf)
+  // No other "..", ".", or empty segment, and the name must match the link.
+  // path.resolve cancels "x/.." lexically while the kernel follows x first, so
+  // any further ".." could leave the store through a symlink and come back.
+  const segments = target.split("/");
+  const ups = inScope ? 2 : 1;
+  const linkName = inScope
+    ? [path.basename(parentReal), path.basename(sourcePath)]
+    : [path.basename(sourcePath)];
+  if (segments.length !== ups + 2 + linkName.length) return false;
+  if (segments.slice(0, ups).some((segment) => segment !== "..")) return false;
+  const storeDir = segments[ups];
+  if (!storeDir || storeDir === "." || storeDir === ".." || storeDir === "node_modules") {
+    return false;
+  }
+  if (segments[ups + 1] !== "node_modules") return false;
+  if (segments.slice(ups + 2).join("/") !== linkName.join("/")) return false;
+  const resolved = path.resolve(parentReal, target);
+  if (!isInside(hoistIndex.store, resolved) || isInside(hoistIndex.root, resolved)) {
+    return false;
+  }
+  const targetState = await lstat(resolved).then(
+    () => "present",
+    (error) => (error?.code === "ENOENT" ? "absent" : "unreadable"),
+  );
+  if (targetState !== "absent") return false;
+  // path.resolve is lexical, but the kernel follows symlinked components. The
+  // nearest existing ancestor of the target must be its own realpath, so no
+  // component between the store and the target can redirect it elsewhere.
+  let existing = path.dirname(resolved);
+  for (;;) {
+    if (!isInside(hoistIndex.store, existing)) return false;
+    const state = await lstat(existing).then(
+      () => "present",
+      (error) => (error?.code === "ENOENT" ? "absent" : "unreadable"),
+    );
+    if (state === "unreadable") return false;
+    if (state === "present") break;
+    existing = path.dirname(existing);
+  }
+  return (await realpath(existing).catch(() => null)) === existing;
+}
+
 async function materializeEntry({
   sourcePath,
   destinationPath,
   candidateBoundary,
   ancestry,
   budget,
+  hoistIndex = null,
   depth = 0,
 }) {
   if (depth > MAX_BROWSER_BUILD_DEPTH) {
@@ -157,7 +249,27 @@ async function materializeEntry({
   if (budget.entries > MAX_BROWSER_BUILD_ENTRIES) {
     throw new Error("Candidate build exceeds the maximum runtime entry count.");
   }
-  const sourceReal = await realpath(sourcePath);
+  let sourceReal;
+  try {
+    sourceReal = await realpath(sourcePath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    if (await isAllowedDanglingHoistLink(sourcePath, hoistIndex)) {
+      process.stderr.write(
+        "Omitted dangling pnpm hoist-index link: " +
+          path.relative(candidateBoundary, sourcePath) +
+          "\n",
+      );
+      return;
+    }
+    if ((await lstat(sourcePath).catch(() => null))?.isSymbolicLink()) {
+      throw new Error(
+        "Candidate build contains a dangling symlink that is not a pnpm hoist-index link; refusing artifact materialization: " +
+          path.relative(candidateBoundary, sourcePath),
+      );
+    }
+    throw error;
+  }
   if (!isInside(candidateBoundary, sourceReal)) {
     throw new Error(
       "Candidate build symlink or path escapes candidate root; refusing artifact materialization.",
@@ -182,6 +294,7 @@ async function materializeEntry({
         candidateBoundary,
         ancestry: nextAncestry,
         budget,
+        hoistIndex,
         depth: depth + 1,
       });
     }
@@ -231,6 +344,7 @@ async function hoistPnpmVirtualStore({
   runtimeRoot,
   candidateBoundary,
   budget,
+  hoistIndex,
 }) {
   const hoistRoot = path.join(standaloneRoot, "node_modules", ".pnpm", "node_modules");
   const names = await readdir(hoistRoot).catch(() => []);
@@ -243,6 +357,7 @@ async function hoistPnpmVirtualStore({
       candidateBoundary,
       ancestry: new Set(),
       budget,
+      hoistIndex,
     });
   };
   // Expand each scope directory in place so the copy order stays: sorted
@@ -504,6 +619,7 @@ export async function createBrowserSwarmBuildArtifact({
   const runtimeRoot = path.join(artifactRoot, "runtime");
   await mkdir(runtimeRoot, { recursive: true });
   const budget = { entries: 0, files: 0, bytes: 0 };
+  const hoistIndex = await resolvePnpmHoistIndex(standaloneRoot, candidateBoundary);
 
   await materializeEntry({
     sourcePath: standaloneRoot,
@@ -511,8 +627,15 @@ export async function createBrowserSwarmBuildArtifact({
     candidateBoundary,
     ancestry: new Set(),
     budget,
+    hoistIndex,
   });
-  await hoistPnpmVirtualStore({ standaloneRoot, runtimeRoot, candidateBoundary, budget });
+  await hoistPnpmVirtualStore({
+    standaloneRoot,
+    runtimeRoot,
+    candidateBoundary,
+    budget,
+    hoistIndex,
+  });
 
   await rm(path.join(runtimeRoot, ".next", "static"), {
     recursive: true,

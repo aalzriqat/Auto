@@ -1,5 +1,8 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
+import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
+import { forwardPostKey } from "./utils/financeCompanyForward";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -1133,9 +1136,11 @@ describe("applications hold release and deposit resolution", () => {
     ).rejects.toThrow(/disbursement has already been confirmed/i);
   });
 
-  // NOTE: this fixture has no chart of accounts and no accounting period, so
-  // nothing here can post to the ledger and no reversal can be asserted from
-  // it. The name used to promise otherwise. What it actually pins is that
+  // NOTE: the commission here is patched onto the sale AFTER it posted, so no
+  // accrual exists to back out and no commission reversal can be asserted from
+  // it (the fixture's books do exist since SCRUM-411 P2-01, which pays the
+  // finance company before finalizing). The name used to promise otherwise.
+  // What it actually pins is that
   // cancelling a finalized deal cancels the SALE — the reversal itself is
   // covered against real books in convex/commissionAccrualTiming.test.ts
   // ("voiding a sale backs the whole commission out of the ledger"), which
@@ -1266,12 +1271,40 @@ async function classifyFinancedDeal(
     orgId,
     feeId,
     notes: "Nothing to match.",
+    expectedActualAmountMinor: 0,
+    expectedActualEvidenceRevision: 0,
   });
   // SCRUM-407: no manual classification step — finalization checks readiness itself.
 }
+/**
+ * A chart of accounts and an open period for the current year. SCRUM-411 P2-01: a
+ * financed deal's deposit is paid to the finance company BEFORE it is finalized, and
+ * that payment counts only once it is on the books, so the books must exist first.
+ */
+async function openBooks(s: Awaited<ReturnType<typeof setup>>) {
+  const { t, orgId, asUser } = s;
+  const fiscalYear = new Date().getUTCFullYear();
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+  );
+  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  await asUser.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear,
+    periodNumber: 1,
+  });
+  const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+  await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+}
+
 async function setupFinalizedFinancedDeal() {
   const base = await setup();
   const { t, orgId, customerId, customerStatusId, vehicleId, asUser, asApprover } = base;
+  // Opened first so every posting of the deal (deposit receipt, sale, forward) lands
+  // on real books rather than queueing behind a missing chart.
+  await openBooks(base);
 
   const companyId = await t.run((ctx) =>
     ctx.db.insert("financeCompanies", {
@@ -1333,7 +1366,22 @@ async function setupFinalizedFinancedDeal() {
     expectedDate: Date.now(),
   });
   await classifyFinancedDeal({ orgId, applicationId, asUser }, 20000);
+  // SCRUM-411 P2-01: finalize refuses until the deposit (3,000,000) is on the books as
+  // paid to the finance company, so it is paid first...
+  const firstForwardId = await payForwardBeforeFinalize(base, asUser, applicationId);
   await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
+  // ...and then taken back, leaving the CLOSED deal with the forward due again. That is
+  // the state these tests were written against (the transfer is refused until the
+  // payment is recorded; a deal with a payment on the books cannot be cancelled).
+  if (firstForwardId !== null) {
+    await asUser.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+      orgId,
+      applicationId,
+      forwardId: firstForwardId,
+      reason: "Recorded in error.",
+      idempotencyKey: crypto.randomUUID(),
+    });
+  }
 
   const getFinanceReceivable = () =>
     t.run((ctx) =>
@@ -1355,42 +1403,30 @@ async function setupFinalizedFinancedDeal() {
     });
 
   // SCRUM-435: a v2 deal is paid out only after the dealership has recorded the
-  // deposit and contribution it owes the finance company back.
+  // deposit and contribution it owes the finance company back. The first payment
+  // (version 1) was taken back above, so this records its replacement (version 2).
   const recordForward = async () => {
     const due = await t.run(async (ctx) => (await ctx.db.get(applicationId))?.financeCompanyForwardDueMinor ?? 0);
     if (due > 0) {
-      // The forward posts to the ledger, so the books must exist. finalizeDeal
-      // queued its own posts before this point; only the forward is drained here.
-      const fiscalYear = new Date().getUTCFullYear();
-      await t.run((ctx) =>
-        ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
-      );
-      await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
-      await asUser.mutation(api.accountingPeriods.create, {
-        orgId,
-        startDate: Date.UTC(fiscalYear, 0, 1),
-        endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
-        fiscalYear,
-        periodNumber: 1,
-      });
-      const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
-      await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
       await asUser.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
         orgId,
         applicationId,
         method: "BANK_TRANSFER",
+        bankAccountId: await seedBank(t, orgId),
         paidAt: Date.now(),
         expectedAmountMinor: due,
         idempotencyKey: crypto.randomUUID(),
       });
-      // The chart and an open period exist, so the forward posts synchronously.
+      // The chart and an open period exist, so the replacement posts synchronously.
       // Assert it rather than force it: confirmDisbursement gates on this proof.
-      const forwardEvents = await t.run(async (ctx) =>
-        (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).filter(
-          (e) => e.eventType === "FINANCE_COMPANY_FORWARD_PAID"
-        )
+      // Read by the replacement's own key; version 1 is the REVERSED payment above.
+      const replacementEvents = await t.run(async (ctx) =>
+        ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", forwardPostKey(applicationId, 2)))
+          .collect()
       );
-      expect(forwardEvents.map((e) => e.status)).toEqual(["POSTED"]);
+      expect(replacementEvents.map((e) => e.status)).toEqual(["POSTED"]);
     }
     return due;
   };
@@ -1400,7 +1436,7 @@ async function setupFinalizedFinancedDeal() {
 
 describe("applications finance-company canonical receivable", () => {
   test("finalizeDeal opens a FINANCE_COMPANY receivable and confirmDisbursement settles it by allocation", async () => {
-    const { t, orgId, companyId, applicationId, asUser, getFinanceReceivable, getCustomerReceivable, recordForward } =
+    const { t, orgId, userId, companyId, applicationId, asUser, getFinanceReceivable, getCustomerReceivable, recordForward } =
       await setupFinalizedFinancedDeal();
 
     // Finalizing must open a canonical receivable owed BY the finance company.
@@ -1454,6 +1490,7 @@ describe("applications finance-company canonical receivable", () => {
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
+      bankAccountId: await receiptBankFor(t, orgId, userId),
     });
 
     const settledReceivable = await getFinanceReceivable();
@@ -1907,9 +1944,22 @@ async function setupFinalizedFinancedDealWithCheque() {
   return { ...base, companyId, quoteId, applicationId, getCheque };
 }
 
+/**
+ * SCRUM-54: the physical bank a BANK_TRANSFER / CHEQUE finance-company receipt
+ * names. Passed explicitly at each `confirmDisbursement` that gets past the
+ * checks ahead of the bank (amount, forward), never injected by a wrapper.
+ */
+async function receiptBankFor(
+  t: Parameters<typeof insertReceiptBank>[0]["t"],
+  orgId: Id<"organizations">,
+  userId: Id<"users">
+) {
+  return await insertReceiptBank({ t, orgId, owner: { userId } });
+}
+
 describe("applications.confirmDisbursement cheque linking", () => {
   test("confirmDisbursement transitions the linked postDatedCheques row to CLEARED", async () => {
-    const { orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const { t, orgId, userId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
 
     const chequeBefore = await getCheque();
     expect(chequeBefore?.status).toBe("HELD");
@@ -1918,6 +1968,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
+      bankAccountId: await receiptBankFor(t, orgId, userId),
     });
 
     const chequeAfter = await getCheque();
@@ -1926,7 +1977,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
   });
 
   test("confirmDisbursement throws if the linked cheque was already returned", async () => {
-    const { orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const { t, orgId, userId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
     const cheque = await getCheque();
 
     await asUser.mutation(api.collections.returnCheque, {
@@ -1940,6 +1991,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
         orgId,
         applicationId,
         disbursedAmountMinor: 20_000_000,
+        bankAccountId: await receiptBankFor(t, orgId, userId),
       })
     ).rejects.toThrow(/returned or cancelled\. Correct the expected payment, then register the new payment/i);
   });
@@ -1954,7 +2006,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
   });
 
   test("confirmDisbursement resolves the replacement cheque after the original was replaced", async () => {
-    const { orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const { t, orgId, userId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
     const originalCheque = await getCheque();
 
     const newChequeId = await asUser.mutation(api.collections.replaceCheque, {
@@ -1970,6 +2022,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
+      bankAccountId: await receiptBankFor(t, orgId, userId),
     });
 
     const chequeAfter = await getCheque();
@@ -1978,7 +2031,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
   });
 
   test("confirmDisbursement treats a soft-deleted linked cheque as not found", async () => {
-    const { t, orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const { t, orgId, userId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
     const cheque = await getCheque();
 
     await t.run((ctx) => ctx.db.patch(cheque!._id, { isDeleted: true }));
@@ -1988,6 +2041,7 @@ describe("applications.confirmDisbursement cheque linking", () => {
         orgId,
         applicationId,
         disbursedAmountMinor: 20_000_000,
+        bankAccountId: await receiptBankFor(t, orgId, userId),
       })
     ).rejects.toThrow(/cheque record not found/i);
   });
@@ -2060,12 +2114,15 @@ async function setupApprovedDealWithCheque(opts: { face?: string; chequeNumber?:
       applicationId,
     });
   };
-  const confirm = () =>
+  // One receiving bank per deal, made on first use: repeated (and refused) confirms name the same one.
+  let receiptBankId: Id<"bankAccounts"> | undefined;
+  const confirm = async () =>
     asUser.mutation(api.applications.confirmDisbursement, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
+      bankAccountId: (receiptBankId ??= await receiptBankFor(base.t, orgId, base.userId)),
     });
   return { ...base, companyId, applicationId, registerCheque, rows, finalize, confirm };
 }
@@ -2522,6 +2579,7 @@ describe("SCRUM-447 D3 correcting the expected payment", () => {
         orgId: s.orgId,
         applicationId: s.applicationId,
         disbursedAmountMinor: 20_000_000,
+        bankAccountId: await receiptBankFor(s.t, s.orgId, s.userId),
       });
       const app = await s.t.run((ctx) => ctx.db.get(s.applicationId));
       expect(app?.disbursedAt).toBeGreaterThan(0);
@@ -2653,7 +2711,13 @@ describe("SCRUM-447 D3 correcting the expected payment", () => {
     const s = await setupApprovedDealWithCheque({ face: "20000" });
     await s.finalize();
     const key = crypto.randomUUID();
-    const args = { idempotencyKey: key, orgId: s.orgId, applicationId: s.applicationId, disbursedAmountMinor: 20_000_000 };
+    const args = {
+      idempotencyKey: key,
+      orgId: s.orgId,
+      applicationId: s.applicationId,
+      disbursedAmountMinor: 20_000_000,
+      bankAccountId: await receiptBankFor(s.t, s.orgId, s.userId),
+    };
     const first = await s.asUser.mutation(api.applications.confirmDisbursement, args);
     const second = await s.asUser.mutation(api.applications.confirmDisbursement, args);
     expect(second).toEqual(first);

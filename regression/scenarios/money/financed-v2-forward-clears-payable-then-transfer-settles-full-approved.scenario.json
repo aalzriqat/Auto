@@ -6,6 +6,16 @@
         "role": "accountant",
         "org": "A"
       },
+      "action": "financeCompanyForward.recordFinanceCompanyForward",
+      "input": {
+        "expectedAmountMinor": 1575000
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
       "action": "applications.finalizeDeal",
       "input": {
         "approvedMinor": 12500000,
@@ -18,19 +28,10 @@
         "role": "accountant",
         "org": "A"
       },
-      "action": "financeCompanyForward.recordFinanceCompanyForward",
-      "input": {
-        "expectedAmountMinor": 1575000
-      }
-    },
-    {
-      "actor": {
-        "role": "accountant",
-        "org": "A"
-      },
       "action": "applications.confirmDisbursement",
       "input": {
-        "disbursedAmountMinor": 12500000
+        "disbursedAmountMinor": 12500000,
+        "bankAccountId": "same-org-active-JOD-receiving-bank"
       }
     }
   ],
@@ -60,10 +61,10 @@
   ],
   "impl": {
     "file": "convex/financeCompanyForward.test.ts",
-    "testName": "recording the forward clears AP-Finance to zero; the transfer then settles the FULL G"
+    "testName": "paying the forward before the sale, then the sale, clears AP-Finance to zero; the transfer then settles the FULL G"
   },
   "matrixRow": "pilot-financed-v2-forward-transfer",
-  "fingerprint": "419a6ae22f41321404ef0d8d3272e12aa03f96ddeca068b77ca2135bec90032d",
+  "fingerprint": "2e204c875c69e8056b66abe2ecbcdefdd32efe9023c4086267a44beb382dcd5c",
   "domain": "money",
   "level": "backend",
   "status": "active",

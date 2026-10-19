@@ -3,7 +3,7 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
@@ -11,6 +11,7 @@ import { fromMinorUnits, toMinorUnits } from "./utils/money";
 import { hookSupplierReceivableCollected } from "./accounting/workflowHooks";
 import { auditLog } from "./financialAudit";
 import { postingStateForKey } from "./accounting/supplierCostRecoveryPosting";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 
 /**
  * Collecting the dealership's agency margin from a supplier who was paid
@@ -103,20 +104,6 @@ function receiptSeqFor(row: Doc<"vehicleSupplierReceivables">): number {
   return row.receiptSeq ?? 0;
 }
 
-/**
- * Loads a claim and proves it belongs to the named org.
- *
- * Written out at each call site rather than hidden behind this helper, because
- * `scripts/tenantWriteGuard` reads the handler source and cannot see through a
- * function call — a guard it cannot see is a guard that stops being enforced
- * the moment somebody edits the helper. Kept here only for the error text.
- */
-function receivableNotFound(): never {
-  // Fails closed and identically for a missing and a foreign row, so the
-  // response cannot be used to probe another org's records.
-  throw new ConvexError("Supplier receivable not found.");
-}
-
 export const list = query({
   args: {
     orgId: v.id("organizations"),
@@ -156,6 +143,16 @@ export const list = query({
         };
       })
     );
+  },
+});
+
+/** Bank choices for collecting this claim, scoped to the claim's own currency. */
+export const listReceiptBankOptions = query({
+  args: { orgId: v.id("organizations"), receivableId: v.id("vehicleSupplierReceivables") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const claim = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierReceivables", args.receivableId, "Supplier receivable not found.");
+    return await listEligibleBanks(ctx, args.orgId, claim.currency);
   },
 });
 
@@ -269,6 +266,7 @@ export const recordReceipt = mutation({
     receivableId: v.id("vehicleSupplierReceivables"),
     amount: v.number(),
     receiptMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** Cheque number or transfer reference. */
     receiptReference: v.optional(v.string()),
     /** The bank or cash account the money arrived in. */
@@ -299,6 +297,7 @@ export const recordReceipt = mutation({
           receivableId: args.receivableId,
           amount: args.amount,
           receiptMethod,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           receiptReference: args.receiptReference ?? null,
           receiptAccountId: args.receiptAccountId ?? null,
           receiptNotes: args.receiptNotes ?? null,
@@ -306,8 +305,18 @@ export const recordReceipt = mutation({
         }),
       },
       async () => {
-        const row = await ctx.db.get(args.receivableId);
-        if (!row || row.orgId !== args.orgId) receivableNotFound();
+        const row = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierReceivables", args.receivableId, "Supplier receivable not found.");
+
+        const bankMethod = receiptMethod === "BANK_TRANSFER" || receiptMethod === "CARD";
+        if (bankMethod) {
+          await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId, bankAccountId: args.bankAccountId, currency: row.currency,
+            missingMessage: "Choose the physical bank account that received this supplier payment. Nothing has been recorded.",
+            currencySubject: "supplier collection",
+          });
+        } else if (args.bankAccountId) {
+          throw new ConvexError("This supplier collection does not post to a bank account; remove the bank selection.");
+        }
 
         if (!Number.isFinite(args.amount) || args.amount <= 0) {
           throw new ConvexError("A receipt must be greater than zero.");
@@ -378,6 +387,7 @@ export const recordReceipt = mutation({
           status: settlesInFull ? "PAID" : "PARTIALLY_PAID",
           ...(settlesInFull ? { settledAt: now, settledBy: user._id } : {}),
           receiptMethod,
+          receiptBankAccountId: args.bankAccountId,
           receiptReference: args.receiptReference,
           receiptAccountId: args.receiptAccountId,
           receiptNotes: args.receiptNotes,
@@ -393,6 +403,7 @@ export const recordReceipt = mutation({
           amountMinor: toMinorUnits(args.amount, row.currency),
           currency: row.currency,
           paymentMethod: receiptMethod,
+          bankAccountId: args.bankAccountId,
           receiptSeq,
           actorId: user._id,
           occurredAt: now,
@@ -436,8 +447,7 @@ export const setDisputed = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const row = await ctx.db.get(args.receivableId);
-    if (!row || row.orgId !== args.orgId) receivableNotFound();
+    const row = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierReceivables", args.receivableId, "Supplier receivable not found.");
 
     if (row.status === "CANCELLED") {
       throw new ConvexError("This claim was cancelled with its sale.");

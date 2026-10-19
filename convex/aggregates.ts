@@ -1,12 +1,15 @@
 import { TableAggregate } from "@convex-dev/aggregate";
 import { customMutation } from "convex-helpers/server/customFunctions";
 import { Triggers } from "convex-helpers/server/triggers";
+import { maintainExpenseSummary } from "./utils/dashboardExpenseSummary";
 import type { GenericDatabaseWriter } from "convex/server";
 import { components } from "./_generated/api";
 import { DataModel, Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { validateVinChecksum } from "../lib/vinHelpers";
 import { SOCIAL_CONVERSATION_GENERATION } from "./utils/materialization";
+import { registerBankBalanceTriggers } from "./accounting/bankAggregateTriggers";
+import { synchronizeJournalLineEligibility, invalidateJournalParentEligibility } from "./utils/journalReportEligibility";
 
 /**
  * Maintained counts for vehicles, so the dashboard can answer "how many" and
@@ -410,6 +413,8 @@ export const aggregateTriggers = new Triggers<DataModel>();
 function registerCountingTriggers<Ctx extends MutationCtx>(
   triggers: Triggers<DataModel, Ctx>
 ): void {
+  triggers.register("journalLines", synchronizeJournalLineEligibility);
+  triggers.register("journalEntries", invalidateJournalParentEligibility);
   triggers.register("vehicles", vehiclesByOrg.idempotentTrigger());
   triggers.register("vehicles", vehicleQualityByOrg.idempotentTrigger());
   triggers.register("customers", customersByOrg.idempotentTrigger());
@@ -418,6 +423,9 @@ function registerCountingTriggers<Ctx extends MutationCtx>(
   triggers.register("instagramEvents", instagramEventsByOrg.idempotentTrigger());
   triggers.register("facebookEvents", facebookEventsByOrg.idempotentTrigger());
   triggers.register("socialContacts", socialContactsByOrg.idempotentTrigger());
+  registerBankBalanceTriggers(triggers);
+  // SCRUM-807: dashboard expense month summary. Never throws on bad data.
+  triggers.register("expenses", maintainExpenseSummary);
 
   // Insert-only and a single indexed point lookup, so it is cheap enough to
   // keep running inside a bulk loop.

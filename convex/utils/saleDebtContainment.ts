@@ -1,6 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { AppErrorCode, throwAppError } from "./errors";
+import { PAYMENT_LINKS_PILOT_DISABLED } from "../../lib/pilotCapabilities";
 
 /**
  * SCRUM-571 slice 1 (D-18 / D-20): competing-debt containment.
@@ -19,7 +20,7 @@ import { AppErrorCode, throwAppError } from "./errors";
  * staff `markSettled` and the webhook capture path all read this one constant;
  * flipping it to `false` is a code change reviewed on its own, never an env var.
  */
-export const PAYMENT_LINKS_PILOT_DISABLED = true as const;
+export { PAYMENT_LINKS_PILOT_DISABLED };
 
 /**
  * SCRUM-802 (owner ruling 2026-10-08, «إجراء + منع»): until the invoice receipt

@@ -86,10 +86,11 @@ export function shouldStackHomeColumns(containerWidth: number): boolean {
   return !(Number.isFinite(containerWidth) && containerWidth >= HOME_TWO_COLUMN_MIN_WIDTH);
 }
 
+/** `null` = unavailable (a source window exceeded its read cap); never zero. */
 export type HomeOverviewKpis = Readonly<{
-  sales: number;
-  expenses: number;
-  netProfit: number;
+  sales: number | null;
+  expenses: number | null;
+  netProfit: number | null;
 }>;
 
 /**
@@ -105,18 +106,24 @@ export type HomeOverviewKpis = Readonly<{
  */
 export function deriveOverviewKpis(stats: MobileDashboardStats | undefined): HomeOverviewKpis {
   const trend = stats?.salesTrend ?? [];
-  let expenses = 0;
-  let netProfit = 0;
+  let expenses: number | null = 0;
+  let netProfit: number | null = 0;
 
   for (const point of trend) {
-    expenses += safeNumber(point?.Expenses);
-    netProfit += safeNumber(point?.Profit);
+    // One unavailable bucket makes the whole sum unavailable: a total of the
+    // remaining buckets would be a confident number for a window it is not.
+    expenses = point?.Expenses === null || expenses === null ? null : expenses + safeNumber(point?.Expenses);
+    netProfit = point?.Profit === null || netProfit === null ? null : netProfit + safeNumber(point?.Profit);
   }
 
   return {
-    sales: safeNumber(stats?.salesVolumeThisMonth),
-    expenses,
-    netProfit,
+    sales: stats?.salesVolumeThisMonth === null ? null : safeNumber(stats?.salesVolumeThisMonth),
+    // The server flags an unavailable window even when no bucket carries it
+    // (an empty trend), so the flag is authoritative too.
+    expenses: stats?.truncated?.expenses ? null : expenses,
+    // Profit needs both sources: sales unavailable makes it unavailable too,
+    // even if no trend bucket exists to carry the null.
+    netProfit: stats?.truncated?.expenses || stats?.salesVolumeThisMonth === null ? null : netProfit,
   };
 }
 
@@ -167,13 +174,13 @@ export function readPreviousPeriod(
  * month with no sales has been told something false.
  */
 export function deriveKpiDelta(
-  current: number,
+  current: number | null,
   previous: number | null | undefined,
 ): HomeKpiDelta | null {
   if (typeof previous !== "number" || !Number.isFinite(previous) || previous === 0) {
     return null;
   }
-  if (!Number.isFinite(current)) {
+  if (current === null || !Number.isFinite(current)) {
     return null;
   }
 

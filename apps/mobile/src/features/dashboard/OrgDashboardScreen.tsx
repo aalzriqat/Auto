@@ -197,7 +197,11 @@ function HomeOverviewDetails({ stats }: Readonly<{ stats: MobileDashboardStats }
   const type = useDashboardTypography();
   const [chartWidth, setChartWidth] = useState(0);
   const trend = stats.salesTrend ?? [];
-  const trendPoints = trend.length > 0 ? trend.slice(-8) : [];
+  // A null revenue means the sale window exceeded its read cap: no chart and
+  // no sold count rather than a flat zero line or a count of a prefix.
+  const revenueUnavailable =
+    stats.salesVolumeThisMonth === null || trend.some((point) => point.Revenue === null);
+  const trendPoints = trend.length > 0 && !revenueUnavailable ? trend.slice(-8) : [];
 
   return (
     <Card style={[styles.panel, { direction: textDirection }]}>
@@ -210,16 +214,18 @@ function HomeOverviewDetails({ stats }: Readonly<{ stats: MobileDashboardStats }
           <SmoothAreaChart
             color={theme.colors.primary}
             height={104}
-            values={trendPoints.map((point) => point.Revenue)}
+            values={trendPoints.map((point) => point.Revenue ?? 0)}
             width={chartWidth}
           />
         ) : (
           <View style={styles.trendPlaceholder} />
         )}
         <Text style={[styles.trendCaption, type.caption]}>
-          {trendPoints.at(-1)?.name
-            ? `${t("revenue")} · ${trendPoints.at(-1)?.name}`
-            : t("revenue")}
+          {revenueUnavailable
+            ? `${t("revenue")} · ${t("dashboardFigureUnavailable")}`
+            : trendPoints.at(-1)?.name
+              ? `${t("revenue")} · ${trendPoints.at(-1)?.name}`
+              : t("revenue")}
         </Text>
       </View>
       <View style={styles.detailGrid}>
@@ -240,7 +246,11 @@ function HomeOverviewDetails({ stats }: Readonly<{ stats: MobileDashboardStats }
         />
         <HomeDetailStat
           label={t("vehiclesSold")}
-          value={compactNumber(stats.salesThisMonth, locale)}
+          value={
+            stats.salesThisMonth === null
+              ? t("dashboardFigureUnavailable")
+              : compactNumber(stats.salesThisMonth, locale)
+          }
         />
       </View>
     </Card>

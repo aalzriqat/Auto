@@ -256,6 +256,22 @@ describe("the release scripts run under the interpreter that will run them", () 
  * are the proofs.
  */
 describe("guarantees that live outside the reach of a normal unit test", () => {
+  test("a stale or malformed release dispatch cannot publish the gate's exact check name", () => {
+    const workflow = readRepoFile(".github/workflows/trusted-accounting-rehearsal.yml");
+    const preflight = workflow.slice(workflow.indexOf("\n  dispatch_preflight:"), workflow.indexOf("\n  rehearsal:"));
+    const verdictJob = workflow.slice(workflow.indexOf("\n  release_verdict:"));
+    const name = verdictJob.match(/^    name: (.+)$/m)?.[1] ?? "";
+    expect(name).toMatch(/github\.event_name == 'repository_dispatch'/);
+    expect(name).toMatch(/needs\.dispatch_preflight\.outputs\.exact_sha == 'true'/);
+    expect(name).toContain("trusted-accounting-release-verdict");
+    expect(name).toContain("trusted-accounting-release-not-dispatched");
+    expect(preflight).toMatch(/permissions: \{\}/);
+    expect(preflight).toMatch(/\$RELEASE_INPUT_SHA" =~ \^\[0-9a-f\]\{40\}\$/);
+    expect(preflight).toMatch(/"\$RELEASE_INPUT_SHA" = "\$EVENT_SHA"/);
+    expect(preflight).toContain("exact_sha=true");
+    expect(preflight).toContain("exact_sha=false");
+    expect(verdictJob).toMatch(/needs: \[dispatch_preflight, rehearsal\]/);
+  });
   test("the rollout script has NO path from CLI output to a public message", () => {
     // ⚠️ REGRESSION. `convex()` used to interpolate `result.stderr` into the
     // reason that `fail()` writes to the job log and the run summary — both
@@ -271,6 +287,41 @@ describe("guarantees that live outside the reach of a normal unit test", () => {
     expect(source.match(/result\.stdout/g) ?? []).toHaveLength(1);
     expect(source).toMatch(/parseConvexRunJson\(result\.stdout \?\? ""\)/);
     expect(source).toMatch(/describeConvexFailure\(args\[0\], result\.status\)/);
+  });
+
+  test("the rollout script exits non-zero on a bank rebuild stop or refusal, before it can report success", () => {
+    // ⚠️ The decision text is unit-tested in releaseGuard.test.ts, but nothing
+    // runs this script, so deleting a `fail(...)` call would leave every other
+    // test green and a run that stopped or refused would end as a success.
+    // Pin the wiring and its order: rebuild -> stop exit -> verification ->
+    // refusal exit -> success exit.
+    // Comments are stripped first and each anchor must be a whole line, so a
+    // commented-out call or a string that merely contains it cannot satisfy the pin.
+    const source = readRepoFile("scripts/rolloutRelease.mjs")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    const at = (line: RegExp) => {
+      const match = line.exec(source);
+      expect(match, `missing from rolloutRelease.mjs: ${line}`).not.toBeNull();
+      return match!.index;
+    };
+
+    const rebuild = at(/^const bank = rebuildBankBalances\(\{$/m);
+    const stopExit = at(/^if \(bankStop\) fail\(bankStop\);$/m);
+    const verification = at(/^const startedAt = rolloutStartedAt;$/m);
+    const refusalExit = at(/^ {2}fail\(bankRefusal\);$/m);
+    const successExit = at(/^if \(lastOutcome === "verified"\) \{$/m);
+
+    expect(rebuild).toBeLessThan(stopExit);
+    expect(stopExit).toBeLessThan(verification);
+    expect(verification).toBeLessThan(refusalExit);
+    expect(refusalExit).toBeLessThan(successExit);
+    expect(source).toMatch(/^const bankRefusal = lastOutcome === "verified" \? bankRefusalMessage\(bank\) : null;$/m);
+    expect(source).toMatch(/^if \(bankRefusal\) \{\s*lastOutcome = "failed";\s*fail\(bankRefusal\);\s*\}$/m);
+    // `fail` must end the process, or none of the above stops anything.
+    const failBody = /^function fail\([^)]*\) \{\n([\s\S]*?)^\}$/m.exec(source);
+    expect(failBody, "fail() not found in rolloutRelease.mjs").not.toBeNull();
+    expect(failBody![1]).toMatch(/^ {2}process\.exit\(1\);$/m);
   });
 
   test("the deploy workflow re-verifies AFTER approval and before the deploy", () => {
@@ -331,6 +382,9 @@ describe("guarantees that live outside the reach of a normal unit test", () => {
     const deployJob = workflow.slice(workflow.indexOf("\n  deploy:"));
     expect(deployJob).toMatch(/checks: read/);
     expect(deployJob).toMatch(/statuses: read/);
+    const authorizeJob = workflow.slice(workflow.indexOf("\n  authorize:"), workflow.indexOf("\n  deploy:"));
+    expect(authorizeJob).toMatch(/actions: read/);
+    expect(deployJob).toMatch(/actions: read/);
   });
 
   test("the deploy step's own shell REFUSES when main has moved, and deploys when it has not", () => {

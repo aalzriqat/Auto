@@ -4,7 +4,7 @@
  * G = 12,500 approved, H = 200 customer deposit, C = 1,375 dealership contribution (the SCRUM-435 worked example).
  */
 import {
-  C, G, H, finalizeAsOwner, newApplication, refusalMessageOf, seedFinancedDealership,
+  C, G, H, finalizeAsOwner, insertReceiptBank, newApplication, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
@@ -95,7 +95,7 @@ async function dealWithRealDeposit(s: Seeded) {
     feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
     deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
   });
-  await owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Matched." });
+  await owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
   const depositId = await owner.as.mutation(api.deposits.create, {
     method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: H / 1000,
   });
@@ -132,13 +132,16 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     expect(gl.CASH_ON_HAND).toBe(H);
     expect(gl.CUSTOMER_DEPOSITS_LIABILITY).toBe(0);
     expect(gl.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES).toBe(G);
-    expect(gl.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(-(H + C));
+    // SCRUM-411 P2-01: finalizeAsOwner pays H + C to the company BEFORE the sale. The payment debits
+    // AP-finance H + C (credit bank) and the sale then credits the same H + C, so AP-finance nets to 0.
+    expect(gl.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(0);
+    expect(gl.BANK_ACCOUNT).toBe(-(H + C));
     expect(gl.SALES_REVENUE).toBe(-G);
     expect(gl.SALES_CONSIDERATION_REDUCTIONS).toBe(C);
     expect(gl.ACCOUNTS_RECEIVABLE_CUSTOMERS).toBeUndefined();
     expect(gl.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY).toBeUndefined();
     // The sale invoice was shrunk to nothing: the customer owes the dealership nothing after finalize.
-    expect(await invoiceOf(s, saleId)).toMatchObject({ original: 0, outstanding: 0 });
+    expect(await invoiceOf(s, saleId)).toMatchObject({ status: "PAID", original: 0, outstanding: 0 });
   });
 
   test("(b) a payment AFTER finalize: naming the sale is refused; without the sale it is ACCEPTED and parked as an unapplied liability", async () => {
@@ -173,11 +176,10 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     // SETTLEMENT must NOT be COMPLETE before the finance company's transfer is confirmed.
     expect(await stageState(s, saleId, "SETTLEMENT")).not.toBe("COMPLETE");
 
-    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
-    });
+    // The forward H + C was already recorded before finalize (finalizeAsOwner pays first, SCRUM-411 P2-01).
     await s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+      bankAccountId: await insertReceiptBank(s),
     });
 
     const gl = await glNet(s);
@@ -204,13 +206,10 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     const { applicationId: secondApplicationId } = await dealWithRealDeposit(secondDeal);
     await finalizeAsOwner(secondDeal, secondApplicationId);
     const secondSaleId = (await saleOf(s, secondApplicationId))!;
-    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: s.orgId, applicationId: secondApplicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-      expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
-    });
     await s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId: secondApplicationId, disbursedAmountMinor: G,
       idempotencyKey: crypto.randomUUID(),
+      bankAccountId: await insertReceiptBank(s),
     });
     expect(await stageState(s, secondSaleId, "SETTLEMENT")).toBe("COMPLETE");
     expect(await stageState(s, firstSaleId, "SETTLEMENT")).not.toBe("COMPLETE");
@@ -224,12 +223,9 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     const { applicationId } = await dealWithRealDeposit(s);
     await finalizeAsOwner(s, applicationId);
     const saleId = (await saleOf(s, applicationId))!;
-    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-      expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
-    });
     await s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+      bankAccountId: await insertReceiptBank(s),
     });
     expect(await stageState(s, saleId, "SETTLEMENT")).toBe("COMPLETE");
 

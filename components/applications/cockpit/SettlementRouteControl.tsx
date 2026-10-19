@@ -16,18 +16,12 @@
  * about who pays for the car.
  */
 export type SupplierSettlementRoute = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
-export type DirectRouteRefusal =
-  | "NoExternalFinancier"
-  | "LEASE"
-  | "PAYER_UNNAMED"
-  | "HeldDeposit"
-  | null;
+export type DirectRouteRefusal = "NoExternalFinancier" | "LEASE" | "PAYER_UNNAMED" | null;
 
 const DIRECT_ROUTE_REFUSAL_KEY: Record<NonNullable<DirectRouteRefusal>, string> = {
   NoExternalFinancier: "RouteDirectUnavailableNoExternalFinancier",
   LEASE: "RouteDirectUnavailableLease",
   PAYER_UNNAMED: "RouteDirectUnavailableUnnamedProvider",
-  HeldDeposit: "RouteDirectUnavailableHeldDeposit",
 };
 
 export function SettlementRouteControl({

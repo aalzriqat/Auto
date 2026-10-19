@@ -117,6 +117,8 @@ const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
     "Self-reference; read only as an id compare (utils/financeCompanyForward.ts:154) and passed to a null-guarded get (utils/prepaidRecognitionEvents.ts:179-182); never a hard dereference.",
   "accountingEvents.reversedByEventId->accountingEvents":
     "Self-reference; every read null-guards the get (accounting/reversals.ts:58-59, accountingReports.ts:1110-1111, utils/financeCompanyForward.ts:149-153 fails to NEEDS_REPAIR).",
+  "retainedCreditRefundRequests.accountingEventId->accountingEvents":
+    "Optional, set once at payout (retainedCreditRefunds.ts); written only, the list query never dereferences it.",
   "canonicalPayments.accountingEventId->accountingEvents":
     "Written only (subledger.ts:123,201); no reader dereferences it.",
   "canonicalPayments.cashierSessionId->cashierReconciliations":
@@ -141,6 +143,10 @@ const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
     "Self-reference; written only (financingEconomics.ts:2096); no reader dereferences it.",
   "financeDealCustodyEntries.reversesEntryId->financeDealCustodyEntries":
     "Self-reference; hard-dereferenced by financeDealCosts.ts:1326,1419,3235 and utils/custodySourceLedger.ts:1258,1750, all tenant-auth functions or pure ledger folds over a live custody, blocked by the suspension preflight.",
+  "invoiceReceiptApplications.splitFromApplicationId->invoiceReceiptApplications":
+    "Self-reference (a table cannot defer itself through CHILD_TABLES); written only when an application is split (accounting/invoiceReceiptActivation.ts:273); no reader dereferences it.",
+  "invoiceReceiptApplications.splitRemainderId->invoiceReceiptApplications":
+    "Self-reference; written when an application is split (accounting/invoiceReceiptActivation.ts:288) and only echoed back as an id in the replay result (:127); never dereferenced.",
   "journalEntries.accountingEventId->accountingEvents":
     "Reverse of the E2 edge (accountingEvents.journalEntryId), which would cycle; the only reader null-guards (accountingLedger.ts:198).",
   "journalEntries.reversalOfJournalEntryId->journalEntries":
@@ -206,6 +212,10 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
   // sibling `financeCompanyForwards`; same SCRUM-546 document-only treatment.
   "dealUnwinds.applicationId->financeApplications":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  "dealUnwinds.completion.customerReceiptSettlement.refundEventIds[]->accountingEvents":
+    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
+  "dealUnwinds.completion.customerReceiptSettlement.refundPaymentIds[]->canonicalPayments":
+    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "dealUnwinds.remittanceRefund.paymentId->canonicalPayments":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "dealUnwinds.remittanceRefund.reversedAllocationIds[]->paymentAllocations":
@@ -226,9 +236,16 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "depositVehicleHolds.depositId->deposits":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  "customerFinanceCompanyPayments.applicationId->financeApplications":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row. Same shape and decision as financeCompanyForwards.applicationId; nothing reads the evidence except through its application.",
   "employeeAdvanceRecoveries.payrollItemId->payrollItems":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "financeCompanyForwards.applicationId->financeApplications":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  // SCRUM-411 P2-02: the per-deposit provenance of a forward; same treatment as its parent forward row.
+  "financeCompanyForwardSlices.applicationId->financeApplications":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  "financeCompanyForwardSlices.depositId->deposits":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
   "fixedAssetEvents.accountingEventId->accountingEvents":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 
 /**
  * The deal cockpit, painted. EN and AR × light and dark × 390px and 1280px.
@@ -336,7 +337,7 @@ for (const locale of LOCALES) {
       test(`${locale} · ${theme} · ${viewport.name}px: paints on-screen, in theme, in direction, in the shell, without sideways scroll`, async ({
         browser,
       }) => {
-        const context = await browser.newContext({
+        const context = await newContainedContext(browser, {
           viewport: { width: viewport.width, height: viewport.height },
           colorScheme: theme,
         });
@@ -627,7 +628,7 @@ for (const locale of LOCALES) {
   for (const theme of THEMES) {
     for (const viewport of VIEWPORTS) {
       test(`${locale} · ${theme} · ${viewport.name}px: UX5 recorded line and mobile step bar`, async ({ browser }) => {
-        const context = await browser.newContext({
+        const context = await newContainedContext(browser, {
           viewport: { width: viewport.width, height: viewport.height },
           colorScheme: theme,
         });
@@ -765,7 +766,7 @@ for (const locale of LOCALES) {
       test(`focus states · ${locale} · ${theme} · ${viewport.name}px: every next step painted, one button each, no sideways scroll`, async ({
         browser,
       }) => {
-        const context = await browser.newContext({
+        const context = await newContainedContext(browser, {
           // Tall enough for the whole gallery at 390px (13 states plus the
           // documents panel since round 2): `main` clips the screenshot to
           // its own box, so a shorter frame silently drops the last states.
@@ -873,7 +874,7 @@ for (const variant of WITHHELD_CLOSE_VARIANTS) {
         test(`${locale} · ${theme} · ${viewport.name}px: ${variant.title}`, async ({
           browser,
         }) => {
-          const context = await browser.newContext({
+          const context = await newContainedContext(browser, {
             viewport: { width: viewport.width, height: viewport.height },
             colorScheme: theme,
           });
@@ -940,7 +941,7 @@ for (const variant of UX4_VARIANTS) {
     for (const theme of THEMES) {
       for (const viewport of VIEWPORTS) {
         test(`${locale} · ${theme} · ${viewport.name}px: ${variant.title}`, async ({ browser }) => {
-          const context = await browser.newContext({
+          const context = await newContainedContext(browser, {
             viewport: { width: viewport.width, height: viewport.height },
             colorScheme: theme,
           });
@@ -1068,7 +1069,7 @@ for (const variant of FORWARD_VARIANTS) {
     for (const theme of THEMES) {
       for (const viewport of VIEWPORTS) {
         test(`${locale} · ${theme} · ${viewport.name}px: ${variant.title}`, async ({ browser }) => {
-          const context = await browser.newContext({
+          const context = await newContainedContext(browser, {
             viewport: { width: viewport.width, height: viewport.height },
             colorScheme: theme,
           });
@@ -1110,7 +1111,7 @@ for (const locale of LOCALES) {
   for (const theme of THEMES) {
     for (const viewport of VIEWPORTS) {
       test(`${locale} · ${theme} · ${viewport.name}px: the cheque-returned-by-bank action is offered in the header`, async ({ browser }) => {
-        const context = await browser.newContext({
+        const context = await newContainedContext(browser, {
           viewport: { width: viewport.width, height: viewport.height },
           colorScheme: theme,
         });
@@ -1149,7 +1150,7 @@ for (const locale of LOCALES) {
   for (const theme of THEMES) {
     for (const viewport of VIEWPORTS) {
       test(`${locale} · ${theme} · ${viewport.name}px: a finished deal with a not-needed step is summarised neutrally, with no completion tick`, async ({ browser }) => {
-        const context = await browser.newContext({
+        const context = await newContainedContext(browser, {
           viewport: { width: viewport.width, height: viewport.height },
           colorScheme: theme,
         });

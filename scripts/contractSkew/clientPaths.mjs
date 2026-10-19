@@ -716,7 +716,13 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
     calls,
     unresolvedBinders,
     provedSkips,
-    diagnosticsCount: program.getSemanticDiagnostics().length,
+    // Lazy: this is a full semantic type-check of every file in the program
+    // (~40 s of a ~65 s web-surface extraction) and no caller reads it. The
+    // extraction above does not depend on it, so computing it only on access
+    // keeps the field available without charging every run for it.
+    get diagnosticsCount() {
+      return program.getSemanticDiagnostics().length;
+    },
   };
 }
 
