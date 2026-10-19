@@ -27,6 +27,13 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { type AppTheme } from "../../../theme";
 import { useAppTheme, useThemedStyles } from "../../../providers/ThemeProvider";
 import { compactInitials } from "../nativeModules";
+import {
+  upliftApprovedText,
+  upliftBelowMinimumBody,
+  upliftFieldLabel,
+  upliftRejectedText,
+  upliftRequestActionText,
+} from "./minimumUpliftCopy";
 import { useCommandIdentity, money, parseOptionalNumber, useGenericError, SearchInput, SelectField } from "../modules/moduleShared";
 import {
   calculateUnifiedMurabaha,
@@ -823,7 +830,7 @@ export function SalesWizardScreen({
                 <>
                   <Field
                     keyboardType="numeric"
-                    label={locale === "ar" ? "ربح المعرض" : "Dealer profit"}
+                    label={upliftFieldLabel(locale)}
                     value={desiredProfit}
                     onChangeText={(value) => {
                       setDesiredProfit(value);
@@ -1023,9 +1030,7 @@ export function SalesWizardScreen({
                       {locale === "ar" ? "موافقة مطلوبة" : "Approval required"}
                     </Text>
                     <Text style={styles.approvalBody}>
-                      {locale === "ar"
-                        ? `الربح المطلوب (${money(profit, locale)}) أقل من الحد الأدنى (${money(minimumProfit, locale)}).`
-                        : `Desired profit (${money(profit, locale)}) is below this vehicle's minimum (${money(minimumProfit, locale)}).`}
+                      {upliftBelowMinimumBody(locale, money(profit, locale), money(minimumProfit, locale))}
                     </Text>
                     {pendingApproval?.status === "PENDING" && pendingApproval.requestedProfit === profit ? (
                       <Text style={styles.approvalPending}>
@@ -1033,7 +1038,7 @@ export function SalesWizardScreen({
                       </Text>
                     ) : pendingApproval?.status === "REJECTED" && pendingApproval.requestedProfit === profit ? (
                       <Text style={styles.approvalRejected}>
-                        {locale === "ar" ? "رُفض هذا المبلغ — ارفع الربح أو اطلب مجدداً." : "This amount was rejected — raise the profit or request again."}
+                        {upliftRejectedText(locale)}
                       </Text>
                     ) : (
                       <Pressable
@@ -1044,7 +1049,7 @@ export function SalesWizardScreen({
                         <Text style={styles.approvalButtonText}>
                           {requesting
                             ? locale === "ar" ? "جاري الطلب..." : "Requesting..."
-                            : locale === "ar" ? "طلب موافقة الربح" : "Request profit approval"}
+                            : upliftRequestActionText(locale)}
                         </Text>
                       </Pressable>
                     )}
@@ -1054,7 +1059,7 @@ export function SalesWizardScreen({
                   <View style={styles.approvedNote}>
                     <Icon color="success" name="check" size={16} />
                     <Text style={styles.approvedNoteText}>
-                      {locale === "ar" ? "تمت الموافقة على الربح — يمكنك المتابعة." : "Profit approved by management — you may proceed."}
+                      {upliftApprovedText(locale)}
                     </Text>
                   </View>
                 ) : null}

@@ -9,9 +9,10 @@ import { dictionaries } from "./dictionaries";
 
 describe("minimum price uplift copy", () => {
   for (const [name, dict] of Object.entries(dictionaries) as [string, Record<string, string>][]) {
-    test(`${name}: the approval card and empty state do not call the list-price spread profit`, () => {
+    test(`${name}: the approval card, empty state and quote-setup input do not call the list-price spread profit`, () => {
       expect(dict.RequestedProfit).not.toMatch(/profit|ربح/i);
       expect(dict.AllCaughtUp).not.toMatch(/profit|ربح/i);
+      expect(dict.DealerProfit).not.toMatch(/profit|ربح/i);
     });
   }
 
