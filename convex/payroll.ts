@@ -24,6 +24,8 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { isCommissionOwed } from "./utils/commission";
 import { saleHasActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { checkPostingAllowed } from "./accountingPeriods";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 
 // ─── Employee compensation (fixed monthly salary) ──────────────────────────────
 
@@ -115,6 +117,14 @@ export const listCompensation = query({
 
 // ─── Employee advances (سلفة) — a recoverable ASSET, not an expense ─────────────
 
+export const listPayrollBankOptions = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
 export const recordAdvance = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -122,6 +132,7 @@ export const recordAdvance = mutation({
     amount: v.number(),
     date: v.optional(v.number()),
     method: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     note: v.optional(v.string()),
     idempotencyKey: v.string(),
   },
@@ -162,6 +173,7 @@ export const recordAdvance = mutation({
             amount: args.amount,
             date: args.date ?? null,
             method: normalizePaymentMethod(args.method),
+            ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
             note: args.note?.trim() || null,
           }),
         },
@@ -170,6 +182,15 @@ export const recordAdvance = mutation({
           const now = Date.now();
           const date = args.date ?? now;
           const method = normalizePaymentMethod(args.method);
+          if (method !== "CASH") {
+            await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId, bankAccountId: args.bankAccountId, currency,
+              missingMessage: "Select the physical bank account used for this advance.",
+              currencySubject: "employee advance", errorCode: AppErrorCode.PAYROLL_BANK_INVALID,
+            });
+          } else if (args.bankAccountId) {
+            throwAppError(AppErrorCode.PAYROLL_BANK_NOT_APPLICABLE, "A cash advance cannot name a bank account.");
+          }
 
           const advanceId = await ctx.db.insert("employeeAdvances", {
             orgId: args.orgId,
@@ -179,6 +200,7 @@ export const recordAdvance = mutation({
             currency,
             date,
             method,
+            bankAccountId: args.bankAccountId,
             status: "OUTSTANDING",
             note: args.note,
             createdBy: user._id,
@@ -194,6 +216,7 @@ export const recordAdvance = mutation({
             amountMinor: toMinorUnits(args.amount, currency),
             currency,
             paymentMethod: method,
+            bankAccountId: args.bankAccountId,
             actorId: user._id,
             occurredAt: date,
           });
@@ -219,6 +242,7 @@ export const recoverAdvance = mutation({
     orgId: v.id("organizations"),
     advanceId: v.id("employeeAdvances"),
     method: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     amount: v.optional(v.number()),
     idempotencyKey: v.string(),
   },
@@ -334,6 +358,7 @@ export const recoverAdvance = mutation({
             advanceId: args.advanceId,
             recoverMinor: requestedMinor,
             method,
+            ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           }),
         },
         async () => {
@@ -365,6 +390,18 @@ export const recoverAdvance = mutation({
             throw new ConvexError("Repayment amount exceeds the outstanding balance.");
           }
 
+          // An inbound CHEQUE is held in CHEQUES_IN_HAND until clearance; it
+          // has not entered a physical bank yet.
+          if (method === "BANK_TRANSFER" || method === "CARD") {
+            await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId, bankAccountId: args.bankAccountId, currency: current.currency,
+              missingMessage: "Select the physical bank account that received this repayment.",
+              currencySubject: "employee advance repayment", errorCode: AppErrorCode.PAYROLL_BANK_INVALID,
+            });
+          } else if (args.bankAccountId) {
+            throwAppError(AppErrorCode.PAYROLL_BANK_NOT_APPLICABLE, "A cash or held-cheque repayment cannot name a bank account.");
+          }
+
           const now = Date.now();
 
           // Don't credit Employee Advances before the issuance that debited it has
@@ -391,6 +428,7 @@ export const recoverAdvance = mutation({
             amountMinor: recoverMinor,
             currency: current.currency,
             method,
+            bankAccountId: args.bankAccountId,
             source: "DIRECT",
             recoveredAt: now,
             recoveredBy: user._id,
@@ -406,6 +444,7 @@ export const recoverAdvance = mutation({
             amountMinor: recoverMinor,
             currency: current.currency,
             paymentMethod: method,
+            bankAccountId: args.bankAccountId,
             actorId: user._id,
             occurredAt: now,
           });
@@ -875,6 +914,7 @@ async function payItem(
   orgId: Id<"organizations">,
   item: Doc<"payrollItems">,
   method: PaymentMethod,
+  bankAccountId: Id<"bankAccounts"> | undefined,
   actorId: Id<"users">,
   now: number
 ): Promise<{ grossMinor: number; netMinor: number }> {
@@ -898,6 +938,7 @@ async function payItem(
       netMinor,
       currency: item.currency,
       paymentMethod: method,
+      bankAccountId,
       actorId,
       occurredAt: now,
     });
@@ -908,6 +949,7 @@ async function payItem(
       commissionPaidAt: now,
       commissionPaidBy: actorId,
       commissionPaymentMethod: method,
+      commissionBankAccountId: bankAccountId,
     });
   }
 
@@ -1340,6 +1382,7 @@ export const payRun = mutation({
     orgId: v.id("organizations"),
     runId: v.id("payrollRuns"),
     method: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
   },
   handler: async (ctx, args) => {
     try {
@@ -1386,6 +1429,16 @@ export const payRun = mutation({
         return { status: "NEEDS_REAPPROVAL" as const };
       }
 
+      if (method !== "CASH") {
+        await requireActiveBankInCurrency(ctx, {
+          orgId: args.orgId, bankAccountId: args.bankAccountId, currency: run.currency,
+          missingMessage: "Select the physical bank account used to pay this payroll run.",
+          currencySubject: "payroll payment", errorCode: AppErrorCode.PAYROLL_BANK_INVALID,
+        });
+      } else if (args.bankAccountId) {
+        throwAppError(AppErrorCode.PAYROLL_BANK_NOT_APPLICABLE, "A cash payroll run cannot name a bank account.");
+      }
+
       // Accrual-before-payment: if the payment itself will hit the ledger now,
       // every prerequisite accrual must already be POSTED — otherwise the
       // payment debits a payable that is still queued (e.g. the accrual is dated
@@ -1427,7 +1480,7 @@ export const payRun = mutation({
       let paidGrossMinor = 0;
       let paidNetMinor = 0;
       for (const item of items) {
-        const paid = await payItem(ctx, args.orgId, item, method, user._id, now);
+        const paid = await payItem(ctx, args.orgId, item, method, args.bankAccountId, user._id, now);
         paidGrossMinor += paid.grossMinor;
         paidNetMinor += paid.netMinor;
       }
@@ -1437,6 +1490,7 @@ export const payRun = mutation({
         paidBy: user._id,
         paidAt: now,
         paidMethod: method,
+        paidBankAccountId: args.bankAccountId,
         totalGrossMinor: paidGrossMinor,
         totalNetMinor: paidNetMinor,
         updatedAt: now,

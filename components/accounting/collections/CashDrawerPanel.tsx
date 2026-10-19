@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Plus } from "lucide-react";
 import { api } from "@/convex/_generated/api";
-import type { Doc } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -42,6 +42,7 @@ export function CashDrawerPanel() {
   const [movementSession, setMovementSession] = useState<CashDrawerSession | null>(null);
   const [closeSession, setCloseSession] = useState<CashDrawerSession | null>(null);
   const [selectedSession, setSelectedSession] = useState<CashDrawerSession | null>(null);
+  const [approveSession, setApproveSession] = useState<CashDrawerSession | null>(null);
 
   const sessions = useQuery(api.cashDrawer.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const movements = useQuery(
@@ -49,7 +50,6 @@ export function CashDrawerPanel() {
     activeOrgId && selectedSession ? { orgId: activeOrgId, sessionId: selectedSession._id } : "skip"
   );
   const beginCount = useMutation(api.cashDrawer.beginCount);
-  const approveVariance = useMutation(api.cashDrawer.approveVariance);
 
   if (!activeOrgId) return null;
 
@@ -58,16 +58,6 @@ export function CashDrawerPanel() {
     try {
       await beginCount({ orgId: activeOrgId!, sessionId: session._id });
       toast.success(t("CashDrawerCountingStarted" as any));
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    }
-  }
-
-  async function approve(session: CashDrawerSession) {
-    if (!window.confirm(t("ConfirmCashDrawerApproval" as any))) return;
-    try {
-      await approveVariance({ orgId: activeOrgId!, sessionId: session._id });
-      toast.success(t("CashDrawerApproved" as any));
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -112,7 +102,7 @@ export function CashDrawerPanel() {
                       {canManage && <Button size="sm" variant="outline" disabled={session.status !== "OPEN"} onClick={() => setMovementSession(session)}>{t("Record" as any)}</Button>}
                       {canManage && <Button size="sm" variant="outline" disabled={session.status !== "OPEN"} onClick={() => begin(session)}>{t("BeginCount" as any)}</Button>}
                       {canManage && <Button size="sm" variant="outline" disabled={session.status !== "COUNTING"} onClick={() => setCloseSession(session)}>{t("Close" as any)}</Button>}
-                      {canApprove && <Button size="sm" variant="outline" disabled={session.status !== "CLOSED"} onClick={() => approve(session)}>{t("Approve" as any)}</Button>}
+                      {canApprove && <Button size="sm" variant="outline" disabled={session.status !== "CLOSED"} onClick={() => setApproveSession(session)}>{t("Approve" as any)}</Button>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -127,6 +117,13 @@ export function CashDrawerPanel() {
           movements={movements ?? []}
           formatAmount={(amountMinor) => formatCurrency(amountMinor / factor)}
           onClose={() => setSelectedSession(null)}
+        />
+      )}
+      {canApprove && (
+        <ApproveDrawerDialog
+          session={approveSession}
+          onOpenChange={(open) => !open && setApproveSession(null)}
+          formatAmount={(amountMinor) => formatCurrency(amountMinor / factor)}
         />
       )}
       {canManage && <>
@@ -286,6 +283,106 @@ function RecordMovementDialog({ session, onOpenChange, factor }: Readonly<{ sess
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)}>{t("Cancel" as any)}</Button>
           <Button onClick={submit} disabled={submitting || !amount}>{submitting ? t("Saving" as any) : t("Record" as any)}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ApproveDrawerDialog({
+  session,
+  onOpenChange,
+  formatAmount,
+}: Readonly<{
+  session: CashDrawerSession | null;
+  onOpenChange: (open: boolean) => void;
+  formatAmount: (amountMinor: number) => string;
+}>) {
+  const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
+  const approveVariance = useMutation(api.cashDrawer.approveVariance);
+  const [bankAccountId, setBankAccountId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const depositMinor = session?.closingCountMinor ?? 0;
+  const needsBank = depositMinor > 0;
+  const bankOptions = useQuery(
+    api.cashDrawer.listDepositBankOptions,
+    activeOrgId && session && needsBank ? { orgId: activeOrgId, sessionId: session._id } : "skip"
+  );
+  const banks = bankOptions?.banks;
+  // Too many banks to list is its own state: never "no bank", and nothing can be chosen.
+  const bankListTruncated = needsBank && bankOptions?.truncated === true;
+  const noEligibleBank = needsBank && banks !== undefined && !bankListTruncated && banks.length === 0;
+  // A choice the server no longer offers (the list moved while the dialog was open) cannot be submitted.
+  const chosenBankOffered = banks?.some((bank) => bank._id === bankAccountId) === true;
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) setBankAccountId("");
+    onOpenChange(nextOpen);
+  }
+
+  async function submit() {
+    if (!activeOrgId || !session) return;
+    setSubmitting(true);
+    try {
+      await approveVariance({
+        orgId: activeOrgId,
+        sessionId: session._id,
+        ...(needsBank ? { bankAccountId: bankAccountId as Id<"bankAccounts"> } : {}),
+      });
+      toast.success(t("CashDrawerApproved" as any));
+      handleOpenChange(false);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={session !== null} onOpenChange={handleOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("ApproveCashDrawer" as any)}</DialogTitle>
+          <DialogDescription>
+            {t((needsBank ? "ConfirmCashDrawerApproval" : "ConfirmCashDrawerApprovalNoDeposit") as any)}
+          </DialogDescription>
+        </DialogHeader>
+        {needsBank && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium">{formatAmount(depositMinor)}</p>
+            <Select
+              value={chosenBankOffered ? bankAccountId : ""}
+              onValueChange={setBankAccountId}
+              disabled={bankOptions === undefined || noEligibleBank || bankListTruncated}
+            >
+              <SelectTrigger aria-label={t("CashDrawerDepositBank" as any)}>
+                <SelectValue placeholder={t(bankOptions === undefined ? "CashDrawerLoadingBanks" : "CashDrawerSelectBank" as any)} />
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                {(banks ?? []).map((bank) => (
+                  <SelectItem key={bank._id} value={bank._id}>
+                    <bdi>{bank.name}</bdi>
+                    {" · "}
+                    <span className="text-xs text-muted-foreground">{bank.currency}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {noEligibleBank && (
+              <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("CashDrawerNoDepositBank" as any)}</p>
+            )}
+            {bankListTruncated && (
+              <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("CashDrawerTooManyBanks" as any)}</p>
+            )}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || (needsBank && !chosenBankOffered)}>
+            {submitting ? t("Saving" as any) : t("Approve" as any)}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

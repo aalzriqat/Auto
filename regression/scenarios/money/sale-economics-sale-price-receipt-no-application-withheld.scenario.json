@@ -1,0 +1,42 @@
+{
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "kind": "rule",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum761-s2b-backfill",
+    "firstSeen": "2026-10-07"
+  },
+  "subject": "saleEconomics",
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "matrixRow": "SCRUM-41-direct",
+  "id": "sale-economics-sale-price-receipt-no-application-withheld",
+  "fingerprint": "b9e556b42b07013a7d55d69b7871fec149ec488e04b9e242511f8ba4ef95be60",
+  "inputs": {
+    "salePrice": 12500,
+    "vehicleSourceType": "SOURCED",
+    "capitalizedCost": 9500,
+    "supplierSettlementRoute": "DIRECT_TO_SUPPLIER",
+    "externallyFinanced": true,
+    "recordedSupplierEntitlement": 9500,
+    "recordedMargin": 3000,
+    "recordedSupplierGrossReceipt": 12500,
+    "hasFinancingApplication": false
+  },
+  "expected": [
+    {
+      "observable": "economics.dealershipMargin",
+      "value": null
+    }
+  ],
+  "impl": {
+    "file": "convex/consignmentEconomics.test.ts",
+    "testName": "a receipt equal to the sale price does not verify a margin with no application behind it"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "sales-member-cannot-post-a-deposit",
+  "fingerprint": "b45cbd4238fccebbbf2be7f8b51dae9ecf739275af1abb0c10bc50e23947f018",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum761-pilot-path",
+    "firstSeen": "2026-10-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sales",
+        "org": "A"
+      },
+      "action": "deposits.create",
+      "input": {
+        "amount": 1500,
+        "method": "CASH"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "confirm:finance_disbursement"
+    },
+    {
+      "observable": "step1.moneyRows",
+      "value": 0
+    },
+    {
+      "observable": "vehicle.status",
+      "value": "AVAILABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/depositRequests.test.ts",
+    "testName": "a SALES-only member cannot post a deposit, and nothing is written"
+  },
+  "matrixRow": "SCRUM-444-deposit-authority"
+}

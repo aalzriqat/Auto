@@ -7,6 +7,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { insertReceiptBank } from "../test-utils/financedDealFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -640,6 +641,8 @@ describe("Phase 8 — finance disbursement", () => {
       orgId, applicationId: appId,
       disbursedAmountMinor: 10_000_000,
       idempotencyKey: "disbursement_001",
+      // SCRUM-54: a BANK_TRANSFER receipt names the physical bank (JOD, the receivable's currency).
+      bankAccountId: await insertReceiptBank({ t, orgId, owner: { userId } }),
     });
 
     const updated = await t.run((ctx) => ctx.db.get(appId));

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { expect, type Page } from "@playwright/test";
+import { namesProduction, servesOtherThan } from "../productionGuard";
 
 /**
  * The preview guard of jev-explorer.spec.ts (SCRUM-595, PR #430), copied
@@ -11,8 +12,6 @@ import { expect, type Page } from "@playwright/test";
  * is the seeded disposable preview and that the served app actually talks to
  * it (Codex AF-430-03).
  */
-
-export const PRODUCTION_DEPLOYMENT = "kindly-hound-172";
 
 /**
  * Runs the bootstrap's own assertExistingE2EPreview, with its own argv checks
@@ -54,7 +53,7 @@ export function attestedPreview(): { url: string | undefined; orgId: string | un
   const reason = (lines.find((l) => /Error/.test(l)) ?? lines.at(-1))?.trim() ?? `exit ${res.status}`;
   console.warn(`Preview attestation failed: ${reason}`);
   if (process.env.GITHUB_ACTIONS === "true") {
-    console.log(`::warning title=Jev form explorer skipped::Preview attestation failed (${reason}); the explorer did not run.`);
+    console.log(`::error title=Jev form explorer could not run::Preview attestation failed (${reason}); the opted-in explorer fails.`);
   }
   return undefined;
 }
@@ -95,7 +94,7 @@ export async function attest(
 ): Promise<{ refusal: string; orgId?: undefined } | { refusal?: undefined; orgId: string }> {
   const app = new URL(baseURL ?? "http://localhost:3000");
   if (!["localhost", "127.0.0.1"].includes(app.hostname)) return { refusal: "Form explorer runs against a local app only." };
-  if ((process.env.NEXT_PUBLIC_CONVEX_URL ?? "").includes(PRODUCTION_DEPLOYMENT)) {
+  if (namesProduction(process.env.NEXT_PUBLIC_CONVEX_URL)) {
     return { refusal: "Form explorer never runs against the production backend." };
   }
   const expected = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL);
@@ -114,7 +113,7 @@ export async function attest(
     .catch(() => undefined);
   const served = servedDeployments(sockets);
   if (served.length === 0) return { refusal: "Could not observe which backend the served app uses; not exploring." };
-  if (served.some((d) => d === PRODUCTION_DEPLOYMENT || d !== expected)) {
+  if (servesOtherThan(served, expected)) {
     return { refusal: `The served app talks to ${[...new Set(served)].join(", ")}, not the preview ${expected}.` };
   }
   return { orgId: attested.orgId };

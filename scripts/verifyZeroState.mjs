@@ -38,7 +38,6 @@ import {
   OPERATIONAL_DIAGNOSTIC_TABLES,
   classifyMarkerRead,
   classifyTableRead,
-  componentNames,
   decideZeroState,
   diagnosticRowBound,
   parseFunctionSpec,
@@ -47,6 +46,7 @@ import {
   schemaTableNames,
   validateDiagnosticRows,
 } from "./zeroState.ts";
+import { componentPaths } from "./zeroStateComponents.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -115,7 +115,7 @@ function readTable(table, component) {
 
 /**
  * A NONEMPTY root table in OPERATIONAL_DIAGNOSTIC_TABLES: read every row back
- * (one more than the table's retention-derived ceiling, so exceeding it is
+ * (one more than the table's fresh-launch ceiling, so exceeding it is
  * detected — the CLI pages through `--limit` without a cap) and validate each
  * as a cron self-report. Provenance labels and counts survive; values do not.
  * A table with no ceiling is never read; the validator refuses it.
@@ -156,7 +156,13 @@ const listRaw = convex(["data"]);
 const listing = parseTableList(listRaw.stdout, listRaw.stderr, listRaw.status);
 if (!listing.ok) fail(`The table listing could not be read: ${listing.reason}`);
 const schemaTables = schemaTableNames(readFileSync(path.join(ROOT, "convex", "schema.ts"), "utf8"));
-const mounted = componentNames(readFileSync(path.join(ROOT, "convex", "convex.config.ts"), "utf8"));
+let mounted;
+try {
+  // Nested components included: a mount's own listing never names its children.
+  mounted = componentPaths(path.join(ROOT, "convex", "convex.config.ts"));
+} catch (error) {
+  fail(`The component inventory could not be established: ${error instanceof Error ? error.message : String(error)}`);
+}
 
 const components = [];
 const reads = [];

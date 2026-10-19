@@ -44,6 +44,8 @@ export type PendingPayout = {
   resolution: "REFUNDED" | "FORFEITED";
   /** The refund method, or "NONE" for a forfeit. */
   method: string;
+  /** The physical bank selected for this attempt, when the method posts to Bank Account. */
+  bankAccountId?: string;
   intent: string;
   /**
    * SCRUM-530 F1: set once an attempt under this record has had an UNKNOWN outcome (a
@@ -57,7 +59,7 @@ export type PendingPayout = {
 export type PayoutGate = { status: "go"; recordedIntent?: string } | { status: "blocked"; pending: PendingPayout };
 
 export type PendingDepositPayouts = {
-  check: (depositId: string, resolution: "REFUNDED" | "FORFEITED", method: string) => PayoutGate;
+  check: (depositId: string, resolution: "REFUNDED" | "FORFEITED", method: string, bankAccountId?: string) => PayoutGate;
   /** Record the attempt about to be sent (idempotent for the same recorded attempt). */
   record: (depositId: string, payout: PendingPayout) => void;
   confirm: (depositId: string) => void;
@@ -91,10 +93,11 @@ export function usePendingDepositPayouts(retire: (intent: string) => void): Pend
       clear(depositId);
     };
     return {
-      check(depositId, resolution, method) {
+      check(depositId, resolution, method, bankAccountId) {
         const existing = pendingRef.current.get(depositId);
         if (!existing) return { status: "go" };
-        if (existing.resolution === resolution && existing.method === method) {
+        if (existing.resolution === resolution && existing.method === method &&
+            existing.bankAccountId === bankAccountId) {
           // A retry of an attempt that never confirmed: its outcome is unknown.
           existing.uncertain = true;
           return { status: "go", recordedIntent: existing.intent };

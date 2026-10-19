@@ -8,6 +8,7 @@ import { ALL_PERMISSIONS } from "./utils/permissions";
 import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { allocatePaymentToReceivable } from "./subledger";
 import { salesAr } from "../lib/i18n/domains/sales";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 
 type TestConvex = ConvexTestInstance<typeof schema>;
 const MODULES = import.meta.glob("./**/*.*s");
@@ -367,6 +368,8 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
   test("(d) a manual finance payer (no companyId) stays EXPECTED", async () => {
     const s = await seed("d_manual");
     const applicationId = await readyManualDeal(s);
+    // SCRUM-411 P2-01: the 1,650 the letter says the dealership sends is paid before finalizing.
+    await payForwardBeforeFinalize(s, s.asOwner, applicationId);
     await finalize(s, applicationId);
     const app = await appOf(s, applicationId);
     expect(app.companyId).toBeUndefined();
@@ -382,6 +385,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     // evidence the reader must not trust over the manual payer.
     const s = await seed("d_cashmanual");
     const applicationId = await readyManualDeal(s);
+    await payForwardBeforeFinalize(s, s.asOwner, applicationId);
     await finalize(s, applicationId);
     const app = await appOf(s, applicationId);
     expect(app.settlementStatus).toBe("EXPECTED");
@@ -608,6 +612,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     // letter, then drop it and hand-edit the sale to CASH: the manual MODE alone must keep the leg closed.
     const s = await seed("manual_noletter");
     const applicationId = await readyManualDeal(s);
+    await payForwardBeforeFinalize(s, s.asOwner, applicationId);
     await finalize(s, applicationId);
     const app = await appOf(s, applicationId);
     expect(app.settlementStatus).toBe("EXPECTED");

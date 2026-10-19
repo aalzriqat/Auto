@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 
 /**
  * SCRUM-694 Gate B: the Deals list, painted. EN and AR x light and dark x
@@ -131,7 +132,7 @@ for (const view of VIEWS) {
     for (const theme of THEMES) {
       for (const viewport of VIEWPORTS) {
         test(`deals-list · ${view} · ${locale} · ${theme} · ${viewport.name}px`, async ({ browser }) => {
-          const context = await browser.newContext({
+          const context = await newContainedContext(browser, {
             viewport: { width: viewport.width, height: viewport.height },
             colorScheme: theme,
           });

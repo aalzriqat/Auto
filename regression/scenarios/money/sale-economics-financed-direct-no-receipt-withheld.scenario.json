@@ -1,0 +1,49 @@
+{
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "kind": "rule",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum761-s2b-backfill",
+    "firstSeen": "2026-10-07"
+  },
+  "subject": "saleEconomics",
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "matrixRow": "SCRUM-41-direct",
+  "id": "sale-economics-financed-direct-no-receipt-withheld",
+  "fingerprint": "10be874c7cfb14d9fd5c49b66a378806e9d06f5d1a9118003c2f7fcab24e1b40",
+  "inputs": {
+    "salePrice": 12500,
+    "vehicleSourceType": "SOURCED",
+    "capitalizedCost": 9500,
+    "supplierSettlementRoute": "DIRECT_TO_SUPPLIER",
+    "externallyFinanced": true,
+    "recordedSupplierEntitlement": 9500,
+    "recordedMargin": 3000,
+    "hasFinancingApplication": true
+  },
+  "expected": [
+    {
+      "observable": "economics.dealershipMargin",
+      "value": null
+    },
+    {
+      "observable": "economics.recognizedRevenue",
+      "value": null
+    },
+    {
+      "observable": "economics.supplierSettlement",
+      "value": 9500
+    }
+  ],
+  "impl": {
+    "file": "convex/consignmentEconomics.test.ts",
+    "testName": "a financed DIRECT row with no frozen receipt does not publish its frozen margin"
+  }
+}

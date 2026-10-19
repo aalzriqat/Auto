@@ -2,6 +2,7 @@ import { TestConvex as ConvexTestInstance } from "convex-test";
 import { ConvexError } from "convex/values";
 import { readFileSync } from "node:fs";
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { seedBank } from "../test-utils/bankFixture";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -100,6 +101,7 @@ async function payDirect(
     extra.expected ?? (await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId)))?.actualAmountMinor ?? 0;
   return await (extra.as ?? seed.asUser).mutation(api.financeDealCosts.recordDirectFeePayment, {
     orgId: seed.orgId, feeId, method: extra.method ?? "BANK_TRANSFER",
+    bankAccountId: extra.method === "CASH" ? undefined : await seedBank(seed.t, seed.orgId),
     paidAt: extra.paidAt ?? Date.now() - DAY, reference: extra.reference,
     expectedAmountMinor,
     idempotencyKey: extra.idempotencyKey ?? crypto.randomUUID(),

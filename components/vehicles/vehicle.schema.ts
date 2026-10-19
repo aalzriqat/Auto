@@ -21,6 +21,7 @@ export const vehicleSchema = z.object({
   // enforces it's set whenever purchasePrice is entered on that path, rather
   // than baking a create-only rule into this shared create/edit schema.
   purchasePaymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD", "ON_ACCOUNT"]).optional(),
+  bankAccountId: z.string().optional(),
   // SCRUM-717 (D-45): who is owed when an OWNED car is bought on account. Never
   // `sourcedFromName`, which is the consignment supplier and nothing else.
   purchaseSupplierName: z.string().optional(),

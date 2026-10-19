@@ -187,22 +187,38 @@ function localUses(workflow: Workflow): string[] {
 
 // sha256 of each workflow that can reach a Convex credential.
 const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
+  // SCRUM-826: re-pinned for two prepare-job steps only — the trusted
+  // pre-provisioning coverage gate (`pnpm browser-swarm:coverage-gate` in
+  // `trusted/`, no secrets, no candidate path) and the upload of its refusal
+  // evidence — plus the coverage json in the plan evidence upload.
+  // SCRUM-777: re-pinned for the swarm's own concurrency group (no longer the
+  // Playwright group) and three `contents: read` live-head checks: in prepare
+  // before the preview is created, in trusted-e2e before it deploys over the
+  // preview, and in attack-worker before the missions. None of them touches a
+  // Convex credential or a candidate path.
+  // SCRUM-350 G4 / SCRUM-411: also re-pinned for the swarm accounting period
+  // setup in trusted-e2e — the same trusted spec (`playwright test` of one
+  // trusted spec, no secret, no candidate path) run twice, once before the full
+  // E2E suite and once after it — plus both runs' report and results folders
+  // in the E2E report upload. The steps are named for what they measure (open
+  // the period, drain the pending outbox); they do not claim a later posting
+  // will settle.
   "browser-attack-swarm.yml":
-    "f88fc750eda3cf953b6a092c80fcb67624f19ea539d3dedb16cfb3cc141d1f25",
+    "35a418ab548a709adcf2bb859a15dcf72864a7573e039ef74e0c51454367673a",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
-    "b6504237de8819f9d408d178fd7b933f4822868b524e859f13a2df8ce0245bee",
+    "f5c1c675661c7f2a16184475a333f9380036cac809190247c945ce823e20f572",
   "hunt-preview.yml":
-    "f755f7106032668891d1a43827e2558b626fde48bf73471f7bdd991774a0bf51",
+    "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":
     "a47a5289bc35c018cbb378d68d7b0d389f3f78774272d4ada03f64eb4197f54d",
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":
-    "da1f85d00bbd9d7b14d4603dfcab4c831a91307bdac7fae1d40bd88053afdf83",
+    "61789e5b96d2a5e5e9b41be44fcf2afccf9bd372865e3c39a1154cb3788edde2",
   "trusted-accounting-rehearsal.yml":
-    "2114a2d133fb1468b98806b796dcc53eba00f44a40cffcd5045cd91ed96a3a1d",
+    "da8ee3225cb7a94f92593a2f18d336eb5284446fe06cd1c81846bbec780d72d8",
   "trusted-main-e2e.yml":
     "ba0277012803ed365c944dbad5ecef410036c5773e6b401a7021a0b37855d9f4",
 };
@@ -289,6 +305,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       "scripts/intelligence/convexCredentialBoundary.test.ts",
       "scripts/intelligence/stageCandidateBackend.test.ts",
       "scripts/intelligence/auditStagedBackendInputs.test.ts",
+      "scripts/intelligence/browserSwarmLoopbackRelay.test.ts",
     ]) {
       expect(command).toContain(file);
     }

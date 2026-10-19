@@ -2,9 +2,10 @@
  * Phase 41 — Bank Reconciliation
  *
  * Matches uploaded bank-statement lines against posted journalLines on the
- * single SYSTEM_KEYS.BANK_ACCOUNT control account (org-wide — day-to-day
- * postings don't carry a per-bank-account tag, so this is only meaningful
- * for the org's reconciliation-target account; see convex/bankAccounts.ts).
+ * single SYSTEM_KEYS.BANK_ACCOUNT control account. A statement line only ever
+ * matches a ledger line whose own `bankAccountId` names the same physical
+ * bank (SCRUM-54); legacy lines without that stamp match no bank until a
+ * producer records one (see convex/bankAccounts.ts).
  * Matching only ever suggests candidates — confirmMatch always requires an
  * explicit user click, never auto-applies.
  */
@@ -113,12 +114,22 @@ export const suggestMatches = query({
         .map((l) => l.matchedJournalLineId!.toString())
     );
 
+    const bankAccount = await ctx.db.get(args.bankAccountId);
+    if (!bankAccount || bankAccount.orgId !== args.orgId) return [];
+
     const bankChartAccountId = await resolveSystemAccount(ctx, args.orgId, SYSTEM_KEYS.BANK_ACCOUNT);
     const dates = unmatched.map((l) => l.statementDate);
     const fromDate = Math.min(...dates) - MATCH_WINDOW_DAYS * DAY_MS;
     const toDate = Math.max(...dates) + MATCH_WINDOW_DAYS * DAY_MS;
+    // Only lines stamped to THIS physical bank, in its currency, are
+    // candidates; a line stamped to another bank, or a legacy line with no
+    // identity, matches no bank (confirmMatch enforces the same rules).
     const candidateLines = (await getPostedLines(ctx, args.orgId, fromDate, toDate)).filter(
-      (l) => l.accountId === bankChartAccountId && !alreadyClaimed.has(l._id.toString())
+      (l) =>
+        l.accountId === bankChartAccountId &&
+        l.bankAccountId === args.bankAccountId &&
+        l.currency === bankAccount.currency &&
+        !alreadyClaimed.has(l._id.toString())
     );
 
     const entryIds = [...new Set(candidateLines.map((l) => l.journalEntryId))];
@@ -196,13 +207,25 @@ export const confirmMatch = mutation({
       throw new ConvexError("Ledger line not found.");
     }
 
-    // The suggestion query (suggestMatches, above) computes these same four
+    // The suggestion query (suggestMatches, above) computes these same
     // checks to build its candidate list, but a client-supplied journalLineId
     // here is otherwise fully trusted — re-derive and enforce them server-side
     // rather than relying on the UI having only offered a valid suggestion.
     const bankChartAccountId = await resolveSystemAccount(ctx, args.orgId, SYSTEM_KEYS.BANK_ACCOUNT);
     if (journalLine.accountId !== bankChartAccountId) {
       throw new ConvexError("This ledger line is not on the bank account.");
+    }
+    if (!journalLine.bankAccountId) {
+      throw new ConvexError("This ledger line has no bank account recorded, so it cannot be matched to a bank.");
+    }
+    if (journalLine.bankAccountId !== statementLine.bankAccountId) {
+      throw new ConvexError("This ledger line belongs to a different bank account.");
+    }
+    // Same ledger-activity rule as suggestMatches (getPostedLines): a reversed
+    // original is still a real posting, a draft or validated entry is not.
+    const entry = await ctx.db.get(journalLine.journalEntryId);
+    if (!entry || entry.orgId !== args.orgId || (entry.status !== "POSTED" && entry.status !== "REVERSED")) {
+      throw new ConvexError("This ledger line's journal entry is not posted.");
     }
     const netMinor = journalLine.debitMinor - journalLine.creditMinor;
     if (netMinor !== statementLine.amountMinor) {

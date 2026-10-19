@@ -33,7 +33,7 @@ import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaym
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { useTableControls } from "@/hooks/useTableControls";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
-import { getErrorMessage, getLocalizedErrorMessage, GENERIC_ERROR_MESSAGE } from "@/lib/errors";
+import { getErrorMessage, getLocalizedErrorMessage, isConvexError, GENERIC_ERROR_MESSAGE } from "@/lib/errors";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID" | "VOID" | "PENDING_SALE";
@@ -169,7 +169,17 @@ export default function CommissionsPage() {
   const [editingAmount, setEditingAmount] = useState("");
   const [commissionToPay, setCommissionToPay] = useState<CommissionSale | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [bankAccountId, setBankAccountId] = useState("");
+  const [uncertainPayment, setUncertainPayment] = useState<{
+    saleId: string; paymentMethod: PaymentMethod; bankAccountId: string; bankName: string | null;
+  } | null>(null);
   const [isPayingCommission, setIsPayingCommission] = useState(false);
+  const commissionBankOptions = useQuery(
+    api.sales.listCommissionBankOptions,
+    activeOrgId && commissionToPay && paymentMethod !== "CASH" ? { orgId: activeOrgId } : "skip"
+  );
+  const commissionRetry = commissionToPay && uncertainPayment?.saleId === commissionToPay._id
+    ? uncertainPayment : null;
 
   const filtered = sortedCommissions ?? [];
 
@@ -214,6 +224,17 @@ export default function CommissionsPage() {
 
   async function handleConfirmMarkPaid() {
     if (!activeOrgId || !commissionToPay) return;
+    const retry = commissionRetry;
+    if (retry && (retry.paymentMethod !== paymentMethod || retry.bankAccountId !== bankAccountId)) {
+      toast.error(t("CommissionRetrySameDetails" as any));
+      return;
+    }
+    if (paymentMethod !== "CASH" && !retry &&
+      (!bankAccountId || commissionBankOptions?.truncated ||
+        !commissionBankOptions?.banks.some((bank) => bank._id === bankAccountId))) {
+      toast.error(t("DirectPaymentBankRequired" as any));
+      return;
+    }
     setIsPayingCommission(true);
     try {
       // Paying a commission moves money. The identity is stable per sale for as
@@ -223,14 +244,26 @@ export default function CommissionsPage() {
         orgId: activeOrgId,
         saleId: commissionToPay._id,
         paymentMethod,
+        bankAccountId: paymentMethod === "CASH" ? undefined : bankAccountId as Id<"bankAccounts">,
         idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
+      setUncertainPayment(null);
       toast.success(t("CommissionPaidSuccess" as any));
       setCommissionToPay(null);
       setPaymentMethod("CASH");
+      setBankAccountId("");
     } catch (e) {
-      toast.error(errorToast(e, t("CommissionPaymentFailed" as any)));
+      if (isConvexError(e)) {
+        commandId.retire(`mark-commission-paid:${commissionToPay._id}`);
+        setUncertainPayment(null);
+      } else {
+        setUncertainPayment({
+          saleId: commissionToPay._id, paymentMethod, bankAccountId,
+          bankName: commissionBankOptions?.banks.find((bank) => bank._id === bankAccountId)?.name ?? null,
+        });
+      }
+      toast.error(getLocalizedErrorMessage(e, t));
     } finally {
       setIsPayingCommission(false);
     }
@@ -671,7 +704,12 @@ export default function CommissionsPage() {
                             variant="outline"
                             size="sm"
                             className="text-green-600 border-green-600 hover:bg-green-50"
-                            onClick={() => { setCommissionToPay(c); setPaymentMethod("CASH"); }}
+                            onClick={() => {
+                              const retry = uncertainPayment?.saleId === c._id ? uncertainPayment : null;
+                              setCommissionToPay(c);
+                              setPaymentMethod(retry?.paymentMethod ?? "CASH");
+                              setBankAccountId(retry?.bankAccountId ?? "");
+                            }}
                           >
                             <Check className="h-3.5 w-3.5 me-1" /> {t("MarkPaid" as any)}
                           </Button>
@@ -693,13 +731,19 @@ export default function CommissionsPage() {
           open={commissionToPay !== null}
           isPaying={isPayingCommission}
           paymentMethod={paymentMethod}
+          bankAccountId={bankAccountId}
+          bankOptions={commissionBankOptions}
+          uncertain={commissionRetry !== null}
+          retryBankName={commissionRetry?.bankName ?? null}
           t={t as any}
-          onPaymentMethodChange={setPaymentMethod}
+          onPaymentMethodChange={(method) => { setPaymentMethod(method); setBankAccountId(""); }}
+          onBankChange={setBankAccountId}
           onConfirm={handleConfirmMarkPaid}
           onOpenChange={(open) => {
             if (!open) {
               setCommissionToPay(null);
               setPaymentMethod("CASH");
+              setBankAccountId("");
             }
           }}
         />

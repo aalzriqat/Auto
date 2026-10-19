@@ -465,6 +465,11 @@ async function allDoors(seeded: Seeded, caller: Caller) {
     await call("applications.getClosingReadiness", () =>
       caller.query(api.applications.getClosingReadiness, { orgId, applicationId })
     ),
+    // SCRUM-54's receipt-bank picker: bank ids/names only, but it is a public
+    // application query, so it is swept like every other door.
+    await call("applications.listDisbursementBankOptions", () =>
+      caller.query(api.applications.listDisbursementBankOptions, { orgId, applicationId })
+    ),
     await call("financingEconomics.getEconomics", () =>
       caller.query(api.financingEconomics.getEconomics, { orgId, applicationId })
     ),

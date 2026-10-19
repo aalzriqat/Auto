@@ -168,11 +168,9 @@ describe("the composition boundary at every real caller", () => {
     await s.t.run((ctx) =>
       ctx.db.patch(s.applicationId, {
         companyId,
-        // Invoice = what the financier remits (11,000) + the customer's 300 gap.
-        legalInvoiceAmountMinor: 11_300_000,
-        legalInvoiceNumber: "INV-1",
-        legalInvoiceDate: Date.now(),
-        legalInvoiceIssuedTo: "FINANCE_COMPANY",
+        // No legal invoice (SCRUM-411): the server derives the consideration from the approved amount and the gap,
+        // and dates the sale at the evidenced vehicle handover.
+        vehicleHandoverAt: Date.now() - 1000,
         // The engine's frozen answer, consistent with gross 11,000 and no deductions.
         expectedDealerRemittanceMinor: 11_000_000,
       })
@@ -184,7 +182,7 @@ describe("the composition boundary at every real caller", () => {
       accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false, actualAmountMinor: 0, expectedCurrency: "JOD",
       idempotencyKey: crypto.randomUUID(),
     });
-    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "nothing to match" });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "nothing to match", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
     const plan = async (pair: { cash?: number; installment?: number }) => {
       await setGap(s, pair);
       return await s.t.run(async (ctx) => {
@@ -228,7 +226,7 @@ describe("the composition boundary at every real caller", () => {
       accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", actualAmountMinor: 90_000, expectedCurrency: "JOD",
       idempotencyKey: crypto.randomUUID(),
     });
-    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked" });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked", expectedActualAmountMinor: 90_000, expectedActualEvidenceRevision: 0 });
     await setGap(s, { cash: -100_000, installment: 200_000 });
     const before = (await s.t.run((ctx) => ctx.db.get(s.applicationId)))!;
 

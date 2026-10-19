@@ -21,6 +21,8 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { deriveForwardState } from "./utils/financeCompanyForward";
 import { economicsStamp } from "./utils/financingEconomics";
+import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -156,15 +158,11 @@ const enterLetter = (
     dealerSendsMinor: over.dealerSendsMinor ?? c.S,
   });
 
-/** The finishing steps every finalizable manual deal shares: handover, expected payment, legal invoice L, reconciled costs, deposit. */
-async function finishManualDeal(s: Seeded, applicationId: Id<"financeApplications">, c: Pick<Case, "H">, invoiceMinor: number = G) {
+/** The finishing steps every finalizable manual deal shares: handover, expected payment, reconciled costs, deposit. No legal invoice (SCRUM-411): the server derives the consideration. */
+async function finishManualDeal(s: Seeded, applicationId: Id<"financeApplications">, c: Pick<Case, "H">) {
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   await s.owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-  });
-  await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-    orgId: s.orgId, applicationId, legalInvoiceAmountMinor: invoiceMinor, legalInvoiceNumber: `INV-${applicationId}`,
-    legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
   });
   await recordReconciledZeroCost(s.owner.as, api, s.orgId, applicationId);
   await s.t.run(async (ctx) => {
@@ -187,14 +185,28 @@ async function readyManualDeal(s: Seeded, c: Case) {
   await finishManualDeal(s, applicationId, c);
   return { applicationId, quoteId };
 }
+/** Finalizes as is: refused while the payment to the finance company is owed and not on the books (SCRUM-411 P2-01). */
 const finalize = (s: Seeded, applicationId: Id<"financeApplications">) =>
   s.owner.as.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
+
+/** SCRUM-411 P2-01: pays S to the finance company BEFORE finalizing (null when nothing is owed), then finalizes. */
+async function payThenFinalize(s: Seeded, applicationId: Id<"financeApplications">) {
+  const forwardId = await payForwardBeforeFinalize(s, s.owner.as, applicationId);
+  await finalize(s, applicationId);
+  return forwardId;
+}
+
+/** Takes a recorded payment back (recorded in error), before the transfer is confirmed. */
+const takeForwardBack = (s: Seeded, applicationId: Id<"financeApplications">, forwardId: Id<"financeCompanyForwards">) =>
+  s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+    orgId: s.orgId, applicationId, forwardId, reason: "Recorded in error.", idempotencyKey: crypto.randomUUID(),
+  });
 
 async function finalizedManualDeal(tag: string, c: Case) {
   const s = await seedDealership(tag);
   const { applicationId } = await readyManualDeal(s, c);
-  await finalize(s, applicationId);
-  return { s, applicationId };
+  const forwardId = await payThenFinalize(s, applicationId);
+  return { s, applicationId, forwardId };
 }
 
 const GAP = 1_000_000; // OR-12: the company approves G - GAP, so the sale price exceeds the letter by GAP
@@ -226,16 +238,20 @@ const record = (
   over: Partial<{ expectedAmountMinor: number; idempotencyKey: string }> = {},
   as = s.owner.as
 ) =>
-  as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-    expectedAmountMinor: over.expectedAmountMinor ?? c.S,
-    idempotencyKey: over.idempotencyKey ?? crypto.randomUUID(),
-  });
+  seedBank(s.t, s.orgId).then((bankAccountId) =>
+    as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId, paidAt: Date.now(),
+      expectedAmountMinor: over.expectedAmountMinor ?? c.S,
+      idempotencyKey: over.idempotencyKey ?? crypto.randomUUID(),
+    })
+  );
 
 const confirmTransfer = (s: Seeded, applicationId: Id<"financeApplications">, amount = G) =>
-  s.owner.as.mutation(api.applications.confirmDisbursement, {
-    orgId: s.orgId, applicationId, disbursedAmountMinor: amount, idempotencyKey: crypto.randomUUID(),
-  });
+  insertReceiptBank(s).then((bankAccountId) =>
+    s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: amount, idempotencyKey: crypto.randomUUID(), bankAccountId,
+    })
+  );
 
 async function netByAccount(s: Seeded, eventType: string) {
   return await s.t.run(async (ctx) => {
@@ -316,11 +332,11 @@ describe.each(CASES)("SCRUM-27 - $name", (c) => {
     expect(app?.finalizedSaleId).toBeUndefined();
   });
 
-  test("finalize freezes v2: due = S, the receivable is the FULL G and names the company, the sale journal balances", async () => {
+  test("finalize freezes v3: due = S, the receivable is the FULL G and names the company, the sale journal balances", async () => {
     const { s, applicationId } = await finalizedManualDeal(`fin_${c.H}_${c.S}`, c);
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(app?.status).toBe("CLOSED");
-    expect(app?.financedSalePlanVersion).toBe(2);
+    expect(app?.financedSalePlanVersion).toBe(3);
     expect(app?.financeCompanyForwardDueMinor).toBe(c.S);
     expect(app?.financedSaleNetReceivableMinor).toBe(G);
     expect(app?.dealerContributionMinor).toBe(C);
@@ -339,8 +355,8 @@ describe.each(CASES)("SCRUM-27 - $name", (c) => {
   });
 
   test("the company's name is on every finance journal line, never a finance-company id", async () => {
+    // The payment to the company (when S > 0) was recorded before finalizing, so its lines are included too.
     const { s, applicationId } = await finalizedManualDeal(`lines_${c.H}_${c.S}`, c);
-    if (c.S > 0) await record(s, applicationId, c);
     await confirmTransfer(s, applicationId);
     const lines = await financeLines(s);
     expect(lines.length).toBeGreaterThan(0);
@@ -351,13 +367,12 @@ describe.each(CASES)("SCRUM-27 - $name", (c) => {
   });
 
   test("forward then receipt: AP clears, AR is settled by the FULL G, the payment names the payer, the stage completes", async () => {
-    const { s, applicationId } = await finalizedManualDeal(`rcpt_${c.H}_${c.S}`, c);
-    const proof0 = await proofOf(s, applicationId);
+    const s = await seedDealership(`rcpt_${c.H}_${c.S}`);
+    const { applicationId } = await readyManualDeal(s, c);
     if (c.S > 0) {
-      expect(proof0.state).toBe("DUE");
-      expect(proof0.dueMinor).toBe(c.S);
-      // The transfer is refused until the dealership has paid what the letter says it owes.
-      expect(await refusalOf(confirmTransfer(s, applicationId))).toMatch(/manager or accountant records that payment/i);
+      // SCRUM-411 P2-01: finalize is refused until the dealership has paid what the letter says it owes.
+      expect(await refusalOf(finalize(s, applicationId))).toMatch(/have not been paid yet/i);
+      expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("APPROVED");
       await record(s, applicationId, c);
       const forwardNet = await netByAccount(s, "FINANCE_COMPANY_FORWARD_PAID");
       expect(forwardNet.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(c.S);
@@ -365,10 +380,23 @@ describe.each(CASES)("SCRUM-27 - $name", (c) => {
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ payerNameSnapshot: LETTER_NAME });
       expect(rows[0].financeCompanyId).toBeUndefined();
+      await finalize(s, applicationId);
+      const proof0 = await proofOf(s, applicationId);
+      expect(proof0.dueMinor).toBe(c.S);
+      expect(proof0.state).toBe("SETTLED");
+
+      // A payment taken back after finalize makes it due again: the transfer is refused until it is recorded anew.
+      await takeForwardBack(s, applicationId, rows[0]._id);
+      expect((await proofOf(s, applicationId)).state).toBe("DUE");
+      expect(await refusalOf(confirmTransfer(s, applicationId))).toMatch(/manager or accountant records that payment/i);
+      await record(s, applicationId, c);
       expect((await proofOf(s, applicationId)).state).toBe("SETTLED");
+      expect((await netByAccount(s, "FINANCE_COMPANY_FORWARD_PAID")).ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(c.S);
     } else {
       // Nothing to forward: the proof must not demand a payment of 0.
-      expect(["NOT_DUE", "SETTLED"]).toContain(proof0.state);
+      expect(await refusalOf(record(s, applicationId, c))).not.toBeNull();
+      await finalize(s, applicationId);
+      expect(["NOT_DUE", "SETTLED"]).toContain((await proofOf(s, applicationId)).state);
       expect(await refusalOf(record(s, applicationId, c))).not.toBeNull();
     }
 
@@ -395,15 +423,17 @@ describe.each(CASES)("SCRUM-27 - $name", (c) => {
   });
 
   test("cancel after finalize and before any payment: the receivable is cancelled; a payment on the books blocks it", async () => {
-    const { s, applicationId } = await finalizedManualDeal(`cancel_${c.H}_${c.S}`, c);
+    const { s, applicationId, forwardId } = await finalizedManualDeal(`cancel_${c.H}_${c.S}`, c);
     const cancel = () =>
       s.manager.as.mutation(api.applications.cancelApplication, {
         orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),
       });
     if (c.S > 0) {
-      await record(s, applicationId, c);
+      // SCRUM-411 P2-01: the payment was recorded before finalizing, so it is on the books now.
+      expect(forwardId).not.toBeNull();
       expect(await refusalOf(cancel())).toMatch(/already been paid to the finance company/i);
-      return;
+      // Once it is taken back the deal can be cancelled, as a deal that never paid.
+      await takeForwardBack(s, applicationId, forwardId!);
     }
     expect(await refusalOf(cancel())).toBeNull();
     const receivables = (await s.t.run((ctx) => ctx.db.query("receivableDocuments").collect())).filter(
@@ -417,7 +447,9 @@ describe.each(CASES)("SCRUM-27 - $name", (c) => {
 describe("SCRUM-27 - cancel before the payment leaves no open manual receivable", () => {
   test("the receivable and the sale are cancelled and the books net to zero on AR-Finance", async () => {
     const c = CASES[0];
-    const { s, applicationId } = await finalizedManualDeal("cancelnp", c);
+    const { s, applicationId, forwardId } = await finalizedManualDeal("cancelnp", c);
+    // The payment recorded before finalizing is taken back first: a paid deal cannot be cancelled.
+    await takeForwardBack(s, applicationId, forwardId!);
     await s.manager.as.mutation(api.applications.cancelApplication, {
       orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),
     });
@@ -511,8 +543,8 @@ describe("SCRUM-27 - refusals and red-team cases", () => {
   });
 
   test("a receipt is refused when the receivable's payer no longer matches the application's frozen name", async () => {
+    // The payment was recorded before finalizing (SCRUM-411 P2-01), so the transfer gate is already satisfied.
     const { s, applicationId } = await finalizedManualDeal("swap", c);
-    await record(s, applicationId, c);
     await s.t.run(async (ctx) => {
       const r = (await ctx.db.query("receivableDocuments").collect()).find((x) => x.orgId === s.orgId && x.sourceType === "finance_application")!;
       await ctx.db.patch(r._id, { payerNameSnapshot: "A Different Company" } as never);
@@ -522,10 +554,15 @@ describe("SCRUM-27 - refusals and red-team cases", () => {
   });
 
   test("forward is recordable only by finance permission; the manager and sales are refused", async () => {
-    const { s, applicationId } = await finalizedManualDeal("fwdperm", c);
+    // Judged before finalizing (SCRUM-411 P2-01): the payment is recorded on an approved, ready deal.
+    const s = await seedDealership("fwdperm");
+    const { applicationId } = await readyManualDeal(s, c);
     expect(await refusalOf(record(s, applicationId, c, {}, s.manager.as))).not.toBeNull();
     expect(await refusalOf(record(s, applicationId, c, {}, s.sales.as))).not.toBeNull();
     expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(0);
+    // Control: the finance permission records it.
+    await record(s, applicationId, c);
+    expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(1);
   });
 
   test("forward rows for two manual deals are separate: each carries its own name", async () => {
@@ -538,8 +575,8 @@ describe("SCRUM-27 - refusals and red-team cases", () => {
 describe("SCRUM-27 - reversing a manual payer's posting", () => {
   test("reversing the forward twice reverses once, and the reversal lines keep the payer's name", async () => {
     const c = CASES[0];
+    // The forward payment was recorded before finalizing (SCRUM-411 P2-01).
     const { s, applicationId } = await finalizedManualDeal("revtwice", c);
-    await record(s, applicationId, c);
     const result = await s.t.run(async (ctx) => {
       const original = (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())
         .find((e) => e.eventType === "FINANCE_COMPANY_FORWARD_PAID" && e.status === "POSTED")!;
@@ -621,6 +658,8 @@ describe("SCRUM-27 OR-12 - the shortfall (sale price minus the letter) is settle
     const net = await netByAccount(s, "SALE_COMPLETED");
     expect(net.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES).toBe(G - GAP);
     expect(net.ACCOUNTS_RECEIVABLE_CUSTOMERS).toBe(GAP);
+    // Revenue is the server-derived consideration A + R = (G - GAP) + GAP, with no invoice involved (SCRUM-411).
+    expect(net.SALES_REVENUE).toBe(-G);
     const { arFinanceDebits, receivable } = await s.t.run(async (ctx) => {
       const account = await ctx.db
         .query("chartOfAccounts")
@@ -638,14 +677,9 @@ describe("SCRUM-27 OR-12 - the shortfall (sale price minus the letter) is settle
     expect(receivable?.payerNameSnapshot).toBe(LETTER_NAME);
   });
 
-  test("dealer absorbs the gap: the invoice at the sale price is refused (G + customer receivable must equal L); at the letter amount it finalizes with no customer receivable", async () => {
-    const refused = await shortfallDeal("or12_absorb_refused", "ABSORB");
-    await finishManualDeal(refused.s, refused.applicationId, NO_DEPOSIT);
-    expect(await refusalOf(finalize(refused.s, refused.applicationId))).toMatch(/legal invoice does not agree with the approved amount/);
-    expect((await refused.s.t.run((ctx) => ctx.db.get(refused.applicationId)))?.status).toBe("APPROVED");
-
+  test("dealer absorbs the gap: the server-derived consideration is the letter amount, so it finalizes with no customer receivable and no invoice", async () => {
     const { s, applicationId } = await shortfallDeal("or12_absorb_ok", "ABSORB");
-    await finishManualDeal(s, applicationId, NO_DEPOSIT, G - GAP);
+    await finishManualDeal(s, applicationId, NO_DEPOSIT);
     await finalize(s, applicationId);
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
     const net = await netByAccount(s, "SALE_COMPLETED");
@@ -654,11 +688,18 @@ describe("SCRUM-27 OR-12 - the shortfall (sale price minus the letter) is settle
     expect(Object.values(net).reduce((a, b) => a + b, 0)).toBe(0);
   });
 
-  test("an invoice that differs from the sale price is reported, never silently posted", async () => {
+  test("an optional genuine invoice that differs from the approved amount is refused when recorded, never stored or posted", async () => {
     const { s, applicationId } = await shortfallDeal("or12_invoice_differs", "CASH");
-    await finishManualDeal(s, applicationId, NO_DEPOSIT, G - 500_000);
-    expect(await refusalOf(finalize(s, applicationId))).toMatch(/legal invoice does not agree with the approved amount/);
-    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("APPROVED");
+    await finishManualDeal(s, applicationId, NO_DEPOSIT);
+    expect(
+      await refusalOf(
+        s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
+          orgId: s.orgId, applicationId, legalInvoiceAmountMinor: G, legalInvoiceNumber: "INV-DIFF",
+          legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+        })
+      )
+    ).toMatch(/does not match the amount the finance company approved/);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.legalInvoiceAmountMinor).toBeUndefined();
   });
 
   test("reopening the approval clears the letter and every gap field", async () => {
@@ -804,7 +845,9 @@ describe("SCRUM-27 R1 - the letter, G, the basis and the gap are one unit", () =
     );
     expect(audit).toHaveLength(1);
 
-    await finalize(s, applicationId);
+    // The corrected S = 1,575 is owed to the company and must be paid before finalizing (SCRUM-411 P2-01).
+    expect(await refusalOf(finalize(s, applicationId))).toMatch(/have not been paid yet/i);
+    await payThenFinalize(s, applicationId);
     expect((await read(s, applicationId))?.status).toBe("CLOSED");
     expect(await arFinanceDebits(s)).toEqual([G]);
   });

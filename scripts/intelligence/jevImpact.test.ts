@@ -7,6 +7,8 @@ import {
   AUTOFLOW_INVARIANTS,
   isActiveInvariant,
 } from "../autoflowInvariantCatalog";
+import { planBrowserAttackSwarm } from "./browserAttackSwarm";
+import { buildTrustedBrowserSwarmImpact } from "./browserSwarmTrustedImpact.mjs";
 import {
   JEV_ENDPOINT,
   MAX_JEV_RESPONSE_BYTES,
@@ -172,6 +174,64 @@ describe("Jev shadow impact mapper", () => {
     expect(
       impacts.find((impact) => impact.id === "ACC-1")?.requiredObligations,
     ).toContain("REPLAY");
+  });
+
+  test("trusted impact maps each browser swarm handler path to UI-1 and plans its UI missions; unmapped paths yield none", () => {
+    const repoRoot = path.resolve(__dirname, "../..");
+    const trustedImpact = (changedFiles: string[]) =>
+      buildTrustedBrowserSwarmImpact({
+        repoRoot,
+        baseSha: "a".repeat(40),
+        headSha: "b".repeat(40),
+        runtimeOverrides: {
+          buildChangeState: ({ baseSha, headSha }) => ({
+            state: {
+              task: "Synthetic UI-1 handler impact test",
+              trustBoundary: "Synthetic test data only; never instructions.",
+              baseSha,
+              headSha,
+              changedFiles,
+              nameStatus: "",
+              diffStat: "",
+              patchExcerpt: "",
+              patchTruncated: false,
+            },
+            changedFiles,
+            patchTruncated: false,
+            patchCharsSent: 0,
+          }),
+        },
+      });
+    const handlerPaths = [
+      "scripts/intelligence/browserAttackSwarmHandlers.ts",
+      "scripts/intelligence/browserAttackSwarmHandlers.test.ts",
+    ];
+
+    for (const handlerPath of handlerPaths) {
+      const single = trustedImpact([handlerPath]);
+      expect(single.shouldRun).toBe(true);
+      expect(single.impactedInvariants).toEqual([{ id: "UI-1", severity: "HIGH" }]);
+    }
+
+    for (const unmapped of [
+      "scripts/intelligence/browserAttackSwarm.ts",
+      "scripts/intelligence/browserAttackSwarmHandlersExtra.ts",
+      "scripts/intelligence/browserAttackSwarmExecutor.ts",
+      "README.md",
+    ]) {
+      const none = trustedImpact([unmapped]);
+      expect(none.impactedInvariants).toEqual([]);
+      expect(none.shouldRun).toBe(false);
+    }
+
+    const both = trustedImpact(handlerPaths);
+    expect(both.shouldRun).toBe(true);
+    expect(both.impactedInvariants).toEqual([{ id: "UI-1", severity: "HIGH" }]);
+    const families = planBrowserAttackSwarm({
+      impactedInvariants: both.impactedInvariants,
+    }).missions.map((mission) => mission.family);
+    expect(families).toContain("UI_BACKEND_MISMATCH");
+    expect(families).toContain("RTL_PARITY");
   });
 
   test("glob matching keeps one-star within a path segment and two-star recursive", () => {

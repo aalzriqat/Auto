@@ -329,3 +329,79 @@ describe("SCRUM-350 trusted browser swarm worker", () => {
     ).rejects.toBeInstanceOf(BrowserSwarmExecutionError);
   });
 });
+
+describe("SCRUM-826 D7: a breach proven after the mission timeout", () => {
+  type LateEvidence = ReturnType<typeof evidenceFor>;
+
+  async function runLate(item: BrowserAttackMission, late: (() => LateEvidence) | Error) {
+    return executeBrowserSwarmWorker({
+      manifest: manifestFor([item]),
+      workerId: "worker-1",
+      verifyPreviewTarget: async () => ({ verified: true, summary: "verified" }),
+      handlers: {
+        UI_BACKEND_MISMATCH: async ({ signal }) =>
+          await new Promise<LateEvidence>((resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                if (late instanceof Error) reject(late);
+                else resolve(late());
+              },
+              { once: true },
+            );
+          }),
+      },
+    });
+  }
+
+  const breach = {
+    kind: "UI_BACKEND_AUTHORITY" as const,
+    passed: false,
+    summary: "two expenses were recorded for one intent",
+  };
+
+  it("keeps a proven, bound, evidenced breach concluded after the abort as CONFIRMED_BREACH", async () => {
+    const item = mission({ timeoutMs: 15 });
+    const result = await runLate(item, () => evidenceFor(item, { oracle: breach }));
+    expect(result.results[0]?.outcome).toBe("CONFIRMED_BREACH");
+    expect(result.results[0]?.evidence.oracle.summary).toMatch(/two expenses were recorded/);
+    expect(result.results[0]?.evidence.oracle.summary).toMatch(/after the mission timeout/);
+    expect(result.passed).toBe(false);
+  });
+
+  it("never certifies a PASS that arrives after the abort", async () => {
+    const item = mission({ timeoutMs: 15 });
+    const result = await runLate(item, () => evidenceFor(item));
+    expect(result.results[0]?.outcome).toBe("HARNESS_ERROR");
+    expect(result.results[0]?.evidence.harnessError).toMatch(/exceeded its 15ms timeout/);
+  });
+
+  it("keeps a late breach without artifacts a harness error", async () => {
+    const item = mission({ timeoutMs: 15 });
+    const result = await runLate(item, () => evidenceFor(item, { oracle: breach, artifacts: [] }));
+    expect(result.results[0]?.outcome).toBe("HARNESS_ERROR");
+  });
+
+  it("keeps a late breach that carries a harness error a harness error", async () => {
+    const item = mission({ timeoutMs: 15 });
+    const result = await runLate(item, () =>
+      evidenceFor(item, { oracle: breach, harnessError: "browser context lost" }),
+    );
+    expect(result.results[0]?.outcome).toBe("HARNESS_ERROR");
+  });
+
+  it("keeps a late breach bound to another worker a harness error", async () => {
+    const item = mission({ timeoutMs: 15 });
+    const result = await runLate(item, () =>
+      evidenceFor(item, { oracle: breach, workerId: "worker-2" }),
+    );
+    expect(result.results[0]?.outcome).toBe("HARNESS_ERROR");
+  });
+
+  it("keeps a handler that throws after the abort a harness error", async () => {
+    const item = mission({ timeoutMs: 15 });
+    const result = await runLate(item, new Error("browser context closed after abort"));
+    expect(result.results[0]?.outcome).toBe("HARNESS_ERROR");
+    expect(result.results[0]?.evidence.harnessError).toMatch(/exceeded its 15ms timeout/);
+  });
+});

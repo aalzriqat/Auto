@@ -7,6 +7,7 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { logAdminAction } from "./adminAudit";
 import { rateLimiter } from "./rateLimit";
 import type { MutationCtx } from "./_generated/server";
+import { buildPreview, isNoReplyAddress } from "../lib/supportMail";
 
 const CONTACT_FORM_TO_EMAIL = "info@autoflowdealer.com";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -52,6 +53,7 @@ async function recordSupportMessage(
     .first();
 
   const now = Date.now();
+  const lastMessagePreview = buildPreview(args.bodyText, args.bodyHtml);
 
   if (!thread) {
     const threadId = await ctx.db.insert("supportThreads", {
@@ -61,13 +63,19 @@ async function recordSupportMessage(
       status: "OPEN",
       inbox,
       lastMessageAt: now,
+      inboundRevision: 1,
+      lastMessagePreview,
+      awaitingReply: true,
     });
     thread = await ctx.db.get(threadId);
   } else {
     await ctx.db.patch(thread._id, {
       lastMessageAt: now,
+      inboundRevision: (thread.inboundRevision ?? 0) + 1,
       status: "OPEN",
       participantName: args.fromName ?? thread.participantName,
+      lastMessagePreview,
+      awaitingReply: true,
     });
   }
 
@@ -187,9 +195,13 @@ export const listThreads = query({
     await requireSuperAdmin(ctx);
 
     if (args.status) {
+      // Newest-first: the status index alone (`by_inbox_and_status`) is not
+      // time-ordered, so `.order("desc")` on it sorted by creation time instead.
       return await ctx.db
         .query("supportThreads")
-        .withIndex("by_inbox_and_status", (q) => q.eq("inbox", args.inbox).eq("status", args.status!))
+        .withIndex("by_inbox_status_and_lastMessageAt", (q) =>
+          q.eq("inbox", args.inbox).eq("status", args.status!)
+        )
         .order("desc")
         .paginate(args.paginationOpts);
     }
@@ -241,6 +253,28 @@ export const setThreadStatus = mutation({
   },
 });
 
+export const setThreadCategory = mutation({
+  args: {
+    threadId: v.id("supportThreads"),
+    // null clears the override and falls back to the heuristic.
+    category: v.union(v.literal("people"), v.literal("automated"), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const admin = await requireSuperAdmin(ctx);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("Thread not found.");
+    await ctx.db.patch(args.threadId, { categoryOverride: args.category ?? undefined });
+
+    await logAdminAction(ctx, admin, {
+      action: "supportSetThreadCategory",
+      targetTable: "supportThreads",
+      targetId: args.threadId,
+      before: { categoryOverride: thread.categoryOverride ?? null },
+      after: { categoryOverride: args.category },
+    });
+  },
+});
+
 // ─── Sending a reply (action — needs to call the Resend API) ──────────────────
 
 export const requireSuperAdminForAction = internalQuery({
@@ -262,8 +296,17 @@ export const recordOutboundMessage = internalMutation({
     // action, so not auditable) from a reply a person sent.
     sentByUserId: v.optional(v.id("users")),
     sentByEmail: v.optional(v.string()),
+    // `thread.inboundRevision ?? 0` as `sendReply` saw it BEFORE the provider call.
+    // A missing value means "unknown", and unknown is treated as NOT newer, so a
+    // caller that does not pass it keeps the pre-F2 behaviour (reply answers the
+    // thread). Only meaningful together with sentByUserId.
+    observedInboundRevision: v.optional(v.number()),
+    // Send & close: close the thread in the same transaction as the reply, but
+    // only if no newer inbound message arrived during the send.
+    closeAfterSend: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ closed: boolean; newerInbound: boolean }> => {
+    const now = Date.now();
     await ctx.db.insert("supportMessages", {
       threadId: args.threadId,
       direction: "OUTBOUND",
@@ -272,9 +315,39 @@ export const recordOutboundMessage = internalMutation({
       bodyText: args.bodyText,
       resendEmailId: args.resendEmailId,
       sentByUserId: args.sentByUserId,
-      createdAt: Date.now(),
+      createdAt: now,
     });
-    await ctx.db.patch(args.threadId, { lastMessageAt: Date.now() });
+
+    let closed = false;
+    let newerInbound = false;
+    let previousStatus: "OPEN" | "CLOSED" | undefined;
+    if (args.sentByUserId) {
+      // The provider call is a separate step from this mutation, so a customer
+      // message can land in between. Re-read the thread HERE (same transaction as
+      // the writes below) and compare against what the action observed.
+      const thread = await ctx.db.get(args.threadId);
+      previousStatus = thread?.status;
+      newerInbound =
+        args.observedInboundRevision !== undefined && (thread?.inboundRevision ?? 0) > args.observedInboundRevision;
+
+      if (newerInbound) {
+        // The reply was sent and is recorded, but it did NOT answer the newest
+        // message: keep the flag, the inbound preview and the open status.
+        await ctx.db.patch(args.threadId, { lastMessageAt: now });
+      } else {
+        // A human reply answers the thread. The automated acknowledgement (no
+        // sentByUserId) must not: it would hide a thread that still needs a person.
+        await ctx.db.patch(args.threadId, {
+          lastMessageAt: now,
+          awaitingReply: false,
+          lastMessagePreview: buildPreview(args.bodyText),
+          ...(args.closeAfterSend ? { status: "CLOSED" as const } : {}),
+        });
+        closed = args.closeAfterSend === true;
+      }
+    } else {
+      await ctx.db.patch(args.threadId, { lastMessageAt: now });
+    }
 
     // `sendReply` is an action, so it cannot write the audit row itself. It
     // passes the actor down and the row is inserted here, in the same
@@ -295,7 +368,27 @@ export const recordOutboundMessage = internalMutation({
         after: { toEmail: args.toEmail, resendEmailId: args.resendEmailId },
         createdAt: Date.now(),
       });
+
+      if (closed) {
+        // Same row shape `setThreadStatus` writes (writeAuditLog's fields), so
+        // closing via Send & close is indistinguishable in the audit trail from
+        // closing by hand. Written from the actor snapshot `sendReply` already
+        // captured, like the reply row above, with NO user re-read: this runs
+        // after the provider has sent the email, and a throw here would roll the
+        // reply back and invite a duplicate resend.
+        await ctx.db.insert("adminAuditLog", {
+          actorUserId: args.sentByUserId,
+          actorEmail: args.sentByEmail,
+          action: "supportSetThreadStatus",
+          targetTable: "supportThreads",
+          targetId: args.threadId,
+          before: { status: previousStatus },
+          after: { status: "CLOSED" },
+          createdAt: Date.now(),
+        });
+      }
     }
+    return { closed, newerInbound };
   },
 });
 
@@ -303,14 +396,26 @@ export const sendReply = action({
   args: {
     threadId: v.id("supportThreads"),
     bodyText: v.string(),
+    // Send & close: closed server-side, atomically with recording the reply, and
+    // only if no newer inbound message arrived while the email was being sent.
+    closeAfterSend: v.optional(v.boolean()),
   },
-  handler: async (ctx, args): Promise<{ success: true }> => {
+  handler: async (ctx, args): Promise<{ success: true; closed: boolean; newerInbound: boolean }> => {
     const admin = await ctx.runQuery(internal.support.requireSuperAdminForAction, {});
 
     const threadData = await ctx.runQuery(internal.support.getThreadForReply, {
       threadId: args.threadId,
     });
     if (!threadData) throw new ConvexError("Thread not found.");
+
+    // Replies to no-reply senders bounce. Refuse before any email is attempted.
+    if (isNoReplyAddress(threadData.participantEmail)) {
+      throw new ConvexError("This sender does not accept replies.");
+    }
+
+    // Captured BEFORE the provider call; recordOutboundMessage compares it with
+    // the thread as it is when the reply is recorded.
+    const observedInboundRevision = threadData.inboundRevision ?? 0;
 
     const result = await ctx.runAction(internal.email.sendSupportReply, {
       toEmail: threadData.participantEmail,
@@ -323,7 +428,7 @@ export const sendReply = action({
       throw new ConvexError(result.error || "Failed to send reply email.");
     }
 
-    await ctx.runMutation(internal.support.recordOutboundMessage, {
+    const outcome = await ctx.runMutation(internal.support.recordOutboundMessage, {
       threadId: args.threadId,
       fromEmail: FROM_EMAIL[threadData.inbox as Inbox],
       toEmail: threadData.participantEmail,
@@ -331,9 +436,11 @@ export const sendReply = action({
       resendEmailId: result.resendEmailId,
       sentByUserId: admin._id,
       sentByEmail: admin.email,
+      observedInboundRevision,
+      closeAfterSend: args.closeAfterSend,
     });
 
-    return { success: true };
+    return { success: true, closed: outcome.closed, newerInbound: outcome.newerInbound };
   },
 });
 

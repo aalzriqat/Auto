@@ -225,6 +225,7 @@ describe("the custody section", () => {
     const costs = { ...dealCosts([openCustody()]), custodyAccounting: { ready: true }, custodyPostsNow: true, plannedCustody: null, recommendedCustody: null, economicsFrozen: { frozen: false } };
     queryResults.set(COSTS_QUERY, costs);
     queryResults.set(CANDIDATES_QUERY, { candidates: [{ userId: "u2", name: "Rami" }], truncated: false });
+    queryResults.set("financeDealCosts:listCustodyBankOptions", { banks: [{ _id: "bank_1", name: "Operating", currency: "JOD" }], truncated: false });
     renderCockpit();
     expect(queryArgs.has(MEMBERS_QUERY)).toBe(false);
     expect(queryArgs.get(CANDIDATES_QUERY)).toEqual({ orgId: ORG });
@@ -234,10 +235,11 @@ describe("the custody section", () => {
     fireEvent.change(within(dialog).getByLabelText(/Amount/), { target: { value: "100" } });
     // SCRUM-469: nothing is pre-selected; the method sent is the one the operator chose.
     pickMethod(dialog, "BANK_TRANSFER");
+    fireEvent.change(within(dialog).getByTestId("custody-returned-bank"), { target: { value: "bank_1" } });
     fireEvent.click(within(dialog).getByTestId("custody-returned-submit"));
     const move = mutations.get("financeDealCosts:recordCustodyMovement")!;
     await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
-    expect(move.mock.calls[0][0]).toMatchObject({ orgId: ORG, custodyId: "cust1", kind: "RETURNED", amountMinor: 100_000, method: "BANK_TRANSFER" });
+    expect(move.mock.calls[0][0]).toMatchObject({ orgId: ORG, custodyId: "cust1", kind: "RETURNED", amountMinor: 100_000, method: "BANK_TRANSFER", bankAccountId: "bank_1" });
     expect(typeof move.mock.calls[0][0].idempotencyKey).toBe("string");
   });
 

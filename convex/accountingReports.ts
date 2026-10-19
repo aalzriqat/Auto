@@ -70,7 +70,7 @@ async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations"
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /** accountingDate value historical queries treat as "no date" when a range bound is open. */
-const NO_ACCOUNTING_DATE_SENTINEL = -1;
+export const NO_ACCOUNTING_DATE_SENTINEL = -1;
 
 /**
  * Concatenate index reads and put them back in insertion (_creationTime) order,
@@ -86,8 +86,61 @@ export async function getPostedLines(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   fromDate?: number,
-  toDate?: number
+  toDate?: number,
+  options?: { preferBulkRead?: boolean }
 ) {
+  // Leave headroom under Convex's per-transaction index-range limit for the
+  // rest of the report. Lines sharing a parent require only one point read.
+  const maxTargetedParents = 512;
+  const excludeSentinel = fromDate === undefined || toDate === undefined;
+  const eligibility = await ctx.db.query("journalReportEligibility")
+    .withIndex("by_org", q => q.eq("orgId", orgId)).unique();
+  if (eligibility?.phase === "READY") {
+    const lines = await ctx.db.query("journalLines")
+      .withIndex("by_org_reportPosted_date", q => {
+        const scoped = q.eq("orgId", orgId).eq("reportPosted", true);
+        if (fromDate !== undefined && toDate !== undefined) return scoped.gte("accountingDate", fromDate).lte("accountingDate", toDate);
+        if (fromDate !== undefined) return scoped.gte("accountingDate", fromDate);
+        if (toDate !== undefined) return scoped.lte("accountingDate", toDate);
+        return scoped;
+      }).collect();
+    return mergeByCreation([lines.filter(line => !excludeSentinel || line.accountingDate !== NO_ACCOUNTING_DATE_SENTINEL)]);
+  }
+  const lineQuery = () => ctx.db
+    .query("journalLines")
+    .withIndex("by_org_date", (q) => {
+      const scoped = q.eq("orgId", orgId);
+      if (fromDate !== undefined && toDate !== undefined) {
+        return scoped.gte("accountingDate", fromDate).lte("accountingDate", toDate);
+      }
+      if (fromDate !== undefined) return scoped.gte("accountingDate", fromDate);
+      if (toDate !== undefined) return scoped.lte("accountingDate", toDate);
+      return scoped;
+    });
+
+  // Read the requested lines once. A two-sided window with a bounded number
+  // of parent entries can avoid reading every posted entry in the organization.
+  // Cumulative callers can retain the bulk parent scan.
+  const hasDateBound = fromDate !== undefined && toDate !== undefined;
+  const inRange = await lineQuery().collect();
+  const parentIds = hasDateBound && !options?.preferBulkRead
+    ? [...new Set(inRange.map((line) => line.journalEntryId))]
+    : [];
+  if (hasDateBound && !options?.preferBulkRead && parentIds.length <= maxTargetedParents) {
+    const parents = await Promise.all(parentIds.map((id) => ctx.db.get("journalEntries", id)));
+    const allowedIds = new Set<Id<"journalEntries">>();
+    for (const parent of parents) {
+      if (parent?.orgId === orgId && (parent.status === "POSTED" || parent.status === "REVERSED")) {
+        allowedIds.add(parent._id);
+      }
+    }
+    return mergeByCreation([
+      inRange.filter(
+        (line) => (!excludeSentinel || line.accountingDate !== NO_ACCOUNTING_DATE_SENTINEL) && allowedIds.has(line.journalEntryId)
+      ),
+    ]);
+  }
+
   // Include REVERSED entries too, not just POSTED ones: a reversed entry's
   // own lines are still real, immutable historical postings — its status
   // just means a *separate*, independently-posted reversal entry later
@@ -106,21 +159,7 @@ export async function getPostedLines(
   for (const e of postedEntries) entryIds.add(e._id);
   for (const e of reversedEntries) entryIds.add(e._id);
 
-  const inRange = await ctx.db
-    .query("journalLines")
-    .withIndex("by_org_date", (q) => {
-      const scoped = q.eq("orgId", orgId);
-      if (fromDate !== undefined && toDate !== undefined) {
-        return scoped.gte("accountingDate", fromDate).lte("accountingDate", toDate);
-      }
-      if (fromDate !== undefined) return scoped.gte("accountingDate", fromDate);
-      if (toDate !== undefined) return scoped.lte("accountingDate", toDate);
-      return scoped;
-    })
-    .collect();
-
   // With an open bound, a line carrying the -1 sentinel date stays excluded.
-  const excludeSentinel = fromDate === undefined || toDate === undefined;
   // Callers expect insertion order; the date index returns accountingDate order.
   return mergeByCreation([
     inRange.filter(

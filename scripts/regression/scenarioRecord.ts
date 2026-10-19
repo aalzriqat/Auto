@@ -53,7 +53,16 @@ export interface ScenarioRecord {
   level: ScenarioLevel;
   status: ScenarioStatus;
   source: { hunter: (typeof SCENARIO_HUNTERS)[number]; runId: string; firstSeen: string };
-  steps: ScenarioStep[];
+  /**
+   * `scenario` (default): actor + public-API steps. `rule`: a pure-function money/permission rule
+   * checked directly (no actor, no API path), described by `subject` + `inputs` instead of `steps`.
+   */
+  kind?: "scenario" | "rule";
+  steps?: ScenarioStep[];
+  /** kind "rule" only: the exported function under test, as a dotted token (e.g. saleEconomics). */
+  subject?: string;
+  /** kind "rule" only: literal inputs, same token rules as a step input. */
+  inputs?: Record<string, unknown>;
   expected: ScenarioExpectation[];
   rulings: RulingRef[];
   /** Executable check for backend/cloud scenarios. Browser records ARE the test. */
@@ -84,7 +93,8 @@ export interface LibraryProblem {
 const SLUG = /^[a-z0-9][a-z0-9._-]{2,80}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
-const RULING_ID = /^SCRUM-\d+#c\d+$/;
+// A ruling lives in a Jira comment (#c4567) or in the issue description itself (#description).
+const RULING_ID = /^SCRUM-\d+#(?:c\d+|description)$/;
 const ID_TOKEN = /^(?:[a-z0-9]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|user_[A-Za-z0-9]{6,}|org_[A-Za-z0-9]{6,})$/;
 const ISO_TS = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}.*$/;
 // Epoch-style per-run suffix only (10+ digits): cheque/invoice numbers and amounts stay significant.
@@ -122,12 +132,18 @@ function normaliseValue(value: unknown): unknown {
  * (amounts, roles, methods) stay different.
  */
 export function scenarioFingerprint(
-  record: Pick<ScenarioRecord, "domain" | "steps" | "expected">,
+  record: Pick<ScenarioRecord, "domain" | "steps" | "expected" | "kind" | "subject" | "inputs">,
 ): string {
+  // A rule's identity is its subject + inputs; the scenario canonical form is unchanged so existing
+  // fingerprints stay valid.
+  const identity =
+    record.kind === "rule"
+      ? { kind: "rule", subject: record.subject, inputs: record.inputs }
+      : { steps: record.steps };
   const canonical = JSON.stringify(
     normaliseValue({
       domain: record.domain,
-      steps: record.steps,
+      ...identity,
       // Assertion order is not part of the scenario.
       expected: [...record.expected]
         .map((e) => normaliseValue(e))
@@ -153,7 +169,7 @@ export function validateRulingSnapshot(snapshot: unknown): LibraryProblem[] {
   const seen = new Set<string>();
   for (const entry of snapshot as Record<string, unknown>[]) {
     const id = String(entry?.id);
-    if (typeof entry?.id !== "string" || !RULING_ID.test(entry.id)) add(id, "id must look like SCRUM-123#c4567");
+    if (typeof entry?.id !== "string" || !RULING_ID.test(entry.id)) add(id, "id must look like SCRUM-123#c4567 or SCRUM-123#description");
     if (seen.has(id)) add(id, "duplicate ruling id");
     seen.add(id);
     if (typeof entry?.digest !== "string" || !SHA256.test(entry.digest)) add(id, "digest must be a sha256 hex string");
@@ -203,7 +219,7 @@ const GLOB = /^[\w./*{}[\],-]{1,120}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const RECORD_KEYS = new Set([
-  "id", "fingerprint", "domain", "level", "status", "source", "steps", "expected", "rulings",
+  "id", "fingerprint", "domain", "level", "status", "source", "kind", "steps", "subject", "inputs", "expected", "rulings",
   "impl", "matrixRow", "bugRef", "candidateReason", "candidateIssue", "retiredReason",
   "retiredByRuling", "invariantIds", "sourceGlobs",
 ]);
@@ -234,6 +250,49 @@ function* stringsIn(value: unknown): Generator<string> {
   else if (isObject(value)) for (const v of Object.values(value)) yield* stringsIn(v);
 }
 
+/**
+ * A `rule` record names a function (`subject`); its bound test must actually call it and assert.
+ * Static only: this stops a record being bound to an unrelated test, not a wrong expected value
+ * (S3's runner census / a record-driven runner is the binding proof).
+ */
+function ruleBodyExercisesSubject(source: string, kind: ts.ScriptKind, testName: string, subject: string): boolean {
+  const fn = subject.split(".").pop()!;
+  const sf = ts.createSourceFile("t.ts", source, ts.ScriptTarget.Latest, true, kind);
+  let called = false;
+  let asserted = false;
+  let mocked = false;
+  const calleeName = (e: ts.Expression): string | undefined => {
+    if (ts.isIdentifier(e)) return e.text;
+    return ts.isPropertyAccessExpression(e) ? e.name.text : undefined;
+  };
+  const scan = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const name = calleeName(node.expression);
+      if (name === fn) called = true;
+      if (name === "expect") asserted = true;
+    }
+    ts.forEachChild(node, scan);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const head = ts.isPropertyAccessExpression(callee) ? callee.expression : callee;
+      if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(head) && head.text === "vi" && /^(?:mock|doMock)$/.test(callee.name.text)) {
+        // Only a mock aimed at the subject's own module defeats the check; unrelated mocks (rateLimit) are normal.
+        const target = node.arguments[0];
+        if (target && ts.isStringLiteralLike(target) && target.text.toLowerCase().includes(fn.toLowerCase())) mocked = true;
+      }
+      const first = node.arguments[0];
+      if (ts.isIdentifier(head) && /^(?:test|it)$/.test(head.text) && first && ts.isStringLiteralLike(first) && first.text === testName) {
+        node.arguments.slice(1).forEach(scan);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return called && asserted && !mocked;
+}
+
 function scriptKindFor(file: string): ts.ScriptKind {
   if (file.endsWith(".tsx")) return ts.ScriptKind.TSX;
   if (file.endsWith(".mjs") || file.endsWith(".js")) return ts.ScriptKind.JS;
@@ -254,8 +313,19 @@ function schemaProblems(r: unknown): string[] {
   if (!isObject(r.source) || !(SCENARIO_HUNTERS as readonly string[]).includes(String(r.source.hunter))) {
     out.push("source.hunter must be scripted|audit|explorer");
   }
-  if (!Array.isArray(r.steps) || r.steps.length === 0) out.push("steps must be a non-empty array");
-  else {
+  if (r.kind !== undefined && r.kind !== "scenario" && r.kind !== "rule") out.push('kind must be "scenario" or "rule"');
+  if (r.kind === "rule") {
+    if (r.steps !== undefined) out.push("a rule has no steps: describe it with subject + inputs");
+    if (typeof r.subject !== "string" || !TOKEN_PATH.test(r.subject)) out.push("a rule needs subject, the function under test as a dotted token");
+    if (!isObject(r.inputs)) out.push("a rule needs inputs (an object of literal values)");
+    else if ([...stringsIn(r.inputs)].some((v) => !VALUE_TOKEN.test(v)) || [...keysIn(r.inputs)].some((k) => !KEY_TOKEN.test(k))) {
+      out.push("rule input strings must be short space-free tokens; no prose");
+    }
+  } else if (r.subject !== undefined || r.inputs !== undefined) {
+    out.push('subject/inputs belong to kind "rule" only');
+  }
+  if (r.kind !== "rule" && (!Array.isArray(r.steps) || r.steps.length === 0)) out.push("steps must be a non-empty array");
+  else if (r.kind !== "rule" && Array.isArray(r.steps)) {
     for (const s of r.steps) {
       if (!isObject(s) || !isObject(s.actor) || !isText(s.actor.role) || !isText(s.actor.org) || !isText(s.action) || !isObject(s.input)) {
         out.push("every step needs actor{role,org}, action and input");
@@ -291,7 +361,7 @@ function schemaProblems(r: unknown): string[] {
   if (extra.length > 0) out.push(`unknown field(s) ${[...new Set(extra)].join(", ")}: records are a closed schema (no free-form notes)`);
   // Closed VALUE formats for every metadata field a public record carries.
   if (Array.isArray(r.rulings) && r.rulings.some((x) => isObject(x) && (!RULING_ID.test(String(x.id)) || !SHA256.test(String(x.digest))))) {
-    out.push("ruling refs must be {id: SCRUM-n#cN, digest: sha256 hex}");
+    out.push("ruling refs must be {id: SCRUM-n#cN or SCRUM-n#description, digest: sha256 hex}");
   }
   if (Array.isArray(r.steps) && r.steps.some((s) => isObject(s) && isObject(s.actor) && (!TOKEN.test(String(s.actor.role)) || !TOKEN.test(String(s.actor.org))))) {
     out.push("actor role/org must be short identifier tokens");
@@ -308,7 +378,7 @@ function schemaProblems(r: unknown): string[] {
   // Metadata formats hold whatever the status: a malformed value must not wait for a status flip to be seen.
   if (r.matrixRow !== undefined && (typeof r.matrixRow !== "string" || !MATRIX_ROW.test(r.matrixRow))) out.push("matrixRow has an invalid format");
   if (r.candidateIssue !== undefined && (typeof r.candidateIssue !== "string" || !SCRUM_KEY.test(r.candidateIssue))) out.push("candidateIssue must be a SCRUM key");
-  if (r.retiredByRuling !== undefined && (typeof r.retiredByRuling !== "string" || !RULING_ID.test(r.retiredByRuling))) out.push("retiredByRuling must look like SCRUM-123#c4567");
+  if (r.retiredByRuling !== undefined && (typeof r.retiredByRuling !== "string" || !RULING_ID.test(r.retiredByRuling))) out.push("retiredByRuling must look like SCRUM-123#c4567 or SCRUM-123#description");
   if (isObject(r.impl) && ((r.impl.file !== undefined && (typeof r.impl.file !== "string" || r.impl.file.length > MAX_PATH)) || (r.impl.testName !== undefined && (typeof r.impl.testName !== "string" || r.impl.testName.length > MAX_TEXT)))) {
     out.push(`impl.file is capped at ${MAX_PATH} and impl.testName at ${MAX_TEXT} characters`);
   }
@@ -327,7 +397,7 @@ function schemaProblems(r: unknown): string[] {
     out.push("expected observable must be a dotted token (deal.status) and value strings short space-free tokens; no prose");
   }
   // Heuristic only (not a guarantee): obvious emails / phone numbers in any text field.
-  for (const s of stringsIn([r.steps, r.expected, r.retiredReason, r.candidateReason, isObject(r.impl) ? r.impl.testName : undefined])) {
+  for (const s of stringsIn([r.steps, r.inputs, r.expected, r.retiredReason, r.candidateReason, isObject(r.impl) ? r.impl.testName : undefined])) {
     if (EMAIL.test(s) || PHONE.test(s)) {
       out.push("a text value looks like an email address or phone number; the repository is public");
       break;
@@ -400,6 +470,7 @@ export function validateLibrary(
 
     // active: every level, browser replays included, must name the check that runs it.
     if (r.level === "cloud") add("level", "no cloud runner exists yet (SCRUM-762): park it as a candidate with that issue instead of counting it active");
+    if (r.kind === "rule" && (r.level !== "backend" || r.domain === "screen")) add("level", "a rule is a pure-function check: backend level, money|permission|tenancy domain");
     if (r.level === "browser" && r.domain !== "screen") add("level", "only screen scenarios convert to a browser replay (R2)");
     if (!r.impl?.file || !r.impl?.testName?.trim()) {
       add("impl", "an active scenario must name its executable check (impl.file + impl.testName)");
@@ -425,6 +496,8 @@ export function validateLibrary(
         const named = listActiveTestRegistrations(forHelper, scriptKindFor(rel)).filter((t) => t.title === r.impl!.testName);
         if (named.length !== 1 || named[0].parameterized || CTX_SKIP.test(text) || ANY_SKIP.test(text) || SKIP_CALL.test(text) || SKIP_OPTION.test(text)) {
           add("skip", `${rel} has no single active test named "${r.impl.testName}" (skipped, conditional, duplicated or absent): a skip is a failure in the library (R4)`);
+        } else if (r.kind === "rule" && typeof r.subject === "string" && !ruleBodyExercisesSubject(forHelper, scriptKindFor(rel), r.impl.testName, r.subject)) {
+          add("impl", `${rel} test "${r.impl.testName}" must call ${r.subject}(...) and assert on it (and ${rel} must not vi.mock a module named for it): a rule record is only as true as the check it names`);
         }
       }
     }

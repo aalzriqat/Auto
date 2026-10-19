@@ -602,20 +602,33 @@ export const getBuyerOffers = query({
   },
 });
 
+// Per status, per hop. Bounds the rows one transaction reads and writes.
+const EXPIRY_BATCH_SIZE = 100;
+
 export const expireStaleRequests = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
+    let anyBatchFull = false;
     for (const status of ["OPEN", "MATCHED"] as const) {
-      const stale = await ctx.db
+      // The range itself is the expiry predicate (strictly before `now`), so only
+      // requests that are due are read — live requests are never loaded.
+      const due = await ctx.db
         .query("marketplaceRequests")
-        .withIndex("by_status", (q) => q.eq("status", status))
-        .collect();
-      for (const request of stale) {
-        if (request.expiresAt < now) {
-          await ctx.db.patch(request._id, { status: "EXPIRED" });
-        }
+        .withIndex("by_status_expires", (q) => q.eq("status", status).lt("expiresAt", now))
+        .take(EXPIRY_BATCH_SIZE);
+      for (const request of due) {
+        await ctx.db.patch(request._id, { status: "EXPIRED" });
       }
+      if (due.length === EXPIRY_BATCH_SIZE) anyBatchFull = true;
+    }
+
+    // A full batch may have more behind it. A full batch is EXPIRY_BATCH_SIZE rows
+    // that were just patched out of their range, so each continuation strictly
+    // shrinks the due set and the chain ends on data. A throw above rolls back the
+    // patches and this schedule together.
+    if (anyBatchFull) {
+      await ctx.scheduler.runAfter(0, internal.marketplaceRequests.expireStaleRequests, {});
     }
   },
 });
