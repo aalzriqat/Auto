@@ -312,7 +312,8 @@ function batchesOf(files, batchSize) {
   // The batches are the census, each file once: anything else is a planner bug
   // that the merge's blob-set gate could not see.
   const planned = batches.flat();
-  if (planned.length !== files.length || [...planned].sort().join("\n") !== [...files].sort().join("\n")) {
+  const census = new Set(files);
+  if (planned.length !== files.length || new Set(planned).size !== census.size || !planned.every((file) => census.has(file))) {
     throw new Error("Coverage batches do not cover the census exactly once.");
   }
   return batches;

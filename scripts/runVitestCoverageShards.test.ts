@@ -808,7 +808,7 @@ describe("runVitestCoverageShards", () => {
       await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
       const text = stdout.join("");
       const pieces = stdout.filter((chunk) => chunk.startsWith("Coverage batch "));
-      expect(pieces.length).toBe(childBoundary.calls.filter((call) => call.async).length);
+      expect(pieces).toHaveLength(childBoundary.calls.filter((call) => call.async).length);
       for (const piece of pieces) {
         const blob = /child output for (unit-batch-\d+\.json)/.exec(piece)?.[1];
         expect(blob).toBeDefined();
