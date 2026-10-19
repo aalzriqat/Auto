@@ -68,7 +68,7 @@ const MUST_RUN_WITH_REAL_SWITCH = [
   "convex/accountingReleaseRehearsal.test.ts",
   "convex/scrum802CashSaleContainment.test.ts",
   "convex/scrum802CashSaleExtras.test.ts",
-  // Bound to the regression scenario cash-taxed-owned-sale-gl-subledger-invoice-agree (re-cut to the refusal).
+  // Bound to the regression scenario cash-sale-with-tax-is-refused-with-the-specific-code-before-any-write.
   "convex/ownedSaleTaxEndToEnd.test.ts",
 ] as const;
 

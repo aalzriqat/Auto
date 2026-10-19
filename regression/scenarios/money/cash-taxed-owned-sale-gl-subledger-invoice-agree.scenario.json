@@ -8,7 +8,7 @@
       },
       "action": "deposits.create",
       "input": {
-        "amount": 20000,
+        "amount": 23200,
         "method": "CASH"
       }
     },
@@ -28,20 +28,16 @@
   ],
   "expected": [
     {
-      "observable": "create.refusalCode",
-      "value": "CASH_SALE_TAX_FEES_WARRANTY_REFUSED"
-    },
-    {
-      "observable": "sales.count",
-      "value": 0
+      "observable": "gl.customerReceivableDebitMinor",
+      "value": 23200000
     },
     {
       "observable": "gl.customerReceivableNetMinor",
       "value": 0
     },
     {
-      "observable": "db.rowsChanged",
-      "value": 0
+      "observable": "subledger.receivableOriginalMinor",
+      "value": 23200000
     }
   ],
   "rulings": [
@@ -52,16 +48,18 @@
   ],
   "impl": {
     "file": "convex/ownedSaleTaxEndToEnd.test.ts",
-    "testName": "a taxed CASH sale is refused with the specific code even when the full price is already held as a deposit; deposit and books untouched"
+    "testName": "the GL receivable, the subledger document and the invoice all agree"
   },
   "matrixRow": "pilot-cash-books-agree",
-  "fingerprint": "ce2c666fe73797e09f9a28f97016bfaec09952ab29d720ee0151559e39d6ac01",
+  "fingerprint": "35a1890b7958a9b68c24440fb38b1e3e7c4ec093b3d9b96fa98cd694ef5669d4",
   "domain": "money",
   "level": "backend",
-  "status": "active",
+  "status": "retired",
   "source": {
     "hunter": "scripted",
     "runId": "scrum761-pilot-path",
     "firstSeen": "2026-10-08"
-  }
+  },
+  "retiredByRuling": "SCRUM-802#c23551",
+  "retiredReason": "The pilot does not offer a taxed cash sale and the server refuses it; the cell needed a quote inflated to price plus tax, which no user can reach. Replaced by the refusal record."
 }
