@@ -291,6 +291,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
     "لا يمكن تسجيل الدفعات أو الأرصدة الدائنة أو الشيكات الخاصة بعملية بيع على ذمة مدينة منفصلة. لم يتم تغيير أي شيء.",
   ],
+  ServerError_DEAL_COMMISSION_LINES_DISABLED: [
+    "Adding commission lines to a deal is not available during the pilot. Nothing has been changed.",
+    "إضافة بنود العمولات إلى الصفقة غير متاحة خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
   ServerError_CUSTOMER_CREDIT_PAYOUT_DISABLED: [
     "Paying customer credit out is not available during the pilot. Keep it as customer credit instead. Nothing has been changed.",
     "صرف رصيد العميل غير متاح خلال المرحلة التجريبية. احتفظ به كرصيد دائن للعميل بدلًا من ذلك. لم يتم تغيير أي شيء.",

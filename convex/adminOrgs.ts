@@ -244,6 +244,10 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // and `expenses` is deleted earlier in this list, so nothing rewrites them.
   { kind: "orgRows", table: "dashboardExpenseMonths", index: "by_org_generation_month" },
   { kind: "orgRows", table: "dashboardExpenseSummaryState", index: "by_org_generation" },
+  // Employee commission lines on a deal. Appended after the existing steps
+  // because the order is pinned; the index leads with orgId, and nothing
+  // references these rows.
+  { kind: "orgRows", table: "dealCommissionLines", index: "by_org_sale" },
   // Explicit retention marker, not a deletion step: the owner requires task
   // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
   // never purged here. Keep it last; never turn it into a delete.
