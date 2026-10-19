@@ -1,6 +1,7 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { seedBank } from "../test-utils/bankFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -220,7 +221,8 @@ describe("every writer refuses an oversize resulting financeDealFees document, w
     const before = { journals: await journalCount(seed), events: await outbox(seed) };
     await expect(
       seed.asUser.mutation(api.financeDealCosts.recordDirectFeePayment, {
-        orgId: seed.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now() - 1000, expectedAmountMinor: jod(50), idempotencyKey: crypto.randomUUID(),
+        orgId: seed.orgId, feeId, method: "BANK_TRANSFER", bankAccountId: await seedBank(seed.t, seed.orgId),
+        paidAt: Date.now() - 1000, expectedAmountMinor: jod(50), idempotencyKey: crypto.randomUUID(),
       })
     ).rejects.toThrow(/too large to store/);
     expect(await journalCount(seed)).toBe(before.journals);
@@ -231,9 +233,10 @@ describe("every writer refuses an oversize resulting financeDealFees document, w
   test("recordDirectFeePayment: the reference is capped at 200 characters", async () => {
     const seed = await seedDeal("w-ref");
     const feeId = await addFee(seed);
-    const pay = (reference: string) =>
+    const pay = async (reference: string) =>
       seed.asUser.mutation(api.financeDealCosts.recordDirectFeePayment, {
-        orgId: seed.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now() - 1000, expectedAmountMinor: jod(50),
+        orgId: seed.orgId, feeId, method: "BANK_TRANSFER", bankAccountId: await seedBank(seed.t, seed.orgId),
+        paidAt: Date.now() - 1000, expectedAmountMinor: jod(50),
         reference, idempotencyKey: crypto.randomUUID(),
       });
     await expect(pay("r".repeat(MAX_DIRECT_PAYMENT_REFERENCE_CHARS + 1))).rejects.toThrow(/reference is too long/);

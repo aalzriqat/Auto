@@ -21,7 +21,8 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { deriveForwardState } from "./utils/financeCompanyForward";
 import { economicsStamp } from "./utils/financingEconomics";
-import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -237,16 +238,20 @@ const record = (
   over: Partial<{ expectedAmountMinor: number; idempotencyKey: string }> = {},
   as = s.owner.as
 ) =>
-  as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-    expectedAmountMinor: over.expectedAmountMinor ?? c.S,
-    idempotencyKey: over.idempotencyKey ?? crypto.randomUUID(),
-  });
+  seedBank(s.t, s.orgId).then((bankAccountId) =>
+    as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId, paidAt: Date.now(),
+      expectedAmountMinor: over.expectedAmountMinor ?? c.S,
+      idempotencyKey: over.idempotencyKey ?? crypto.randomUUID(),
+    })
+  );
 
 const confirmTransfer = (s: Seeded, applicationId: Id<"financeApplications">, amount = G) =>
-  s.owner.as.mutation(api.applications.confirmDisbursement, {
-    orgId: s.orgId, applicationId, disbursedAmountMinor: amount, idempotencyKey: crypto.randomUUID(),
-  });
+  insertReceiptBank(s).then((bankAccountId) =>
+    s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: amount, idempotencyKey: crypto.randomUUID(), bankAccountId,
+    })
+  );
 
 async function netByAccount(s: Seeded, eventType: string) {
   return await s.t.run(async (ctx) => {

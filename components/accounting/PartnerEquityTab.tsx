@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { usePaginatedQuery, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
+import { partnerEquityNeedsBank } from "@/convex/utils/partnerEquityBank";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -48,6 +49,55 @@ type PartnerRow = NonNullable<
   ReturnType<typeof usePaginatedQuery<typeof api.partnerEquity.list>>["results"]
 >[number];
 
+type PartnerBankOptions = {
+  banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>;
+  truncated: boolean;
+} | undefined;
+
+function selectedBank(options: PartnerBankOptions, id: string | undefined) {
+  return options?.banks.find((bank) => bank._id === id);
+}
+
+function PartnerBankChoice({
+  inputId, value, onChange, options, direction, t,
+}: Readonly<{
+  inputId: string;
+  value: string | undefined;
+  onChange: (value: string | undefined) => void;
+  options: PartnerBankOptions;
+  direction: "IN" | "OUT";
+  t: ReturnType<typeof useLanguage>["t"];
+}>) {
+  const eligible = selectedBank(options, value);
+  const unavailable = options?.truncated === true;
+  const empty = options !== undefined && !unavailable && options.banks.length === 0;
+  const label = direction === "IN" ? "ReceiptBankAccount" : "DirectPaymentBankLabel";
+  const choose = direction === "IN" ? "ReceiptSelectBank" : "DirectPaymentBankChoose";
+  const message = unavailable
+    ? direction === "IN" ? "ReceiptTooManyBanks" : "DirectPaymentTooManyBanks"
+    : empty ? direction === "IN" ? "ReceiptNoBank" : "DirectPaymentNoBank" : null;
+  return (
+    <div className="space-y-1.5">
+      <label htmlFor={inputId} className="text-sm font-medium">{t(label)}</label>
+      <select
+        id={inputId}
+        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+        value={eligible?._id ?? ""}
+        onChange={(event) => onChange(event.target.value || undefined)}
+        disabled={options === undefined || unavailable || empty}
+        required
+        aria-describedby={message ? `${inputId}-status` : undefined}
+      >
+        <option value="">{t(options === undefined ? "CashDrawerLoadingBanks" : choose)}</option>
+        {(options?.banks ?? []).map((bank) => (
+          <option key={bank._id} value={bank._id}>{bank.name} · {bank.currency}</option>
+        ))}
+      </select>
+      {message && <p id={`${inputId}-status`} className="text-sm text-muted-foreground" role="status">{t(message)}</p>}
+    </div>
+  );
+}
+
 const MOVEMENT_META: Record<MovementType, { titleKey: string; descKey: string; needsPayment: boolean }> = {
   CONTRIBUTION: { titleKey: "RecordContribution", descKey: "RecordContributionDesc", needsPayment: true },
   DRAW: { titleKey: "RecordDraw", descKey: "RecordDrawDesc", needsPayment: true },
@@ -73,6 +123,10 @@ export function PartnerEquityTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [movement, setMovement] = useState<{ partner: PartnerRow; type: MovementType } | null>(null);
   const [historyPartner, setHistoryPartner] = useState<PartnerRow | null>(null);
+  const bankOptions = useQuery(
+    api.partnerEquity.listBankOptions,
+    activeOrgId && canManage && (addOpen || movement) ? { orgId: activeOrgId } : "skip"
+  );
 
   if (partnersStatus === "LoadingFirstPage") {
     return <LoadingAccountingState label={t("LoadingEquity" as any)} />;
@@ -181,7 +235,7 @@ export function PartnerEquityTab() {
       )}
 
       {activeOrgId && canManage && (
-        <AddPartnerDialog open={addOpen} onOpenChange={setAddOpen} orgId={activeOrgId} factor={factor} />
+        <AddPartnerDialog open={addOpen} onOpenChange={setAddOpen} orgId={activeOrgId} factor={factor} bankOptions={bankOptions} />
       )}
 
       {activeOrgId && movement && (
@@ -193,6 +247,7 @@ export function PartnerEquityTab() {
           factor={factor}
           scale={scale}
           formatCurrency={formatCurrency}
+          bankOptions={bankOptions}
         />
       )}
 
@@ -215,11 +270,13 @@ function AddPartnerDialog({
   onOpenChange,
   orgId,
   factor,
+  bankOptions,
 }: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
+  bankOptions: PartnerBankOptions;
 }>) {
   const { t } = useLanguage();
   const addPartner = useMutation(api.partnerEquity.add);
@@ -231,8 +288,12 @@ function AddPartnerDialog({
 
   const form = useForm<AddPartnerFormValues>({
     resolver: zodResolver(addPartnerSchema),
-    defaultValues: { name: "", openingContribution: 0, paymentMethod: "CASH", notes: "" },
+    defaultValues: { name: "", openingContribution: 0, paymentMethod: "CASH", bankAccountId: undefined, notes: "" },
   });
+  const openingAmount = form.watch("openingContribution");
+  const paymentMethod = form.watch("paymentMethod");
+  const bankSelection = form.watch("bankAccountId");
+  const needsBank = Number(openingAmount) > 0 && partnerEquityNeedsBank("CONTRIBUTION", paymentMethod);
 
   function handleOpenChange(nextOpen: boolean) {
     onOpenChange(nextOpen);
@@ -241,6 +302,12 @@ function AddPartnerDialog({
 
   async function onSubmit(values: AddPartnerFormValues) {
     const openingMinor = Math.round(values.openingContribution * factor);
+    const requiresBank = openingMinor > 0 && partnerEquityNeedsBank("CONTRIBUTION", values.paymentMethod);
+    const bank = requiresBank ? selectedBank(bankOptions, values.bankAccountId) : undefined;
+    if (requiresBank && !bank) {
+      form.setError("bankAccountId", { message: t("ReceiptSelectBank") });
+      return;
+    }
     await submitWithFeedback(async () => {
       idempotencyKeyRef.current ??= `partner-add:${crypto.randomUUID()}`;
       await addPartner({
@@ -250,6 +317,7 @@ function AddPartnerDialog({
         notes: values.notes?.trim() || undefined,
         openingContributionMinor: openingMinor > 0 ? openingMinor : undefined,
         paymentMethod: openingMinor > 0 ? values.paymentMethod : undefined,
+        bankAccountId: bank?._id,
       });
       // Only a SUCCESS retires the identity.
       idempotencyKeyRef.current = null;
@@ -303,13 +371,36 @@ function AddPartnerDialog({
                   <FormItem>
                     <FormLabel>{t("PaymentMethodLabel" as any)}</FormLabel>
                     <FormControl>
-                      <PaymentMethodSelect t={t as any} value={field.value} onValueChange={field.onChange} />
+                      <PaymentMethodSelect t={t} value={field.value} onValueChange={(value) => {
+                        field.onChange(value);
+                        form.setValue("bankAccountId", undefined);
+                        form.clearErrors("bankAccountId");
+                      }} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
             </div>
+
+            {needsBank && (
+              <>
+                <PartnerBankChoice
+                  inputId="partner-add-bank"
+                  value={bankSelection}
+                  onChange={(value) => {
+                    form.setValue("bankAccountId", value);
+                    form.clearErrors("bankAccountId");
+                  }}
+                  options={bankOptions}
+                  direction="IN"
+                  t={t}
+                />
+                {form.formState.errors.bankAccountId?.message && (
+                  <p role="alert" className="text-sm text-destructive">{form.formState.errors.bankAccountId.message}</p>
+                )}
+              </>
+            )}
 
             <FormField
               control={form.control}
@@ -349,6 +440,7 @@ function MovementDialog({
   factor,
   scale,
   formatCurrency,
+  bankOptions,
 }: Readonly<{
   partner: PartnerRow;
   type: MovementType;
@@ -357,6 +449,7 @@ function MovementDialog({
   factor: number;
   scale: number;
   formatCurrency: CurrencyFormatter;
+  bankOptions: PartnerBankOptions;
 }>) {
   const { t } = useLanguage();
   const recordMovement = useMutation(api.partnerEquity.recordEquityMovement);
@@ -367,10 +460,19 @@ function MovementDialog({
 
   const form = useForm<MovementFormValues>({
     resolver: zodResolver(movementSchema),
-    defaultValues: { amount: 0, paymentMethod: "CASH", notes: "" },
+    defaultValues: { amount: 0, paymentMethod: "CASH", bankAccountId: undefined, notes: "" },
   });
+  const paymentMethod = form.watch("paymentMethod");
+  const bankSelection = form.watch("bankAccountId");
+  const needsBank = partnerEquityNeedsBank(type, paymentMethod);
 
   async function onSubmit(values: MovementFormValues) {
+    const requiresBank = partnerEquityNeedsBank(type, values.paymentMethod);
+    const bank = requiresBank ? selectedBank(bankOptions, values.bankAccountId) : undefined;
+    if (requiresBank && !bank) {
+      form.setError("bankAccountId", { message: t(type === "CONTRIBUTION" ? "ReceiptSelectBank" : "DirectPaymentBankRequired") });
+      return;
+    }
     await submitWithFeedback(async () => {
       idempotencyKeyRef.current ??= `equity-movement:${crypto.randomUUID()}`;
       await recordMovement({
@@ -380,6 +482,7 @@ function MovementDialog({
         type,
         amountMinor: Math.round(values.amount * factor),
         paymentMethod: meta.needsPayment ? values.paymentMethod : undefined,
+        bankAccountId: bank?._id,
         notes: values.notes?.trim() || undefined,
       });
       // Only a SUCCESS retires the identity.
@@ -426,12 +529,35 @@ function MovementDialog({
                   <FormItem>
                     <FormLabel>{t("PaymentMethodLabel" as any)}</FormLabel>
                     <FormControl>
-                      <PaymentMethodSelect t={t as any} value={field.value} onValueChange={field.onChange} />
+                      <PaymentMethodSelect t={t} value={field.value} onValueChange={(value) => {
+                        field.onChange(value);
+                        form.setValue("bankAccountId", undefined);
+                        form.clearErrors("bankAccountId");
+                      }} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+            )}
+
+            {needsBank && (
+              <>
+                <PartnerBankChoice
+                  inputId="partner-movement-bank"
+                  value={bankSelection}
+                  onChange={(value) => {
+                    form.setValue("bankAccountId", value);
+                    form.clearErrors("bankAccountId");
+                  }}
+                  options={bankOptions}
+                  direction={type === "CONTRIBUTION" ? "IN" : "OUT"}
+                  t={t}
+                />
+                {form.formState.errors.bankAccountId?.message && (
+                  <p role="alert" className="text-sm text-destructive">{form.formState.errors.bankAccountId.message}</p>
+                )}
+              </>
             )}
 
             <FormField

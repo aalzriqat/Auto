@@ -18,7 +18,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DIAGNOSTIC_ROW_BOUNDS, componentNames } from "./zeroState";
+import { DIAGNOSTIC_ROW_BOUNDS } from "./zeroState";
+import { componentPaths } from "./zeroStateComponents";
 
 // ── the process boundaries ──────────────────────────────────────────────────
 type Spawned = { file: string; cli: string; args: string[]; env: Record<string, string | undefined> };
@@ -54,10 +55,22 @@ const SCHEMA_TABLES = (() => {
 })();
 // The components the repository actually mounts (the shell derives its scope
 // from the same file); each aggregate component lists the two B-tree tables.
+// Workpool and its nested batch-worker list the tables their INSTALLED schema
+// declares, so a version bump that adds one is read, not assumed absent.
+function installedTables(pkg: string): string[] {
+  const src = fs.readFileSync(path.join(process.cwd(), "node_modules", pkg, "dist", "component", "schema.js"), "utf8");
+  return [...src.matchAll(/^\s+([A-Za-z_][A-Za-z0-9_]*):\s*defineTable\(/gm)].map((m) => m[1]);
+}
+function tablesOfComponent(componentPath: string): string[] {
+  if (componentPath === "rateLimiter") return ["rateLimits"];
+  if (componentPath === "weeklyReportWorkpool") return installedTables("@convex-dev/workpool");
+  if (componentPath === "weeklyReportWorkpool/batchWorker") return installedTables("@convex-dev/batch-worker");
+  return ["btree", "btreeNode"];
+}
 const COMPONENT_TABLES: Record<string, string[]> = Object.fromEntries(
-  componentNames(fs.readFileSync(path.join(process.cwd(), "convex", "convex.config.ts"), "utf8")).map((name) => [
+  componentPaths(path.join(process.cwd(), "convex", "convex.config.ts")).map((name) => [
     name,
-    name === "rateLimiter" ? ["rateLimits"] : ["btree", "btreeNode"],
+    tablesOfComponent(name),
   ])
 );
 const COMPONENT_TABLE_COUNT = Object.values(COMPONENT_TABLES).flat().length;

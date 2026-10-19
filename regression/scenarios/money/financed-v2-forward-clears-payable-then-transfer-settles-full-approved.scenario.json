@@ -30,7 +30,8 @@
       },
       "action": "applications.confirmDisbursement",
       "input": {
-        "disbursedAmountMinor": 12500000
+        "disbursedAmountMinor": 12500000,
+        "bankAccountId": "same-org-active-JOD-receiving-bank"
       }
     }
   ],
@@ -63,7 +64,7 @@
     "testName": "paying the forward before the sale, then the sale, clears AP-Finance to zero; the transfer then settles the FULL G"
   },
   "matrixRow": "pilot-financed-v2-forward-transfer",
-  "fingerprint": "c8d2dcebfaaab5add4be962ce93a84dfe57be38add7a221d3b0191241cc7c302",
+  "fingerprint": "2e204c875c69e8056b66abe2ecbcdefdd32efe9023c4086267a44beb382dcd5c",
   "domain": "money",
   "level": "backend",
   "status": "active",

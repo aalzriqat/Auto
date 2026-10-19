@@ -4,6 +4,8 @@ import type { SchemaDefinition, GenericSchema } from "convex/server";
 // does not expose `src/`, but convex-test needs the component's schema module.
 import aggregateComponentSchema from "../node_modules/@convex-dev/aggregate/src/component/schema";
 import rateLimiterComponentSchema from "../node_modules/@convex-dev/rate-limiter/src/component/schema";
+import workpoolComponentSchema from "../node_modules/@convex-dev/workpool/src/component/schema";
+import batchWorkerComponentSchema from "../node_modules/@convex-dev/batch-worker/src/component/schema";
 import { aggregateTriggers } from "../convex/aggregates";
 import type { api as ApiRef } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -60,6 +62,30 @@ export function registerRateLimiter(t: {
   t.registerComponent("rateLimiter", rateLimiterComponentSchema, RATE_LIMITER_MODULES);
 }
 
+const WORKPOOL_MODULES = import.meta.glob("../node_modules/@convex-dev/workpool/src/component/**/*.ts");
+const BATCH_WORKER_MODULES = import.meta.glob("../node_modules/@convex-dev/batch-worker/src/component/**/*.ts");
+
+/**
+ * Opt-in registration for the `weeklyReportWorkpool` component
+ * (convex/marketplaceReports.ts). Opt-in for the same reason as the rate
+ * limiter: only code that enqueues weekly-report work reaches it.
+ *
+ * Mirrors what the package's own `@convex-dev/workpool/test` `register` does —
+ * the component, plus the batch-worker it runs its main loop on, nested under
+ * `<name>/batchWorker` — but through the schema/module-glob route used for the
+ * other components in this file. The package's `test.ts` is not imported
+ * because it carries a `/// <reference types="vite/client" />` and imports its
+ * transitive `@convex-dev/batch-worker/test`, neither of which this project's
+ * type program can resolve (`@convex-dev/batch-worker` is a direct devDependency
+ * here so the path below exists under pnpm's strict layout).
+ */
+export function registerWeeklyReportWorkpool(t: {
+  registerComponent: TestConvex<SchemaDefinition<GenericSchema, boolean>>["registerComponent"];
+}): void {
+  t.registerComponent("weeklyReportWorkpool", workpoolComponentSchema, WORKPOOL_MODULES);
+  t.registerComponent("weeklyReportWorkpool/batchWorker", batchWorkerComponentSchema, BATCH_WORKER_MODULES);
+}
+
 /** Every aggregate mounted in `convex/convex.config.ts`. Keep in step with it. */
 const AGGREGATE_COMPONENTS = [
   "vehiclesByOrg",
@@ -70,6 +96,8 @@ const AGGREGATE_COMPONENTS = [
   "instagramEventsByOrg",
   "facebookEventsByOrg",
   "socialContactsByOrg",
+  "bankControlByDate",
+  "bankAttributionByDate",
 ] as const;
 
 export function convexTestWithComponents<

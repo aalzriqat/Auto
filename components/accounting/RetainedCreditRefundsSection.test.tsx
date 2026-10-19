@@ -8,7 +8,7 @@
  * The section is rendered directly here; CollectionsTabRetainedCreditRefunds.test.tsx
  * covers it as mounted on the Collections Approvals tab.
  */
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 const stubs = vi.hoisted(() => ({
@@ -39,6 +39,13 @@ vi.mock("convex/react", async () => {
 });
 
 import { RetainedCreditRefundsSection } from "./RetainedCreditRefundsSection";
+
+beforeAll(() => {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.scrollIntoView = () => {};
+});
 
 type Actor = { canApprove: boolean; canManage: boolean };
 const ACCOUNTANT: Actor = { canApprove: false, canManage: true };
@@ -74,6 +81,26 @@ describe("Retained-credit refund queue, lifecycle reachable under default roles"
     expect(screen.getByLabelText("RetainedCreditPayoutReference")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
+  });
+
+  test("two approved refunds offer banks in each request's currency", async () => {
+    seedRefunds([
+      refundRow({ _id: "usd", status: "APPROVED", method: "BANK_TRANSFER", currency: "USD" }),
+      refundRow({ _id: "jod", status: "APPROVED", method: "BANK_TRANSFER", currency: "JOD" }),
+    ]);
+    const requestedCurrencies: string[] = [];
+    stubs.queryResults.set("collections:listReceiptBankOptions", (args: { currency: string }) => {
+      requestedCurrencies.push(args.currency);
+      return { banks: [{ _id: `bank-${args.currency}`, name: `${args.currency} bank`, currency: args.currency }],
+        truncated: false };
+    });
+    renderSection(ACCOUNTANT, true);
+    expect(requestedCurrencies).toContain("USD");
+    expect(requestedCurrencies).toContain("JOD");
+    const bankPickers = screen.getAllByRole("combobox", { name: "ReceiptBankAccount" });
+    fireEvent.pointerDown(bankPickers[0], { button: 0, ctrlKey: false, pointerType: "mouse" });
+    expect(await screen.findByRole("option", { name: /USD bank/ })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /JOD bank/ })).toBeNull();
   });
 
   test("MANAGER-like (APPROVE_REQUESTS, no MANAGE_FINANCE) can approve and reject a PENDING request but cannot pay out", () => {

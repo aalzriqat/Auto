@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { insertReceiptBank } from "../test-utils/financedDealFixture";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -423,6 +424,8 @@ describe("Finance lifecycle Phase 4", () => {
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
+      // SCRUM-54: a BANK_TRANSFER receipt names the physical bank (JOD, the receivable's currency).
+      bankAccountId: await insertReceiptBank({ t, orgId, owner: { userId: salespersonId } }),
     });
 
     const app = await t.run((ctx) => ctx.db.get(applicationId));

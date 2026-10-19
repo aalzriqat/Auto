@@ -50,6 +50,9 @@ importers:
       '@convex-dev/rate-limiter':
         specifier: ^0.3.2
         version: 0.3.2(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(react@19.2.7)
+      '@convex-dev/workpool':
+        specifier: 0.4.14
+        version: 0.4.14(convex-helpers@0.1.120(@standard-schema/spec@1.1.0)(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(hono@4.12.25)(react@19.2.7)(typescript@6.0.3)(zod@3.25.76))(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(react@19.2.7)
       '@hookform/resolvers':
         specifier: ^3.9.0
         version: 3.10.0(react-hook-form@7.78.0(react@19.2.7))
@@ -189,6 +192,9 @@ importers:
       '@ai-sdk/openai':
         specifier: 4.0.87
         version: 4.0.87(zod@3.25.76)
+      '@convex-dev/batch-worker':
+        specifier: 0.2.2
+        version: 0.2.2(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(react@19.2.7)
       '@convex-dev/eslint-plugin':
         specifier: ^1.2.2
         version: 1.2.2(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3)
@@ -1096,6 +1102,12 @@ packages:
     peerDependencies:
       convex: ^1.24.8
 
+  '@convex-dev/batch-worker@0.2.2':
+    resolution: {integrity: sha512-3knigElzTVhWw1sN28EYkGBTdrJZ03vMj2PJPuFq3V0Tg41i7tcv/EWDBFQWcUaKzBWWVw693hcJtxCF3CRtEw==}
+    peerDependencies:
+      convex: ^1.36.1
+      react: ^18.3.1 || ^19.0.0
+
   '@convex-dev/eslint-plugin@1.2.2':
     resolution: {integrity: sha512-hLElzzSHuO83O/7PqaeFrMy8EOaDPMAUBNaqo7wkOzCsUCgA+tI9SXVSVLUozDGBBQjyXjAaPYRIBKoPeZbZKg==}
     peerDependencies:
@@ -1109,6 +1121,12 @@ packages:
     peerDependenciesMeta:
       react:
         optional: true
+
+  '@convex-dev/workpool@0.4.14':
+    resolution: {integrity: sha512-uTgOlLo7/Sv5OYhb6jjQ/+COAgLhOd1sMfHtJbN5qB298SHJQGoUUab66f6kqfEb8ugD1FnkL0oNZmk6fMqkow==}
+    peerDependencies:
+      convex: ^1.36.1
+      convex-helpers: ^0.1.94
 
   '@csstools/color-helpers@6.0.2':
     resolution: {integrity: sha512-LMGQLS9EuADloEFkcTBR3BwV/CGHV7zyDxVRtVDTwdI2Ca4it0CCVTT9wCkxSgokjE5Ho41hEPgb8OEUwoXr6Q==}
@@ -10653,6 +10671,11 @@ snapshots:
     dependencies:
       convex: 1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6)
 
+  '@convex-dev/batch-worker@0.2.2(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(react@19.2.7)':
+    dependencies:
+      convex: 1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6)
+      react: 19.2.7
+
   '@convex-dev/eslint-plugin@1.2.2(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3)':
     dependencies:
       '@typescript-eslint/types': 8.58.2
@@ -10668,6 +10691,14 @@ snapshots:
       convex: 1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6)
     optionalDependencies:
       react: 19.2.7
+
+  '@convex-dev/workpool@0.4.14(convex-helpers@0.1.120(@standard-schema/spec@1.1.0)(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(hono@4.12.25)(react@19.2.7)(typescript@6.0.3)(zod@3.25.76))(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(react@19.2.7)':
+    dependencies:
+      '@convex-dev/batch-worker': 0.2.2(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(react@19.2.7)
+      convex: 1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6)
+      convex-helpers: 0.1.120(@standard-schema/spec@1.1.0)(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(hono@4.12.25)(react@19.2.7)(typescript@6.0.3)(zod@3.25.76)
+    transitivePeerDependencies:
+      - react
 
   '@csstools/color-helpers@6.0.2': {}
 

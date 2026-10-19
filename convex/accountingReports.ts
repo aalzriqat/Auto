@@ -70,7 +70,7 @@ async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations"
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /** accountingDate value historical queries treat as "no date" when a range bound is open. */
-const NO_ACCOUNTING_DATE_SENTINEL = -1;
+export const NO_ACCOUNTING_DATE_SENTINEL = -1;
 
 /**
  * Concatenate index reads and put them back in insertion (_creationTime) order,

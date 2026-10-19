@@ -22,7 +22,6 @@ import {
   CURRENCY_SCALES,
   DEFAULT_ORG_CURRENCY,
   assertBothAttemptsExecuted,
-  candidateCommandNamesBank,
   candidateNamesReceiptBank,
   createVehicleForRehearsal,
   REQUIRED_REHEARSAL_CASE_IDS,
@@ -447,17 +446,26 @@ type Defects = {
   financeDeductedCloseMutatesThenRefuses?: boolean;
   /** A short finance-company receipt is refused for an unrelated reason. */
   financeReceiptWrongRefusalReason?: boolean;
-  /** SCRUM-54: the backend implements the physical-bank receipt contract (main does not yet). */
-  bankContract?: boolean;
-  /** The direct-fee and cheque commands can change independently of the receipt contract. */
-  directFeeBankContract?: boolean;
-  chequeBankContract?: boolean;
+  /** A BANK_TRANSFER finance-company receipt that names no bank is accepted instead of refused (SCRUM-54). */
+  acceptsReceiptWithoutBank?: boolean;
+  /** SCRUM-54: a pre-bank backend - confirmDisbursement does not take a physical bank at all. */
+  legacyBackend?: boolean;
   /** Bank contract: a receipt that names no bank is accepted and silently defaulted. */
   bankDefaultedWhenMissing?: boolean;
   /** Bank contract: the bank-less receipt is refused only AFTER it marked the application disbursed. */
   bankMissingWritesBeforeRefusing?: boolean;
   /** Bank contract: the receipt posts, but its BANK_ACCOUNT line loses the named bank. */
   bankIdentityDroppedFromJournal?: boolean;
+  /** RV1: a cleared customer cheque loses its named destination bank. */
+  chequeClearingBankDropped?: boolean;
+  /** RV1: a cheque reversal drops the clearing bank. */
+  chequeReversalBankDropped?: boolean;
+  /** RV1: a returned-cheque fee loses the bank that paid it. */
+  chequeFeeBankDropped?: boolean;
+  /** RV1: the fee credits the clearing bank instead of its distinct paying bank. */
+  chequeFeeBankUsesClearingBank?: boolean;
+  /** RV1: a returned-cheque fee debits the wrong expense account. */
+  chequeFeeWrongAccount?: boolean;
   /** Bank contract: a short receipt that names a valid bank is accepted. */
   bankShortReceiptAccepted?: boolean;
   /** Bank contract: the malformed-id contract probe is accepted. */
@@ -549,6 +557,7 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_cap", code: "3000", type: "EQUITY", name: "Partner Capital", systemKey: "PARTNER_CAPITAL", normalBalance: "CREDIT" },
     { _id: "acct_draw", code: "3100", type: "EQUITY", name: "Partner Drawings", systemKey: "PARTNER_DRAWINGS", normalBalance: "DEBIT" },
     { _id: "acct_exp", code: "6000", type: "EXPENSE", name: "General Expense", systemKey: "GENERAL_EXPENSE", normalBalance: "DEBIT" },
+    { _id: "acct_prof_fees", code: "6850", type: "EXPENSE", name: "Professional Fees", systemKey: "PROFESSIONAL_FEES_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_arfc", code: "1210", type: "ASSET", name: "AR Finance Companies", systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", normalBalance: "DEBIT" },
     { _id: "acct_fc_comm", code: "6860", type: "EXPENSE", name: "Finance Company Commission", systemKey: "FINANCE_COMPANY_COMMISSION_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_transfer", code: "6820", type: "EXPENSE", name: "Ownership Transfer", systemKey: "OWNERSHIP_TRANSFER_EXPENSE", normalBalance: "DEBIT" },
@@ -657,7 +666,8 @@ function makeBackend(defects: Defects = {}) {
         vehicleId: l.vehicleId,
         financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
-        bankAccountId: l.bankAccountId,
+        bankAccountId: defects.chequeReversalBankDropped && original.eventType === "COLLECTION_PAYMENT" &&
+          CHART.find((a) => a._id === l.accountId)?.systemKey === "BANK_ACCOUNT" ? undefined : l.bankAccountId,
       })),
       { category: "REVERSAL" }
     );
@@ -1270,15 +1280,12 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: null };
       }
       case "collections:clearCheque": {
-        const chequeBankContract = defects.chequeBankContract ?? defects.bankContract ?? false;
-        if (!chequeBankContract && Object.hasOwn(args, "bankAccountId")) {
-          return { ok: false as const, error: "Unexpected argument: bankAccountId" };
-        }
-        if (chequeBankContract && !args.bankAccountId) {
-          return { ok: false as const, error: "Select the bank account this cheque was deposited into." };
-        }
         if (!canManageFinance) {
           return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
+        }
+        const clearingBank = bankAccounts.get(String(args.bankAccountId ?? ""));
+        if (!clearingBank || clearingBank.orgId !== String(args.orgId) || !clearingBank.isActive || clearingBank.currency !== ORG_CURRENCY) {
+          return { ok: false as const, error: "Select an active bank account in this organization and currency." };
         }
         const made = replayableCreate("clr", args, true);
         if (made) return made;
@@ -1286,16 +1293,23 @@ function makeBackend(defects: Defects = {}) {
         const cheque = cheques.get(String(args.chequeId));
         if (!cheque) return { ok: false as const, error: "Cheque not found" };
         cheque.status = "CLEARED";
+        cheque.clearingBankAccountId = String(args.bankAccountId);
         const paymentId = id("pay");
         collectionPayments.push({ _id: paymentId, direction: "IN", method: "CHEQUE", amount: cheque.amount, chequeId: cheque._id, receivableId: cheque.receivableId });
         settle(cheque.receivableId, cheque.amount);
-        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT", args.bankAccountId);
+        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT", defects.chequeClearingBankDropped ? undefined : String(args.bankAccountId));
         cheque.clearingEventId = eventId;
         return { ok: true as const, value: null };
       }
       case "collections:returnClearedCheque": {
         if (!canManageFinance) {
           return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
+        }
+        if (Number(args.bankFeeMinor ?? 0) > 0) {
+          const feeBank = bankAccounts.get(String(args.bankFeeBankAccountId ?? ""));
+          if (!feeBank || feeBank.orgId !== String(args.orgId) || !feeBank.isActive || feeBank.currency !== ORG_CURRENCY) {
+            return { ok: false as const, error: "Select an active bank account to pay the return fee." };
+          }
         }
         const made = replayableCreate("ret", args, true);
         if (made) return made;
@@ -1318,6 +1332,13 @@ function makeBackend(defects: Defects = {}) {
             r.outstandingAmount += cheque.amount;
             r.status = r.outstandingAmount >= r.originalAmount ? "OPEN" : "PARTIALLY_PAID";
           }
+        }
+        if (Number(args.bankFeeMinor ?? 0) > 0) {
+          post("EXPENSE_POSTED", "expenses", id("expense"), [
+            { key: defects.chequeFeeWrongAccount ? "GENERAL_EXPENSE" : "PROFESSIONAL_FEES_EXPENSE", debitMinor: Number(args.bankFeeMinor) },
+            { key: "BANK_ACCOUNT", creditMinor: Number(args.bankFeeMinor), bankAccountId: defects.chequeFeeBankDropped
+              ? undefined : defects.chequeFeeBankUsesClearingBank ? cheque.clearingBankAccountId : String(args.bankFeeBankAccountId) },
+          ]);
         }
         return { ok: true as const, value: null };
       }
@@ -1975,13 +1996,6 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: fee._id };
       }
       case "financeDealCosts:recordDirectFeePayment": {
-        const directFeeBankContract = defects.directFeeBankContract ?? defects.bankContract ?? false;
-        if (!directFeeBankContract && Object.hasOwn(args, "bankAccountId")) {
-          return { ok: false as const, error: "Unexpected argument: bankAccountId" };
-        }
-        if (directFeeBankContract && !args.bankAccountId) {
-          return { ok: false as const, error: "Select the bank account this payment was made from." };
-        }
         defects.captureDirectPaymentDate?.(Number(args.paidAt));
         if (defects.clockRolloverAfterBookOpen && openedPeriodEndDate !== null &&
             Number(args.paidAt) > openedPeriodEndDate) {
@@ -1993,13 +2007,24 @@ function makeBackend(defects: Defects = {}) {
             fee.actualAmountMinor !== args.expectedAmountMinor) {
           return { ok: false as const, error: "This cost cannot be paid directly." };
         }
+        // SCRUM-54: a bank method names an active same-org bank in the cost's currency,
+        // validated before any write. `legacyBackend` models the pre-bank CONFIRM-
+        // DISBURSEMENT contract the FD1 probe must report, so it ignores the field here.
+        const paidBankId = args.bankAccountId ? String(args.bankAccountId) : undefined;
+        if (!defects.legacyBackend) {
+          if (!paidBankId) return { ok: false as const, error: "Select the bank account this payment was made from. Nothing has been recorded." };
+          const paidBank = bankAccounts.get(paidBankId);
+          if (!paidBank || paidBank.orgId !== String(args.orgId) || !paidBank.isActive || paidBank.currency !== fee.currency) {
+            return { ok: false as const, error: "The selected bank account is not an active account in this cost's currency." };
+          }
+        }
         if (!defects.financeDirectPaymentSkipped) {
           fee.directPayment = { amountMinor: args.expectedAmountMinor, method: args.method, paidAt: args.paidAt };
         }
         if (!defects.financeDirectPaymentPostingSkipped) {
           post("HANDOVER_COST_PAID_DIRECT", "financeDealFees", String(args.feeId), [
             { key: "OWNERSHIP_TRANSFER_EXPENSE", debitMinor: args.expectedAmountMinor },
-            { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor, bankAccountId: args.bankAccountId },
+            { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor, bankAccountId: paidBankId },
           ]);
         }
         return { ok: true as const, value: fee._id };
@@ -2197,7 +2222,7 @@ function makeBackend(defects: Defects = {}) {
         // bankAccountId and refuses the unknown field; a SCRUM-54 validator refuses a
         // value that is not a bankAccounts id.
         if (args.bankAccountId !== undefined) {
-          if (!defects.bankContract) {
+          if (defects.legacyBackend) {
             return { ok: false as const, error: "ArgumentValidationError: Object contains extra field `bankAccountId` that is not in the validator." };
           }
           if (!bankAccounts.has(String(args.bankAccountId))) {
@@ -2240,17 +2265,22 @@ function makeBackend(defects: Defects = {}) {
           }
           amount = Math.min(amount, net);
         }
+        // Mirrors the real order: the amount is proven first, then the named bank is validated
+        // (present, same org, active, in the receivable's currency) before any write.
         let receiptBankId: string | undefined = args.bankAccountId ? String(args.bankAccountId) : undefined;
-        if (defects.bankContract) {
-          if (!receiptBankId) {
-            if (defects.bankDefaultedWhenMissing) receiptBankId = [...bankAccounts.keys()][0];
-            else {
-              if (defects.bankMissingWritesBeforeRefusing) app.disbursedAt = Date.now();
-              return {
-                ok: false as const,
-                error: defects.bankMissingWrongReason ? "The receipt could not be recorded." : "Select the bank account the finance company's payment was received into.",
-              };
-            }
+        if (!receiptBankId) {
+          if (defects.bankDefaultedWhenMissing) receiptBankId = [...bankAccounts.keys()][0];
+          else if (!defects.acceptsReceiptWithoutBank && !defects.legacyBackend) {
+            if (defects.bankMissingWritesBeforeRefusing) app.disbursedAt = Date.now();
+            return {
+              ok: false as const,
+              error: defects.bankMissingWrongReason ? "The receipt could not be recorded." : "Select the bank account the finance company's payment was received into.",
+            };
+          }
+        } else {
+          const bank = bankAccounts.get(receiptBankId);
+          if (!bank || bank.orgId !== String(args.orgId) || !bank.isActive || bank.currency !== receivable.currency) {
+            return { ok: false as const, error: "The selected bank account is not an active account in this deal's currency." };
           }
         }
         const currency = defects.financeReceiptInDifferentCurrency ? "USD" : receivable.currency;
@@ -2324,15 +2354,12 @@ const recordCase = (
       });
     });
 
-async function runAgainst(defects: Defects = {}, source: { declaresBank?: boolean; directFeeBank?: boolean; chequeBank?: boolean; requireBank?: boolean } = { declaresBank: !!defects.bankContract }) {
+async function runAgainst(defects: Defects = {}, source: { declaresBank?: boolean } = { declaresBank: !defects.legacyBackend }) {
   const backend = makeBackend(defects);
   const results: Array<Record<string, unknown>> = [];
   await runRehearsalCases({
     results,
     candidateFinanceReceiptNamesBank: source.declaresBank,
-    candidateDirectFeeNamesBank: Object.hasOwn(source, "directFeeBank") ? source.directFeeBank : source.declaresBank,
-    candidateChequeClearNamesBank: Object.hasOwn(source, "chequeBank") ? source.chequeBank : source.declaresBank,
-    requireFinanceReceiptBankContract: source.requireBank,
     orgId: "org_1",
     config: { convexUrl: "https://x.convex.cloud" },
     tokens: { sales: "t-sales", approver: "t-approver" },
@@ -2640,19 +2667,6 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
   test("RV1 catches a cheque return that ERASES its clearing", async () => {
     // Balances perfectly and destroys the history. ACC-3: a reversal ADDS.
     const results = await runAgainst({ eraseOnChequeReturn: true });
-    expect(statusOf(results, "RV1")).toBe("FAIL");
-  });
-
-  test("RV1 withholds proof when the candidate cheque bank contract is unreadable", async () => {
-    const results = await runAgainst({}, { declaresBank: false, chequeBank: undefined });
-    expect(statusOf(results, "RV1")).toBe("UNPROVEN");
-  });
-
-  test.each([
-    ["candidate requires a bank but backend is legacy", {}, true],
-    ["backend requires a bank but candidate is legacy", { chequeBankContract: true }, false],
-  ] as const)("RV1 fails when %s", async (_name, defect, chequeBank) => {
-    const results = await runAgainst(defect, { declaresBank: false, chequeBank });
     expect(statusOf(results, "RV1")).toBe("FAIL");
   });
 
@@ -3059,6 +3073,17 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     expect(statusOf(results, "RV1")).toBe("FAIL");
     expect(detail(results, "RV1")).toMatch(/outstanding on the receivable after the cheque bounced: expected 1200, got 0/);
   });
+  test.each([
+    ["clearing bank", { chequeClearingBankDropped: true }, /cheque clearing's physical bank/],
+    ["reversal bank", { chequeReversalBankDropped: true }, /cheque reversal's original physical bank/],
+    ["fee bank", { chequeFeeBankDropped: true }, /bank that paid the cheque return fee/],
+    ["fee bank choice", { chequeFeeBankUsesClearingBank: true }, /bank that paid the cheque return fee/],
+    ["fee account", { chequeFeeWrongAccount: true }, /cheque return fee: journal lines are not exactly/],
+  ] as const)("RV1 catches a wrong %s", async (_label, defect, refusal) => {
+    const results = await runAgainst(defect);
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(detail(results, "RV1")).toMatch(refusal);
+  });
 
   // ── RT2: the eight named commands ──
   test("RT2 catches a replay that mints a second identity on any of the eight", async () => {
@@ -3107,6 +3132,12 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
   });
 
+  test("FD1 catches a bank receipt accepted with no bank named", async () => {
+    const results = await runAgainst({ acceptsReceiptWithoutBank: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/named no bank was accepted/);
+  });
+
   describe("FD1 bank contract (SCRUM-54) — the trusted controller holds main and the candidate to their own contracts", () => {
     const fd1Detail = (results: Array<Record<string, unknown>>) =>
       (results.find((r) => r.id === "FD1")?.detail ?? {}) as { bankContract?: string; receiptBankAccountId?: string | null };
@@ -3117,98 +3148,67 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
       ["a probe that writes before refusing", { bankProbeWritesBeforeRefusing: true }, /contract probe still marked the application disbursed/],
       ["a bank-less correct-amount receipt refused for the wrong reason", { bankMissingWrongReason: true }, /bank-less receipt was refused for the wrong reason/],
     ] as Array<[string, Defects, RegExp]>)("%s fails FD1 rather than passing", async (_name, defect, expected) => {
-      const results = await runAgainst({ bankContract: true, ...defect });
+      const results = await runAgainst({ ...defect });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(expected);
     });
 
-    test("legacy main passes the strict economics and sends no bank", async () => {
-      const results = await runAgainst({});
-      expect(statusOf(results, "FD1")).toBe("PASS");
-      expect(fd1Detail(results).bankContract).toBe("legacy-no-bank");
-      expect(fd1Detail(results).receiptBankAccountId).toBeNull();
-    });
-
     test("a SCRUM-54 candidate passes with a named same-org bank carried onto the BANK_ACCOUNT line", async () => {
-      const results = await runAgainst({ bankContract: true });
+      const results = await runAgainst({});
       expect(statusOf(results, "FD1")).toBe("PASS");
       expect(fd1Detail(results).bankContract).toBe("named-bank");
       expect(fd1Detail(results).receiptBankAccountId).toMatch(/^bank/);
     });
 
-    test("FD1 withholds proof when the candidate direct-fee bank contract is unreadable", async () => {
-      const results = await runAgainst({}, { declaresBank: false, directFeeBank: undefined });
-      expect(statusOf(results, "FD1")).toBe("UNPROVEN");
-    });
-
-    test.each([
-      ["candidate requires a bank but backend is legacy", {}, true],
-      ["backend requires a bank but candidate is legacy", { directFeeBankContract: true }, false],
-    ] as const)("FD1 fails when %s", async (_name, defect, directFeeBank) => {
-      const results = await runAgainst(defect, { declaresBank: false, directFeeBank });
-      expect(statusOf(results, "FD1")).toBe("FAIL");
-    });
-
-    test("legacy economics are still strict: a short receipt accepted on legacy main fails", async () => {
+    test("economics stay strict: a short receipt accepted fails", async () => {
       const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
     });
 
     test("source declares a bank but the deployed backend is legacy: FAIL, never a quiet legacy pass", async () => {
-      const results = await runAgainst({}, { declaresBank: true, directFeeBank: false, chequeBank: false });
+      const results = await runAgainst({ legacyBackend: true }, { declaresBank: true });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(/absent or not deployed/);
     });
 
     test("deployed backend takes a bank but the source does not declare one: FAIL", async () => {
-      const results = await runAgainst({ bankContract: true }, { declaresBank: false, directFeeBank: true, chequeBank: true });
+      const results = await runAgainst({}, { declaresBank: false });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(/does not declare one/);
     });
 
-    // One-off trusted expectation for PR #602 (workflow-derived PR_NUMBER). Removed
-    // with requireFinanceReceiptBankContract when #602 merges its strict controller.
-    test("PR #602 expectation: source AND backend both legacy is FAIL, not a legacy PASS", async () => {
-      const results = await runAgainst({}, { declaresBank: false, requireBank: true });
+    test("source AND backend both legacy is FAIL, not a legacy PASS: the bank contract is unconditional", async () => {
+      const results = await runAgainst({ legacyBackend: true }, { declaresBank: false });
       expect(statusOf(results, "FD1")).toBe("FAIL");
-      expect(detail(results, "FD1")).toMatch(/requires the SCRUM-54 bank contract/);
-    });
-
-    test("PR #602 expectation: an unreadable source stays UNPROVEN, and a real bank candidate passes", async () => {
-      expect(statusOf(await runAgainst({}, { declaresBank: undefined, requireBank: true }), "FD1")).toBe("UNPROVEN");
-      expect(statusOf(await runAgainst({ bankContract: true }, { declaresBank: true, requireBank: true }), "FD1")).toBe("PASS");
-    });
-
-    test("without the #602 expectation, ordinary legacy main still passes", async () => {
-      expect(statusOf(await runAgainst({}, { declaresBank: false, requireBank: false }), "FD1")).toBe("PASS");
+      expect(detail(results, "FD1")).toMatch(/both lack the SCRUM-54 bank contract/);
     });
 
     test("an unreadable candidate source leaves FD1 UNPROVEN, not PASS", async () => {
-      const results = await runAgainst({}, { declaresBank: undefined });
-      expect(statusOf(results, "FD1")).toBe("UNPROVEN");
+      expect(statusOf(await runAgainst({}, { declaresBank: undefined }), "FD1")).toBe("UNPROVEN");
+      expect(statusOf(await runAgainst({ legacyBackend: true }, { declaresBank: undefined }), "FD1")).toBe("UNPROVEN");
     });
 
     test("a bank-less receipt that is accepted and defaulted to the only bank fails", async () => {
-      const results = await runAgainst({ bankContract: true, bankDefaultedWhenMissing: true });
+      const results = await runAgainst({ bankDefaultedWhenMissing: true });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(/named no bank was accepted/);
     });
 
     test("a bank-less receipt refused only after writing fails", async () => {
-      const results = await runAgainst({ bankContract: true, bankMissingWritesBeforeRefusing: true });
+      const results = await runAgainst({ bankMissingWritesBeforeRefusing: true });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(/still marked the application disbursed/);
     });
 
     test("a short receipt that names a valid bank and is accepted fails", async () => {
-      const results = await runAgainst({ bankContract: true, bankShortReceiptAccepted: true });
+      const results = await runAgainst({ bankShortReceiptAccepted: true });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
     });
 
     test("a journal whose BANK_ACCOUNT line loses the named bank fails", async () => {
-      const results = await runAgainst({ bankContract: true, bankIdentityDroppedFromJournal: true });
+      const results = await runAgainst({ bankIdentityDroppedFromJournal: true });
       expect(statusOf(results, "FD1")).toBe("FAIL");
       expect(detail(results, "FD1")).toMatch(/bank identity on the BANK_ACCOUNT journal line/);
     });
@@ -3227,11 +3227,6 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
       expect(candidateNamesReceiptBank(sharedArgsThenHelper)).toBeUndefined();
       expect(candidateNamesReceiptBank("export const nothing = 1;")).toBeUndefined();
       expect(candidateNamesReceiptBank(undefined)).toBeUndefined();
-      const directFee = withBank.replace("confirmDisbursement", "recordDirectFeePayment");
-      const chequeClear = withBank.replace("confirmDisbursement", "clearCheque");
-      expect(candidateCommandNamesBank(directFee, "recordDirectFeePayment")).toBe(true);
-      expect(candidateCommandNamesBank(chequeClear, "clearCheque")).toBe(true);
-      expect(candidateCommandNamesBank(directFee, "clearCheque")).toBeUndefined();
     });
   });
 

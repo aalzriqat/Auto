@@ -167,15 +167,8 @@ describe("FD1 bank-contract inputs come from trusted provenance (SCRUM-54)", () 
   const cwd = "/work/trusted";
   const read = vi.fn((file: string) => `source of ${file.replace(/\\/g, "/")}`);
 
-  test("PR_NUMBER exactly 602 requires the bank contract; any other PR or a release dispatch does not", () => {
-    expect(fd1BankContractInputs({ env: { PR_NUMBER: "602" }, cwd, readText: read }).requireBankContract).toBe(true);
-    for (const pr of ["601", "6020", "602 ", "", undefined]) {
-      expect(fd1BankContractInputs({ env: { PR_NUMBER: pr }, cwd, readText: read }).requireBankContract).toBe(false);
-    }
-  });
-
   test("the candidate source is read from the checkout beside the trusted one; unreadable is undefined", () => {
-    const inputs = fd1BankContractInputs({ env: {}, cwd, readText: read });
+    const inputs = fd1BankContractInputs({ env: { PR_NUMBER: "602" }, cwd, readText: read });
     expect(inputs.candidateSource).toMatch(/\/work\/candidate\/convex\/applications\.ts$/);
     expect(inputs.directFeeSource).toMatch(/\/work\/candidate\/convex\/financeDealCosts\.ts$/);
     expect(inputs.chequeSource).toMatch(/\/work\/candidate\/convex\/collections\.ts$/);

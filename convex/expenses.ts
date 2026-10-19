@@ -4,7 +4,7 @@ import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth, requireOrgMember } from "./utils/tenancy";
-import { AppErrorCode } from "./utils/errors";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { validateInput } from "./utils/validation";
@@ -27,6 +27,7 @@ import { CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
 import { expenseAccountKeyForCategory } from "./accounting/postingRules";
 import { createPrepaidScheduleForExpense, cancelPrepaidScheduleForExpense } from "./prepaidExpenses";
 import { yearMonthIndex } from "./utils/expenseAmortization";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -244,6 +245,7 @@ async function recordPaidExpenseSideEffects(
     currency,
     category: args.expense.category,
     paymentMethod: normalizePaymentMethod(args.expense.paymentMethod),
+    bankAccountId: args.expense.bankAccountId,
     actorId: args.actorId,
     occurredAt: args.expense.date,
     vehicleId: args.expense.vehicleId,
@@ -285,6 +287,15 @@ async function recordPaidExpenseSideEffects(
 }
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
+
+/** Bank names offered to expense editors; mutation validation remains authoritative. */
+export const listPaymentBankOptions = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_EXPENSES]);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+  },
+});
 
 /**
  * Lists all expenses for an organization, optionally filtering by vehicle.
@@ -411,6 +422,7 @@ export const create = mutation({
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     notes: v.optional(v.string()),
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
@@ -469,6 +481,7 @@ export const create = mutation({
           vendor: args.vendor ?? null,
           payerId: args.payerId ?? null,
           paymentMethod: paymentMethod ?? null,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           notes: args.notes ?? null,
           isPrepaid: isPrepaid ?? null,
           amortizationMonths: amortizationMonths ?? null,
@@ -482,6 +495,21 @@ export const create = mutation({
       },
       async () => {
         validateInput(CreateExpenseSchema, args);
+        if (status !== "PAID" && args.bankAccountId) {
+          throwAppError(AppErrorCode.EXPENSE_BANK_INVALID, "Choose a bank account when marking the expense paid.");
+        }
+        if (status === "PAID" && paymentMethod !== "CASH") {
+          await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId,
+            bankAccountId: args.bankAccountId,
+            currency: await getOrgCurrency(ctx, args.orgId),
+            missingMessage: "Select the physical bank account used to pay this expense.",
+            currencySubject: "expense payment",
+            errorCode: AppErrorCode.EXPENSE_BANK_INVALID,
+          });
+        } else if (args.bankAccountId) {
+          throwAppError(AppErrorCode.EXPENSE_BANK_INVALID, "A cash expense cannot name a bank account.");
+        }
 
         if (args.vehicleId) {
           const vehicle = await ctx.db.get(args.vehicleId);
@@ -513,6 +541,7 @@ export const create = mutation({
           status,
           idempotencyKey: args.idempotencyKey,
           paymentMethod,
+          bankAccountId: args.bankAccountId,
           vendor: args.vendor,
           payerId: args.payerId,
           notes: args.notes,
@@ -564,6 +593,7 @@ export const update = mutation({
     vendor: v.optional(v.string()),
     payerId: v.optional(v.union(v.id("users"), v.null())),
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.union(v.id("bankAccounts"), v.null())),
     notes: v.optional(v.string()),
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
@@ -592,6 +622,7 @@ export const update = mutation({
     if (argsToValidate.vehicleId === null) delete argsToValidate.vehicleId;
     if (argsToValidate.payerId === null) delete argsToValidate.payerId;
     if (argsToValidate.amortizationStartDate === null) delete argsToValidate.amortizationStartDate;
+    if (argsToValidate.bankAccountId === null) delete argsToValidate.bankAccountId;
 
     validateInput(UpdateExpenseSchema, argsToValidate);
 
@@ -614,6 +645,27 @@ export const update = mutation({
     const currentStatus = expense.status ?? "PAID";
     const nextStatus = args.status ?? currentStatus;
     const willMarkPaid = currentStatus === "PENDING" && nextStatus === "PAID";
+    const effectiveMethod = normalizePaymentMethod(args.paymentMethod ?? expense.paymentMethod);
+    const effectiveBankAccountId = args.bankAccountId === null ? undefined : (args.bankAccountId ?? expense.bankAccountId);
+    const bankChoiceChanged = args.bankAccountId !== undefined && effectiveBankAccountId !== expense.bankAccountId;
+    const methodChanged = args.paymentMethod !== undefined && effectiveMethod !== normalizePaymentMethod(expense.paymentMethod);
+    if (nextStatus === "PAID" && effectiveMethod !== "CASH") {
+      // A newly paid bank expense must carry its physical bank before any write.
+      // An unchanged PAID replay need not revalidate a bank that may have been
+      // deactivated after the original payment was accepted.
+      if (willMarkPaid || methodChanged || bankChoiceChanged) {
+        await requireActiveBankInCurrency(ctx, {
+          orgId: args.orgId,
+          bankAccountId: effectiveBankAccountId,
+          currency: await getOrgCurrency(ctx, args.orgId),
+          missingMessage: "Select the physical bank account used to pay this expense.",
+          currencySubject: "expense payment",
+          errorCode: AppErrorCode.EXPENSE_BANK_INVALID,
+        });
+      }
+    } else if (effectiveBankAccountId) {
+      throwAppError(AppErrorCode.EXPENSE_BANK_INVALID, "A cash or pending expense cannot name a bank account.");
+    }
     // SCRUM-389: the bearer decided which account the payment was debited to
     // and whether a recovery was opened. Once PAID it is history, whatever the
     // posting state — a queued post has already frozen it in its payload.
@@ -634,6 +686,7 @@ export const update = mutation({
       (args.category !== undefined && args.category !== expense.category) ||
       (args.status !== undefined && args.status !== currentStatus) ||
       (args.paymentMethod !== undefined && args.paymentMethod !== expense.paymentMethod) ||
+      bankChoiceChanged ||
       (args.isPrepaid !== undefined && (args.isPrepaid || false) !== (expense.isPrepaid || false)) ||
       (args.amortizationMonths !== undefined && args.amortizationMonths !== expense.amortizationMonths) ||
       (args.amortizationStartDate !== undefined && args.amortizationStartDate !== (expense.amortizationStartDate ?? null)) ||
@@ -705,6 +758,7 @@ export const update = mutation({
     if (args.status !== undefined) patch.status = args.status;
     if (args.vendor !== undefined) patch.vendor = args.vendor;
     if (args.paymentMethod !== undefined) patch.paymentMethod = args.paymentMethod;
+    if (args.bankAccountId !== undefined) patch.bankAccountId = effectiveBankAccountId;
     if (args.payerId !== undefined) {
       if (args.payerId !== null) {
         await requireOrgMember(

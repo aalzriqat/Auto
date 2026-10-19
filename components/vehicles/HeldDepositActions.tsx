@@ -3,6 +3,8 @@
 import { Button } from "@/components/ui/button";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { isChosenMethod } from "@/components/payments/paymentMethod";
+import type { Id } from "@/convex/_generated/dataModel";
+import { DepositRefundBankSelect, useDepositRefundBanks } from "@/components/deposits/DepositRefundBankSelect";
 
 /**
  * Refund or forfeit a HELD deposit, from the vehicle's own deposit list.
@@ -16,20 +18,30 @@ import { isChosenMethod } from "@/components/payments/paymentMethod";
  * command's identity) and the mutation.
  */
 export function HeldDepositActions({
+  orgId,
+  currency,
   method,
+  bankAccountId,
   onMethodChange,
+  onBankChange,
   busy,
   onRefund,
   onForfeit,
   t,
 }: Readonly<{
+  orgId: Id<"organizations"> | undefined;
+  currency?: string;
   method: PaymentMethod | undefined;
+  bankAccountId: string;
   onMethodChange: (method: PaymentMethod) => void;
+  onBankChange: (bankAccountId: string) => void;
   busy: boolean;
-  onRefund: (method: PaymentMethod) => void;
+  onRefund: (method: PaymentMethod, bankAccountId?: Id<"bankAccounts">) => void;
   onForfeit: () => void;
   t: (key: any) => string;
 }>) {
+  const needsBank = method === "BANK_TRANSFER" || method === "CARD" || method === "CHEQUE";
+  const bankOptions = useDepositRefundBanks(orgId, currency, needsBank, bankAccountId);
   return (
     <div className="flex min-w-0 max-w-full flex-col items-end gap-1">
       <div className="flex flex-wrap items-center justify-end gap-2">
@@ -46,9 +58,10 @@ export function HeldDepositActions({
           variant="outline"
           size="sm"
           className="h-7 text-xs"
-          disabled={busy || !isChosenMethod(method)}
+          disabled={busy || !isChosenMethod(method) || (needsBank && !bankOptions.chosenOffered)}
           onClick={() => {
-            if (isChosenMethod(method)) onRefund(method);
+            if (isChosenMethod(method) && (!needsBank || bankOptions.chosenOffered))
+              onRefund(method, needsBank ? bankAccountId as Id<"bankAccounts"> : undefined);
           }}
         >
           {t("Refund") ?? "Refund"}
@@ -63,6 +76,12 @@ export function HeldDepositActions({
           {t("Forfeit") ?? "Forfeit"}
         </Button>
       </div>
+      {needsBank && (
+        <div className="w-64 max-w-full">
+          <DepositRefundBankSelect value={bankAccountId}
+            onChange={onBankChange} bankOptions={bankOptions} disabled={busy} />
+        </div>
+      )}
       {!isChosenMethod(method) ? (
         <p className="max-w-[18rem] text-xs font-medium text-destructive text-end" role="status">
           {t("RefundMethodRequired")}

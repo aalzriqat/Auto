@@ -85,6 +85,15 @@ describe("buildOwnershipDecision", () => {
       purchaseSupplierName: "Atiwi",
     });
   });
+
+  test("bank-funded approval waits for a bank and carries its exact identity", () => {
+    const base = draft({ sourceType: "STOCK", purchasePrice: "10000", purchasePaymentMethod: "BANK_TRANSFER" });
+    expect(buildOwnershipDecision(base)).toBeNull();
+    const bankAccountId = "bank_test_1" as OwnershipDraft["bankAccountId"];
+    expect(buildOwnershipDecision({ ...base, bankAccountId })).toEqual({
+      sourceType: "STOCK", purchasePrice: 10000, purchasePaymentMethod: "BANK_TRANSFER", bankAccountId,
+    });
+  });
 });
 
 describe("ApprovalOwnershipChooser", () => {

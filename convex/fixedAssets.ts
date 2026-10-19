@@ -12,7 +12,7 @@ import { internalQuery, query, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { mutation, internalMutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyOwner, getActorName } from "./utils/notifications";
 import {
@@ -28,8 +28,23 @@ import { assertMonthClaim } from "./utils/expenseAmortization";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { interpolate } from "../lib/i18n/interpolate";
 import { isFutureUtcDay, isRepresentableTimestamp, utcDateLabel, utcDay } from "./utils/ledgerCalendar";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 
 const methodValidator = v.literal("STRAIGHT_LINE");
+
+const capitalizationNeedsBank = (method: PaymentMethod | undefined) =>
+  method === "BANK_TRANSFER" || method === "CARD" || method === "CHEQUE";
+
+export const listBankOptions = query({
+  args: { orgId: v.id("organizations"), assetId: v.optional(v.id("fixedAssets")) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const asset = args.assetId
+      ? await requireOwnedRow(ctx, args.orgId, "fixedAssets", args.assetId, "Fixed asset not found in this organization.")
+      : undefined;
+    return await listEligibleBanks(ctx, args.orgId, asset?.currency ?? (await getOrgCurrency(ctx, args.orgId)));
+  },
+});
 
 /**
  * SCRUM-542. The English text of every accounting-date refusal `impair` and
@@ -154,8 +169,8 @@ export const listEvents = query({
   args: { orgId: v.id("organizations"), assetId: v.id("fixedAssets") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    const asset = await ctx.db.get(args.assetId);
-    if (!asset || asset.orgId !== args.orgId || asset.isDeleted) {
+    const asset = await requireOwnedRow(ctx, args.orgId, "fixedAssets", args.assetId, "Fixed asset not found in this organization.");
+    if (asset.isDeleted) {
       throw new ConvexError("Fixed asset not found in this organization.");
     }
     return await ctx.db
@@ -184,6 +199,7 @@ export const capitalize = mutation({
     method: v.optional(methodValidator),
     depreciationStartDate: v.optional(v.number()),
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     notes: v.optional(v.string()),
     // SCRUM-57 / SCRUM-313 census. `hookAssetCapitalized` keys its accounting
     // event on `asset_capitalized_${assetId}`, and the asset id is minted by
@@ -248,6 +264,7 @@ export const capitalize = mutation({
           method: args.method ?? "STRAIGHT_LINE",
           depreciationStartDate: args.depreciationStartDate ?? args.purchaseDate,
           paymentMethod: args.paymentMethod ?? null,
+          bankAccountId: args.bankAccountId ?? null,
         }),
       },
       async () => await capitalizeCore(ctx, args, { user, currency, salvageValueMinor, now })
@@ -270,11 +287,21 @@ async function capitalizeCore(
     method?: Doc<"fixedAssets">["method"];
     depreciationStartDate?: number;
     paymentMethod?: PaymentMethod;
+    bankAccountId?: Id<"bankAccounts">;
     notes?: string;
   },
   deps: { user: Doc<"users">; currency: string; salvageValueMinor: number; now: number }
 ): Promise<Id<"fixedAssets">> {
   const { user, currency, salvageValueMinor, now } = deps;
+  if (capitalizationNeedsBank(args.paymentMethod)) {
+    await requireActiveBankInCurrency(ctx, {
+      orgId: args.orgId, bankAccountId: args.bankAccountId, currency,
+      missingMessage: "Select the physical bank used to pay for this asset.",
+      currencySubject: "asset purchase", errorCode: AppErrorCode.ASSET_BANK_INVALID,
+    });
+  } else if (args.bankAccountId) {
+    throwAppError(AppErrorCode.ASSET_BANK_NOT_APPLICABLE, "A physical bank does not apply to this cash asset purchase.");
+  }
   const assetId = await ctx.db.insert("fixedAssets", {
       orgId: args.orgId,
       name: args.name,
@@ -295,6 +322,7 @@ async function capitalizeCore(
       assetId,
       type: "CAPITALIZE",
       amountMinor: args.costMinor,
+      bankAccountId: args.bankAccountId,
       currency,
       occurredAt: args.purchaseDate,
       actorId: user._id,
@@ -307,6 +335,7 @@ async function capitalizeCore(
       costMinor: args.costMinor,
       currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId,
       actorId: user._id,
       occurredAt: args.purchaseDate,
     });
@@ -400,8 +429,8 @@ export const impair = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
-    const asset = await ctx.db.get(args.assetId);
-    if (!asset || asset.orgId !== args.orgId || asset.isDeleted) {
+    const asset = await requireOwnedRow(ctx, args.orgId, "fixedAssets", args.assetId, "Fixed asset not found in this organization.");
+    if (asset.isDeleted) {
       throw new ConvexError("Fixed asset not found in this organization.");
     }
     if (asset.status !== "ACTIVE") {
@@ -460,13 +489,14 @@ export const dispose = mutation({
     orgId: v.id("organizations"),
     assetId: v.id("fixedAssets"),
     proceedsMinor: v.optional(v.number()),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     occurredAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
-    const asset = await ctx.db.get(args.assetId);
-    if (!asset || asset.orgId !== args.orgId || asset.isDeleted) {
+    const asset = await requireOwnedRow(ctx, args.orgId, "fixedAssets", args.assetId, "Fixed asset not found in this organization.");
+    if (asset.isDeleted) {
       throw new ConvexError("Fixed asset not found in this organization.");
     }
     if (asset.status === "DISPOSED") {
@@ -484,6 +514,15 @@ export const dispose = mutation({
     const occurredAt = args.occurredAt ?? Date.now();
     await assertAssetEventDate(ctx, { orgId: args.orgId, asset, occurredAt, kind: "DISPOSE" });
     const currency = asset.currency ?? (await getOrgCurrency(ctx, args.orgId));
+    if (proceedsMinor > 0) {
+      await requireActiveBankInCurrency(ctx, {
+        orgId: args.orgId, bankAccountId: args.bankAccountId, currency,
+        missingMessage: "Select the physical bank receiving the disposal proceeds.",
+        currencySubject: "asset disposal", errorCode: AppErrorCode.ASSET_BANK_INVALID,
+      });
+    } else if (args.bankAccountId) {
+      throwAppError(AppErrorCode.ASSET_BANK_NOT_APPLICABLE, "A physical bank does not apply to a disposal without proceeds.");
+    }
     const accumulatedDepreciationMinor = asset.accumulatedDepreciationMinor ?? 0;
 
     await ctx.db.patch(args.assetId, {
@@ -497,6 +536,7 @@ export const dispose = mutation({
       assetId: args.assetId,
       type: "DISPOSE",
       amountMinor: proceedsMinor,
+      bankAccountId: args.bankAccountId,
       currency,
       occurredAt,
       actorId: user._id,
@@ -509,6 +549,7 @@ export const dispose = mutation({
       costMinor: asset.costMinor,
       accumulatedDepreciationMinor,
       proceedsMinor,
+      bankAccountId: args.bankAccountId,
       currency,
       actorId: user._id,
       occurredAt,

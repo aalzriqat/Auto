@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTestWithComponents } from "../test-utils/convexTest";
 import { makeFunctionReference } from "convex/server";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import schema from "./schema";
@@ -15,7 +15,10 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 async function fixture(count = 1) {
-  const t = convexTest(schema, modules);
+  // Components registered for the bank-balance triggers; `run` stays raw so the
+  // tests choose when triggers fire, as they did before.
+  const t = convexTestWithComponents(schema, modules);
+  t.run = t.runUnwrapped;
   const seed = await t.run(async ctx => {
     const orgId = await ctx.db.insert("organizations", { name: "Ledger eligibility", createdAt: 1 });
     const otherOrg = await ctx.db.insert("organizations", { name: "Other", createdAt: 1 });
