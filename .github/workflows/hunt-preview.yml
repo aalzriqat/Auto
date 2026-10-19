@@ -21,7 +21,7 @@ name: Hunt preview (manual bug hunt)
 #
 # Before every hunt session the hunter checks the browser's network tab: the
 # only Convex host is <deployment>.convex.cloud / .convex.site and never
-# kindly-hound-172. Vercel preview URLs are NOT used for hunting (SCRUM-767).
+# clever-mockingbird-719 (production) or kindly-hound-172. Vercel preview URLs are NOT used for hunting (SCRUM-767).
 
 on:
   workflow_dispatch:
@@ -80,7 +80,7 @@ jobs:
             if ! [[ "$DEPLOYMENT" =~ ^[a-z]+-[a-z]+-[0-9]+$ ]]; then
               echo "::error::deployment must be the name printed by create (word-word-number)."; exit 1
             fi
-            if [ "$DEPLOYMENT" = "kindly-hound-172" ]; then
+            if [ "$DEPLOYMENT" = "clever-mockingbird-719" ] || [ "$DEPLOYMENT" = "kindly-hound-172" ]; then
               echo "::error::Refusing the production deployment."; exit 1
             fi
             echo "HUNT_CONVEX_URL=https://${DEPLOYMENT}.convex.cloud" >> "$GITHUB_ENV"

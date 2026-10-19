@@ -127,7 +127,8 @@ describe("hunt-preview workflow (SCRUM-768)", () => {
 
     it.each([
       ["a newline smuggling a second GITHUB_ENV line", "happy-otter-1\nNODE_OPTIONS=--require=/tmp/x"],
-      ["production", "kindly-hound-172"],
+      ["production", "clever-mockingbird-719"],
+      ["the earlier protected deployment", "kindly-hound-172"],
       ["a URL", "https://happy-otter-1.convex.cloud"],
       ["an empty value", ""],
     ])("refuses %s and writes nothing", (_label, deployment) => {

@@ -118,6 +118,7 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
       expect(calls).toEqual([]);
     }
     expect(() => deploymentNameFromUrl("https://kindly-hound-172.convex.cloud")).toThrow(/protected/);
+    expect(() => deploymentNameFromUrl("https://clever-mockingbird-719.convex.cloud")).toThrow(/protected/);
   });
 
   it("refuses a non-preview deploy key before any request", async () => {

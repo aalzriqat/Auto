@@ -30,7 +30,14 @@
  */
 
 /** The production deployment. Delivery there must never be sunk. */
-export const PRODUCTION_DEPLOYMENT_NAME = "kindly-hound-172";
+export const PRODUCTION_DEPLOYMENT_NAME = "clever-mockingbird-719";
+
+/**
+ * Production, plus the earlier `kindly-hound-172` this guard protected before
+ * the owner named `clever-mockingbird-719` as production (2026-10-19). The old
+ * name stays guarded; it only ever adds protection.
+ */
+const NEVER_SINK_DEPLOYMENTS: ReadonlySet<string> = new Set([PRODUCTION_DEPLOYMENT_NAME, "kindly-hound-172"]);
 
 export type EgressChannel = "email" | "whatsapp" | "sms" | "web-push" | "expo-push";
 
@@ -53,7 +60,7 @@ function deploymentName(url: string | undefined): string | null {
 export function isEgressSinkActive(): boolean {
   if (process.env.AUTOFLOW_DEPLOYMENT_CLASS !== "preview") return false;
   const name = deploymentName(process.env.CONVEX_CLOUD_URL);
-  return name !== null && name !== PRODUCTION_DEPLOYMENT_NAME;
+  return name !== null && !NEVER_SINK_DEPLOYMENTS.has(name);
 }
 
 /**

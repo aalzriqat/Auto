@@ -52,8 +52,10 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 export const PIN_TTL_MS = 12 * 60 * 60 * 1000;
 const SAFE_PREVIEW_NAME = /^[a-z0-9][a-z0-9._-]{0,60}$/;
 export const DEPLOYMENT_NAME = /^[a-z]+-[a-z]+-\d+$/;
-// Production. The key cannot reach it; this list makes the refusal local too.
-export const PROTECTED_DEPLOYMENTS = new Set(["kindly-hound-172"]);
+// Production (clever-mockingbird-719, owner 2026-10-19) and the earlier
+// kindly-hound-172, which stays protected. The key cannot reach production;
+// this list makes the refusal local too.
+export const PROTECTED_DEPLOYMENTS = new Set(["clever-mockingbird-719", "kindly-hound-172"]);
 
 export class PreviewLifecycleRefusal extends Error {}
 
