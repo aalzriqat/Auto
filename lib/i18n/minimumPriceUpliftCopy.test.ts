@@ -7,24 +7,26 @@
 import { describe, expect, test } from "vitest";
 import { dictionaries } from "./dictionaries";
 
+const NO_PROFIT_KEYS = ["RequestedProfit", "AllCaughtUp", "DealerProfit"] as const;
+
+// Per language: the help text says LESS than the minimum above list, and not the old wording.
+const HELP_WORDING = {
+  en: { present: /less than this amount above/, absent: /before it needs/ },
+  ar: { present: /بأقل من هذا المبلغ/, absent: /قبل أن يحتاج/ },
+} as const;
+
 describe("minimum price uplift copy", () => {
   for (const [name, dict] of Object.entries(dictionaries) as [string, Record<string, string>][]) {
     test(`${name}: the approval card, empty state and quote-setup input do not call the list-price spread profit`, () => {
-      expect(dict.RequestedProfit).not.toMatch(/profit|ربح/i);
-      expect(dict.AllCaughtUp).not.toMatch(/profit|ربح/i);
-      expect(dict.DealerProfit).not.toMatch(/profit|ربح/i);
+      for (const key of NO_PROFIT_KEYS) expect(dict[key]).not.toMatch(/profit|ربح/i);
     });
   }
 
-  test("en: help text says approval is needed when the price is LESS than the minimum above list", () => {
-    const help = dictionaries.en.MinimumPriceUpliftHelp as string;
-    expect(help).toMatch(/less than this amount above/);
-    expect(help).not.toMatch(/before it needs/);
-  });
-
-  test("ar: help text says approval is needed when the price is LESS than the minimum above list", () => {
-    const help = dictionaries.ar.MinimumPriceUpliftHelp as string;
-    expect(help).toMatch(/بأقل من هذا المبلغ/);
-    expect(help).not.toMatch(/قبل أن يحتاج/);
-  });
+  for (const [lang, { present, absent }] of Object.entries(HELP_WORDING)) {
+    test(`${lang}: help text says approval is needed when the price is LESS than the minimum above list`, () => {
+      const help = (dictionaries as Record<string, Record<string, unknown>>)[lang].MinimumPriceUpliftHelp as string;
+      expect(help).toMatch(present);
+      expect(help).not.toMatch(absent);
+    });
+  }
 });
