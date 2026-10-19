@@ -495,17 +495,12 @@ export function summarize(results) {
 }
 
 /**
- * FD1's SCRUM-54 bank-contract inputs, from trusted provenance only.
+ * FD1's SCRUM-54 bank-contract input, from trusted provenance only.
  *
  * The tested merge is checked out BESIDE this trusted checkout (`../candidate`) and
  * read as data; an unreadable source is `undefined`, which leaves FD1 UNPROVEN.
- *
- * `requireBankContract` is a ONE-OFF: PR_NUMBER is the job env the trusted workflow
- * derives from github.event.workflow_run after verifying the exact head and merge,
- * and #602 is the SCRUM-54 bank-feature PR. For it a legacy-looking source+backend
- * pair must not pass FD1. REMOVE this expectation (and
- * requireFinanceReceiptBankContract in accountingRehearsalCases.mjs) in #602's own
- * merge, where the strict candidate controller makes the contract unconditional.
+ * The bank receipt contract itself is unconditional: FD1 fails unless the candidate
+ * source and the deployed backend both take the physical bank.
  */
 export function fd1BankContractInputs({ env, cwd, readText = (file) => readFileSync(file, "utf8") }) {
   const candidateSource = (filename) => {

@@ -208,6 +208,7 @@ describe("dynamically-referenced i18n keys", () => {
     "OpeningBalanceSegregationOfDutiesNotice",
     "OpeningBalancePreparerUnknown",
     "OpeningBalanceRawMinorUnitsNote",
+    "OpeningBalanceBankMissing",
   ] as const;
 
   test("every key computeApprovalGate can return exists in both dictionaries", () => {
@@ -225,9 +226,11 @@ describe("dynamically-referenced i18n keys", () => {
       for (const busy of [true, false]) {
         for (const balanced of [true, false]) {
           for (const denominationKnown of [true, false]) {
-            const gate = computeApprovalGate({ isOwnDraft, busy, balanced, denominationKnown });
-            if (gate.recoveryKey) produced.add(gate.recoveryKey);
-            gate.blockingFacts.forEach((f) => produced.add(f.key));
+            for (const bankIdentityMissing of [true, false]) {
+              const gate = computeApprovalGate({ isOwnDraft, busy, balanced, denominationKnown, bankIdentityMissing });
+              if (gate.recoveryKey) produced.add(gate.recoveryKey);
+              gate.blockingFacts.forEach((f) => produced.add(f.key));
+            }
           }
         }
       }

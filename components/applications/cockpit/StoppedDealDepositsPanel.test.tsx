@@ -6,6 +6,19 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
+vi.mock("@/components/deposits/DepositRefundBankSelect", () => ({
+  useDepositRefundBanks: (_orgId: unknown, _currency: unknown, _enabled: boolean, value: string) => ({
+    banks: [{ _id: "bank-1", name: "Test bank", currency: "JOD" }],
+    chosenOffered: value === "bank-1", loading: false, truncated: false, noEligible: false,
+  }),
+  DepositRefundBankSelect: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
+    <select data-testid="bank-select" value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="" />
+      <option value="bank-1">Test bank</option>
+    </select>
+  ),
+}));
+
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
 }));
@@ -42,6 +55,7 @@ afterEach(cleanup);
 function renderPanel(onResolve = vi.fn().mockResolvedValue(undefined)) {
   render(
     <StoppedDealDepositsPanel
+      orgId={"org-1" as never}
       deposits={[{ _id: "dep1", amount: 500, status: "HELD", method: "CASH", releaseCount: 2 }]}
       canResolve
       faceValueIsReleasable
@@ -75,10 +89,12 @@ describe("StoppedDealDepositsPanel refund method (SCRUM-469)", () => {
     fireEvent.change(screen.getByTestId("method-select"), { target: { value: "BANK_TRANSFER" } });
 
     const confirm = screen.getByRole("button", { name: "ConfirmRefund" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("bank-select"), { target: { value: "bank-1" } });
     expect(confirm.disabled).toBe(false);
     expect(screen.queryByRole("status")).toBeNull();
     fireEvent.click(confirm);
-    expect(onResolve).toHaveBeenCalledWith("dep1", "REFUNDED", "BANK_TRANSFER", 2);
+    expect(onResolve).toHaveBeenCalledWith("dep1", "REFUNDED", "BANK_TRANSFER", 2, "bank-1");
   });
 
   test("the choice does not leak into the next refund: reopening starts empty again", () => {
@@ -99,6 +115,6 @@ describe("StoppedDealDepositsPanel refund method (SCRUM-469)", () => {
     const confirm = screen.getByRole("button", { name: "ConfirmForfeit" }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(false);
     fireEvent.click(confirm);
-    expect(onResolve).toHaveBeenCalledWith("dep1", "FORFEITED", undefined, 2);
+    expect(onResolve).toHaveBeenCalledWith("dep1", "FORFEITED", undefined, 2, undefined);
   });
 });

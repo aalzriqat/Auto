@@ -430,9 +430,12 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
   ["convex/payroll.ts", "payroll.recordAdvance", ["method"]],
   // Selects the credit account (cash on hand vs bank) a direct handover payment leaves.
   // …and the amount the approver SAW: the same key for another figure is another intent.
-  ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor"]],
+  // SCRUM-54: …and the physical bank a bank-method payment left.
+  ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor", "bankAccountId"]],
   // SCRUM-435: how the forward was paid selects the account it leaves, and the amount the payer saw is pinned.
-  ["convex/financeCompanyForward.ts", "financeCompanyForward.recordFinanceCompanyForward", ["method", "expectedAmountMinor"]],
+  ["convex/financeCompanyForward.ts", "financeCompanyForward.recordFinanceCompanyForward", ["method", "bankAccountId", "expectedAmountMinor"]],
+  ["convex/partnerEquity.ts", "partnerEquity.add", ["paymentMethod", "bankAccountId"]],
+  ["convex/partnerEquity.ts", "partnerEquity.recordEquityMovement", ["paymentMethod", "bankAccountId"]],
 ];
 
 describe("SCRUM-57 — fields whose omission was a reproduced defect stay hashed", () => {

@@ -19,6 +19,7 @@ import { interpolate } from "@/lib/i18n/interpolate";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 import { busyCloseGuard } from "@/components/ui/busyCloseGuard";
+import { PAYMENT_LINKS_PILOT_DISABLED } from "@/lib/pilotCapabilities";
 import {
   AccountingEmptyRow,
   AccountingTableFrame,
@@ -99,11 +100,16 @@ export function PaymentLinksPanel() {
 
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
-        <Button onClick={() => setCreateOpen(true)}>
+      <div className="flex flex-col items-end gap-1">
+        <Button disabled={PAYMENT_LINKS_PILOT_DISABLED} onClick={() => setCreateOpen(true)}>
           <Plus className="me-2 h-4 w-4" />
           {t("NewPaymentLink" as any)}
         </Button>
+        {PAYMENT_LINKS_PILOT_DISABLED && (
+          <p className="text-sm text-muted-foreground" role="status">
+            {t("ServerError_PAYMENT_LINKS_DISABLED" as any)}
+          </p>
+        )}
       </div>
       <div className="rounded-md border border-border overflow-x-auto">
         <Table>

@@ -66,7 +66,11 @@ type EditableLandedItem = {
   label: string;
   amount: string;
   paymentMethod: MobileLandedCostPaymentMethod;
+  bankAccountId?: string;
 };
+
+const landedMethodUsesBank = (method: MobileLandedCostPaymentMethod) =>
+  method === "BANK_TRANSFER" || method === "CARD" || method === "CHEQUE";
 
 let landedItemKeyCounter = 0;
 
@@ -197,6 +201,11 @@ function VehicleDetailContent({
     api.vehicles.getLandedCosts,
     scopedArgs && activeTab === "costs" ? scopedArgs : "skip",
   );
+  const landedBankOptions = useQuery(
+    api.vehicles.listAcquisitionBankOptions,
+    canQuery && orgId && canEdit && activeTab === "costs" && vehicle?.sourceType !== "SOURCED"
+      ? { orgId, purpose: "EDIT" } : "skip",
+  );
   const pricingHistory = useQuery(
     api.vehicles.getPricingHistory,
     scopedArgs && activeTab === "pricing" ? scopedArgs : "skip",
@@ -233,7 +242,7 @@ function VehicleDetailContent({
   // SCRUM-530 F1: `uncertain` is set once any attempt under the record had an
   // unknown outcome; from then on only success or dismissal retires it.
   const pendingPayoutsRef = useRef<
-    Map<string, { resolution: "REFUNDED" | "FORFEITED"; method: string; intent: string; uncertain?: boolean }>
+    Map<string, { resolution: "REFUNDED" | "FORFEITED"; method: string; bankAccountId?: string; intent: string; uncertain?: boolean }>
   >(
     new Map(),
   );
@@ -252,17 +261,33 @@ function VehicleDetailContent({
   // payout generation (`releaseCount`) it was chosen for, so once a partial
   // payout confirms and the generation advances the choice no longer applies.
   const [refundChoiceByDeposit, setRefundChoiceByDeposit] = useState<
-    Record<string, { method: MobileDepositMethod; generation: number }>
+    Record<string, { method: MobileDepositMethod; bankAccountId?: string; generation: number }>
   >({});
+  const refundBankOptions = useQuery(api.deposits.listRefundBankOptions,
+    canQuery && orgId && canResolveDeposits && activeTab === "overview" &&
+      Object.values(refundChoiceByDeposit).some((choice) => choice.method !== "CASH")
+      ? { orgId } : "skip");
   const refundMethodFor = (deposit: { _id: string; releaseCount?: number }): MobileDepositMethod | undefined => {
     const choice = refundChoiceByDeposit[deposit._id];
     return choice && choice.generation === (deposit.releaseCount ?? 0) ? choice.method : undefined;
   };
   const [landedItems, setLandedItems] = useState<EditableLandedItem[]>([]);
+  const hasLegacyUnattributedBank = vehicle?.sourceType !== "SOURCED" && !!landedCosts?.items.some((item) =>
+    item.amount !== 0 && item.paymentMethod && landedMethodUsesBank(item.paymentMethod) && !item.bankAccountId);
+  const hasUnselectedLandedBank = vehicle?.sourceType !== "SOURCED" && landedItems.some((item) =>
+    (parseOptionalNumber(item.amount) ?? 0) !== 0 && landedMethodUsesBank(item.paymentMethod) &&
+    !landedBankOptions?.banks?.some((bank) => bank._id === item.bankAccountId));
   const [savingCosts, setSavingCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
   const [reservationMethod, setReservationMethod] = useState("");
+  const [reservationBankAccountId, setReservationBankAccountId] = useState("");
+  const reservationNeedsBank = parseOptionalNumber(reservationDeposit) !== undefined &&
+    (reservationMethod === "BANK_TRANSFER" || reservationMethod === "CARD");
+  const receiptBankOptions = useQuery(api.deposits.listReceiptBankOptions,
+    canQuery && orgId && canRecordDeposit && reservationNeedsBank ? { orgId } : "skip");
+  const reservationBankReady = !reservationNeedsBank ||
+    (receiptBankOptions?.banks.some((bank) => bank._id === reservationBankAccountId) ?? false);
   const [reservationHoldDays, setReservationHoldDays] = useState("");
   const [savingReservation, setSavingReservation] = useState(false);
 
@@ -274,6 +299,7 @@ function VehicleDetailContent({
           label: item.label,
           amount: String(item.amount),
           paymentMethod: item.paymentMethod ?? "CASH",
+          bankAccountId: item.bankAccountId,
         })),
       );
     } else if (landedCosts === null) {
@@ -285,6 +311,7 @@ function VehicleDetailContent({
     setReservationCustomerId("");
     setReservationDeposit("");
     setReservationMethod("");
+    setReservationBankAccountId("");
     setReservationHoldDays("");
     setRefundChoiceByDeposit({});
   }, [vehicleId]);
@@ -323,6 +350,8 @@ function VehicleDetailContent({
     // Set only by the reconciliation notice's retry: the RECORDED attempt's own
     // method, not whatever the picker holds now.
     recordedMethod?: string,
+    recordedBankAccountId?: string,
+    isRetry = false,
   ) {
     if (!orgId) return;
     // SCRUM-469: no default. A refund with no chosen method is refused here
@@ -333,8 +362,13 @@ function VehicleDetailContent({
       refundMethodFor({ _id: depositId, releaseCount: observedReleaseCount });
     if (resolution === "REFUNDED" && !isChosenMethod(chosenMethod)) return;
     const method = resolution === "REFUNDED" ? chosenMethod : "NONE";
+    const selectedBank = recordedBankAccountId ?? refundChoiceByDeposit[depositId]?.bankAccountId;
+    const bankAccountId = resolution === "REFUNDED" && method !== "CASH" ? selectedBank : undefined;
+    if (resolution === "REFUNDED" && method !== "CASH" &&
+        !refundBankOptions?.banks?.some((bank) => bank._id === bankAccountId) && !isRetry) return;
     const pendingPayout = pendingPayoutsRef.current.get(depositId);
-    if (pendingPayout && (pendingPayout.resolution !== resolution || pendingPayout.method !== method)) {
+    if (pendingPayout && (pendingPayout.resolution !== resolution || pendingPayout.method !== method ||
+        pendingPayout.bankAccountId !== bankAccountId)) {
       // A DIFFERENT decision than an earlier attempt that never confirmed: do not
       // send it (it would mint a new key and could pay out twice). Tell the
       // operator to reconcile: retry the recorded attempt, or dismiss it.
@@ -359,6 +393,8 @@ function VehicleDetailContent({
                 pendingPayout.resolution,
                 observedReleaseCount,
                 pendingPayout.resolution === "REFUNDED" ? pendingPayout.method : undefined,
+                pendingPayout.bankAccountId,
+                true,
               ),
           },
           {
@@ -396,8 +432,8 @@ function VehicleDetailContent({
     // generation moved is still that attempt and not a new command.
     const intent =
       pendingPayout?.intent ??
-      `release-deposit:${String(depositId)}:${resolution}:${method}:gen${observedReleaseCount}`;
-    if (!pendingPayout) pendingPayoutsRef.current.set(depositId, { resolution, method: String(method), intent });
+      `release-deposit:${String(depositId)}:${resolution}:${method}:${bankAccountId ?? "none"}:gen${observedReleaseCount}`;
+    if (!pendingPayout) pendingPayoutsRef.current.set(depositId, { resolution, method: String(method), bankAccountId, intent });
     // A retry of an attempt that never confirmed: its outcome is unknown.
     else pendingPayout.uncertain = true;
     const settle = () => {
@@ -410,6 +446,7 @@ function VehicleDetailContent({
         depositId,
         resolution,
         refundMethod: resolution === "REFUNDED" ? chosenMethod : undefined,
+        bankAccountId,
         idempotencyKey: commandId.for(intent),
       });
       settle();
@@ -437,6 +474,11 @@ function VehicleDetailContent({
     // has already taken is not the generation they decided against.
     observedReleaseCount: number,
   ) {
+    const choice = refundChoiceByDeposit[depositId];
+    const selectedMethod = resolution === "REFUNDED" && choice?.generation === observedReleaseCount
+      ? choice.method : undefined;
+    const selectedBank = resolution === "REFUNDED" && choice?.generation === observedReleaseCount
+      ? choice.bankAccountId : undefined;
     const actionLabel =
       resolution === "REFUNDED"
         ? locale === "ar" ? "استرداد" : "Refund"
@@ -451,19 +493,21 @@ function VehicleDetailContent({
         {
           text: actionLabel,
           style: resolution === "FORFEITED" ? "destructive" : "default",
-          onPress: () => void handleReleaseDeposit(depositId, resolution, observedReleaseCount),
+          onPress: () => void handleReleaseDeposit(depositId, resolution, observedReleaseCount,
+            selectedMethod, selectedBank),
         },
       ],
     );
   }
 
   async function saveLandedCosts() {
-    if (!orgId || !vehicleId) return;
+    if (!orgId || !vehicleId || hasLegacyUnattributedBank || hasUnselectedLandedBank || landedBankOptions?.truncated) return;
     const items = landedItems
       .map((item) => ({
         label: item.label.trim(),
         amount: parseOptionalNumber(item.amount) ?? 0,
         paymentMethod: item.paymentMethod,
+        bankAccountId: item.bankAccountId,
       }))
       .filter((item) => item.label.length > 0);
     setSavingCosts(true);
@@ -478,7 +522,7 @@ function VehicleDetailContent({
   }
 
   async function handleCreateReservation() {
-    if (!orgId || !vehicleId || !reservationCustomerId) return;
+    if (!orgId || !vehicleId || !reservationCustomerId || !reservationBankReady) return;
     const holdDays = parseOptionalNumber(reservationHoldDays);
     setSavingReservation(true);
     try {
@@ -495,6 +539,8 @@ function VehicleDetailContent({
         customerId: reservationCustomerId,
         depositAmount: parseOptionalNumber(reservationDeposit),
         depositMethod: parseOptionalNumber(reservationDeposit) !== undefined ? (reservationMethod as "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE") : undefined,
+        depositBankAccountId: parseOptionalNumber(reservationDeposit) !== undefined && reservationNeedsBank
+          ? reservationBankAccountId : undefined,
         expiresAt: holdDays !== undefined && holdDays > 0 ? Date.now() + holdDays * 24 * 60 * 60 * 1000 : undefined,
       });
       // Only a CONFIRMED success retires this vehicle's identity.
@@ -502,6 +548,7 @@ function VehicleDetailContent({
       setReservationCustomerId("");
       setReservationDeposit("");
       setReservationMethod("");
+      setReservationBankAccountId("");
       setReservationHoldDays("");
       Alert.alert(locale === "ar" ? "تم إنشاء الحجز." : "Reservation created.");
     } catch (error) {
@@ -690,11 +737,37 @@ function VehicleDetailContent({
                             ...prev,
                             [deposit._id]: {
                               method: method as MobileDepositMethod,
+                              bankAccountId: undefined,
                               generation: deposit.releaseCount ?? 0,
                             },
                           }))
                         }
                       />
+                      {refundMethodFor(deposit) && refundMethodFor(deposit) !== "CASH" ? (
+                        <>
+                        <SelectField
+                          label={locale === "ar" ? "حساب البنك الذي سيُدفع منه الاسترداد" : "Refund bank account"}
+                          value={refundChoiceByDeposit[deposit._id]?.bankAccountId ?? ""}
+                          options={(refundBankOptions?.banks ?? []).map((bank) => ({
+                            value: bank._id, label: `${bank.name} · ${bank.currency}`,
+                          }))}
+                          onChange={(bankAccountId) => setRefundChoiceByDeposit((previous) => ({
+                            ...previous,
+                            [deposit._id]: { method: refundMethodFor(deposit)!, bankAccountId,
+                              generation: deposit.releaseCount ?? 0 },
+                          }))}
+                        />
+                        {refundBankOptions?.truncated ? (
+                          <Text style={styles.mutedText}>{locale === "ar"
+                            ? "قائمة البنوك كبيرة جداً. اطلب من المسؤول تقليل البنوك النشطة."
+                            : "Too many active banks to list. Ask an administrator to reduce the active bank list."}</Text>
+                        ) : refundBankOptions && refundBankOptions.banks.length === 0 ? (
+                          <Text style={styles.mutedText}>{locale === "ar"
+                            ? "لا يوجد حساب بنك نشط بهذه العملة."
+                            : "No active bank account is available in this currency."}</Text>
+                        ) : null}
+                        </>
+                      ) : null}
                       {!isChosenMethod(refundMethodFor(deposit)) ? (
                         <Text accessibilityRole="summary" style={styles.mutedText}>
                           {locale === "ar"
@@ -704,7 +777,9 @@ function VehicleDetailContent({
                       ) : null}
                       <View style={styles.cardActions}>
                         <PrimaryButton
-                          disabled={releasingDepositId === deposit._id || !isChosenMethod(refundMethodFor(deposit))}
+                          disabled={releasingDepositId === deposit._id || !isChosenMethod(refundMethodFor(deposit)) ||
+                            (refundMethodFor(deposit) !== "CASH" &&
+                              !refundBankOptions?.banks?.some((bank) => bank._id === refundChoiceByDeposit[deposit._id]?.bankAccountId))}
                           label={locale === "ar" ? "استرداد" : "Refund"}
                           tone="muted"
                           onPress={() =>
@@ -926,6 +1001,13 @@ function VehicleDetailContent({
         {activeTab === "costs" ? (
           <View style={styles.detailSection}>
             <Text style={styles.sectionTitle}>{locale === "ar" ? "تفصيل التكلفة الكلية" : "Landed cost breakdown"}</Text>
+            {hasLegacyUnattributedBank ? (
+              <Text style={styles.mutedText} accessibilityRole="alert">
+                {locale === "ar"
+                  ? "توجد تكلفة سابقة دُفعت عبر البنك دون تسجيل الحساب الفعلي. يجب أن تراجع المالية الدفعة الأصلية قبل التعديل."
+                  : "An earlier bank-funded cost has no recorded physical bank. Finance must review its original payment before editing."}
+              </Text>
+            ) : null}
             {landedCosts === undefined ? (
               <Text style={styles.mutedText}>{loadingLabel}</Text>
             ) : (
@@ -938,7 +1020,7 @@ function VehicleDetailContent({
                       <FormField
                         label={locale === "ar" ? "البند" : "Item"}
                         value={item.label}
-                        onChangeText={(label) =>
+                        onChangeText={(label) => !hasLegacyUnattributedBank &&
                           setLandedItems((items) =>
                             items.map((current, currentIndex) => (currentIndex === index ? { ...current, label } : current)),
                           )
@@ -948,7 +1030,7 @@ function VehicleDetailContent({
                         keyboardType="numeric"
                         label={locale === "ar" ? "المبلغ" : "Amount"}
                         value={item.amount}
-                        onChangeText={(amount) =>
+                        onChangeText={(amount) => !hasLegacyUnattributedBank &&
                           setLandedItems((items) =>
                             items.map((current, currentIndex) => (currentIndex === index ? { ...current, amount } : current)),
                           )
@@ -958,17 +1040,28 @@ function VehicleDetailContent({
                         label={locale === "ar" ? "طريقة الدفع" : "Payment method"}
                         value={item.paymentMethod}
                         options={paymentMethodOptions}
-                        onChange={(method) =>
+                        onChange={(method) => !hasLegacyUnattributedBank &&
                           setLandedItems((items) =>
                             items.map((current, currentIndex) =>
                               currentIndex === index
-                                ? { ...current, paymentMethod: method as MobileLandedCostPaymentMethod }
+                                ? { ...current, paymentMethod: method as MobileLandedCostPaymentMethod, bankAccountId: undefined }
                                 : current,
                             ),
                           )
                         }
                       />
-                      {canEdit ? (
+                      {landedMethodUsesBank(item.paymentMethod) && vehicle?.sourceType !== "SOURCED" ? (
+                        <SelectField
+                          label={locale === "ar" ? "الحساب المصرفي المدفوع منه" : "Bank account paid from"}
+                          value={landedBankOptions?.banks?.some((bank) => bank._id === item.bankAccountId) ? item.bankAccountId ?? "" : ""}
+                          options={(landedBankOptions?.banks ?? []).map((bank) => ({ value: bank._id, label: `${bank.name} · ${bank.currency}` }))}
+                          onChange={(bankAccountId) => {
+                            if (!hasLegacyUnattributedBank) setLandedItems((items) => items.map((current, currentIndex) =>
+                              currentIndex === index ? { ...current, bankAccountId: bankAccountId || undefined } : current));
+                          }}
+                        />
+                      ) : null}
+                      {canEdit && !hasLegacyUnattributedBank ? (
                         <PrimaryButton
                           label={locale === "ar" ? "إزالة" : "Remove"}
                           tone="danger"
@@ -989,11 +1082,18 @@ function VehicleDetailContent({
                     )}
                   </Text>
                 </View>
+                {landedBankOptions?.truncated ? (
+                  <Text style={styles.mutedText}>{locale === "ar" ? "عدد الحسابات المصرفية أكبر من أن يُعرض هنا. عطّل الحسابات غير المستخدمة قبل الحفظ." : "Too many active bank accounts to list. Deactivate unused accounts before saving."}</Text>
+                ) : null}
+                {landedBankOptions && !landedBankOptions.truncated && !landedBankOptions.banks?.length && hasUnselectedLandedBank ? (
+                  <Text style={styles.mutedText}>{locale === "ar" ? "لا يوجد حساب مصرفي نشط بهذه العملة." : "No active bank account is available in this currency."}</Text>
+                ) : null}
                 {canEdit ? (
                   <View style={styles.cardActions}>
                     <PrimaryButton
                       label={locale === "ar" ? "إضافة بند" : "Add item"}
                       tone="muted"
+                      disabled={hasLegacyUnattributedBank}
                       onPress={() =>
                         setLandedItems((items) => [
                           ...items,
@@ -1002,7 +1102,7 @@ function VehicleDetailContent({
                       }
                     />
                     <PrimaryButton
-                      disabled={savingCosts}
+                      disabled={savingCosts || hasLegacyUnattributedBank || hasUnselectedLandedBank || landedBankOptions?.truncated}
                       label={savingCosts ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ التكلفة" : "Save landed cost")}
                       onPress={saveLandedCosts}
                     />
@@ -1073,7 +1173,7 @@ function VehicleDetailContent({
                         { label: locale === "ar" ? "بطاقة" : "Card", value: "CARD" },
                         { label: locale === "ar" ? "شيك" : "Cheque", value: "CHEQUE" },
                       ]}
-                      onChange={setReservationMethod}
+                      onChange={(method) => { setReservationMethod(method); setReservationBankAccountId(""); }}
                     />
                   ) : (
                     <Text style={styles.mutedText}>
@@ -1083,6 +1183,17 @@ function VehicleDetailContent({
                     </Text>
                   )
                 ) : null}
+                {parseOptionalNumber(reservationDeposit) !== undefined && canRecordDeposit && reservationNeedsBank && (
+                  <SelectField
+                    label={locale === "ar" ? "البنك الذي استلم العربون" : "Bank that received the deposit"}
+                    value={receiptBankOptions?.banks.some((bank) => bank._id === reservationBankAccountId) ? reservationBankAccountId : ""}
+                    options={(receiptBankOptions?.banks ?? []).map((bank) => ({ label: `${bank.name} · ${bank.currency}`, value: bank._id }))}
+                    onChange={setReservationBankAccountId}
+                  />
+                )}
+                {reservationNeedsBank && receiptBankOptions?.truncated && (
+                  <Text style={styles.mutedText}>{locale === "ar" ? "قائمة البنوك كبيرة جداً؛ اطلب مساعدة المسؤول." : "Too many banks to choose from; ask an administrator."}</Text>
+                )}
                 <FormField
                   keyboardType="numeric"
                   label={locale === "ar" ? "مدة الحجز بالأيام (اختياري)" : "Hold days (optional)"}
@@ -1095,7 +1206,7 @@ function VehicleDetailContent({
                     savingReservation ||
                     !reservationCustomerId ||
                     (parseOptionalNumber(reservationDeposit) !== undefined &&
-                      (!canRecordDeposit || !reservationMethod))
+                      (!canRecordDeposit || !reservationMethod || !reservationBankReady))
                   }
                   label={savingReservation ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "إنشاء الحجز" : "Create reservation")}
                   onPress={handleCreateReservation}

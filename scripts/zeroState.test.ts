@@ -76,6 +76,7 @@ describe("parsing the CLI's real output shapes", () => {
     expect(componentNames(config)).toEqual([
       "rateLimiter", "vehiclesByOrg", "vehicleQualityByOrg", "customersByOrg", "leadsByOrg", "membershipsByOrg",
       "instagramEventsByOrg", "facebookEventsByOrg", "socialContactsByOrg",
+      "bankControlByDate", "bankAttributionByDate",
     ]);
   });
   test("a deployment name is read from its cloud URL and nothing else", () => {

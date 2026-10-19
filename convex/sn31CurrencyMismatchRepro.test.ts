@@ -27,6 +27,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { insertReceiptBank } from "../test-utils/financedDealFixture";
 import { WITHHELD_READINESS_REASON_FALLBACK } from "../lib/closingReadinessReasonCodes";
 
 vi.mock("./rateLimit", () => ({
@@ -302,6 +303,7 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
       applicationId,
       disbursedAmountMinor: closed!.financedSaleNetReceivableMinor!,
       idempotencyKey: "sn31-ctrl",
+      bankAccountId: await insertReceiptBank({ t: s.t, orgId: s.orgId, owner: { userId: s.userId } }),
     });
 
     const after = await settlementDelta(s, applicationId);
@@ -492,6 +494,8 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
       applicationId,
       disbursedAmountMinor: closed!.financedSaleNetReceivableMinor!,
       idempotencyKey: "sn31-post2",
+      // The bank is in the deal's pinned currency (JOD), not the org's current USD.
+      bankAccountId: await insertReceiptBank({ t: s.t, orgId: s.orgId, owner: { userId: s.userId } }),
     });
     const after = await settlementDelta(s, applicationId);
     expect((await app(s, applicationId))?.disbursedAt).toBeTypeOf("number");

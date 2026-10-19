@@ -15,6 +15,7 @@ import {
   settleOutbox, makeDue, outboxRows, quiesceScheduler, settleScheduledOnly, withFrozenScheduler,
 } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
+import { insertReceiptBank } from "../test-utils/financedDealFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -83,8 +84,13 @@ async function seedDealer(tag = "p9", openPeriod = true) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Test", lastName: "Customer" })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
-  return { t, orgId, userId, roleId, period, asUser, customerId };
+  return { t, orgId, userId, roleId, period, asUser, customerId, bankAccountId };
 }
 
 /** Maps an event's journal lines to { accountCode -> { debit, credit } }. */
@@ -127,7 +133,7 @@ describe("Phase 9 — expense account mapping", () => {
   });
 
   test("bank-transfer expense stores method and credits Bank", async () => {
-    const { t, orgId, asUser } = await seedDealer("exp_method");
+    const { t, orgId, asUser, bankAccountId } = await seedDealer("exp_method");
 
     const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -137,6 +143,7 @@ describe("Phase 9 — expense account mapping", () => {
       category: "REPAIR",
       status: "PAID",
       paymentMethod: "BANK_TRANSFER",
+      bankAccountId,
     });
 
     const event = await eventForSource(asUser, orgId, "expenses", expenseId.toString());
@@ -157,7 +164,7 @@ describe("Phase 9 — expense account mapping", () => {
 
 describe("Phase 9 — supplier payable payment method", () => {
   test("markPaid stores bank-transfer method and credits Bank", async () => {
-    const { t, orgId, userId, asUser } = await seedDealer("supplier_method");
+    const { t, orgId, userId, asUser, bankAccountId } = await seedDealer("supplier_method");
     const now = Date.now();
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
@@ -194,6 +201,7 @@ describe("Phase 9 — supplier payable payment method", () => {
       orgId,
       payableId,
       paymentMethod: "BANK_TRANSFER",
+      bankAccountId,
       idempotencyKey: "supplier_bank_transfer_1",
     });
 
@@ -557,7 +565,7 @@ describe("Phase 9 — manual journal reviewer authority", () => {
 
 describe("Phase 9 — cheque GL posting", () => {
   test("clearing a cheque posts DR Bank / CR AR, and return-after-clearing reverses it", async () => {
-    const { orgId, asUser, customerId } = await seedDealer("chq");
+    const { orgId, asUser, customerId, bankAccountId } = await seedDealer("chq");
 
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -571,7 +579,7 @@ describe("Phase 9 — cheque GL posting", () => {
     });
 
     const paymentId = await asUser.mutation(api.collections.clearCheque, {
-      orgId, chequeId, idempotencyKey: `clear_${chequeId}`,
+      orgId, chequeId, bankAccountId, idempotencyKey: `clear_${chequeId}`,
     });
 
     // Clearing posted a COLLECTION_PAYMENT to the GL (DR Bank 1110 / CR AR 1200).
@@ -584,6 +592,7 @@ describe("Phase 9 — cheque GL posting", () => {
     // Return after clearing reverses the clearing event and posts the bank fee.
     await asUser.mutation(api.collections.returnClearedCheque, {
       orgId, chequeId, returnReason: "NSF", bankFeeMinor: 5000,
+      bankFeeBankAccountId: bankAccountId,
       idempotencyKey: `return_${chequeId}`,
     });
 
@@ -645,6 +654,8 @@ describe("Phase 9 — finance disbursement receipt", () => {
     await asUser.mutation(api.applications.confirmDisbursement, {
       orgId, applicationId: appId, disbursedAmountMinor: 10_000_000,
       idempotencyKey: "disb_gl_1",
+      // SCRUM-54: a BANK_TRANSFER receipt names the physical bank (JOD, the receivable's currency).
+      bankAccountId: await insertReceiptBank({ t, orgId, owner: { userId } }),
     });
 
     const event = await eventForSource(asUser, orgId, "financeApplications", `disbursement_${appId}`);
@@ -719,7 +730,7 @@ describe("Phase 9 — commission payment GL posting", () => {
   });
 
   test("markCommissionPaid stores bank-transfer method and credits Bank", async () => {
-    const { t, orgId, asUser, customerId, userId } = await seedDealer("comm_method");
+    const { t, orgId, asUser, customerId, userId, bankAccountId } = await seedDealer("comm_method");
 
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
@@ -755,11 +766,13 @@ describe("Phase 9 — commission payment GL posting", () => {
       orgId,
       saleId,
       paymentMethod: "BANK_TRANSFER",
+      bankAccountId,
       idempotencyKey: "comm_method_paid_1",
     });
 
     const event = await eventForSource(asUser, orgId, "sales", `commission_paid_${saleId}`);
     expect((event.payload as { paymentMethod?: string }).paymentMethod).toBe("BANK_TRANSFER");
+    expect((event.payload as { bankAccountId?: string }).bankAccountId).toBe(bankAccountId);
     const byCode = await journalByCode(asUser, orgId, event.journalEntryId);
     expect(byCode["2300"]?.debit).toBe(700_000);
     expect(byCode["1110"]?.credit).toBe(700_000);
@@ -768,6 +781,13 @@ describe("Phase 9 — commission payment GL posting", () => {
     await t.run(async (ctx) => {
       const sale = await ctx.db.get(saleId);
       expect(sale?.commissionPaymentMethod).toBe("BANK_TRANSFER");
+      expect(sale?.commissionBankAccountId).toBe(bankAccountId);
+      const lines = await ctx.db.query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event.journalEntryId))
+        .collect();
+      expect(lines.filter((line) => line.bankAccountId === bankAccountId)).toEqual([
+        expect.objectContaining({ creditMinor: 700_000 }),
+      ]);
     });
   });
 });

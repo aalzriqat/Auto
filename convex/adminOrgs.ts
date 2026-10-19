@@ -232,6 +232,12 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // because the order is pinned; the index leads with orgId, so the read is a
   // prefix scan, and nothing references these rows.
   { kind: "orgRows", table: "financeCompanyForwardSlices", index: "by_org_forward" },
+  // Appended after the existing steps so saved deletion cursors keep their
+  // meaning (the retention marker below stays last). Journal-line
+  // triggers remove projections before these residual cleanup steps run.
+  { kind: "orgRows", table: "bankBalanceAggregateItems", index: "by_org" },
+  { kind: "orgRows", table: "bankBalanceAggregateStates", index: "by_org" },
+  { kind: "orgRows", table: "bankBalanceGrossShards", index: "by_org" },
   // Explicit retention marker, not a deletion step: the owner requires task
   // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
   // never purged here. Keep it last; never turn it into a delete.

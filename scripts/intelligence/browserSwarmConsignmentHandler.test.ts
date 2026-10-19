@@ -335,6 +335,8 @@ class World {
         if (actor !== "manager") throw new ConvexError("the forward is paid by the approver seat");
         if (!this.handedOver) throw new ConvexError("the forward needs a handover first");
         if (typeof a.paidAt !== "number" || a.paidAt > Date.now()) throw new ConvexError("paidAt is in the future");
+        // SCRUM-54: the product refuses a bank on cash; this scenario pays cash and names none.
+        if (a.method !== "CASH" || a.bankAccountId !== undefined) throw new ConvexError("A bank account applies only to a bank transfer, card or cheque payment.");
         if (this.faults.forwardRefused || a.expectedAmountMinor !== plan.forward) {
           throw new ConvexError("The amount due to the finance company has changed.");
         }

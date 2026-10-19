@@ -685,10 +685,12 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // The two SCRUM-807 changes are independent; with both applied: 529 + 1 = 530 total, 356 + 1 = 357 analysed.
   // SCRUM-807: deliverTaskAlarmToManagers is one retained internal mutation keyed by deliveryId, not orgId. Re-measured from the analyser after merging main: 534 total.
   // SCRUM-807 (#608): the collections reminder child adds one orgId mutation - 535 total, 361 analysed.
+  // SCRUM-54: bankBalanceBackfill.runPage is one additional org-scoped internal
+  // mutation; it reads the mapped account and bounded journal page by org - 536 total, 362 analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 535,
-      analysed: 361,
+      totalMutations: 536,
+      analysed: 362,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 159,
     });
