@@ -417,15 +417,6 @@ export function schemaTableNames(schemaSource: string): string[] {
   return names;
 }
 
-/** The components `convex.config.ts` mounts, by the name the CLI addresses them with. */
-export function componentNames(configSource: string): string[] {
-  const names: string[] = [];
-  for (const match of configSource.matchAll(/app\.use\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:,\s*\{[^}]*?\bname:\s*"([^"]+)"[^}]*\})?\s*\)/g)) {
-    names.push(match[2] ?? match[1]);
-  }
-  return names;
-}
-
 export function deploymentNameFromUrl(url: string | null): string | null {
   if (!url) return null;
   const match = /^https:\/\/([a-z0-9-]+)\.convex\.cloud\/?$/i.exec(url.trim());

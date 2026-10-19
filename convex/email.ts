@@ -8,6 +8,8 @@ import { Resend } from "resend";
 import { rateLimiter } from "./rateLimit";
 import { getValidatedEnv } from "./utils/env";
 import { sinkEgress } from "./utils/egressSink";
+import { emailButton, escapeHtml, wrapEmailHtml } from "./utils/emailHtml";
+import { renderMarketplaceWeeklyReportEmail } from "./utils/marketplaceWeeklyReportEmail";
 import { renderNotification } from "../lib/notifications/render";
 
 // ─── Rate limiting ───────────────────────────────────────────────────────────
@@ -139,63 +141,6 @@ function deliverableResendKey(env: { RESEND_API_KEY?: string }, sender: string):
   return sinkEgress("email", sender) ? undefined : env.RESEND_API_KEY;
 }
 
-/** Escape user input before interpolating into HTML to prevent XSS/injection. */
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-/**
- * Wraps inner content in a branded, table-based email shell.
- * Table layout + inline styles are deliberate — they're the only markup that
- * renders consistently across Outlook/Gmail/Apple Mail, which all strip or
- * ignore <style> blocks and modern CSS (flexbox/grid).
- */
-function wrapEmailHtml(preheader: string, bodyHtml: string): string {
-  return `
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  </head>
-  <body style="margin:0; padding:0; background-color:#f4f5f7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-    <span style="display:none; font-size:1px; color:#f4f5f7; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden;">${preheader}</span>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7; padding:32px 16px;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px; background-color:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.08);">
-            <tr>
-              <td style="background-color:#0f172a; padding:24px 32px;">
-                <span style="color:#ffffff; font-size:20px; font-weight:700; letter-spacing:-0.02em;">AutoFlow</span>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:32px; color:#374151; font-size:14px; line-height:1.6;">
-                ${bodyHtml}
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:20px 32px; background-color:#f9fafb; border-top:1px solid #eef0f2;">
-                <p style="margin:0; font-size:12px; color:#9ca3af;">This is an automated message from AutoFlow. If you weren't expecting this email, you can safely ignore it.</p>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>`;
-}
-
-/** Bulletproof-enough button styling for the email clients this app's recipients realistically use. */
-function emailButton(url: string, label: string): string {
-  return `<a href="${url}" style="display:inline-block; background-color:#0f172a; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:8px; font-size:14px; font-weight:600;">${label}</a>`;
-}
 
 /**
  * Plain wrapper for human-written replies — no branded banner, card, or
@@ -476,7 +421,74 @@ export const sendAutoReplyEmail = internalAction({
   },
 });
 
-/** Sends (or mocks, if Resend isn't configured) a plain transactional email and logs the outcome. Shared by sendSubscriptionReminderEmail and sendMarketplaceWeeklyReportEmail — same send-or-mock/try-catch/log shape, only the content differs. */
+/**
+ * What a transactional send actually did.
+ * - `accepted`: the provider returned an id. Acceptance is not delivery.
+ * - `rejected`: the provider definitely refused; nothing was queued.
+ * - `ambiguous`: the provider may or may not have queued it (transport error,
+ *   5xx, in-flight or reused idempotency key, any answer not known to be a
+ *   refusal). Must not be treated as "not sent" and must not be re-sent with a
+ *   different payload or after the provider's key retention window.
+ * - `mock`: no deliverable Resend key; nothing left the process.
+ */
+export type EmailOutcome = "accepted" | "rejected" | "ambiguous" | "mock";
+
+export type EmailSendResult = {
+  success: boolean;
+  error?: string;
+  outcome?: EmailOutcome;
+  providerAccepted?: boolean;
+  resendEmailId?: string;
+  retryable?: boolean;
+};
+
+/** Resend's idempotency keys are 1 to 256 characters (resend.com/docs/dashboard/emails/idempotency-keys). */
+const MIN_IDEMPOTENCY_KEY_LENGTH = 1;
+const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
+
+/**
+ * Resend error names that prove the email was NOT queued (Resend SDK 6.12.4
+ * `RESEND_ERROR_CODE_KEY`). Anything else, including names added later, is
+ * ambiguous: 5xx, `concurrent_idempotent_requests` and `invalid_idempotent_request`
+ * can all follow an earlier request that was accepted.
+ */
+const DEFINITE_REFUSALS: ReadonlySet<string> = new Set([
+  "validation_error",
+  "missing_required_field",
+  "invalid_from_address",
+  "invalid_idempotency_key",
+  "invalid_parameter",
+  "invalid_attachment",
+  "missing_api_key",
+  "invalid_api_key",
+  "restricted_api_key",
+  "daily_quota_exceeded",
+  "monthly_quota_exceeded",
+  "rate_limit_exceeded",
+]);
+
+/** Only a rate limit clears by waiting; every other definite refusal repeats until the input changes. */
+const RETRYABLE_REFUSALS: ReadonlySet<string> = new Set(["rate_limit_exceeded"]);
+
+/** A provider error name is logged and returned, so keep it to a short code and never echo its free-text message. */
+function providerErrorCode(name: unknown): string {
+  return typeof name === "string" && /^[a-z_]{1,64}$/.test(name) ? name : "unknown";
+}
+
+/**
+ * Server-side log detail for a provider failure: detailed enough to diagnose
+ * (error code, status, provider message) but with recipient addresses and
+ * Resend keys masked and the length bounded. Never returned to callers or
+ * written to the admin-visible webhook log, which carry only the short code.
+ */
+function redactForLog(detail: unknown): string {
+  return String(detail)
+    .replace(/[^\s<>"',;()]+@[^\s<>"',;()]+/g, "[email]")
+    .replace(/\bre_[A-Za-z0-9_]+/g, "[resend-key]")
+    .slice(0, 300);
+}
+
+/** Sends (or mocks, if Resend isn't configured) a plain transactional email and logs the outcome. Shared by sendSubscriptionReminderEmail and sendMarketplaceWeeklyReportEmail — same send-or-mock/log shape, only the content differs. The Resend SDK returns `{ data, error }` rather than throwing on API errors, so the answer is read, not assumed. */
 async function sendTransactionalEmail(
   ctx: ActionCtx,
   args: {
@@ -487,18 +499,68 @@ async function sendTransactionalEmail(
     html: string;
     logSource: "subscription-reminder" | "marketplace-weekly-report";
     logSummary: string;
+    idempotencyKey?: string;
   }
-): Promise<{ success: boolean; error?: string }> {
-  let result: { success: boolean; error?: string };
-  if (!args.resendApiKey) {
-    result = { success: true };
+): Promise<EmailSendResult> {
+  let result: EmailSendResult;
+  if (
+    args.idempotencyKey !== undefined &&
+    (args.idempotencyKey.length < MIN_IDEMPOTENCY_KEY_LENGTH || args.idempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH)
+  ) {
+    result = {
+      success: false,
+      outcome: "rejected",
+      providerAccepted: false,
+      retryable: false,
+      error: "provider_rejected:invalid_idempotency_key",
+    };
+  } else if (!args.resendApiKey) {
+    result = { success: true, outcome: "mock", providerAccepted: false };
   } else {
     const resend = new Resend(args.resendApiKey);
+    const payload = { from: args.from, to: args.to, subject: args.subject, html: args.html };
     try {
-      await resend.emails.send({ from: args.from, to: args.to, subject: args.subject, html: args.html });
-      result = { success: true };
+      const response = args.idempotencyKey !== undefined
+        ? await resend.emails.send(payload, { idempotencyKey: args.idempotencyKey })
+        : await resend.emails.send(payload);
+      if (response.error) {
+        const code = providerErrorCode(response.error.name);
+        const definite = DEFINITE_REFUSALS.has(code);
+        console.error(
+          `[email] ${args.logSource} provider ${definite ? "rejected" : "ambiguous"}: ` +
+            `code=${code} status=${response.error.statusCode ?? "none"} ` +
+            `detail=${redactForLog(response.error.message)}`
+        );
+        if (definite) {
+          result = {
+            success: false,
+            outcome: "rejected",
+            providerAccepted: false,
+            retryable: RETRYABLE_REFUSALS.has(code),
+            error: `provider_rejected:${code}`,
+          };
+        } else {
+          result = {
+            success: false,
+            outcome: "ambiguous",
+            providerAccepted: false,
+            error: `provider_ambiguous:${code}`,
+          };
+        }
+      } else if (!response.data?.id) {
+        // Accepted means the provider returned an id; "no error" without one proves nothing.
+        console.error(`[email] ${args.logSource} provider ambiguous: no error but no email id in the answer`);
+        result = { success: false, outcome: "ambiguous", providerAccepted: false, error: "provider_ambiguous:missing_id" };
+      } else {
+        result = { success: true, outcome: "accepted", providerAccepted: true, resendEmailId: response.data.id };
+      }
     } catch (error) {
-      result = { success: false, error: String(error) };
+      // Detail goes to the server log (masked); callers and the webhook log get only the class.
+      console.error(
+        `[email] ${args.logSource} provider ambiguous: thrown ` +
+          `${error instanceof Error ? error.name : typeof error} detail=${redactForLog(error instanceof Error ? error.message : error)}`
+      );
+      result = { success: false, outcome: "ambiguous", providerAccepted: false, error: "provider_ambiguous:exception" };
     }
   }
 
@@ -522,7 +584,7 @@ export const sendSubscriptionReminderEmail = internalAction({
     endsAt: v.number(),
     priceJod: v.optional(v.number()),
   },
-  handler: async (ctx, args): Promise<{ success: boolean; error?: string }> => {
+  handler: async (ctx, args): Promise<EmailSendResult> => {
     // Bulk and keyed by org, not by recipient: this is billing correspondence
     // about a tenant, addressed to whichever owner happens to be on file today.
     // The org is the durable identity, and an org-keyed budget still bounds the
@@ -572,6 +634,15 @@ export const sendSubscriptionReminderEmail = internalAction({
   },
 });
 
+/**
+ * Compatibility only: the weekly cron no longer calls this, and it has no live
+ * production caller. The cron sends through `sendFrozenWeeklyDelivery`, which
+ * stores the envelope first and records the outcome. This action is kept only
+ * so any already-scheduled job that still names it resolves, and for its
+ * existing tests. Its send result is now classified (`EmailSendResult`, via
+ * `sendTransactionalEmail`) rather than assumed successful. Removal is a
+ * separate change.
+ */
 export const sendMarketplaceWeeklyReportEmail = internalAction({
   args: {
     orgId: v.id("organizations"),
@@ -587,8 +658,10 @@ export const sendMarketplaceWeeklyReportEmail = internalAction({
       v.object({ make: v.string(), model: v.string(), year: v.number(), views: v.number() })
     ),
     requestsLost: v.number(),
+    // Stable per (week, org) by the caller; Resend returns the original for the same key and payload for 24 h.
+    idempotencyKey: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ success: boolean; error?: string }> => {
+  handler: async (ctx, args): Promise<EmailSendResult> => {
     // Bulk and keyed by org for the same reason as the renewal reminder: the
     // report is *about* a dealership, and the owner address is just where this
     // week's copy is delivered. Once a week per org, so this bucket should
@@ -606,47 +679,80 @@ export const sendMarketplaceWeeklyReportEmail = internalAction({
     const resendApiKey = deliverableResendKey(env, "sendMarketplaceWeeklyReportEmail");
     const appUrl = env.NEXT_PUBLIC_APP_URL;
 
-    const safeOrgName = escapeHtml(args.orgName);
-    const subject = `Your AutoFlow Marketplace week: ${args.requestsMatched} matched request${args.requestsMatched === 1 ? "" : "s"}, ${args.responsesSent} repl${args.responsesSent === 1 ? "y" : "ies"}`;
-    const preheader = `${args.pageViews} dealer-site views, ${args.requestsMatched} matched buyer requests this week.`;
-
-    const statRow = (label: string, value: string) =>
-      `<tr><td style="padding:6px 0; color:#6b7280;">${label}</td><td style="padding:6px 0; text-align:right; font-weight:600; color:#111827;">${value}</td></tr>`;
-
-    const rows = [
-      statRow("Dealer-site page views", String(args.pageViews)),
-      statRow("Vehicle detail views", String(args.vehicleDetailViews)),
-      statRow("Buyer requests matched to you", String(args.requestsMatched)),
-      statRow("Responses you sent", String(args.responsesSent)),
-      statRow("Avg. response time", args.avgResponseMinutes != null ? `${Math.round(args.avgResponseMinutes)} min` : "—"),
-      statRow("Requests lost to no response", String(args.requestsLost)),
-    ].join("");
-
-    let mostViewedHtml = "";
-    if (args.mostViewedVehicle) {
-      const vehicleLabel = `${args.mostViewedVehicle.year} ${args.mostViewedVehicle.make} ${args.mostViewedVehicle.model}`;
-      mostViewedHtml = `<p style="margin:20px 0 0; font-size:13px; color:#6b7280;">Most-viewed vehicle: <strong style="color:#111827;">${escapeHtml(vehicleLabel)}</strong> (${args.mostViewedVehicle.views} views)</p>`;
-    }
-
-    const bodyHtml = `
-      <h1 style="margin:0 0 16px; font-size:20px; font-weight:700; color:#111827;">Your Marketplace week</h1>
-      <p style="margin:0 0 16px;">Hi ${safeOrgName},</p>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">${rows}</table>
-      ${mostViewedHtml}
-      ${emailButton(`${appUrl}/marketplace/requests`, "View your requests")}
-    `;
-
-    const emailHtml = wrapEmailHtml(preheader, bodyHtml);
+    const { from, subject, html } = renderMarketplaceWeeklyReportEmail({ ...args, appUrl });
 
     return await sendTransactionalEmail(ctx, {
       resendApiKey,
-      from: "AutoFlow Marketplace <marketplace@autoflowdealer.com>",
+      from,
       to: args.toEmail,
       subject,
-      html: emailHtml,
+      html,
       logSource: "marketplace-weekly-report",
       logSummary: `weekly-report -> ${args.toEmail} (${args.orgName})`,
+      idempotencyKey: args.idempotencyKey,
     });
+  },
+});
+
+/**
+ * Sends one already-frozen weekly report (SCRUM-807): the envelope was rendered
+ * and stored before this runs, so a retry hands the provider the same bytes
+ * under the same idempotency key. Same per-org bulk budget as the live action.
+ * A refusal by the local limiter is `{ success: false, error: "rate_limited" }`
+ * with no `outcome`: nothing reached the provider.
+ */
+async function sendFrozenWeeklyReport(
+  ctx: ActionCtx,
+  args: { orgId: string; from: string; to: string; subject: string; html: string; idempotencyKey: string }
+): Promise<EmailSendResult> {
+  const limit = await checkEmailLimit(ctx, "sendFrozenWeeklyReport", "emailBulk", orgKey(args.orgId));
+  if (!limit.ok) {
+    return { success: false, error: "rate_limited" };
+  }
+  const resendApiKey = deliverableResendKey(getValidatedEnv(), "sendFrozenWeeklyReport");
+  return await sendTransactionalEmail(ctx, {
+    resendApiKey,
+    from: args.from,
+    to: args.to,
+    subject: args.subject,
+    html: args.html,
+    logSource: "marketplace-weekly-report",
+    logSummary: `weekly-report -> ${args.to}`,
+    idempotencyKey: args.idempotencyKey,
+  });
+}
+
+/**
+ * Workpool send item for one frozen weekly delivery. State lives in
+ * `marketplaceWeeklyReportDeliveries`; this only runs one attempt:
+ *  1. `beginWeeklySend` authorizes it (or refuses: canceled, terminal, stale),
+ *     resetting the row's per-attempt outcome to ambiguous BEFORE the provider call;
+ *  2. the provider call;
+ *  3. `recordWeeklySendOutcome` stores what the provider answered.
+ * A retryable or ambiguous answer is recorded and then THROWN: Workpool retries
+ * only failures, and the Resend SDK reports API errors as values.
+ */
+export const sendFrozenWeeklyDelivery = internalAction({
+  args: { deliveryId: v.id("marketplaceWeeklyReportDeliveries") },
+  handler: async (ctx, args): Promise<null> => {
+    const gate = await ctx.runMutation(internal.marketplaceReports.beginWeeklySend, {
+      deliveryId: args.deliveryId,
+    });
+    if (!gate.go) return null;
+
+    const result = await sendFrozenWeeklyReport(ctx, gate.send);
+    const disposition = await ctx.runMutation(internal.marketplaceReports.recordWeeklySendOutcome, {
+      deliveryId: args.deliveryId,
+      // No `outcome` means the local limiter refused: nothing reached the provider, so it is a retryable refusal.
+      outcome: result.outcome ?? "rejected",
+      retryable: result.outcome === undefined ? true : (result.retryable ?? false),
+      errorName: result.error,
+      providerEmailId: result.resendEmailId,
+    });
+    if (disposition === "retry") {
+      throw new Error("weekly report send will be retried");
+    }
+    return null;
   },
 });
 
