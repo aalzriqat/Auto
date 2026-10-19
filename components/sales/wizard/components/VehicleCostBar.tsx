@@ -62,7 +62,7 @@ export function VehicleCostBar({ vehicleId, purchasePrice }: Readonly<VehicleCos
       <div className="flex items-center justify-between gap-1.5 mb-2">
         <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">
           <Info className="h-3.5 w-3.5" />
-          {t("RecordedCostInputs" as any)}
+          {t("RecordedCostInputs")}
         </div>
         <button
           type="button"
