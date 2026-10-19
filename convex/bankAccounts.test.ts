@@ -668,29 +668,28 @@ describe("bankAccounts.getBookBalance", () => {
     const bankA = await createBank(fx, "Bank A", true);
     await seedBankLine(fx, { debitMinor: 100_000, bankAccountId: bankA });
     const { bank } = await refs(fx);
-    await fx.t.run(async (ctx) => {
+    const duplicates = await fx.t.run(async (ctx) => {
       const { _id, _creationTime, ...copy } = bank;
       void _id;
       void _creationTime;
-      await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 1" });
-      await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 2" });
+      const first = await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 1" });
+      const second = await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 2" });
+      return { first, second, rows: [await ctx.db.get(first), await ctx.db.get(second)] };
     });
+    // The fixture's order is explicit: original < duplicate 1 < duplicate 2.
+    expect(bank._creationTime).toBeLessThan(duplicates.rows[0]!._creationTime);
+    expect(duplicates.rows[0]!._creationTime).toBeLessThan(duplicates.rows[1]!._creationTime);
+    const boundTo = () => fx.t.run((ctx) => ctx.db.query("bankBalanceAggregateStates")
+      .withIndex("by_org", (q) => q.eq("orgId", fx.orgId)).unique().then((row) => row?.controlAccountId));
 
     expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
-    const state = await fx.t.run((ctx) => ctx.db.query("bankBalanceAggregateStates")
-      .withIndex("by_org", (q) => q.eq("orgId", fx.orgId)).unique());
-    expect(state?.controlAccountId).toBe(bank._id);
+    expect(await boundTo()).toBe(bank._id);
 
     // With the earliest row inactive, the next-oldest active duplicate takes over.
     await fx.t.run((ctx) => ctx.db.patch(bank._id, { active: false }));
-    const next = await fx.t.run(async (ctx) => (await ctx.db.query("chartOfAccounts")
-      .withIndex("by_org_systemKey", (q) => q.eq("orgId", fx.orgId).eq("systemKey", bank.systemKey))
-      .take(10)).filter((row) => row.active).sort((a, b) => a._creationTime - b._creationTime)[0]);
     await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId });
-    const rebound = await fx.t.run((ctx) => ctx.db.query("bankBalanceAggregateStates")
-      .withIndex("by_org", (q) => q.eq("orgId", fx.orgId)).unique());
-    expect(rebound?.controlAccountId).toBe(next?._id);
-    expect(next?._id).not.toBe(bank._id);
+    expect(await boundTo()).toBe(duplicates.first);
+    expect(duplicates.first).not.toBe(duplicates.second);
   });
 
   test("adopting an existing bank-control chart row includes lines posted before its system mapping", async () => {
