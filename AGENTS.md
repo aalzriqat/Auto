@@ -284,7 +284,7 @@ longer true, and reviews of it should be read with that in mind.
 | What | Where | State | Detail |
 | --- | --- | --- | --- |
 | `Production` environment | Settings → Environments | ✅ | Required reviewer `aalzriqat`; branches restricted to `main`; admin bypass disabled. **Self-review NOT prevented** — see above |
-| `CONVEX_PROD_DEPLOYMENT` | that environment's **variables** | ✅ | `kindly-hound-172`. Not a secret — it is an identifier, and naming it is the point |
+| `CONVEX_PROD_DEPLOYMENT` | that environment's **variables** | ✅ | `clever-mockingbird-719`. Not a secret — it is an identifier, and naming it is the point |
 | `CONVEX_PROD_DEPLOY_KEY` | that environment's secrets | ✅ | Intended scope: that deployment, permission `deployment:deploy` **only** |
 | `CONVEX_PROD_OPERATOR_KEY` | that environment's secrets | ✅ | Intended scope: `deployment:functions:runInternalMutations` + `runInternalQueries` **only** |
 | `CONVEX_FRESH_OBSERVER_KEY` | that environment's secrets | ✅ | Read by ONE step only — `Verify zero-state (fresh launch checkpoint)`, which runs only when the dispatch input `zero_state` is `fresh-launch`. **Full deploy capability** — Convex mints no narrower key (checked 2026-09-11: `convex deployment token create` has no scope option). The read-only property is `scripts/verifyZeroState.mjs`'s fixed command set, not the key |
