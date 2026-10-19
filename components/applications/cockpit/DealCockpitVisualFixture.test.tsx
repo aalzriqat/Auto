@@ -33,6 +33,13 @@ import {
 
 const language = vi.hoisted(() => ({ locale: "ar" as "ar" | "en" }));
 
+// The static visual fixture has no Convex provider. The view skips this query
+// when it has no organization/settlement action; model that skipped read here.
+vi.mock("convex/react", async (importOriginal) => ({
+  ...await importOriginal<typeof import("convex/react")>(),
+  useQuery: () => undefined,
+}));
+
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
     t: (key: string) => {

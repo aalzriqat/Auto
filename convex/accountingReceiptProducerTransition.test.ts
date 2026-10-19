@@ -109,7 +109,12 @@ async function seedPostableOrg(suffix: string) {
   const customerId = (await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Cust", lastName: suffix, createdAt: Date.now() })
   )) as Id<"customers">;
-  return { t, asAdmin, orgId, userId, customerId };
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "USD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  return { t, asAdmin, orgId, userId, customerId, bankAccountId };
 }
 
 async function eventsFor(t: TestHarness, orgId: Id<"organizations">) {
@@ -238,14 +243,14 @@ describe("SCRUM-236 §1 — recordPayment owns the receipt occurrence", () => {
 
 describe("SCRUM-236 §2 — clearCheque owns the receipt occurrence", () => {
   test("P2 — a cleared cheque posts one occurrence through the same producer", async () => {
-    const { t, asAdmin, orgId, customerId } = await seedPostableOrg("p2");
+    const { t, asAdmin, orgId, customerId, bankAccountId } = await seedPostableOrg("p2");
     const chequeId = (await asAdmin.mutation(api.collections.registerCheque, {
       orgId, customerId, bank: "Bank", chequeNumber: "C-1",
       chequeDate: Date.now(), amount: 400,
     })) as Id<"postDatedCheques">;
     const paymentId = (await asAdmin.mutation(api.collections.clearCheque, {
       idempotencyKey: crypto.randomUUID(),
-      orgId, chequeId,
+      orgId, chequeId, bankAccountId,
     })) as Id<"collectionPayments">;
 
     const row = await expectSingleOwnedOccurrence(t, orgId, paymentId);

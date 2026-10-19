@@ -98,6 +98,26 @@ export async function seedFinancedDealership<K extends string>(tag: string, opts
   return { t, orgId, customerId, customerStatusId, vehicleId, companyId, owner, approver, actors, fiscalYear };
 }
 
+/**
+ * SCRUM-54: a physical bank the finance company's transfer can be received
+ * into. Called EXPLICITLY at each BANK_TRANSFER / CHEQUE `confirmDisbursement`
+ * (the id is passed in the call); a CASH receipt takes none. It is not seeded
+ * with the dealership, so no test gets a bank it did not ask for.
+ */
+export async function insertReceiptBank(
+  s: { t: ForwardPayerSeed["t"]; orgId: Id<"organizations">; owner: { userId: Id<"users"> } },
+  over: { currency?: string } = {}
+): Promise<Id<"bankAccounts">> {
+  const now = Date.now();
+  return await s.t.run((ctx) =>
+    ctx.db.insert("bankAccounts", {
+      orgId: s.orgId, name: "Receiving bank", currency: over.currency ?? "JOD",
+      openingBalanceMinor: 0, openingBalanceDate: now, isActive: true, isReconciliationTarget: false,
+      createdBy: s.owner.userId, createdAt: now, updatedAt: now,
+    })
+  );
+}
+
 /** The slice of a seeded dealership the deal drivers below use. */
 interface DealSeed {
   t: Awaited<ReturnType<typeof seedFinancedDealership>>["t"];
@@ -118,6 +138,27 @@ interface DealSeed {
 interface ForwardPayerSeed {
   t: { run: <T>(fn: (ctx: MutationCtx) => Promise<T>) => Promise<T> };
   orgId: Id<"organizations">;
+}
+
+/**
+ * SCRUM-54: the organization's one active, live JOD bank for a bank-method forward payment, created on first use
+ * and reused after (the same find-or-create as `seedBank`, typed to this seed's narrower `t`).
+ */
+async function activeJodBank(s: ForwardPayerSeed): Promise<Id<"bankAccounts">> {
+  return await s.t.run(async (ctx) => {
+    const existing = await ctx.db
+      .query("bankAccounts")
+      .withIndex("by_org_active_currency", (q) => q.eq("orgId", s.orgId).eq("isActive", true).eq("currency", "JOD"))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .first();
+    if (existing) return existing._id;
+    const createdBy = (await ctx.db.query("users").first())!._id;
+    const now = Date.now();
+    return await ctx.db.insert("bankAccounts", {
+      orgId: s.orgId, name: "Operating bank", currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: now,
+      isActive: true, isReconciliationTarget: false, createdBy, createdAt: now, updatedAt: now,
+    });
+  });
 }
 
 export async function newApplication(s: DealSeed, opts: { gapMinor?: number } = {}) {
@@ -245,7 +286,7 @@ export async function payForwardBeforeFinalize(
   const expectedAmountMinor = await prospectiveForwardDueMinor(s, applicationId);
   if (expectedAmountMinor <= 0) return null;
   return await payer.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: await activeJodBank(s), paidAt: Date.now(),
     expectedAmountMinor, idempotencyKey: crypto.randomUUID(),
   });
 }

@@ -5284,6 +5284,15 @@ describe("a settlement advice that contradicts the approval", () => {
     // figure withheld and every reason replaced by a plain sentence.
     const closingReadiness = await s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
     expect(closingReadiness.moneyWithheld).toBe(true);
+    // SCRUM-54's receipt-bank picker is a public application query too, so it is scanned like the rest.
+    // This caller lacks confirm:finance_disbursement, so the door is expected to refuse; the refusal
+    // is scanned as the response, and a non-refusal would be scanned for leaks like any other payload.
+    const disbursementBankOptions = await s.asUser
+      .query(api.applications.listDisbursementBankOptions, { orgId: s.orgId, applicationId })
+      .catch((error: unknown) => ({ refusal: error instanceof Error ? error.message : String(error) }));
+    expect(disbursementBankOptions).toEqual({
+      refusal: expect.stringContaining("confirm:finance_disbursement"),
+    });
     const handoverToken = await s.asUser.query(api.applications.handoverStamp, {
       orgId: s.orgId,
       applicationId,
@@ -5351,6 +5360,7 @@ describe("a settlement advice that contradicts the approval", () => {
       ["applications.dealCockpit", cockpitView],
       ["applications.getLog", log],
       ["applications.getClosingReadiness", closingReadiness],
+      ["applications.listDisbursementBankOptions", disbursementBankOptions],
       // The handover stamp. It is issued from the UNREDACTED row and served to
       // any caller who may hand over, so it is exactly the kind of door this
       // scan exists for — and the first version of it did leak: the token

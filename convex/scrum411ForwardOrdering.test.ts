@@ -20,6 +20,7 @@
 import {
   C, G, H, finalizeAsOwner, readyDeal, refusalDataOf, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -70,9 +71,9 @@ async function seed(tag: string, sourced: boolean) {
 type Seeded = Awaited<ReturnType<typeof seed>>;
 type AppId = Id<"financeApplications">;
 
-const payForward = (s: Seeded, applicationId: AppId, over: { expected?: number; idempotencyKey?: string } = {}) =>
+const payForward = async (s: Seeded, applicationId: AppId, over: { expected?: number; idempotencyKey?: string } = {}) =>
   s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: await seedBank(s.t, s.orgId), paidAt: Date.now(),
     expectedAmountMinor: over.expected ?? FORWARD, idempotencyKey: over.idempotencyKey ?? crypto.randomUUID(),
   });
 

@@ -58,6 +58,82 @@ async function seedReportingDealer() {
 }
 
 describe("Phase 5 — trial balance", () => {
+  // SCRUM-54: a queued pre-dimension cheque event previously posted an
+  // unattributed BANK_ACCOUNT journal line through the generic ingress.
+  test("generic posting ingress refuses an unbanked bank-control line without an event or journal", async () => {
+    const { t, orgId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    await expect(asUser.mutation(internal.accountingLedger.post, {
+      orgId,
+      eventType: "CHEQUE_CLEARED",
+      sourceType: "cheques",
+      sourceId: "legacy-bankless-cheque",
+      eventVersion: 1,
+      accountingDate: now,
+      occurredAt: now,
+      currency: "JOD",
+      idempotencyKey: "legacy-bankless-cheque",
+      payload: { chequeId: "legacy-bankless-cheque", amountMinor: 1_000, currency: "JOD" },
+    })).rejects.toThrow(/physical bank/i);
+
+    const rows = await t.run(async (ctx) => ({
+      events: await ctx.db.query("accountingEvents").collect(),
+      entries: await ctx.db.query("journalEntries").collect(),
+      lines: await ctx.db.query("journalLines").collect(),
+    }));
+    expect(rows.events).toHaveLength(0);
+    expect(rows.entries).toHaveLength(0);
+    expect(rows.lines).toHaveLength(0);
+  });
+
+  test("generic posting ingress refuses another organization's bank and the wrong currency", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const banks = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other bank owner", createdAt: now });
+      const insertBank = (ownerId: typeof orgId, currency: string) => ctx.db.insert("bankAccounts", {
+        orgId: ownerId,
+        name: "Test bank",
+        currency,
+        openingBalanceMinor: 0,
+        openingBalanceDate: now,
+        isActive: true,
+        isReconciliationTarget: false,
+        createdBy: userId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      return [await insertBank(otherOrgId, "JOD"), await insertBank(orgId, "USD")];
+    });
+
+    for (const [index, bankAccountId] of banks.entries()) {
+      await expect(asUser.mutation(internal.accountingLedger.post, {
+        orgId,
+        eventType: "COMMISSION_PAID",
+        sourceType: "sales",
+        sourceId: `commission-bank-${index}`,
+        eventVersion: 1,
+        accountingDate: now,
+        occurredAt: now,
+        currency: "JOD",
+        idempotencyKey: `commission-bank-${index}`,
+        payload: {
+          saleId: `sale-${index}`, salespersonId: userId, amountMinor: 1_000,
+          currency: "JOD", paymentMethod: "BANK_TRANSFER", bankAccountId,
+        },
+      })).rejects.toThrow(/physical account cannot be verified/i);
+    }
+
+    const rows = await t.run(async (ctx) => ({
+      events: await ctx.db.query("accountingEvents").collect(),
+      entries: await ctx.db.query("journalEntries").collect(),
+      lines: await ctx.db.query("journalLines").collect(),
+    }));
+    expect(rows.events).toHaveLength(0);
+    expect(rows.entries).toHaveLength(0);
+    expect(rows.lines).toHaveLength(0);
+  });
+
   test("trial balance is balanced after posting an expense", async () => {
     const { orgId, asUser } = await seedReportingDealer();
     const now = Date.now();

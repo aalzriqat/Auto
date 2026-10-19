@@ -71,9 +71,15 @@ export function SupplierCostRecoveriesSection() {
   // SCRUM-469: no default. The method picks the ledger account the receipt is
   // booked to; an unstated one used to be sent as CASH.
   const [method, setMethod] = useState<RecoveryMethod | undefined>(undefined);
+  const [bankAccountId, setBankAccountId] = useState("");
   const [receivedDate, setReceivedDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [reference, setReference] = useState("");
   const [saving, setSaving] = useState(false);
+  const bankOptions = useQuery(
+    api.supplierCostRecoveries.listReceiptBankOptions,
+    activeOrgId && canRecord && target && method === "BANK_TRANSFER"
+      ? { orgId: activeOrgId, recoveryId: target._id } : "skip"
+  );
   // One receipt intent per dialog session: a retried submit is the SAME
   // command, and closing the dialog ends it.
   const idempotencyKeyRef = useRef<string | null>(null);
@@ -88,6 +94,7 @@ export function SupplierCostRecoveriesSection() {
     setTarget(row);
     setAmount(String(fromMinorUnits(row.remainingMinor, row.currency)));
     setMethod(undefined);
+    setBankAccountId("");
     setReceivedDate(new Date().toISOString().split("T")[0]);
     setReference("");
   };
@@ -95,6 +102,8 @@ export function SupplierCostRecoveriesSection() {
   const submit = async () => {
     if (!activeOrgId || !target) return;
     if (!isChosenMethod(method)) return;
+    const selectedBank = bankOptions?.banks.find((bank) => bank._id === bankAccountId);
+    if (method === "BANK_TRANSFER" && (!selectedBank || bankOptions?.truncated)) return;
     let amountMinor: number;
     try {
       // Throws on anything that is not a safe integer in minor units (NaN included).
@@ -118,6 +127,7 @@ export function SupplierCostRecoveriesSection() {
         recoveryId: target._id,
         amountMinor,
         method,
+        bankAccountId: method === "BANK_TRANSFER" ? selectedBank?._id : undefined,
         receivedDate: receivedAt,
         reference: reference.trim() || undefined,
         idempotencyKey: idempotencyKeyRef.current,
@@ -240,7 +250,7 @@ export function SupplierCostRecoveriesSection() {
                   <PaymentMethodSelect
                     t={t}
                     value={method}
-                    onValueChange={setMethod}
+                    onValueChange={(next) => { setMethod(next); setBankAccountId(""); }}
                     methods={RECOVERY_METHODS}
                     ariaLabel={t("RecoveryReceiptMethod" as any)}
                     placeholder={t("MoneyMethodChoose" as any)}
@@ -262,6 +272,19 @@ export function SupplierCostRecoveriesSection() {
                   />
                 </div>
               </div>
+              {method === "BANK_TRANSFER" && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="recovery-bank">{t("ReceiptBankAccount")}</Label>
+                  <select id="recovery-bank" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={bankAccountId} disabled={!bankOptions || bankOptions.truncated || saving}
+                    onChange={(event) => setBankAccountId(event.target.value)}>
+                    <option value="">{t(bankOptions ? "ReceiptSelectBank" : "CashDrawerLoadingBanks")}</option>
+                    {(bankOptions?.banks ?? []).map((bank) => <option key={bank._id} value={bank._id}>{bank.name} ({bank.currency})</option>)}
+                  </select>
+                  {bankOptions?.truncated && <p role="alert" className="text-xs text-destructive">{t("ReceiptTooManyBanks")}</p>}
+                  {bankOptions && !bankOptions.truncated && bankOptions.banks.length === 0 && <p role="alert" className="text-xs text-destructive">{t("ReceiptNoBank")}</p>}
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label htmlFor="recovery-reference">{t("RecoveryReceiptReference" as any)}</Label>
                 <Input id="recovery-reference" value={reference} onChange={(e) => setReference(e.target.value)} />
@@ -270,7 +293,9 @@ export function SupplierCostRecoveriesSection() {
                 <Button type="button" variant="outline" onClick={() => setTarget(null)}>
                   {t("Cancel" as any)}
                 </Button>
-                <Button type="button" disabled={saving || !isChosenMethod(method)} onClick={() => void submit()}>
+                <Button type="button" disabled={saving || !isChosenMethod(method) ||
+                  (method === "BANK_TRANSFER" && (!bankOptions || bankOptions.truncated ||
+                    !bankOptions.banks.some((bank) => bank._id === bankAccountId)))} onClick={() => void submit()}>
                   {saving ? t("Saving" as any) : t("RecordRecoveryReceipt" as any)}
                 </Button>
               </div>

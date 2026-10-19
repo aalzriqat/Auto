@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { ruleCollectionRefund } from "./accounting/postingRules";
+import { ruleCollectionPayment, ruleCollectionRefund } from "./accounting/postingRules";
 import { registerChequeCore } from "./collections";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import {
@@ -105,12 +105,18 @@ async function seedFinanceMember(t: ReturnType<typeof convexTestWithComponents>)
       phone: "+962790000000",
     })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Collection bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
   return {
     orgId,
     userId,
     approverId,
     customerId,
+    bankAccountId,
     asFinance: t.withIdentity({ subject: "collections_user", clerkId: "collections_user" }),
     asApprover: t.withIdentity({ subject: "collections_approver", clerkId: "collections_approver" }),
   };
@@ -242,13 +248,34 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
+    const paymentKey = "legacy-cash-retry";
+    const paymentDate = Date.now();
+    const paymentArgs = {
+      idempotencyKey: paymentKey,
       orgId,
       receivableId,
       amount: 300,
+      method: "CASH" as const,
+      paymentDate,
+    };
+    const firstPayment = await asFinance.mutation(api.collections.recordPayment, paymentArgs);
+
+    // A retry crossing this release must match the stored pre-bank fingerprint.
+    const command = await t.run((ctx) => ctx.db.query("commandIdempotency")
+      .withIndex("by_org_operation_key", (q) => q.eq("orgId", orgId)
+        .eq("operation", "collections.recordPayment").eq("idempotencyKey", paymentKey)).unique());
+    expect(JSON.parse(command?.fingerprint ?? "{}")).toEqual({
+      receivableId,
+      customerId: null,
+      vehicleId: null,
+      saleId: null,
+      invoiceSaleId: null,
+      amount: 300,
       method: "CASH",
-      paymentDate: Date.now(),
+      paymentDate,
+      reference: null,
     });
+    expect(await asFinance.mutation(api.collections.recordPayment, paymentArgs)).toEqual(firstPayment);
 
     await t.run(async (ctx) => {
       const receivable = await ctx.db.get(receivableId);
@@ -289,7 +316,7 @@ describe("Collections", () => {
 
   test("cleared_cheque_pays_receivable_and_posts_cheque_payment", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -311,7 +338,7 @@ describe("Collections", () => {
       amount: 500,
     });
 
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
 
     await t.run(async (ctx) => {
       const cheque = await ctx.db.get(chequeId);
@@ -371,7 +398,7 @@ describe("Collections", () => {
 
   test("return_cleared_cheque_rejects_invalid_bank_fee_minor_units", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -392,7 +419,7 @@ describe("Collections", () => {
       chequeDate: Date.now() + 3 * 24 * 60 * 60 * 1000,
       amount: 500,
     });
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
 
     await expect(
       asFinance.mutation(api.collections.returnClearedCheque, {
@@ -692,7 +719,7 @@ describe("Collections", () => {
 
   test("bank_refund_posts_gl_entry_to_bank_account_not_cash_on_hand", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, bankAccountId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -709,6 +736,7 @@ describe("Collections", () => {
       receivableId,
       amount: 500,
       method: "BANK_TRANSFER",
+      bankAccountId: await insertBank(t, orgId, userId),
       paymentDate: Date.now(),
     });
     const requestId = await asFinance.mutation(api.collections.requestApproval, {
@@ -717,6 +745,7 @@ describe("Collections", () => {
       requestType: "REFUND",
       requestedAmount: 500,
       disbursementMethod: "BANK_TRANSFER",
+      bankAccountId,
       reason: "Customer cancelled after bank payment",
     });
 
@@ -733,6 +762,7 @@ describe("Collections", () => {
         .collect();
       const refund = payments.find((p) => p.direction === "OUT");
       expect(refund?.method).toBe("BANK_TRANSFER");
+      expect(refund?.bankAccountId).toBe(bankAccountId);
 
       // In tests there is no chart of accounts, so the event is durably
       // enqueued in pendingAccountingEvents (the outbox) rather than posted
@@ -745,11 +775,44 @@ describe("Collections", () => {
       const refundEvent = pending.find((e) => e.eventType === "COLLECTION_REFUND");
       expect(refundEvent).toBeTruthy();
       expect((refundEvent?.payload as { paymentMethod?: string })?.paymentMethod).toBe("BANK_TRANSFER");
+      expect((refundEvent?.payload as { bankAccountId?: string })?.bankAccountId).toBe(bankAccountId);
 
       const canonicalRefund = refund?.canonicalPaymentId
         ? await ctx.db.get(refund.canonicalPaymentId)
         : null;
       expect(canonicalRefund?.method).toBe("BANK_TRANSFER");
+    });
+  });
+
+  test("bank refund request refuses a missing bank and approval refuses a bank deactivated while pending", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, bankAccountId, asFinance, asApprover } = await seedFinanceMember(t);
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(), orgId, customerId,
+      sourceType: "INTERNAL_INSTALLMENT", title: "Refund bank guard", amount: 50,
+      dueDate: Date.now() + 86_400_000, creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    await asFinance.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(), orgId, receivableId,
+      amount: 50, method: "CASH", paymentDate: Date.now(),
+    });
+    const refund = { orgId, receivableId, requestType: "REFUND" as const,
+      requestedAmount: 50, disbursementMethod: "BANK_TRANSFER" as const,
+      reason: "Return collected funds" };
+    await expect(asFinance.mutation(api.collections.requestApproval, refund))
+      .rejects.toThrow("Select the bank account");
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      ...refund, bankAccountId,
+    });
+    await t.run((ctx) => ctx.db.patch(bankAccountId, { isActive: false }));
+    await expect(asApprover.mutation(api.collections.respondToApproval, {
+      orgId, requestId, status: "APPROVED", idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow("inactive");
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(requestId))?.status).toBe("PENDING");
+      const payments = await ctx.db.query("collectionPayments")
+        .withIndex("by_receivable", (q) => q.eq("receivableId", receivableId)).collect();
+      expect(payments.filter((payment) => payment.direction === "OUT")).toHaveLength(0);
     });
   });
 
@@ -792,7 +855,7 @@ describe("Collections", () => {
 
   test("card_refund_routes_to_bank_account_not_cash_on_hand", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, bankAccountId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -809,6 +872,7 @@ describe("Collections", () => {
       receivableId,
       amount: 300,
       method: "CARD",
+      bankAccountId: await insertBank(t, orgId, userId),
       paymentDate: Date.now(),
     });
     const requestId = await asFinance.mutation(api.collections.requestApproval, {
@@ -817,6 +881,7 @@ describe("Collections", () => {
       requestType: "REFUND",
       requestedAmount: 300,
       disbursementMethod: "CARD",
+      bankAccountId,
       reason: "Customer requested card reversal",
     });
 
@@ -860,15 +925,17 @@ describe("Collections", () => {
       currency: "JOD",
       customerId: "cust-1" as any,
       paymentMethod: "CHEQUE",
+      bankAccountId: "bank-1",
     });
     const creditLine = result.lines.find((l) => l.creditMinor > 0 && l.debitMinor === 0);
     expect(creditLine?.accountSystemKey).toBe(SYSTEM_KEYS.BANK_ACCOUNT);
+    expect(creditLine?.bankAccountId).toBe("bank-1");
     expect(creditLine?.accountSystemKey).not.toBe(SYSTEM_KEYS.CHEQUES_IN_HAND);
   });
 
   test("cheque_refund_approval_posts_cheque_method_to_event_outbox", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, bankAccountId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -893,6 +960,7 @@ describe("Collections", () => {
       requestType: "REFUND",
       requestedAmount: 600,
       disbursementMethod: "CHEQUE",
+      bankAccountId,
       reason: "Refund by dealership cheque",
     });
 
@@ -1362,7 +1430,7 @@ describe("Collections", () => {
     // the scheduler on the real clock and runAllTimers with nothing to fire.
     vi.useFakeTimers();
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, bankAccountId, asFinance } = await seedFinanceMember(t);
     const { vehicleId, saleId, quoteId, applicationId } = await seedVehicleQuoteSaleAndApplication(t, {
       orgId,
       customerId,
@@ -1696,6 +1764,7 @@ describe("Collections", () => {
     await expect(asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId: returnedChequeId,
+      bankAccountId,
     })).rejects.toThrow("Only held or deposited cheques can be cleared");
 
     const smallReceivableId = await insertReceivable(t, {
@@ -1723,6 +1792,7 @@ describe("Collections", () => {
     await expect(asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(),
       orgId,
       chequeId: oversizedChequeId,
+      bankAccountId,
     })).rejects.toThrow("Cheque amount cannot exceed");
     await expect(asFinance.mutation(api.collections.returnClearedCheque, {
       orgId,
@@ -1977,7 +2047,7 @@ describe("Collections", () => {
 
   test("return_cleared_cheque_defers_reversal_when_no_open_period_exists", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     await t.run((ctx) =>
       ctx.db.insert("subscriptions", {
@@ -2018,7 +2088,7 @@ describe("Collections", () => {
       chequeDate: Date.now(),
       amount: 250,
     });
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
     await asFinance.mutation(api.accountingPeriods.close, { orgId, periodId: period._id });
 
     await asFinance.mutation(api.collections.returnClearedCheque, {
@@ -2480,6 +2550,756 @@ describe("Collections", () => {
   });
 });
 
+// SCRUM-807: the daily reminder cron must stay inside one mutation's read/write
+// budget however large a tenant's receivable book is, WITHOUT dropping reminders
+// or marking the wrong rows. These tests drive the public internal mutation and
+// the scheduler only; they assert what customers and ledgers observe.
+describe("daily collection reminders stay bounded without losing work (SCRUM-807)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = Date.UTC(2026, 9, 17, 6, 30);
+  type Statuses = Doc<"receivables">["status"];
+
+  function startClock() {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    return convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  }
+  type ReminderT = ReturnType<typeof startClock>;
+
+  // Customers carry no phone, so every reminder is a MANUAL/SKIPPED row and no
+  // provider send is scheduled: the only scheduled work left is the cron's own
+  // continuation, which is exactly what these tests drain.
+  async function seedOrg(t: ReminderT, label: string) {
+    return await t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: label, createdAt: NOW });
+      const userId = await ctx.db.insert("users", {
+        clerkId: `reminder_${label}`,
+        email: `${label}@example.com`,
+        name: label,
+      });
+      const customerId = await ctx.db.insert("customers", { orgId, firstName: label, lastName: "Customer" });
+      return { orgId, userId, customerId };
+    });
+  }
+  type Org = Awaited<ReturnType<typeof seedOrg>>;
+
+  async function addReceivables(
+    t: ReminderT,
+    org: Org,
+    count: number,
+    dueDate: (index: number) => number,
+    status: Statuses = "OPEN"
+  ) {
+    return await t.run(async (ctx) => {
+      const ids: Id<"receivables">[] = [];
+      for (let index = 0; index < count; index += 1) {
+        const due = dueDate(index);
+        ids.push(await ctx.db.insert("receivables", {
+          orgId: org.orgId,
+          customerId: org.customerId,
+          sourceType: "INTERNAL_INSTALLMENT",
+          title: `Receivable ${index}`,
+          originalAmount: 100,
+          outstandingAmount: 100,
+          dueDate: due,
+          status,
+          createdBy: org.userId,
+          createdAt: NOW,
+          updatedAt: NOW,
+        }));
+      }
+      return ids;
+    });
+  }
+
+  async function addCheques(
+    t: ReminderT,
+    org: Org,
+    count: number,
+    chequeDate: (index: number) => number,
+    extra: Partial<Doc<"postDatedCheques">> = {}
+  ) {
+    return await t.run(async (ctx) => {
+      const ids: Id<"postDatedCheques">[] = [];
+      for (let index = 0; index < count; index += 1) {
+        ids.push(await ctx.db.insert("postDatedCheques", {
+          orgId: org.orgId,
+          customerId: org.customerId,
+          bank: "Bound Bank",
+          chequeNumber: `CHQ-${extra.drawerType ?? "C"}-${index}-${chequeDate(index)}`,
+          chequeDate: chequeDate(index),
+          amount: 50,
+          status: "HELD",
+          createdBy: org.userId,
+          createdAt: NOW,
+          updatedAt: NOW,
+          ...extra,
+        }));
+      }
+      return ids;
+    });
+  }
+
+  async function remindersFor(t: ReminderT, orgId: Id<"organizations">) {
+    return await t.run((ctx) =>
+      ctx.db.query("collectionReminders").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+  }
+
+  async function runCronToCompletion(t: ReminderT) {
+    const first = await t.mutation(internal.collections.processDailyCollectionReminders, {});
+    await drainScheduled(t);
+    return first;
+  }
+
+  function receivableReminderCounts(reminders: Doc<"collectionReminders">[]) {
+    const counts = new Map<string, number>();
+    for (const reminder of reminders) {
+      if (!reminder.receivableId || reminder.chequeId) continue;
+      counts.set(reminder.receivableId, (counts.get(reminder.receivableId) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  test.each([
+    ["customer", "deleted"], ["customer", "missing"],
+    ["receivable", "deleted"], ["receivable", "missing"],
+    ["cheque", "deleted"], ["cheque", "missing"],
+  ] as const)("queued reminders skip a %s that becomes %s before the payload read", async (kind, state) => {
+    await import("./collectionReminderActions");
+    const t = startClock();
+    const org = await seedOrg(t, `queued-${kind}-${state}`);
+    const [receivableId] = await addReceivables(t, org, 1, () => NOW + DAY);
+    const [chequeId] = await addCheques(t, org, 1, () => NOW + DAY);
+    const reminderId = await t.run(async (ctx) => {
+      await ctx.db.patch(org.customerId, { phone: "+15550000001" });
+      const id = await ctx.db.insert("collectionReminders", {
+        orgId: org.orgId, customerId: org.customerId,
+        receivableId: kind === "cheque" ? undefined : receivableId,
+        chequeId: kind === "cheque" ? chequeId : undefined,
+        channel: "SMS", messageType: kind === "cheque" ? "CHEQUE_UPCOMING" : "DUE_SOON",
+        status: "PENDING", scheduledAt: NOW, createdAt: NOW,
+      });
+      const sourceId = kind === "customer" ? org.customerId : kind === "cheque" ? chequeId : receivableId;
+      if (state === "deleted") await ctx.db.patch(sourceId, { isDeleted: true });
+      else await ctx.db.delete(sourceId);
+      return id;
+    });
+    const request = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 201 }));
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "");
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "synthetic-account");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "synthetic-token");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "+15550000000");
+    try {
+      await t.action(internal.collectionReminderActions.sendCollectionReminder, { reminderId });
+      expect(request).not.toHaveBeenCalled();
+      const reminder = await t.run((ctx) => ctx.db.get(reminderId));
+      expect(reminder?.status).toBe("SKIPPED");
+      expect(reminder?.sentAt).toBeUndefined();
+    } finally {
+      request.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  test.each(["overdue", "dueSoon", "cheque"] as const)(
+    "soft-deleted %s rows are never chased or changed by the reminder sweep",
+    async (kind) => {
+      const t = startClock();
+      const org = await seedOrg(t, `deleted-${kind}`);
+      const ids = kind === "cheque"
+        ? await addCheques(t, org, 3, () => NOW + DAY)
+        : await addReceivables(t, org, 3, () => kind === "overdue" ? NOW - DAY : NOW + DAY);
+      await t.run(async (ctx) => {
+        await ctx.db.patch(ids[1], { isDeleted: false });
+        await ctx.db.patch(ids[2], { isDeleted: true });
+      });
+      const before = await t.run((ctx) => ctx.db.get(ids[2]));
+
+      await runCronToCompletion(t);
+
+      const reminders = await remindersFor(t, org.orgId);
+      expect(reminders.map((r) => r.chequeId ?? r.receivableId).sort()).toEqual(ids.slice(0, 2).sort());
+      expect(await t.run((ctx) => ctx.db.get(ids[2]))).toEqual(before);
+      for (const id of ids.slice(0, 2)) {
+        expect(await t.run((ctx) => ctx.db.get(id))).toMatchObject(kind === "cheque"
+          ? { amount: 50, status: "HELD" }
+          : { originalAmount: 100, outstandingAmount: 100, status: kind === "overdue" ? "OVERDUE" : "OPEN" });
+      }
+    }
+  );
+
+  test("missing and false live cohorts both finish overflow pages without chasing deleted history", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "live-cohorts");
+    const missing = await addReceivables(t, org, 220, () => NOW + DAY);
+    const explicitFalse = await addReceivables(t, org, 220, () => NOW + DAY);
+    const deleted = await addReceivables(t, org, 250, () => NOW + DAY);
+    await t.run(async (ctx) => {
+      for (const id of explicitFalse) await ctx.db.patch(id, { isDeleted: false });
+      for (const id of deleted) await ctx.db.patch(id, { isDeleted: true });
+    });
+    await runCronToCompletion(t);
+    const counts = receivableReminderCounts(await remindersFor(t, org.orgId));
+    expect([...counts.keys()].sort()).toEqual([...missing, ...explicitFalse].sort());
+    expect([...counts.values()].every((n) => n === 1)).toBe(true);
+    expect(await t.run((ctx) => ctx.db.get(deleted[0]))).toMatchObject({ isDeleted: true, status: "OPEN", outstandingAmount: 100 });
+  });
+
+  test("an old index cursor continues on its original index and skips a subsequently deleted row", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "legacy-cursor");
+    const ids = await addReceivables(t, org, 450, () => NOW + DAY);
+    const oldPage = await t.run((ctx) => ctx.db.query("receivables")
+      .withIndex("by_org_status_and_dueDate", (q) => q.eq("orgId", org.orgId).eq("status", "OPEN").gt("dueDate", NOW).lte("dueDate", NOW + 2 * DAY))
+      .paginate({ cursor: null, numItems: 180 }));
+    expect(oldPage.isDone).toBe(false);
+    await t.run(async (ctx) => {
+      for (const row of oldPage.page) await ctx.db.insert("collectionReminders", {
+        orgId: org.orgId, customerId: org.customerId, receivableId: row._id,
+        channel: "MANUAL", messageType: "DUE_SOON", status: "SKIPPED", scheduledAt: NOW, createdAt: NOW,
+      });
+      await ctx.db.patch(ids[220], { isDeleted: true });
+      await ctx.db.patch(ids[230], { isDeleted: false });
+    });
+    const first = await t.mutation(internal.collections.processReminderRange, {
+      orgId: org.orgId, step: 1, now: NOW, cursor: oldPage.continueCursor,
+    });
+    expect(first.isDone).toBe(false);
+    await drainScheduled(t);
+    const counts = receivableReminderCounts(await remindersFor(t, org.orgId));
+    expect([...counts.keys()].sort()).toEqual(ids.filter((id) => id !== ids[220]).sort());
+    expect([...counts.values()].every((n) => n === 1)).toBe(true);
+  });
+
+  test("an overdue book larger than one invocation is fully marked and reminded exactly once", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "bigoverdue");
+    const ids = await addReceivables(t, org, 260, (i) => NOW - DAY - i * 1_000);
+
+    const first = await runCronToCompletion(t);
+    // One invocation never swallows the whole book...
+    expect(first.markedOverdue).toBeLessThan(260);
+
+    // ...yet the continuation chain reaches every row.
+    const rows = await t.run((ctx) => Promise.all(ids.map((id) => ctx.db.get(id))));
+    expect(rows.every((row) => row?.status === "OVERDUE")).toBe(true);
+    const counts = receivableReminderCounts(await remindersFor(t, org.orgId));
+    expect(counts.size).toBe(260);
+    expect([...counts.values()].every((n) => n === 1)).toBe(true);
+
+    // Replaying the whole cron is idempotent: nothing is re-marked or re-sent.
+    await runCronToCompletion(t);
+    expect(await remindersFor(t, org.orgId)).toHaveLength(260);
+  });
+
+  test("a due-soon window larger than one invocation reminds every row and marks none overdue", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "bigduesoon");
+    const ids = await addReceivables(t, org, 150, (i) => NOW + 60_000 + i * 60_000);
+
+    await runCronToCompletion(t);
+
+    const reminders = await remindersFor(t, org.orgId);
+    expect(reminders).toHaveLength(150);
+    expect(reminders.every((reminder) => reminder.messageType === "DUE_SOON")).toBe(true);
+    expect(receivableReminderCounts(reminders).size).toBe(150);
+    const rows = await t.run((ctx) => Promise.all(ids.map((id) => ctx.db.get(id))));
+    expect(rows.every((row) => row?.status === "OPEN")).toBe(true);
+  });
+
+  test("hundreds of rows sharing one due date are neither skipped nor duplicated across continuations", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "tiedates");
+    await addReceivables(t, org, 130, () => NOW + DAY);
+    await addCheques(t, org, 130, () => NOW + 2 * DAY);
+
+    await runCronToCompletion(t);
+
+    const reminders = await remindersFor(t, org.orgId);
+    expect(reminders.filter((r) => r.messageType === "DUE_SOON")).toHaveLength(130);
+    expect(reminders.filter((r) => r.messageType === "CHEQUE_UPCOMING")).toHaveLength(130);
+    expect([...receivableReminderCounts(reminders).values()].every((n) => n === 1)).toBe(true);
+    const chequeIds = reminders.filter((r) => r.chequeId).map((r) => r.chequeId);
+    expect(new Set(chequeIds).size).toBe(130);
+  });
+
+  test("overdue, due-soon and cheque cohorts across every active status all complete", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "allstatuses");
+    const statuses: Statuses[] = ["OPEN", "PARTIALLY_PAID", "RESCHEDULED"];
+    for (const status of statuses) {
+      await addReceivables(t, org, 120, (i) => NOW - DAY - i * 1_000, status);
+      await addReceivables(t, org, 120, (i) => NOW + 60_000 + i * 1_000, status);
+    }
+    await addCheques(t, org, 120, (i) => NOW + DAY + i * 1_000);
+
+    await runCronToCompletion(t);
+
+    const reminders = await remindersFor(t, org.orgId);
+    expect(reminders.filter((r) => r.messageType === "OVERDUE")).toHaveLength(360);
+    expect(reminders.filter((r) => r.messageType === "DUE_SOON")).toHaveLength(360);
+    expect(reminders.filter((r) => r.messageType === "CHEQUE_UPCOMING")).toHaveLength(120);
+    const overdueLeft = await t.run(async (ctx) =>
+      (await ctx.db.query("receivables").withIndex("by_org_status_and_dueDate", (q) =>
+        q.eq("orgId", org.orgId).eq("status", "OVERDUE")).collect()).length
+    );
+    expect(overdueLeft).toBe(360);
+  });
+
+  test("distant-future receivables and cheques are never reminded or marked", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "pollution");
+    const inWindow = await addReceivables(t, org, 3, (i) => NOW + DAY + i);
+    const justOutside = await addReceivables(t, org, 1, () => NOW + 2 * DAY + 1);
+    const distant = await addReceivables(t, org, 400, (i) => NOW + 5 * DAY + i * DAY);
+    const chequeIn = await addCheques(t, org, 2, (i) => NOW + DAY + i);
+    await addCheques(t, org, 300, (i) => NOW + 3 * DAY + 1 + i * DAY);
+
+    await runCronToCompletion(t);
+
+    const reminders = await remindersFor(t, org.orgId);
+    const remindedReceivables = new Set(reminders.map((r) => r.receivableId).filter(Boolean));
+    expect(remindedReceivables).toEqual(new Set(inWindow));
+    expect(new Set(reminders.map((r) => r.chequeId).filter(Boolean))).toEqual(new Set(chequeIn));
+    const untouched = await t.run((ctx) => Promise.all([...justOutside, ...distant].map((id) => ctx.db.get(id))));
+    expect(untouched.every((row) => row?.status === "OPEN" && row.updatedAt === NOW)).toBe(true);
+  });
+
+  test("a long run of finance-company cheques cannot hide the customer cheques behind it", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "fclineage");
+    const fcIds = await addCheques(t, org, 120, (i) => NOW + DAY + i, { drawerType: "FINANCE_COMPANY" });
+    const ordinary = await addCheques(t, org, 40, (i) => NOW + 2 * DAY + i);
+
+    await runCronToCompletion(t);
+
+    const reminders = await remindersFor(t, org.orgId);
+    const chased = new Set(reminders.map((r) => r.chequeId).filter(Boolean));
+    expect(chased).toEqual(new Set(ordinary));
+    for (const fcId of fcIds) expect(chased.has(fcId)).toBe(false);
+  });
+
+  test("exact window boundaries: overdue, due-soon and cheque edges are inclusive where specified", async () => {
+    const t = startClock();
+    const org = await seedOrg(t, "boundaries");
+    const [atNow] = await addReceivables(t, org, 1, () => NOW);
+    const [justPast] = await addReceivables(t, org, 1, () => NOW - 1);
+    const [justAhead] = await addReceivables(t, org, 1, () => NOW + 1);
+    const [dueSoonEdge] = await addReceivables(t, org, 1, () => NOW + 2 * DAY);
+    const [pastDueSoonEdge] = await addReceivables(t, org, 1, () => NOW + 2 * DAY + 1);
+    const [partial] = await addReceivables(t, org, 1, () => NOW - DAY, "PARTIALLY_PAID");
+    const [rescheduled] = await addReceivables(t, org, 1, () => NOW + DAY, "RESCHEDULED");
+    const [alreadyOverdue] = await addReceivables(t, org, 1, () => NOW - DAY, "OVERDUE");
+    const [paid] = await addReceivables(t, org, 1, () => NOW - DAY, "PAID");
+    const [chequePast] = await addCheques(t, org, 1, () => NOW - 1);
+    const [chequeAtNow] = await addCheques(t, org, 1, () => NOW);
+    const [chequeEdge] = await addCheques(t, org, 1, () => NOW + 3 * DAY);
+    const [chequePastEdge] = await addCheques(t, org, 1, () => NOW + 3 * DAY + 1);
+    const [deposited] = await addCheques(t, org, 1, () => NOW + DAY, { status: "DEPOSITED" });
+
+    await runCronToCompletion(t);
+
+    const reminders = await remindersFor(t, org.orgId);
+    const typeOf = (id: Id<"receivables">) => reminders.find((r) => r.receivableId === id && !r.chequeId)?.messageType;
+    expect(typeOf(atNow)).toBe("OVERDUE");
+    expect(typeOf(justPast)).toBe("OVERDUE");
+    expect(typeOf(partial)).toBe("OVERDUE");
+    expect(typeOf(justAhead)).toBe("DUE_SOON");
+    expect(typeOf(dueSoonEdge)).toBe("DUE_SOON");
+    expect(typeOf(rescheduled)).toBe("DUE_SOON");
+    expect(typeOf(pastDueSoonEdge)).toBeUndefined();
+    expect(typeOf(alreadyOverdue)).toBeUndefined();
+    expect(typeOf(paid)).toBeUndefined();
+    const chequeChased = (id: Id<"postDatedCheques">) => reminders.some((r) => r.chequeId === id);
+    expect(chequeChased(chequeAtNow)).toBe(true);
+    expect(chequeChased(chequeEdge)).toBe(true);
+    expect(chequeChased(chequePast)).toBe(false);
+    expect(chequeChased(chequePastEdge)).toBe(false);
+    expect(chequeChased(deposited)).toBe(false);
+    const marked = await t.run((ctx) => Promise.all([atNow, justPast, partial, justAhead].map((id) => ctx.db.get(id))));
+    expect(marked.map((row) => row?.status)).toEqual(["OVERDUE", "OVERDUE", "OVERDUE", "OPEN"]);
+  });
+
+  test("a giant tenant does not starve the tenants behind it, and every tenant ends complete and isolated", async () => {
+    const t = startClock();
+    const giant = await seedOrg(t, "giant");
+    const giantIds = await addReceivables(t, giant, 300, (i) => NOW - DAY - i * 1_000);
+    const small: Org[] = [];
+    // 54 small tenants: more than one organization page, so the org cursor is exercised too.
+    for (let index = 0; index < 54; index += 1) {
+      const org = await seedOrg(t, `small${index}`);
+      await addReceivables(t, org, 2, () => NOW - DAY);
+      small.push(org);
+    }
+
+    const first = await t.mutation(internal.collections.processDailyCollectionReminders, {});
+    expect(first.isDone).toBe(false);
+    // After ONE invocation the tenants on the first organization page are fully
+    // served even though the giant tenant still has work outstanding.
+    for (const org of small.slice(0, 40)) {
+      expect(await remindersFor(t, org.orgId)).toHaveLength(2);
+    }
+    const giantAfterFirst = await t.run((ctx) => Promise.all(giantIds.map((id) => ctx.db.get(id))));
+    expect(giantAfterFirst.filter((row) => row?.status === "OVERDUE").length).toBeLessThan(300);
+
+    await drainScheduled(t);
+
+    for (const org of small) {
+      const reminders = await remindersFor(t, org.orgId);
+      expect(reminders).toHaveLength(2);
+      const own = await t.run(async (ctx) =>
+        Promise.all(reminders.map(async (r) => (await ctx.db.get(r.receivableId!))?.orgId))
+      );
+      expect(own.every((id) => id === org.orgId)).toBe(true);
+    }
+    const giantCounts = receivableReminderCounts(await remindersFor(t, giant.orgId));
+    expect(giantCounts.size).toBe(300);
+    expect([...giantCounts.values()].every((n) => n === 1)).toBe(true);
+    const total = await t.run(async (ctx) => (await ctx.db.query("collectionReminders").collect()).length);
+    expect(total).toBe(300 + 54 * 2);
+  });
+
+  describe("large windows continue on native pagination cursors", () => {
+    async function pendingFunctions(t: ReminderT) {
+      const rows = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+      return rows.filter((row) => row.state.kind === "pending");
+    }
+
+    test("a static cohort several pages long is reminded exactly once per row, however many share a date", async () => {
+      const t = startClock();
+      const org = await seedOrg(t, "multipage");
+      // 450 rows on ONE due date and 450 cheques on ONE cheque date: more than two
+      // 200-row pages each, with every row tied on the window's sort field.
+      const receivables = await addReceivables(t, org, 450, () => NOW + DAY);
+      const cheques = await addCheques(t, org, 450, () => NOW + 2 * DAY);
+
+      await runCronToCompletion(t);
+
+      const reminders = await remindersFor(t, org.orgId);
+      const receivableCounts = receivableReminderCounts(reminders);
+      expect(receivableCounts.size).toBe(450);
+      expect(receivables.every((id) => receivableCounts.get(id) === 1)).toBe(true);
+      const chequeCounts = new Map<string, number>();
+      for (const reminder of reminders) {
+        if (reminder.chequeId) chequeCounts.set(reminder.chequeId, (chequeCounts.get(reminder.chequeId) ?? 0) + 1);
+      }
+      expect(chequeCounts.size).toBe(450);
+      expect(cheques.every((id) => chequeCounts.get(id) === 1)).toBe(true);
+    });
+
+    test("rows deleted and inserted between two hops of one window never cause a surviving row to be skipped", async () => {
+      const t = startClock();
+      const org = await seedOrg(t, "betweenhops");
+      const initial = await addReceivables(t, org, 450, () => NOW + DAY);
+
+      // First hop only: the child handles one page and leaves its continuation pending.
+      await t.mutation(internal.collections.processReminderRange, {
+        orgId: org.orgId, step: 1, cursor: null, now: NOW,
+      });
+      expect(await pendingFunctions(t)).toHaveLength(1);
+      const handledFirst = new Set(
+        (await remindersFor(t, org.orgId)).map((reminder) => reminder.receivableId)
+      );
+      expect(handledFirst.size).toBeGreaterThan(0);
+      expect(handledFirst.size).toBeLessThan(450);
+
+      // Between hops: drop rows on both sides of the cursor, add rows sharing the date.
+      const handled = initial.filter((id) => handledFirst.has(id));
+      const unhandled = initial.filter((id) => !handledFirst.has(id));
+      const removed = [...handled.slice(0, 5), ...unhandled.slice(0, 5), ...unhandled.slice(-5)];
+      await t.run(async (ctx) => {
+        for (const id of removed) await ctx.db.delete(id);
+      });
+      const added = await addReceivables(t, org, 30, () => NOW + DAY);
+
+      await drainScheduled(t);
+
+      const counts = receivableReminderCounts(await remindersFor(t, org.orgId));
+      const survivors = [...initial.filter((id) => !removed.includes(id)), ...added];
+      expect(survivors.every((id) => counts.get(id) === 1)).toBe(true);
+      expect(removed.filter((id) => !handledFirst.has(id) && counts.has(id))).toEqual([]);
+    });
+
+    test("tenants whose windows fit never schedule a child function", async () => {
+      const t = startClock();
+      for (let index = 0; index < 49; index += 1) {
+        const org = await seedOrg(t, `fits${index}`);
+        await addReceivables(t, org, 1, () => NOW - DAY);
+        await addReceivables(t, org, 1, () => NOW + DAY);
+        await addReceivables(t, org, 1, () => NOW + DAY, "PARTIALLY_PAID");
+        await addCheques(t, org, 1, () => NOW + DAY);
+      }
+
+      const first = await t.mutation(internal.collections.processDailyCollectionReminders, {});
+
+      expect(first).toMatchObject({ isDone: true, queued: 49 * 4, markedOverdue: 49 });
+      expect(await pendingFunctions(t)).toHaveLength(0);
+    });
+
+    test("a sweep of fifty worst-case tenants schedules exactly 50 x (15 + 1) + 1 functions", async () => {
+      const t = startClock();
+      for (let index = 0; index < 50; index += 1) {
+        const org = await seedOrg(t, `heavy${index}`);
+        // A phone makes every reminder schedule a provider send.
+        await t.run((ctx) => ctx.db.patch(org.customerId, { phone: "+962790000009" }));
+        // Worst case for one org: 11 overdue sends, a due-soon window too big for the
+        // 4 units left (one child), then 3 more overdue sends exhaust the 15-unit
+        // budget with the next overdue step still overflowing (one resume).
+        await addReceivables(t, org, 11, (i) => NOW - DAY - i * 1_000);
+        await addReceivables(t, org, 20, (i) => NOW + DAY + i * 1_000);
+        await addReceivables(t, org, 10, (i) => NOW - DAY - i * 1_000, "PARTIALLY_PAID");
+      }
+      // The 51st tenant forces the sweep's own next-page continuation.
+      await seedOrg(t, "heavy50");
+
+      const first = await t.mutation(internal.collections.processDailyCollectionReminders, {});
+
+      expect(first.isDone).toBe(false);
+      // Per org: 14 sends + 1 window child + 1 resume = 16 (the 15 budget units plus the
+      // resume); plus the single page continuation. 50 * 16 + 1, below the 1000 limit.
+      expect(await pendingFunctions(t)).toHaveLength(801);
+    });
+
+    test("a window step that is not a due-soon or cheque window is rejected before anything is read", async () => {
+      const t = startClock();
+      const org = await seedOrg(t, "badstep");
+      const [due] = await addReceivables(t, org, 1, () => NOW - DAY);
+
+      for (const step of [0, 7, -1, 1.5]) {
+        await expect(
+          t.mutation(internal.collections.processReminderRange, { orgId: org.orgId, step, cursor: null, now: NOW })
+        ).rejects.toThrow("Invalid collection reminder window step");
+      }
+      expect((await t.run((ctx) => ctx.db.get(due)))?.status).toBe("OPEN");
+      expect(await remindersFor(t, org.orgId)).toHaveLength(0);
+    });
+
+    test("an invalid resume step is rejected without touching any row", async () => {
+      const t = startClock();
+      const org = await seedOrg(t, "badresume");
+      const [due] = await addReceivables(t, org, 1, () => NOW - DAY);
+
+      // The live missing/false cohorts now occupy steps0..13; step7 is valid.
+      for (const step of [14, -1, 1.5, Number.NaN]) {
+        await expect(
+          t.mutation(internal.collections.processDailyCollectionReminders, { now: NOW, resume: { orgId: org.orgId, step } })
+        ).rejects.toThrow("Invalid collection reminder resume step");
+      }
+      expect((await t.run((ctx) => ctx.db.get(due)))?.status).toBe("OPEN");
+      expect(await remindersFor(t, org.orgId)).toHaveLength(0);
+    });
+
+    test("every scheduled hop keeps the sweep's original now when the wall clock moves on", async () => {
+      const t = startClock();
+      // First org: overdue overflow (=> resume hop), then a 300-row due-soon window (=> child hops,
+      // more than one 200-row page). 49 small orgs fill the first page; the last org only exists
+      // on the sweep's page-continuation hop.
+      const big = await seedOrg(t, "anchorbig");
+      const overdue = await addReceivables(t, big, 20, (i) => NOW - DAY - i * 1_000);
+      const bigDue = await addReceivables(t, big, 300, (i) => NOW + DAY + i * 1_000);
+      const smallDue: Id<"receivables">[] = [];
+      for (let index = 0; index < 50; index += 1) {
+        const org = await seedOrg(t, `anchorsmall${index}`);
+        smallDue.push(...(await addReceivables(t, org, 1, () => NOW + DAY)));
+      }
+
+      await t.mutation(internal.collections.processDailyCollectionReminders, {});
+      // Two days later every continuation would see the due-soon rows as already overdue
+      // (or outside the window) if it recomputed now instead of carrying the sweep's.
+      vi.setSystemTime(NOW + 2 * DAY);
+      await drainScheduled(t);
+
+      const rows = await t.run(async (ctx) => ({
+        overdue: await Promise.all(overdue.map((id) => ctx.db.get(id))),
+        due: await Promise.all([...bigDue, ...smallDue].map((id) => ctx.db.get(id))),
+        reminders: await ctx.db.query("collectionReminders").collect(),
+      }));
+      expect(rows.overdue.every((row) => row?.status === "OVERDUE" && row.updatedAt === NOW)).toBe(true);
+      expect(rows.due.every((row) => row?.status === "OPEN")).toBe(true);
+      const dueSoon = new Map<string, number>();
+      for (const reminder of rows.reminders) {
+        if (reminder.messageType === "DUE_SOON" && reminder.receivableId) {
+          dueSoon.set(reminder.receivableId, (dueSoon.get(reminder.receivableId) ?? 0) + 1);
+        }
+      }
+      expect(dueSoon.size).toBe(350);
+      expect([...bigDue, ...smallDue].every((id) => dueSoon.get(id) === 1)).toBe(true);
+      expect(rows.reminders.filter((r) => r.messageType === "OVERDUE")).toHaveLength(20);
+    });
+  });
+
+  describe("the 20-hour cooldown reads the exact recent rows, never a prefix of history", () => {
+    const COOLDOWN = 20 * 60 * 60 * 1000;
+    type Reminder = Doc<"collectionReminders">;
+
+    async function addHistory(
+      t: ReminderT,
+      org: Org,
+      spec: {
+        receivableId?: Id<"receivables">;
+        chequeId?: Id<"postDatedCheques">;
+        messageType: Reminder["messageType"];
+        status: Reminder["status"];
+        createdAt: number;
+        count?: number;
+      }
+    ) {
+      await t.run(async (ctx) => {
+        for (let index = 0; index < (spec.count ?? 1); index += 1) {
+          await ctx.db.insert("collectionReminders", {
+            orgId: org.orgId,
+            customerId: org.customerId,
+            receivableId: spec.receivableId,
+            chequeId: spec.chequeId,
+            channel: "MANUAL",
+            messageType: spec.messageType,
+            status: spec.status,
+            scheduledAt: spec.createdAt,
+            createdAt: spec.createdAt,
+          });
+        }
+      });
+    }
+
+    async function newRowsFor(
+      t: ReminderT,
+      org: Org,
+      match: (reminder: Reminder) => boolean,
+      seeded: number
+    ) {
+      const all = await remindersFor(t, org.orgId);
+      return all.filter(match).length - seeded;
+    }
+
+    test("a recent valid row behind hundreds of older rows still suppresses a receivable reminder", async () => {
+      const t = startClock();
+      const org = await seedOrg(t, "longhist");
+      const [due] = await addReceivables(t, org, 1, () => NOW + DAY);
+      // Hundreds of expired rows first (oldest in _creationTime order), then the
+      // one row inside the cooldown. A reader that caps a prefix never sees it.
+      await addHistory(t, org, { receivableId: due, messageType: "DUE_SOON", status: "SENT", createdAt: NOW - 30 * DAY, count: 300 });
+      await addHistory(t, org, { receivableId: due, messageType: "DUE_SOON", status: "SENT", createdAt: NOW - 3_600_000 });
+
+      await runCronToCompletion(t);
+
+      expect(await newRowsFor(t, org, (r) => r.receivableId === due, 301)).toBe(0);
+    });
+
+    test.each(["PENDING", "SENT", "SKIPPED"] as const)(
+      "a recent %s row suppresses; a recent FAILED run in front of it does not hide it",
+      async (status) => {
+        const t = startClock();
+        const org = await seedOrg(t, `dedupe${status}`);
+        const [due] = await addReceivables(t, org, 1, () => NOW + DAY);
+        await addHistory(t, org, { receivableId: due, messageType: "DUE_SOON", status: "FAILED", createdAt: NOW - 3_600_000, count: 120 });
+        await addHistory(t, org, { receivableId: due, messageType: "DUE_SOON", status, createdAt: NOW - 2 * 3_600_000 });
+
+        await runCronToCompletion(t);
+
+        expect(await newRowsFor(t, org, (r) => r.receivableId === due, 121)).toBe(0);
+      }
+    );
+
+    test("recent FAILED rows alone, or an expired valid row, never suppress a fresh reminder", async () => {
+      const t = startClock();
+      const org = await seedOrg(t, "failedonly");
+      const [failedOnly] = await addReceivables(t, org, 1, () => NOW + DAY);
+      const [expiredValid] = await addReceivables(t, org, 1, () => NOW + DAY);
+      await addHistory(t, org, { receivableId: failedOnly, messageType: "DUE_SOON", status: "FAILED", createdAt: NOW - 1_000, count: 150 });
+      await addHistory(t, org, { receivableId: expiredValid, messageType: "DUE_SOON", status: "SENT", createdAt: NOW - COOLDOWN - 1 });
+      await addHistory(t, org, { receivableId: expiredValid, messageType: "DUE_SOON", status: "FAILED", createdAt: NOW - 1_000 });
+
+      await runCronToCompletion(t);
+
+      expect(await newRowsFor(t, org, (r) => r.receivableId === failedOnly, 150)).toBe(1);
+      expect(await newRowsFor(t, org, (r) => r.receivableId === expiredValid, 2)).toBe(1);
+    });
+
+    test("the cooldown edge is inclusive: exactly 20h old suppresses, 1ms older does not", async () => {
+      const t = startClock();
+      const org = await seedOrg(t, "edge");
+      const [onEdge, pastEdge] = await addReceivables(t, org, 2, () => NOW + DAY);
+      const [chequeOnEdge, chequePastEdge] = await addCheques(t, org, 2, (i) => NOW + DAY + i);
+      await addHistory(t, org, { receivableId: onEdge, messageType: "DUE_SOON", status: "SENT", createdAt: NOW - COOLDOWN });
+      await addHistory(t, org, { receivableId: pastEdge, messageType: "DUE_SOON", status: "SENT", createdAt: NOW - COOLDOWN - 1 });
+      await addHistory(t, org, { chequeId: chequeOnEdge, messageType: "CHEQUE_UPCOMING", status: "PENDING", createdAt: NOW - COOLDOWN });
+      await addHistory(t, org, { chequeId: chequePastEdge, messageType: "CHEQUE_UPCOMING", status: "PENDING", createdAt: NOW - COOLDOWN - 1 });
+
+      await runCronToCompletion(t);
+
+      expect(await newRowsFor(t, org, (r) => r.receivableId === onEdge, 1)).toBe(0);
+      expect(await newRowsFor(t, org, (r) => r.receivableId === pastEdge, 1)).toBe(1);
+      expect(await newRowsFor(t, org, (r) => r.chequeId === chequeOnEdge, 1)).toBe(0);
+      expect(await newRowsFor(t, org, (r) => r.chequeId === chequePastEdge, 1)).toBe(1);
+    });
+
+    test("cheque history is read per cheque: long history, FAILED in front, and no match from a sibling cheque", async () => {
+      const t = startClock();
+      const org = await seedOrg(t, "chequehist");
+      const [shared] = await addReceivables(t, org, 1, () => NOW + 30 * DAY);
+      const [suppressed, sibling, failedFront] = await addCheques(t, org, 3, (i) => NOW + DAY + i, { receivableId: shared });
+      await addHistory(t, org, { chequeId: suppressed, receivableId: shared, messageType: "CHEQUE_UPCOMING", status: "SENT", createdAt: NOW - 30 * DAY, count: 250 });
+      await addHistory(t, org, { chequeId: suppressed, receivableId: shared, messageType: "CHEQUE_UPCOMING", status: "SENT", createdAt: NOW - 3_600_000 });
+      await addHistory(t, org, { chequeId: failedFront, receivableId: shared, messageType: "CHEQUE_UPCOMING", status: "FAILED", createdAt: NOW - 1_000, count: 120 });
+      await addHistory(t, org, { chequeId: failedFront, receivableId: shared, messageType: "CHEQUE_UPCOMING", status: "SKIPPED", createdAt: NOW - 3_600_000 });
+
+      await runCronToCompletion(t);
+
+      expect(await newRowsFor(t, org, (r) => r.chequeId === suppressed, 251)).toBe(0);
+      expect(await newRowsFor(t, org, (r) => r.chequeId === failedFront, 121)).toBe(0);
+      // The sibling shares the receivable but has no reminder of its own.
+      expect(await newRowsFor(t, org, (r) => r.chequeId === sibling, 0)).toBe(1);
+    });
+
+    test("returning two cheques of one receivable reminds the customer once per cheque", async () => {
+      // CHEQUE_RETURNED carries both ids; its cooldown is keyed by the cheque, so the
+      // first bounce must not swallow the second cheque's notice (it did when keyed by receivable).
+      const t = startClock();
+      const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+      const receivableId = await insertReceivable(t, { orgId, customerId, createdBy: userId, dueDate: NOW + 30 * DAY });
+      const [first, second] = await t.run(async (ctx) => {
+        const ids: Id<"postDatedCheques">[] = [];
+        for (const chequeNumber of ["RET-1", "RET-2"]) {
+          ids.push(await ctx.db.insert("postDatedCheques", {
+            orgId, customerId, receivableId, bank: "Return Bank", chequeNumber,
+            chequeDate: NOW + DAY, amount: 50, status: "HELD",
+            createdBy: userId, createdAt: NOW, updatedAt: NOW,
+          }));
+        }
+        return ids;
+      });
+
+      await asFinance.mutation(api.collections.returnCheque, { orgId, chequeId: first, returnReason: "NSF" });
+      await asFinance.mutation(api.collections.returnCheque, { orgId, chequeId: second, returnReason: "NSF" });
+
+      const returned = (await t.run((ctx) =>
+        ctx.db.query("collectionReminders").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      )).filter((reminder) => reminder.messageType === "CHEQUE_RETURNED");
+      expect(returned.map((reminder) => reminder.chequeId).sort()).toEqual([first, second].sort());
+    });
+
+    test("another document's or another message type's recent row never suppresses", async () => {
+      const t = startClock();
+      const org = await seedOrg(t, "isolation");
+      const [target, neighbour] = await addReceivables(t, org, 2, () => NOW + DAY);
+      const [cheque, neighbourCheque] = await addCheques(t, org, 2, (i) => NOW + DAY + i);
+      await addHistory(t, org, { receivableId: neighbour, messageType: "DUE_SOON", status: "SENT", createdAt: NOW - 1_000 });
+      await addHistory(t, org, { receivableId: target, messageType: "OVERDUE", status: "SENT", createdAt: NOW - 1_000 });
+      await addHistory(t, org, { chequeId: neighbourCheque, messageType: "CHEQUE_UPCOMING", status: "SENT", createdAt: NOW - 1_000 });
+      await addHistory(t, org, { chequeId: cheque, messageType: "CHEQUE_RETURNED", status: "SENT", createdAt: NOW - 1_000 });
+
+      await runCronToCompletion(t);
+
+      const reminders = await remindersFor(t, org.orgId);
+      expect(reminders.filter((r) => r.receivableId === target && r.messageType === "DUE_SOON")).toHaveLength(1);
+      expect(reminders.filter((r) => r.receivableId === neighbour && r.messageType === "DUE_SOON")).toHaveLength(1);
+      expect(reminders.filter((r) => r.chequeId === cheque && r.messageType === "CHEQUE_UPCOMING")).toHaveLength(1);
+      expect(reminders.filter((r) => r.chequeId === neighbourCheque && r.messageType === "CHEQUE_UPCOMING")).toHaveLength(1);
+    });
+  });
+});
+
 describe("refund eligibility", () => {
   test("a cancelled, never-paid receivable cannot be refunded", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
@@ -2721,7 +3541,9 @@ describe("SCRUM-263 recordPayment refuses a deposit application", () => {
 
   test("genuine inbound methods still record (controls)", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
+    // SCRUM-54: bank-bound methods must name an eligible bank; CASH names none.
+    const bankAccountId = await insertBank(t, orgId, userId);
     // PAYMENT_LINK is deliberately absent: recordPayment refuses it (SCRUM-571 S1);
     // that refusal is asserted in scrum571ReceiptContainment.test.ts.
     for (const method of ["CASH", "BANK_TRANSFER", "CARD"] as const) {
@@ -2731,6 +3553,7 @@ describe("SCRUM-263 recordPayment refuses a deposit application", () => {
         customerId,
         amount: 5,
         method,
+        ...(method === "CASH" ? {} : { bankAccountId }),
         paymentDate: Date.now(),
       });
       const payment = await t.run((ctx) => ctx.db.get(paymentId));
@@ -2815,5 +3638,148 @@ describe("SCRUM-447 FC cheque face is rounded in its own denomination", () => {
     const row = await t.run((ctx) => ctx.db.get(newId));
     expect(row?.amountMinor).toBe(1_234_567);
     expect(row?.amount).toBe(1234.567);
+  });
+});
+
+async function insertBank(
+  t: ReturnType<typeof convexTestWithComponents>,
+  orgId: Id<"organizations">,
+  createdBy: Id<"users">,
+  over: { currency?: string; isActive?: boolean; isDeleted?: boolean; name?: string } = {}
+) {
+  const now = Date.now();
+  return await t.run((ctx) =>
+    ctx.db.insert("bankAccounts", {
+      orgId, name: over.name ?? "Operating bank", currency: over.currency ?? "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: now, isActive: over.isActive ?? true, isReconciliationTarget: false, createdBy,
+      createdAt: now, updatedAt: now, isDeleted: over.isDeleted,
+    })
+  );
+}
+
+test("retained-credit payout bank options follow the requested currency", async () => {
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  const s = await seedFinanceMember(t);
+  const usdBankId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId: s.orgId, name: "USD payout bank", currency: "USD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  const usdOptions = await s.asFinance.query(api.collections.listReceiptBankOptions,
+    { orgId: s.orgId, currency: "USD" });
+  expect(usdOptions.banks.map((bank) => bank._id)).toEqual([usdBankId]);
+  const defaultOptions = await s.asFinance.query(api.collections.listReceiptBankOptions,
+    { orgId: s.orgId });
+  expect(defaultOptions.banks.map((bank) => bank._id)).toEqual([s.bankAccountId]);
+});
+
+describe("SCRUM-54 recordPayment names the physical bank of a bank-bound receipt", () => {
+  const TRACKED = [
+    "collectionPayments", "canonicalPayments", "paymentAllocations", "transactions", "accountingEvents",
+    "pendingAccountingEvents", "journalEntries", "journalLines", "commandIdempotency",
+  ] as const;
+
+  async function counts(t: ReturnType<typeof convexTestWithComponents>) {
+    return await t.run(async (ctx) => {
+      const out: Record<string, number> = {};
+      for (const table of TRACKED) out[table] = (await ctx.db.query(table).take(10_000)).length;
+      return out;
+    });
+  }
+
+  async function seed() {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const s = await seedFinanceMember(t);
+    const receivableId = await s.asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: s.orgId,
+      customerId: s.customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Installment",
+      amount: 1000,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    const pay = (extra: { method: "BANK_TRANSFER" | "CARD" | "CASH"; bankAccountId?: Id<"bankAccounts"> }) =>
+      s.asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey: crypto.randomUUID(), orgId: s.orgId, receivableId, amount: 300, paymentDate: Date.now(), ...extra,
+      });
+    return { t, ...s, receivableId, pay };
+  }
+
+  test.each(["BANK_TRANSFER", "CARD"] as const)("%s without a bank is refused and writes nothing", async (method) => {
+    const { t, pay } = await seed();
+    const before = await counts(t);
+    await expect(pay({ method })).rejects.toThrow("Select the bank account this payment was received into.");
+    expect(await counts(t)).toEqual(before);
+  });
+
+  test.each([
+    ["foreign organization", "The selected bank account was not found in this organization."],
+    ["deleted", "The selected bank account was not found in this organization."],
+    ["inactive", "The selected bank account is inactive."],
+    ["wrong currency", "denominated in USD, but this organization is in JOD."],
+  ] as const)("a %s bank is refused and writes nothing", async (kind, message) => {
+    const { t, orgId, userId, pay } = await seed();
+    let bankAccountId: Id<"bankAccounts">;
+    if (kind === "foreign organization") {
+      const otherOrg = await t.run((ctx) => ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() }));
+      bankAccountId = await insertBank(t, otherOrg, userId);
+    } else if (kind === "deleted") bankAccountId = await insertBank(t, orgId, userId, { isDeleted: true });
+    else if (kind === "inactive") bankAccountId = await insertBank(t, orgId, userId, { isActive: false });
+    else bankAccountId = await insertBank(t, orgId, userId, { currency: "USD" });
+    const before = await counts(t);
+    await expect(pay({ method: "BANK_TRANSFER", bankAccountId })).rejects.toThrow(message);
+    expect(await counts(t)).toEqual(before);
+  });
+
+  test("a bank on a CASH receipt is refused and writes nothing", async () => {
+    const { t, orgId, userId, pay } = await seed();
+    const bankAccountId = await insertBank(t, orgId, userId);
+    const before = await counts(t);
+    await expect(pay({ method: "CASH", bankAccountId })).rejects.toThrow("applies only to bank transfer or card");
+    expect(await counts(t)).toEqual(before);
+  });
+
+  test("a valid Bank A receipt carries Bank A on the receipt event; CASH carries none", async () => {
+    const { t, orgId, userId, pay } = await seed();
+    const bankA = await insertBank(t, orgId, userId, { name: "Bank A" });
+    await insertBank(t, orgId, userId, { name: "Bank B" });
+    await pay({ method: "CARD", bankAccountId: bankA });
+    await pay({ method: "CASH" });
+    const payloads = await t.run(async (ctx) =>
+      (await ctx.db.query("pendingAccountingEvents").collect())
+        .filter((e) => e.eventType === "COLLECTION_PAYMENT")
+        .map((e) => e.payload as { paymentMethod?: string; bankAccountId?: string })
+    );
+    expect(payloads.map((p) => [p.paymentMethod, p.bankAccountId])).toEqual(
+      expect.arrayContaining([["CARD", String(bankA)], ["CASH", undefined]])
+    );
+    expect(payloads).toHaveLength(2);
+  });
+
+  test("the same key with a different bank is a different instruction, not a replay", async () => {
+    const { t, orgId, userId, asFinance, receivableId } = await seed();
+    const bankA = await insertBank(t, orgId, userId, { name: "Bank A" });
+    const bankB = await insertBank(t, orgId, userId, { name: "Bank B" });
+    const args = { idempotencyKey: "scrum54-same-key", orgId, receivableId, amount: 300, method: "BANK_TRANSFER" as const, paymentDate: 1_700_000_000_000 };
+    await asFinance.mutation(api.collections.recordPayment, { ...args, bankAccountId: bankA });
+    await expect(asFinance.mutation(api.collections.recordPayment, { ...args, bankAccountId: bankB })).rejects.toThrow(
+      "Idempotency key reused with different request content."
+    );
+  });
+
+  test("ruleCollectionPayment puts the bank only on the BANK_ACCOUNT control line", () => {
+    const base = { paymentId: "p1", receivedMinor: 300_000, appliedMinor: 200_000, unappliedMinor: 100_000, currency: "JOD", customerId: "c1" };
+    const bank = ruleCollectionPayment({ ...base, paymentMethod: "BANK_TRANSFER", bankAccountId: "bankA" });
+    expect(bank.lines.map((l) => [l.accountSystemKey, l.bankAccountId])).toEqual([
+      [SYSTEM_KEYS.BANK_ACCOUNT, "bankA"],
+      [SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, undefined],
+      [SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY, undefined],
+    ]);
+    expect(() => ruleCollectionPayment({ ...base, paymentMethod: "BANK_TRANSFER" })).toThrow(/bank account is required/);
+    expect(() => ruleCollectionPayment({ ...base, paymentMethod: "CASH", bankAccountId: "bankA" })).toThrow(/non-bank/);
+    const cash = ruleCollectionPayment({ ...base, paymentMethod: "CASH" });
+    expect(cash.lines.every((l) => l.bankAccountId === undefined)).toBe(true);
   });
 });

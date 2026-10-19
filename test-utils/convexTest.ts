@@ -70,6 +70,8 @@ const AGGREGATE_COMPONENTS = [
   "instagramEventsByOrg",
   "facebookEventsByOrg",
   "socialContactsByOrg",
+  "bankControlByDate",
+  "bankAttributionByDate",
 ] as const;
 
 export function convexTestWithComponents<

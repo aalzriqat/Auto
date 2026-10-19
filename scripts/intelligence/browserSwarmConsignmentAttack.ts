@@ -468,12 +468,15 @@ function consignmentEconomicsSpec(options: MissionTiming, figures: Readonly<Cons
       );
       // H + D must reach the financier before the sale can close. `expectedAmountMinor` is the independently
       // derived figure: the product refuses unless it equals its own due amount, which cross-checks both.
+      // SCRUM-54: a bank-account method must name a physical bank, and the approver seat may lack MANAGE_FINANCE so it cannot
+      // create one. This scenario judges consignment economics, not bank attribution, so it pays CASH: no bank is named
+      // (the product refuses one on cash) and nothing is created on the preview.
       await refusalIsInconclusive(
         () =>
           approver.client.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
             orgId: org,
             applicationId,
-            method: "BANK_TRANSFER",
+            method: "CASH",
             paidAt: Date.now() - PAID_AT_SKEW_MS,
             expectedAmountMinor: scenario.forwardDueMinor,
             idempotencyKey: `${nonce}-forward`,

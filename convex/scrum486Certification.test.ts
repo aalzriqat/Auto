@@ -9,7 +9,8 @@
  * literals here and import no production accounting calculations.
  */
 import { describe, expect, test, vi } from "vitest";
-import { seedFinancedDealership, newApplication } from "../test-utils/financedDealFixture";
+import { insertReceiptBank, seedFinancedDealership, newApplication } from "../test-utils/financedDealFixture";
+import { seedBank } from "../test-utils/bankFixture";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
@@ -294,7 +295,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     // is on the books.
     const paidAt = Date.now();
     const forwardArgs = {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER" as const, paidAt,
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER" as const, bankAccountId: await seedBank(s.t, s.orgId), paidAt,
       expectedAmountMinor: 1_575_000, reference: "CERT-FORWARD",
       idempotencyKey: "s486-financed-held-forward",
     };
@@ -379,6 +380,9 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       "4180|JOD": 1_375_000,
       "5100|JOD": 10_000_000,
     });
+    // SCRUM-54: the finance company's transfer names the physical bank it reached. Seeded
+    // before the snapshot so the zero-write refusal checks below still compare like with like.
+    const receiptBankAccountId = await insertReceiptBank(s);
     const afterForwardSnapshot = await dbSnapshot(s.t, Object.keys(schema.tables));
     await s.approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, forwardArgs);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterForwardSnapshot);
@@ -395,6 +399,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const receiptArgs = {
       orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000,
       idempotencyKey: "s486-financed-held-receipt",
+      bankAccountId: receiptBankAccountId,
     };
     await expect(s.actors.salesperson.as.mutation(api.applications.confirmDisbursement, {
       ...receiptArgs,
@@ -491,10 +496,12 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
   test("owned configured financier × foreign application ID: neither tenant's forward or receipt changes", async () => {
     const { s, applicationId } = await ownedFinancedOpening("s486foreignfinanced");
     const other = await authorizedOtherTenant(s, "s486foreignfinanced");
+    // The victim's own bank: the foreign application must be refused before any bank is judged.
+    const victimBank = await seedBank(s.t, s.orgId);
     const before = await dbSnapshot(s.t, Object.keys(schema.tables));
 
     await expect(other.owner.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: other.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+      orgId: other.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: victimBank, paidAt: Date.now(),
       expectedAmountMinor: 0, idempotencyKey: "s486-foreign-forward-denied",
     })).rejects.toThrow(/Finance application not found in this organization/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
@@ -882,9 +889,11 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const claim = await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables")
       .withIndex("by_sale", (q) => q.eq("saleId", saleId!)).unique());
     expect(claim).toMatchObject({ amountDue: 2_500, status: "OPEN" });
+    const bankAccountId = await seedBank(s.t, s.orgId);
     const receiptArgs = {
       orgId: s.orgId, receivableId: claim!._id, amount: 2_500,
       receiptMethod: "BANK_TRANSFER" as const,
+      bankAccountId,
       idempotencyKey: "s486-direct-supplier-receipt",
     };
     expect(await s.owner.as.mutation(api.supplierReceivables.recordReceipt, receiptArgs)).toEqual({
@@ -924,9 +933,11 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const claim = await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables")
       .withIndex("by_sale", (q) => q.eq("saleId", saleId!)).unique());
     expect(claim).toMatchObject({ amountDue: 2_500, status: "OPEN" });
+    const bankAccountId = await seedBank(s.t, s.orgId);
     const firstArgs = {
       orgId: s.orgId, receivableId: claim!._id, amount: 1_000,
       receiptMethod: "BANK_TRANSFER" as const,
+      bankAccountId,
       idempotencyKey: "s486-direct-supplier-partial-first",
     };
     expect(await s.owner.as.mutation(api.supplierReceivables.recordReceipt, firstArgs)).toEqual({

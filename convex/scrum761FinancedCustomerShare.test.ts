@@ -4,7 +4,7 @@
  * G = 12,500 approved, H = 200 customer deposit, C = 1,375 dealership contribution (the SCRUM-435 worked example).
  */
 import {
-  C, G, H, finalizeAsOwner, newApplication, refusalMessageOf, seedFinancedDealership,
+  C, G, H, finalizeAsOwner, insertReceiptBank, newApplication, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
@@ -179,6 +179,7 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     // The forward H + C was already recorded before finalize (finalizeAsOwner pays first, SCRUM-411 P2-01).
     await s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+      bankAccountId: await insertReceiptBank(s),
     });
 
     const gl = await glNet(s);
@@ -208,6 +209,7 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     await s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId: secondApplicationId, disbursedAmountMinor: G,
       idempotencyKey: crypto.randomUUID(),
+      bankAccountId: await insertReceiptBank(s),
     });
     expect(await stageState(s, secondSaleId, "SETTLEMENT")).toBe("COMPLETE");
     expect(await stageState(s, firstSaleId, "SETTLEMENT")).not.toBe("COMPLETE");
@@ -223,6 +225,7 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     const saleId = (await saleOf(s, applicationId))!;
     await s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+      bankAccountId: await insertReceiptBank(s),
     });
     expect(await stageState(s, saleId, "SETTLEMENT")).toBe("COMPLETE");
 
