@@ -96,8 +96,12 @@ export function contributionOf(exp: Doc<"expenses"> | null | undefined): Contrib
   // A date the calendar cannot place goes to a sentinel month as
   // unrepresentable, so every window that could hold it falls back to the raw
   // reader. Years 0-99 are excluded too: Date.UTC reads them as 1900-1999.
+  // The side comes from the stored value, since a date past the Date range has
+  // no year at all but open-ended windows still hold it. Convex orders NaN
+  // above every number, so a NaN date sits on the late side too.
   if (!Number.isFinite(year) || year < 100 || year > 9999) {
-    const month = year > 9999 ? UNPLACEABLE_LATE_MONTH : UNPLACEABLE_EARLY_MONTH;
+    const late = exp.date > 0 || Number.isNaN(exp.date);
+    const month = late ? UNPLACEABLE_LATE_MONTH : UNPLACEABLE_EARLY_MONTH;
     return { month, day: 0, cashOut: 0, showroom: 0, general: 0, showroomCount: 0, unrepresentable: 1, abs: 0 };
   }
   const month = monthKeyOf(exp.date);

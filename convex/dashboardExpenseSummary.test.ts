@@ -268,6 +268,21 @@ describe("dashboard expense month summary", () => {
     expect(await s.stats()).toEqual(raw);
   });
 
+  test.each([1e16, Number.POSITIVE_INFINITY, -1e16, Number.NEGATIVE_INFINITY, Number.NaN])(
+    "a stored date past the Date range (%s) falls back to the raw reader wherever it is held",
+    async (date) => {
+      const s = await setup();
+      await s.add([
+        { ...base, amount: 2, date: NOW - 3 * DAY_MS },
+        { ...base, amount: 11, date },
+      ]);
+      const raw = await s.stats();
+      await s.t.mutation(begin, { orgId: s.orgId });
+      await s.drain();
+      expect(await s.stats()).toEqual(raw);
+    },
+  );
+
   test("a year from 100 on is placed on its own calendar month", async () => {
     const s = await setup();
     await s.add([
