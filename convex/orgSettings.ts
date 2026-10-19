@@ -354,6 +354,9 @@ export const setCommissionMode = mutation({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
     const before = effectiveCommissionMode(settings);
+    // Already stored as this mode: nothing to patch and nothing to audit. An
+    // unset org choosing MANUAL still writes, because that pins the choice.
+    if (settings && settings.commissionMode === args.commissionMode) return settings._id;
     let settingsId: Id<"orgSettings">;
     if (settings) {
       await ctx.db.patch(settings._id, { commissionMode: args.commissionMode });

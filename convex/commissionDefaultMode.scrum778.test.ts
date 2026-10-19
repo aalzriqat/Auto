@@ -253,6 +253,17 @@ describe("SCRUM-778: an automatic mode needs a deliberate choice", () => {
     });
   });
 
+  test("setting the mode already stored writes no audit row, and an unset org choosing MANUAL pins it", async () => {
+    const d = await seedDealer("noop", "AUTO_MEMBER");
+    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" });
+    expect(await d.t.run((ctx) => ctx.db.query("adminAuditLog").collect())).toHaveLength(0);
+
+    const unset = await seedDealer("pin");
+    await unset.as.mutation(api.orgSettings.setCommissionMode, { orgId: unset.orgId, commissionMode: "MANUAL" });
+    expect(await storedMode(unset)).toBe("MANUAL");
+    expect(await unset.t.run((ctx) => ctx.db.query("adminAuditLog").collect())).toHaveLength(1);
+  });
+
   // An access refusal reads as "no mode visible"; any other failure must surface.
   test("getCommissionMode returns null on an access refusal but rethrows other errors", async () => {
     const d = await seedDealer("rethrow", "AUTO_MEMBER");
