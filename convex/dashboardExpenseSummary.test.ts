@@ -251,6 +251,36 @@ describe("dashboard expense month summary", () => {
     expect(toThousandths(Number.NaN)).toBeNull();
   });
 
+  test("dates the calendar cannot place fall back to the raw reader in every window that holds them", async () => {
+    // Date.UTC reads years 0-99 as 1900-1999, so build each date with setUTCFullYear.
+    const at = (year: number, monthIndex: number, day: number) =>
+      new Date(0).setUTCFullYear(year, monthIndex, day) + 12 * 60 * 60 * 1000;
+    const s = await setup();
+    await s.add([
+      { ...base, amount: 2, date: NOW - 3 * DAY_MS },
+      { ...base, amount: 5, date: at(20260, 6, 9) }, // a year typo: open-ended MONTH and YEAR hold it
+      { ...base, amount: 7, date: at(50, 2, 1) }, // a two-digit year: only ALL_TIME holds it
+      { ...base, amount: 9, date: at(99, 2, 1) },
+    ]);
+    const raw = await s.stats();
+    await s.t.mutation(begin, { orgId: s.orgId });
+    await s.drain();
+    expect(await s.stats()).toEqual(raw);
+  });
+
+  test("a year from 100 on is placed on its own calendar month", async () => {
+    const s = await setup();
+    await s.add([
+      { ...base, amount: 2, date: NOW - 3 * DAY_MS },
+      { ...base, amount: 7, date: new Date(0).setUTCFullYear(100, 2, 1) },
+    ]);
+    const raw = await s.stats();
+    await s.t.mutation(begin, { orgId: s.orgId });
+    await s.drain();
+    await s.expectSummaryServes();
+    expect(await s.stats()).toEqual(raw);
+  });
+
   test("BUILDING and BLOCKED generations are never read, and a newer generation stops an older chain", async () => {
     const s = await setup();
     await s.add([{ ...base, amount: 3, date: NOW - 3 * DAY_MS }]);

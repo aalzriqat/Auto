@@ -25,8 +25,13 @@ import { isCashOutExpense, isShowroomBorne } from "./costBearer";
  */
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-/** Month key for dates the calendar cannot place; below every real month. */
-export const UNPLACEABLE_MONTH = 0;
+/**
+ * Month keys for dates the calendar cannot place. A date before year 100 (or
+ * not a number) sorts below every real month, a date after 9999 above it, so
+ * any window that could hold the row reaches its sentinel and is refused.
+ */
+export const UNPLACEABLE_EARLY_MONTH = 0;
+export const UNPLACEABLE_LATE_MONTH = 99_999_999;
 const DAYS = 31;
 
 export const expenseSummaryPage = makeFunctionReference<
@@ -88,11 +93,12 @@ type Contribution = {
 export function contributionOf(exp: Doc<"expenses"> | null | undefined): Contribution | null {
   if (!exp || !isLiveExpense(exp)) return null;
   const year = new Date(exp.date).getUTCFullYear();
-  // A date the calendar cannot place (non-finite, or outside years 1-9999)
-  // goes to the UNPLACEABLE_MONTH sentinel as unrepresentable, so any window
-  // that could reach it (ALL_TIME) falls back to the raw reader.
-  if (!Number.isFinite(year) || year < 1 || year > 9999) {
-    return { month: UNPLACEABLE_MONTH, day: 0, cashOut: 0, showroom: 0, general: 0, showroomCount: 0, unrepresentable: 1, abs: 0 };
+  // A date the calendar cannot place goes to a sentinel month as
+  // unrepresentable, so every window that could hold it falls back to the raw
+  // reader. Years 0-99 are excluded too: Date.UTC reads them as 1900-1999.
+  if (!Number.isFinite(year) || year < 100 || year > 9999) {
+    const month = year > 9999 ? UNPLACEABLE_LATE_MONTH : UNPLACEABLE_EARLY_MONTH;
+    return { month, day: 0, cashOut: 0, showroom: 0, general: 0, showroomCount: 0, unrepresentable: 1, abs: 0 };
   }
   const month = monthKeyOf(exp.date);
   const day = new Date(exp.date).getUTCDate() - 1;
