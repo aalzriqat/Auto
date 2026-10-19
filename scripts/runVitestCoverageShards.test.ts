@@ -393,9 +393,13 @@ describe("runVitestCoverageShards", () => {
     writeFileSync(path.join(directory, "lib", "a.test.ts"), "");
     const file = path.join(directory, "workload.json");
     writeFileSync(file, JSON.stringify(mutate({ ...WORKLOAD, files: {} })));
-    await expect(
-      run("unit", { AUTOFLOW_COVERAGE_DISCOVERY_ROOT: directory, AUTOFLOW_COVERAGE_WORKLOAD: file }),
-    ).rejects.toThrow(new RegExp(`needs non-negative numbers of seconds for: .*${named.replace(/[[\]"().]/g, "\\$&")}`));
+    const error = await run("unit", { AUTOFLOW_COVERAGE_DISCOVERY_ROOT: directory, AUTOFLOW_COVERAGE_WORKLOAD: file }).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(Error);
+    const [, names = ""] = (error as Error).message.split("needs non-negative numbers of seconds for: ");
+    expect(names.split(", ")).toContain(named);
     expect(childBoundary.calls).toHaveLength(0);
   });
 
