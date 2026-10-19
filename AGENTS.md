@@ -46,12 +46,32 @@ Until SCRUM-760 is Done, none of the following is evidence of correctness:
 - the pull-request visual Playwright gate;
 - a swarm run that never reached its attack workers.
 
-**Owner ruling SCRUM-813 c22622 (2026-10-10):** the pilot retains the original
-30-day no-code lifecycle. Customer invoice receipt application, unwind/refund
-and operator correction must work and be certified before launch. The current
-narrowed CASH + configured FINANCED controls remain disabled until their broader
-routes have been implemented, reviewed, deployed and certified. A green test of
-only the narrowed path does not satisfy SCRUM-714 or SCRUM-760.
+**Owner ruling SCRUM-760 (2026-10-19), decision B — narrow pilot gate.** This
+supersedes the SCRUM-813 c22622 ruling (2026-10-10) for the *initial pilot only*.
+Two gates now exist and must not be confused:
+
+- **Pilot launch gate (SCRUM-760).** One dealer (Bloom Cars), CASH and FINANCED
+  deals through delivery, and only certified financial operations enabled. The
+  full receipt, refund and correction lifecycle is **not** required to launch.
+  The gate passes only when the narrow scope is independently verified, with
+  evidence that:
+  - every enabled workflow preserves the accounting invariants;
+  - every excluded or uncertified financial mutation is blocked **server-side**
+    (hiding it in the UI is not a block) and cannot corrupt financial state;
+  - no critical financial defect is open against an enabled workflow;
+  - any refund or correction capability judged indispensable for launch is
+    certified before launch.
+- **Full-lifecycle production certification (post-pilot).** The original 30-day
+  no-code lifecycle (customer invoice receipt application, unwind/refund,
+  operator correction, SCRUM-813 / 714 / 716 / 722 / 723 / 724 / 571) is a set of
+  **post-pilot activation gates**. Each deferred workflow stays disabled, and is
+  enabled only by its own implemented, reviewed, deployed and certified change
+  plus separate owner approval. The compile-time switches in
+  `convex/utils/customerCreditPayoutContainment.ts` stay as they are until then.
+
+Do not broaden the pilot scope or enable a deferred financial operation without
+that separate certification and approval. A green test of only the narrowed path
+proves the narrow pilot; it does not satisfy full-lifecycle certification.
 
 ### Exact-SHA cloud rehearsal before a release
 
