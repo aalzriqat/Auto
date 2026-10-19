@@ -1161,6 +1161,37 @@ export type BankRebuildResult = {
   stopped?: { kind: "deadline" | "pageCap"; ref: string };
 };
 
+type BankRebuildInput = {
+  orgs: { orgId: string }[];
+  runPage: (orgId: string) => { ok: true; value: unknown } | { ok: false; reason: string };
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  maxPages: number;
+  log: (level: "info" | "error", line: string) => void;
+};
+
+/** How one organization's rebuild ended: a final step, or a stop for the whole phase. */
+type BankOrgOutcome =
+  | { kind: "ready"; pages: number }
+  | { kind: "notApplicable" }
+  | { kind: "refused"; reason: string }
+  | { kind: "deadline" | "pageCap" };
+
+function rebuildOneOrg(input: BankRebuildInput, orgId: string): BankOrgOutcome {
+  for (let pages = 0; ; ) {
+    if (input.now() - input.startedAt > input.timeoutMs) return { kind: "deadline" };
+    if (pages >= input.maxPages) return { kind: "pageCap" };
+    const page = input.runPage(orgId);
+    pages += 1;
+    const step: BankBackfillStep = page.ok
+      ? classifyBankBackfillStep(page.value)
+      : { kind: "refused", reason: page.reason };
+    if (step.kind === "ready") return { kind: "ready", pages };
+    if (step.kind !== "more") return step;
+  }
+}
+
 /**
  * Rebuilds every organization's bank balance aggregates, one `runPage` call at
  * a time, and never lets one organization keep the others from running.
@@ -1170,47 +1201,24 @@ export type BankRebuildResult = {
  * `runPage` is injected so this is testable without a deployment, and `log`
  * receives only opaque refs and fixed text because its output is public.
  */
-export function rebuildBankBalances(input: {
-  orgs: { orgId: string }[];
-  runPage: (orgId: string) => { ok: true; value: unknown } | { ok: false; reason: string };
-  now: () => number;
-  startedAt: number;
-  timeoutMs: number;
-  maxPages: number;
-  log: (level: "info" | "error", line: string) => void;
-}): BankRebuildResult {
+export function rebuildBankBalances(input: BankRebuildInput): BankRebuildResult {
   const result: BankRebuildResult = { ready: 0, notApplicable: 0, refused: [] };
   for (const org of input.orgs) {
     const ref = opaqueOrgRef(org.orgId);
-    let pages = 0;
-    for (;;) {
-      if (input.now() - input.startedAt > input.timeoutMs) {
-        result.stopped = { kind: "deadline", ref };
-        return result;
-      }
-      if (pages >= input.maxPages) {
-        result.stopped = { kind: "pageCap", ref };
-        return result;
-      }
-      const page = input.runPage(org.orgId);
-      pages += 1;
-      const step: BankBackfillStep = page.ok
-        ? classifyBankBackfillStep(page.value)
-        : { kind: "refused", reason: page.reason };
-      if (step.kind === "more") continue;
-      if (step.kind === "refused") {
-        result.refused.push(`${ref}: ${step.reason}`);
-        input.log("error", `  ${ref}: refused (${step.reason})`);
-        break;
-      }
-      if (step.kind === "ready") {
-        result.ready += 1;
-        input.log("info", `  ${ref}: ready after ${pages} page(s)`);
-      } else {
-        result.notApplicable += 1;
-        input.log("info", `  ${ref}: no bank control account`);
-      }
-      break;
+    const outcome = rebuildOneOrg(input, org.orgId);
+    if (outcome.kind === "deadline" || outcome.kind === "pageCap") {
+      result.stopped = { kind: outcome.kind, ref };
+      return result;
+    }
+    if (outcome.kind === "refused") {
+      result.refused.push(`${ref}: ${outcome.reason}`);
+      input.log("error", `  ${ref}: refused (${outcome.reason})`);
+    } else if (outcome.kind === "ready") {
+      result.ready += 1;
+      input.log("info", `  ${ref}: ready after ${outcome.pages} page(s)`);
+    } else {
+      result.notApplicable += 1;
+      input.log("info", `  ${ref}: no bank control account`);
     }
   }
   return result;
@@ -1218,7 +1226,8 @@ export function rebuildBankBalances(input: {
 
 /** The "Bank balances" job-summary text for a finished or stopped rebuild. */
 export function renderBankRebuildSummary(result: BankRebuildResult): string {
-  const list = result.refused.length > 0 ? `\n\n${result.refused.map((line) => `- ${line}`).join("\n")}` : "";
+  const refusedLines = result.refused.map((line) => `- ${line}`).join("\n");
+  const list = result.refused.length > 0 ? `\n\n${refusedLines}` : "";
   if (result.stopped) {
     const why = result.stopped.kind === "deadline" ? "before the deadline" : "at the page cap";
     return `Stopped at ${result.stopped.ref}: ${result.ready} organizations rebuilt ${why}.${list}`;
