@@ -663,6 +663,44 @@ describe("bankAccounts.getBookBalance", () => {
     expect(await asOfBalance(fx, Date.now(), BOOK_BALANCE_READ_BUDGET)).toMatchObject({ status: "OK", balanceMinor: 100_000 });
   });
 
+  test("the backfill binds duplicate control mappings to the earliest active one, skips inactive ones, and reports UNAVAILABLE with none", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    await seedBankLine(fx, { debitMinor: 100_000, bankAccountId: bankA });
+    const { bank } = await refs(fx);
+    const duplicates = await fx.t.run(async (ctx) => {
+      const { _id, _creationTime, ...copy } = bank;
+      void _id;
+      void _creationTime;
+      const first = await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 1" });
+      const second = await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 2" });
+      return { first, second, rows: [await ctx.db.get(first), await ctx.db.get(second)] };
+    });
+    // The fixture's order is explicit: original < duplicate 1 < duplicate 2. convex-test makes
+    // _creationTime strictly increasing per harness (one insert never shares a time with the last),
+    // and these assertions fail loudly if that ever stopped holding.
+    expect(bank._creationTime).toBeLessThan(duplicates.rows[0]!._creationTime);
+    expect(duplicates.rows[0]!._creationTime).toBeLessThan(duplicates.rows[1]!._creationTime);
+    const boundTo = () => fx.t.run((ctx) => ctx.db.query("bankBalanceAggregateStates")
+      .withIndex("by_org", (q) => q.eq("orgId", fx.orgId)).unique().then((row) => row?.controlAccountId));
+
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
+    expect(await boundTo()).toBe(bank._id);
+
+    // With the earliest row inactive, the next-oldest active duplicate takes over.
+    await fx.t.run((ctx) => ctx.db.patch(bank._id, { active: false }));
+    await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId });
+    expect(await boundTo()).toBe(duplicates.first);
+    expect(duplicates.first).not.toBe(duplicates.second);
+
+    // With no active mapping left there is nothing to rebuild against.
+    await fx.t.run(async (ctx) => {
+      await ctx.db.patch(duplicates.first, { active: false });
+      await ctx.db.patch(duplicates.second, { active: false });
+    });
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "UNAVAILABLE" });
+  });
+
   test("adopting an existing bank-control chart row includes lines posted before its system mapping", async () => {
     const fx = await seedDealer();
     const bankId = await createBank(fx, "Operating", true);
