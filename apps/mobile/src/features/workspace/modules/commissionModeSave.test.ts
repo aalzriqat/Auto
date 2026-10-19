@@ -1,4 +1,4 @@
-import { saveSettingsThenCommissionMode } from "./commissionModeSave";
+import { DEFAULT_MOBILE_COMMISSION_MODE, saveResultMessage, saveSettingsThenCommissionMode } from "./commissionModeSave";
 
 describe("SCRUM-778: saving settings and the commission mode together", () => {
   test("refused settings leave the commission mode untouched", async () => {
@@ -55,5 +55,16 @@ describe("SCRUM-778: saving settings and the commission mode together", () => {
     });
 
     expect(result).toBe("settingsSavedModeFailed");
+  });
+
+  test("an unset org's default mode is MANUAL", () => {
+    expect(DEFAULT_MOBILE_COMMISSION_MODE).toBe("MANUAL");
+  });
+
+  test("the result message is truthful in English and Arabic", () => {
+    expect(saveResultMessage("saved", "en")).toBe("Saved");
+    expect(saveResultMessage("saved", "ar")).toBe("تم الحفظ");
+    expect(saveResultMessage("settingsSavedModeFailed", "en")).toBe("Settings saved, but the commission mode was not changed.");
+    expect(saveResultMessage("settingsSavedModeFailed", "ar")).toBe("تم حفظ الإعدادات، لكن لم يتغير نظام العمولة.");
   });
 });

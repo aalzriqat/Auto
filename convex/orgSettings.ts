@@ -301,9 +301,9 @@ const ACCESS_REFUSAL_CODES: ReadonlySet<string> = new Set([
 ]);
 
 function isAccessRefusal(error: unknown): boolean {
-  if (!(error instanceof ConvexError)) return false;
-  const data = error.data as { code?: unknown } | string | undefined;
-  return typeof data === "object" && data !== null && typeof data.code === "string" && ACCESS_REFUSAL_CODES.has(data.code);
+  const data: unknown = error instanceof ConvexError ? error.data : undefined;
+  const code = typeof data === "object" && data !== null ? (data as { code?: unknown }).code : undefined;
+  return typeof code === "string" && ACCESS_REFUSAL_CODES.has(code);
 }
 
 /**

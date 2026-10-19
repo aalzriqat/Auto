@@ -261,6 +261,8 @@ describe("SCRUM-778: an automatic mode needs a deliberate choice", () => {
     );
     const asStranger = d.t.withIdentity({ subject: "s778_stranger", clerkId: "s778_stranger" });
     expect(strangerId).toBeTruthy();
+    // Signed out: no identity at all reads as no mode, not as an error.
+    expect(await d.t.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBeNull();
     expect(await asStranger.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBeNull();
 
     // A membership whose role row is gone is corrupt data, not "no access".
