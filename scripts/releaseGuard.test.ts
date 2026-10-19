@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
 import {
+  classifyBankBackfillStep,
   PRODUCTION_CONFIRMATION,
   assertDeploymentIdentity,
   captureRunBaseline,
@@ -1394,5 +1395,31 @@ describe("values headed for a URL or a log are bounded first", () => {
     const long = forLog("x".repeat(500));
     expect(long.length).toBeLessThan(140);
     expect(long.endsWith("…")).toBe(true);
+  });
+});
+
+describe("classifyBankBackfillStep (SCRUM-54 bank balance rebuild)", () => {
+  test("progress and completion are told apart", () => {
+    expect(classifyBankBackfillStep({ status: "MORE" })).toEqual({ kind: "more" });
+    expect(classifyBankBackfillStep({ status: "READY" })).toEqual({ kind: "ready" });
+  });
+
+  test("an org without a bank control account has nothing to rebuild", () => {
+    expect(classifyBankBackfillStep({ status: "UNAVAILABLE" })).toEqual({ kind: "notApplicable" });
+  });
+
+  test("a reset, refused history or unknown shape refuses with fixed text", () => {
+    for (const value of [
+      { status: "RESET_IN_PROGRESS" },
+      { status: "INCONSISTENT_HISTORY" },
+      { status: "SOMETHING_NEW", detail: "tenant secret" },
+      null,
+      "READY",
+      undefined,
+    ]) {
+      const step = classifyBankBackfillStep(value);
+      expect(step.kind).toBe("refused");
+      if (step.kind === "refused") expect(step.reason).not.toMatch(/tenant secret/);
+    }
   });
 });

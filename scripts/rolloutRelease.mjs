@@ -22,12 +22,14 @@ import process from "node:process";
 import {
   assertDeploymentIdentity,
   captureRunBaseline,
+  classifyBankBackfillStep,
   classifyMaterializationReport,
   decideEmptyRollout,
   decidePollOutcome,
   describeConvexFailure,
   forLog,
   mergeVerdicts,
+  opaqueOrgRef,
   parseConvexRunJson,
   pollIntervalMs,
   renderReleaseSummary,
@@ -36,6 +38,9 @@ import {
 
 const REPORT_FN = "adminSystem:materializationReportForRelease";
 const START_FN = "migrations:startSocialConversationBackfills";
+const BANK_BACKFILL_FN = "bankBalanceBackfill:runPage";
+/** 16 journal lines per page, so this bounds one org at 160,000 bank lines. */
+const MAX_BANK_PAGES_PER_ORG = 10_000;
 
 const PAGE_SIZE = 50;
 /** A cursor that stops advancing would otherwise page forever. */
@@ -63,6 +68,7 @@ const CONVEX_CLI = path.join(process.cwd(), "node_modules", "convex", "bin", "ma
 
 let lastVerdict = null;
 let lastOutcome = "continue";
+let bankSummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -82,6 +88,7 @@ function writeSummary(extra) {
     verdict,
     outcome: lastOutcome === "continue" ? "failed" : lastOutcome,
   });
+  if (bankSummary) body += `\n### Bank balances\n\n${bankSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -251,6 +258,46 @@ console.log(`Starting Social Inbox conversation backfills…`);
 const started = convex(["run", START_FN, "{}"]);
 if (!started.ok) fail(started.reason);
 console.log(`  fan-out: ${JSON.stringify(started.value)}`);
+
+// ─── 2b. Rebuild every organization's bank balance aggregates ───────────────
+
+// SCRUM-54: bank balances read from per-org aggregate trees, and a state built
+// for an older layout is withheld, so until this finishes every bank balance in
+// that org reads as unavailable. Synchronous, page by page, through the same
+// operator key; `runPage` is idempotent and returns READY at once for an org
+// already rebuilt, so a re-run resumes rather than restarts. It runs while the
+// Social Inbox fan-out proceeds in the background.
+console.log(`Rebuilding bank balance aggregates…`);
+const bankStartedAt = Date.now();
+const bank = { ready: 0, notApplicable: 0 };
+for (const org of before.orgs) {
+  const ref = opaqueOrgRef(org.orgId);
+  let pages = 0;
+  for (;;) {
+    if (Date.now() - bankStartedAt > TIMEOUT_MS) {
+      bankSummary = `Stopped at ${ref}: ${bank.ready} organizations rebuilt before the deadline.`;
+      fail(`Production is DEPLOYED, but the bank balance rebuild did not finish within the deadline. A re-run resumes it.`);
+    }
+    if (pages >= MAX_BANK_PAGES_PER_ORG) {
+      bankSummary = `Stopped at ${ref} after ${pages} pages.`;
+      fail(`Production is DEPLOYED, but ${ref}'s bank balance rebuild exceeded ${MAX_BANK_PAGES_PER_ORG} pages.`);
+    }
+    const result = convex(["run", BANK_BACKFILL_FN, JSON.stringify({ orgId: org.orgId })]);
+    if (!result.ok) fail(result.reason);
+    pages += 1;
+    const step = classifyBankBackfillStep(result.value);
+    if (step.kind === "more") continue;
+    if (step.kind === "refused") {
+      bankSummary = `Refused at ${ref}: ${step.reason}.`;
+      fail(`Production is DEPLOYED, but the bank balance rebuild is INCOMPLETE at ${ref}: ${step.reason}.`);
+    }
+    bank[step.kind] += 1;
+    console.log(`  ${ref}: ${step.kind === "ready" ? `ready after ${pages} page(s)` : "no bank control account"}`);
+    break;
+  }
+}
+bankSummary = `${bank.ready} organizations rebuilt, ${bank.notApplicable} without a bank control account.`;
+console.log(`  ${bankSummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 

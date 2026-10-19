@@ -1111,3 +1111,43 @@ export function renderReleaseSummary(input: {
 
   return lines.join("\n");
 }
+
+// ─── Bank balance aggregate backfill (SCRUM-54) ─────────────────────────────
+
+export type BankBackfillStep =
+  | { kind: "ready" }
+  | { kind: "more" }
+  | { kind: "notApplicable" }
+  | { kind: "refused"; reason: string };
+
+/**
+ * Classifies one `bankBalanceBackfill:runPage` result.
+ *
+ * Bank balances read from per-org aggregate trees that a release must rebuild
+ * once for the current layout; until it does, every bank balance in that org
+ * reads as unavailable. `UNAVAILABLE` is an org with no bank control account,
+ * which has nothing to rebuild. Anything else that is not progress refuses:
+ * a reset in progress, a historical line the aggregate cannot accept, or a
+ * shape this script does not know. The reasons are fixed text, never the
+ * backend's, because this output is public.
+ */
+export function classifyBankBackfillStep(value: unknown): BankBackfillStep {
+  const status = typeof value === "object" && value !== null ? (value as { status?: unknown }).status : undefined;
+  switch (status) {
+    case "READY":
+      return { kind: "ready" };
+    case "MORE":
+      return { kind: "more" };
+    case "UNAVAILABLE":
+      return { kind: "notApplicable" };
+    case "RESET_IN_PROGRESS":
+      return { kind: "refused", reason: "the organization is being reset; re-run once the reset has finished" };
+    case "INCONSISTENT_HISTORY":
+      return {
+        kind: "refused",
+        reason: "a historical bank line was refused by the aggregate; its balance stays unavailable until that line is corrected",
+      };
+    default:
+      return { kind: "refused", reason: "the backfill returned a result this script does not recognise" };
+  }
+}

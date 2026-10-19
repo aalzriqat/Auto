@@ -171,6 +171,14 @@ skips orgs already `completed`. SCRUM-126 adds the materializable-event count
 that would make this enforceable; until then it is an anomaly in the summary and
 a human decides.
 
+The same step also rebuilds every organization's bank balance aggregates
+(`bankBalanceBackfill:runPage`, SCRUM-54), page by page, before it verifies the
+Social Inbox. Until an org is rebuilt for the current aggregate layout its bank
+balances read as unavailable, never as a wrong number. An org without a bank
+control account is reported and skipped; a reset in progress or a historical
+bank line the aggregate refuses stops the run as deployed but incomplete.
+`runPage` returns READY at once for an org already rebuilt, so a re-run resumes.
+
 Backfills run in the same job on purpose. Between the code landing and the
 backfills completing, database I/O goes **up**: the conversation trigger adds a
 read and a write per inbound webhook while every inbox is still served by the
