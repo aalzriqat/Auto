@@ -207,6 +207,33 @@ async function economicEvents(t: TestHarness, orgId: Id<"organizations">) {
   );
 }
 
+/** Journal entries in posting order, each with its lines resolved to system key and code. */
+async function entriesWithLines(t: TestHarness, orgId: Id<"organizations">) {
+  return await t.run(async (ctx) => {
+    const entries = (
+      await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    ).sort((a, b) => a._creationTime - b._creationTime);
+    const out: Array<{
+      sourceType: string | undefined;
+      lines: Array<{ key: string | undefined; code: string | undefined; debit: number; credit: number }>;
+    }> = [];
+    for (const entry of entries) {
+      const lines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect();
+      const mine = [];
+      for (const l of lines.filter((x) => x.journalEntryId === entry._id)) {
+        const account = await ctx.db.get(l.accountId);
+        mine.push({ key: account?.systemKey, code: account?.code, debit: l.debitMinor, credit: l.creditMinor });
+      }
+      mine.sort((x, y) => String(x.code).localeCompare(String(y.code)));
+      out.push({ sourceType: (entry as { sourceType?: string }).sourceType, lines: mine });
+    }
+    return out;
+  });
+}
+
 async function journalEntries(t: TestHarness, orgId: Id<"organizations">) {
   return await t.run((ctx) =>
     ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
@@ -657,24 +684,39 @@ describe("R8 — sourced (consigned) vehicle economics", () => {
     // proving 0 !== 2,400,000. A filter on a key that matches nothing always
     // reads as "that account was never touched" — the false negative this whole
     // rehearsal is supposed to catch, so the entry is pinned exactly instead.
-    // SCRUM-802: the pilot cash procedure records the customer's full payment as a deposit first, so the entry is
-    // pinned as the NET effect per account (order-independent) rather than as three raw lines.
-    const netByKey = new Map<string, number>();
-    for (const l of lines) {
-      const key = `${l.systemKey}/${l.code}`;
-      netByKey.set(key, (netByKey.get(key) ?? 0) + l.debitMinor - l.creditMinor);
-    }
-    expect(Object.fromEntries([...netByKey].filter(([, n]) => n !== 0))).toEqual({
-      // The customer paid the whole ticket price in cash...
-      "CASH_ON_HAND/1100": 2_400_000,
-      // ...of which the supplier's cost is OWED ONWARD, never the dealership's...
-      "ACCOUNTS_PAYABLE_SUPPLIERS/2400": -1_900_000,
-      // ...leaving the 5,000 margin as the only thing the dealership EARNED.
-      "CONSIGNMENT_COMMISSION_REVENUE/4170": -500_000,
-    });
-    // The receivable was recognised and fully settled by the deposit.
-    expect(netOn(lines, "ACCOUNTS_RECEIVABLE_CUSTOMERS")).toBe(0);
-    expect(netOn(lines, "CUSTOMER_DEPOSITS_LIABILITY")).toBe(0);
+    // SCRUM-802: the pilot cash procedure records the customer's full payment as a deposit first, so the ledger holds
+    // TWO entries, each pinned exactly (a net-by-account view would hide a wrong leg behind a zero net).
+    const byEntry = await entriesWithLines(t, orgId);
+    expect(byEntry).toEqual([
+      // The deposit receipt: cash in, held as a customer-deposit liability - not revenue.
+      {
+        sourceType: "deposits",
+        lines: [
+          { key: "CASH_ON_HAND", code: "1100", debit: 2_400_000, credit: 0 },
+          { key: "CUSTOMER_DEPOSITS_LIABILITY", code: "2100", debit: 0, credit: 2_400_000 },
+        ],
+      },
+      // Its application to the sale invoice at completion: the liability settles the receivable.
+      {
+        sourceType: "depositApplications",
+        lines: [
+          { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", code: "1200", debit: 0, credit: 2_400_000 },
+          { key: "CUSTOMER_DEPOSITS_LIABILITY", code: "2100", debit: 2_400_000, credit: 0 },
+        ],
+      },
+      // The sale entry itself, exactly as before SCRUM-802.
+      {
+        sourceType: "sales",
+        lines: [
+          // The customer owes the whole ticket price...
+          { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", code: "1200", debit: 2_400_000, credit: 0 },
+          // ...of which the supplier's cost is OWED ONWARD, never the dealership's...
+          { key: "ACCOUNTS_PAYABLE_SUPPLIERS", code: "2400", debit: 0, credit: 1_900_000 },
+          // ...leaving the 5,000 margin as the only thing the dealership EARNED.
+          { key: "CONSIGNMENT_COMMISSION_REVENUE", code: "4170", debit: 0, credit: 500_000 },
+        ],
+      },
+    ]);
 
     // ACC-1 restated as the thing that must NOT be true: the dealership never
     // owned this car, so none of the sale price is its own sales revenue.

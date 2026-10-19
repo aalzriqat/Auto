@@ -1544,6 +1544,7 @@ export const recordPayment = mutation({
     // the pilot procedure is a deposit. Same pre-wrapper placement as above.
     await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, {
       receivableId: args.receivableId,
+      invoiceSaleId: args.invoiceSaleId,
       customerId: args.customerId,
     });
     const validateInvoiceIntent = async () => {
@@ -2108,7 +2109,11 @@ export async function registerChequeCore(
   // SCRUM-802: a customer cheque is customer money too — park nothing against an open sale invoice. A finance
   // company's cheque is the financier's money, not the customer's, so that drawer is exempt.
   if (args.drawerType !== "FINANCE_COMPANY") {
-    await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, { receivableId: args.receivableId, customerId: args.customerId });
+    await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, {
+      receivableId: args.receivableId,
+      invoiceSaleId: args.invoiceSaleId,
+      customerId: args.customerId,
+    });
   }
 
   let receivable: Doc<"receivables"> | null = null;
@@ -2704,6 +2709,18 @@ export const replaceCheque = mutation({
       if (args.amount === undefined) throw new ConvexError("Cheque amount is required.");
       assertPositiveAmount(args.amount);
       amount = args.amount;
+    }
+
+    // SCRUM-802: the replacement is a NEW customer instrument; an unlinked one would park customer money against an
+    // open sale invoice exactly like a new registration, so it takes the same gate. A finance-company cheque is
+    // the financier's money and is exempt, as in registerChequeCore. Refusing strands nothing: the held cheque stays
+    // as it is and the customer's payment is recorded as a deposit (the pilot procedure).
+    if (!fcLineage) {
+      await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, {
+        receivableId: oldCheque.receivableId,
+        invoiceSaleId: replacementInvoiceSaleId,
+        customerId: oldCheque.customerId,
+      });
     }
 
     const currency = await getOrgCurrency(ctx, args.orgId);

@@ -53,7 +53,12 @@ async function isOpenSaleInvoice(ctx: QueryCtx | MutationCtx, doc: Doc<"receivab
   // CASH sale invoices block (a sale that cannot be resolved is treated as cash: fail closed).
   const saleId = doc.sourceId ? ctx.db.normalizeId("sales", doc.sourceId) : null;
   const sale = saleId ? await ctx.db.get(saleId) : null;
-  if (sale && (sale.financingType === "FINANCED" || sale.financingType === "LEASE")) return false;
+  // The same predicate as the completion guard. The plan marker is not stored on the sale row; it lives on the
+  // sale's finance application (`financedSalePlanVersion`), so it is read from there.
+  if (sale) {
+    const app = sale.applicationId ? await ctx.db.get(sale.applicationId) : null;
+    if (!isCashCompletion({ financingType: sale.financingType, financedSalePlan: app?.financedSalePlanVersion })) return false;
+  }
   return (await outstandingFromReceivableDoc(ctx, doc)) > 0;
 }
 
@@ -67,10 +72,12 @@ async function isOpenSaleInvoice(ctx: QueryCtx | MutationCtx, doc: Doc<"receivab
 export async function assertNoOpenSaleInvoiceForUnlinkedReceipt(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  target: { receivableId?: Id<"receivables">; customerId?: Id<"customers"> }
+  target: { receivableId?: Id<"receivables">; invoiceSaleId?: Id<"sales">; customerId?: Id<"customers"> }
 ): Promise<void> {
   if (!CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED) return;
-  if (target.receivableId || !target.customerId) return;
+  // A receipt or cheque that names a receivable or a sale invoice is LINKED, not unlinked: the invoice-targeted door
+  // has its own containment (SALE_INVOICE_RECEIPT_DOORS_PILOT_DISABLED) and must not be double-counted here.
+  if (target.receivableId || target.invoiceSaleId || !target.customerId) return;
   const customerId = target.customerId;
   const docs = await ctx.db
     .query("receivableDocuments")

@@ -13,8 +13,11 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { SALE_DEBT_CONTAINMENT_REFUSALS } from "./utils/saleDebtContainment";
+import { assertNoOpenSaleInvoiceForUnlinkedReceipt } from "./utils/cashSalePilotGate";
+import { commonAr, commonEn } from "../lib/i18n/domains/common";
 import { payInvoice } from "../test-utils/saleInvoiceFixtures";
-import { H, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { H, finalizeAsOwner, readyDeal, refusalDataOf, refusalMessageOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }), check: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }) },
@@ -107,7 +110,9 @@ describe("SCRUM-802 item 1: a CASH completion refuses while its invoice would st
     const before = await footprint(s);
     const glBefore = await glNet(s.t);
 
-    await expect(complete(s, quoteId)).rejects.toThrow(/CASH_SALE_BALANCE_UNPAID_REFUSED/);
+    const refusal = await refusalDataOf(complete(s, quoteId));
+    expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+    expect(refusal?.message).toBe(commonEn.ServerError_CASH_SALE_BALANCE_UNPAID_REFUSED);
 
     expect(await footprint(s)).toEqual(before);
     expect(await glNet(s.t)).toEqual(glBefore);
@@ -233,7 +238,9 @@ describe("SCRUM-802 item 2: an UNLINKED customer receipt is refused while the cu
     const payments = () => s.t.run(async (ctx) => (await ctx.db.query("collectionPayments").collect()).length);
     const glBefore = await glNet(s.t);
 
-    await expect(unlinked(s)).rejects.toThrow(/UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED/);
+    const refusal = await refusalDataOf(unlinked(s));
+    expect(refusal?.code).toBe("UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED");
+    expect(refusal?.message).toBe(commonEn.ServerError_UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED);
 
     expect(await payments()).toBe(0);
     expect(await glNet(s.t)).toEqual(glBefore);
@@ -312,5 +319,165 @@ describe("SCRUM-802 item 2: an UNLINKED customer receipt is refused while the cu
         orgId: s.orgId, saleId, customerId: s.customerId, amount: 100, method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
       })
     ).rejects.toThrow(/SALE_DEBT_RECEIPT_REFUSED/);
+  });
+});
+
+describe("SCRUM-802: the refusals are translated, in both languages, from the same code", () => {
+  test.each(["CASH_SALE_BALANCE_UNPAID_REFUSED", "UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED"] as const)("%s", (code) => {
+    const en = (commonEn as Record<string, string>)[`ServerError_${code}`];
+    const ar = (commonAr as Record<string, string>)[`ServerError_${code}`];
+    // The server text IS the English dictionary entry; the Arabic entry is Arabic and states that nothing changed.
+    expect(SALE_DEBT_CONTAINMENT_REFUSALS[code]).toBe(en);
+    expect(ar).toMatch(/[\u0600-\u06FF]/);
+    expect(ar.endsWith("لم يتم تغيير أي شيء.")).toBe(true);
+  });
+});
+
+describe("SCRUM-802: a quote with several cars completes whole or not at all", () => {
+  test("one car fully funded and one short refuses the whole completion and leaves both cars unsold", async () => {
+    const s = await seedDealer("multi");
+    const second = await s.mkVehicle("VIN802multi2", { purchasePrice: 17000 });
+    const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, vehiclePrice: 40_000, downPayment: 0, termMonths: 0,
+      vehicleItems: [{ vehicleId: s.vehicleId, unitPrice: 20_000 }, { vehicleId: second, unitPrice: 20_000 }],
+    });
+    // The first car is paid in full (20,000), the second only 5,000 of 20,000: its invoice would stay open.
+    await deposit(s, quoteId, 25_000);
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId, quoteId,
+      allocations: [{ vehicleId: s.vehicleId, amount: 20_000 }, { vehicleId: second, amount: 5_000 }],
+    });
+    const state = () =>
+      s.t.run(async (ctx) => ({
+        sales: (await ctx.db.query("sales").collect()).length,
+        invoices: (await ctx.db.query("receivableDocuments").collect()).length,
+        allocations: (await ctx.db.query("paymentAllocations").collect()).length,
+        first: (await ctx.db.get(s.vehicleId))?.status,
+        second: (await ctx.db.get(second))?.status,
+        deposits: (await ctx.db.query("deposits").collect()).map((d) => ({ status: d.status, holdActive: d.holdActive })),
+      }));
+    const before = await state();
+    const glBefore = await glNet(s.t);
+
+    const refusal = await refusalDataOf(complete(s, quoteId));
+
+    expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+    const after = await state();
+    expect(after).toEqual(before);
+    expect(after.sales).toBe(0);
+    // Neither car is sold; each keeps the status the deposit hold gave it.
+    expect(after.first).not.toBe("SOLD");
+    expect(after.second).not.toBe("SOLD");
+    expect(await glNet(s.t)).toEqual(glBefore);
+  });
+});
+
+describe("SCRUM-802: a receipt or cheque that names a sale invoice is linked, never counted as unlinked", () => {
+  async function seedOpenCashInvoice(s: Seeded) {
+    return await s.t.run(async (ctx) => {
+      const now = Date.now();
+      const saleId = await ctx.db.insert("sales", {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 20_000, saleDate: now,
+        status: "COMPLETED", financingType: "CASH",
+      } as never);
+      await ctx.db.insert("receivableDocuments", {
+        orgId: s.orgId, documentType: "INVOICE", documentNumber: `INV-${crypto.randomUUID()}`, payerType: "CUSTOMER", customerId: s.customerId,
+        sourceType: "sales", sourceId: String(saleId), originalAmountMinor: jod(20_000), currency: "JOD", scale: 3,
+        issueDate: now, dueDate: now, status: "OPEN", createdAt: now, createdBy: s.userId,
+      });
+      return saleId;
+    });
+  }
+
+  test("the gate refuses an unlinked target and passes the same target once it names invoiceSaleId", async () => {
+    const s = await seedDealer("gateinv");
+    const saleId = await seedOpenCashInvoice(s);
+    await expect(
+      s.t.run((ctx) => assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, s.orgId, { customerId: s.customerId }))
+    ).rejects.toThrow(/UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED/);
+    await expect(
+      s.t.run((ctx) => assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, s.orgId, { customerId: s.customerId, invoiceSaleId: saleId }))
+    ).resolves.toBeNull();
+  });
+
+  test("recordPayment with invoiceSaleId is refused by the invoice-receipt door switch, not by the unlinked rule", async () => {
+    const s = await seedDealer("rpinv");
+    const saleId = await seedOpenCashInvoice(s);
+    const refusal = await refusalDataOf(
+      s.asUser.mutation(api.collections.recordPayment, {
+        orgId: s.orgId, customerId: s.customerId, invoiceSaleId: saleId, amount: 100, method: "CASH", paymentDate: Date.now(),
+        idempotencyKey: crypto.randomUUID(),
+      })
+    );
+    expect(refusal?.code).toBe("SALE_INVOICE_RECEIPT_DOORS_DISABLED");
+  });
+
+  test("registerSaleInvoiceCheque reaches registerChequeCore without the unlinked refusal", async () => {
+    const s = await seedDealer("chinv");
+    const saleId = await seedOpenCashInvoice(s);
+    const refusal = await refusalDataOf(
+      s.asUser.mutation(api.collections.registerSaleInvoiceCheque, {
+        orgId: s.orgId, saleId, bank: "Bank", chequeNumber: `CH-${crypto.randomUUID()}`, chequeDate: Date.now(), amount: 100,
+      } as never)
+    );
+    expect(refusal?.code).not.toBe("UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED");
+  });
+});
+
+describe("SCRUM-802: one definition of a cash sale invoice", () => {
+  test("a sale governed by a financed plan is not a cash invoice even when its financingType says CASH", async () => {
+    const f = await seedFinancedDealership("plan802", {
+      modules: MODULES,
+      ownerPerms: [...PERMS, "view:finance_applications", "create:finance_application", "review:finance_application", "approve:finance_application",
+        "manage:supplier_settlement", "cancel:closed_deal", "verify:finance_documents", "register:vehicle_handover", "register:expected_payment",
+        "view:commissions", "manage:commissions", "view:reports", "manage:settings"],
+      actors: {}, label: "S802P", vinPrefix: "VIN802P",
+    });
+    const { applicationId } = await readyDeal(f);
+    await finalizeAsOwner(f, applicationId);
+    const { saleId, customerId, planVersion } = await f.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId))!;
+      const sale = (await ctx.db.query("sales").collect()).find((x) => x.applicationId === applicationId)!;
+      return { saleId: sale._id, customerId: app.customerId, planVersion: app.financedSalePlanVersion };
+    });
+    expect(planVersion).toBeTruthy();
+    // Strip the sale's own financing label and add a clearly open invoice: only the plan marker can keep it non-cash.
+    await f.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { financingType: "CASH" });
+      const now = Date.now();
+      await ctx.db.insert("receivableDocuments", {
+        orgId: f.orgId, documentType: "INVOICE", documentNumber: `INV-${crypto.randomUUID()}`, payerType: "CUSTOMER", customerId,
+        sourceType: "sales", sourceId: String(saleId), originalAmountMinor: jod(2_000), currency: "JOD", scale: 3,
+        issueDate: now, dueDate: now, status: "OPEN", createdAt: now, createdBy: f.owner.userId,
+      });
+    });
+    await expect(
+      f.t.run((ctx) => assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, f.orgId, { customerId }))
+    ).resolves.toBeNull();
+  });
+});
+
+describe("SCRUM-802: replaceCheque does not create an unlinked instrument against an open sale invoice", () => {
+  test("a held unlinked cheque cannot be replaced once the customer owes a sale invoice; the held cheque is left as it was", async () => {
+    const s = await seedDealer("repl");
+    const chequeId = await s.asUser.mutation(api.collections.registerCheque, {
+      orgId: s.orgId, customerId: s.customerId, bank: "Bank", chequeNumber: "CH-1", chequeDate: Date.now(), amount: 100,
+    });
+    const replace = (n: string) =>
+      s.asUser.mutation(api.collections.replaceCheque, {
+        orgId: s.orgId, chequeId, bank: "Bank", chequeNumber: n, chequeDate: Date.now(), amount: 100,
+      });
+    await s.t.run(async (ctx) => {
+      const now = Date.now();
+      await ctx.db.insert("receivableDocuments", {
+        orgId: s.orgId, documentType: "INVOICE", documentNumber: `INV-${crypto.randomUUID()}`, payerType: "CUSTOMER", customerId: s.customerId,
+        sourceType: "sales", sourceId: `legacy-${crypto.randomUUID()}`, originalAmountMinor: jod(20_000), currency: "JOD", scale: 3,
+        issueDate: now, dueDate: now, status: "OPEN", createdAt: now, createdBy: s.userId,
+      });
+    });
+    const refusal = await refusalDataOf(replace("CH-2"));
+    expect(refusal?.code).toBe("UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED");
+    const cheques = await s.t.run(async (ctx) => (await ctx.db.query("postDatedCheques").collect()).map((c) => c.status));
+    expect(cheques).toEqual(["HELD"]);
   });
 });
