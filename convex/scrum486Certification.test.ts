@@ -609,7 +609,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const financeReceivable = () => s.t.run((ctx) => ctx.db.query("receivableDocuments")
       .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
         .eq("sourceType", "finance_application").eq("sourceId", applicationId)).unique());
-    const bankBalance = async () => (await s.owner.as.query(api.bankAccounts.getBookBalance, { orgId: s.orgId })).balanceMinor;
+    const bankBalance = async () => (await s.owner.as.query(api.bankAccounts.getBookBalance, { orgId: s.orgId }))?.balanceMinor;
 
     // Opening facts after the receipt: the financier paid 12,500,000 into the named bank.
     expect(await bankBalance()).toBe(12_500_000);
