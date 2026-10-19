@@ -46,6 +46,11 @@ const RETAINED_BY_DESIGN: Record<string, string> = {
   // somebody had just chosen to empty. Retained, the dangling pointer makes the
   // next bootstrap REFUSE and say so, which is the fail-closed direction.
   e2ePreviewBootstrap: "a deployment-level E2E preview attestation, not tenant data",
+  // SCRUM-807. The retained business record of the weekly proof email: which
+  // dealer was sent which frozen report, and what the provider answered. Run
+  // history is kept whole (owner ruling: no history deletion); the delivery
+  // rows are the audit trail of an email that left the platform.
+  marketplaceWeeklyReportDeliveries: "weekly proof email send history, retained on purpose (SCRUM-807)",
 };
 
 /**
