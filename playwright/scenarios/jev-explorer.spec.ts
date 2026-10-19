@@ -26,7 +26,9 @@ import { isCommitActionName } from "./jevExplorerActions";
  * TypeSafe (Codex AF-430-03).
  */
 
-const PRODUCTION_DEPLOYMENT = "kindly-hound-172";
+// `clever-mockingbird-719` is the live production deployment. `kindly-hound-172`
+// is the earlier one and stays refused.
+const PRODUCTION_DEPLOYMENTS: readonly string[] = ["clever-mockingbird-719", "kindly-hound-172"];
 const STEPS = Number(process.env.JEV_EXPLORER_STEPS ?? 40);
 const SEED = Number(process.env.JEV_EXPLORER_SEED ?? Date.now() % 100_000);
 
@@ -263,7 +265,7 @@ test.describe("Jev explorer (advisory)", () => {
     const host = new URL(baseURL ?? "http://localhost:3000").hostname;
     test.skip(!["localhost", "127.0.0.1"].includes(host), "Explorer runs against a local app only.");
     test.skip(
-      (process.env.NEXT_PUBLIC_CONVEX_URL ?? "").includes(PRODUCTION_DEPLOYMENT),
+      PRODUCTION_DEPLOYMENTS.some((name) => (process.env.NEXT_PUBLIC_CONVEX_URL ?? "").includes(name)),
       "Explorer never runs against the production backend.",
     );
 
@@ -303,7 +305,7 @@ test.describe("Jev explorer (advisory)", () => {
     const served = sockets.filter((u) => u.includes(".convex.cloud")).map((u) => convexDeploymentOf(u) ?? u);
     test.skip(served.length === 0, "Could not observe which backend the served app uses; not exploring.");
     test.skip(
-      served.some((d) => d === PRODUCTION_DEPLOYMENT || d !== expectedDeployment),
+      served.some((d) => PRODUCTION_DEPLOYMENTS.includes(d) || d !== expectedDeployment),
       `The served app talks to ${[...new Set(served)].join(", ")}, not the preview ${expectedDeployment}.`,
     );
 

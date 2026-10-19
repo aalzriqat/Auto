@@ -12,7 +12,9 @@ import { expect, type Page } from "@playwright/test";
  * it (Codex AF-430-03).
  */
 
-export const PRODUCTION_DEPLOYMENT = "kindly-hound-172";
+// `clever-mockingbird-719` is the live production deployment. `kindly-hound-172`
+// is the earlier one and stays refused.
+export const PRODUCTION_DEPLOYMENTS: readonly string[] = ["clever-mockingbird-719", "kindly-hound-172"];
 
 /**
  * Runs the bootstrap's own assertExistingE2EPreview, with its own argv checks
@@ -95,7 +97,7 @@ export async function attest(
 ): Promise<{ refusal: string; orgId?: undefined } | { refusal?: undefined; orgId: string }> {
   const app = new URL(baseURL ?? "http://localhost:3000");
   if (!["localhost", "127.0.0.1"].includes(app.hostname)) return { refusal: "Form explorer runs against a local app only." };
-  if ((process.env.NEXT_PUBLIC_CONVEX_URL ?? "").includes(PRODUCTION_DEPLOYMENT)) {
+  if (PRODUCTION_DEPLOYMENTS.some((name) => (process.env.NEXT_PUBLIC_CONVEX_URL ?? "").includes(name))) {
     return { refusal: "Form explorer never runs against the production backend." };
   }
   const expected = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL);
@@ -114,7 +116,7 @@ export async function attest(
     .catch(() => undefined);
   const served = servedDeployments(sockets);
   if (served.length === 0) return { refusal: "Could not observe which backend the served app uses; not exploring." };
-  if (served.some((d) => d === PRODUCTION_DEPLOYMENT || d !== expected)) {
+  if (served.some((d) => PRODUCTION_DEPLOYMENTS.includes(d) || d !== expected)) {
     return { refusal: `The served app talks to ${[...new Set(served)].join(", ")}, not the preview ${expected}.` };
   }
   return { orgId: attested.orgId };

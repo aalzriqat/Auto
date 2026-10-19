@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { isEgressSinkActive, PRODUCTION_DEPLOYMENT_NAME, sinkEgress } from "./egressSink";
+import { isEgressSinkActive, PRODUCTION_DEPLOYMENT_NAMES, sinkEgress } from "./egressSink";
 
 const PREVIEW_URL = "https://combative-gerbil-860.convex.cloud";
-const PROD_URL = `https://${PRODUCTION_DEPLOYMENT_NAME}.convex.cloud`;
+const PROD_URL = "https://clever-mockingbird-719.convex.cloud";
 
 function deployment(cls: string | undefined, url: string | undefined) {
   vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", cls);
@@ -25,6 +25,14 @@ describe("isEgressSinkActive (SCRUM-639)", () => {
     expect(isEgressSinkActive()).toBe(false);
     deployment(undefined, PROD_URL);
     expect(isEgressSinkActive()).toBe(false);
+  });
+
+  test("both the live and the earlier production deployment are protected", () => {
+    expect(PRODUCTION_DEPLOYMENT_NAMES).toEqual(["clever-mockingbird-719", "kindly-hound-172"]);
+    for (const name of PRODUCTION_DEPLOYMENT_NAMES) {
+      deployment("preview", `https://${name}.convex.cloud`);
+      expect(isEgressSinkActive(), name).toBe(false);
+    }
   });
 
   test("no class, or any other value, delivers as today", () => {
