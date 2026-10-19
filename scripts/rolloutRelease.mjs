@@ -281,7 +281,9 @@ for (const org of before.orgs) {
   for (;;) {
     // Hard stops: the shared deadline and the page cap end the whole phase.
     if (Date.now() - rolloutStartedAt > TIMEOUT_MS) {
-      bankSummary = `Stopped at ${ref}: ${bank.ready} organizations rebuilt before the deadline.`;
+      bankSummary =
+        `Stopped at ${ref}: ${bank.ready} organizations rebuilt before the deadline.` +
+        (bank.refused.length > 0 ? `\n\n${bank.refused.map((line) => `- ${line}`).join("\n")}` : "");
       fail(`Production is DEPLOYED, but the bank balance rebuild did not finish within the deadline. A re-run resumes it.`);
     }
     if (pages >= MAX_BANK_PAGES_PER_ORG) {
@@ -340,6 +342,8 @@ for (const p of lastVerdict.anomalies) {
 }
 
 if (lastOutcome === "verified" && bank.refused.length > 0) {
+  // The heading must not read "verified" on a run that fails.
+  lastOutcome = "failed";
   fail(
     `Production is DEPLOYED and the Social Inbox is verified, but ${bank.refused.length} organization(s) ` +
       `refused the bank balance rebuild; their bank balances stay unavailable. A re-run retries them.`
