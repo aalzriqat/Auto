@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
@@ -78,6 +78,7 @@ function CorrectionForm({
   const tx = t as (key: string) => string;
   const formatMoney = useCurrencyFormatterInCurrency();
   const correct = useMutation(api.vehicles.correctAcquisitionCost);
+  const reverse = useMutation(api.vehicles.reverseCostCorrection);
   const context = useQuery(
     api.vehicles.getAcquisitionCostCorrectionContext,
     activeOrgId ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
@@ -89,6 +90,10 @@ function CorrectionForm({
   const [bankAccountId, setBankAccountId] = useState<Id<"bankAccounts"> | undefined>();
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  // SCRUM-716: one reversal intent per open row, so a double click or a retry replays, never repeats.
+  const [reversingId, setReversingId] = useState<Id<"vehicleCostCorrections"> | undefined>();
+  const [reverseReason, setReverseReason] = useState("");
+  const reverseCommandId = useRef<string | undefined>(undefined);
 
   const allowedTypes = (context?.allowedTypes ?? []) as CorrectionType[];
   const currentCost = context?.currentCost ?? 0;
@@ -117,6 +122,28 @@ function CorrectionForm({
     !unsupportedReceivedCheque &&
     (!needsBank || Boolean(selectedBank)) &&
     reason.trim().length > 0;
+
+  const submitReverse = async () => {
+    if (!activeOrgId || !reversingId || busy || reverseReason.trim().length === 0) return;
+    reverseCommandId.current ??= crypto.randomUUID();
+    setBusy(true);
+    try {
+      await reverse({
+        orgId: activeOrgId,
+        correctionId: reversingId,
+        reason: reverseReason.trim(),
+        commandId: reverseCommandId.current,
+      });
+      toast.success(tx("CostCorrectionReverseDone"));
+      setReversingId(undefined);
+      setReverseReason("");
+      reverseCommandId.current = undefined;
+    } catch (error) {
+      toast.error(getLocalizedErrorMessage(error, tx));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const submit = async () => {
     if (!activeOrgId || !canSubmit || type === undefined) return;
@@ -300,17 +327,56 @@ function CorrectionForm({
                 <p className="text-sm font-medium">{tx("CostCorrectionHistory")}</p>
                 <ul className="divide-y rounded-md border text-xs">
                   {(context.corrections ?? []).map((row) => (
-                    <li
-                      key={`${row.createdAt}-${row.newCost}`}
-                      className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 px-2 py-1.5"
-                    >
-                      <span className="tabular-nums" dir="ltr">
-                        {row.previousCost.toLocaleString()} → {row.newCost.toLocaleString()}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-muted-foreground">{row.reason}</span>
-                      <span className="text-muted-foreground tabular-nums">
-                        {format(new Date(row.createdAt), "yyyy-MM-dd")}
-                      </span>
+                    <li key={row.id} className="space-y-1.5 px-2 py-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+                        <span className="tabular-nums" dir="ltr">
+                          {row.previousCost.toLocaleString()} → {row.newCost.toLocaleString()}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-muted-foreground">{row.reason}</span>
+                        <span className="text-muted-foreground tabular-nums">
+                          {format(new Date(row.createdAt), "yyyy-MM-dd")}
+                        </span>
+                        {row.status === "REVERSED" && (
+                          <span className="text-muted-foreground">{tx("CostCorrectionReversed")}</span>
+                        )}
+                        {row.canReverse && reversingId !== row.id && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => {
+                              // A new reversal intent gets a new command id; one id never spans two corrections.
+                              reverseCommandId.current = undefined;
+                              setReversingId(row.id);
+                            }}
+                          >
+                            {tx("CostCorrectionReverse")}
+                          </Button>
+                        )}
+                      </div>
+                      {reversingId === row.id && (
+                        <div className="space-y-1.5">
+                          <Label htmlFor="cost-correction-reverse-reason">{tx("CostCorrectionReverseReason")}</Label>
+                          <Textarea
+                            id="cost-correction-reverse-reason"
+                            rows={2}
+                            value={reverseReason}
+                            onChange={(event) => setReverseReason(event.target.value)}
+                          />
+                          <div className="flex gap-2">
+                            <Button variant="outline" size="sm" onClick={() => setReversingId(undefined)} disabled={busy}>
+                              {tx("Cancel")}
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => void submitReverse()}
+                              disabled={busy || reverseReason.trim().length === 0}
+                            >
+                              {busy ? tx("CostCorrectionReversing") : tx("CostCorrectionReverseConfirm")}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>

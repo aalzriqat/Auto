@@ -361,6 +361,22 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This vehicle has already been sold, so its cost can no longer be corrected here. Ask your accountant for a manual journal entry.",
     "تم بيع هذه المركبة، لذلك لم يعد بالإمكان تصحيح تكلفتها من هنا. اطلب من المحاسب إجراء قيد يدوي.",
   ],
+  ServerError_COST_CORRECTION_ALREADY_REVERSED: [
+    "This correction has already been reversed. Post a new correction if the cost is still wrong.",
+    "تم عكس هذا التصحيح مسبقاً. سجّل تصحيحاً جديداً إذا كانت التكلفة لا تزال خاطئة.",
+  ],
+  ServerError_COST_CORRECTION_REVERSAL_NOT_LATEST: [
+    "Only the most recent correction on a vehicle can be reversed, and only while the vehicle's cost still matches it. Reverse the later correction first.",
+    "يمكن عكس أحدث تصحيح فقط على المركبة، وطالما بقيت تكلفتها مطابقة له. اعكس التصحيح الأحدث أولاً.",
+  ],
+  ServerError_COST_CORRECTION_COMMAND_REUSED: [
+    "This reversal request was already used for a different correction or reason. Start the reversal again.",
+    "تم استخدام طلب العكس هذا مسبقاً لتصحيح أو سبب مختلف. ابدأ عملية العكس من جديد.",
+  ],
+  ServerError_COST_CORRECTION_REVERSAL_CASHBOOK_MISSING: [
+    "The cash record for this correction is missing or does not match, so it can't be reversed automatically. Contact finance. Nothing has been changed.",
+    "سجل النقد الخاص بهذا التصحيح غير موجود أو لا يطابقه، لذلك لا يمكن عكسه تلقائياً. تواصل مع المحاسبة. لم يتم تغيير أي شيء.",
+  ],
   ServerError_COST_CORRECTION_NOT_POSTED: [
     "This vehicle's purchase hasn't been posted to accounting yet, so its cost can't be corrected.",
     "لم يتم ترحيل شراء هذه المركبة إلى المحاسبة بعد، لذلك لا يمكن تصحيح تكلفتها.",

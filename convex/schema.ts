@@ -1332,7 +1332,20 @@ export default defineSchema({
     previousAmountDue: v.optional(v.number()),
     correctedBy: v.id("users"),
     createdAt: v.number(),
-  }).index("by_org_vehicle", ["orgId", "vehicleId"]),
+    // SCRUM-716. Absent means APPLIED, so every existing row reads correctly with no backfill. A
+    // REVERSED row is never edited again; a fresh correction posts as a new row.
+    status: v.optional(v.union(v.literal("APPLIED"), v.literal("REVERSED"))),
+    reversedBy: v.optional(v.id("users")),
+    reversedAt: v.optional(v.number()),
+    reversalReason: v.optional(v.string()),
+    // Idempotency key of the reversal command: a replay returns the stored result.
+    reversalCommandId: v.optional(v.string()),
+    // The mirror journal is found through its accounting event, key `vehicle_cost_correction_reversal_<id>`;
+    // no journalEntries reference is stored here, which would add an org-reset ordering edge.
+  })
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    // SCRUM-716: a reversal command id is unique per organization, never reusable across corrections.
+    .index("by_org_reversalCommand", ["orgId", "reversalCommandId"]),
 
   /**
    * One row per historical consigned sale restated from principal to agent
@@ -5394,7 +5407,9 @@ export default defineSchema({
     // Searching the vehicle range and filtering on category meant an edit to
     // either field moved a row out of reach while it kept its `saleId`, so a
     // cancelled deal could leave live revenue behind — SCRUM-212-R2.
-    .index("by_org_sale", ["orgId", "saleId"]),
+    .index("by_org_sale", ["orgId", "saleId"])
+    // SCRUM-716: exact lookup of a correction's cashbook row by its idempotency key, never a vehicle scan.
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
 
   fixedAssets: defineTable({
     orgId: v.id("organizations"),
