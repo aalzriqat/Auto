@@ -55,7 +55,10 @@ describe("RBAC Permissions Configuration", () => {
   // accountant moves money through the dealership. These are the permissions the
   // money doors check — recording a deposit or reservation deposit
   // (CONFIRM_FINANCE_DISBURSEMENT), collection receipts and payments
-  // (MANAGE_FINANCE), and refund/release approvals (APPROVE_REQUESTS). A
+  // (MANAGE_FINANCE), refund/release approvals (APPROVE_REQUESTS), cancelling a
+  // closed deal (CANCEL_CLOSED_DEAL) and supplier settlement
+  // (MANAGE_SUPPLIER_SETTLEMENT). Custom roles are outside this pin: for them the
+  // control is the permission each door checks (see salesTemplateMoneyDoors.test.ts). A
   // salesperson REQUESTS a deposit (`depositRequests.request`); this pins that no
   // default template outside the allowlist can record the money itself.
   it("only OWNER, MANAGER and the accountant templates hold a money-moving permission", () => {
@@ -63,6 +66,8 @@ describe("RBAC Permissions Configuration", () => {
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
       PERMISSIONS.MANAGE_FINANCE,
       PERMISSIONS.APPROVE_REQUESTS,
+      PERMISSIONS.CANCEL_CLOSED_DEAL,
+      PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
     ];
     const holders = DEFAULT_ROLE_TEMPLATES.filter((role) =>
       MONEY_MOVING.some((permission) => role.permissions.includes(permission))
