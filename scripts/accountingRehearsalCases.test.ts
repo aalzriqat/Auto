@@ -387,10 +387,6 @@ type Defects = {
   cashForfeitDeletesPriorCollection?: boolean;
   /** Unrelated three-decimal profit must not perturb the forfeiture delta. */
   cashForfeitUnrelatedFractionalProfit?: boolean;
-  /** A returned cheque ERASES its clearing instead of reversing it. */
-  eraseOnChequeReturn?: boolean;
-  /** A returned cheque posts nothing at all — the books still say money arrived. */
-  silentChequeReturn?: boolean;
   // ── the owner-proxy's evidence-floor closure (2026-09-11): the false-pass shapes it named ──
   /** The org's currency is one the product does not denominate — expectations cannot be derived. */
   orgCurrencyUnknown?: boolean;
@@ -416,8 +412,6 @@ type Defects = {
   reversalUnlinked?: boolean;
   /** The reversal is for HALF the clearing — linked, and wrong. */
   reversalWrongAmount?: boolean;
-  /** The cheque bounces, the GL reverses, and the receivable still reads PAID. */
-  receivableNotReopened?: boolean;
   /** A replayed create hands back the SAME id and posts its footprint AGAIN. */
   doubleFootprintOnReplay?: boolean;
   /** The same, for createReceivable / createInstallmentPlan ONLY — the six other steps stay healthy (Sonnet MAX R4-A1). */
@@ -459,14 +453,14 @@ type Defects = {
   bankIdentityDroppedFromJournal?: boolean;
   /** RV1: a cleared customer cheque loses its named destination bank. */
   chequeClearingBankDropped?: boolean;
-  /** RV1: a cheque reversal drops the clearing bank. */
+  /** A reversal of a cleared cheque's collection drops the clearing bank. */
   chequeReversalBankDropped?: boolean;
-  /** RV1: a returned-cheque fee loses the bank that paid it. */
-  chequeFeeBankDropped?: boolean;
-  /** RV1: the fee credits the clearing bank instead of its distinct paying bank. */
-  chequeFeeBankUsesClearingBank?: boolean;
-  /** RV1: a returned-cheque fee debits the wrong expense account. */
-  chequeFeeWrongAccount?: boolean;
+  /** RV1: the blocked cleared-cheque return is ACCEPTED and reverses the clearing. */
+  chequeReturnAccepted?: boolean;
+  /** RV1: the return is refused, but only after it already marked the cheque RETURNED. */
+  chequeReturnWritesThenRefuses?: boolean;
+  /** RV1: the return is refused with a generic code instead of the pilot containment code. */
+  chequeReturnWrongRefusal?: boolean;
   /** Bank contract: a short receipt that names a valid bank is accepted. */
   bankShortReceiptAccepted?: boolean;
   /** Bank contract: the malformed-id contract probe is accepted. */
@@ -1312,36 +1306,19 @@ function makeBackend(defects: Defects = {}) {
             return { ok: false as const, error: "Select an active bank account to pay the return fee." };
           }
         }
-        const made = replayableCreate("ret", args, true);
-        if (made) return made;
-        if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("ret"));
         const cheque = cheques.get(String(args.chequeId));
         if (!cheque) return { ok: false as const, error: "Cheque not found" };
-        if (defects.eraseOnChequeReturn) {
-          // Balances perfectly, and destroys the record that it ever happened.
-          const original = events.find((e) => e._id === cheque.clearingEventId)!;
-          journalEntries.splice(journalEntries.findIndex((j) => j._id === original.journalEntryId), 1);
-          events.splice(events.indexOf(original), 1);
-          cheques.delete(String(args.chequeId));
+        if (defects.chequeReturnAccepted) {
+          cheque.status = "RETURNED";
+          reverse(cheque.clearingEventId);
           return { ok: true as const, value: null };
         }
-        cheque.status = "RETURNED";
-        if (!defects.silentChequeReturn) reverse(cheque.clearingEventId);
-        if (!defects.receivableNotReopened) {
-          const r = receivables.get(cheque.receivableId);
-          if (r) {
-            r.outstandingAmount += cheque.amount;
-            r.status = r.outstandingAmount >= r.originalAmount ? "OPEN" : "PARTIALLY_PAID";
-          }
-        }
-        if (Number(args.bankFeeMinor ?? 0) > 0) {
-          post("EXPENSE_POSTED", "expenses", id("expense"), [
-            { key: defects.chequeFeeWrongAccount ? "GENERAL_EXPENSE" : "PROFESSIONAL_FEES_EXPENSE", debitMinor: Number(args.bankFeeMinor) },
-            { key: "BANK_ACCOUNT", creditMinor: Number(args.bankFeeMinor), bankAccountId: defects.chequeFeeBankDropped
-              ? undefined : defects.chequeFeeBankUsesClearingBank ? cheque.clearingBankAccountId : String(args.bankFeeBankAccountId) },
-          ]);
-        }
-        return { ok: true as const, value: null };
+        if (defects.chequeReturnWritesThenRefuses) cheque.status = "RETURNED";
+        return {
+          ok: false as const,
+          error: "Returning a cheque that has already cleared is not available during the pilot. Nothing has been changed.",
+          errorCode: defects.chequeReturnWrongRefusal ? "CHEQUE_NOT_CLEARED" : "CLEARED_CHEQUE_RETURN_PILOT_DISABLED",
+        };
       }
       case "collections:listCheques":
         return { ok: true as const, value: { page: [...cheques.values()], isDone: true, continueCursor: null } };
@@ -2665,16 +2642,22 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     expect(String(results.find((r) => r.id === "RC1")?.detail)).toMatch(/expected 500000, got 300000/);
   });
 
-  test("RV1 catches a cheque return that ERASES its clearing", async () => {
-    // Balances perfectly and destroys the history. ACC-3: a reversal ADDS.
-    const results = await runAgainst({ eraseOnChequeReturn: true });
+  test("RV1 catches a cleared-cheque return that the pilot should have refused but ACCEPTED", async () => {
+    const results = await runAgainst({ chequeReturnAccepted: true });
     expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/ACCEPTED/);
   });
 
-  test("RV1 catches a cheque that bounces with no accounting effect at all", async () => {
-    const results = await runAgainst({ silentChequeReturn: true });
+  test("RV1 catches a refused return that already wrote before refusing", async () => {
+    const results = await runAgainst({ chequeReturnWritesThenRefuses: true });
     expect(statusOf(results, "RV1")).toBe("FAIL");
-    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/expected REVERSED, got POSTED/);
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/cheque status after the refused return: expected CLEARED, got RETURNED/);
+  });
+
+  test("RV1 catches a refusal that carries a generic code instead of the pilot containment code", async () => {
+    const results = await runAgainst({ chequeReturnWrongRefusal: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/refusal code: expected CLEARED_CHEQUE_RETURN_PILOT_DISABLED, got CHEQUE_NOT_CLEARED/);
   });
 
   test("SR1 catches a consigned car posted as dealership stock", async () => {
@@ -3056,34 +3039,6 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ applicationPostsNothing: true });
     expect(statusOf(results, "RC1")).toBe("FAIL");
     expect(detail(results, "RC1")).toMatch(/RECEIPT_CREDIT_APPLIED events .* expected 1, got 0/);
-  });
-
-  // ── RV1: exact reopening, linked and opposite ──
-  test("RV1 catches a reversal that nothing links to the clearing it reverses", async () => {
-    const results = await runAgainst({ reversalUnlinked: true });
-    expect(statusOf(results, "RV1")).toBe("FAIL");
-    expect(detail(results, "RV1")).toMatch(/names no reversing/);
-  });
-  test("RV1 catches a linked reversal for the wrong amount", async () => {
-    const results = await runAgainst({ reversalWrongAmount: true });
-    expect(statusOf(results, "RV1")).toBe("FAIL");
-    expect(detail(results, "RV1")).toMatch(/the cheque-return reversal: journal lines are not exactly/);
-  });
-  test("RV1 catches a bounced cheque whose receivable still reads PAID", async () => {
-    const results = await runAgainst({ receivableNotReopened: true });
-    expect(statusOf(results, "RV1")).toBe("FAIL");
-    expect(detail(results, "RV1")).toMatch(/outstanding on the receivable after the cheque bounced: expected 1200, got 0/);
-  });
-  test.each([
-    ["clearing bank", { chequeClearingBankDropped: true }, /cheque clearing's physical bank/],
-    ["reversal bank", { chequeReversalBankDropped: true }, /cheque reversal's original physical bank/],
-    ["fee bank", { chequeFeeBankDropped: true }, /bank that paid the cheque return fee/],
-    ["fee bank choice", { chequeFeeBankUsesClearingBank: true }, /bank that paid the cheque return fee/],
-    ["fee account", { chequeFeeWrongAccount: true }, /cheque return fee: journal lines are not exactly/],
-  ] as const)("RV1 catches a wrong %s", async (_label, defect, refusal) => {
-    const results = await runAgainst(defect);
-    expect(statusOf(results, "RV1")).toBe("FAIL");
-    expect(detail(results, "RV1")).toMatch(refusal);
   });
 
   // ── RT2: the eight named commands ──
