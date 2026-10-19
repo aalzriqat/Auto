@@ -37,5 +37,5 @@ For a quick ballpark the user asked for, one run is enough. Still check question
 ## AutoFlow additions
 
 - For Convex I/O and cost claims, tie the number to its measured source: function calls, documents and bytes read and written per call, from the Convex dashboard, usage export or a logged run. Count read, writer and backfill costs separately. A claim read off the code is a guess, not a measurement.
-- Say which deployment the number came from. `focused-starfish-265` is a test deployment that Convex usage labels "Prod". Real production is `clever-mockingbird-719`.
+- Say which deployment the number came from. A test deployment that uses a production-type key shows as "Prod" in Convex usage, so confirm the deployment name against the owner's current statement in Jira or the project memory, not the label.
 - A benchmark run is never evidence that money or permission behavior is correct. Pair it with the backend test that covers that behavior.

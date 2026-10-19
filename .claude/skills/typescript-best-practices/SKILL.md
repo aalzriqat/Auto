@@ -8,7 +8,7 @@ paths: ["**/*.ts", "**/*.tsx"]
 
 > Adapted from pstack by Lauren Tan (MIT), cursor/plugins@d457567. See ../PSTACK-LICENSE and ../README.md.
 
-Apply the type-system section of the `engineering-principles` skill first.
+Apply the "Make illegal states unrepresentable" rule in the `engineering-principles` skill first.
 
 Inside `convex/`, `convex/_generated/ai/guidelines.md` wins on any conflict (validators on every function, `Id<"table">` types, `QueryCtx`/`MutationCtx`/`ActionCtx`, no `any` for ctx).
 

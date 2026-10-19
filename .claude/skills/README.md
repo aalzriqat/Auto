@@ -10,7 +10,7 @@ Shared skills for every agent session in this repository. Claude Code loads `.cl
 
 A skill never lowers a gate. In particular:
 
-- Money-touching changes still need the two-seat review on the final head SHA (Seat 1: Opus 5.5 plus `/simplify` in a session separate from the implementer; Seat 2: Codex sol6 at medium effort or lower). Any subagent or "second opinion" a skill suggests is advisory and is not a seat.
+- Money-touching changes still need the two-seat review (defined in the project instructions; if you do not have them, ask before merging any money change) on the final head SHA (Seat 1: Opus 5.5 plus `/simplify` in a session separate from the implementer; Seat 2: Codex sol6 at medium effort or lower). Any subagent or "second opinion" a skill suggests is advisory and is not a seat.
 - Never write `review-evidence/*.json`. Never claim a human review.
 - The Production deploy approval in GitHub stays a human action.
 - Skills that ask a person a question are answered by the decision rule in the project instructions (consult Codex sol6, medium effort at most). Codex quota is low, so skills do not trigger extra Codex runs.
@@ -34,7 +34,7 @@ The pilot bug hunters (SCRUM-760) are not skills. Scenarios they find become bac
 
 pstack has 56 skills. These were read and left out on purpose:
 
-- `poteto-mode` and its 23 playbooks, `figure-it-out`, `orchestrate`, `autopilot-*`, `shipping`, `babysit`: tied to Cursor's subagent and model setup (Grok, `pstack-models.mdc`), and their autonomy rules (arm merges, land stacks, "never block on the human") conflict with the two-seat review, the deploy gate and the decision rule here.
+- `poteto-mode` and its 23 playbooks, `figure-it-out`, the `orchestrate`, `autopilot-*`, `shipping` and `babysit` playbooks: tied to Cursor's subagent and model setup (Grok, `pstack-models.mdc`), and their autonomy rules (arm merges, land stacks, "never block on the human") conflict with the two-seat review, the deploy gate and the decision rule here.
 - `architect`, `arena`, `swarm`, `interrogate`, `how`, `why`, `teach`, `recall`, `reflect`, `no-comments` with the `comment-sicko` agent: need Cursor's Task tool and model slugs, and Slack, Datadog and Linear sources we do not use. `interrogate` is a multi-model review panel, which would duplicate or blur the two-seat review. The comment-deletion rules are not this repository's convention.
 - `setup-pstack` writes to `~/.claude/rules`, and `automate-me` edits personal skills. Both change the user's environment.
 - `make-bot-ui` pipes a downloaded installer into `sudo sh` and joins the machine to a Tailscale network. Rejected on security grounds.
