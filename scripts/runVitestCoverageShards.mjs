@@ -153,9 +153,12 @@ function runVitest(args, diagnosticFiles = [], unit = undefined) {
 // together instead of interleaving with the processes running beside it.
 function runVitestBuffered(header, args, unit) {
   const started = performance.now();
+  // Announced at once, so a batch that hangs is still named in the log.
+  process.stdout.write(`Started: ${header}\n`);
   return new Promise((resolve) => {
     const output = [];
     let settled = false;
+    let launchError;
     const finish = (result) => {
       if (settled) return;
       settled = true;
@@ -163,15 +166,26 @@ function runVitestBuffered(header, args, unit) {
       process.stdout.write(`${header}\n${Buffer.concat(output).toString("utf8")}`);
       resolve(result);
     };
-    const child = spawn(process.execPath, [vitestBin, ...args], {
-      cwd: root,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let child;
+    try {
+      child = spawn(process.execPath, [vitestBin, ...args], {
+        cwd: root,
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      finish({ status: null, signal: null, error });
+      return;
+    }
     child.stdout.on("data", (chunk) => output.push(chunk));
     child.stderr.on("data", (chunk) => output.push(chunk));
-    child.on("error", (error) => finish({ status: null, signal: null, error }));
-    child.on("close", (status, signal) => finish({ status, signal }));
+    // A child that never started emits no "close"; one that did is only settled
+    // by "close", so no result is reported while it may still be running.
+    child.on("error", (error) => {
+      launchError ??= error;
+      if (child.pid === undefined) finish({ status: null, signal: null, error });
+    });
+    child.on("close", (status, signal) => finish({ status, signal, error: launchError }));
   });
 }
 
@@ -251,6 +265,26 @@ const workloadPath = path.resolve(root, process.env.AUTOFLOW_COVERAGE_WORKLOAD ?
 const workload = JSON.parse(readFileSync(workloadPath, "utf8"));
 const fileSeconds = (file) => workload.files[file] ?? workload.defaultFileSeconds;
 
+// Every cost must be a real number: a NaN compares false both ways, so a value
+// like "20s" would put its file in no batch at all, and the merge gate, built
+// from the same plan, would still call the smaller blob set complete.
+function assertWorkloadIsNumeric() {
+  const seconds = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+  const named = [
+    ["defaultFileSeconds", workload.defaultFileSeconds],
+    ["isolateAtSeconds", workload.isolateAtSeconds],
+    ["processSeconds.unit", workload.processSeconds?.unit],
+    ["processSeconds.sonar", workload.processSeconds?.sonar],
+    ...Object.entries(workload.files ?? {}).map(([file, value]) => [`files["${file}"]`, value]),
+  ];
+  const bad = named.filter(([, value]) => !seconds(value)).map(([name]) => name);
+  if (workload.files === null || typeof workload.files !== "object" || Array.isArray(workload.files)) bad.unshift("files");
+  if (bad.length > 0) {
+    throw new Error(`${path.relative(root, workloadPath)} needs non-negative numbers of seconds for: ${bad.join(", ")}`);
+  }
+}
+assertWorkloadIsNumeric();
+
 function assertWorkloadNamesRealFiles(testFiles) {
   // A stale entry would silently stop isolating whatever replaced it. Only the
   // real repository census is checked; synthetic discovery roots in the runner's
@@ -267,11 +301,19 @@ function assertWorkloadNamesRealFiles(testFiles) {
 // rest keep the original sorted, fixed-size batching. Composition depends only
 // on the census and the committed workload file, never on the slice.
 function batchesOf(files, batchSize) {
-  const isolated = files.filter((file) => fileSeconds(file) >= workload.isolateAtSeconds);
-  const rest = files.filter((file) => fileSeconds(file) < workload.isolateAtSeconds);
+  // One predicate and its negation, so every file lands in exactly one list.
+  const heavy = (file) => fileSeconds(file) >= workload.isolateAtSeconds;
+  const isolated = files.filter(heavy);
+  const rest = files.filter((file) => !heavy(file));
   const batches = isolated.map((file) => [file]);
   for (let offset = 0; offset < rest.length; offset += batchSize) {
     batches.push(rest.slice(offset, offset + batchSize));
+  }
+  // The batches are the census, each file once: anything else is a planner bug
+  // that the merge's blob-set gate could not see.
+  const planned = batches.flat();
+  if (planned.length !== files.length || [...planned].sort().join("\n") !== [...files].sort().join("\n")) {
+    throw new Error("Coverage batches do not cover the census exactly once.");
   }
   return batches;
 }
@@ -352,10 +394,13 @@ const plan = slicePlan(census);
 const modeUnits = plan.units.filter((unit) => unit.mode === mode);
 
 // SCRUM-752: how many batch processes a slice runs at once. 1 (the default)
-// is the original strictly serial runner. Each process keeps --maxWorkers=1,
-// its own blob and the fixed 5.5 GiB heap ceiling. The bound is 2 because two
-// ceilings fit inside a 16 GB CI runner and a third would not: measured peaks
-// are ~1.3 GB per process, but the guarantee must hold at the ceiling.
+// is the original strictly serial runner. Each batch keeps --maxWorkers=1, its
+// own blob and the unchanged NODE_OPTIONS heap limit. That limit is a per-heap
+// ceiling, not a memory reservation: a batch is a Vitest main process plus one
+// fork worker, so even one serial batch could in principle exceed a 16 GB
+// runner. The bound of 2 rests on measurement instead: a full CI slice on a
+// 4-core / 16 GB machine peaked at 1.6 GB for one process and 2.75 GB for all
+// of them with two lanes. An out-of-memory kill still fails the slice.
 const concurrency = boundedInteger("VITEST_COVERAGE_CONCURRENCY", "1", 1, 2);
 
 

@@ -381,6 +381,24 @@ describe("runVitestCoverageShards", () => {
     expect(childBoundary.calls).toHaveLength(0);
   });
 
+  test.each([
+    ["a file cost that is not a number", (w: Record<string, unknown>) => ({ ...w, files: { ...(w.files as object), "lib/a.test.ts": "20s" } }), 'files["lib/a.test.ts"]'],
+    ["a missing isolation threshold", (w: Record<string, unknown>) => ({ ...w, isolateAtSeconds: undefined }), "isolateAtSeconds"],
+    ["a negative process cost", (w: Record<string, unknown>) => ({ ...w, processSeconds: { unit: -1, sonar: 25 } }), "processSeconds.unit"],
+    ["a files map that is a list", (w: Record<string, unknown>) => ({ ...w, files: [] }), "files"],
+  ])("a workload with %s refuses before any subprocess, instead of dropping files", async (_label, mutate, named) => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-workload-"));
+    tempDiscoveryRoots.push(directory);
+    mkdirSync(path.join(directory, "lib"));
+    writeFileSync(path.join(directory, "lib", "a.test.ts"), "");
+    const file = path.join(directory, "workload.json");
+    writeFileSync(file, JSON.stringify(mutate({ ...WORKLOAD, files: {} })));
+    await expect(
+      run("unit", { AUTOFLOW_COVERAGE_DISCOVERY_ROOT: directory, AUTOFLOW_COVERAGE_WORKLOAD: file }),
+    ).rejects.toThrow(new RegExp(`needs non-negative numbers of seconds for: .*${named.replace(/[[\]"().]/g, "\\$&")}`));
+    expect(childBoundary.calls).toHaveLength(0);
+  });
+
   test("a census file that is a substring of another refuses, because one Vitest filter would run both", async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-coverage-substring-"));
     tempDiscoveryRoots.push(directory);
@@ -795,6 +813,12 @@ describe("runVitestCoverageShards", () => {
       expect(text).not.toMatch(/child output for [^\n]+\n(?!child stderr)/);
     });
 
+    test("each overlapping batch is announced when it starts, so a hung batch is named", async () => {
+      await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
+      const started = stdout.filter((chunk) => chunk.startsWith("Started: Coverage batch "));
+      expect(started).toHaveLength(childBoundary.calls.filter((call) => call.async).length);
+    });
+
     test.each(["0", "3", "1.5", "two"])(
       "rejects an invalid concurrency (%s) before any subprocess",
       async (value) => {
@@ -817,10 +841,9 @@ describe("runVitestCoverageShards", () => {
       expect(error).toBeInstanceOf(ExitSignal);
       expect((error as ExitSignal).code).toBe(7);
       const batches = childBoundary.calls.filter((call) => call.async);
-      // The batch beside the failure was already running and finished; the
-      // failing lane started nothing more. Only the surviving lane may have
-      // started one more batch before it saw the failure.
-      expect(batches.length).toBeLessThanOrEqual(3);
+      // The batch beside the failure was already running and finished; neither
+      // lane started another one after the failure.
+      expect(batches).toHaveLength(2);
       expect(childBoundary.active).toBe(0);
       const diagnostic = rawArgs(childBoundary.calls.at(-1)!);
       expect(childBoundary.calls.at(-1)!.async).toBeUndefined();

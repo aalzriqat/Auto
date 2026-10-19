@@ -74,9 +74,10 @@ jobs:
         AUTOFLOW_COVERAGE_REPORTS_DIR: coverage-slice
         AUTOFLOW_COVERAGE_TIMINGS: coverage-timings/slice-${{ matrix.slice }}.jsonl
         # SCRUM-752: two batch processes at a time on the 4-core runner. Each
-        # keeps its own blob, coverage directory and heap ceiling; the runner
-        # refuses more than two, which is all a 16 GB runner can hold at the
-        # ceiling. Unit and Sonar still run one after the other.
+        # keeps its own blob, coverage directory and the heap limit below; the
+        # runner refuses more than two, a bound set from measured peak memory
+        # (2.75 GB for a whole slice). Unit and Sonar still run one after the
+        # other.
         VITEST_COVERAGE_CONCURRENCY: "2"
         # Coverage runs are split into bounded Vitest shards and merged before
         # threshold enforcement. Keep headroom for the final V8 coverage merge;
