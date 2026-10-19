@@ -663,6 +663,36 @@ describe("bankAccounts.getBookBalance", () => {
     expect(await asOfBalance(fx, Date.now(), BOOK_BALANCE_READ_BUDGET)).toMatchObject({ status: "OK", balanceMinor: 100_000 });
   });
 
+  test("the backfill binds duplicate control mappings to the earliest active one, and an inactive older row is ignored", async () => {
+    const fx = await seedDealer();
+    const bankA = await createBank(fx, "Bank A", true);
+    await seedBankLine(fx, { debitMinor: 100_000, bankAccountId: bankA });
+    const { bank } = await refs(fx);
+    await fx.t.run(async (ctx) => {
+      const { _id, _creationTime, ...copy } = bank;
+      void _id;
+      void _creationTime;
+      await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 1" });
+      await ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank 2" });
+    });
+
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
+    const state = await fx.t.run((ctx) => ctx.db.query("bankBalanceAggregateStates")
+      .withIndex("by_org", (q) => q.eq("orgId", fx.orgId)).unique());
+    expect(state?.controlAccountId).toBe(bank._id);
+
+    // With the earliest row inactive, the next-oldest active duplicate takes over.
+    await fx.t.run((ctx) => ctx.db.patch(bank._id, { active: false }));
+    const next = await fx.t.run(async (ctx) => (await ctx.db.query("chartOfAccounts")
+      .withIndex("by_org_systemKey", (q) => q.eq("orgId", fx.orgId).eq("systemKey", bank.systemKey))
+      .take(10)).filter((row) => row.active).sort((a, b) => a._creationTime - b._creationTime)[0]);
+    await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId });
+    const rebound = await fx.t.run((ctx) => ctx.db.query("bankBalanceAggregateStates")
+      .withIndex("by_org", (q) => q.eq("orgId", fx.orgId)).unique());
+    expect(rebound?.controlAccountId).toBe(next?._id);
+    expect(next?._id).not.toBe(bank._id);
+  });
+
   test("adopting an existing bank-control chart row includes lines posted before its system mapping", async () => {
     const fx = await seedDealer();
     const bankId = await createBank(fx, "Operating", true);

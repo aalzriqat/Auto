@@ -15,7 +15,7 @@ async function controlAccount(ctx: MutationCtx, orgId: Id<"organizations">) {
   if (mappings.length > 50) throw new Error("Bank control mapping is too large to backfill safely.");
   const active = mappings.filter((m) => m.active);
   if (active.length === 0) return null;
-  return active.reduce((oldest, row) => row._creationTime < oldest._creationTime ? row : oldest);
+  return active.reduce((oldest, row) => row._creationTime < oldest._creationTime ? row : oldest, active[0]);
 }
 
 /**
