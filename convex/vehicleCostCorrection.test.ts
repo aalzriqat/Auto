@@ -1274,6 +1274,29 @@ describe("SCRUM-716 reverseCostCorrection", () => {
     expect((await correctionRows(d, vehicleId))[0].status).toBeUndefined();
   });
 
+  test("a soft-deleted cashbook row and an oversized or blank command id are refused before any write", async () => {
+    const d = await seedDealer("r17");
+    const vehicleId = await createCashVehicle(d);
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Wrong", correctionType: "CASH_REFUND", paymentMethod: "CASH",
+    });
+    const [row] = await correctionRows(d, vehicleId);
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+    const attempt = async (commandId: string) =>
+      (await refusalOf(d.asOwner.mutation(api.vehicles.reverseCostCorrection, {
+        orgId: d.orgId, correctionId: row._id, reason: "Undo", commandId,
+      })))?.code;
+
+    expect(await attempt("x".repeat(129))).toBe("COST_CORRECTION_COMMAND_REUSED");
+    expect(await attempt("   ")).toBe("COST_CORRECTION_COMMAND_REUSED");
+    await d.t.run(async (ctx) => {
+      const refund = (await ctx.db.query("transactions").collect()).find((r) => r.idempotencyKey === `vehicle_cost_correction_${row._id}`)!;
+      await ctx.db.patch(refund._id, { isDeleted: true });
+    });
+    expect(await attempt("cmd-17")).toBe("COST_CORRECTION_REVERSAL_CASHBOOK_MISSING");
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+  });
+
   test("a stray cashbook row on a correction that wrote none refuses instead of creating cash", async () => {
     const d = await seedDealer("r16");
     const vehicleId = await createOnAccountVehicle(d, 12500);

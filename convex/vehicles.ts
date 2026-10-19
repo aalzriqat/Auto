@@ -2279,8 +2279,8 @@ export const reverseCostCorrection = mutation({
         "A reason is required to correct a vehicle's purchase cost."
       );
     }
-    if (!commandId) {
-      throwAppError(AppErrorCode.COST_CORRECTION_REASON_REQUIRED, "A command id is required to reverse a correction.");
+    if (!commandId || commandId.length > 128) {
+      throwAppError(AppErrorCode.COST_CORRECTION_COMMAND_REUSED, "This reversal request was already used for a different correction or reason. Start the reversal again.");
     }
 
     const correction = await requireOwnedRow(ctx, args.orgId, "vehicleCostCorrections", args.correctionId);
@@ -2390,6 +2390,7 @@ export const reverseCostCorrection = mutation({
     // missing, duplicated, mismatched or unexpected row refuses before anything moves.
     const cashbookConsistent = expectsCashbook
       ? cashbookRows.length === 1 &&
+        cashbookRow.isDeleted !== true &&
         cashbookRow.type === (deltaMinor < 0 ? "IN" : "OUT") &&
         toMinorUnits(cashbookRow.amount, currency) === Math.abs(deltaMinor)
       : cashbookRows.length === 0;
