@@ -656,6 +656,12 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
+    // Refused after auth and ahead of the rate limiter, validation and the idempotency claim.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
+
     const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
@@ -667,12 +673,6 @@ export const create = mutation({
     // in. The validators stay wide so a legacy row still parses; the refusal is
     // here, before any write.
     assertOperatedDealMode(args.financingType);
-
-    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
-    // Ahead of the idempotency claim, so the refusal precedes the first write.
-    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
-      refuseDepositOtherTreatment();
-    }
 
     return await runWithIdempotency(
       ctx,

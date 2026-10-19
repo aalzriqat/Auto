@@ -46,6 +46,19 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
+// SCRUM-801: counts runWithIdempotency calls (the idempotency claim is a door's first write). Passthrough otherwise.
+const idempotency = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("./utils/idempotency", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/idempotency")>();
+  return {
+    ...actual,
+    runWithIdempotency: ((...args: Parameters<typeof actual.runWithIdempotency>) => {
+      idempotency.calls += 1;
+      return actual.runWithIdempotency(...args);
+    }) as typeof actual.runWithIdempotency,
+  };
+});
+
 const MODULES = import.meta.glob("./**/*.ts");
 
 const PERMS = [
@@ -7488,6 +7501,7 @@ describe("the closing matrix c16216 requires", () => {
     const s = await seedDealership("p801finalize");
     // Taken immediately before finalizeDeal, after the deal has been built.
     let before: Awaited<ReturnType<typeof dbSnapshot>> | undefined;
+    let claimsBefore: number | undefined;
 
     // finalizeDeal is the third completion door. OTHER posts nothing and leaves
     // the liability for a manual journal, which the pilot has switched off.
@@ -7500,9 +7514,14 @@ describe("the closing matrix c16216 requires", () => {
         depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
         beforeFinalize: async () => {
           before = await dbSnapshot(s.t, Object.keys(schema.tables));
+          claimsBefore = idempotency.calls;
         },
       })
     ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    // The refusal precedes the idempotency claim, which is finalizeDeal's first write. convex-test rolls a
+    // throwing mutation back, so the snapshot below cannot see a claim written ahead of the refusal; this can.
+    expect(claimsBefore).toBeDefined();
+    expect(idempotency.calls).toBe(claimsBefore);
 
     const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
     expect(sales).toHaveLength(0);
