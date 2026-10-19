@@ -17,12 +17,6 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
-// SCRUM-760: one cell here returns a CLEARED finance-company cheque, which the narrow pilot blocks by
-// default. It exercises the behaviour that returns when the door is activated, so the block is off here.
-// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
-vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
-  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
-
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),

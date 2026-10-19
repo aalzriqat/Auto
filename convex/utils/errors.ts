@@ -121,7 +121,6 @@ export const AppErrorCode = {
   // SCRUM-760 decision B: the cleared-cheque return is blocked for the narrow pilot
   // (utils/postDeliveryDoorContainment.ts). Translated under ServerError_<code>.
   CLEARED_CHEQUE_RETURN_PILOT_DISABLED: "CLEARED_CHEQUE_RETURN_PILOT_DISABLED",
-  FINANCE_CHEQUE_RETURN_PILOT_DISABLED: "FINANCE_CHEQUE_RETURN_PILOT_DISABLED",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",

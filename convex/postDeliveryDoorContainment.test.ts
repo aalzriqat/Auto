@@ -17,7 +17,7 @@
  */
 import { describe, expect, test, vi } from "vitest";
 import {
-  G, finalizeAsOwner, insertReceiptBank, readyDeal, refusalDataOf, seedFinancedDealership,
+  insertReceiptBank, refusalDataOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import type { PostDeliverySwitchState } from "../test-utils/postDeliveryDoorSwitches";
@@ -37,7 +37,6 @@ vi.mock("./rateLimit", () => ({
 const switches = vi.hoisted(
   (): PostDeliverySwitchState => ({
     clearedChequeReturn: true,
-    financeChequeReturn: true,
   })
 );
 vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
@@ -67,7 +66,7 @@ const ALL_PERMS = [
 
 async function seed(tag: string) {
   return await seedFinancedDealership(tag, {
-    modules: MODULES, ownerPerms: ALL_PERMS, label: "S760", vinPrefix: "VIN760", actors: { Nobody: ["view:sales"] },
+    modules: MODULES, ownerPerms: ALL_PERMS, label: "S760", vinPrefix: "VIN760", actors: {},
   });
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
@@ -108,11 +107,6 @@ describe("the shipped switches are ON (unmocked pin)", () => {
       "./utils/postDeliveryDoorContainment"
     );
     expect(real.CLEARED_CHEQUE_RETURN_PILOT_DISABLED).toBe(true);
-    expect(real.FINANCE_CHEQUE_RETURN_PILOT_DISABLED).toBe(true);
-    expect(() => real.assertFinanceChequeReturnAllowed()).toThrow();
-    expect(() => real.assertFinanceChequeReturnAllowed(false)).not.toThrow();
-    expect(real.isFinanceChequeReturnDisabled()).toBe(true);
-    expect(real.isFinanceChequeReturnDisabled(false)).toBe(false);
     expect(() => real.assertClearedChequeReturnAllowed()).toThrow();
     // The pure guard passes when its switch is off, so a flipped switch is observable.
     expect(() => real.assertClearedChequeReturnAllowed(false)).not.toThrow();
@@ -127,7 +121,7 @@ describe("the shipped switches are ON (unmocked pin)", () => {
     );
     const { AppErrorCode } = await import("./utils/errors");
     const codes = Object.keys(real.POST_DELIVERY_DOOR_REFUSALS);
-    expect(codes.sort()).toEqual(["CLEARED_CHEQUE_RETURN_PILOT_DISABLED", "FINANCE_CHEQUE_RETURN_PILOT_DISABLED"]);
+    expect(codes).toEqual(["CLEARED_CHEQUE_RETURN_PILOT_DISABLED"]);
     for (const code of codes) expect(Object.values(AppErrorCode)).toContain(code);
     expect(new Set(Object.values(real.POST_DELIVERY_DOOR_REFUSALS)).size).toBe(codes.length);
   });
@@ -184,64 +178,3 @@ describe("collections.returnClearedCheque is blocked", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// applications.returnFinanceDisbursementCheque: the finance-company sibling of the cleared-cheque
-// return. It takes a CLEARED finance-company cheque to RETURNED (returnedAfterClearing), voids the
-// SETTLED payment and reverses its allocations. Own commit and own switch so it can be dropped.
-// ---------------------------------------------------------------------------------------------
-
-/** Finalized financed deal whose finance-company transfer was confirmed: its cheque is CLEARED. */
-async function deliveredDealWithClearedFinanceCheque(tag: string) {
-  const s = await seed(tag);
-  const { applicationId } = await readyDeal(s, { tender: "CHEQUE" });
-  await finalizeAsOwner(s, applicationId);
-  const bankAccountId = await insertReceiptBank(s);
-  await s.owner.as.mutation(api.applications.confirmDisbursement, {
-    orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(), bankAccountId,
-  });
-  const cheques = await s.t.run((ctx) =>
-    ctx.db.query("postDatedCheques").withIndex("by_application", (q) => q.eq("applicationId", applicationId)).collect()
-  );
-  expect(cheques.map((c) => c.status)).toEqual(["CLEARED"]);
-  return { s, applicationId, chequeId: cheques[0]._id };
-}
-
-describe("applications.returnFinanceDisbursementCheque is blocked", () => {
-  const CODE = "FINANCE_CHEQUE_RETURN_PILOT_DISABLED";
-  const giveBack = (
-    d: { s: Seeded; applicationId: Id<"financeApplications">; chequeId: Id<"postDatedCheques"> },
-    key = crypto.randomUUID()
-  ) =>
-    d.s.owner.as.mutation(api.applications.returnFinanceDisbursementCheque, {
-      orgId: d.s.orgId, applicationId: d.applicationId, chequeId: d.chequeId,
-      returnReason: "Bank returned: insufficient funds", idempotencyKey: key,
-    });
-
-  test("returning a CLEARED finance-company cheque is refused and nothing changes", async () => {
-    const d = await deliveredDealWithClearedFinanceCheque("fcReturn");
-    await expectRefusedAndUnchanged(d.s, CODE, () => giveBack(d));
-    expect((await d.s.t.run((ctx) => ctx.db.get(d.chequeId)))?.status).toBe("CLEARED");
-  });
-
-  test("a stored replay of a return done before the switch is refused too (refusal precedes the idempotency wrapper)", async () => {
-    const d = await deliveredDealWithClearedFinanceCheque("fcReplay");
-    const replayRef = crypto.randomUUID();
-    await withSwitchOff("financeChequeReturn", () => giveBack(d, replayRef));
-    await expectRefusedAndUnchanged(d.s, CODE, () => giveBack(d, replayRef));
-  });
-
-  test("a caller without the tenant permissions still gets the permission refusal, not the containment code", async () => {
-    const d = await deliveredDealWithClearedFinanceCheque("fcPerm");
-    const refusal = await refusalDataOf(d.s.actors.Nobody.as.mutation(api.applications.returnFinanceDisbursementCheque, {
-      orgId: d.s.orgId, applicationId: d.applicationId, chequeId: d.chequeId,
-      returnReason: "Bank returned", idempotencyKey: crypto.randomUUID(),
-    }));
-    expect(refusal?.code).not.toBe(CODE);
-  });
-
-  test("MUTATION ATTACK: with the switch flipped off the same return is accepted", async () => {
-    const d = await deliveredDealWithClearedFinanceCheque("fcAttack");
-    expect(await refusalDataOf(withSwitchOff("financeChequeReturn", () => giveBack(d)))).toBeNull();
-    expect((await d.s.t.run((ctx) => ctx.db.get(d.chequeId)))?.status).toBe("RETURNED");
-  });
-});

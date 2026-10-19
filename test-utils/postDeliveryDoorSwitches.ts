@@ -18,13 +18,11 @@ type Original = typeof import("../convex/utils/postDeliveryDoorContainment");
 export type PostDeliverySwitchState = {
   /** `true` = the pilot block is ON (the shipped state). */
   clearedChequeReturn: boolean;
-  financeChequeReturn: boolean;
 };
 
 /** The door open: for files that test the deferred behaviour itself. */
 export const PILOT_DOORS_OPEN: PostDeliverySwitchState = {
   clearedChequeReturn: false,
-  financeChequeReturn: false,
 };
 
 export function withPostDeliverySwitches(original: Original, state: PostDeliverySwitchState): Original {
@@ -34,11 +32,6 @@ export function withPostDeliverySwitches(original: Original, state: PostDelivery
   return {
     ...original,
     isClearedChequeReturnDisabled: () => state.clearedChequeReturn && original.isClearedChequeReturnDisabled(),
-    isFinanceChequeReturnDisabled: () => state.financeChequeReturn && original.isFinanceChequeReturnDisabled(),
-    assertFinanceChequeReturnAllowed: () =>
-      state.financeChequeReturn
-        ? original.assertFinanceChequeReturnAllowed()
-        : original.assertFinanceChequeReturnAllowed(false),
     assertClearedChequeReturnAllowed: () =>
       state.clearedChequeReturn
         ? original.assertClearedChequeReturnAllowed()

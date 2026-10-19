@@ -198,8 +198,6 @@ export async function readyDeal(
     route?: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
     /** false: no reservation deposit is held. Defaults to true. */
     deposit?: boolean;
-    /** The finance company's expected tender. Defaults to BANK_TRANSFER; CHEQUE registers one face-amount G cheque. */
-    tender?: "BANK_TRANSFER" | "CHEQUE";
   } = {}
 ) {
   const { quoteId, applicationId } = await newApplication(s, { gapMinor: opts.gapMinor });
@@ -217,15 +215,9 @@ export async function readyDeal(
     orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
   });
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
-  await s.owner.as.mutation(
-    api.applications.registerExpectedPayment,
-    opts.tender === "CHEQUE"
-      ? {
-          orgId: s.orgId, applicationId, method: "CHEQUE", expectedDate: Date.now(),
-          chequeDetails: { bank: "Arab Bank", chequeNumber: `CHQ-${applicationId}` }, faceAmount: String(G / 1_000),
-        }
-      : { orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now() }
-  );
+  await s.owner.as.mutation(api.applications.registerExpectedPayment, {
+    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+  });
   const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
     expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
     feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
