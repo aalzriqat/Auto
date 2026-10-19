@@ -3795,6 +3795,10 @@ export const cancelApplication = mutation({
         }
 
         if (app.status === "CANCELLED") {
+          // A deal that was finalized and then reversed (unwind or closed-deal cancel) had its deposit holds
+          // deliberately reinstated by the teardown, pending a refund-or-forfeit decision (SCRUM-712). A repeated
+          // cancel must not release them: only the deposit decision does.
+          if (app.finalizedSaleId !== undefined) return;
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
           await releaseRootsForApplicationQuote(ctx, {
             orgId: args.orgId,
