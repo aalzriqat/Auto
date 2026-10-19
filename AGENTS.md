@@ -74,12 +74,12 @@ Two gates now exist and must not be confused:
   `convex/utils/customerCreditPayoutContainment.ts` stay as they are until then,
   and dark helpers without a public caller stay uncalled. Those switches cover
   only the receipt and customer-credit payout doors; every other excluded
-  mutation needs its own server-side block evidence under the second bullet
-  above.
+  mutation needs its own server-side block evidence under the "blocked server-side"
+  evidence bullet.
 
 The narrowed CASH and configured FINANCED controls may be enabled for the pilot
 only once certified; that certification is part of SCRUM-760's evidence. For the
-pilot, item 1 above means the enabled scope is correct and every excluded door
+pilot, gate item 1 ("fully correct and truthful") means the enabled scope is correct and every excluded door
 refuses truthfully, server-side.
 
 Do not broaden the pilot scope or enable a deferred financial operation without
