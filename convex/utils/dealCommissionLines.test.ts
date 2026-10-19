@@ -37,6 +37,6 @@ describe("netProfitAfterCommissionsMinor", () => {
   });
 });
 
-test("the pilot switch is ON in this build", () => {
-  expect(DEAL_COMMISSION_LINES_PILOT_DISABLED).toBe(true);
+test("the pilot switch is OFF in this build: commission lines are enabled", () => {
+  expect(DEAL_COMMISSION_LINES_PILOT_DISABLED).toBe(false);
 });

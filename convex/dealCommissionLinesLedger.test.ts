@@ -20,10 +20,6 @@ vi.mock("./rateLimit", () => ({
   },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
-vi.mock("./utils/dealCommissionLines", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./utils/dealCommissionLines")>()),
-  DEAL_COMMISSION_LINES_PILOT_DISABLED: false,
-}));
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 const PERMISSIONS = [

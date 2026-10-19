@@ -13,10 +13,6 @@ vi.mock("./rateLimit", () => ({
 
 // The pilot switch is ON in the build (convex/dealCommissionsPilot.test.ts pins
 // that). These tests exercise the certified-by-test behaviour with it off.
-vi.mock("./utils/dealCommissionLines", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./utils/dealCommissionLines")>()),
-  DEAL_COMMISSION_LINES_PILOT_DISABLED: false,
-}));
 
 const ADMIN = ["view:commissions", "manage:commissions", "view:sales", "create:sales", "view:vehicles", "edit:sales"];
 

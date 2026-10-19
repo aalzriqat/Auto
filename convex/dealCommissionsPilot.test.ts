@@ -3,6 +3,11 @@ import { expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
+vi.mock("./utils/dealCommissionLines", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/dealCommissionLines")>()),
+  DEAL_COMMISSION_LINES_PILOT_DISABLED: true,
+}));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -12,11 +17,11 @@ vi.mock("./rateLimit", () => ({
 }));
 
 /**
- * SCRUM-760 narrow pilot: registering commission lines is a new, uncertified
- * money write, so the server refuses it. This runs against the REAL switch
- * (no mock) so it fails the day someone flips the switch without updating it.
+ * Kill switch: lines are enabled in this build (the owner ruled them on), but
+ * the compile-time switch must still refuse every writer server-side when it is
+ * set back to true. The switch is mocked ON here to prove that path stays wired.
  */
-test("addLine and removeLine are refused server-side during the pilot; the read still works", async () => {
+test("with the kill switch on, addLine is refused server-side and the read still works", async () => {
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Pilot Dealer", createdAt: Date.now() }));
   const userId = await t.run((ctx) =>

@@ -10,10 +10,13 @@
  * (the deal screen's commissions row and the net profit after commissions)
  * works regardless, and shows the salesperson's existing commission.
  *
- * To enable: a reviewed code change that sets this to `false`, after the lines
- * are certified and the owner approves. Never an env var.
+ * Owner ruling (2026-10-19): multi-line commissions are ON for the pilot. The
+ * lines accrue to the ledger, reverse on removal or cancellation, and are paid
+ * through payroll (dealCommissionLinesLedger.test.ts). The switch stays as a
+ * compile-time kill switch: set it back to `true` to refuse every writer again.
+ * Never an env var.
  */
-export const DEAL_COMMISSION_LINES_PILOT_DISABLED = true as const;
+export const DEAL_COMMISSION_LINES_PILOT_DISABLED = false as const;
 
 export const DEAL_COMMISSION_KINDS = ["SALE", "PURCHASE", "EXECUTION"] as const;
 export type DealCommissionKind = (typeof DEAL_COMMISSION_KINDS)[number];
