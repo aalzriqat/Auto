@@ -266,9 +266,9 @@ export async function reconcileDealFeeCompat(call, { orgId, applicationId, feeId
  * imports or runs it. Returns undefined when the command block cannot be found, so
  * the caller treats "unknown" as UNPROVEN rather than as "legacy".
  */
-export function candidateNamesReceiptBank(source) {
+export function candidateCommandNamesBank(source, command) {
   if (typeof source !== "string") return undefined;
-  const at = source.indexOf("export const confirmDisbursement = mutation({");
+  const at = source.indexOf(`export const ${command} = mutation({`);
   if (at < 0) return undefined;
   // Bound everything to the target declaration so shared args (`args: sharedArgs`) can
   // never borrow a later declaration's inline args, exported or not. The body is
@@ -283,6 +283,10 @@ export function candidateNamesReceiptBank(source) {
   const handlerAt = declaration.indexOf("handler:", argsAt);
   if (argsAt < 0 || handlerAt < 0) return undefined;
   return /^[ \t]*bankAccountId[ \t]*:/m.test(declaration.slice(argsAt, handlerAt));
+}
+
+export function candidateNamesReceiptBank(source) {
+  return candidateCommandNamesBank(source, "confirmDisbursement");
 }
 
 export async function runRehearsalCases(ctx) {
