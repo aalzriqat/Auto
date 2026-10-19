@@ -2376,12 +2376,13 @@ export const reverseCostCorrection = mutation({
     }
     const { count: payableCount } = await loadAcquisitionPayable(ctx, vehicle);
     const cashbookKey = `vehicle_cost_correction_${correction._id}`;
-    const cashbookRows = await ctx.db
+    // Soft-deleted rows are not part of the cashbook. They are excluded inside the query, so any
+    // number of deleted twins cannot hide a live row; two live rows are enough to refuse.
+    const liveCashbookRows = await ctx.db
       .query("transactions")
       .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", cashbookKey))
-      .take(5);
-    // Soft-deleted rows are not part of the cashbook: only live rows are counted.
-    const liveCashbookRows = cashbookRows.filter((row) => row.isDeleted !== true);
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .take(2);
     const expectsCashbook =
       correction.correctionType === "CASH_REFUND" &&
       resolveOriginalPaymentMethod(acquisitionEvent, payableCount) !== "ON_ACCOUNT";
