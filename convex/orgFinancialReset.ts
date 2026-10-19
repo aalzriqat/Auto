@@ -167,6 +167,12 @@ const RESET_TABLES = [
   "supplierCostRecoveryReceipts",
   "supplierCostRecoveries",
   "expenses",
+  // SCRUM-807: derived dashboard expense totals. The expenses trigger maintains
+  // only an org's latest summary generation, so a superseded or blocked one
+  // would keep this org's pre-reset amounts. Listed after `expenses` so the
+  // trigger has already run for every deleted expense.
+  "dashboardExpenseMonths",
+  "dashboardExpenseSummaryState",
   // Payroll. ⚠️ SCRUM-546: `payrollItems.runId` is REQUIRED, so items go BEFORE
   // their run (and `CHILD_TABLES` defers the run while any item remains).
   "payrollItems",
@@ -395,6 +401,8 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   supplierCostRecoveryReceipts: "by_org",
   supplierCostRecoveries: "by_org",
   expenses: "by_org",
+  dashboardExpenseMonths: "by_org_generation_month",
+  dashboardExpenseSummaryState: "by_org_generation",
   payrollItems: "by_org",
   payrollRuns: "by_org",
   employeeCompensation: "by_org",

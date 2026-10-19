@@ -238,6 +238,12 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "bankBalanceAggregateItems", index: "by_org" },
   { kind: "orgRows", table: "bankBalanceAggregateStates", index: "by_org" },
   { kind: "orgRows", table: "bankBalanceGrossShards", index: "by_org" },
+  // SCRUM-807: derived dashboard expense totals. The expenses trigger only
+  // maintains an org's latest generation, so superseded or blocked generations
+  // keep their amounts; purge them with the org. Both indexes lead with orgId,
+  // and `expenses` is deleted earlier in this list, so nothing rewrites them.
+  { kind: "orgRows", table: "dashboardExpenseMonths", index: "by_org_generation_month" },
+  { kind: "orgRows", table: "dashboardExpenseSummaryState", index: "by_org_generation" },
   // Explicit retention marker, not a deletion step: the owner requires task
   // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
   // never purged here. Keep it last; never turn it into a delete.
