@@ -1,6 +1,8 @@
 import { describe, test, expect } from "vitest";
 import {
   classifyBankBackfillStep,
+  rebuildBankBalances,
+  renderBankRebuildSummary,
   PRODUCTION_CONFIRMATION,
   assertDeploymentIdentity,
   captureRunBaseline,
@@ -1421,5 +1423,72 @@ describe("classifyBankBackfillStep (SCRUM-54 bank balance rebuild)", () => {
       expect(step.kind).toBe("refused");
       if (step.kind === "refused") expect(step.reason).not.toMatch(/tenant secret/);
     }
+  });
+});
+
+describe("rebuildBankBalances (SCRUM-54 rollout phase)", () => {
+  const ok = (status: string) => ({ ok: true as const, value: { status } });
+  const run = (
+    runPage: (orgId: string) => { ok: true; value: unknown } | { ok: false; reason: string },
+    overrides: Partial<{ now: () => number; maxPages: number; timeoutMs: number }> = {},
+  ) => {
+    const lines: string[] = [];
+    const result = rebuildBankBalances({
+      orgs: [{ orgId: "org-a" }, { orgId: "org-b" }, { orgId: "org-c" }],
+      runPage,
+      now: overrides.now ?? (() => 0),
+      startedAt: 0,
+      timeoutMs: overrides.timeoutMs ?? 1_000,
+      maxPages: overrides.maxPages ?? 5,
+      log: (level, line) => lines.push(`${level}:${line}`),
+    });
+    return { result, lines };
+  };
+
+  test("pages each org to READY and counts orgs with no bank control account", () => {
+    const calls: string[] = [];
+    const { result } = run((orgId) => {
+      calls.push(orgId);
+      if (orgId === "org-a") return calls.filter((c) => c === "org-a").length < 3 ? ok("MORE") : ok("READY");
+      return orgId === "org-b" ? ok("READY") : ok("UNAVAILABLE");
+    });
+    expect(result).toEqual({ ready: 2, notApplicable: 1, refused: [] });
+    expect(calls).toEqual(["org-a", "org-a", "org-a", "org-b", "org-c"]);
+  });
+
+  test("a refused org, a reset and a failed call never stop the others", () => {
+    const { result, lines } = run((orgId) => {
+      if (orgId === "org-a") return ok("INCONSISTENT_HISTORY");
+      if (orgId === "org-b") return { ok: false, reason: "convex run exited 1." };
+      return ok("READY");
+    });
+    expect(result.ready).toBe(1);
+    expect(result.refused).toEqual([
+      expect.stringContaining(opaqueOrgRef("org-a")),
+      `${opaqueOrgRef("org-b")}: convex run exited 1.`,
+    ]);
+    expect(lines.join("\n")).not.toMatch(/\borg-[abc]\b/);
+  });
+
+  test("the deadline ends the whole phase and names where it stopped", () => {
+    const { result } = run(() => ok("MORE"), { now: (() => { let t = 0; return () => (t += 600); })() });
+    expect(result.stopped).toEqual({ kind: "deadline", ref: opaqueOrgRef("org-a") });
+  });
+
+  test("the page cap ends the whole phase for an org that never finishes", () => {
+    const { result } = run(() => ok("MORE"), { maxPages: 3 });
+    expect(result.stopped).toEqual({ kind: "pageCap", ref: opaqueOrgRef("org-a") });
+    expect(result.ready).toBe(0);
+  });
+
+  test("the summary reports counts, refusals and where a stop happened", () => {
+    expect(renderBankRebuildSummary({ ready: 2, notApplicable: 1, refused: [] }))
+      .toBe("2 organizations rebuilt, 1 without a bank control account, 0 refused.");
+    expect(renderBankRebuildSummary({ ready: 1, notApplicable: 0, refused: ["org-x: why"] }))
+      .toContain("- org-x: why");
+    expect(renderBankRebuildSummary({ ready: 1, notApplicable: 0, refused: ["org-x: why"], stopped: { kind: "deadline", ref: "org-y" } }))
+      .toMatch(/^Stopped at org-y: 1 organizations rebuilt before the deadline\.[\s\S]*- org-x: why/);
+    expect(renderBankRebuildSummary({ ready: 0, notApplicable: 0, refused: [], stopped: { kind: "pageCap", ref: "org-y" } }))
+      .toContain("at the page cap");
   });
 });

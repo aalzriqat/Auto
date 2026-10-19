@@ -511,6 +511,23 @@ describe("bankAccounts.getBookBalance", () => {
     expect(componentCalls).toBe(2);
   });
 
+  test("a balance read whose component answer has an unexpected shape is withheld, never OK", async () => {
+    const fx = await seedDealer();
+    await multiPeriodMultiBank(fx);
+    for (const answer of [[], [{ count: 1 }], "nope"]) {
+      const result = await fx.t.run((ctx) => {
+        const broken = new Proxy(ctx, {
+          get(target, prop, receiver) {
+            if (prop === "runQuery") return async () => answer;
+            return Reflect.get(target, prop, receiver);
+          },
+        });
+        return computeBookBalance(broken, fx.orgId, Date.now(), BOOK_BALANCE_READ_BUDGET);
+      });
+      expect(result).toMatchObject({ status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null });
+    }
+  });
+
   test("multi-period, multi-bank history over the budget is withheld as incomplete, never OK", async () => {
     const fx = await seedDealer();
     await multiPeriodMultiBank(fx);

@@ -1151,3 +1151,80 @@ export function classifyBankBackfillStep(value: unknown): BankBackfillStep {
       return { kind: "refused", reason: "the backfill returned a result this script does not recognise" };
   }
 }
+
+export type BankRebuildResult = {
+  ready: number;
+  notApplicable: number;
+  /** `<opaque ref>: <fixed reason>` per org that refused; never backend text. */
+  refused: string[];
+  /** Set when the deadline or page cap ended the whole phase early. */
+  stopped?: { kind: "deadline" | "pageCap"; ref: string };
+};
+
+/**
+ * Rebuilds every organization's bank balance aggregates, one `runPage` call at
+ * a time, and never lets one organization keep the others from running.
+ *
+ * A refusal (bad history, a reset in progress, a failed call) is recorded and
+ * the loop moves on; only the deadline and the page cap end the whole phase.
+ * `runPage` is injected so this is testable without a deployment, and `log`
+ * receives only opaque refs and fixed text because its output is public.
+ */
+export function rebuildBankBalances(input: {
+  orgs: { orgId: string }[];
+  runPage: (orgId: string) => { ok: true; value: unknown } | { ok: false; reason: string };
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  maxPages: number;
+  log: (level: "info" | "error", line: string) => void;
+}): BankRebuildResult {
+  const result: BankRebuildResult = { ready: 0, notApplicable: 0, refused: [] };
+  for (const org of input.orgs) {
+    const ref = opaqueOrgRef(org.orgId);
+    let pages = 0;
+    for (;;) {
+      if (input.now() - input.startedAt > input.timeoutMs) {
+        result.stopped = { kind: "deadline", ref };
+        return result;
+      }
+      if (pages >= input.maxPages) {
+        result.stopped = { kind: "pageCap", ref };
+        return result;
+      }
+      const page = input.runPage(org.orgId);
+      pages += 1;
+      const step: BankBackfillStep = page.ok
+        ? classifyBankBackfillStep(page.value)
+        : { kind: "refused", reason: page.reason };
+      if (step.kind === "more") continue;
+      if (step.kind === "refused") {
+        result.refused.push(`${ref}: ${step.reason}`);
+        input.log("error", `  ${ref}: refused (${step.reason})`);
+        break;
+      }
+      if (step.kind === "ready") {
+        result.ready += 1;
+        input.log("info", `  ${ref}: ready after ${pages} page(s)`);
+      } else {
+        result.notApplicable += 1;
+        input.log("info", `  ${ref}: no bank control account`);
+      }
+      break;
+    }
+  }
+  return result;
+}
+
+/** The "Bank balances" job-summary text for a finished or stopped rebuild. */
+export function renderBankRebuildSummary(result: BankRebuildResult): string {
+  const list = result.refused.length > 0 ? `\n\n${result.refused.map((line) => `- ${line}`).join("\n")}` : "";
+  if (result.stopped) {
+    const why = result.stopped.kind === "deadline" ? "before the deadline" : "at the page cap";
+    return `Stopped at ${result.stopped.ref}: ${result.ready} organizations rebuilt ${why}.${list}`;
+  }
+  return (
+    `${result.ready} organizations rebuilt, ${result.notApplicable} without a bank control account, ` +
+    `${result.refused.length} refused.${list}`
+  );
+}

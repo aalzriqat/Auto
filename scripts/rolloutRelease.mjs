@@ -29,9 +29,10 @@ import {
   describeConvexFailure,
   forLog,
   mergeVerdicts,
-  opaqueOrgRef,
   parseConvexRunJson,
   pollIntervalMs,
+  rebuildBankBalances,
+  renderBankRebuildSummary,
   renderReleaseSummary,
   requireBoundProductionKey,
 } from "./releaseGuard.ts";
@@ -274,44 +275,24 @@ const rolloutStartedAt = Date.now();
 // Until verification runs, the summary shows the pre-rollout report rather
 // than an empty "0/0" that reads as if the Social Inbox had been checked.
 lastVerdict = before.verdict;
-const bank = { ready: 0, notApplicable: 0, refused: [] };
-for (const org of before.orgs) {
-  const ref = opaqueOrgRef(org.orgId);
-  let pages = 0;
-  for (;;) {
-    // Hard stops: the shared deadline and the page cap end the whole phase.
-    if (Date.now() - rolloutStartedAt > TIMEOUT_MS) {
-      bankSummary =
-        `Stopped at ${ref}: ${bank.ready} organizations rebuilt before the deadline.` +
-        (bank.refused.length > 0 ? `\n\n${bank.refused.map((line) => `- ${line}`).join("\n")}` : "");
-      fail(`Production is DEPLOYED, but the bank balance rebuild did not finish within the deadline. A re-run resumes it.`);
-    }
-    if (pages >= MAX_BANK_PAGES_PER_ORG) {
-      bankSummary = `Stopped at ${ref} after ${pages} pages.`;
-      fail(`Production is DEPLOYED, but ${ref}'s bank balance rebuild exceeded ${MAX_BANK_PAGES_PER_ORG} pages.`);
-    }
-    const result = convex(["run", BANK_BACKFILL_FN, JSON.stringify({ orgId: org.orgId })]);
-    pages += 1;
-    // One org's refusal (bad history, a reset in progress, a failed call) must
-    // not keep every other org unrebuilt or skip the verification below: it is
-    // recorded, and the run fails at the end with every refused org listed.
-    const step = result.ok ? classifyBankBackfillStep(result.value) : { kind: "refused", reason: result.reason };
-    if (step.kind === "more") continue;
-    if (step.kind === "refused") {
-      bank.refused.push(`${ref}: ${step.reason}`);
-      console.error(`  ${ref}: refused (${step.reason})`);
-      break;
-    }
-    bank[step.kind] += 1;
-    console.log(`  ${ref}: ${step.kind === "ready" ? `ready after ${pages} page(s)` : "no bank control account"}`);
-    break;
-  }
-}
-bankSummary =
-  `${bank.ready} organizations rebuilt, ${bank.notApplicable} without a bank control account, ` +
-  `${bank.refused.length} refused.` +
-  (bank.refused.length > 0 ? `\n\n${bank.refused.map((line) => `- ${line}`).join("\n")}` : "");
+const bank = rebuildBankBalances({
+  orgs: before.orgs,
+  runPage: (orgId) => convex(["run", BANK_BACKFILL_FN, JSON.stringify({ orgId })]),
+  now: Date.now,
+  startedAt: rolloutStartedAt,
+  timeoutMs: TIMEOUT_MS,
+  maxPages: MAX_BANK_PAGES_PER_ORG,
+  log: (level, line) => (level === "error" ? console.error(line) : console.log(line)),
+});
+bankSummary = renderBankRebuildSummary(bank);
 console.log(`  ${bankSummary}`);
+// Hard stops: the shared deadline and the page cap end the whole phase.
+if (bank.stopped?.kind === "deadline") {
+  fail(`Production is DEPLOYED, but the bank balance rebuild did not finish within the deadline. A re-run resumes it.`);
+}
+if (bank.stopped?.kind === "pageCap") {
+  fail(`Production is DEPLOYED, but ${bank.stopped.ref}'s bank balance rebuild exceeded ${MAX_BANK_PAGES_PER_ORG} pages.`);
+}
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 
