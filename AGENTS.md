@@ -55,8 +55,9 @@ Two gates now exist and must not be confused:
   full receipt, refund and correction lifecycle is **not** required to launch.
   The gate passes only when the narrow scope is independently verified (the
   three bug hunters, the scenario library run against a real backend under
-  SCRUM-762, and the trusted cloud rehearsal; there is no second person), with
-  evidence that:
+  SCRUM-762, and the trusted cloud rehearsal). The verifier is two independent
+  agent seats (Codex and Opus), never the implementing session; there is no
+  second person and no human review is claimed. The evidence required is:
   - every enabled workflow preserves the accounting invariants;
   - every excluded or uncertified financial mutation is blocked **server-side**
     (hiding it in the UI is not a block) and cannot corrupt financial state;
@@ -71,7 +72,10 @@ Two gates now exist and must not be confused:
   enabled only by its own implemented, reviewed, deployed and certified change
   plus separate owner approval. The compile-time switches in
   `convex/utils/customerCreditPayoutContainment.ts` stay as they are until then,
-  and dark helpers without a public caller stay uncalled.
+  and dark helpers without a public caller stay uncalled. Those switches cover
+  only the receipt and customer-credit payout doors; every other excluded
+  mutation needs its own server-side block evidence under the second bullet
+  above.
 
 The narrowed CASH and configured FINANCED controls may be enabled for the pilot
 only once certified; that certification is part of SCRUM-760's evidence. For the
@@ -80,7 +84,9 @@ refuses truthfully, server-side.
 
 Do not broaden the pilot scope or enable a deferred financial operation without
 that separate certification and approval. A green test of only the narrowed path
-proves the narrow pilot; it does not satisfy full-lifecycle certification.
+is necessary but not sufficient for the pilot: independent verification,
+server-side block evidence and the exact-SHA rehearsal are still required, and
+it never satisfies full-lifecycle certification.
 
 ### Exact-SHA cloud rehearsal before a release
 

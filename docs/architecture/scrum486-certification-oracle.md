@@ -100,7 +100,7 @@ The suite must expand each applicable cell across quote, deposit, approval, hand
 2. An independent reviewer attacks the literal oracle before tests are compared with production code. Deliberately mutating the contribution account (4180 to expense) or netting 200,000 from the 1210 receivable must turn a covered cell red.
 3. Each known failing cell cites a validated open Jira defect and fails explicitly; a skipped or unmeasured cell is **UNAVAILABLE**, not PASS. The required CI aggregate must consume the matrix.
 4. Replay the same cases through the trusted real-backend disposable-preview rehearsal, with exact-SHA evidence, parsed scenario counts and preview deletion. `convex-test` proves harness behavior only; it does not prove Convex platform concurrency or retained production-data parity.
-5. The full 30-day no-code receipt application, retained credit/refund and correction path chosen in SCRUM-813 is an independent release gate. Passing a dealer sale cell does not satisfy it.
+5. Two gates stay separate (owner ruling SCRUM-760 decision B, 2026-10-19; see AGENTS.md). The **pilot launch gate** is the narrow scope: only certified operations enabled, excluded mutations blocked server-side with evidence. The full 30-day no-code receipt application, retained credit/refund and correction path chosen in SCRUM-813 is a **post-pilot activation gate**: it must be certified before those workflows are enabled, not before the narrow pilot. Passing a dealer sale cell satisfies neither gate by itself.
 
 This document is a proposed oracle and coverage ledger. It does **not** mark SCRUM-486 or SCRUM-760 Done.
 
