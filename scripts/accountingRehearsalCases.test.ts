@@ -537,6 +537,9 @@ function makeBackend(defects: Defects = {}) {
   let certifiedCashSalePosted = false;
   let m486c5ReportStarted = false;
   let certifiedCashDepositId: string | undefined;
+  // Every certified-case deposit (SCRUM-802: M486C1 now pays by deposit too), so a report defect that omits receipts
+  // omits them consistently instead of only the latest case's deposit.
+  const certifiedDepositIds = new Set<string>();
   let certifiedCashRefundDepositId: string | undefined;
   let certifiedCashForfeitDepositId: string | undefined;
   let cashRefundCreatorRefused = false;
@@ -1066,7 +1069,7 @@ function makeBackend(defects: Defects = {}) {
           const lines = [...journalLines.entries()]
             .filter(([entryId]) => !defects.cashDepositReportOmitsReceipt || !certifiedCashDepositId ||
               !journalEntries.some((entry) => entry._id === entryId &&
-                entry.sourceType === "deposits" && entry.sourceId === certifiedCashDepositId))
+                entry.sourceType === "deposits" && certifiedDepositIds.has(String(entry.sourceId))))
             .flatMap(([, entryLines]) => entryLines).filter((line) =>
             line.accountId === account._id && line.accountingDate <= Number(args.toDate ?? Infinity));
           if (lines.length === 0) return [];
@@ -1350,6 +1353,21 @@ function makeBackend(defects: Defects = {}) {
       case "sales:create": {
         const made = replayableCreate("sale", args, true);
         if (made) return made;
+        // SCRUM-802 (owner ruling, Option A): a cash sale completes only when its full price is held as a deposit.
+        // The real backend refuses otherwise, so the rehearsal fake must too: a case that completes an unpaid cash
+        // sale is red here exactly as it would be against the real backend.
+        if (args.status === "COMPLETED" && args.financingType !== "FINANCED" && args.financingType !== "LEASE") {
+          const requiredMinor = Math.round(Number(args.salePrice) * MINOR_SCALE);
+          const heldMinor = [...deposits.values()]
+            .filter((row) => row.vehicleId === String(args.vehicleId) && row.customerId === String(args.customerId) && row.status === "HELD")
+            .reduce((sum, row) => sum + row.amountMinor, 0);
+          if (heldMinor < requiredMinor) {
+            return {
+              ok: false as const,
+              error: "A cash sale can only be completed once the customer's full payment is recorded as a deposit. Record the remaining payment as a deposit first. Nothing has been changed.",
+            };
+          }
+        }
         const saleId = id("sale");
         const cashInvoice = Boolean(args.quoteId && Number(args.salePrice) === 12_500);
         const invoiceId = cashInvoice && !defects.cashSaleMissingInvoice ? id("rdoc") : undefined;
@@ -1422,16 +1440,16 @@ function makeBackend(defects: Defects = {}) {
               ],
           { payload: { saleAmountMinor: priceMinor } }
         );
-        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-sale-")) {
+        if (/^rehearsal-(m486c1|m486c2|sr1)-sale-/.test(String(args.idempotencyKey ?? ""))) {
           const deposit = [...deposits.values()].find((row) => row.vehicleId === String(args.vehicleId) &&
-            row.customerId === String(args.customerId) && row.status === "HELD" && row.amountMinor === 200_000);
+            row.customerId === String(args.customerId) && row.status === "HELD" && row.amountMinor === priceMinor);
           if (deposit && !defects.cashDepositNotApplied) {
             deposit.status = "APPLIED";
             deposit.freeMinor = 0;
             if (!defects.cashDepositApplicationMissingPosting) {
               post("DEPOSIT_APPLIED", "depositApplications", `${deposit._id}:${args.vehicleId}`, [
-                { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 200_000, customerId: String(args.customerId) },
-                { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: 200_000, customerId: String(args.customerId) },
+                { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: priceMinor, customerId: String(args.customerId) },
+                { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: priceMinor, customerId: String(args.customerId) },
               ]);
             }
             if (invoiceId && !defects.cashDepositInvoiceNotReduced) {
@@ -1445,14 +1463,14 @@ function makeBackend(defects: Defects = {}) {
                 }
               }
               allocations.push({ orgId: String(args.orgId), paymentId: allocationPaymentId, receivableDocumentId: invoiceId,
-                amountMinor: 200_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
+                amountMinor: priceMinor, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
               if (defects.cashDepositSaleOverallocatesPayment) allocations.push({
                 orgId: String(args.orgId), paymentId: deposit.canonicalPaymentId,
                 receivableDocumentId: "other-invoice", amountMinor: 1_000,
                 currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
               });
               const invoice = financeReceivables.get(invoiceId);
-              if (invoice) invoice.status = "PARTIALLY_PAID";
+              if (invoice) invoice.status = priceMinor >= Number(invoice.originalAmountMinor) ? "PAID" : "PARTIALLY_PAID";
             }
           }
         }
@@ -1529,8 +1547,9 @@ function makeBackend(defects: Defects = {}) {
         const replayed = replayableCreate("dep", args, true);
         if (replayed) return replayed;
         const depositId = id("dep");
-        if (/^rehearsal-m486c[234]-deposit-/.test(String(args.idempotencyKey ?? ""))) {
+        if (/^rehearsal-m486c[1234]-deposit-/.test(String(args.idempotencyKey ?? ""))) {
           certifiedCashDepositId = depositId;
+          certifiedDepositIds.add(depositId);
         }
         if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c3-deposit-")) {
           certifiedCashRefundDepositId = depositId;
@@ -1603,8 +1622,8 @@ function makeBackend(defects: Defects = {}) {
           releasedAmountMinor: 0,
           refundedAmountMinor: 0,
           releaseCount: 0,
-          freeMinor: /^rehearsal-m486c[234]-deposit-/.test(String(args.idempotencyKey ?? "")) ? amountMinor : 2_000_000,
-          committedMinor: /^rehearsal-m486c[234]-deposit-/.test(String(args.idempotencyKey ?? "")) ? 0 : 1_000_000,
+          freeMinor: /^rehearsal-m486c[1234]-deposit-/.test(String(args.idempotencyKey ?? "")) ? amountMinor : 2_000_000,
+          committedMinor: /^rehearsal-m486c[1234]-deposit-/.test(String(args.idempotencyKey ?? "")) ? 0 : 1_000_000,
           vehicleId: quoteVehicle.get(String(args.quoteId)) ?? String(args.vehicleId ?? ""),
           customerId: depositCustomerId,
           status: "HELD",

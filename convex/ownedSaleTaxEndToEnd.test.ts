@@ -19,6 +19,7 @@ import schema from "./schema";
 import { settleOutbox } from "../test-utils/outboxWork";
 import { api } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -57,7 +58,7 @@ async function seedDealer(tag: string) {
         "view:sales", "create:sales", "edit:sales",
         "view:vehicles", "create:vehicles", "edit:vehicles",
         "view:customers", "create:customers",
-        "manage:finance", "view:finance",
+        "manage:finance", "view:finance", "confirm:finance_disbursement",
       ],
     })
   );
@@ -133,12 +134,54 @@ async function netOnAccount(
   });
 }
 
+/** Gross debits on one system account: the sale entry's own AR debit, whatever settles it afterwards. */
+async function debitsOnAccount(
+  t: Awaited<ReturnType<typeof seedDealer>>["t"],
+  orgId: string,
+  systemKey: string
+): Promise<number> {
+  return await t.run(async (ctx) => {
+    const account = await ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId as never).eq("systemKey", systemKey))
+      .unique();
+    if (!account) throw new Error(`No account for ${systemKey}`);
+    const lines = await ctx.db
+      .query("journalLines")
+      .withIndex("by_org_account", (q) => q.eq("orgId", orgId as never).eq("accountId", account._id))
+      .collect();
+    return lines.reduce((sum, l) => sum + (l.debitMinor ?? 0), 0);
+  });
+}
+
+type Dealer = Awaited<ReturnType<typeof seedDealer>>;
+
+/**
+ * SCRUM-802 (owner ruling, Option A): the pilot cash procedure. A cash sale completes only when its full invoice
+ * (price plus tax) is already held as a deposit, so the quote is created and the customer's full payment recorded
+ * as a deposit first; the sale is then completed against that quote.
+ */
+async function payFullByDeposit(s: Dealer, price: number, tax = 0): Promise<Id<"quotes">> {
+  const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+    orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, mode: "CASH",
+    // The quote carries the customer's whole bill (price plus tax): a deposit cannot exceed its quote.
+    vehiclePrice: price + tax, downPayment: 0, termMonths: 0,
+  });
+  await s.asUser.mutation(api.deposits.create, {
+    orgId: s.orgId, quoteId, amount: price + tax, method: "CASH", idempotencyKey: crypto.randomUUID(),
+  });
+  return quoteId;
+}
+
 describe("a taxed owned sale reaches both books with the same amount", () => {
   test("the GL receivable, the subledger document and the invoice all agree", async () => {
-    const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("agree");
+    const dealer = await seedDealer("agree");
+    const { t, orgId, userId, customerId, vehicleId, asUser } = dealer;
+    const quoteId = await payFullByDeposit(dealer, 20_000, 3_200);
 
     const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
+      quoteId,
       vehicleId,
       customerId,
       salespersonId: userId,
@@ -152,8 +195,10 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // What the invoice says: SaleDialog bills salePrice + taxAmount.
     const invoiceMinor = jod(23_200);
 
-    const arDebitMinor = await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
+    // The sale entry's own AR debit (the deposit then settles it, so the NET is zero: asserted below).
+    const arDebitMinor = await debitsOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
     expect(arDebitMinor).toBe(invoiceMinor);
+    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(0);
 
     const receivable = await t.run(async (ctx) => {
       const sale = await ctx.db.get(saleId);
@@ -163,6 +208,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // ANTI-VACUITY: a missing document would make the comparison below pass for
     // the trivial reason.
     expect(receivable).toBeTruthy();
+    expect(receivable!.status).toBe("PAID");
     expect(receivable!.originalAmountMinor).toBe(invoiceMinor);
 
     // Stated as its own assertion because this is the invariant, not the two
@@ -215,10 +261,13 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // ANTI-VACUITY for the refusal above: without this, a guard that rejected
     // every taxed sale outright would pass it while breaking the ordinary case
     // the whole ticket exists to make work.
-    const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("edgetax");
+    const dealer = await seedDealer("edgetax");
+    const { t, orgId, userId, customerId, vehicleId, asUser } = dealer;
+    const quoteId = await payFullByDeposit(dealer, 20_000, 20_000);
 
     await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
+      quoteId,
       vehicleId,
       customerId,
       salespersonId: userId,
@@ -229,7 +278,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
       financingType: "CASH",
     });
 
-    expect(await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(40_000));
+    expect(await debitsOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(jod(40_000));
   });
 
   test("a PENDING draft may carry no agreed price, and stays editable", async () => {
@@ -301,8 +350,10 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // by magnitude rather than by representability, and the sub-precision test
     // would still pass.
     const s = await seedDealer("minprice");
+    const quoteId = await payFullByDeposit(s, 0.001);
     await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
+      quoteId,
       vehicleId: s.vehicleId,
       customerId: s.customerId,
       salespersonId: s.userId,
@@ -311,7 +362,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
       status: "COMPLETED",
       financingType: "CASH",
     });
-    expect(await netOnAccount(s.t, s.orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(1);
+    expect(await debitsOnAccount(s.t, s.orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)).toBe(1);
   });
 
   test("the invariant refuses BEFORE the outbox, even when accounting would be deferred", async () => {
@@ -407,7 +458,9 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     // the old convention, against a receivable sized under the new one. The
     // journal would still balance, which is the exact blindness SCRUM-22 exists
     // to close.
-    const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("deferred");
+    const dealer = await seedDealer("deferred");
+    const { t, orgId, userId, customerId, vehicleId, asUser } = dealer;
+    const quoteId = await payFullByDeposit(dealer, 20_000, 3_200);
 
     // Deferral is driven by `shouldPost` → `getOpenPeriodForDate`. Dating the
     // sale into a year the seed created no period for is the cleanest way to
@@ -416,6 +469,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     const priorYear = new Date().getUTCFullYear() - 1;
     const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
+      quoteId,
       vehicleId,
       customerId,
       salespersonId: userId,
@@ -457,7 +511,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
     await settleOutbox(t, orgId);
 
     const invoiceMinor = jod(23_200);
-    const arDebitMinor = await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
+    const arDebitMinor = await debitsOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
     expect(arDebitMinor).toBe(invoiceMinor);
 
     const receivable = await t.run(async (ctx) => {
@@ -476,10 +530,13 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
   test("an untaxed sale is unchanged in both books", async () => {
     // The common case. A fix that shifted this would restate every sale ever
     // recorded, so it is pinned at the same level as the taxed one.
-    const { t, orgId, userId, customerId, vehicleId, asUser } = await seedDealer("plain");
+    const dealer = await seedDealer("plain");
+    const { t, orgId, userId, customerId, vehicleId, asUser } = dealer;
+    const quoteId = await payFullByDeposit(dealer, 20_000);
 
     const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
+      quoteId,
       vehicleId,
       customerId,
       salespersonId: userId,
@@ -489,7 +546,7 @@ describe("a taxed owned sale reaches both books with the same amount", () => {
       financingType: "CASH",
     });
 
-    const arDebitMinor = await netOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
+    const arDebitMinor = await debitsOnAccount(t, orgId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS);
     expect(arDebitMinor).toBe(jod(20_000));
 
     const receivable = await t.run(async (ctx) => {
