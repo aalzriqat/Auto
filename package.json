@@ -38,13 +38,15 @@
     "test:jev-calibration": "vitest run scripts/intelligence/jevCalibration.test.ts",
     "test:review-evidence": "vitest run scripts/intelligence/reviewEvidence.test.ts scripts/intelligence/reviewAuditAuthority.test.ts scripts/intelligence/reviewAuditController.test.ts",
     "jev:calibrate": "node scripts/intelligence/runJevHistoricalCalibration.mjs",
-    "test:browser-swarm": "vitest run scripts/intelligence/browserAttackSwarm.test.ts scripts/intelligence/browserAttackSwarmExecutor.test.ts scripts/intelligence/browserAttackSwarmPreviewVerifier.test.ts scripts/intelligence/browserAttackSwarmRuntime.test.ts scripts/intelligence/browserAttackSwarmHandlers.test.ts scripts/intelligence/browserSwarmTrustedImpact.test.ts scripts/intelligence/e2ePreviewDescriptor.test.ts scripts/intelligence/prepareTrustedBrowserSwarmRun.test.ts scripts/intelligence/browserAttackSwarmWorkflow.test.ts scripts/intelligence/browserSwarmBuildArtifact.test.ts scripts/intelligence/trustedBrowserJevSuggestions.test.ts scripts/intelligence/clerkPublicJwtKey.test.ts scripts/intelligence/convexPreviewAuthority.test.ts scripts/intelligence/prWorkflowSecretBoundary.test.ts scripts/intelligence/convexCredentialBoundary.test.ts scripts/intelligence/stageCandidateBackend.test.ts scripts/intelligence/auditStagedBackendInputs.test.ts",
+    "test:browser-swarm": "vitest run scripts/intelligence/browserAttackSwarm.test.ts scripts/intelligence/browserAttackSwarmExecutor.test.ts scripts/intelligence/browserAttackSwarmPreviewVerifier.test.ts scripts/intelligence/browserAttackSwarmRuntime.test.ts scripts/intelligence/browserAttackSwarmHandlers.test.ts scripts/intelligence/browserSwarmTrustedImpact.test.ts scripts/intelligence/e2ePreviewDescriptor.test.ts scripts/intelligence/prepareTrustedBrowserSwarmRun.test.ts scripts/intelligence/browserAttackSwarmWorkflow.test.ts scripts/intelligence/browserSwarmCoverageContract.test.ts scripts/intelligence/browserSwarmCoverageGate.test.ts scripts/intelligence/browserSwarmEconomicOracle.test.ts scripts/intelligence/browserSwarmExpenseAuthority.test.ts scripts/intelligence/browserSwarmConvexFrames.test.ts scripts/intelligence/browserSwarmConvexSyncObserver.test.ts scripts/intelligence/browserSwarmDuplicateSubmitHandler.test.ts scripts/intelligence/browserSwarmMultiTabRaceHandler.test.ts scripts/intelligence/browserSwarmLoopbackRelay.test.ts scripts/intelligence/browserSwarmAccountingPeriod.test.ts scripts/intelligence/browserSwarmBuildArtifact.test.ts scripts/intelligence/browserSwarmHeadFreshness.test.ts scripts/intelligence/trustedBrowserJevSuggestions.test.ts scripts/intelligence/clerkPublicJwtKey.test.ts scripts/intelligence/convexPreviewAuthority.test.ts scripts/intelligence/prWorkflowSecretBoundary.test.ts scripts/intelligence/convexCredentialBoundary.test.ts scripts/intelligence/stageCandidateBackend.test.ts scripts/intelligence/auditStagedBackendInputs.test.ts scripts/intelligence/browserEgressContainment.test.ts scripts/intelligence/browserEgressContainmentBranches.test.ts scripts/intelligence/browserEgressProof.test.ts scripts/intelligence/proxyClerkHandler.test.ts scripts/intelligence/playwrightContainedContext.test.ts scripts/intelligence/browserEgressLaunch.test.ts lib/offlineSwarmClerk.test.ts proxy.offlineSwarm.test.ts",
     "browser-swarm:trusted-impact": "node scripts/intelligence/browserSwarmTrustedImpact.mjs",
     "e2e:preview-descriptor": "node scripts/intelligence/e2ePreviewDescriptor.mjs",
-    "browser-swarm:prepare-trusted-run": "node scripts/intelligence/prepareTrustedBrowserSwarmRun.mjs",
+    "browser-swarm:coverage-gate": "node scripts/intelligence/browserSwarmCoverageGate.mjs",
+    "browser-swarm:prepare-trusted-run":"node scripts/intelligence/prepareTrustedBrowserSwarmRun.mjs",
     "browser-swarm:jev-exploration": "node scripts/intelligence/trustedBrowserJevSuggestions.mjs",
     "browser-swarm:build-artifact": "node scripts/intelligence/browserSwarmBuildArtifact.mjs",
-    "test:unified-deal-authority": "vitest run convex/unifiedDealFeeAuthority.test.ts"
+    "test:unified-deal-authority": "vitest run convex/unifiedDealFeeAuthority.test.ts",
+    "test:e2e": "e2e run --config playwright/agentic/e2e.config.ts"
   },
   "dependencies": {
     "@autoflow/shared": "workspace:*",
@@ -52,6 +54,7 @@
     "@clerk/nextjs": "^7.4.2",
     "@convex-dev/aggregate": "0.2.2",
     "@convex-dev/rate-limiter": "^0.3.2",
+    "@convex-dev/workpool": "0.4.14",
     "@hookform/resolvers": "^3.9.0",
     "@radix-ui/react-accordion": "^1.2.13",
     "@radix-ui/react-avatar": "^1.2.0",
@@ -99,7 +102,10 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@ai-sdk/openai": "4.0.87",
+    "@convex-dev/batch-worker": "0.2.2",
     "@convex-dev/eslint-plugin": "^1.2.2",
+    "@e2e-dev/web": "^0.13.0",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.2.2",
     "@testing-library/react": "^16.3.2",
@@ -108,7 +114,9 @@
     "@types/react-dom": "^19.2.3",
     "@types/web-push": "^3.6.4",
     "@vitest/coverage-v8": "^4.1.9",
+    "ai": "7.0.131",
     "convex-test": "^0.0.53",
+    "e2e": "^0.18.0",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.4",
     "jsdom": "^29.1.1",

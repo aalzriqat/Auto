@@ -24,6 +24,7 @@ import { v, ConvexError } from "convex/values";
 import { query, QueryCtx, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireTenantAuth } from "./utils/tenancy";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { getOrgCurrency } from "./accounting/workflowHooks";
@@ -31,6 +32,54 @@ import { validateManualJournalLines, auditLog, type ManualJournalLine } from "./
 import { toMinorUnits, denominationOf } from "./utils/money";
 import { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+
+/**
+ * SCRUM-54: an opening line on the BANK_ACCOUNT control account must name the
+ * physical bank it seeds — `getBookBalance` withholds any balance that has a
+ * control line without one. The identity is supplied by the user, never
+ * defaulted or inferred from amount/date, and no other account may carry one.
+ *
+ * The bank must be a live (not deleted, active) bank of this organization in
+ * the currency the opening is denominated in. Callers invoke this before their
+ * first write, and the shared poster repeats it as the chokepoint so a bank
+ * removed between draft and approval, or a draft saved before this field
+ * existed, cannot post an unattributed bank line.
+ */
+async function assertOpeningBankIdentities(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  lines: ReadonlyArray<{ accountId: Id<"chartOfAccounts">; bankAccountId?: Id<"bankAccounts"> }>,
+  currency: string
+): Promise<void> {
+  for (const line of lines) {
+    const account = await ctx.db.get(line.accountId);
+    if (!account || account.orgId !== orgId) {
+      throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
+    }
+    if (account.systemKey !== SYSTEM_KEYS.BANK_ACCOUNT) {
+      if (line.bankAccountId) {
+        throw new ConvexError("Only a bank account line can name a bank account.");
+      }
+      continue;
+    }
+    if (!line.bankAccountId) {
+      throw new ConvexError("Select a bank account for every bank opening-balance line.");
+    }
+    const bank = await ctx.db.get(line.bankAccountId);
+    if (!bank || bank.orgId !== orgId || bank.isDeleted) {
+      throw new ConvexError("The selected bank account was not found in this organization.");
+    }
+    if (!bank.isActive) {
+      throw new ConvexError("The selected bank account is inactive.");
+    }
+    if (bank.currency !== currency) {
+      throw new ConvexError(
+        `The selected bank account is denominated in ${bank.currency}, but this opening balance is in ${currency}.`
+      );
+    }
+  }
+}
 
 /**
  * One refusal, worded for the two things that are actually different to the
@@ -170,6 +219,37 @@ async function hasOpeningBalanceCommitment(ctx: QueryCtx, orgId: Id<"organizatio
   return pendingDraft !== null;
 }
 
+/**
+ * True once the org has ANY POSTED or REVERSED journal entry. Status, not period
+ * state, decides: a REVERSED entry is still history, and a later period being
+ * open says nothing about earlier postings. DRAFT/VALIDATED never count.
+ *
+ * Deliberately no category filter: an ordinary new opening after the reversal of
+ * an old one is refused too. No correction path exists yet (SCRUM-850); the
+ * refusal only tells the finance owner a cutover correction needs review.
+ */
+async function hasPostedLedgerActivity(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
+  for (const status of ["POSTED", "REVERSED"] as const) {
+    const entry = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .first();
+    if (entry) return true;
+  }
+  return false;
+}
+
+/**
+ * The English text of the coded refusal; lib/i18n/domains/common.ts carries the
+ * same text under `ServerError_OPENING_BALANCE_AFTER_LEDGER_ACTIVITY`.
+ */
+export const POSTED_LEDGER_ACTIVITY_MESSAGE =
+  "This organization already has posted ledger activity, so an opening balance cannot be posted. The cutover needs finance-owner review.";
+
+function refuseOpeningAfterLedgerActivity(): never {
+  throwAppError(AppErrorCode.OPENING_BALANCE_AFTER_LEDGER_ACTIVITY, POSTED_LEDGER_ACTIVITY_MESSAGE);
+}
+
 export const draftOpeningBalance = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -178,6 +258,7 @@ export const draftOpeningBalance = mutation({
       debitMinor: v.number(),
       creditMinor: v.number(),
       description: v.optional(v.string()),
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
@@ -195,6 +276,12 @@ export const draftOpeningBalance = mutation({
 
     if (await hasOpeningBalanceCommitment(ctx, args.orgId)) {
       throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
+    }
+
+    // Preflight only: don't knowingly create a draft that approval must refuse.
+    // Activity that lands after this point is still caught at posting time.
+    if (await hasPostedLedgerActivity(ctx, args.orgId)) {
+      refuseOpeningAfterLedgerActivity();
     }
 
     validateManualJournalLines(args.lines as ManualJournalLine[]);
@@ -218,6 +305,8 @@ export const draftOpeningBalance = mutation({
         throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
       }
     }
+
+    await assertOpeningBankIdentities(ctx, args.orgId, args.lines, args.expectedCurrency);
 
     if (!(await getOpenPeriodForDate(ctx, args.orgId, args.asOfDate))) {
       throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
@@ -332,6 +421,13 @@ async function postOpeningBalanceDraft(
 ): Promise<Id<"journalEntries">> {
   const { orgId, draft, approverId, autoApproved } = args;
 
+  // The chokepoint both routes share, checked in the posting transaction itself
+  // so activity that landed after the draft was prepared is still caught. A
+  // balanced opening journal proves arithmetic, not a cutover basis.
+  if (await hasPostedLedgerActivity(ctx, orgId)) {
+    refuseOpeningAfterLedgerActivity();
+  }
+
   const totalDebits = validateManualJournalLines(draft.lines as ManualJournalLine[]);
 
   // Re-validate at approval time — an account may have been deactivated
@@ -377,6 +473,7 @@ async function postOpeningBalanceDraft(
     throw new ConvexError(unvouchableDenominationMessage(draft.currency));
   }
   const currency = denomination.code;
+  await assertOpeningBankIdentities(ctx, orgId, draft.lines, currency);
   const now = Date.now();
 
   const journalId = await ctx.db.insert("journalEntries", {
@@ -413,6 +510,7 @@ async function postOpeningBalanceDraft(
       scale,
       accountingDate: draft.asOfDate,
       description: line.description,
+      bankAccountId: line.bankAccountId,
     });
     // GL Phase 18: this is a direct journalLines insert (not routed through
     // postAccountingEvent), so it must keep the running snapshot in sync
@@ -486,6 +584,7 @@ export const postOpeningBalanceDirect = mutation({
       debitMinor: v.number(),
       creditMinor: v.number(),
       description: v.optional(v.string()),
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
@@ -509,7 +608,16 @@ export const postOpeningBalanceDirect = mutation({
       throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
     }
 
+    // Same preflight as draftOpeningBalance, so the stable coded refusal for
+    // late openings still wins over the bank check below (the poster repeats it).
+    if (await hasPostedLedgerActivity(ctx, args.orgId)) {
+      refuseOpeningAfterLedgerActivity();
+    }
+
     validateManualJournalLines(args.lines as ManualJournalLine[]);
+
+    // Before the draft insert: a refused bank identity must leave no row behind.
+    await assertOpeningBankIdentities(ctx, args.orgId, args.lines, args.expectedCurrency);
 
     // The denomination to stamp on the row. Already proved vouchable AND equal
     // to what the caller converted under by the assertion above, which is why
@@ -632,15 +740,34 @@ export const listPendingOpeningBalanceDrafts = query({
         // the preparer as "Unknown" on the very screen where identifying them
         // is the control.
         const preparer = draft.preparedByName ? null : await ctx.db.get(draft.createdBy);
+        const draftCurrency = draft.currency ?? orgCurrency;
+        // SCRUM-54: the approver must see WHICH physical bank each bank line
+        // seeds. The name is reported only for a bank approval would accept
+        // (same org, live, in the draft's currency); `null` on a line that
+        // requires a bank means approval will refuse it.
+        const lines = await Promise.all(
+          draft.lines.map(async (line) => {
+            const account = await ctx.db.get(line.accountId);
+            const bank = line.bankAccountId ? await ctx.db.get(line.bankAccountId) : null;
+            const usable =
+              bank !== null && bank.orgId === args.orgId && !bank.isDeleted && bank.isActive && bank.currency === draftCurrency;
+            return {
+              ...line,
+              requiresBankAccount: account?.systemKey === SYSTEM_KEYS.BANK_ACCOUNT,
+              bankAccountName: usable ? bank.name : null,
+            };
+          })
+        );
         return {
           ...draft,
+          lines,
           // `null`, never an English literal. The client renders this inside a
           // <bdi> on a screen this PR hardened for Arabic bidi — shipping
           // "Unknown" there would put untranslated English in the RTL run.
           // Translation is the client's job; the server reports absence.
           preparedByName:
             draft.preparedByName || preparer?.name || preparer?.email || null,
-          currency: draft.currency ?? orgCurrency,
+          currency: draftCurrency,
           // The SAME authority the server refuses on, not a lookalike. This was
           // `Boolean(draft.currency)` to match the old `!draft.currency` guard,
           // and both were truthiness: a draft denominated "JD" reported

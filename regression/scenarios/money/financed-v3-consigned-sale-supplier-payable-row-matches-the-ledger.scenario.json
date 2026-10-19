@@ -1,0 +1,68 @@
+{
+  "id": "financed-v3-consigned-sale-supplier-payable-row-matches-the-ledger",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "priceMinor": 20000000,
+        "supplierEntitlementMinor": 15000000,
+        "approvedMinor": 18000000,
+        "depositMinor": 200000,
+        "customerGapCashMinor": 1000000,
+        "contributionMinor": 2500000,
+        "forwardMinor": 2700000,
+        "legalInvoiceRecorded": false
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicleSupplierPayables.rowsForSale",
+      "value": 1
+    },
+    {
+      "observable": "vehicleSupplierPayables.amountDueMinor",
+      "value": 15000000
+    },
+    {
+      "observable": "vehicleSupplierPayables.amountPaidMinor",
+      "value": 0
+    },
+    {
+      "observable": "vehicleSupplierPayables.amountDueEqualsSupplierPayableLedger",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum350Cons1V3PriceBasis.test.ts",
+    "testName": "the supplier subledger row agrees with the GL: one payable for this sale and car, 15,000, unpaid"
+  },
+  "matrixRow": "pilot-v3-consigned-supplier-payable",
+  "fingerprint": "10c5dc85e06805f80f00c6cf9cde98176d5aae4bd8b77c2a1f8d0e0cd2afdeeb",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum350-cons1-v3",
+    "firstSeen": "2026-10-15"
+  }
+}

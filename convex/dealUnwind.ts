@@ -28,7 +28,7 @@ import { DEAL_UNWIND_MESSAGES, type DealUnwindRefusalCode } from "./utils/dealUn
 import { activeDealUnwindFor, paidDealReversalRoute, receiptPostedToPaymentAccount } from "./utils/dealUnwindGuard";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
-import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { reverseForward } from "./financeCompanyForward";
 import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
@@ -40,6 +40,13 @@ import { manualPayerOf } from "./utils/manualFinancePayer";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { hookFinanceCashReceivedReturned } from "./accounting/workflowHooks";
+import { planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
+import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
+import {
+  CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED,
+  assertCustomerCreditPayoutAllowed,
+  assertCustomerCreditPayoutMethodSupported,
+} from "./utils/customerCreditPayoutContainment";
 import { reverseAllocation, voidCanonicalPayment } from "./subledger";
 import { auditLog } from "./financialAudit";
 import {
@@ -197,7 +204,7 @@ async function assertDealUnwindable(
   app: Doc<"financeApplications">,
   action: string
 ): Promise<Doc<"sales">> {
-  if (app.status !== "CLOSED" || planVersionOf(app) !== 2) refuse("DEAL_UNWIND_NOT_ELIGIBLE");
+  if (app.status !== "CLOSED" || !isForwardPlanVersion(planVersionOf(app))) refuse("DEAL_UNWIND_NOT_ELIGIBLE");
   if (app.supplierDisbursementConfirmedAt !== undefined || app.supplierDisbursedAmountMinor !== undefined) {
     refuse("DEAL_UNWIND_DIRECT_ROUTE");
   }
@@ -492,8 +499,12 @@ async function assertFinishable(
   await assertPeriodOpen(ctx, orgId, now);
   // PRB-F2: the teardown's read-only refusals, so the status query and the closing step ask one
   // question. The mutation still refuses anything left atomically (ruling B).
-  await assertSaleTeardownPreflight(ctx, { orgId, sale });
-  return { sale, version, refundedAt, keys, payment, activeAllocations };
+  const invoicePlan = await planSaleInvoiceReceiptReversal(ctx, orgId, sale);
+  await assertSaleTeardownPreflight(ctx, {
+    orgId, sale,
+    plannedInvoiceAllocationIds: invoicePlan.applications.map((row) => row.allocationId),
+  });
+  return { sale, version, refundedAt, keys, payment, activeAllocations, invoicePlan };
 }
 
 /** Where the teardown may leave a returned car that D3 moves into inspection. */
@@ -562,6 +573,11 @@ export const finishDealUnwind = mutation({
     vehicleReturnedAt: v.number(),
     vehicleReturnNote: v.string(),
     customerPaymentDisposition: v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT")),
+    customerRefundAmountMinor: v.optional(v.number()),
+    customerRefundMethod: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+    customerRefundBankAccountId: v.optional(v.id("bankAccounts")),
+    customerRefundReference: v.optional(v.string()),
+    customerRefundedAt: v.optional(v.number()),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -601,6 +617,11 @@ export const finishDealUnwind = mutation({
           vehicleReturnedAt: args.vehicleReturnedAt,
           vehicleReturnNote,
           customerPaymentDisposition: args.customerPaymentDisposition,
+          customerRefundAmountMinor: args.customerRefundAmountMinor ?? null,
+          customerRefundMethod: args.customerRefundMethod ?? null,
+          customerRefundBankAccountId: args.customerRefundBankAccountId ?? null,
+          customerRefundReference: args.customerRefundReference ?? null,
+          customerRefundedAt: args.customerRefundedAt ?? null,
         }),
       },
       async () => {
@@ -608,7 +629,7 @@ export const finishDealUnwind = mutation({
         const now = Date.now();
         const vehicleReturnedAt = pastDate(args.vehicleReturnedAt, now);
 
-        const { sale, version, refundedAt, keys, payment, activeAllocations } = await assertFinishable(ctx, {
+        const { sale, version, refundedAt, keys, payment, activeAllocations, invoicePlan } = await assertFinishable(ctx, {
           orgId: args.orgId,
           unwind,
           app,
@@ -616,6 +637,21 @@ export const finishDealUnwind = mutation({
           method: args.method,
           refundedAt: args.refundedAt,
         });
+
+        // SCRUM-724 / SCRUM-795 c22479 + Sol Q7: a customer-credit PAYOUT is a new
+        // money exit. FINISH_PERMS are deal-cancel authorities, not payout
+        // authority (the default MANAGER holds them without MANAGE_FINANCE), so
+        // any request that could pay the customer out also needs MANAGE_FINANCE,
+        // checked BEFORE the pilot refusal and before any write below.
+        const payoutFieldGiven = [args.customerRefundAmountMinor, args.customerRefundMethod,
+          args.customerRefundBankAccountId, args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined);
+        if (payoutFieldGiven || (args.customerPaymentDisposition === "REFUND" && invoicePlan.totalMinor > 0)) {
+          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+          assertCustomerCreditPayoutAllowed();
+          if (args.customerRefundMethod !== undefined) {
+            assertCustomerCreditPayoutMethodSupported(args.customerRefundMethod);
+          }
+        }
 
         // 1. The receipt comes off the books.
         for (const allocation of activeAllocations) {
@@ -645,6 +681,39 @@ export const finishDealUnwind = mutation({
           settlementStatus: "EXPECTED",
           disbursementVersion: version + 1,
           updatedAt: now,
+        });
+
+        const customerPayout = args.customerRefundAmountMinor !== undefined &&
+          args.customerRefundMethod !== undefined &&
+          args.customerRefundReference !== undefined &&
+          args.customerRefundedAt !== undefined
+          ? {
+              amountMinor: args.customerRefundAmountMinor,
+              method: args.customerRefundMethod,
+              bankAccountId: args.customerRefundBankAccountId,
+              reference: requiredText(
+                args.customerRefundReference,
+                MAX_DIRECT_PAYMENT_REFERENCE_CHARS,
+                "DEAL_UNWIND_EVIDENCE_REQUIRED"
+              ),
+              paidAt: pastDate(args.customerRefundedAt, now),
+            }
+          : undefined;
+        if (
+          [args.customerRefundAmountMinor, args.customerRefundMethod,
+            args.customerRefundBankAccountId, args.customerRefundReference, args.customerRefundedAt]
+            .some((value) => value !== undefined) && !customerPayout
+        ) {
+          refuse("DEAL_UNWIND_EVIDENCE_REQUIRED");
+        }
+        const customerSettlement = await disposeActiveSaleInvoiceReceipts(ctx, {
+          orgId: args.orgId,
+          applications: invoicePlan.applications,
+          disposition: args.customerPaymentDisposition,
+          payout: customerPayout,
+          actorId: user._id,
+          reason: `Deal unwind: customer receipt disposition (${unwind.reason})`,
+          now,
         });
 
         // 2. The deal is cancelled, from the row as the refund left it. A
@@ -696,6 +765,15 @@ export const finishDealUnwind = mutation({
             vehicleReturnedAt,
             vehicleReturnNote,
             customerPaymentDisposition: args.customerPaymentDisposition,
+            customerReceiptSettlement: {
+              refundedMinor: customerSettlement.refundedMinor,
+              retainedMinor: customerSettlement.retainedMinor,
+              refundPaymentIds: customerSettlement.paymentIds,
+              refundEventIds: customerSettlement.eventIds,
+              method: customerPayout?.method,
+              reference: customerPayout?.reference,
+              paidAt: customerPayout?.paidAt,
+            },
             completedBy: user._id,
             completedAt: now,
           },
@@ -935,12 +1013,33 @@ export const unwindStatus = query({
     // would reveal the protected contribution) nor any free text.
     const financeReader = mayReadFinanceEconomics(role);
     const unwindActor = holds(role, START_PERMS) || mayRecordForwardReturn(role);
+    let customerReceiptPreview: { amountMinor: number; currency: string } | null = null;
+    if (unwind?.status === "ACTIVE" && (financeReader || unwindActor)) {
+      const sale = await ctx.db.get(unwind.saleId);
+      if (sale?.orgId === args.orgId) {
+        try {
+          const plan = await planSaleInvoiceReceiptReversal(ctx, args.orgId, sale);
+          customerReceiptPreview = {
+            amountMinor: plan.totalMinor,
+            currency: plan.applications[0]?.application.currency ?? "",
+          };
+        } catch (error) {
+          console.error("Could not preview customer receipt disposition for deal unwind", error);
+          // The finish refusal, derived from the same plan, carries the reason.
+        }
+      }
+    }
     const evidence =
       unwind !== null && (financeReader || unwindActor)
         ? {
             reason: financeReader ? unwind.reason : null,
             remittanceMinor: unwind.remittanceMinor,
             remittanceMethod: unwind.remittanceMethod,
+            customerReceiptMinor: customerReceiptPreview?.amountMinor ?? null,
+            customerReceiptCurrency: customerReceiptPreview?.currency ?? null,
+            // The dialog offers a customer payout only when this is true (pilot switch off AND the viewer may pay out).
+            customerPayoutAvailable:
+              !(CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED as boolean) && holds(role, [PERMISSIONS.MANAGE_FINANCE]),
             forwardDueMinor: financeReader ? unwind.forwardDueMinor : null,
             forwardReturn: unwind.forwardReturn
               ? {
@@ -965,6 +1064,17 @@ export const unwindStatus = query({
                   vehicleReturnedAt: unwind.completion.vehicleReturnedAt,
                   vehicleReturnNote: financeReader ? unwind.completion.vehicleReturnNote : null,
                   customerPaymentDisposition: unwind.completion.customerPaymentDisposition,
+                  customerReceiptSettlement: unwind.completion.customerReceiptSettlement
+                    ? {
+                        refundedMinor: unwind.completion.customerReceiptSettlement.refundedMinor,
+                        retainedMinor: unwind.completion.customerReceiptSettlement.retainedMinor,
+                        method: unwind.completion.customerReceiptSettlement.method ?? null,
+                        reference: financeReader
+                          ? unwind.completion.customerReceiptSettlement.reference ?? null
+                          : null,
+                        paidAt: unwind.completion.customerReceiptSettlement.paidAt ?? null,
+                      }
+                    : null,
                   completedAt: unwind.completion.completedAt,
                 }
               : null,

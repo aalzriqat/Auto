@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { extractClientCalls } from "./clientPaths.mjs";
+import { createClientProgram, extractClientCalls } from "./clientPaths.mjs";
 import { CLIENT_SURFACES, listSurfaceFiles, unscannedConvexClients } from "./clientFiles.mjs";
 
 /**
@@ -38,7 +38,17 @@ type Extraction = {
 };
 
 const fixture = (name: string) => `scripts/contractSkew/__fixtures__/census/${name}.tsx`;
-const extract = (name: string) => extractClientCalls([fixture(name)], "tsconfig.json") as unknown as Extraction;
+// One type-checked program for every fixture this file reads, as census.test.ts
+// does. Resolving the generated `api` type is the expensive part (~25 s per
+// program) and is identical for each fixture; extraction is still scoped to the
+// single file named, so each describe sees only its own fixture's records.
+const FIXTURES = ["realForms", "requestMaps", "escapes", "elementAccess"];
+let shared: ReturnType<typeof createClientProgram> | undefined;
+const sharedProgram = () => (shared ??= createClientProgram(FIXTURES.map(fixture), "tsconfig.json"));
+const extract = (name: string) => {
+  if (!FIXTURES.includes(name)) throw new Error(`${name} is not in this file's shared fixture program`);
+  return extractClientCalls([fixture(name)], "tsconfig.json", { program: sharedProgram() }) as unknown as Extraction;
+};
 const lineOf = (name: string, needle: string) =>
   readFileSync(fixture(name), "utf8").split(/\r?\n/).findIndex((l) => l.includes(needle)) + 1;
 

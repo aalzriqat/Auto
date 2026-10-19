@@ -1,4 +1,5 @@
 import { test, expect, type Browser } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 import { gotoOrgRoute, APPROVER_AUTH_FILE, resolveOrgId, authenticatedConvexClient } from "../utils";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -64,7 +65,7 @@ async function proveLegacyApproveRefused(browser: Browser, orgId: Id<"organizati
   // (ii-b) approve of the seeded legacy draft is refused. MANDATORY where the draft is seeded.
   // Sent as the AUTHORIZED, DISTINCT reviewer (the approver seat), not as the
   // draft's creator, so the refusal is the pilot switch and nothing else.
-  const approverContext = await browser.newContext({ storageState: APPROVER_AUTH_FILE });
+  const approverContext = await newContainedContext(browser, { storageState: APPROVER_AUTH_FILE });
   try {
     const approverPage = await approverContext.newPage();
     await gotoOrgRoute(approverPage, "accounting");

@@ -38,10 +38,27 @@ vi.mock("@/hooks/use-permissions", () => ({
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
+    useQuery: (_reference: never, args: unknown) =>
+      args === "skip" ? undefined : { banks: [{ _id: "bank1", name: "Operating", currency: "JOD" }], truncated: false },
     useMutation: (reference: never) => async (args: Record<string, unknown>) => {
       const name = getFunctionName(reference);
       stubs.calls.push({ name, args });
       return name === "deposits:create" ? "deposit1" : "request1";
+    },
+  };
+});
+vi.mock("@/components/ui/select", async () => {
+  const React = await import("react");
+  const Ctx = React.createContext<(value: string) => void>(() => undefined);
+  return {
+    Select: ({ onValueChange, children }: { onValueChange: (value: string) => void; children: React.ReactNode }) =>
+      <Ctx.Provider value={onValueChange}>{children}</Ctx.Provider>,
+    SelectTrigger: () => null,
+    SelectValue: () => null,
+    SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    SelectItem: ({ value }: { value: string }) => {
+      const choose = React.useContext(Ctx);
+      return <button type="button" data-testid={`bank-${value}`} onClick={() => choose(value)} />;
     },
   };
 });
@@ -127,6 +144,8 @@ describe("RecordDepositDialog — request vs record", () => {
     expect(stubs.calls).toEqual([]);
 
     fireEvent.change(screen.getByTestId("method-select"), { target: { value: "BANK_TRANSFER" } });
+    expect(screen.getByRole("button", { name: "RecordDeposit" })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByTestId("bank-bank1"));
     fireEvent.click(screen.getByRole("button", { name: "RecordDeposit" }));
 
     await waitFor(() => expect(onRecorded).toHaveBeenCalledWith("deposit1"));
@@ -137,6 +156,7 @@ describe("RecordDepositDialog — request vs record", () => {
       quoteId: "quote1",
       amount: 1500,
       method: "BANK_TRANSFER",
+      bankAccountId: "bank1",
     });
   });
 });
@@ -240,7 +260,7 @@ describe("RecordDepositDialog — the amount field (SCRUM-628 F-05)", () => {
     stubs.permissions = permissions;
     renderDialog();
     if (permissions.length) {
-      fireEvent.change(screen.getByTestId("method-select"), { target: { value: "BANK_TRANSFER" } });
+      fireEvent.change(screen.getByTestId("method-select"), { target: { value: "CASH" } });
     }
     await submitAmount("8800000000000.029");
     await screen.findByText("DepositAmountInvalid");

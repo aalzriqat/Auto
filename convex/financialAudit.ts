@@ -15,6 +15,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { assertManualJournalsEnabled } from "./utils/manualJournalContainment";
 import { scaleForCurrency } from "./utils/money";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
 
 type AuditActionType =
   | "CREATE_PERIOD"
@@ -265,6 +266,12 @@ async function resolveManualJournalCurrency(
     }
     if (!account.active) {
       throw new ConvexError(`Account "${account.name}" is inactive and cannot be posted to. Reactivate it first or use a different account.`);
+    }
+    // Manual journal lines have no physical bank field. Even if an older
+    // chart configuration permits manual posting, they cannot safely debit or
+    // credit the BANK_ACCOUNT control without inventing an attribution.
+    if (account.systemKey === SYSTEM_KEYS.BANK_ACCOUNT) {
+      throw new ConvexError("This manual journal cannot use the bank control account because it cannot capture a physical bank. Nothing was posted.");
     }
     if (!account.allowManualPosting) {
       throw new ConvexError(`Account "${account.name}" does not allow manual posting.`);

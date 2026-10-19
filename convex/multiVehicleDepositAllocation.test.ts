@@ -738,6 +738,32 @@ describe("a slice that was refunded or forfeited", () => {
     return { s, holdId };
   }
 
+  test("a bank refund of a released slice requires and credits the selected physical bank", async () => {
+    const { s, holdId } = await releasedSlice("bankSlice");
+    await expect(s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId, holdId, treatment: "REFUND_TO_CUSTOMER",
+      refundMethod: "BANK_TRANSFER",
+    })).rejects.toThrow(/Select the bank account/i);
+    const bankAccountId = await s.t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId: s.orgId, name: "Slice payout bank", currency: "JOD",
+      openingBalanceMinor: 0, openingBalanceDate: Date.now(),
+      isActive: true, isReconciliationTarget: false,
+      createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId, holdId, treatment: "REFUND_TO_CUSTOMER",
+      refundMethod: "BANK_TRANSFER", bankAccountId,
+    });
+    const refundEvent = await s.t.run(async (ctx) => (await ctx.db.query("accountingEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())
+      .find((event) => event.eventType === "DEPOSIT_REFUNDED"));
+    expect(refundEvent?.journalEntryId).toBeDefined();
+    const bankLine = await s.t.run(async (ctx) => (await ctx.db.query("journalLines")
+      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", refundEvent!.journalEntryId!)).collect())
+      .find((line) => line.bankAccountId === bankAccountId));
+    expect(bankLine?.creditMinor).toBe(3_000 * SCALE);
+  });
+
   test("does not come back as money the quote can still allocate", async () => {
     // The defect this replaces: a decision recorded by zeroing the slice made
     // it vanish from the released bucket and reappear in the unallocated

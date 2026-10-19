@@ -46,7 +46,9 @@ vi.mock("@/components/payments/PaymentMethodSelect", () => ({
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
-    useQuery: () => ({
+    useQuery: (reference: never) => getFunctionName(reference) === "supplierCostRecoveries:listReceiptBankOptions"
+      ? { banks: [{ _id: "bank_1", name: "Operating", currency: "JOD" }], truncated: false }
+      : ({
       complete: true,
       items: [
         {
@@ -98,10 +100,12 @@ describe("SupplierCostRecoveriesSection receipt method (SCRUM-469)", () => {
     const dialog = openDialog();
     fireEvent.change(within(dialog).getByTestId("method-select"), { target: { value: "BANK_TRANSFER" } });
     expect(within(dialog).queryByRole("status")).toBeNull();
+    expect(record(dialog).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText("ReceiptBankAccount"), { target: { value: "bank_1" } });
     expect(record(dialog).disabled).toBe(false);
     fireEvent.click(record(dialog));
     await waitFor(() => expect(stubs.calls).toHaveLength(1));
-    expect(stubs.calls[0]!.args).toMatchObject({ recoveryId: "rec_1", amountMinor: 500_000, method: "BANK_TRANSFER" });
+    expect(stubs.calls[0]!.args).toMatchObject({ recoveryId: "rec_1", amountMinor: 500_000, method: "BANK_TRANSFER", bankAccountId: "bank_1" });
   });
 
   test("the last choice is not remembered when the dialog is opened again", () => {

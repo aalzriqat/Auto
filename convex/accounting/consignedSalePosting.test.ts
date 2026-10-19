@@ -149,6 +149,7 @@ describe("a consigned vehicle sold as the supplier's agent", () => {
       amountMinor: jod(9_500),
       currency: "JOD",
       paymentMethod: "BANK_TRANSFER",
+      bankAccountId: "bankA",
       costOrigin: "COGS",
     });
 

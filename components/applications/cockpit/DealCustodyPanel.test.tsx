@@ -98,6 +98,7 @@ function wiring(overrides: Partial<DealCustodyWiring> = {}): DealCustodyWiring {
 function actions(overrides: Partial<DealCustodyActions> = {}): DealCustodyActions {
   return {
     members: [{ userId: "u2" as Id<"users">, name: "Rami" }, { userId: "u3" as Id<"users">, name: "Lina" }],
+    bankOptions: { banks: [{ _id: "bank_1" as Id<"bankAccounts">, name: "Operating", currency: "JOD" }], truncated: false },
     eligibleFees: [],
     scaleOf: () => 3,
     onPlan: vi.fn(async () => {}),
@@ -246,10 +247,18 @@ describe("DealCustodyPanel", () => {
       fireEvent.click(submit);
       expect(a.onMove).not.toHaveBeenCalled();
       fireEvent.change(within(dialog).getByTestId("method-select"), { target: { value: "BANK_TRANSFER" } });
+      expect(submit.disabled).toBe(true);
+      fireEvent.change(within(dialog).getByTestId("custody-reimbursed-bank"), { target: { value: "bank_1" } });
+      expect(submit.disabled).toBe(false);
+      fireEvent.change(within(dialog).getByTestId("method-select"), { target: { value: "CASH" } });
+      expect(within(dialog).queryByTestId("custody-reimbursed-bank")).toBeNull();
+      fireEvent.change(within(dialog).getByTestId("method-select"), { target: { value: "BANK_TRANSFER" } });
+      expect(submit.disabled).toBe(true);
+      fireEvent.change(within(dialog).getByTestId("custody-reimbursed-bank"), { target: { value: "bank_1" } });
       expect(submit.disabled).toBe(false);
       expect(within(dialog).queryByTestId("custody-reimbursed-method-required")).toBeNull();
       fireEvent.click(submit);
-      expect(a.onMove).toHaveBeenCalledWith("cust1", "REIMBURSED", expect.objectContaining({ amountMinor: 200_000, method: "BANK_TRANSFER" }));
+      expect(a.onMove).toHaveBeenCalledWith("cust1", "REIMBURSED", expect.objectContaining({ amountMinor: 200_000, method: "BANK_TRANSFER", bankAccountId: "bank_1" }));
     });
 
     test("every movement dialog opens with no method, and reopening does not remember the last one", () => {

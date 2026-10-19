@@ -147,7 +147,8 @@ describe("SCRUM-548 prune leaked Convex previews", () => {
   });
 
   it.each([
-    ["protected production name", dep("kindly-hound-172")],
+    ["protected production name", dep("clever-mockingbird-719")],
+    ["protected earlier production name", dep("kindly-hound-172")],
     ["isDefault true", dep("aaa-bbb-1", { isDefault: true })],
     ["prod type", dep("aaa-bbb-1", { deploymentType: "prod" })],
     ["dev type", dep("aaa-bbb-1", { deploymentType: "dev" })],

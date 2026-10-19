@@ -1,6 +1,7 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { seedBank } from "../test-utils/bankFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -127,7 +128,8 @@ describe("a1 - the dead end: a description past the cap is refused at entry, an 
     const feeId = await addFee(seed, { description, receiptReference: "€".repeat(MAX_FEE_RECEIPT_REFERENCE_CHARS) });
     expect((await rowOf(seed, feeId))?.description).toHaveLength(MAX_FEE_DESCRIPTION_CHARS);
     await seed.asUser.mutation(api.financeDealCosts.recordDirectFeePayment, {
-      orgId: seed.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now() - 1000, expectedAmountMinor: jod(50),
+      orgId: seed.orgId, feeId, method: "BANK_TRANSFER", bankAccountId: await seedBank(seed.t, seed.orgId),
+      paidAt: Date.now() - 1000, expectedAmountMinor: jod(50),
       reference: "€".repeat(MAX_DIRECT_PAYMENT_REFERENCE_CHARS), idempotencyKey: crypto.randomUUID(),
     });
     expect((await rowOf(seed, feeId))?.directPayment).toBeDefined();
@@ -148,7 +150,7 @@ describe("a1 - the dead end: a description past the cap is refused at entry, an 
       })
     ).rejects.toThrow(/at most 200 characters/);
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "n".repeat(MAX_FEE_RECONCILIATION_NOTES_CHARS + 1) })
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "n".repeat(MAX_FEE_RECONCILIATION_NOTES_CHARS + 1), expectedActualAmountMinor: jod(50), expectedActualEvidenceRevision: 0 })
     ).rejects.toThrow(/at most 500 characters/);
     await expect(
       seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "v".repeat(MAX_FEE_VOID_REASON_CHARS + 1) })
@@ -216,7 +218,8 @@ describe("a3 - the template path: a long configured description is shortened on 
     const feeId = await record(seed);
     expect((await rowOf(seed, feeId))?.description).toHaveLength(MAX_FEE_DESCRIPTION_CHARS);
     await seed.asUser.mutation(api.financeDealCosts.recordDirectFeePayment, {
-      orgId: seed.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now() - 1000, expectedAmountMinor: jod(50), idempotencyKey: crypto.randomUUID(),
+      orgId: seed.orgId, feeId, method: "BANK_TRANSFER", bankAccountId: await seedBank(seed.t, seed.orgId),
+      paidAt: Date.now() - 1000, expectedAmountMinor: jod(50), idempotencyKey: crypto.randomUUID(),
     });
     await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "entered in error" });
     expect((await rowOf(seed, feeId))?.voidedAt).toBeDefined();

@@ -115,6 +115,10 @@ export type DealFinancialSummaryInputs = Readonly<{
     customerFirstPaymentMinor?: number;
     customerGapCashToDealerMinor?: number;
     customerGapInstallmentToDealerMinor?: number;
+    /** The CONFIRMED part of what the customer agreed to pay the finance company, the only part credited against the contribution. */
+    customerGapToFinanceCompanyAppliedMinor?: number;
+    /** What is still to be confirmed of the creditable part of that agreement: the deal's one balance. */
+    customerGapToFinanceCompanyUnconfirmedMinor?: number;
     dealerContributionSettlement?: "PAID_SEPARATELY" | "NETTED_FROM_REMITTANCE";
     /** What the financier is expected to remit to the dealership, as the economics froze it. */
     expectedDealerRemittanceMinor?: number;
@@ -197,6 +201,22 @@ export type DealFinancialSummary = Readonly<{
     installmentMinor: number;
   }> | null;
   customerGapCashPlannedMinor: number | null;
+  /**
+   * The part of the customer's shortfall share they pay the finance company
+   * directly that is CONFIRMED paid and so credited against the contribution
+   * (SCRUM-766 PR-B): never dealership money, and already netted out of the
+   * planned contribution below. `0` when nothing was credited; `null` when the
+   * row carries no figure.
+   */
+  customerGapToFinanceCompanyPlannedMinor: number | null;
+  /**
+   * What is still to be confirmed of the part of the customer's payment to the
+   * finance company that could be credited: the deal's ONE stored balance, the
+   * same figure the closing gate and the payment card read. The planned
+   * contribution below still includes it, and the deal cannot close until it is
+   * confirmed. `0` when fully confirmed; `null` when the row carries no figure.
+   */
+  customerGapToFinanceCompanyUnconfirmedMinor: number | null;
   /** The customer's first payment as the economics froze it, whoever receives it. */
   customerFirstPaymentMinor: number | null;
   financier: Readonly<{
@@ -270,6 +290,8 @@ export type SummaryMoneyField =
   | "customerPaidToDealer"
   | "customerGapPlanned"
   | "customerGapCashPlanned"
+  | "customerGapToFinanceCompanyPlanned"
+  | "customerGapToFinanceCompanyUnconfirmed"
   | "customerFirstPayment"
   | "financierReceived"
   | "financierFundedPortion"
@@ -430,6 +452,14 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
     }
   }
 
+  const confirmedToFinanceCompany = boundary.serve("customerGapToFinanceCompanyPlanned", app.customerGapToFinanceCompanyAppliedMinor);
+  // The deal's ONE stored balance, as the closing gate and the payment card read it - never
+  // re-derived here from the agreement, which can exceed what is creditable.
+  const customerGapToFinanceCompanyUnconfirmedMinor = boundary.serve(
+    "customerGapToFinanceCompanyUnconfirmed",
+    app.customerGapToFinanceCompanyUnconfirmedMinor
+  );
+
   return {
     currency,
     customerSalePrice: customerSalePriceFor(app, boundary),
@@ -437,6 +467,8 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
     customerPaidToDealer,
     customerGapPlanned,
     customerGapCashPlannedMinor: boundary.serve("customerGapCashPlanned", app.customerGapCashToDealerMinor),
+    customerGapToFinanceCompanyPlannedMinor: confirmedToFinanceCompany,
+    customerGapToFinanceCompanyUnconfirmedMinor,
     customerFirstPaymentMinor: boundary.serve("customerFirstPayment", app.customerFirstPaymentMinor),
     financier: {
       receivedMinor: boundary.serve("financierReceived", app.disbursedAmountMinor),

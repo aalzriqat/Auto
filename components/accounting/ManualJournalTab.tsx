@@ -73,7 +73,9 @@ export function ManualJournalTab() {
   const approveDraft = useMutation(api.financialAudit.approveManualJournal);
   const rejectDraft = useMutation(api.financialAudit.rejectManualJournal);
 
-  const manualAccounts = (accounts ?? []).filter((a) => a.allowManualPosting);
+  // A legacy chart setting may allow manual posting on the bank control, but
+  // this form cannot capture the physical bank required by its journal line.
+  const manualAccounts = (accounts ?? []).filter((a) => a.allowManualPosting && a.systemKey !== "BANK_ACCOUNT");
   const accountOptions = manualAccounts.map((a) => ({
     value: a._id as string,
     label: a.name,

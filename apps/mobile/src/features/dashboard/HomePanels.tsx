@@ -646,6 +646,12 @@ export function HomeOverviewCard({
 
   const kpis = deriveOverviewKpis(stats);
   const previous = readPreviousPeriod(stats);
+  // An unavailable figure (a source window exceeded its read cap) is stated as
+  // such - never rendered as a zero or as the total of a prefix.
+  const kpiAmount = (value: number | null) =>
+    value === null ? t("dashboardFigureUnavailable") : money(value, locale, currency);
+  const anyKpiUnavailable =
+    kpis.sales === null || kpis.expenses === null || kpis.netProfit === null;
 
   return (
     <Card style={[styles.panel, { direction: textDirection }]}>
@@ -668,7 +674,7 @@ export function HomeOverviewCard({
       />
       <View style={styles.kpiRow}>
         <KpiColumn
-          amount={money(kpis.sales, locale, currency)}
+          amount={kpiAmount(kpis.sales)}
           delta={deriveKpiDelta(kpis.sales, previous?.sales)}
           icon="reports"
           iconToken="homeKpiSalesIcon"
@@ -677,7 +683,7 @@ export function HomeOverviewCard({
         />
         <View style={styles.kpiDivider} />
         <KpiColumn
-          amount={money(kpis.expenses, locale, currency)}
+          amount={kpiAmount(kpis.expenses)}
           delta={deriveKpiDelta(kpis.expenses, previous?.expenses)}
           icon="finance"
           iconToken="homeKpiExpenseIcon"
@@ -686,7 +692,7 @@ export function HomeOverviewCard({
         />
         <View style={styles.kpiDivider} />
         <KpiColumn
-          amount={money(kpis.netProfit, locale, currency)}
+          amount={kpiAmount(kpis.netProfit)}
           delta={deriveKpiDelta(kpis.netProfit, previous?.netProfit)}
           icon="trendUp"
           iconToken="homeKpiProfitIcon"
@@ -698,7 +704,13 @@ export function HomeOverviewCard({
           figure above is short. A sale whose basis could not be established is
           excluded from turnover deliberately — fail-closed — but excluding it
           silently just swaps an overstated number for an understated one. */}
-      {stats.truncated?.sales || stats.truncated?.turnover ? (
+      {/* Independent notes: an unavailable expense window must not hide that
+          the (still shown) sales figure is short. An unavailable sales figure
+          is not "partial", so the partial note needs a sales figure on screen. */}
+      {anyKpiUnavailable ? (
+        <Text style={[styles.panelNote, type.caption]}>{t("dashboardFiguresUnavailableNote")}</Text>
+      ) : null}
+      {kpis.sales !== null && (stats.truncated?.sales || stats.truncated?.turnover) ? (
         <Text style={[styles.panelNote, type.caption]}>{t("todayForRolePartialTotal")}</Text>
       ) : null}
     </Card>

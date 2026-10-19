@@ -226,7 +226,12 @@ describe("dashboard.stats — VEHICLE_SALE transaction fallback", () => {
     );
 
     const tables = await tablesQueriedByStats(asUser, { orgId, timeRange: "ALL_TIME" });
-    expect(countOf(tables, "transactions")).toBe(1);
+    // The ledger IS consulted when the window has no sale rows. Live ledger rows
+    // hold `isDeleted` unset or legacy `false`, read as one query each; one
+    // unset row is under the cap, so both run. This counts `db.query` calls
+    // only - it cannot show which index or range a query used, or the rows it
+    // scanned.
+    expect(countOf(tables, "transactions")).toBe(2);
 
     const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
     expect(result.salesThisMonth).toBe(1);
@@ -239,12 +244,12 @@ describe("dashboard.stats — VEHICLE_SALE transaction fallback", () => {
  * `truncated.sales` claims the published sales figures are incomplete. Whether
  * they are is a property of the READ that produced them, not of a row count:
  *
- * - DAY / MONTH / YEAR read `periodSales` with `.collect()` — the complete
- *   range comes back, so exactly SALES_CAP rows means the period genuinely had
- *   that many and nothing was dropped.
- * - ALL_TIME reads `.take(SALES_CAP)` and can stop silently at the cap.
- * - The fallback ledger always reads `.take(SALES_CAP)`, so it is truncated at
- *   the cap — but only while it is the authoritative source.
+ * - Every window (DAY / MONTH / YEAR / ALL_TIME) reads at most SALES_CAP + 1
+ *   rows. Exactly SALES_CAP rows is a complete window; only the extra row
+ *   proves overflow. The SALES_CAP + 1 case, where the figures turn `null`, is
+ *   covered in dashboardWindowCaps.test.ts.
+ * - The fallback ledger has the same bound, and only counts while it is the
+ *   authoritative source (no sale rows in the window).
  */
 describe("dashboard.stats — truncated.sales is source-aware", () => {
   const SALES_CAP = 5000;
@@ -310,7 +315,7 @@ describe("dashboard.stats — truncated.sales is source-aware", () => {
     expect(result.truncated.sales).toBe(false);
   });
 
-  test("ALL_TIME with SALES_CAP sale rows IS truncated — take stopped at the cap", async () => {
+  test("ALL_TIME with exactly SALES_CAP sale rows is NOT truncated — only CAP + 1 proves overflow", async () => {
     const { orgId, userId, vehicleId, customerId, asUser, t } = await setup();
     await seedSales(
       t,
@@ -321,16 +326,18 @@ describe("dashboard.stats — truncated.sales is source-aware", () => {
 
     const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
 
-    expect(result.truncated.sales).toBe(true);
+    expect(result.salesThisMonth).toBe(SALES_CAP);
+    expect(result.truncated.sales).toBe(false);
   });
 
-  test("no sales and a capped fallback ledger IS truncated", async () => {
+  test("no sales and exactly SALES_CAP fallback ledger rows is NOT truncated", async () => {
     const { orgId, asUser, t } = await setup();
     await seedLedger(t, orgId, SALES_CAP, Date.now() - 60 * 60 * 1000);
 
     const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "MONTH" });
 
-    expect(result.truncated.sales).toBe(true);
+    expect(result.salesThisMonth).toBe(SALES_CAP);
+    expect(result.truncated.sales).toBe(false);
   });
 
   test("sales present: a capped ledger is neither read nor allowed to set the flag", async () => {

@@ -616,6 +616,7 @@ describe("a rejected eager dispatch after the row is POSTED", () => {
     expect(counters, "the drain reports what it queued, not what it posted").toEqual({
       scheduled: 1,
       alreadyInFlight: 0,
+      periodHeld: 0,
     });
 
     // The journal was not duplicated by the failure.

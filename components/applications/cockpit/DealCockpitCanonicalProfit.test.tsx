@@ -26,6 +26,10 @@ vi.mock("@/hooks/useCurrency", () => ({
   useCurrency: () => ({ code: "JOD", symbol: "JD", displayLabel: "JOD", format: (n: number) => `${n} JOD`, formatCompact: String }),
 }));
 vi.mock("@/components/accounting/AccountingTabShared", () => ({ scaleForCurrency: () => 3 }));
+vi.mock("convex/react", async (importOriginal) => ({
+  ...await importOriginal<typeof import("convex/react")>(),
+  useQuery: () => undefined,
+}));
 
 import { DealCockpitView } from "./DealCockpit";
 
@@ -92,6 +96,8 @@ function overview(): FinancedDealOverviewData {
       approvedPurchaseAmountMinor: 12_500 * SCALE,
       customerPaidToDealer: { heldDepositMinor: 0, totalMinor: 0 },
       customerGapCashPlannedMinor: null,
+      customerGapToFinanceCompanyPlannedMinor: null,
+      customerGapToFinanceCompanyUnconfirmedMinor: null,
       customerFirstPaymentMinor: null,
       financier: { receivedMinor: null, fundedPortionMinor: 12_000 * SCALE, outstanding: { state: "NOT_YET_RECEIVABLE", amountMinor: null, basis: null } },
       dealerOutlay: {

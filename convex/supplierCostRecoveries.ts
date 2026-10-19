@@ -16,6 +16,7 @@ import {
   supplierCostRecoveryReceiptReversalKey,
 } from "./accounting/supplierCostRecoveryPosting";
 import { auditLog } from "./financialAudit";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 
 /**
  * SCRUM-389 — recovering supplier-borne vehicle costs.
@@ -250,6 +251,7 @@ export const listReceipts = query({
       amountMinor: v.number(),
       currency: v.string(),
       method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+      bankAccountId: v.union(v.id("bankAccounts"), v.null()),
       receivedDate: v.number(),
       reference: v.union(v.string(), v.null()),
       status: v.union(v.literal("POSTING"), v.literal("LIVE"), v.literal("REVERSED")),
@@ -270,11 +272,22 @@ export const listReceipts = query({
       amountMinor: r.amountMinor,
       currency: r.currency,
       method: r.method,
+      bankAccountId: r.bankAccountId ?? null,
       receivedDate: r.receivedDate,
       reference: r.reference ?? null,
       status: r.status,
       reversedAt: r.reversedAt ?? null,
     }));
+  },
+});
+
+/** Active physical banks in this recovery's currency for a receipt. */
+export const listReceiptBankOptions = query({
+  args: { orgId: v.id("organizations"), recoveryId: v.id("supplierCostRecoveries") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const recovery = await requireOwnedRow(ctx, args.orgId, "supplierCostRecoveries", args.recoveryId, "Supplier cost recovery not found.");
+    return await listEligibleBanks(ctx, args.orgId, recovery.currency);
   },
 });
 
@@ -306,6 +319,7 @@ export const recordReceipt = mutation({
     recoveryId: v.id("supplierCostRecoveries"),
     amountMinor: v.number(),
     method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     receivedDate: v.number(),
     reference: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -333,6 +347,7 @@ export const recordReceipt = mutation({
           recoveryId: args.recoveryId,
           amountMinor: args.amountMinor,
           method: args.method,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           receivedDate: args.receivedDate,
           reference: args.reference ?? null,
           notes: args.notes ?? null,
@@ -346,6 +361,15 @@ export const recordReceipt = mutation({
           args.recoveryId,
           "Supplier cost recovery not found."
         );
+        if (args.method === "BANK_TRANSFER") {
+          await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId, bankAccountId: args.bankAccountId, currency: recovery.currency,
+            missingMessage: "Choose the physical bank account that received this supplier recovery. Nothing has been recorded.",
+            currencySubject: "supplier cost recovery",
+          });
+        } else if (args.bankAccountId) {
+          throw new ConvexError("A cash supplier recovery cannot name a bank account.");
+        }
         // NaN, Infinity and fractions all fail `isSafeInteger`; `<= 0` alone
         // would let NaN through.
         if (!Number.isSafeInteger(args.amountMinor) || args.amountMinor <= 0) {
@@ -389,6 +413,7 @@ export const recordReceipt = mutation({
           amountMinor: args.amountMinor,
           currency: recovery.currency,
           method: args.method,
+          bankAccountId: args.bankAccountId,
           receivedDate: args.receivedDate,
           reference: args.reference?.trim() || undefined,
           notes: args.notes?.trim() || undefined,
@@ -406,6 +431,7 @@ export const recordReceipt = mutation({
           amountMinor: args.amountMinor,
           currency: recovery.currency,
           paymentMethod: args.method,
+          bankAccountId: args.bankAccountId,
           receivedDate: args.receivedDate,
           actorId: user._id,
         });

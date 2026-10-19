@@ -135,6 +135,8 @@ export default defineSchema({
     /** SCRUM-563 — financial reset counters; absent means 0. Protocol: `convex/utils/orgResetGeneration.ts`. */
     financialResetGeneration: v.optional(v.number()),
     financialResetCompletedGeneration: v.optional(v.number()),
+    /** Incremented whenever journal/period facts or BANK_ACCOUNT mapping change. */
+    bankAggregateMappingGeneration: v.optional(v.number()),
   }),
 
   organizationDeletionRequests: defineTable({
@@ -215,6 +217,10 @@ export default defineSchema({
 
   accountingPeriods: defineTable({
     orgId: v.id("organizations"),
+    // Set only when this period was created with synchronous snapshot writers.
+    // Older retained periods have no certificate and use journal lines for
+    // containing-period reports until their snapshots are reconciled.
+    snapshotFastPathEligible: v.optional(v.boolean()),
     startDate: v.number(),
     endDate: v.number(),
     fiscalYear: v.number(),
@@ -384,17 +390,31 @@ export default defineSchema({
     // "due now" rather than "invisible" — which is what a legacy backlog must
     // mean. That the index actually behaves that way is not assumed here; it is
     // proved against a real deployment (contract §4.2).
-    /** Present only while a worker attempt is outstanding. Absent = unclaimed. */
-    dispatchState: v.optional(v.literal("DISPATCHED")),
+    /**
+     * `DISPATCHED`: a worker attempt is outstanding. `PERIOD_HELD` (SCRUM-807): parked
+     * until a period covers `accountingDate`; neither due-work range matches it, so
+     * nothing re-selects it until `wakePeriodHeldRows` releases it. Absent = unclaimed.
+     */
+    dispatchState: v.optional(v.union(v.literal("DISPATCHED"), v.literal("PERIOD_HELD"))),
     /** Bumped on every claim and every manual revive; a stale worker loses. */
     generation: v.optional(v.number()),
     activeAttemptId: v.optional(v.string()),
     scheduledFunctionId: v.optional(v.id("_scheduled_functions")),
     /** When this row next becomes selectable. Absent = immediately due. */
     nextActionAt: v.optional(v.number()),
+    /**
+     * SCRUM-807 — set only while the row is HELD waiting for an accounting
+     * period to cover `accountingDate`. It lets a period opening find exactly
+     * the rows it unblocks by index. Absent for every other hold, for failures
+     * in backoff, and for rows written before this field existed (those are
+     * claimed once, re-evaluated and then marked like any new hold).
+     */
+    holdKind: v.optional(v.literal("PERIOD")),
   })
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
+    // SCRUM-807 — the period-held rows a period now covers, in date order.
+    .index("by_org_hold_date", ["orgId", "holdKind", "accountingDate"])
     // SCRUM-222 — the due-work index, mirroring `commitmentAuthorityWork`'s
     // `by_status_next_action`. One index serves both selector ranges:
     // unclaimed work (`dispatchState` absent) and claimed work awaiting
@@ -720,6 +740,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_date", ["orgId", "accountingDate"])
     .index("by_org_period", ["orgId", "periodId"])
+    .index("by_org_period_date", ["orgId", "periodId", "accountingDate"])
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
     .index("by_accounting_event", ["accountingEventId"])
     // SCRUM-555 lane-B: getPostedLines reads POSTED and REVERSED entries.
@@ -728,6 +749,7 @@ export default defineSchema({
   journalLines: defineTable({
     orgId: v.id("organizations"),
     journalEntryId: v.id("journalEntries"),
+    reportPosted: v.optional(v.boolean()),
     lineNumber: v.number(),
     accountId: v.id("chartOfAccounts"),
     debitMinor: v.number(),
@@ -746,6 +768,12 @@ export default defineSchema({
     payerNameSnapshot: v.optional(v.string()),
     salespersonId: v.optional(v.id("users")),
     cashierId: v.optional(v.id("users")),
+    /**
+     * SCRUM-54: the physical bank account a BANK_ACCOUNT control line moved
+     * money through, captured by the money-moving producer. Absent on legacy
+     * lines — those are unmatched and never inferred by amount/date.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     description: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
@@ -754,7 +782,14 @@ export default defineSchema({
     .index("by_org_account_date", ["orgId", "accountId", "accountingDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     // SCRUM-555 lane-B: getPostedLines date-range read without a query filter.
-    .index("by_org_date", ["orgId", "accountingDate"]),
+    .index("by_org_date", ["orgId", "accountingDate"])
+    .index("by_org_reportPosted_date", ["orgId", "reportPosted", "accountingDate"]),
+
+  journalReportEligibility: defineTable({
+    orgId: v.id("organizations"),
+    phase: v.union(v.literal("BUILDING"), v.literal("READY"), v.literal("BLOCKED")),
+    cursor: v.union(v.string(), v.null()),
+  }).index("by_org", ["orgId"]),
 
   // ─── Phase 3: Receivables, payments, and allocations subledger ────────────
 
@@ -1009,6 +1044,10 @@ export default defineSchema({
       debitMinor: v.number(),
       creditMinor: v.number(),
       description: v.optional(v.string()),
+      // SCRUM-54: the physical bank a BANK_ACCOUNT-control line seeds. Required
+      // by the mutations for that account, absent on every other line and on
+      // drafts saved before this field existed (which approval refuses).
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
@@ -1261,6 +1300,7 @@ export default defineSchema({
       // written before this field existed have none, treated as CASH (the
       // old normalizePaymentMethod default) wherever it's read.
       paymentMethod: v.optional(paymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     total: v.number(),
     updatedAt: v.number(),
@@ -1274,6 +1314,7 @@ export default defineSchema({
   vehicleCostCorrections: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     previousCost: v.number(),
     newCost: v.number(),
     reason: v.string(),
@@ -1440,6 +1481,7 @@ export default defineSchema({
      */
     amountReceived: v.optional(v.number()),
     receiptMethod: v.optional(paymentMethodValidator),
+    receiptBankAccountId: v.optional(v.id("bankAccounts")),
     /** Cheque number or transfer reference for the most recent receipt. */
     receiptReference: v.optional(v.string()),
     /** The bank or cash account the money arrived in. */
@@ -1536,6 +1578,7 @@ export default defineSchema({
     amountMinor: v.number(),
     currency: v.string(),
     method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     receivedDate: v.number(),
     reference: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -1624,6 +1667,8 @@ export default defineSchema({
     paidAt: v.optional(v.number()),
     paidBy: v.optional(v.id("users")),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Last payment's physical bank; each instalment also retains its bank on its accounting event. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** Cheque number or transfer reference. */
     paymentReference: v.optional(v.string()),
     /** The bank or cash account the payment left. */
@@ -1789,6 +1834,7 @@ export default defineSchema({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      bankAccountId: v.optional(v.id("bankAccounts")),
       purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
@@ -2037,6 +2083,37 @@ export default defineSchema({
       })
     ),
     /**
+     * SCRUM-411 (plan v3): the revenue this financed sale earned, net of the
+     * showroom's contribution, in minor units of `currency`, frozen at completion.
+     *
+     *   dealer-owned car:  consideration (A + R) - contra-revenue
+     *   consigned car:     consideration (A + R) - supplier entitlement - contra-revenue
+     *
+     * The same figure the general ledger nets (revenue credited less
+     * SALES_CONSIDERATION_REDUCTIONS debited), recorded so every report reads
+     * the books' number instead of re-deriving a gross one. SIGNED: a
+     * contribution larger than a consigned commission is a real loss and is
+     * recorded as one, never floored.
+     *
+     * Absent on every sale that is not a v3 financed completion (cash,
+     * `sales.create`, plan v1/v2, no plan) - readers keep the sale-price /
+     * `consignedMarginMinor` reading for those, exactly as before. Distinct from
+     * `consignedMarginMinor`, which stays the commission / supplier-claim basis
+     * (K - E) and is not netted of the contribution.
+     *
+     * `considerationMinor` is that consideration K = A + R itself, in the same
+     * `currency`, frozen in the same patch. It bounds a THROUGH_DEALERSHIP supplier's
+     * entitlement for the readers (K exceeds the operational `salePrice` when the customer
+     * absorbs a net shortfall). Absent on a v3 sale completed before it was recorded.
+     */
+    financedNetRevenue: v.optional(
+      v.object({
+        minor: v.number(),
+        currency: v.string(),
+        considerationMinor: v.optional(v.number()),
+      })
+    ),
+    /**
      * What the supplier is owed for the car, in minor units, frozen at
      * completion — his entitlement, denominated in `consignedMarginCurrency`.
      *
@@ -2098,6 +2175,7 @@ export default defineSchema({
     commissionPaidAt: v.optional(v.number()),
     commissionPaidBy: v.optional(v.id("users")),
     commissionPaymentMethod: v.optional(paymentMethodValidator),
+    commissionBankAccountId: v.optional(v.id("bankAccounts")),
     commissionPaymentIdempotencyKey: v.optional(v.string()),
     // A sale is either live (unset) or soft-deleted (true); `false` is
     // unrepresentable, so the by_org_deleted / by_org_salesperson_deleted index
@@ -2119,6 +2197,9 @@ export default defineSchema({
     // created early but completed later would land in the wrong page.
     .index("by_org_salesperson_saleDate", ["orgId", "salespersonId", "saleDate"])
     .index("by_org_saleDate", ["orgId", "saleDate"])
+    // Dashboard totals (dated windows and ALL_TIME) need completed, non-deleted
+    // rows in sale-date order.
+    .index("by_org_status_live_saleDate", ["orgId", "status", "isDeleted", "saleDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_quote", ["quoteId"])
     .index("by_lead", ["leadId"]),
@@ -2213,6 +2294,7 @@ export default defineSchema({
     refundMinor: v.number(), // cash/bank refund received for the unused portion, 0 if none
     refundTaxMinor: v.optional(v.number()), // VAT portion of the refund, 0/undefined if none
     refundPaymentMethod: v.optional(paymentMethodValidator),
+    refundBankAccountId: v.optional(v.id("bankAccounts")),
     writeOffMinor: v.number(), // non-refundable unused portion expensed immediately, 0 if none
     previousTermMonths: v.number(),
     newTermMonths: v.number(),
@@ -2242,6 +2324,7 @@ export default defineSchema({
     refundMinor: v.number(),
     refundTaxMinor: v.optional(v.number()),
     refundPaymentMethod: v.optional(paymentMethodValidator),
+    refundBankAccountId: v.optional(v.id("bankAccounts")),
     writeOffMinor: v.number(),
     newTermMonths: v.number(),
     reason: v.string(),
@@ -2293,6 +2376,8 @@ export default defineSchema({
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     idempotencyKey: v.optional(v.string()),
     paymentMethod: v.optional(paymentMethodValidator),
+    /** Physical bank used by a paid transfer, issued cheque or card expense. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
@@ -2333,10 +2418,40 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_date", ["orgId", "date"])
+    // Dashboard ranges: live (isDeleted undefined or false - two ranges, as the
+    // optional field holds either) and unreversed, in date order. Both
+    // exclusions are in the index so a read never scans deleted or reversed rows.
+    .index("by_org_deleted_reversedAt_date", ["orgId", "isDeleted", "reversedAt", "date"])
     // Finds expenses whose *reversal* lands in a reporting window even though
     // the expense itself is dated long before it — a date-range scan over
     // `by_org_date` would never reach them.
     .index("by_org_reversedAt", ["orgId", "reversedAt"]),
+
+  // SCRUM-807: dashboard expense figures per (org, generation, UTC month). Each
+  // array holds one integer per UTC day 1..31, in thousandths of the org
+  // currency (showroomCount is a row count). Maintained by the expenses trigger;
+  // see convex/utils/dashboardExpenseSummary.ts. Rows are never deleted.
+  dashboardExpenseMonths: defineTable({
+    orgId: v.id("organizations"),
+    generation: v.number(),
+    month: v.number(),
+    cashOut: v.array(v.number()),
+    showroom: v.array(v.number()),
+    general: v.array(v.number()),
+    showroomCount: v.array(v.number()),
+    unrepresentable: v.number(),
+    absTotal: v.number(),
+    overflowed: v.boolean(),
+  }).index("by_org_generation_month", ["orgId", "generation", "month"]),
+
+  // SCRUM-807: one row per summary generation. The newest generation controls
+  // reads; only READY is ever read. Older generations are kept, not maintained.
+  dashboardExpenseSummaryState: defineTable({
+    orgId: v.id("organizations"),
+    generation: v.number(),
+    phase: v.union(v.literal("BUILDING"), v.literal("READY"), v.literal("BLOCKED")),
+    countedThrough: v.optional(v.number()),
+  }).index("by_org_generation", ["orgId", "generation"]),
 
   tasks: defineTable({
     orgId: v.id("organizations"),
@@ -2362,7 +2477,38 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_status_alarm", ["status", "alarmTriggered"])
+    // SCRUM-807 — lets the alarm sweep read only the tasks that are due. Added
+    // alongside by_status_alarm; the older index is kept (indexes are never
+    // removed here).
+    .index("by_status_alarm_due", ["status", "alarmTriggered", "dueDate"])
     .index("by_org_customer", ["orgId", "customerId"]),
+
+  // SCRUM-807 — durable progress of ONE task alarm's manager notifications.
+  // Written in the same transaction that flags the task. Completed/cancelled
+  // deliveries retain their history and are excluded from the ACTIVE sweep.
+  // `cursor` is the memberships pagination cursor (null = not
+  // started); each page commits its notifications together with the cursor that
+  // says they were sent. `lastProgressAt` lets the alarm cron find a delivery whose
+  // continuation was lost; `attempts` counts those re-kicks since the last
+  // progress, because a page that throws rolls back and cannot count itself.
+  // A delivery that exhausts them is parked as FAILED. All delivery history,
+  // including the task title and assignee name, survives organization deletion
+  // by explicit owner policy; this table is not only in-flight work.
+  taskAlarmDeliveries: defineTable({
+    orgId: v.id("organizations"),
+    taskId: v.id("tasks"),
+    taskTitle: v.string(),
+    assigneeName: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    lastProgressAt: v.number(),
+    status: v.union(v.literal("ACTIVE"), v.literal("FAILED"), v.literal("COMPLETED"), v.literal("CANCELLED")),
+    completedAt: v.optional(v.number()),
+    attempts: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    // Status leads so terminal rows, which are never re-read by the sweep,
+    // cannot fill its batch ahead of live stalled ones.
+    .index("by_status_lastProgressAt", ["status", "lastProgressAt"]),
 
   taskHistory: defineTable({
     orgId: v.id("organizations"),
@@ -3098,6 +3244,15 @@ export default defineSchema({
       v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("OTHER"))
     ),
     legalInvoiceIssuedToOther: v.optional(v.string()),
+    /**
+     * SCRUM-411 (plan v3): who ISSUED the invoice. A genuine dealership invoice
+     * exists only for dealer-owned stock; on a sourced/importer-owned car the
+     * importer, a separate company, invoices the finance company and the
+     * dealership issues none for its margin. Optional evidence only: nothing
+     * here ever feeds revenue, the recognition date or readiness.
+     */
+    legalInvoiceIssuedBy: v.optional(v.union(v.literal("DEALERSHIP"), v.literal("THIRD_PARTY"))),
+    legalInvoiceIssuerName: v.optional(v.string()),
 
     // Whether the deal's accounting treatment has actually been established.
     //
@@ -3142,7 +3297,7 @@ export default defineSchema({
      * at finalize so the forward due never re-derives from moving inputs.
      * Absent on a v1 deal, which is never recomputed.
      */
-    financedSalePlanVersion: v.optional(v.union(v.literal(1), v.literal(2))),
+    financedSalePlanVersion: v.optional(v.union(v.literal(1), v.literal(2), v.literal(3))),
     financeCompanyForwardDueMinor: v.optional(v.number()),
     forwardDepositPortionMinor: v.optional(v.number()),
     forwardContributionPortionMinor: v.optional(v.number()),
@@ -3168,6 +3323,27 @@ export default defineSchema({
     customerGapCashToDealerMinor: v.optional(v.number()),
     customerGapInstallmentToDealerMinor: v.optional(v.number()),
     customerGapToFinanceCompanyMinor: v.optional(v.number()),
+    /**
+     * SCRUM-766 PR-B: how much of `customerGapToFinanceCompanyMinor` was credited
+     * against the showroom's contribution - only the part CONFIRMED by a
+     * `customerFinanceCompanyPayments` row; `dealerContributionMinor` is already
+     * net of it. Kept so the commissionable margin can use the contribution
+     * BEFORE the credit (owner ruling: the margin does not depend on where the
+     * customer's money goes). Absent means nothing was credited.
+     */
+    customerGapToFinanceCompanyAppliedMinor: v.optional(v.number()),
+    /**
+     * SCRUM-766 PR-B: THE balance of what the deal still needs confirmed - the
+     * part of the agreement that could be credited against the contribution
+     * (the agreement, capped by the customer's share and by the contribution)
+     * minus what is confirmed. Written by the economics recompute beside
+     * `customerGapToFinanceCompanyAppliedMinor` and nowhere else; the closing
+     * gate, the payment card, the overview and the confirm command's cap all
+     * read it, so none of them can disagree about it. Zero when nothing is left
+     * to confirm; absent until a recompute has run (a reader treats absent, with
+     * a payment agreed, as unconfirmed).
+     */
+    customerGapToFinanceCompanyUnconfirmedMinor: v.optional(v.number()),
     gapResolvedAt: v.optional(v.number()),
     gapResolvedBy: v.optional(v.id("users")),
     gapResolutionNotes: v.optional(v.string()),
@@ -3349,6 +3525,19 @@ export default defineSchema({
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
+    /**
+     * SCRUM-834. How many times this line's actual and its evidence (amount,
+     * paid date, receipt reference, attachments) have been RE-recorded
+     * through `recordActualFeeAmount`; absent on a line never re-recorded and
+     * read as 0. Monotonic and unrelated to `updatedAt`, which payment,
+     * custody and binding writes also move. `reconcileDealFee` pins the value
+     * its checker was looking at, so a reconciliation can never certify
+     * evidence that was replaced under it — even by a same-amount re-record.
+     * Written only by `recordActualFeeAmount`: the one writer that replaces
+     * those fields on an existing row (the inserts create new rows, which
+     * start at 0).
+     */
+    actualEvidenceRevision: v.optional(v.number()),
 
     /** Whether the line came from the company's fee template or was typed. */
     source: v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL")),
@@ -3480,6 +3669,7 @@ export default defineSchema({
    */
   financeCompanyForwards: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     applicationId: v.id("financeApplications"),
     // SCRUM-27: exactly ONE of the two is set - a configured company by id, a manual one by the name on its letter.
     financeCompanyId: v.optional(v.id("financeCompanies")),
@@ -3499,6 +3689,10 @@ export default defineSchema({
     reference: v.optional(v.string()),
     actorId: v.id("users"),
     createdAt: v.number(),
+    // SCRUM-411 P2-01: the sale plan fingerprint (A/F/H/D/R) this payment was
+    // recorded against. A payment made BEFORE finalizing counts only while the plan
+    // finalize would freeze still has this fingerprint; absent on older rows.
+    planFingerprint: v.optional(v.string()),
     // Reversal intent (the ledger decides whether it happened).
     reversalRequestedAt: v.optional(v.number()),
     reversalIdempotencyKey: v.optional(v.string()),
@@ -3508,6 +3702,71 @@ export default defineSchema({
     reversalActorId: v.optional(v.id("users")),
   })
     .index("by_org_application", ["orgId", "applicationId"]),
+
+  /**
+   * SCRUM-766 PR-B: evidence that the CUSTOMER paid the finance company directly
+   * toward the shortfall. Only a CONFIRMED row reduces the showroom's
+   * contribution; the agreed amount on the application is a promise, not money.
+   * The money never touches the dealership's books, so there is deliberately no
+   * posting and no ledger link here - the row is the audit trail. A row is
+   * voided, never deleted, and neither is possible once the deal is closed
+   * (the contribution is then frozen into the finalized plan).
+   *
+   * A payment is evidence against ONE agreement: `agreementResolvedAt` is the
+   * application's `gapResolvedAt` when it was confirmed. Reopening the approval
+   * or moving the shortfall voids the agreement and gives the next one a new
+   * stamp, so an earlier agreement's rows stop crediting and stop being
+   * confirmable against it - they stay on file, visible, until a person takes
+   * them back with a reason (the transfer is then re-recorded on the new
+   * agreement if it still stands). An application's finance company is fixed
+   * for its life, so (application, reference) is also (company, reference).
+   */
+  customerFinanceCompanyPayments: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    status: v.union(v.literal("CONFIRMED"), v.literal("VOIDED")),
+    amountMinor: v.number(),
+    currency: v.string(),
+    paidAt: v.number(),
+    reference: v.string(),
+    agreementResolvedAt: v.number(),
+    confirmedBy: v.id("users"),
+    confirmedAt: v.number(),
+    voidedBy: v.optional(v.id("users")),
+    voidedAt: v.optional(v.number()),
+    voidReason: v.optional(v.string()),
+  })
+    .index("by_org_application", ["orgId", "applicationId"]),
+
+  /**
+   * SCRUM-411 P2-02: the immutable provenance of the DEPOSIT part of one forward version -
+   * which deposit (and which hold, when the deposit carries one) was paid onward to the
+   * finance company inside H + D, and for how much. Written in the same transaction as the
+   * forward row and NEVER patched or deleted: whether the money is still FORWARDED, or has
+   * been recovered, is DERIVED from the forward version's accounting events (a posted
+   * reversal), exactly like the forward's own state, so there is no label here that could
+   * disagree with the ledger. `sum(amountMinor)` over a version's slices equals that row's
+   * `depositPortionMinor` (checked when it is written). Absent for forwards recorded before
+   * this table existed and for a replacement recorded after the sale (its deposit is already
+   * consumed into the sale); the deposit spend guard treats a live unsliced version of an
+   * unfinalized deal as covering every deposit of its quote.
+   */
+  financeCompanyForwardSlices: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    forwardId: v.id("financeCompanyForwards"),
+    version: v.number(),
+    depositId: v.id("deposits"),
+    /** The one live hold row of this deposit on the car, when the deposit carries hold rows. */
+    holdId: v.optional(v.id("depositVehicleHolds")),
+    vehicleId: v.id("vehicles"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org_forward", ["orgId", "forwardId"])
+    .index("by_org_deposit", ["orgId", "depositId"]),
 
   /**
    * SCRUM-693: one server-owned unwind of a CLOSED, finance-company-paid deal.
@@ -3561,6 +3820,15 @@ export default defineSchema({
         vehicleReturnedAt: v.number(),
         vehicleReturnNote: v.string(),
         customerPaymentDisposition: v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT")),
+        customerReceiptSettlement: v.optional(v.object({
+          refundedMinor: v.number(),
+          retainedMinor: v.number(),
+          refundPaymentIds: v.array(v.id("canonicalPayments")),
+          refundEventIds: v.array(v.id("accountingEvents")),
+          method: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+          reference: v.optional(v.string()),
+          paidAt: v.optional(v.number()),
+        })),
         completedBy: v.id("users"),
         completedAt: v.number(),
       })
@@ -3689,6 +3957,7 @@ export default defineSchema({
         v.literal("CARD")
       )
     ),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     reference: v.optional(v.string()),
     note: v.optional(v.string()),
     occurredAt: v.number(),
@@ -4518,13 +4787,96 @@ export default defineSchema({
     currency: v.string(),
     initialUnappliedMinor: v.number(),
     remainingUnappliedMinor: v.number(),
-    /** Monotonic count of applications, and the source of the next `sequence`. */
+    /** Legacy receiptApplications sequence counter; invoice claims use their own row id. */
     applicationCount: v.number(),
+    /**
+     * SCRUM-724 lineage, written ONCE at insert and never patched. Present only
+     * on a position created by clearing a customer cheque that was registered
+     * against a sale invoice. "Cancelled" is NOT stored: it is derived from the
+     * sale's status at read time. Rows created before SCRUM-724 carry neither.
+     */
+    sourceChequeId: v.optional(v.id("postDatedCheques")),
+    originatingSaleId: v.optional(v.id("sales")),
     updatedAt: v.number(),
   })
     .index("by_org", ["orgId"])
     .index("by_org_movement", ["orgId", "receiptMovementId"])
     .index("by_org_customer", ["orgId", "customerId"]),
+
+  /**
+   * SCRUM-724: a request to pay retained 2110 customer credit back to the
+   * customer. Keyed to the retained position / movement, NEVER to a receivable
+   * (no receivable exists for credit left by a cancelled sale). One approved
+   * request authorizes exactly one payout: `status` moves
+   * PENDING -> APPROVED -> EXECUTED, and EXECUTED is terminal.
+   */
+  retainedCreditRefundRequests: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    positionId: v.id("receiptRetainedPositions"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    amountMinor: v.number(),
+    method: v.union(v.literal("BANK_TRANSFER"), v.literal("CASH")),
+    reason: v.string(),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("APPROVED"),
+      v.literal("REJECTED"),
+      v.literal("EXECUTED"),
+      // SCRUM-724 Sol 6 Q3: withdrawn (from PENDING) or cancelled (from
+      // APPROVED) by a MANAGE_FINANCE user, or invalidated by a source-cheque
+      // return. Terminal; never reached from EXECUTED.
+      v.literal("CANCELLED")
+    ),
+    requestedBy: v.id("users"),
+    decidedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    decisionNotes: v.optional(v.string()),
+    responseIdempotencyKey: v.optional(v.string()),
+    cancelledBy: v.optional(v.id("users")),
+    cancelledAt: v.optional(v.number()),
+    cancelReason: v.optional(v.string()),
+    cancelledFromStatus: v.optional(v.union(v.literal("PENDING"), v.literal("APPROVED"))),
+    executedBy: v.optional(v.id("users")),
+    executedAt: v.optional(v.number()),
+    canonicalPaymentId: v.optional(v.id("canonicalPayments")),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_movement", ["orgId", "receiptMovementId"])
+    .index("by_org_movement_status", ["orgId", "receiptMovementId", "status"]),
+
+  /**
+   * SCRUM-722: a pending claim on retained 2110 credit for a completed sale's
+   * canonical invoice. PENDING reserves money without calling it applied.
+   * The receipt and invoice journals still have to be POSTED before a future
+   * activation can create an allocation or move 2110 to AR.
+   */
+  invoiceReceiptApplications: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    saleId: v.id("sales"),
+    receivableDocumentId: v.id("receivableDocuments"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    amountMinor: v.number(),
+    status: v.union(v.literal("PENDING"), v.literal("ACTIVE"), v.literal("REVERSED"), v.literal("CANCELLED")),
+    allocationId: v.optional(v.id("paymentAllocations")),
+    activationEventId: v.optional(v.id("accountingEvents")),
+    activatedAt: v.optional(v.number()),
+    splitFromApplicationId: v.optional(v.id("invoiceReceiptApplications")),
+    splitRemainderId: v.optional(v.id("invoiceReceiptApplications")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    cancelledAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_movement_status", ["orgId", "receiptMovementId", "status"])
+    .index("by_org_sale_status", ["orgId", "saleId", "status"]),
 
   /**
    * One append-only row per later application of retained credit.
@@ -4659,6 +5011,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_status_and_dueDate", ["orgId", "status", "dueDate"])
+    .index("by_org_status_isDeleted_dueDate", ["orgId", "status", "isDeleted", "dueDate"])
     .index("by_org_dueDate", ["orgId", "dueDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
@@ -4669,6 +5022,7 @@ export default defineSchema({
 
   collectionPayments: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     branchId: v.optional(v.id("branches")),
     receivableId: v.optional(v.id("receivables")),
     customerId: v.id("customers"),
@@ -4722,6 +5076,8 @@ export default defineSchema({
     customerId: v.id("customers"),
     vehicleId: v.optional(v.id("vehicles")),
     saleId: v.optional(v.id("sales")),
+    // Customer invoice intent; legacy saleId remains absent when this cheque clears.
+    invoiceSaleId: v.optional(v.id("sales")),
     // Set when this cheque is the registered expected-payment method for a
     // finance application, ahead of finalizeDeal — see registerExpectedPayment.
     //
@@ -4781,6 +5137,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_status_and_chequeDate", ["orgId", "status", "chequeDate"])
+    .index("by_org_status_isDeleted_chequeDate", ["orgId", "status", "isDeleted", "chequeDate"])
     .index("by_org_chequeDate", ["orgId", "chequeDate"])
     .index("by_org_bank_and_chequeNumber", ["orgId", "bank", "chequeNumber"])
     .index("by_org_customer", ["orgId", "customerId"])
@@ -4816,6 +5173,7 @@ export default defineSchema({
 
   collectionApprovalRequests: defineTable({
     orgId: v.id("organizations"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     receivableId: v.id("receivables"),
     customerId: v.id("customers"),
     requestedBy: v.id("users"),
@@ -4883,6 +5241,11 @@ export default defineSchema({
     .index("by_org_status_and_scheduledAt", ["orgId", "status", "scheduledAt"])
     .index("by_receivable", ["receivableId"])
     .index("by_cheque", ["chequeId"])
+    // SCRUM-807: the reminder cooldown asks "is there a PENDING/SENT/SKIPPED row
+    // of this message type for this one document, newer than X" - an exact
+    // range per status, not a read of the document's whole reminder history.
+    .index("by_receivable_and_messageType_and_status_and_createdAt", ["receivableId", "messageType", "status", "createdAt"])
+    .index("by_cheque_and_messageType_and_status_and_createdAt", ["chequeId", "messageType", "status", "createdAt"])
     .index("by_org_customer", ["orgId", "customerId"]),
 
   companyDocumentRules: defineTable({
@@ -5022,6 +5385,9 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_date", ["orgId", "date"])
+    // Dashboard sale-ledger fallback: live VEHICLE_SALE inflows in date order,
+    // so the read never scans the org's other transactions (or deleted ones).
+    .index("by_org_category_type_deleted_date", ["orgId", "category", "type", "isDeleted", "date"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_customer", ["orgId", "customerId"])
     // Cancellation finds a sale's own cashflow rows by the sale itself.
@@ -5081,6 +5447,7 @@ export default defineSchema({
   fixedAssetEvents: defineTable({
     orgId: v.id("organizations"),
     assetId: v.id("fixedAssets"),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     type: v.union(
       v.literal("CAPITALIZE"),
       v.literal("DEPRECIATE"),
@@ -5154,6 +5521,50 @@ export default defineSchema({
     .index("by_org_account_currency_period_shard", ["orgId", "accountId", "currency", "periodId", "shard"])
     .index("by_org_period", ["orgId", "periodId"]),
 
+  // A bank-control aggregate is usable only after the organization, chart
+  // mapping and reset generation behind it have been fully validated.
+  bankBalanceAggregateStates: defineTable({
+    orgId: v.id("organizations"),
+    controlAccountId: v.id("chartOfAccounts"),
+    mappingGeneration: v.number(),
+    resetGeneration: v.number(),
+    status: v.union(v.literal("READY"), v.literal("BACKFILL_REQUIRED"), v.literal("BACKFILLING")),
+    cursor: v.optional(v.string()),
+    // Tree layout the state certifies; absent means the original single-tree layout.
+    layout: v.optional(v.number()),
+    // Legacy; written as 0 on rebuild. Gross flow lives in bankBalanceGrossShards.
+    grossAbsMinor: v.number(),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  // Sharded gross absolute bank flow per aggregate namespace, so concurrent
+  // postings in one org write different documents. Each shard is capped at its
+  // share of the safe-integer range (see bankAggregateTriggers.ts).
+  bankBalanceGrossShards: defineTable({
+    orgId: v.id("organizations"),
+    namespace: v.string(),
+    shard: v.number(),
+    grossAbsMinor: v.number(),
+  })
+    .index("by_namespace_shard", ["namespace", "shard"])
+    .index("by_org", ["orgId"]),
+
+  // Transactional membership record for each line projected into the two
+  // component trees. The backfill and live trigger share this exact-once key.
+  bankBalanceAggregateItems: defineTable({
+    orgId: v.id("organizations"),
+    journalLineId: v.id("journalLines"),
+    namespace: v.string(),
+    accountId: v.id("chartOfAccounts"),
+    currency: v.string(),
+    accountingDate: v.number(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
+    netMinor: v.number(),
+    absMinor: v.number(),
+  })
+    .index("by_line", ["journalLineId"])
+    .index("by_org", ["orgId"]),
+
   // GL Phase 15: full cash-drawer lifecycle. Distinct from the simpler,
   // pre-existing cashierReconciliations (open-float-free count-vs-expected
   // snapshot with no movement ledger) — this is the fuller open→count→
@@ -5196,6 +5607,8 @@ export default defineSchema({
     occurredAt: v.number(),
     notes: v.optional(v.string()),
     accountingEventId: v.optional(v.id("accountingEvents")),
+    /** SCRUM-54: the physical bank a BANK_DEPOSIT movement went into. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     actorId: v.id("users"),
     createdAt: v.number(),
     idempotencyKey: v.string(),
@@ -5230,7 +5643,9 @@ export default defineSchema({
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_active", ["orgId", "isActive"]),
+    // SCRUM-54: the receipt / deposit bank pickers read only the banks in the one currency a
+    // bank must match, so a long list in other currencies cannot crowd out an eligible bank.
+    .index("by_org_active_currency", ["orgId", "isActive", "currency"]),
 
   // Uploaded bank-statement rows for the reconciliation-target bank account,
   // matched against posted journalLines on SYSTEM_KEYS.BANK_ACCOUNT.
@@ -5314,6 +5729,8 @@ export default defineSchema({
     ),
     amountMinor: v.number(),
     currency: v.string(),
+    paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     occurredAt: v.number(),
     notes: v.optional(v.string()),
     accountingEventId: v.optional(v.id("accountingEvents")),
@@ -5378,6 +5795,7 @@ export default defineSchema({
     amountMinor: v.number(),
     recoveredMinor: v.number(),
     currency: v.string(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     date: v.number(),
     method: v.optional(
       v.union(
@@ -5414,6 +5832,7 @@ export default defineSchema({
     userId: v.id("users"),
     amountMinor: v.number(),
     currency: v.string(),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     method: v.optional(
       v.union(
         v.literal("CASH"),
@@ -5477,6 +5896,7 @@ export default defineSchema({
     approvedNetMinor: v.optional(v.number()),
     // The method the whole run was paid with (per-employee split not supported).
     paidMethod: v.optional(v.string()),
+    paidBankAccountId: v.optional(v.id("bankAccounts")),
     createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
     approvedBy: v.optional(v.id("users")),
@@ -5670,6 +6090,18 @@ export default defineSchema({
     facebookPendingCredentials: v.optional(
       v.array(v.object({ id: v.string(), name: v.string(), token: v.string() }))
     ),
+    // SCRUM-841: when the Owner last disconnected Facebook for this org. An OAuth
+    // attempt begun at or before it cannot store pending Page credentials, so an
+    // exchange already in flight (or an old unconsumed state) cannot undo the
+    // disconnect. A timestamp only; never cleared, so it keeps fencing attempts
+    // begun before it after later connections. Distinct from the Meta-user
+    // `facebookRevocations` fence, which a signed callback sets.
+    facebookDisconnectedAt: v.optional(v.number()),
+    // SCRUM-841: identifies the OAuth attempt whose Pages are in `facebookPendingCredentials`.
+    // A fresh random value is stamped each time pending credentials are saved, so a Page
+    // selection begun on an earlier attempt cannot promote a later attempt's credentials
+    // even when the user, Page and token are identical. Server-only; cleared with them.
+    facebookPendingAttemptId: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_instagram_business_account_id", ["instagramBusinessAccountId"])
@@ -5928,6 +6360,26 @@ export default defineSchema({
   })
     .index("by_state", ["state"])
     .index("by_org", ["orgId"]),
+
+  // SCRUM-841: per-Facebook-user revocation fence. Meta's signed deauthorize and
+  // data-deletion callbacks record when a user revoked access, even if that user
+  // has no org row yet. An OAuth attempt begun at or before `revokedAt` is
+  // refused when it tries to store pending Page credentials, so a callback that
+  // lands while the attempt is in flight cannot be undone by it. One row per
+  // user, keyed by Facebook user id (not org-scoped, so the org hard-delete does
+  // not touch it). `facebookUserId` is a Facebook user identifier, i.e. personal
+  // data; the row holds that id and a timestamp only — no tokens and no other
+  // user content. It is retained deliberately as a security
+  // record: a data-deletion request writes it rather than erasing it, since it is
+  // what stops an in-flight connection undoing that request. Since SCRUM-807
+  // nothing deletes it (operational records are preserved); correctness does not
+  // depend on removal (see utils/facebookRevocation.ts).
+  facebookRevocations: defineTable({
+    facebookUserId: v.string(),
+    revokedAt: v.number(),
+  })
+    .index("by_facebook_user_id", ["facebookUserId"])
+    .index("by_revoked_at", ["revokedAt"]),
 
   instagramEvents: defineTable({
     orgId: v.id("organizations"),
@@ -6503,10 +6955,30 @@ export default defineSchema({
     inbox: v.union(v.literal("support"), v.literal("info"), v.literal("subscriptions")),
     lastMessageAt: v.number(),
     autoRepliedAt: v.optional(v.number()),
+    // SCRUM-825 mail-client inbox. All optional: rows written before this change
+    // carry none of them and are NOT backfilled (the UI treats absent as
+    // "unknown": no preview text, no needs-reply flag).
+    // Whitespace-collapsed, link-dump-free snippet of the latest inbound message
+    // or human reply (never the automated acknowledgement).
+    lastMessagePreview: v.optional(v.string()),
+    // true after an inbound message, false after a HUMAN reply. The automated
+    // acknowledgement deliberately leaves it untouched.
+    awaitingReply: v.optional(v.boolean()),
+    // Per-thread counter of INBOUND messages, +1 on every one. `sendReply`
+    // captures it before the provider call so the reply can tell that a newer
+    // inbound message arrived while it was in flight. A counter, not a timestamp:
+    // two messages in the same millisecond, or a clock that steps back, would
+    // defeat a time comparison. Absent on old rows and read as 0, so the first
+    // new inbound on such a row (revision 1) reads as newer than a captured 0.
+    inboundRevision: v.optional(v.number()),
+    // Admin override of the client-side people/automated heuristic.
+    categoryOverride: v.optional(v.union(v.literal("people"), v.literal("automated"))),
   })
     .index("by_participantEmail_and_inbox", ["participantEmail", "inbox"])
     .index("by_inbox_and_lastMessageAt", ["inbox", "lastMessageAt"])
-    .index("by_inbox_and_status", ["inbox", "status"]),
+    .index("by_inbox_and_status", ["inbox", "status"])
+    // Time-ordered per status, so a status-filtered list is newest-first.
+    .index("by_inbox_status_and_lastMessageAt", ["inbox", "status", "lastMessageAt"]),
 
   supportMessages: defineTable({
     threadId: v.id("supportThreads"),
@@ -6928,7 +7400,9 @@ export default defineSchema({
   })
     .index("by_status", ["status"])
     .index("by_city", ["buyerCity"])
-    .index("by_publicId", ["publicId"]),
+    .index("by_publicId", ["publicId"])
+    // SCRUM-807 — lets the daily expiry sweep read only requests past expiresAt.
+    .index("by_status_expires", ["status", "expiresAt"]),
 
   // One row per matched dealer per request — not a flat array on
   // marketplaceRequests — so notify/respond timestamps are trackable per
@@ -6967,7 +7441,9 @@ export default defineSchema({
     contactUnlockedAt: v.optional(v.number()),
   })
     .index("by_request", ["requestId"])
-    .index("by_org", ["orgId"]),
+    .index("by_org", ["orgId"])
+    // Weekly proof report (SCRUM-807): range-bounds the read by date BEFORE any row cap.
+    .index("by_org_matchedAt", ["orgId", "matchedAt"]),
 
   // A matched dealer's reply to a buyer request (Phase 58). Reused across
   // both the dealer-facing inbox and the public buyer-status page.
@@ -7020,7 +7496,9 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_request", ["requestId"])
-    .index("by_org", ["orgId"]),
+    .index("by_org", ["orgId"])
+    // Weekly proof report (SCRUM-807): range-bounds the read by date BEFORE any row cap.
+    .index("by_org_createdAt", ["orgId", "createdAt"]),
 
   // Funnel telemetry (request submitted, offer sent/viewed/accepted, contact
   // unlocked, ...) — powers dealer response-SLA scoring and liquidity
@@ -7057,6 +7535,84 @@ export default defineSchema({
     sentAt: v.number(),
     sentBy: v.id("users"),
   }).index("by_org_week", ["orgId", "weekStart"]),
+
+  // SCRUM-807 — one row per business week of the automatic weekly proof-report
+  // email. The business-level idempotency/result/window binding: the frozen
+  // `since`/`until` window, the roster cursor and the run's own status. Not a
+  // lease or a queue (Workpool owns the queue). History is kept on purpose.
+  marketplaceWeeklyReportRuns: defineTable({
+    // `currentWeekStart(runStartedAt)`: one run per week, however often the cron fires.
+    weekKey: v.number(),
+    runStartedAt: v.number(),
+    since: v.number(),
+    until: v.number(),
+    status: v.union(
+      v.literal("PRODUCING"),
+      v.literal("PRODUCED"),
+      v.literal("COMPLETE"),
+      v.literal("CANCELED"),
+      v.literal("STALLED")
+    ),
+    // Roster pagination cursor; null before the first page and after the last.
+    cursor: v.union(v.string(), v.null()),
+    cancelRequestedAt: v.optional(v.number()),
+  }).index("by_weekKey", ["weekKey"]),
+
+  // One row per (run, dealer org): the frozen full email, the per-attempt send
+  // state, and the final honest result. Provider acceptance is not delivery.
+  marketplaceWeeklyReportDeliveries: defineTable({
+    runId: v.id("marketplaceWeeklyReportRuns"),
+    orgId: v.id("organizations"),
+    state: v.union(
+      v.literal("PENDING"),
+      v.literal("FROZEN"),
+      v.literal("SKIPPED"),
+      v.literal("SENDING"),
+      v.literal("ACCEPTED"),
+      v.literal("MOCK"),
+      v.literal("FAILED_TERMINAL"),
+      v.literal("AMBIGUOUS"),
+      v.literal("CANCELED")
+    ),
+    // Stable per (week, org); Resend returns the original for the same key and payload for 24 h.
+    idempotencyKey: v.string(),
+    envelope: v.optional(
+      v.object({ from: v.string(), to: v.string(), subject: v.string(), html: v.string() })
+    ),
+    report: v.optional(
+      v.object({
+        pageViews: v.number(),
+        vehicleDetailViews: v.number(),
+        requestsMatched: v.number(),
+        responsesSent: v.number(),
+        avgResponseMinutes: v.union(v.number(), v.null()),
+        mostViewedVehicle: v.union(
+          v.null(),
+          v.object({ make: v.string(), model: v.string(), year: v.number(), views: v.number() })
+        ),
+        requestsLost: v.number(),
+        lowerBound: v.optional(v.array(v.string())),
+        unavailable: v.optional(v.array(v.string())),
+      })
+    ),
+    firstAttemptAt: v.optional(v.number()),
+    attempts: v.number(),
+    // Per attempt: reset to "ambiguous" by `beginWeeklySend` before the provider call.
+    errorClass: v.optional(v.union(v.literal("rejected"), v.literal("ambiguous"))),
+    errorName: v.optional(v.string()),
+    // Monotonic: set once an earlier attempt may have been accepted; never cleared.
+    anyAttemptAmbiguous: v.boolean(),
+    providerEmailId: v.optional(v.string()),
+    // The Workpool id of this row's freeze job. Freeze jobs are enqueued as one
+    // batch per roster page, which shares a single onComplete context, so a
+    // failed/canceled freeze finds its row by this id.
+    freezeWorkId: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_run_org", ["runId", "orgId"])
+    .index("by_run_state", ["runId", "state"])
+    .index("by_freezeWorkId", ["freezeWorkId"]),
 
   // Phase 62 — buyer-submitted trade-in request, directed at a single dealer
   // (whichever listing the buyer was viewing), not fanned out like

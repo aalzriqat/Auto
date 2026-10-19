@@ -13,6 +13,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { getLocalizedErrorMessage } from "@/lib/errors";
+import { DepositReceiptBankPicker, useDepositReceiptBankOptions } from "./DepositReceiptBankPicker";
 
 /**
  * SCRUM-444. A deposit REQUEST is a salesperson saying "the customer is handing
@@ -47,8 +48,9 @@ function useDecisionActions(orgId: Id<"organizations">) {
 
   return {
     busyId,
-    confirm: (requestId: Id<"depositRequests">, amount: number, method: PaymentMethod) => {
-      const intent = `confirm-deposit-request:${requestId}:${amount}:${method}`;
+    confirm: (requestId: Id<"depositRequests">, amount: number, method: PaymentMethod,
+      bankAccountId?: Id<"bankAccounts">) => {
+      const intent = `confirm-deposit-request:${requestId}:${amount}:${method}:${bankAccountId ?? ""}`;
       return run(
         requestId,
         async () => {
@@ -57,6 +59,7 @@ function useDecisionActions(orgId: Id<"organizations">) {
             requestId,
             amount,
             method,
+            bankAccountId,
             idempotencyKey: commandId.for(intent),
           });
           commandId.retire(intent);
@@ -84,15 +87,21 @@ function DecisionControls({
   orgId,
   requestId,
   amount,
+  currency,
 }: {
   orgId: Id<"organizations">;
   requestId: Id<"depositRequests">;
   amount: number;
+  currency: string;
 }) {
   const { t } = useLanguage();
   const actions = useDecisionActions(orgId);
   const [mode, setMode] = useState<Decision | null>(null);
   const [method, setMethod] = useState<PaymentMethod | undefined>(undefined);
+  const [bankAccountId, setBankAccountId] = useState<Id<"bankAccounts"> | undefined>(undefined);
+  const { required: bankRequired, options: bankOptions } =
+    useDepositReceiptBankOptions(orgId, method, currency);
+  const bankReady = !bankRequired || (bankOptions?.banks.some((bank) => bank._id === bankAccountId) ?? false);
   const [reason, setReason] = useState("");
   const busy = actions.busyId === requestId;
 
@@ -121,15 +130,20 @@ function DecisionControls({
           <PaymentMethodSelect
             t={t as any}
             value={method}
-            onValueChange={setMethod}
+          onValueChange={(next) => { setMethod(next); setBankAccountId(undefined); }}
             ariaLabel={t("PaymentMethodLabel" as any)}
             placeholder={t("DepositChooseMethod" as any)}
           />
         </div>
+        {bankRequired && <div className="w-full sm:w-56">
+          <DepositReceiptBankPicker id={`deposit-request-bank-${requestId}`}
+            options={bankOptions} value={bankAccountId} onChange={setBankAccountId} />
+        </div>}
         <Button
           size="sm"
-          disabled={busy || !method}
-          onClick={() => method && void actions.confirm(requestId, amount, method)}
+          disabled={busy || !method || !bankReady}
+          onClick={() => method && bankReady && void actions.confirm(requestId, amount, method,
+            bankRequired ? bankAccountId : undefined)}
           data-testid="deposit-request-confirm-submit"
         >
           {t("DepositRequestReceivedConfirm" as any)}
@@ -215,7 +229,7 @@ export function QuoteDepositRequests({
             ) : null}
             {row.status === "PENDING" ? (
               data.canConfirm ? (
-                <DecisionControls orgId={orgId} requestId={row._id} amount={row.amount} />
+                <DecisionControls orgId={orgId} requestId={row._id} amount={row.amount} currency={row.currency} />
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="text-xs text-muted-foreground">
@@ -279,7 +293,7 @@ export function PendingDepositRequestsQueue({ orgId }: { orgId: Id<"organization
               <span className="text-xs text-muted-foreground">{row.requestedByName}</span>
             </div>
             {row.note ? <p className="text-xs text-muted-foreground">{row.note}</p> : null}
-            <DecisionControls orgId={orgId} requestId={row._id} amount={row.amount} />
+            <DecisionControls orgId={orgId} requestId={row._id} amount={row.amount} currency={row.currency} />
           </li>
         ))}
       </ul>
@@ -329,7 +343,7 @@ export function DealPendingDepositRequests({
               {money(request.amount)} {request.currency}
             </span>
             {canDecide ? (
-              <DecisionControls orgId={orgId} requestId={request._id} amount={request.amount} />
+              <DecisionControls orgId={orgId} requestId={request._id} amount={request.amount} currency={request.currency} />
             ) : (
               <p className="text-xs text-amber-800 dark:text-amber-300" data-testid="deal-pending-deposit-readonly">
                 {t("DealDepositRequestPendingReadonly" as any)}
