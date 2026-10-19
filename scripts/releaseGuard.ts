@@ -1228,3 +1228,23 @@ export function renderBankRebuildSummary(result: BankRebuildResult): string {
     `${result.refused.length} refused.${list}`
   );
 }
+
+/** Why the rebuild phase must end the run, or null when it may go on to verification. */
+export function bankRebuildStopMessage(result: BankRebuildResult, maxPages: number): string | null {
+  if (result.stopped?.kind === "deadline") {
+    return "Production is DEPLOYED, but the bank balance rebuild did not finish within the deadline. A re-run resumes it.";
+  }
+  if (result.stopped?.kind === "pageCap") {
+    return `Production is DEPLOYED, but ${result.stopped.ref}'s bank balance rebuild exceeded ${maxPages} pages.`;
+  }
+  return null;
+}
+
+/** Why a run whose Social Inbox verified must still fail, or null when no organization refused. */
+export function bankRefusalMessage(result: BankRebuildResult): string | null {
+  if (result.refused.length === 0) return null;
+  return (
+    `Production is DEPLOYED and the Social Inbox is verified, but ${result.refused.length} organization(s) ` +
+    `refused the bank balance rebuild; their bank balances stay unavailable. A re-run retries them.`
+  );
+}

@@ -30,6 +30,8 @@ import {
   mergeVerdicts,
   parseConvexRunJson,
   pollIntervalMs,
+  bankRebuildStopMessage,
+  bankRefusalMessage,
   rebuildBankBalances,
   renderBankRebuildSummary,
   renderReleaseSummary,
@@ -286,12 +288,8 @@ const bank = rebuildBankBalances({
 bankSummary = renderBankRebuildSummary(bank);
 console.log(`  ${bankSummary}`);
 // Hard stops: the shared deadline and the page cap end the whole phase.
-if (bank.stopped?.kind === "deadline") {
-  fail(`Production is DEPLOYED, but the bank balance rebuild did not finish within the deadline. A re-run resumes it.`);
-}
-if (bank.stopped?.kind === "pageCap") {
-  fail(`Production is DEPLOYED, but ${bank.stopped.ref}'s bank balance rebuild exceeded ${MAX_BANK_PAGES_PER_ORG} pages.`);
-}
+const bankStop = bankRebuildStopMessage(bank, MAX_BANK_PAGES_PER_ORG);
+if (bankStop) fail(bankStop);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 
@@ -321,13 +319,11 @@ for (const p of lastVerdict.anomalies) {
   console.warn(`  ⚠ ${p.org} ${p.platform ?? "—"} ${p.kind}: ${p.detail}`);
 }
 
-if (lastOutcome === "verified" && bank.refused.length > 0) {
+const bankRefusal = lastOutcome === "verified" ? bankRefusalMessage(bank) : null;
+if (bankRefusal) {
   // The heading must not read "verified" on a run that fails.
   lastOutcome = "failed";
-  fail(
-    `Production is DEPLOYED and the Social Inbox is verified, but ${bank.refused.length} organization(s) ` +
-      `refused the bank balance rebuild; their bank balances stay unavailable. A re-run retries them.`
-  );
+  fail(bankRefusal);
 }
 
 if (lastOutcome === "verified") {

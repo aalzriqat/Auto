@@ -1,6 +1,8 @@
 import { describe, test, expect } from "vitest";
 import {
   classifyBankBackfillStep,
+  bankRebuildStopMessage,
+  bankRefusalMessage,
   rebuildBankBalances,
   renderBankRebuildSummary,
   PRODUCTION_CONFIRMATION,
@@ -1503,5 +1505,24 @@ describe("rebuildBankBalances (SCRUM-54 rollout phase)", () => {
       .toMatch(/^Stopped at org-y: 1 organizations rebuilt before the deadline\.[\s\S]*- org-x: why/);
     expect(renderBankRebuildSummary({ ready: 0, notApplicable: 0, refused: [], stopped: { kind: "pageCap", ref: "org-y" } }))
       .toContain("at the page cap");
+  });
+});
+
+describe("bank rebuild failure messages (SCRUM-54 rollout phase)", () => {
+  const base = { ready: 1, notApplicable: 0, refused: [] as string[] };
+
+  test("a deadline or page-cap stop ends the run, naming only the opaque ref", () => {
+    expect(bankRebuildStopMessage({ ...base, stopped: { kind: "deadline", ref: "org-x" } }, 5))
+      .toMatch(/DEPLOYED.*did not finish within the deadline.*re-run resumes/);
+    expect(bankRebuildStopMessage({ ...base, stopped: { kind: "pageCap", ref: "org-x" } }, 5))
+      .toBe("Production is DEPLOYED, but org-x's bank balance rebuild exceeded 5 pages.");
+    expect(bankRebuildStopMessage(base, 5)).toBeNull();
+  });
+
+  test("a refusal fails a run whose Social Inbox verified, with the count only", () => {
+    expect(bankRefusalMessage(base)).toBeNull();
+    const message = bankRefusalMessage({ ...base, refused: ["org-x: why", "org-y: why"] });
+    expect(message).toMatch(/Social Inbox is verified, but 2 organization\(s\) refused/);
+    expect(message).not.toMatch(/org-x|why/);
   });
 });
