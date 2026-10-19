@@ -5,7 +5,16 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { fromMinorUnits } from "./utils/money";
-import { isCashOutExpense, isShowroomBorne } from "./utils/costBearer";
+import {
+  DAY_MS,
+  ExactSum,
+  expenseFlags,
+  latestSummaryState,
+  readSummaryDays,
+  utcMidnight,
+  type ExpenseDayBucket,
+  type SummaryState,
+} from "./utils/dashboardExpenseSummary";
 import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
 import {
   recordedConsignedMargin,
@@ -165,6 +174,55 @@ async function readLiveExpenses(
       })
       .take(take)
   );
+}
+
+type ExpenseWindow = {
+  /** A raw part of the window exceeded its cap: every expense figure is withheld. */
+  overCap: boolean;
+  /** Raw rows: the partial UTC days at the window's edges, or the whole window. */
+  rows: Doc<"expenses">[];
+  /** Whole UTC days from the month summary. */
+  days: ExpenseDayBucket[];
+};
+
+/**
+ * SCRUM-807: live expenses in [from, until), as raw rows and summary days.
+ *
+ * With a READY summary (and `useSummary`), whole UTC days come from the month
+ * rows and only the partial day at each rolling edge is read raw, each part
+ * capped at `limit` — so the window has no row cap beyond a single day. The
+ * cutoff is never rounded. Without one, or when the summary refuses a month
+ * (an amount it cannot hold exactly), this is today's capped raw read.
+ */
+async function readExpenseWindow(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  summary: SummaryState | null,
+  useSummary: boolean,
+  from: number | undefined,
+  until: number | undefined,
+  limit: number
+): Promise<ExpenseWindow> {
+  const raw = async (lo: number | undefined, hi: number | undefined) => {
+    const rows = await readLiveExpenses(ctx, orgId, lo, hi, limit + 1);
+    return { overCap: rows.length > limit, rows: rows.length > limit ? [] : rows };
+  };
+  const whole = async (): Promise<ExpenseWindow> => ({ ...(await raw(from, until)), days: [] });
+  if (!useSummary || summary?.phase !== "READY") return await whole();
+
+  // Whole days are [fromDay, untilDay); the edges outside them are read raw.
+  const fromDay = from === undefined ? undefined : from % DAY_MS === 0 ? from : utcMidnight(from) + DAY_MS;
+  const untilDay = until === undefined ? undefined : utcMidnight(until);
+  if (fromDay !== undefined && untilDay !== undefined && untilDay <= fromDay) return await whole();
+
+  const days = await readSummaryDays(ctx, summary, fromDay, untilDay);
+  if (days === null) return await whole();
+  const head = from !== undefined && fromDay !== from ? await raw(from, fromDay) : null;
+  const tail = until !== undefined && untilDay !== until ? await raw(untilDay, until) : null;
+  const overCap = (head?.overCap ?? false) || (tail?.overCap ?? false);
+  return overCap
+    ? { overCap, rows: [], days: [] }
+    : { overCap, rows: [...(head?.rows ?? []), ...(tail?.rows ?? [])], days };
 }
 
 /** Live VEHICLE_SALE inflows; `from` undefined means the org's whole history. */
@@ -421,45 +479,62 @@ export const stats = query({
     // that sums expenses (Expenses, CashOut and the expense term of Profit on
     // the trend, plus the comparison deltas) is withheld rather than totalled
     // from a prefix. Deleted and reversed rows never count towards the cap.
+    //
+    // SCRUM-807: MONTH, YEAR and ALL_TIME read whole UTC days from the expense
+    // month summary when the org's summary is READY, so only the partial day
+    // at the cutoff counts towards the cap. DAY stays a raw read: its labels
+    // are hours. Sums are exact thousandths (`ExactSum`) on both paths.
     const EXPENSES_CAP = 5000;
-    const expenseRows = canViewCostMetrics
-      ? await readLiveExpenses(ctx, args.orgId, windowFrom, undefined, EXPENSES_CAP + 1)
-      : [];
-    const expensesOverCap = expenseRows.length > EXPENSES_CAP;
-    const allExpenses = expensesOverCap ? [] : expenseRows;
+    const expenseSummary = canViewCostMetrics ? await latestSummaryState(ctx, args.orgId) : null;
+    const expenseWindow = canViewCostMetrics
+      ? await readExpenseWindow(
+        ctx, args.orgId, expenseSummary, args.timeRange !== "DAY", windowFrom, undefined, EXPENSES_CAP
+      )
+      : { overCap: false, rows: [], days: [] };
+    const expensesOverCap = expenseWindow.overCap;
 
-    const generalExpensesByMonth: Record<string, number> = {};
-    const totalExpensesByMonth: Record<string, number> = {};
+    const generalSums: Record<string, ExactSum> = {};
+    const totalSums: Record<string, ExactSum> = {};
     // SCRUM-389: what left the till, whoever bears it. A supplier-borne cost is
     // cash out but a receivable, not a showroom expense, so it is shown here and
     // kept out of `Expenses` and of profit below.
-    const cashOutByMonth: Record<string, number> = {};
+    const cashOutSums: Record<string, ExactSum> = {};
+    const sumAt = (sums: Record<string, ExactSum>, key: string) => (sums[key] ??= new ExactSum());
 
-    for (const exp of allExpenses) {
+    for (const exp of expenseWindow.rows) {
 
       const key = getChartKey(exp.date);
-
-      if (canViewCostMetrics && isCashOutExpense(exp)) {
-        cashOutByMonth[key] = (cashOutByMonth[key] || 0) + exp.amount;
-      }
-
-      if (!isShowroomBorne(exp)) continue;
-
-      if (canViewCostMetrics) {
-        totalExpensesByMonth[key] = (totalExpensesByMonth[key] || 0) + exp.amount;
-      }
-
-      if (!canViewProfitMetrics) continue;
-
+      // The same three predicates the summary stores, so the paths agree.
       // A reconditioning expense that was capitalized into Vehicle Inventory is
       // already inside the vehicle's cost basis below. Deducting it here as well
       // would charge it to profit twice. Everything else — operating costs, and
       // vehicle-linked costs that were expensed rather than capitalized, such as
       // marketing on a specific car — is a period expense and belongs here.
-      if (exp.vehicleId && exp.accountingTreatment === "CAPITALIZED_INVENTORY") continue;
+      const flags = expenseFlags(exp);
 
-      generalExpensesByMonth[key] = (generalExpensesByMonth[key] || 0) + exp.amount;
+      if (canViewCostMetrics && flags.cashOut) sumAt(cashOutSums, key).addAmount(exp.amount);
+      if (!flags.showroom) continue;
+      if (canViewCostMetrics) sumAt(totalSums, key).addAmount(exp.amount);
+      if (!canViewProfitMetrics || !flags.general) continue;
+      sumAt(generalSums, key).addAmount(exp.amount);
     }
+    for (const day of expenseWindow.days) {
+      // A UTC midnight labels exactly as every row of that UTC day would.
+      const key = getChartKey(day.day);
+      if (canViewCostMetrics && (day.cashOut !== 0 || day.showroomCount > 0)) {
+        sumAt(cashOutSums, key).addThousandths(day.cashOut);
+      }
+      // A label exists when a showroom-borne row maps to it, even at zero.
+      // General rows are a subset of showroom rows, so they add no label.
+      if (day.showroomCount === 0) continue;
+      if (canViewCostMetrics) sumAt(totalSums, key).addThousandths(day.showroom);
+      if (canViewProfitMetrics) sumAt(generalSums, key).addThousandths(day.general);
+    }
+    const settle = (sums: Record<string, ExactSum>) =>
+      Object.fromEntries(Object.entries(sums).map(([key, sum]) => [key, sum.value()])) as Record<string, number>;
+    const generalExpensesByMonth = settle(generalSums);
+    const totalExpensesByMonth = settle(totalSums);
+    const cashOutByMonth = settle(cashOutSums);
 
     // Cost basis for the profit line. This used to be
     // `vehicle.purchasePrice + <every expense logged against the vehicle>`,
@@ -1063,11 +1138,12 @@ export const stats = query({
     const previousTransactionsOverCap = previousSaleTransactionsRead.length > PREVIOUS_PERIOD_CAP;
     const previousSaleTransactions = previousTransactionsOverCap ? [] : previousSaleTransactionsRead;
 
-    const previousExpensesRead = comparesPeriods && canViewCostMetrics && !expensesOverCap
-      ? await readLiveExpenses(ctx, args.orgId, previousStart, filterStart, PREVIOUS_PERIOD_CAP + 1)
-      : [];
-    const previousExpensesTruncated = previousExpensesRead.length > PREVIOUS_PERIOD_CAP;
-    const previousExpenses = previousExpensesTruncated ? [] : previousExpensesRead;
+    const previousExpenseWindow = comparesPeriods && canViewCostMetrics && !expensesOverCap
+      ? await readExpenseWindow(
+        ctx, args.orgId, expenseSummary, args.timeRange !== "DAY", previousStart, filterStart, PREVIOUS_PERIOD_CAP
+      )
+      : { overCap: false, rows: [], days: [] };
+    const previousExpensesTruncated = previousExpenseWindow.overCap;
 
     // Turnover for the comparison window needs the same consigned split, so the
     // previous window's vehicles are costed here rather than inside the
@@ -1172,17 +1248,22 @@ export const stats = query({
 
     // SCRUM-389: the same showroom-borne predicate as the current window, so
     // the delta is never taken across two different bases.
-    const previousShowroomExpenses = previousExpenses.filter(isShowroomBorne);
-    const previousTotalExpenses = previousShowroomExpenses.reduce((acc, exp) => acc + exp.amount, 0);
-
     // Same split the current period makes: a reconditioning expense already
     // capitalized into a vehicle's cost basis is not a period expense, and
     // deducting it here too would charge it to profit twice.
-    const previousGeneralExpenses = previousShowroomExpenses.reduce(
-      (acc, exp) =>
-        exp.vehicleId && exp.accountingTreatment === "CAPITALIZED_INVENTORY" ? acc : acc + exp.amount,
-      0,
-    );
+    const previousTotalSum = new ExactSum();
+    const previousGeneralSum = new ExactSum();
+    for (const exp of previousExpenseWindow.rows) {
+      const flags = expenseFlags(exp);
+      if (flags.showroom) previousTotalSum.addAmount(exp.amount);
+      if (flags.general) previousGeneralSum.addAmount(exp.amount);
+    }
+    for (const day of previousExpenseWindow.days) {
+      previousTotalSum.addThousandths(day.showroom);
+      previousGeneralSum.addThousandths(day.general);
+    }
+    const previousTotalExpenses = previousTotalSum.value();
+    const previousGeneralExpenses = previousGeneralSum.value();
 
     // Still counted, because `previousProfitTruncated` is a statement about how
     // many DISTINCT vehicles this window sold — not about anything that gets

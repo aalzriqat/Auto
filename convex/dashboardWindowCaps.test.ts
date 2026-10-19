@@ -90,7 +90,9 @@ async function seedExpenses(
     category: "MARKETING" as const,
     status: "PAID" as const,
   };
-  await s.t.run(async (ctx) => {
+  // Seeded without triggers: the only expenses trigger is the dashboard month
+  // summary, and these tests pin the capped raw reader (no summary is built).
+  await s.t.runUnwrapped(async (ctx) => {
     for (let i = 0; i < live; i++) await ctx.db.insert("expenses", base);
     for (let i = 0; i < (extras.restored ?? 0); i++) await ctx.db.insert("expenses", { ...base, isDeleted: false });
     for (let i = 0; i < (extras.deleted ?? 0); i++) await ctx.db.insert("expenses", { ...base, isDeleted: true });

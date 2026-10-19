@@ -1,6 +1,7 @@
 import { TableAggregate } from "@convex-dev/aggregate";
 import { customMutation } from "convex-helpers/server/customFunctions";
 import { Triggers } from "convex-helpers/server/triggers";
+import { maintainExpenseSummary } from "./utils/dashboardExpenseSummary";
 import type { GenericDatabaseWriter } from "convex/server";
 import { components } from "./_generated/api";
 import { DataModel, Doc, Id } from "./_generated/dataModel";
@@ -423,6 +424,8 @@ function registerCountingTriggers<Ctx extends MutationCtx>(
   triggers.register("facebookEvents", facebookEventsByOrg.idempotentTrigger());
   triggers.register("socialContacts", socialContactsByOrg.idempotentTrigger());
   registerBankBalanceTriggers(triggers);
+  // SCRUM-807: dashboard expense month summary. Never throws on bad data.
+  triggers.register("expenses", maintainExpenseSummary);
 
   // Insert-only and a single indexed point lookup, so it is cheap enough to
   // keep running inside a bulk loop.
