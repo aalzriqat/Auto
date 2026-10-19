@@ -24,6 +24,8 @@ import { C, H, SCALE, payForwardAsOwner, finalizeAsOwner, readyDeal, refusalData
 import { seedBank } from "../test-utils/bankFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
+import schema from "./schema";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
 import type { Id } from "./_generated/dataModel";
 import { payOutDepositSlice, recordUnpostedDepositTreatment, releaseHeldDeposit } from "./utils/depositHelpers";
 import {
@@ -37,6 +39,19 @@ vi.mock("./rateLimit", () => ({
   },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
+
+// SCRUM-801: OTHER is refused while the pilot switch is on (the shipped value). The switch-off cells turn it
+// off locally to prove what OTHER did before the pilot containment, and restore it in a finally.
+const pilot = vi.hoisted(() => ({ otherDisabled: true }));
+vi.mock("./utils/depositOtherContainment", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/depositOtherContainment")>();
+  return {
+    ...actual,
+    get DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED() {
+      return pilot.otherDisabled;
+    },
+  };
+});
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -661,5 +676,52 @@ describe("P2-02 - a contribution-only payment (H = 0) carries no deposit", () =>
     const later = await rawDeposit(s, quoteId, 50_000);
     expect(await guardCodeOf(s, later)).toBe(GUARD);
     expect((await refusalDataOf(voidDeposit(s, later)))?.code).toBe(GUARD);
+  });
+});
+
+describe("SCRUM-801 - OTHER and the forwarded deposit, with the pilot switch off and for a caller who may not finalize", () => {
+  const finalizeOther = (s: Seeded, as: Seeded["owner"]["as"], applicationId: AppId) =>
+    as.mutation(api.applications.finalizeDeal, {
+      orgId: s.orgId, applicationId, depositResolution: { treatment: "OTHER", reason: "Approved by the owner." },
+      idempotencyKey: crypto.randomUUID(),
+    });
+
+  test("switch off: OTHER on a released slice still meets the forward guard, and OTHER at finalize still reads the unfunded first payment", async () => {
+    // What the pilot containment must not have removed: with the SCRUM-801 switch off, both older refusals still answer.
+    pilot.otherDisabled = false;
+    try {
+      const slice = await paidDeal("s801a");
+      const releasedHold = await rawHold(slice.s, slice.depositId, {
+        active: false, allocationStatus: "RELEASED_AWAITING_DECISION", allocatedAmountMinor: H,
+      });
+      const sliceBefore = await untouched(slice.s, slice.depositId);
+      expect((await refusalDataOf(resolveSlice(slice.s, releasedHold, "OTHER")))?.code).toBe(GUARD);
+      expect(await untouched(slice.s, slice.depositId)).toEqual(sliceBefore);
+
+      const deal = await paidDeal("s801b");
+      await useManualCommission(deal.s);
+      const before = await untouched(deal.s, deal.depositId);
+      expect((await refusalDataOf(finalizeOther(deal.s, deal.s.owner.as, deal.applicationId)))?.code).toBe("FIRST_PAYMENT_UNFUNDED");
+      expect(await untouched(deal.s, deal.depositId)).toEqual(before);
+      expect((await deal.s.t.run((ctx) => ctx.db.get(deal.applicationId)))?.status).toBe("APPROVED");
+    } finally {
+      pilot.otherDisabled = true;
+    }
+  });
+
+  test("a caller without the finalize authority who states OTHER gets FORBIDDEN, not the pilot code, and nothing is written", async () => {
+    const s = await seedFinancedDealership("s801c", {
+      modules: MODULES, ownerPerms: ALL_PERMS, label: "S411P", vinPrefix: "VIN411P", sourced: false,
+      actors: { clerk: ["view:sales"] },
+    });
+    const { applicationId } = await readyDeal(s);
+    await payForwardAsOwner(s, applicationId);
+    await useManualCommission(s);
+    const snapshot = () => dbSnapshot(s.t, Object.keys(schema.tables));
+    const before = await snapshot();
+
+    const refusal = await refusalDataOf(finalizeOther(s, s.actors.clerk.as, applicationId));
+    expect(refusal?.code).toBe("FORBIDDEN");
+    expect(await snapshot()).toEqual(before);
   });
 });

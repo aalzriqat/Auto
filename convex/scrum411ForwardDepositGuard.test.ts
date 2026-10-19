@@ -33,6 +33,19 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
+// SCRUM-801: OTHER is refused while the pilot switch is on (the shipped value). The switch-off cells turn it
+// off locally to prove what OTHER did before the pilot containment, and restore it in a finally.
+const pilot = vi.hoisted(() => ({ otherDisabled: true }));
+vi.mock("./utils/depositOtherContainment", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/depositOtherContainment")>();
+  return {
+    ...actual,
+    get DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED() {
+      return pilot.otherDisabled;
+    },
+  };
+});
+
 const MODULES = import.meta.glob("./**/*.ts");
 
 const ALL_PERMS = [
@@ -160,6 +173,26 @@ describe("B1 - a deposit already inside an on-books forward cannot also leave as
     const holds = await s.t.run(async (ctx) => [await ctx.db.get(activeHold), await ctx.db.get(releasedHold)]);
     expect(holds[0]?.allocationStatus).toBe("ALLOCATED");
     expect(holds[1]?.allocationStatus).toBe("RELEASED_AWAITING_DECISION");
+  });
+
+  test("switch off: OTHER on a released slice still meets the forward guard, and writes nothing", async () => {
+    // Proves what the pilot containment did not remove: with the SCRUM-801 switch off, the forward guard
+    // still answers for OTHER on a deposit paid onward to the finance company.
+    pilot.otherDisabled = false;
+    try {
+      const { s, depositId } = await paidDeal("g3off");
+      const releasedHold = await s.t.run((ctx) =>
+        ctx.db.insert("depositVehicleHolds", {
+          orgId: s.orgId, depositId, vehicleId: s.vehicleId, createdAt: Date.now(), active: false,
+          allocatedAmountMinor: H / 2, allocatedAt: Date.now(), allocationStatus: "RELEASED_AWAITING_DECISION",
+        })
+      );
+      const before = await untouched(s, depositId);
+      expect((await refusalDataOf(resolveSlice(s, releasedHold, "OTHER")))?.code).toBe(GUARD);
+      expect(await untouched(s, depositId)).toEqual(before);
+    } finally {
+      pilot.otherDisabled = true;
+    }
   });
 
   test("a payment the books cannot confirm (NEEDS_REPAIR) blocks as well: cannot tell means hold", async () => {
