@@ -268,13 +268,19 @@ console.log(`  fan-out: ${JSON.stringify(started.value)}`);
 // already rebuilt, so a re-run resumes rather than restarts. It runs while the
 // Social Inbox fan-out proceeds in the background.
 console.log(`Rebuilding bank balance aggregates…`);
-const bankStartedAt = Date.now();
-const bank = { ready: 0, notApplicable: 0 };
+// ONE deadline covers this phase and the verification below, so the two can
+// never add up past the job's own timeout and kill it before the summary.
+const rolloutStartedAt = Date.now();
+// Until verification runs, the summary shows the pre-rollout report rather
+// than an empty "0/0" that reads as if the Social Inbox had been checked.
+lastVerdict = before.verdict;
+const bank = { ready: 0, notApplicable: 0, refused: [] };
 for (const org of before.orgs) {
   const ref = opaqueOrgRef(org.orgId);
   let pages = 0;
   for (;;) {
-    if (Date.now() - bankStartedAt > TIMEOUT_MS) {
+    // Hard stops: the shared deadline and the page cap end the whole phase.
+    if (Date.now() - rolloutStartedAt > TIMEOUT_MS) {
       bankSummary = `Stopped at ${ref}: ${bank.ready} organizations rebuilt before the deadline.`;
       fail(`Production is DEPLOYED, but the bank balance rebuild did not finish within the deadline. A re-run resumes it.`);
     }
@@ -283,26 +289,32 @@ for (const org of before.orgs) {
       fail(`Production is DEPLOYED, but ${ref}'s bank balance rebuild exceeded ${MAX_BANK_PAGES_PER_ORG} pages.`);
     }
     const result = convex(["run", BANK_BACKFILL_FN, JSON.stringify({ orgId: org.orgId })]);
-    if (!result.ok) fail(result.reason);
     pages += 1;
-    const step = classifyBankBackfillStep(result.value);
+    // One org's refusal (bad history, a reset in progress, a failed call) must
+    // not keep every other org unrebuilt or skip the verification below: it is
+    // recorded, and the run fails at the end with every refused org listed.
+    const step = result.ok ? classifyBankBackfillStep(result.value) : { kind: "refused", reason: result.reason };
     if (step.kind === "more") continue;
     if (step.kind === "refused") {
-      bankSummary = `Refused at ${ref}: ${step.reason}.`;
-      fail(`Production is DEPLOYED, but the bank balance rebuild is INCOMPLETE at ${ref}: ${step.reason}.`);
+      bank.refused.push(`${ref}: ${step.reason}`);
+      console.error(`  ${ref}: refused (${step.reason})`);
+      break;
     }
     bank[step.kind] += 1;
     console.log(`  ${ref}: ${step.kind === "ready" ? `ready after ${pages} page(s)` : "no bank control account"}`);
     break;
   }
 }
-bankSummary = `${bank.ready} organizations rebuilt, ${bank.notApplicable} without a bank control account.`;
+bankSummary =
+  `${bank.ready} organizations rebuilt, ${bank.notApplicable} without a bank control account, ` +
+  `${bank.refused.length} refused.` +
+  (bank.refused.length > 0 ? `\n\n${bank.refused.map((line) => `- ${line}`).join("\n")}` : "");
 console.log(`  ${bankSummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 
-const startedAt = Date.now();
-console.log(`Verifying the rollout (deadline ${Math.round(TIMEOUT_MS / 60_000)} minutes)…`);
+const startedAt = rolloutStartedAt;
+console.log(`Verifying the rollout (deadline ${Math.round(TIMEOUT_MS / 60_000)} minutes from the rebuild's start)…`);
 
 // The loop variable IS the end condition: every branch below either leaves it
 // at "continue" or sets a terminal value.
@@ -325,6 +337,13 @@ while (lastOutcome === "continue") {
 
 for (const p of lastVerdict.anomalies) {
   console.warn(`  ⚠ ${p.org} ${p.platform ?? "—"} ${p.kind}: ${p.detail}`);
+}
+
+if (lastOutcome === "verified" && bank.refused.length > 0) {
+  fail(
+    `Production is DEPLOYED and the Social Inbox is verified, but ${bank.refused.length} organization(s) ` +
+      `refused the bank balance rebuild; their bank balances stay unavailable. A re-run retries them.`
+  );
 }
 
 if (lastOutcome === "verified") {

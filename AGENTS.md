@@ -175,9 +175,14 @@ The same step also rebuilds every organization's bank balance aggregates
 (`bankBalanceBackfill:runPage`, SCRUM-54), page by page, before it verifies the
 Social Inbox. Until an org is rebuilt for the current aggregate layout its bank
 balances read as unavailable, never as a wrong number. An org without a bank
-control account is reported and skipped; a reset in progress or a historical
-bank line the aggregate refuses stops the run as deployed but incomplete.
-`runPage` returns READY at once for an org already rebuilt, so a re-run resumes.
+control account is reported and skipped. An org that refuses (a reset in
+progress, a historical bank line the aggregate rejects, a failed call) is
+recorded and the others still run, as does the Social Inbox verification; the
+run then fails as deployed but incomplete, listing each refused org by its
+opaque hash. The rebuild and the verification share one deadline
+(`ROLLOUT_TIMEOUT_MINUTES`), which stays inside the job timeout. `runPage`
+returns READY at once for an org already rebuilt, so a re-run resumes; a
+refused org restarts its walk from the beginning on each attempt.
 
 Backfills run in the same job on purpose. Between the code landing and the
 backfills completing, database I/O goes **up**: the conversation trigger adds a
