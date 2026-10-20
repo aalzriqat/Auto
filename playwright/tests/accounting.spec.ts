@@ -220,8 +220,8 @@ const OPENING_UNITS = 100;
 // Minor-unit scale per currency, hand-written: 3 for JOD/KWD/BHD/OMR, 2 otherwise.
 const scaleOf = (currency: string): number => (["JOD", "KWD", "BHD", "OMR"].includes(currency) ? 3 : 2);
 
-/** Every POSTED journal of the organization, read through the query's own cursor to the last page. */
-async function listPostedJournals(
+/** Every journal of the organization, in any status, read through the query's own cursor to the last page. */
+async function listAllJournals(
   client: Awaited<ReturnType<typeof authenticatedConvexClient>>,
   orgId: Id<"organizations">
 ): Promise<JournalRow[]> {
@@ -232,7 +232,7 @@ async function listPostedJournals(
       api.accountingLedger.listJournalEntries,
       { orgId, paginationOpts: { numItems: 200, cursor } }
     );
-    rows.push(...page.page.filter((row) => row.status === "POSTED"));
+    rows.push(...page.page);
     if (page.isDone) return rows;
     cursor = page.continueCursor;
   }
@@ -247,10 +247,21 @@ test.describe("accounting register: a posted journal", () => {
 
     // 1. A POSTED journal to look at. A scenario that finds none FAILS; it never skips.
     //    Every read that decides whether an opening balance can be posted happens BEFORE the first write: the
-    //    whole ledger is paged (not just a first page), and the pending-draft, posted and owner checks are read.
+    //    whole ledger is paged in every status (not just a first page), and the REVERSED, pending-draft, posted
+    //    and owner preconditions of postOpeningBalanceDirect are read.
     let known: { memo: string; debitMinor: number; date: number; periodId: Id<"accountingPeriods"> } | null = null;
-    let posted = await listPostedJournals(client, orgId);
+    const allJournals = await listAllJournals(client, orgId);
+    let posted = allJournals.filter((row) => row.status === "POSTED");
     if (posted.length === 0) {
+      // The opening-balance mutation refuses an organization with ANY POSTED or REVERSED journal
+      // (accountingCutover.hasPostedLedgerActivity). With no POSTED journal, a REVERSED one is the only way
+      // that can hold; it is checked here, before any write, so the period is never created for a posting
+      // the mutation will refuse. Such a ledger cannot run this replay: that FAILS, it never skips.
+      const reversed = allJournals.filter((row) => row.status === "REVERSED");
+      expect(
+        reversed.length,
+        "the ledger holds only REVERSED journals, so an opening balance would be refused and no posted row exists to replay"
+      ).toBe(0);
       const status = (await client.query(api.accountingCutover.openingBalanceStatus, { orgId })) as {
         posted: boolean;
         pendingDraftId: string | null;
@@ -276,7 +287,10 @@ test.describe("accounting register: a posted journal", () => {
         status: string;
       }>;
       // Prefer a period that is already OPEN, so nothing is written before the posting is attempted. Only
-      // when none is open is 2026-P8 created (the one write the posting itself needs).
+      // when none is open is 2026-P8 created (the one write the posting itself needs), and only after every
+      // precondition above was read: any POSTED/REVERSED journal, a posted or pending opening balance, the owner
+      // right and two usable accounts. A refusal for a reason none of those reads can see (for example a bank
+      // identity rule) would still leave the created period behind, and fails the test.
       const open = periods.find((p) => p.status === "OPEN");
       let periodId: Id<"accountingPeriods">;
       let asOfDate: number;
@@ -315,7 +329,7 @@ test.describe("accounting register: a posted journal", () => {
         ],
       });
       known = { memo, debitMinor: minor, date: asOfDate, periodId };
-      posted = await listPostedJournals(client, orgId);
+      posted = (await listAllJournals(client, orgId)).filter((row) => row.status === "POSTED");
     } else {
       // EXPLICIT, not silent: an existing posted journal is checked for internal consistency and for the screen
       // agreeing with the backend, but NOT against hand-written literals, which only a journal this test posts has.
