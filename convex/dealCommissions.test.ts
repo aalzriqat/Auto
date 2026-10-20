@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { payFullPriceByDeposit } from "../test-utils/cashDealerFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -32,7 +33,7 @@ async function seed(
   const buyerAgent = await mkUser("buyer");
   const executor = await mkUser("exec");
   const outsider = await mkUser("outsider");
-  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Admin", permissions }));
+  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Admin", permissions: [...permissions, "confirm:finance_disbursement"] }));
   for (const member of [userId, buyerAgent, executor]) {
     await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: member, roleId }));
   }
@@ -49,8 +50,10 @@ async function seed(
     ctx.db.insert("customers", { orgId, firstName: "A", lastName: "B", email: `${suffix}@example.com` })
   );
   const asAdmin = t.withIdentity({ subject: `admin_${suffix}`, clerkId: `admin_${suffix}` });
+  // SCRUM-802 (pilot): the cash sale is only a fixture here, so it is completed the pilot way, paid in full by deposit.
+  const quoteId = await payFullPriceByDeposit(asAdmin, { orgId, customerId, vehicleId, price: 15000 });
   const saleId = await asAdmin.mutation(api.sales.create, {
-    idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId,
+    idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId, quoteId,
     salePrice: 15000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
   });
   return { orgId, userId, buyerAgent, executor, outsider, saleId, asAdmin };

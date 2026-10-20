@@ -4,6 +4,7 @@
  * `import.meta.glob("./**\/*.*s")`, because a glob resolves relative to the file that writes it.
  */
 import { convexTestWithComponents } from "./convexTest";
+import type { Id } from "../convex/_generated/dataModel";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 
@@ -41,3 +42,21 @@ export async function seedCashDealer(tag: string, modules: Record<string, () => 
   return { t, orgId, userId, customerId, vehicleId, asUser, mkVehicle };
 }
 export type SeededCashDealer = Awaited<ReturnType<typeof seedCashDealer>>;
+
+/**
+ * SCRUM-802 (pilot): a suite that completes a CASH sale only as a fixture for something else pays the full price by
+ * deposit first (the pilot procedure) and completes the sale against the returned quote. `asUser` needs
+ * `view:sales` and `confirm:finance_disbursement`.
+ */
+export async function payFullPriceByDeposit(
+  asUser: ReturnType<ReturnType<typeof convexTestWithComponents>["withIdentity"]>,
+  args: { orgId: Id<"organizations">; customerId: Id<"customers">; vehicleId: Id<"vehicles">; price: number }
+): Promise<Id<"quotes">> {
+  const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+    orgId: args.orgId, customerId: args.customerId, vehicleId: args.vehicleId, vehiclePrice: args.price, downPayment: 0, termMonths: 0,
+  });
+  await asUser.mutation(api.deposits.create, {
+    orgId: args.orgId, quoteId, amount: args.price, method: "CASH", idempotencyKey: crypto.randomUUID(),
+  });
+  return quoteId;
+}
