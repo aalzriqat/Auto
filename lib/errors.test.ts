@@ -568,7 +568,8 @@ describe("getCodedErrorMessage - SCRUM-724 CR-1: a coded refusal or nothing, nev
     const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
     const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
     for (const code of ["RETAINED_CREDIT_UNAVAILABLE", "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
-      "CHEQUE_INVOICE_UNCOVERED_HELD", "CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER", "CUSTOMER_CREDIT_PAYOUT_DISABLED"]) {
+      "CHEQUE_INVOICE_UNCOVERED_HELD", "CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER", "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+      "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON"]) {
       const error = new ConvexError({ code, message: "server text" });
       const enText = getCodedErrorMessage(error, en);
       const arText = getCodedErrorMessage(error, ar);
