@@ -1,6 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { outstandingFromReceivableDoc } from "../subledger";
+import { allocatedDepositForVehicle } from "./depositAllocation";
 import { CASH_SALE_EXTRAS_PILOT_REFUSED, CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED, refuseSaleDebt } from "./saleDebtContainment";
 
 /**
@@ -66,6 +67,37 @@ export async function assertCashSaleInvoiceFullyPaid(
   if (cashSaleOutstandingForPayFirst({ outstandingMinor, tradeInAppliedMinor: args.tradeInAppliedMinor ?? 0 }) > 0) {
     refuseSaleDebt("CASH_SALE_BALANCE_UNPAID_REFUSED");
   }
+}
+
+/**
+ * The READ-ONLY, pre-write form of the pay-first rule (Codex Seat 2: the refusal must come before the first write on
+ * every completion path, not be rolled back after them). Deposits are the only money that can reach a cash sale's invoice
+ * (a trade-in does not count, `TRADE_IN_COUNTS_TOWARD_CASH_PAY_FIRST`), and a car can consume no more than its own
+ * allocated share of the quote's held deposit, so an invoice larger than that share can never be paid first: refuse now.
+ * Necessary, not sufficient: `assertCashSaleInvoiceFullyPaid` after the allocations stays the exact final gate (for
+ * example a deposit whose treatment diverts it from the invoice). A multi-car quote whose deposit has not been allocated
+ * defers to the completion's own allocation-required refusal, which has always come first.
+ */
+export async function assertCashSaleDepositsCanCoverInvoice(
+  ctx: QueryCtx | MutationCtx,
+  args: {
+    quoteId?: Id<"quotes">;
+    vehicleId: Id<"vehicles">;
+    currency: string;
+    invoiceMinor: number;
+    financingType?: "CASH" | "FINANCED" | "LEASE";
+    financedSalePlan?: unknown;
+  }
+): Promise<void> {
+  if (!CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED || !isCashCompletion(args) || args.invoiceMinor <= 0) return;
+  if (!args.quoteId) return refuseSaleDebt("CASH_SALE_BALANCE_UNPAID_REFUSED");
+  const allocation = await allocatedDepositForVehicle(ctx, {
+    quoteId: args.quoteId,
+    vehicleId: args.vehicleId,
+    currency: args.currency,
+  });
+  if (allocation.kind === "NOT_ALLOCATED") return;
+  if (allocation.allocatedMinor < args.invoiceMinor) refuseSaleDebt("CASH_SALE_BALANCE_UNPAID_REFUSED");
 }
 
 const positive = (n: number | null | undefined): boolean => typeof n === "number" && n > 0;

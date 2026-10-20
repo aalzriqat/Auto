@@ -68,6 +68,7 @@ const MUST_RUN_WITH_REAL_SWITCH = [
   "convex/accountingReleaseRehearsal.test.ts",
   "convex/scrum802CashSaleContainment.test.ts",
   "convex/scrum802CashSaleExtras.test.ts",
+  "convex/scrum802CashSaleOrdering.test.ts",
   // Bound to the regression scenario cash-sale-with-tax-is-refused-with-the-specific-code-before-any-write.
   "convex/ownedSaleTaxEndToEnd.test.ts",
 ] as const;
@@ -99,19 +100,111 @@ function turnsSwitchOff(src: string): boolean {
   return MOCKS_GATE_MODULE.test(src) || SETS_SWITCH_NOT_TRUE.test(src);
 }
 
-// What a marked opt-out must actually DO, not merely say: mock the containment module and set the full-payment switch
-// to a falsy literal. A file that carries the marker text but mocks nothing runs with the real switch and is a lie.
-const MOCKS_CONTAINMENT_MODULE = /vi\.(?:mock|doMock)\s*\(\s*(?:import\s*\(\s*)?["'`][^"'`]*saleDebtContainment/;
-const FULL_PAYMENT_SET_FALSY = /CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED\s*:\s*(?:false|!1|0|null|undefined)\b/;
-function mocksFullPaymentSwitchOff(src: string): boolean {
-  return MOCKS_CONTAINMENT_MODULE.test(src) && FULL_PAYMENT_SET_FALSY.test(src);
+// What a marked opt-out must actually DO, not merely say. The marker text, a comment, a string or a pass-through
+// `importOriginal()` mock do not turn the switch off; only an ASSIGNMENT of a falsy literal to the switch, inside the
+// factory of a vi.mock/vi.doMock of the containment module, does. So the source is parsed: comments are removed,
+// each mock call is cut out with balanced parentheses (string-aware), the module path is read from its first argument,
+// string contents are blanked in the factory, and every `CASH_SALE_..._REQUIRED: value` in it must be a falsy literal.
+const FALSY_LITERAL = /^(?:false|!1|0|null|undefined)$/;
+
+/** Source with // and /* *\/ comments blanked out; string and template literals are kept intact (they may hold "//"). */
+function stripComments(src: string): string {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === "/" && n === "/") {
+      while (i < src.length && src[i] !== "\n") i += 1;
+    } else if (c === "/" && n === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i += 1;
+      i += 2;
+    } else if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      out += c;
+      i += 1;
+      while (i < src.length && src[i] !== quote) {
+        if (src[i] === "\\") {
+          out += src[i];
+          i += 1;
+        }
+        out += src[i] ?? "";
+        i += 1;
+      }
+      out += quote;
+      i += 1;
+    } else {
+      out += c;
+      i += 1;
+    }
+  }
+  return out;
 }
+
+/** The text of a call from its opening parenthesis to the matching close, string-aware. */
+function balancedCall(src: string, openIndex: number): string {
+  let depth = 0;
+  let i = openIndex;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") {
+      i += 1;
+      while (i < src.length && src[i] !== c) i += src[i] === "\\" ? 2 : 1;
+    } else if (c === "(") {
+      depth += 1;
+    } else if (c === ")") {
+      depth -= 1;
+      if (depth === 0) return src.slice(openIndex, i + 1);
+    }
+    i += 1;
+  }
+  return src.slice(openIndex);
+}
+
+/** Replaces every string/template literal body with spaces, so a key named inside a string is not an assignment. */
+function blankStrings(src: string): string {
+  return src.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, (m) => m[0] + " ".repeat(m.length - 2) + m[0]);
+}
+
+/** Every vi.mock / vi.doMock call whose first argument names the containment module, as { factory } with strings blanked. */
+function containmentMockFactories(src: string): string[] {
+  const code = stripComments(src);
+  const out: string[] = [];
+  for (const match of code.matchAll(/vi\.(?:mock|doMock)\s*\(/g)) {
+    const call = balancedCall(code, match.index! + match[0].length - 1);
+    const first = /^\(\s*(?:import\s*\(\s*)?(["'`])([^"'`]*)\1/.exec(call);
+    if (!first || !/saleDebtContainment/.test(first[2])) continue;
+    out.push(blankStrings(call.slice(first[0].length)));
+  }
+  return out;
+}
+
+/** Values assigned to `key` as an object property inside a factory text. */
+function assignedValues(factory: string, key: string): string[] {
+  return [...factory.matchAll(new RegExp(`\\b${key}\\s*:\\s*([^,}\\n]+)`, "g"))].map((m) => m[1].trim());
+}
+
+function mocksFullPaymentSwitchOff(src: string): boolean {
+  const factories = containmentMockFactories(src);
+  if (factories.length === 0) return false;
+  return factories.every((factory) => {
+    const values = assignedValues(factory, "CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED");
+    return values.length > 0 && values.every((value) => FALSY_LITERAL.test(value));
+  });
+}
+
 function flipsOnlyTheExtrasSwitch(src: string): boolean {
-  return (
-    MOCKS_CONTAINMENT_MODULE.test(src) &&
-    /CASH_SALE_EXTRAS_PILOT_REFUSED\s*:\s*(?:false|!1|0|null|undefined)\b/.test(src) &&
-    !/CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED\s*:/.test(src)
-  );
+  const factories = containmentMockFactories(src);
+  if (factories.length === 0) return false;
+  return factories.every((factory) => {
+    const extras = assignedValues(factory, "CASH_SALE_EXTRAS_PILOT_REFUSED");
+    return (
+      extras.length > 0 &&
+      extras.every((value) => FALSY_LITERAL.test(value)) &&
+      assignedValues(factory, "CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED").length === 0
+    );
+  });
 }
 
 describe("SCRUM-802 opt-out census", () => {
@@ -190,13 +283,38 @@ describe("SCRUM-802 opt-out census", () => {
     expect(turnsSwitchOff("const m = { CASH_SALE_EXTRAS_PILOT_REFUSED: !1 };")).toBe(true);
   });
 
-  test("the opt-out verifier goes red on a marker with no real mock (self-test)", () => {
-    const real = `// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (importOriginal) => ({ ...(await importOriginal()), CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false }));`;
+  test("the opt-out verifier parses the real assignment and goes red on every fooling case (self-test)", () => {
+    const N = "CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED";
+    const real = `// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (importOriginal) => ({ ...(await importOriginal()), ${N}: false }));`;
     expect(mocksFullPaymentSwitchOff(real)).toBe(true);
-    expect(mocksFullPaymentSwitchOff(`// ${MARK}\nconst x = 1;`)).toBe(false); // marker only
-    expect(mocksFullPaymentSwitchOff(`// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (o) => await o());`)).toBe(false); // mock, switch still real
-    expect(mocksFullPaymentSwitchOff(`// ${MARK}\nconst m = { CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false };`)).toBe(false); // value set, nothing mocked
-    expect(flipsOnlyTheExtrasSwitch(`vi.mock("./utils/saleDebtContainment", async (o) => ({ ...(await o()), CASH_SALE_EXTRAS_PILOT_REFUSED: false }));`)).toBe(true);
-    expect(flipsOnlyTheExtrasSwitch(`vi.mock("./utils/saleDebtContainment", async (o) => ({ ...(await o()), CASH_SALE_EXTRAS_PILOT_REFUSED: false, CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false }));`)).toBe(false);
+    expect(mocksFullPaymentSwitchOff(real.replace("false", "!1"))).toBe(true);
+    expect(mocksFullPaymentSwitchOff(`vi.mock("./utils/saleDebtContainment.ts", async (o) => ({ ...(await o()), ${N}: 0 }));`)).toBe(true);
+
+    const fooled = [
+      // marker only
+      `// ${MARK}\nconst x = 1;`,
+      // pass-through mock plus a comment that claims the switch is off
+      `// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (importOriginal) => {\n  // ${N}: false\n  return await importOriginal();\n});`,
+      `// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (importOriginal) => {\n  /* ${N}: false */\n  return { ...(await importOriginal()) };\n});`,
+      // pass-through mock, the switch still real
+      `// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (o) => await o());`,
+      // the assignment named only inside a string
+      `// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (o) => ({ ...(await o()), note: "${N}: false" }));`,
+      // the value assigned is true, or something that is not a falsy literal
+      `// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (o) => ({ ...(await o()), ${N}: true }));`,
+      `// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (o) => ({ ...(await o()), ${N}: flag }));`,
+      // assigned off, then back on within the same factory
+      `// ${MARK}\nvi.mock("./utils/saleDebtContainment", async (o) => ({ ...(await o()), ${N}: false, ${N}: true }));`,
+      // value set, nothing mocked
+      `// ${MARK}\nconst m = { ${N}: false };`,
+      // the falsy assignment is in a different module's mock
+      `// ${MARK}\nvi.mock("./rateLimit", () => ({ ${N}: false }));\nvi.mock("./utils/saleDebtContainment", async (o) => await o());`,
+    ];
+    for (const src of fooled) expect(mocksFullPaymentSwitchOff(src), src).toBe(false);
+
+    const extras = `vi.mock("./utils/saleDebtContainment", async (o) => ({ ...(await o()), CASH_SALE_EXTRAS_PILOT_REFUSED: false }));`;
+    expect(flipsOnlyTheExtrasSwitch(extras)).toBe(true);
+    expect(flipsOnlyTheExtrasSwitch(extras.replace("false }", `false, ${N}: false }`))).toBe(false);
+    expect(flipsOnlyTheExtrasSwitch(`// CASH_SALE_EXTRAS_PILOT_REFUSED: false\nvi.mock("./utils/saleDebtContainment", async (o) => await o());`)).toBe(false);
   });
 });
