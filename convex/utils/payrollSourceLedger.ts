@@ -129,6 +129,28 @@ async function payrollPaidBlockedReason(
       }
       recognizedTotal += inRunCurrency ?? 0;
     }
+    // Extra deal commission lines: each accrual must be posted, and what it
+    // recognized joins the total the payment is compared with.
+    for (const lineId of item.commissionLineIds ?? []) {
+      const event = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_line_accrued_${lineId}`)
+        )
+        .filter((q) => q.eq(q.field("status"), "POSTED"))
+        .first();
+      if (!event) {
+        return "a commission line behind it has not posted to the ledger yet, so this would clear a Commission Payable that was never accrued";
+      }
+      const amount = event.payload?.amountMinor;
+      if (typeof amount !== "number" || !Number.isFinite(amount)) {
+        return "a commission line behind it has an unreadable recognized amount, so the Commission Payable it clears cannot be verified";
+      }
+      if (event.currency !== runCurrency) {
+        return "a commission line on it was recognized in a different currency than the run pays, so accounting must reconcile it before this can settle";
+      }
+      recognizedTotal += amount;
+    }
     // The mutation-side check is skipped whenever the payment would queue, so a
     // run frozen at a divergent commission total replays unchecked and clears
     // more Commission Payable than was ever recognized. Compared against the
