@@ -294,6 +294,7 @@ const HEREDOC = /(<<-?\s*(['"]?)(\w+)\2[^\n]*)\n[\s\S]*?\n[ \t]*\3(?=\n|$)/g;
 const PLAIN_WORD = /^[\w./~:@+=%,-]*$/;
 const RUNNER_PREFIX = new Set(["sudo", "env", "command", "exec", "nohup", "time", "nice", "timeout", "xargs", "parallel", "builtin"]);
 const FEEDS_ARGUMENTS = new Set(["xargs", "parallel"]);
+const GIT_LIKE = /^(?:.*[\\/])?git(?:-[\w-]+)?(?:\.exe)?$/i;
 const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 const gitHelper = (word) => /^git-([\w-]+?)(?:\.exe)?$/i.exec(word.split(/[\\/]/).pop())?.[1].toLowerCase();
 const SEGMENT_WORDS_SKIPPED = new Set(["!", "do", "then", "else", "{", "(", "}", ")", "[", "[[", "]", "]]"]);
@@ -341,8 +342,9 @@ function expandsCommandOrSubcommand(command) {
     let prefixed = false;
     let feeds = false;
     if (words.some((w) => w.text === "expand_aliases")) return true;
-    const execAt = words.findIndex((w) => FIND_EXEC.has(w.text));
-    if (execAt >= 0 && words[execAt + 1] && (words[execAt + 1].dirty || /^(?:.*[\\/])?git(?:[-.].*)?$/i.test(words[execAt + 1].text))) return true;
+    // git anywhere after xargs, parallel or find -exec: the subcommand may arrive on stdin or after options with values.
+    const feeder = words.findIndex((w) => FEEDS_ARGUMENTS.has(w.text.split(/[\\/]/).pop().toLowerCase()) || FIND_EXEC.has(w.text));
+    if (feeder >= 0 && words.slice(feeder + 1).some((w, k) => GIT_LIKE.test(w.text) || (k === 0 && FIND_EXEC.has(words[feeder].text) && w.dirty))) return true;
     for (; i < words.length; i++) {
       const w = words[i];
       if (/^\w+=/.test(w.text) || /^\d*[<>]/.test(w.text) || SEGMENT_WORDS_SKIPPED.has(w.text)) continue;
