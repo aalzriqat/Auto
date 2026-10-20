@@ -228,6 +228,31 @@ describe("gitSteps", () => {
     expect(gitSteps(cmd).length).toBeGreaterThan(0);
   });
   test.each([
+    '"git" push',
+    "'git' push",
+    'g"it" push',
+    "g''it push",
+    '"/usr/bin/git" push',
+    "git.exe push",
+    "git.exe commit -m x",
+    'git "push"',
+    'git comm"it" -m x',
+    '"git" "commit" -m x',
+    "g\\it push",
+    'echo ok; "git" push',
+    '"git" -C d push',
+    '"git" pp origin',
+  ])("a quoted or escaped git command word or subcommand is still a step: %s", (cmd) => {
+    expect(gitSteps(cmd).length).toBeGreaterThan(0);
+  });
+  test.each([
+    'echo "git" push',
+    'grep "git" push notes',
+    '"git" status',
+    'git "log" --oneline',
+    'echo "git push"',
+  ])("quoting does not turn text or built-ins into steps: %s", (cmd) => expect(gitSteps(cmd)).toEqual([]));
+  test.each([
     'rg "--pre" git x push',
     "rg '--pre=sh' x .",
     'rg "--hostname-bin" "git push" x',

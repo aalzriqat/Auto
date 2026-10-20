@@ -34,7 +34,7 @@ export function gitExecutable(exists = existsSync, resolve = resolveTrustedGitEx
 
 const ARG = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
 const GIT_STEP = new RegExp(
-  String.raw`\bgit\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b`,
+  String.raw`\bgit(?:\.exe)?\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b`,
   "g",
 );
 // A match is skipped only when git is an argument to one of these, as in
@@ -167,7 +167,7 @@ const GIT_BUILTINS = new Set([
   "update-index", "update-ref", "verify-commit", "verify-tag", "version", "whatchanged", "worktree", "write-tree",
 ]);
 const GIT_COMMAND = new RegExp(
-  String.raw`${COMMAND_POSITION}(?:[\w./~-]*/)?git\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+([^\s;&|()]+)`,
+  String.raw`${COMMAND_POSITION}(?:[\w./~-]*/)?git(?:\.exe)?\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+([^\s;&|()]+)`,
   "gi",
 );
 // The same, once quotes are removed (`git "-c" alias.p=push p`); only the config options are read there.
@@ -266,6 +266,27 @@ function commitArgs(tail) {
   return out;
 }
 
+/**
+ * The command as the shell reads its words: quote characters and escaping
+ * backslashes removed, and whitespace inside quotes kept as U+0001 so a quoted
+ * argument stays one word. `"git" push`, `g"it" push` and `git "push"` become
+ * `git push`; `git commit -m "fix: git push"` stays one message word.
+ */
+function normalizeWords(command) {
+  let out = "";
+  let quote = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else out += /\s/.test(ch) ? "\u0001" : ch;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "\\" && /[A-Za-z]/.test(command[i + 1] ?? "")) continue;
+    else out += ch;
+  }
+  return quote ? command : out;
+}
+
 const unknownStep = (step) => ({ step, all: false, dirs: [], opaque: false, paths: [], unknown: true });
 
 /**
@@ -306,8 +327,17 @@ export function gitSteps(command) {
   if (/\bgh\s+pr\s+create\b/.test(command)) steps.push({ ...unknownStep("pr"), unknown: false });
   // Quotes do not hide a word from the shell: `rg "--pre" sh` and `"sh" -c` are the same commands.
   const dequoted = scan.replace(/["']/g, "");
-  if (UNPARSEABLE.some((re) => re.test(scan) || re.test(dequoted)) || mayBeAlias(scan) || ALIAS_CONFIG.test(dequoted)) {
+  const words = normalizeWords(scan);
+  if (UNPARSEABLE.some((re) => re.test(scan) || re.test(dequoted)) || mayBeAlias(words) || ALIAS_CONFIG.test(dequoted)) {
     steps.push(unknownStep("commit"), unknownStep("push"));
+  }
+  // A quoted or escaped command word (`"git" push`, `g"it" push`, `git "push"`) is the same
+  // command to the shell. Steps seen only after normalising are unknown: the files cannot be read.
+  const seen = normalizeWords(command);
+  for (const type of ["commit", "push"]) {
+    const found = [...seen.matchAll(GIT_STEP)].filter((m) => m[2] === type && !isTextArgument(seen, m.index)).length;
+    const have = steps.filter((st) => st.step === type).length;
+    for (let i = have; i < found; i++) steps.push(unknownStep(type));
   }
   return steps;
 }
