@@ -23,7 +23,9 @@ permissions:
   contents: read
 
 # Its own group, so a push cancels only the previous replay lane and never trusted-main-e2e.yml. A cancelled run
-# still executes its always() cleanup step below, which deletes its preview.
+# still executes its always() cleanup steps, but they overlap the new run's create (the two previews have different
+# names, so they do not collide), and a delete that fails leaves a preview behind. The 1 hour nonce expiry and the
+# 2 hour pin backstop bound what runner loss, a force-cancel or a failed removal can leave.
 concurrency:
   group: trusted-main-replay-playwright-${{ github.ref }}
   cancel-in-progress: true
@@ -214,16 +216,6 @@ jobs:
         if: always()
         run: node scripts/assertReplayLaneRan.mjs replay-lane-report.json replay-lane-summary.md
 
-      # Counts only. The Playwright report, traces and videos are NOT uploaded: this repository is public.
-      - name: Upload the replay lane summary
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: trusted-main-replay-lane-summary
-          path: replay-lane-summary.md
-          if-no-files-found: ignore
-          retention-days: 14
-
       # Invalidate the attestation BEFORE the delete: if the delete fails or the preview is later promoted, the
       # nonce, run id and expiry are already gone, so nothing can attest. Best effort per variable (removing an
       # unset variable succeeds); only the variable NAMES are ever printed, never values.
@@ -252,11 +244,23 @@ jobs:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
           CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
 
-      # Last step, always(). --strict: a refused or failed delete, or a preview that is still there afterwards,
-      # fails the job loudly. If create never handed back a URL, no step can name the deployment (the CLI picks
+      # Cleanup runs on every run that reaches this step (always()). It is NOT a guarantee for runner loss, a
+      # force-cancel or a failed removal: the 1 hour nonce expiry and the 2 hour pin backstop are the bound there.
+      # --strict: a refused or failed delete, or a preview that is still there afterwards, fails the job loudly.
+      # Only the artifact upload follows, so the cleanup never waits on an optional step. If create never handed back a URL, no step can name the deployment (the CLI picks
       # its random name); that residual gap has no attestation on it, because the nonce is only set after pin.
       - name: Delete the disposable preview
         if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
         run: node scripts/previewDeploymentLifecycle.mjs delete --strict
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      # Counts only. The Playwright report, traces and videos are NOT uploaded: this repository is public.
+      - name: Upload the replay lane summary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: trusted-main-replay-lane-summary
+          path: replay-lane-summary.md
+          if-no-files-found: ignore
+          retention-days: 14

@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { REPLAY_PRODUCTION_DEPLOYMENTS } from "../playwright/fixtures/replayIsolation";
 import {
   PIN_TTL_MS,
+  PROTECTED_DEPLOYMENTS,
   PIN_TTL_ENV,
   PIN_TTL_FLOOR_MS,
   pinTtlMs,
@@ -74,6 +76,20 @@ function env(overrides: Record<string, string | undefined> = {}) {
 }
 
 const writes = (calls: Call[]) => calls.filter((c) => c.method !== "GET");
+
+describe("protected deployments", () => {
+  it("the lifecycle script and the replay guard refuse exactly the same production deployments", () => {
+    expect([...PROTECTED_DEPLOYMENTS].sort()).toEqual([...REPLAY_PRODUCTION_DEPLOYMENTS].sort());
+  });
+
+  it("refuses every one of them by URL before any request", async () => {
+    for (const name of PROTECTED_DEPLOYMENTS) {
+      const { calls, fetchImpl } = api(preview());
+      await expect(deletePreview({ env: env({ CONVEX_PREVIEW_URL: "https://" + name + ".convex.cloud" }), fetchImpl })).rejects.toThrow(/protected/);
+      expect(calls).toEqual([]);
+    }
+  });
+});
 
 describe("SCRUM-377 preview deployment lifecycle", () => {
   it("deletes exactly this run's preview after re-confirming it", async () => {
@@ -371,6 +387,10 @@ const KEY = "${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}";
  * with JavaScript comments removed and braces balanced, so a commented-out or
  * nested-brace argument cannot hide from the check.
  */
+function firstIndexOfJob(all: Array<{ id: string }>, id: string): number {
+  return all.findIndex((entry) => entry.id === id);
+}
+
 function inlineResolverCalls(script: string): string[] {
   const code = script.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   const calls: string[] = [];
@@ -486,7 +506,14 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
       // Same job: the delete is its final step and runs whatever came before.
       expect(del).toBeGreaterThan(pin);
       expect(delStep.if).toBe("always() && env.CONVEX_PREVIEW_CREATED_AT != ''");
-      expect(jobs[delJobId].steps?.at(-1)).toBe(delStep);
+      // The delete is the final step, except that one workflow lets an always() artifact upload of its counts-only
+      // summary follow it (so cleanup never waits on an optional step). Nothing else may follow, anywhere.
+      const after = (jobs[delJobId].steps ?? []).slice(del - firstIndexOfJob(steps, delJobId) + 1);
+      for (const step of after) {
+        expect(_file, "only an always() upload-artifact may follow the delete").toBe("trusted-main-replay-e2e.yml");
+        expect(String((step as Step & { uses?: string }).uses ?? "")).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}/);
+        expect(step.if).toBe("always()");
+      }
     } else {
       // Separate job: it waits for every other job, whatever their outcome,
       // and receives exactly what the pin step published.

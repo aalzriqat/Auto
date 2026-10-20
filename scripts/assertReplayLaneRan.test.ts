@@ -26,7 +26,7 @@ function report(replay: T | null, others: T[] = []) {
         file: "accounting.spec.ts",
         suites: [
           { title: "accounting workspace", specs: others.map((x, i) => ({ title: `other ${i}`, tests: [x] })) },
-          { title: REPLAY_SUITE_TITLE, specs: replay ? [{ title: REPLAY_SPEC_TITLE, tests: [replay] }] : [] },
+          { title: REPLAY_SUITE_TITLE, specs: replay ? [{ title: REPLAY_SPEC_TITLE, ok: replay.status === "expected", tests: [replay] }] : [] },
         ],
       },
     ],
@@ -45,6 +45,27 @@ describe("evaluateReplayReport", () => {
     const v = evaluateReplayReport(report(t("skipped", [{ status: "skipped" }]), [passed]));
     expect(v.ok).toBe(false);
     expect(v.counts.skipped).toBe(1);
+  });
+
+  it("fails when any other test in the spec was skipped (no unexpected skip is tolerated)", () => {
+    const v = evaluateReplayReport(report(passed, [passed, t("skipped", [{ status: "skipped" }])]));
+    expect(v.ok).toBe(false);
+    expect(v.problems.join(" ")).toMatch(/skipped/);
+  });
+
+  it("does not count a replay whose spec is not ok, or whose last attempt is not passed", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = report(passed, [passed]) as Record<string, any>;
+    r.suites[0].suites[1].specs[0].ok = false;
+    expect(evaluateReplayReport(r).ok).toBe(false);
+    expect(evaluateReplayReport(report(t("expected", [{ status: "passed" }, { status: "failed" }]))).ok).toBe(false);
+  });
+
+  it("fails two copies of the replay test (exactly one)", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = report(passed) as Record<string, any>;
+    r.suites[0].suites[1].specs.push({ title: REPLAY_SPEC_TITLE, ok: true, tests: [passed] });
+    expect(evaluateReplayReport(r).ok).toBe(false);
   });
 
   it("fails a missing replay test (renamed or filtered out)", () => {

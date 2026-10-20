@@ -10,13 +10,25 @@ import { parse } from "yaml";
  */
 const FILE = ".github/workflows/trusted-main-replay-e2e.yml";
 const text = readFileSync(path.join(process.cwd(), FILE), "utf8");
-type Step = { name?: string; run?: string; if?: string; uses?: string; env?: Record<string, string> };
+type Step = {
+  name?: string;
+  run?: string;
+  if?: string;
+  uses?: string;
+  env?: Record<string, string>;
+  with?: Record<string, string>;
+  "continue-on-error"?: unknown;
+};
 const workflow = parse(text) as {
   on: Record<string, unknown>;
   permissions: Record<string, string>;
   jobs: Record<string, { if?: string; steps: Step[] }>;
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean };
 };
-const job = workflow.jobs.replay;
+const job = workflow.jobs.replay as { if?: string; steps: Step[]; "timeout-minutes"?: number };
+const trustedMain = parse(readFileSync(path.join(process.cwd(), ".github/workflows/trusted-main-e2e.yml"), "utf8")) as {
+  concurrency: { group: string };
+};
 const steps = job.steps;
 const indexOf = (needle: string) => {
   const hits = steps.flatMap((s, i) => ((s.run ?? "").includes(needle) ? [i] : []));
@@ -177,14 +189,20 @@ describe("replay lane workflow", () => {
     expect(text).not.toMatch(/steps\.[\w-]+\.outputs\.preview_name|needs\.[\w-]+\.outputs/);
   });
 
-  it("pins strictly with a short backstop, and deletes strictly as the last step under always()", () => {
+  it("pins strictly with a short backstop, and deletes strictly under always(), followed only by the summary upload", () => {
     const pinStep = steps[indexOf("previewDeploymentLifecycle.mjs pin")];
     expect(pinStep.run?.trim()).toBe("node scripts/previewDeploymentLifecycle.mjs pin --strict");
     expect(pinStep.if).toBe("always() && env.CONVEX_PREVIEW_URL != ''");
     const ttl = Number(pinStep.env?.CONVEX_PREVIEW_PIN_TTL_MS);
     expect(ttl).toBeGreaterThanOrEqual(15 * 60 * 1000);
     expect(ttl).toBeLessThanOrEqual(2 * 60 * 60 * 1000);
-    const del = steps.at(-1)!;
+    const delIndex = indexOf("previewDeploymentLifecycle.mjs delete");
+    const del = steps[delIndex];
+    // Only the always() upload of the counts-only summary may follow the delete.
+    const after = steps.slice(delIndex + 1);
+    expect(after.map((x) => x.name)).toEqual(["Upload the replay lane summary"]);
+    expect(after[0].uses).toMatch(/^actions\/upload-artifact@[0-9a-f]{40}/);
+    expect(after[0].if).toBe("always()");
     expect(del.run?.trim()).toBe("node scripts/previewDeploymentLifecycle.mjs delete --strict");
     expect(del.if).toBe("always() && env.CONVEX_PREVIEW_CREATED_AT != ''");
     expect(del.env?.CONVEX_PREVIEW_DEPLOY_KEY).toBe("${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}");
@@ -194,7 +212,7 @@ describe("replay lane workflow", () => {
   it("removes the three run variables from the preview, by name, always, before the delete", () => {
     const inv = steps.findIndex((s) => s.name === "Invalidate the replay attestation");
     expect(inv).toBeGreaterThan(-1);
-    const del = steps.length - 1;
+    const del = indexOf("previewDeploymentLifecycle.mjs delete");
     expect(inv).toBeLessThan(del);
     // Nothing between the invalidation and the delete could make the delete wait on something that may not run.
     expect(del - inv).toBe(1);
@@ -210,10 +228,92 @@ describe("replay lane workflow", () => {
       expect(run.indexOf(guard), guard).toBeGreaterThan(-1);
       expect(run.indexOf(guard), guard).toBeLessThan(run.indexOf("convex env remove"));
     }
+    // Cleanup comes after the proof step and ahead of the upload.
+    expect(inv).toBeGreaterThan(steps.findIndex((x) => x.name === "Assert the replay ran"));
     // A removal that fails is a warning, never an abort of the loop or of the step that precedes the delete.
     expect(run).toContain("::warning::");
     expect(run).not.toMatch(/set -[a-z]*e/);
     // It never prints a value: only the variable name, and no output of the CLI.
     expect(run).not.toMatch(/\$NONCE|E2E_REPLAY_RUN_NONCE\}|env\.E2E_REPLAY/);
+  });
+
+  describe("anti-skip wiring (a skipped or unproven replay must fail the job)", () => {
+    const playwrightIndex = () => steps.findIndex((x) => (x.run ?? "").includes("playwright test"));
+    const assertIndex = () => steps.findIndex((x) => (x.run ?? "").includes("assertReplayLaneRan.mjs"));
+
+    it("runs the assert step always(), after Playwright, reading the file Playwright writes", () => {
+      const pw = playwrightIndex();
+      const as = assertIndex();
+      expect(pw).toBeGreaterThan(-1);
+      expect(as).toBeGreaterThan(pw);
+      expect(steps[as].if).toBe("always()");
+      const reportFile = steps[pw].env?.PLAYWRIGHT_JSON_OUTPUT_NAME;
+      expect(reportFile).toMatch(/^[\w.-]+\.json$/);
+      const words = (steps[as].run ?? "").trim().split(/\s+/);
+      expect(words.slice(0, 2)).toEqual(["node", "scripts/assertReplayLaneRan.mjs"]);
+      expect(words[2]).toBe(reportFile);
+      expect(steps.filter((x) => (x.run ?? "").includes("assertReplayLaneRan.mjs"))).toHaveLength(1);
+    });
+
+    it("runs Playwright with no retries, the chromium project and a json reporter", () => {
+      const cmd = (steps[playwrightIndex()].run ?? "").replace(/\s+/g, " ").trim();
+      expect(cmd).toContain("playwright test playwright/tests/accounting.spec.ts");
+      expect(cmd).toMatch(/--retries=0(\s|$)/);
+      expect(cmd).toMatch(/--project=chromium(\s|$)/);
+      expect(cmd).toMatch(/--reporter=[\w,]*json[\w,]*(\s|$)/);
+    });
+
+    it("lets none of Playwright, Assert, Bind, Pin or Delete continue on error", () => {
+      for (const name of [
+        "Run the accounting replay spec",
+        "Assert the replay ran",
+        "Bind the replay run to this preview",
+        "Pin the disposable preview for cleanup",
+        "Delete the disposable preview",
+      ]) {
+        const step = steps.find((x) => x.name === name);
+        expect(step, name).toBeDefined();
+        expect(step!["continue-on-error"], name).toBeUndefined();
+      }
+      expect(text).not.toMatch(/continue-on-error/);
+    });
+
+    it("uploads only the counts-only summary the assert step writes, never test output", () => {
+      const upload = steps.find((x) => x.name === "Upload the replay lane summary")!;
+      const written = (steps[assertIndex()].run ?? "").trim().split(/\s+/)[3];
+      expect(written).toBe("replay-lane-summary.md");
+      expect(upload.with?.path).toBe(written);
+      expect(String(upload.with?.path)).not.toMatch(/test-results|playwright-report|\*|\//);
+      expect(steps.filter((x) => (x.uses ?? "").includes("upload-artifact"))).toHaveLength(1);
+    });
+
+    it("has its own concurrency group, distinct from the trusted-main lane, and a bounded timeout", () => {
+      const group = workflow.concurrency?.group;
+      expect(group).toMatch(/^trusted-main-replay-playwright-/);
+      expect(group).not.toBe(trustedMain.concurrency.group);
+      expect(group!.startsWith(trustedMain.concurrency.group.replace(/\$\{\{.*$/, ""))).toBe(false);
+      expect(job["timeout-minutes"]).toBeGreaterThan(0);
+      expect(job["timeout-minutes"]).toBeLessThanOrEqual(60);
+    });
+
+    it("gates the bind step on the earlier steps succeeding: no always(), after pin", () => {
+      const bind = steps[bindIndex()];
+      expect(bind.if).toBeUndefined();
+      expect(bindIndex()).toBeGreaterThan(indexOf("previewDeploymentLifecycle.mjs pin"));
+      // Nothing between create and bind may restore the always() path to it.
+      const create = indexOf("--preview-create");
+      for (const step of steps.slice(create + 2, bindIndex())) expect(step.if ?? "", step.name).not.toMatch(/always\(\)/);
+    });
+
+    it("verify_var really compares: its last command is the equality test of the value read against the expected one", () => {
+      const run = steps[bindIndex()].run ?? "";
+      const body = /verify_var\(\) \{\n([\s\S]*?)\n\}/.exec(run)?.[1] ?? "";
+      const lines = body.split("\n").map((l) => l.trim()).filter(Boolean);
+      expect(lines).toEqual([
+        "local got",
+        'got="$(pnpm exec convex env get --preview-name "$CONVEX_PREVIEW_NAME" "$1" 2>/dev/null)" || return 1',
+        '[ "$got" = "$2" ]',
+      ]);
+    });
   });
 });

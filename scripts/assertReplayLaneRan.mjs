@@ -60,6 +60,7 @@ export function evaluateReplayReport(report) {
           const last = results[results.length - 1];
           if (
             status === "expected" &&
+            spec.ok === true &&
             results.length === 1 &&
             last?.status === "passed" &&
             test.projectName === REPLAY_PROJECT
@@ -76,6 +77,10 @@ export function evaluateReplayReport(report) {
   if (counts.replayPassed !== 1) {
     problems.push("the replay test did not finish as a single passing attempt (it was skipped, failed, flaky or retried)");
   }
+  // The lane's spec has no legitimate skip: the approve-door "NOT RUN" is an annotation on a passing test, not a
+  // skip. So a skip anywhere in the report (a renamed replay, a new test.skip) fails the lane. There is no
+  // allow-list today; add one here BY TITLE, with the reason, if a skip ever becomes legitimate.
+  if (counts.skipped !== 0) problems.push(`${counts.skipped} test(s) were skipped`);
   if (counts.unexpected !== 0) problems.push(`${counts.unexpected} test(s) failed`);
   if (counts.flaky !== 0) problems.push(`${counts.flaky} test(s) were flaky`);
   return { ok: problems.length === 0, problems, counts };
