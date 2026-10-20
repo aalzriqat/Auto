@@ -10,6 +10,7 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { Id } from "@/convex/_generated/dataModel";
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
@@ -46,6 +47,7 @@ function renderDialog(
       supplierName="Amman Importer Co"
       outstandingMajor={overrides.outstandingMajor ?? 5_000}
       outstandingLabel="JD 5,000"
+      bankOptions={{ banks: [{ _id: "bank_1" as Id<"bankAccounts">, name: "Operating", currency: "JOD" }], truncated: false }}
       t={(key: string) => key}
       onOpenChange={() => {}}
       onConfirm={onConfirm as never}
@@ -56,6 +58,7 @@ function renderDialog(
 const amountField = () => document.querySelector("#supplier-receipt-amount") as HTMLInputElement;
 const dateField = () => document.querySelector("#supplier-receipt-date") as HTMLInputElement;
 const submit = () => screen.getByRole("button", { name: /RecordReceipt/i });
+const chooseBank = () => fireEvent.change(screen.getByTestId("supplier-receipt-bank"), { target: { value: "bank_1" } });
 
 describe("what the operator is asked to type", () => {
   test("the amount is not prefilled with what the supplier owes", () => {
@@ -69,6 +72,18 @@ describe("what the operator is asked to type", () => {
   test("nothing can be submitted until an amount is entered", () => {
     renderDialog();
     expect((submit() as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("a bank transfer sends the explicitly selected physical bank", () => {
+    const onConfirm = vi.fn();
+    renderDialog(onConfirm);
+    fireEvent.change(amountField(), { target: { value: "250" } });
+    expect((submit() as HTMLButtonElement).disabled).toBe(true);
+    chooseBank();
+    fireEvent.click(submit());
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      amount: 250, receiptMethod: "BANK_TRANSFER", bankAccountId: "bank_1",
+    }));
   });
 });
 
@@ -88,6 +103,8 @@ describe("refusing more than the supplier owes", () => {
     fireEvent.change(amountField(), { target: { value: "5000" } });
 
     expect(screen.queryByText(/ReceiptExceedsClaim/)).toBeNull();
+    expect((submit() as HTMLButtonElement).disabled).toBe(true);
+    chooseBank();
     expect((submit() as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -116,6 +133,7 @@ describe("the date a receipt is filed under", () => {
     expect(new Date().toISOString().slice(0, 10)).toBe("2026-08-09");
 
     fireEvent.change(amountField(), { target: { value: "1200" } });
+    chooseBank();
     fireEvent.change(dateField(), { target: { value: dateField().max } });
     fireEvent.click(submit());
 
@@ -131,6 +149,7 @@ describe("the date a receipt is filed under", () => {
     renderDialog((receipt) => captured.push(receipt as { receivedAt?: number }));
 
     fireEvent.change(amountField(), { target: { value: "1200" } });
+    chooseBank();
     fireEvent.change(dateField(), { target: { value: "2026-08-01" } });
     fireEvent.click(submit());
 
@@ -151,7 +170,7 @@ describe("what happens when the outstanding balance changes while the dialog is 
       onConfirm: () => {},
     };
     const { rerender } = render(
-      <SupplierSettlementDialog {...props} outstandingMajor={5_000} outstandingLabel="JD 5,000" />
+      <SupplierSettlementDialog {...props} outstandingMajor={5_000} outstandingLabel="JD 5,000" bankOptions={{ banks: [], truncated: false }} />
     );
 
     fireEvent.change(amountField(), { target: { value: "1200" } });
@@ -159,7 +178,7 @@ describe("what happens when the outstanding balance changes while the dialog is 
     fireEvent.change(reference, { target: { value: "CHQ-4417" } });
 
     rerender(
-      <SupplierSettlementDialog {...props} outstandingMajor={3_800} outstandingLabel="JD 3,800" />
+      <SupplierSettlementDialog {...props} outstandingMajor={3_800} outstandingLabel="JD 3,800" bankOptions={{ banks: [], truncated: false }} />
     );
 
     expect(amountField().value).toBe("1200");

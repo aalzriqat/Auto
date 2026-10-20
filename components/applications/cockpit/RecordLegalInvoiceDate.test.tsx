@@ -1,21 +1,15 @@
 /**
- * SCRUM-596 — the legal invoice date must never be sent as an instant the
- * server will refuse, and must never silently move to another day.
+ * SCRUM-596 / SCRUM-411 — the legal invoice date is a DOCUMENT date (the one
+ * printed on the paper): it is never defaulted, it is never sent as an instant
+ * the server will refuse, and it never silently moves to another day.
  *
- * The dialog defaulted to `todayDateInput()` — the operator's LOCAL calendar
- * day — and sent it through `dateInputToUtcMs`, i.e. UTC midnight of that day.
- * East of UTC that instant is in the FUTURE for the first hours of the local
- * morning (until 03:00 in Amman), and `recordLegalInvoice` refuses a future
- * invoice date, so the closing checklist could not be cleared overnight.
- * Found by the SCRUM-595 browser matrix at 01:00 Amman (finding F-28).
- *
- * A legal invoice date is a DOCUMENT date (the one printed on the paper), so
- * the fix must not trade the refusal for a silent backdate: pre-filling the
- * ledger's UTC day at 01:30 on 1 October would file an invoice dated
- * 1 October under 30 September — the previous period (Sol 6 review of
- * 8616c7118). The picker is capped at the earlier of the local and UTC days,
- * pre-fills the local day only once the ledger has reached it, and otherwise
- * leaves the date blank with a hint so the operator picks the paper's date.
+ * SCRUM-596 found that the dialog defaulted to the operator's LOCAL calendar day
+ * and sent it as UTC midnight, which east of UTC is in the FUTURE for the first
+ * hours of the local morning (until 03:00 in Amman) and which
+ * `recordLegalInvoice` refuses. SCRUM-411 then removed the default altogether:
+ * the sale no longer needs this invoice, so nothing on this form may look real
+ * before a person enters it. The picker is capped at the earlier of the local
+ * and UTC days, and the operator picks the paper's date.
  *
  * TZ is pinned per test, as in `SettlementAdviceCorrectionDate.test.tsx`:
  * under a UTC runner the local and UTC days coincide and this could not fail.
@@ -56,7 +50,7 @@ function at(instant: Date, tz = "Asia/Amman") {
   vi.setSystemTime(instant);
 }
 
-function renderDialog(captured: RecordLegalInvoiceValues[]) {
+function renderDialog(captured: RecordLegalInvoiceValues[], vehicleIsConsigned = false) {
   return render(
     <RecordLegalInvoiceDialog
       open
@@ -64,6 +58,7 @@ function renderDialog(captured: RecordLegalInvoiceValues[]) {
       error={null}
       scale={3}
       currency="JOD"
+      vehicleIsConsigned={vehicleIsConsigned}
       t={(key: string) => key}
       onOpenChange={() => {}}
       onSubmit={async (values) => {
@@ -81,18 +76,30 @@ function fillRequired() {
 const dateInput = () => screen.getByLabelText("LegalInvoiceDate") as HTMLInputElement;
 const submitButton = () => screen.getByRole("button", { name: "SubmitLegalInvoice" }) as HTMLButtonElement;
 
-async function submitWith(day: string | null): Promise<RecordLegalInvoiceValues> {
+async function submitWith(day: string): Promise<RecordLegalInvoiceValues> {
   const captured: RecordLegalInvoiceValues[] = [];
   renderDialog(captured);
   fillRequired();
-  if (day !== null) fireEvent.change(dateInput(), { target: { value: day } });
+  fireEvent.change(dateInput(), { target: { value: day } });
   fireEvent.click(submitButton());
   await vi.waitFor(() => expect(captured).toHaveLength(1));
   return captured[0]!;
 }
 
 describe("the date a legal invoice is recorded under", () => {
-  test("before the local day opens on the ledger, nothing is pre-filled and the hint says why", () => {
+  test("no date is ever pre-filled: the form cannot be submitted until a day is picked", () => {
+    at(NOON_IN_AMMAN);
+    renderDialog([]);
+    fillRequired();
+    expect(dateInput().value).toBe("");
+    expect(submitButton().disabled).toBe(true);
+    expect(screen.queryByText("LegalInvoiceDateNotOpenYet")).toBeNull();
+
+    fireEvent.change(dateInput(), { target: { value: "2026-08-10" } });
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  test("before the local day opens on the ledger, the cap is the ledger day and the hint says why", () => {
     at(EARLY_MORNING_IN_AMMAN);
     // Guard: the scenario only exists while the local day is ahead of the UTC day.
     expect(new Date().getDate()).toBe(10);
@@ -131,7 +138,7 @@ describe("the date a legal invoice is recorded under", () => {
     expect(time?.textContent).toContain(expected);
   });
 
-  test("on the 1st of a month before 03:00 the previous month is never pre-filled", () => {
+  test("on the 1st of a month before 03:00 the picker is capped at the previous month's last day", () => {
     at(MONTH_START_IN_AMMAN);
     expect(new Date().getDate()).toBe(1);
 
@@ -148,28 +155,16 @@ describe("the date a legal invoice is recorded under", () => {
     expect(sent.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
   });
 
-  test("once the ledger has reached the local day, the local day is the default", async () => {
-    at(NOON_IN_AMMAN);
-    renderDialog([]);
-    expect(dateInput().value).toBe("2026-08-10");
-    expect(screen.queryByText("LegalInvoiceDateNotOpenYet")).toBeNull();
-    cleanup();
-
-    const sent = await submitWith(null);
-    expect(sent.legalInvoiceDate).toBe(Date.UTC(2026, 7, 10));
-    expect(sent.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
-  });
-
-  test("behind UTC, the default and cap are the local day, not the UTC tomorrow", async () => {
+  test("behind UTC, the cap is the local day, not the UTC tomorrow", async () => {
     at(EVENING_IN_NEW_YORK, "America/New_York");
     expect(new Date().getDate()).toBe(9);
 
     renderDialog([]);
-    expect(dateInput().value).toBe("2026-08-09");
+    expect(dateInput().value).toBe("");
     expect(dateInput().max).toBe("2026-08-09");
     cleanup();
 
-    const sent = await submitWith(null);
+    const sent = await submitWith("2026-08-09");
     expect(sent.legalInvoiceDate).toBe(Date.UTC(2026, 7, 9));
   });
 
@@ -222,7 +217,7 @@ describe("the date a legal invoice is recorded under", () => {
     expect(captured[0]!.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
   });
 
-  test("behind UTC, a dialog left open across local midnight lets the operator pick the new day", async () => {
+  test("behind UTC, a dialog left open across local midnight keeps the pick and moves the cap", async () => {
     // 23:59:30 on 31 August in New York; the ledger is already on 1 September (Sol 6 on 8846fc9d4).
     at(new Date("2026-09-01T03:59:30Z"), "America/New_York");
     renderDialog([]);
@@ -238,183 +233,22 @@ describe("the date a legal invoice is recorded under", () => {
     expect(dateInput().value).toBe("2026-08-28");
   });
 
-  test("ahead of UTC, an untouched default does not carry the old month past local midnight", async () => {
-    // 23:50 on 30 September in Amman (Sol 6 on 37dcee78b): left open past 00:00,
-    // the pre-fill would file a 1 October paper under September.
+  test("a date is never supplied for the operator when the day turns over", async () => {
+    // 23:50 on 30 September in Amman: left open past 00:00 there is still nothing to carry over.
     at(new Date("2026-09-30T20:50:00Z"));
-    const captured: RecordLegalInvoiceValues[] = [];
-    renderDialog(captured);
+    renderDialog([]);
     fillRequired();
-    expect(dateInput().value).toBe("2026-09-30");
-    expect(document.querySelector("#legal-invoice-date-hint")).toBeNull();
+    expect(dateInput().value).toBe("");
 
     await act(async () => {
       vi.advanceTimersByTime(20 * 60_000);
     });
     expect(new Date().getDate()).toBe(1);
-    expect(document.querySelector("#legal-invoice-date-hint")).not.toBeNull();
-    expect(dateInput().max).toBe("2026-09-30");
     expect(dateInput().value).toBe("");
+    expect(dateInput().max).toBe("2026-09-30");
     expect(submitButton().disabled).toBe(true);
     // Typed fields survive.
     expect((screen.getByLabelText("LegalInvoiceNumber") as HTMLInputElement).value).toBe("INV-0596");
-
-    // A September paper is still recordable, but only by picking it.
-    fireEvent.change(dateInput(), { target: { value: "2026-09-30" } });
-    fireEvent.click(submitButton());
-    await vi.waitFor(() => expect(captured).toHaveLength(1));
-    expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 8, 30));
-    expect(captured[0]!.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
-  });
-
-  test("behind UTC, a day change while open blanks the untouched default and says why", async () => {
-    // 23:59:30 on 31 August in New York. Neither the old day nor the new one is
-    // filed silently: the operator picks the paper's date (Sol 6 SCRUM-596-3).
-    at(new Date("2026-09-01T03:59:30Z"), "America/New_York");
-    const captured: RecordLegalInvoiceValues[] = [];
-    renderDialog(captured);
-    fillRequired();
-    expect(dateInput().value).toBe("2026-08-31");
-    expect(document.querySelector("#legal-invoice-date-changed")).toBeNull();
-
-    await act(async () => {
-      vi.advanceTimersByTime(60_000);
-    });
-    expect(dateInput().value).toBe("");
-    expect(submitButton().disabled).toBe(true);
-    expect(document.querySelector("#legal-invoice-date-changed")?.textContent).toBe(
-      "LegalInvoiceDateDayChanged"
-    );
-    expect(dateInput().getAttribute("aria-describedby")).toBe("legal-invoice-date-changed");
-
-    fireEvent.change(dateInput(), { target: { value: "2026-09-01" } });
-    expect(document.querySelector("#legal-invoice-date-changed")).toBeNull();
-    fireEvent.click(submitButton());
-    await vi.waitFor(() => expect(captured).toHaveLength(1));
-    expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 8, 1));
-    expect(captured[0]!.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
-  });
-
-  test("re-selecting the shown day before midnight cannot become the next day (Sol 6 SCRUM-596-3)", async () => {
-    at(new Date("2026-09-01T03:59:30Z"), "America/New_York");
-    const captured: RecordLegalInvoiceValues[] = [];
-    renderDialog(captured);
-    fillRequired();
-    // The same value: like a native picker, React fires no change for it.
-    fireEvent.change(dateInput(), { target: { value: "2026-08-31" } });
-
-    await act(async () => {
-      vi.advanceTimersByTime(60_000);
-    });
-    expect(dateInput().value).toBe("");
-    expect(document.querySelector("#legal-invoice-date-changed")).not.toBeNull();
-    await act(async () => {
-      fireEvent.click(submitButton());
-    });
-    expect(captured.map((v) => v.legalInvoiceDate)).not.toContain(Date.UTC(2026, 8, 1));
-  });
-
-  test("ahead of UTC, opened before the ledger's day, the day opening asks for a pick", async () => {
-    // Opened blank at 02:59:30 in Amman; at 03:00 the not-open hint gives way
-    // to the day-changed hint and nothing is filled in.
-    at(new Date("2026-08-09T23:59:30Z"));
-    renderDialog([]);
-    expect(dateInput().value).toBe("");
-    await act(async () => {
-      vi.advanceTimersByTime(60_000);
-    });
-    expect(dateInput().value).toBe("");
-    expect(document.querySelector("#legal-invoice-date-hint")).toBeNull();
-    // Only the ledger's day opened; the local day did not change (Opus L1).
-    expect(document.querySelector("#legal-invoice-date-changed")?.textContent).toBe(
-      "LegalInvoiceDateNowOpen"
-    );
-  });
-
-  test("ahead of UTC, left open from before midnight until past 03:00 stays blank", async () => {
-    at(new Date("2026-09-30T20:50:00Z"));
-    renderDialog([]);
-    fillRequired();
-    expect(dateInput().value).toBe("2026-09-30");
-    await act(async () => {
-      vi.advanceTimersByTime(3 * 60 * 60_000 + 20 * 60_000);
-    });
-    expect(dateInput().value).toBe("");
-    expect(submitButton().disabled).toBe(true);
-    expect(document.querySelector("#legal-invoice-date-changed")).not.toBeNull();
-  });
-
-  describe("a Save in the second before the refresh lands (Sol 6 SCRUM-596-1, Opus L-1)", () => {
-    // Frozen timers: the clock moves past midnight but the refresh has not run,
-    // as in the deliberate one-second lag or a machine waking from sleep.
-    function frozenAt(instant: Date, tz: string) {
-      process.env.TZ = tz;
-      vi.useFakeTimers();
-      vi.setSystemTime(instant);
-    }
-
-    test("behind UTC, a stale untouched default is blanked, not sent", async () => {
-      frozenAt(new Date("2026-09-01T03:59:59Z"), "America/New_York");
-      const captured: RecordLegalInvoiceValues[] = [];
-      renderDialog(captured);
-      fillRequired();
-      expect(dateInput().value).toBe("2026-08-31");
-
-      vi.setSystemTime(new Date("2026-09-01T04:00:00.500Z"));
-      await act(async () => {
-        fireEvent.click(submitButton());
-      });
-      expect(captured).toHaveLength(0);
-      expect(dateInput().value).toBe("");
-      expect(submitButton().disabled).toBe(true);
-      expect(document.querySelector("#legal-invoice-date-changed")).not.toBeNull();
-    });
-
-    test("ahead of UTC, a stale untouched default is cleared, not sent", async () => {
-      frozenAt(new Date("2026-09-30T20:59:59Z"), "Asia/Amman");
-      const captured: RecordLegalInvoiceValues[] = [];
-      renderDialog(captured);
-      fillRequired();
-      expect(dateInput().value).toBe("2026-09-30");
-
-      vi.setSystemTime(new Date("2026-09-30T21:00:00.500Z"));
-      await act(async () => {
-        fireEvent.click(submitButton());
-      });
-      expect(captured).toHaveLength(0);
-      expect(dateInput().value).toBe("");
-      expect(submitButton().disabled).toBe(true);
-    });
-
-    test("at the ledger's midnight a blank default stays unsendable", async () => {
-      frozenAt(new Date("2026-08-09T23:59:59Z"), "Asia/Amman");
-      const captured: RecordLegalInvoiceValues[] = [];
-      renderDialog(captured);
-      fillRequired();
-      expect(dateInput().value).toBe("");
-
-      vi.setSystemTime(new Date("2026-08-10T00:00:00.500Z"));
-      await act(async () => {
-        fireEvent.click(submitButton());
-      });
-      expect(captured).toHaveLength(0);
-    });
-
-    test("an explicit pick is sent as picked at the boundary", async () => {
-      frozenAt(new Date("2026-09-30T20:59:59Z"), "Asia/Amman");
-      const captured: RecordLegalInvoiceValues[] = [];
-      renderDialog(captured);
-      fillRequired();
-      // A different day from the default: re-picking the same value fires no change.
-      fireEvent.change(dateInput(), { target: { value: "2026-09-28" } });
-
-      vi.setSystemTime(new Date("2026-09-30T21:00:00.500Z"));
-      await act(async () => {
-        fireEvent.click(submitButton());
-      });
-      expect(captured).toHaveLength(1);
-      expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 8, 28));
-    });
   });
 
   test("a day picked before midnight is kept and sent after it (Opus L-3)", async () => {
@@ -544,5 +378,37 @@ describe("the date a legal invoice is recorded under", () => {
     at(EARLY_MORNING_IN_AMMAN);
     const sent = await submitWith("2026-08-06");
     expect(sent.legalInvoiceDate).toBe(Date.UTC(2026, 7, 6));
+  });
+});
+
+describe("who issued the invoice (SCRUM-411)", () => {
+  test("a dealer-owned car sends the dealership as issuer and shows no issuer field", async () => {
+    at(NOON_IN_AMMAN);
+    const captured: RecordLegalInvoiceValues[] = [];
+    renderDialog(captured, false);
+    fillRequired();
+    fireEvent.change(dateInput(), { target: { value: "2026-08-10" } });
+    expect(screen.queryByLabelText("LegalInvoiceIssuerName")).toBeNull();
+    fireEvent.click(submitButton());
+    await vi.waitFor(() => expect(captured).toHaveLength(1));
+    expect(captured[0]!.issuedBy).toBe("DEALERSHIP");
+    expect(captured[0]!.issuerName).toBeUndefined();
+  });
+
+  test("a consigned car needs the importer's or supplier's name and sends it as a third party", async () => {
+    at(NOON_IN_AMMAN);
+    const captured: RecordLegalInvoiceValues[] = [];
+    renderDialog(captured, true);
+    fillRequired();
+    fireEvent.change(dateInput(), { target: { value: "2026-08-10" } });
+    // Everything else is valid, yet the importer's document is not the dealership's.
+    expect(submitButton().disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("LegalInvoiceIssuerName"), { target: { value: "  Al-Salam Imports  " } });
+    expect(submitButton().disabled).toBe(false);
+    fireEvent.click(submitButton());
+    await vi.waitFor(() => expect(captured).toHaveLength(1));
+    expect(captured[0]!.issuedBy).toBe("THIRD_PARTY");
+    expect(captured[0]!.issuerName).toBe("Al-Salam Imports");
   });
 });

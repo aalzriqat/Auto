@@ -6,6 +6,7 @@
 // `vehicleEdits.resolve` as its `ownership` argument. Nothing is pre-selected.
 
 import { Input } from "@/components/ui/input";
+import type { Id } from "@/convex/_generated/dataModel";
 import { Label } from "@/components/ui/label";
 import {
   ACQUISITION_PAYMENT_METHODS,
@@ -25,6 +26,7 @@ export interface OwnershipDraft {
   sourceCost: string;
   purchasePrice: string;
   purchasePaymentMethod?: AcquisitionPaymentMethod;
+  bankAccountId?: Id<"bankAccounts">;
   purchaseSupplierName: string;
 }
 
@@ -34,6 +36,7 @@ export interface OwnershipDecision {
   sourceCost?: number;
   purchasePrice?: number;
   purchasePaymentMethod?: AcquisitionPaymentMethod;
+  bankAccountId?: Id<"bankAccounts">;
   purchaseSupplierName?: string;
 }
 
@@ -62,20 +65,26 @@ export function buildOwnershipDecision(draft: OwnershipDraft | undefined): Owner
     return { sourceType: "SOURCED", sourcedFromName: draft.sourcedFromName.trim(), sourceCost: Number(draft.sourceCost) };
   }
   const price = Number(draft.purchasePrice);
+  const bankMethod = draft.purchasePaymentMethod === "BANK_TRANSFER" || draft.purchasePaymentMethod === "CARD" || draft.purchasePaymentMethod === "CHEQUE";
+  if (bankMethod && !draft.bankAccountId) return null;
   if (draft.purchasePaymentMethod === "ON_ACCOUNT") {
     return { sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: draft.purchaseSupplierName.trim() };
   }
-  return { sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: draft.purchasePaymentMethod };
+  return { sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: draft.purchasePaymentMethod,
+    ...(bankMethod ? { bankAccountId: draft.bankAccountId } : {}) };
 }
 
 interface Props {
+  bankOptions?: { banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean };
   idPrefix: string;
   draft: OwnershipDraft;
   onChange: (next: OwnershipDraft) => void;
   t: Translate;
 }
 
-export function ApprovalOwnershipChooser({ idPrefix, draft, onChange, t }: Readonly<Props>) {
+export function ApprovalOwnershipChooser({ bankOptions, idPrefix, draft, onChange, t }: Readonly<Props>) {
+  const bankMethod = draft.purchasePaymentMethod === "BANK_TRANSFER" || draft.purchasePaymentMethod === "CARD" || draft.purchasePaymentMethod === "CHEQUE";
+  const selectedBank = bankOptions?.banks?.find((bank) => bank._id === draft.bankAccountId);
   const set = (patch: Partial<OwnershipDraft>) => onChange({ ...draft, ...patch });
   const choices: { value: OwnershipChoice; label: string }[] = [
     { value: "SOURCED", label: t("VehicleOwnershipConsignment") },
@@ -128,7 +137,7 @@ export function ApprovalOwnershipChooser({ idPrefix, draft, onChange, t }: Reado
             <PaymentMethodSelect<AcquisitionPaymentMethod>
               t={t}
               value={draft.purchasePaymentMethod}
-              onValueChange={(method) => set({ purchasePaymentMethod: method })}
+              onValueChange={(method) => set({ purchasePaymentMethod: method, bankAccountId: undefined })}
               methods={ACQUISITION_PAYMENT_METHODS}
               ariaLabel={t("PaymentMethodLabel")}
             />
@@ -137,6 +146,24 @@ export function ApprovalOwnershipChooser({ idPrefix, draft, onChange, t }: Reado
             <div className="space-y-1 sm:col-span-2">
               <Label htmlFor={`${idPrefix}-creditor`} className="text-xs">{t("PurchaseSupplierName")} *</Label>
               <Input id={`${idPrefix}-creditor`} value={draft.purchaseSupplierName} placeholder={t("SourceDealerPlaceholder")} onChange={(e) => set({ purchaseSupplierName: e.target.value })} />
+            </div>
+          )}
+          {bankMethod && (
+            <div className="space-y-1 sm:col-span-2">
+              <Label htmlFor={`${idPrefix}-bank`} className="text-xs">{t("DirectPaymentBankLabel")} *</Label>
+              <select
+                id={`${idPrefix}-bank`}
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+                value={selectedBank?._id ?? ""}
+                onChange={(event) => set({ bankAccountId: event.target.value ? event.target.value as Id<"bankAccounts"> : undefined })}
+                disabled={!bankOptions || bankOptions.truncated || !bankOptions.banks?.length}
+                required
+              >
+                <option value="">{t(bankOptions ? "DirectPaymentBankChoose" : "CashDrawerLoadingBanks")}</option>
+                {(bankOptions?.banks ?? []).map((bank) => <option key={bank._id} value={bank._id}>{bank.name} · {bank.currency}</option>)}
+              </select>
+              {bankOptions?.truncated && <p role="status" className="text-xs text-muted-foreground">{t("DirectPaymentTooManyBanks")}</p>}
+              {bankOptions && !bankOptions.truncated && !bankOptions.banks?.length && <p role="status" className="text-xs text-muted-foreground">{t("DirectPaymentNoBank")}</p>}
             </div>
           )}
         </div>

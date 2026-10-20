@@ -5,12 +5,19 @@ import { computeExpectedRemittance } from "../../lib/financingEconomics";
 import {
   buildFinancedSalePostingPlan,
   buildFinancedSalePostingPlanV2,
+  buildFinancedSalePostingPlanV3,
   checkLegalInvoice,
+  checkLegalInvoiceEvidence,
+  isServerDerivedPlanVersion,
+  planVersionOf,
   treatmentPosting,
   type FinancedSalePostingPlan,
   type FinancedSalePostingPlanV2,
+  type FinancedSalePostingPlanV3,
   type SettlementComponentInput,
 } from "./financedSalePostingPlan";
+import { getOpenPeriodForDate } from "../accountingPeriods";
+import { isChartInitialized } from "../chartOfAccounts";
 import { executionFeePosition, executionFeeRefusal } from "./executionFeePosition";
 import {
   configuredFeesRefusal,
@@ -31,7 +38,7 @@ import {
   type ClosingReadinessReasonCode,
   type ClosingReadinessReasonParams,
 } from "../../lib/closingReadinessReasonCodes";
-import type { AppErrorData } from "./errors";
+import { AppErrorCode, throwAppError, type AppErrorData } from "./errors";
 import {
   custodyLedgerFamilyRefusal,
 } from "./custodySourceLedger";
@@ -42,6 +49,7 @@ import { toMinorUnits } from "./money";
 import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { requireCustomerGapToDealer } from "./financingEconomics";
+import { customerPaymentEvidenceOf, loadCustomerFinanceCompanyPayments } from "./customerFinanceCompanyPayments";
 import { summarizeFees } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
 import {
@@ -110,18 +118,32 @@ export function costsGateApplies(
   return opts.mode === "MANUAL_FINANCE_COMPANY" || opts.mode === "LEASE" || opts.mode === "INTERNAL_INSTALLMENT";
 }
 
+/**
+ * The plan version recognition is asked under: a finalized deal's own (0 for a
+ * deal that closed before plans existed), else the version a deal finalized now
+ * would get. Never a blind default - a closed legacy deal must not read as v3.
+ */
+function recognitionPlanVersion(app: Doc<"financeApplications">): 0 | 1 | 2 | 3 {
+  const frozen = planVersionOf(app);
+  return frozen === 0 && app.finalizedSaleId === undefined ? 3 : frozen;
+}
+
 /** Deals this model covers. Everything else posts the way it always did. */
 export function financedSaleRecognitionApplies(
   app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean }
+  opts: { settlesDirect: boolean; planVersion?: 1 | 2 | 3 }
 ): boolean {
-  // On the direct route the financing company pays the supplier, so no
-  // dealership-side finance receivable exists to recognise. Without a configured
-  // company there is no counterparty to owe one.
-  if (opts.settlesDirect) return false;
   // SCRUM-27: a MANUAL finance company is a counterparty too - identified by the
   // name on its approval letter rather than by a configured row.
-  return app.companyId !== undefined || isManualFinanceApplication(app);
+  const hasFinancier = app.companyId !== undefined || isManualFinanceApplication(app);
+  // SCRUM-411 (plan v3): the direct route is recognised under the same convention
+  // as every other financed deal - K = A + R, the contribution D as contra-revenue,
+  // dated on the handover. The finance company pays the SUPPLIER there, so the
+  // plan opens no finance receivable; only v3 describes that route, and the
+  // legacy builders (1, 2) never did - so a direct deal closed under one of
+  // them, or before plans existed, stays outside it.
+  if (opts.settlesDirect) return hasFinancier && (opts.planVersion ?? recognitionPlanVersion(app)) === 3;
+  return hasFinancier;
 }
 
 /**
@@ -442,9 +464,12 @@ function rowsUnavailableReason(read: "FEES" | "CUSTODY", error: unknown): Closin
 export async function evaluateClosingReadiness(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 }
+  opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 | 3 }
 ): Promise<ClosingReadinessEvaluation> {
   const planCovered = financedSaleRecognitionApplies(app, opts);
+  // Absent means the current plan (v3, SCRUM-411); 1 and 2 exist for the legacy
+  // builders' own tests and are never used to finalize a new deal.
+  const planVersion = opts.planVersion ?? 3;
   // The scope of the cost gate is decided HERE, once, for the readiness query
   // and for finalization alike (both reach this evaluator).
   const dealMode = await dealModeOf(ctx, app);
@@ -577,8 +602,10 @@ export async function evaluateClosingReadiness(
   // Row verdicts first (a line with no source at all); only when every line
   // has one is each direct payment proven on the LEDGER — a ledger that cannot
   // be read is UNAVAILABLE, never READY.
-  // Deductions are the plan's to recognise only where a plan covers the deal.
-  const handoverScope: HandoverScope = { planRecognisesDeductions: planCovered };
+  // Deductions are the plan's to recognise only where a plan covers the deal -
+  // and never on the direct route, where the company's transfer goes to the
+  // supplier and there is no dealership-side settlement to deduct from.
+  const handoverScope: HandoverScope = { planRecognisesDeductions: planCovered && !opts.settlesDirect };
   let ledgerFeeIds: string[] = [];
   await onRows(
     "HANDOVER_COSTS_PAID",
@@ -610,7 +637,10 @@ export async function evaluateClosingReadiness(
   // leave it unable ever to finalize. It is READY only when its agreed first
   // payment is actually stored; otherwise this quotation-based check does not
   // apply to it (NOT_APPLICABLE), rather than claiming a figure nobody recorded.
-  planOnly("FIRST_PAYMENT_RECORDED", () => {
+  // Not asked on the direct route: the dealership bills the customer nothing for
+  // the car there and holds no deposit, so the first payment is no plan input.
+  if (opts.settlesDirect) add("FIRST_PAYMENT_RECORDED", "NOT_APPLICABLE", null);
+  else planOnly("FIRST_PAYMENT_RECORDED", () => {
     if (app.approvedDealerPurchaseAmountMinor === undefined) {
       return [
         "UNAVAILABLE",
@@ -634,25 +664,57 @@ export async function evaluateClosingReadiness(
       : ["READY", null];
   });
 
-  // Required while the v1 posting plan is in force: it posts revenue from the
-  // legal invoice. Replacing that revenue source is SCRUM-411; until then the
-  // invoice is a readiness item, and the panel offers the action that records it.
-  planOnly("LEGAL_INVOICE_RECORDED", () => {
-    const invoice = checkLegalInvoice({
-      legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
-      legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
-      // Asked only on the plan's route, which requires a configured company.
-      financierIsConfiguredExternal: true,
+  // Plans v1/v2 post revenue from the legal invoice, so for them it is a
+  // readiness item the panel offers to record. Plan v3 (SCRUM-411) replaced that
+  // revenue source; for v3 it is optional evidence, as below.
+  //
+  // v3 (SCRUM-411): the invoice is OPTIONAL EVIDENCE. Absent is NOT_APPLICABLE
+  // (the sale closes from the server-derived consideration); present, it must
+  // describe this deal - issued to the company, for the approved amount, by the
+  // right party for the car's ownership - or it is BLOCKED so a wrong document is
+  // never left standing as evidence.
+  if (!planCovered) {
+    add("LEGAL_INVOICE_RECORDED", "NOT_APPLICABLE", null);
+  } else if (!isServerDerivedPlanVersion(planVersion)) {
+    planOnly("LEGAL_INVOICE_RECORDED", () => {
+      const invoice = checkLegalInvoice({
+        legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
+        legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+        // Asked only on the plan's route, which requires a configured company.
+        financierIsConfiguredExternal: true,
+      });
+      // The plan's own code tells absent, unusable and wrong-recipient apart.
+      return invoice.ok ? ["READY", null] : ["BLOCKED", reasonOf(invoice.refusal.code, invoice.refusal.message)];
     });
-    // The plan's own code tells absent, unusable and wrong-recipient apart.
-    return invoice.ok ? ["READY", null] : ["BLOCKED", reasonOf(invoice.refusal.code, invoice.refusal.message)];
-  });
+  } else if (app.legalInvoiceAmountMinor === undefined) {
+    add("LEGAL_INVOICE_RECORDED", "NOT_APPLICABLE", null);
+  } else {
+    const vehicle = await ctx.db.get(app.vehicleId);
+    if (vehicle === null || vehicle.orgId !== app.orgId) {
+      add(
+        "LEGAL_INVOICE_RECORDED",
+        "UNAVAILABLE",
+        reasonOf("CHECK_REFUSED", "The deal's vehicle could not be read, so the recorded legal invoice cannot be checked against it.")
+      );
+    } else {
+      const evidence = checkLegalInvoiceEvidence({
+        legalInvoiceAmountMinor: app.legalInvoiceAmountMinor,
+        legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+        legalInvoiceIssuedBy: app.legalInvoiceIssuedBy,
+        legalInvoiceIssuerName: app.legalInvoiceIssuerName,
+        approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+        vehicleIsConsigned: isConsignedAgentSale(vehicle),
+      });
+      if (evidence.ok) add("LEGAL_INVOICE_RECORDED", "READY", null);
+      else add("LEGAL_INVOICE_RECORDED", "BLOCKED", reasonOf(evidence.refusal.code, evidence.refusal.message));
+    }
+  }
 
   // SCRUM-420: a deal flagged for financing reconciliation (true) is BLOCKED; reviewed
   // (false) is READY; never flagged (undefined) is NOT_APPLICABLE. This gates finalizeDeal
   // (via resolveFinancedSalePlan) and the readiness screen; the other completion doors are
-  // refused separately (SCRUM-504 finance-claim guard / SCRUM-69). APPENDED LAST: the first
-  // unmet check in array order is the stated refusal, which existing refusals must keep.
+  // refused separately (SCRUM-504 finance-claim guard / SCRUM-69). APPENDED after every earlier
+  // check: the first unmet check in array order is the stated refusal, which existing refusals must keep.
   const flagged = app.needsFinancingReconciliation;
   add(
     "FINANCING_RECONCILED",
@@ -664,6 +726,94 @@ export async function evaluateClosingReadiness(
         )
       : null
   );
+
+  // SCRUM-766 PR-B: what the customer AGREED to pay the finance company is a
+  // promise until a confirmed payment row backs it. The contribution this plan
+  // forwards is reduced only by the confirmed part, so closing on an
+  // unconfirmed remainder would book a sale the showroom cannot cover if the
+  // customer never pays. Appended after FINANCING_RECONCILED so existing
+  // refusals keep their order.
+  //
+  // Two things block, judged in this order:
+  //  - a confirmed payment that belongs to an agreement since withdrawn: real
+  //    money is on file that the deal's figures do not account for, so a person
+  //    disposes of it before the deal closes - whatever the new agreement says.
+  //    The old row blocks until it is taken back with a reason; a new
+  //    confirmation alone never clears it. Only then, if the transfer still
+  //    stands, is it recorded again on the current agreement;
+  //  - the deal's ONE stored balance of what the agreement still leaves to
+  //    confirm. Not `agreed - applied`: the agreement can exceed what is
+  //    creditable, and that excess is reconciled under FINANCING_RECONCILED,
+  //    not demanded as a payment no row can ever credit.
+  const agreedToCompanyMinor = app.customerGapToFinanceCompanyMinor ?? 0;
+  let priorConfirmedMinor = 0;
+  let paymentEvidenceUnreadable: ClosingReadinessReason | null = null;
+  try {
+    priorConfirmedMinor = customerPaymentEvidenceOf(
+      await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id),
+      app,
+      opts.currency
+    ).priorConfirmedMinor;
+  } catch (error) {
+    paymentEvidenceUnreadable = reasonOf("CHECK_REFUSED", messageOf(error));
+  }
+  const unconfirmedToCompanyMinor = app.customerGapToFinanceCompanyUnconfirmedMinor;
+  // A payment agreed with no balance stored has not been recomputed since: unknown is unconfirmed.
+  const stillUnconfirmed =
+    agreedToCompanyMinor > 0 && (unconfirmedToCompanyMinor === undefined || unconfirmedToCompanyMinor > 0);
+  if (paymentEvidenceUnreadable !== null) {
+    add("CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "UNAVAILABLE", paymentEvidenceUnreadable);
+  } else if (priorConfirmedMinor > 0) {
+    add(
+      "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
+      "BLOCKED",
+      reasonOf(
+        "CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED",
+        "A payment from the customer to the finance company was confirmed against an agreement that has since been withdrawn, so this deal's figures do not account for it. Take that confirmation back with a reason first; then, if the transfer still stands, record it again against the current agreement. Finalize after that."
+      )
+    );
+  } else if (agreedToCompanyMinor <= 0) {
+    add("CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "NOT_APPLICABLE", null);
+  } else if (stillUnconfirmed) {
+    add(
+      "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
+      "BLOCKED",
+      reasonOf(
+        "CUSTOMER_FINANCE_COMPANY_PAYMENT_UNCONFIRMED",
+        "The customer agreed to pay part of the shortfall to the finance company, but that payment is not confirmed in full, so the dealership's contribution cannot be reduced by it yet. Record the payment's confirmation before finalizing."
+      )
+    );
+  } else {
+    add("CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "READY", null);
+  }
+
+  // SCRUM-411 (plan v3): the sale is recognised on the vehicle HANDOVER date, so
+  // that date's accounting period must be open - judged HERE, before any write,
+  // rather than discovered after the sale exists with its posting queued into a
+  // period nobody can post to. A deal whose org has no chart posts nothing
+  // anywhere, so there is no period to judge (NOT_APPLICABLE). APPENDED LAST.
+  if (!planCovered || !isServerDerivedPlanVersion(planVersion)) {
+    add("RECOGNITION_PERIOD_OPEN", "NOT_APPLICABLE", null);
+  } else if (app.vehicleHandoverAt === undefined) {
+    add(
+      "RECOGNITION_PERIOD_OPEN",
+      "BLOCKED",
+      reasonOf("RECOGNITION_HANDOVER_PENDING", "The sale is recognised on the vehicle handover date, and the handover is not registered yet. Register it before finalizing.")
+    );
+  } else if (!(await isChartInitialized(ctx, app.orgId))) {
+    add("RECOGNITION_PERIOD_OPEN", "NOT_APPLICABLE", null);
+  } else if ((await getOpenPeriodForDate(ctx, app.orgId, app.vehicleHandoverAt)) === null) {
+    add(
+      "RECOGNITION_PERIOD_OPEN",
+      "BLOCKED",
+      reasonOf(
+        "RECOGNITION_PERIOD_NOT_OPEN",
+        "The vehicle was handed over on a date that has no open accounting period, so the sale cannot be recognised. Open or reopen that period before finalizing."
+      )
+    );
+  } else {
+    add("RECOGNITION_PERIOD_OPEN", "READY", null);
+  }
 
   const state = overallReadinessState(checks);
   const readiness: ClosingReadiness = { state, checks };
@@ -700,6 +850,13 @@ function firstUnmetRefusal(readiness: ClosingReadiness): TaggedClosingRefusal {
   };
 }
 
+/**
+ * SCRUM-411 P2-03. Thrown (coded `FIRST_PAYMENT_UNFUNDED`) by `resolveFinancedSalePlan`; the cockpit's
+ * pre-finalize status recognises the code. The EN dictionary entry equals this text (lib/errors.test.ts).
+ */
+export const FIRST_PAYMENT_UNFUNDED_MESSAGE =
+  "The customer's first payment on this deal was agreed on the strength of a reservation deposit that is not being applied to it, so that first payment would be funded by nothing. Apply the deposit to the transaction settlement, or reopen the approval and amend the first payment, before finalizing.";
+
 export async function resolveFinancedSalePlan(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
@@ -731,13 +888,13 @@ export async function resolveFinancedSalePlan(
      */
     mayReadMoney: boolean;
     /**
-     * SCRUM-435. Defaults to 2 (finance-company forward): `finalizeDeal` is
-     * always v2. 1 exists so the v1 builder stays exercised by its own tests
-     * and is never recomputed for a deal already finalized under it.
+     * Defaults to 3 (SCRUM-411, server-derived consideration): `finalizeDeal` is
+     * always v3. 1 and 2 exist so the legacy builders stay exercised by their
+     * own tests and are never recomputed for a deal already finalized under them.
      */
-    planVersion?: 1 | 2;
+    planVersion?: 1 | 2 | 3;
   }
-): Promise<FinancedSalePostingPlan | FinancedSalePostingPlanV2 | undefined> {
+): Promise<FinancedSalePostingPlan | FinancedSalePostingPlanV2 | FinancedSalePostingPlanV3 | undefined> {
   // The finalize door re-runs the SAME evaluator the deal screen shows — never
   // a client's verdict, never the retired stamp — and refuses on the first
   // unmet condition, before anything is written (SCRUM-407 P1.4) — including a
@@ -944,6 +1101,19 @@ export async function resolveFinancedSalePlan(
         "On a deal financed by a finance company the customer's deposit is forwarded to the company, not applied against the dealer's amount. Choose to apply it to the transaction settlement, or refund or forfeit it, before finalizing."
       );
     }
+    // SCRUM-411 P2-03. The agreed first payment was founded on the customer's
+    // deposit. If that deposit is NOT applied to this purchase - refused here
+    // (refund, forfeiture, offset) or already refunded/forfeited before - H falls
+    // to zero while the first payment is still agreed, and the deal would be
+    // finalized with the customer's first payment funded by nothing. There is no
+    // evidenced replacement-payment path (and no first-payment amendment once
+    // approved), so the combination is refused rather than treated as paid.
+    if (
+      (app.customerFirstPaymentMinor ?? 0) > depositLiabilityAppliedMinor &&
+      ((depositHeldMajor > 0 && !depositIsApplied) || (await hasSettledAwayQuoteDeposit(ctx, app)))
+    ) {
+      throwAppError(AppErrorCode.FIRST_PAYMENT_UNFUNDED, FIRST_PAYMENT_UNFUNDED_MESSAGE);
+    }
     // SCRUM-27: for a manual company the contribution is NOT a stored figure.
     // The letter says how much the dealership sends (S); the deposits already
     // held are part of that, so the dealership's own money is S minus H. It is
@@ -965,17 +1135,30 @@ export async function resolveFinancedSalePlan(
         );
       }
     }
-    const v2 = buildFinancedSalePostingPlanV2({
+    // The economics both forward plans are built from; v2 adds the invoice, v3 the route.
+    const forwardPlanInputs = {
       currency: opts.currency,
-      legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
-      legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
-      financierIsConfiguredExternal: true,
       approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
       hasSettlementComponents: components.length > 0,
       customerReceivableMinor,
       depositLiabilityAppliedMinor,
       dealerContributionMinor: contributionForPlanMinor,
+      customerPaymentToFinanceCompanyMinor: app.customerGapToFinanceCompanyAppliedMinor,
       customerFirstPaymentMinor: app.customerFirstPaymentMinor,
+    };
+    if ((opts.planVersion ?? 3) === 3) {
+      // v3: the consideration is A + R, derived here from the frozen economics.
+      // The recorded invoice (if any) was validated as evidence by the readiness
+      // evaluator above and is not an input to the plan.
+      const v3 = buildFinancedSalePostingPlanV3({ ...forwardPlanInputs, settlesDirect: opts.settlesDirect });
+      if (!v3.ok) throw new ConvexError(v3.refusal.message);
+      return v3.plan;
+    }
+    const v2 = buildFinancedSalePostingPlanV2({
+      ...forwardPlanInputs,
+      legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
+      legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+      financierIsConfiguredExternal: true,
     });
     if (!v2.ok) throw new ConvexError(v2.refusal.message);
     return v2.plan;
@@ -1023,6 +1206,21 @@ export async function resolveFinancedSalePlan(
   return result.plan;
 }
 
+/** Whether a deposit taken for this deal's car was already refunded or forfeited before finalizing. */
+async function hasSettledAwayQuoteDeposit(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<boolean> {
+  for (const status of ["REFUNDED", "FORFEITED"] as const) {
+    for await (const deposit of ctx.db
+      .query("deposits")
+      .withIndex("by_quote_status", (q) => q.eq("quoteId", app.quoteId).eq("status", status))) {
+      if (deposit.isDeleted !== true && deposit.vehicleId === app.vehicleId) return true;
+    }
+  }
+  return false;
+}
+
 /** "OWNERSHIP_TRANSFER" -> "Ownership transfer". Only for a line with no description. */
 function humanizeFeeType(feeType: string): string {
   const words = feeType.toLowerCase().replace(/_/g, " ");
@@ -1032,6 +1230,9 @@ function humanizeFeeType(feeType: string): string {
 /**
  * THE date a financed sale is recognized on — and therefore the period its
  * revenue, its finance receivable, its deductions and its commission land in.
+ *
+ * Plan v3 (SCRUM-411) dates the sale at the vehicle HANDOVER and ignores any
+ * invoice date; the rest of this note describes plans v1/v2.
  *
  * The legal invoice's date, when one is recorded: the schema note on
  * `legalInvoiceDate` has always said it "decides the period revenue lands in",
@@ -1052,9 +1253,27 @@ function humanizeFeeType(feeType: string): string {
  * the moment of finalization is a day that has not happened.
  */
 export function financedSaleRecognitionDate(
-  app: Pick<Doc<"financeApplications">, "legalInvoiceDate">,
-  finalizedAt: number
+  app: Pick<Doc<"financeApplications">, "legalInvoiceDate" | "vehicleHandoverAt">,
+  finalizedAt: number,
+  /** The plan being finalized. Defaults to 2 so historical two-argument callers keep the invoice-date rule. */
+  planVersion: 1 | 2 | 3 = 2
 ): number {
+  // v3 (SCRUM-411): the sale is recognised when the vehicle was handed over - an
+  // evidenced server fact - never on an invoice date a person typed. A deal with
+  // no recorded handover cannot be dated, so it is refused rather than dated at
+  // the wall clock (`finalizeDeal` requires the handover before it gets here).
+  if (isServerDerivedPlanVersion(planVersion)) {
+    const handoverAt = app.vehicleHandoverAt;
+    if (handoverAt === undefined) {
+      throw new ConvexError("The sale is recognised on the vehicle handover date, and the handover is not registered yet. Register it before finalizing.");
+    }
+    if (!Number.isSafeInteger(handoverAt) || handoverAt < 0 || handoverAt > finalizedAt) {
+      throw new ConvexError(
+        `This deal's recorded handover time (${handoverAt}) is not a real past instant, so the sale cannot be dated for recognition. Have the handover reviewed before finalizing.`
+      );
+    }
+    return handoverAt;
+  }
   const invoiceDate = app.legalInvoiceDate;
   if (invoiceDate === undefined) return finalizedAt;
   // A PRESENT date that is not usable is refused, never quietly replaced

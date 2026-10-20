@@ -1747,7 +1747,7 @@ describe("turnover past the dashboard's costing cap", () => {
      * turnover let a chart reporting 0 sit under a headline reporting the
      * margin.
      */
-    expect(dash.salesTrend.reduce((total, point) => total + point.Profit, 0)).toBe(
+    expect(dash.salesTrend.reduce((total, point) => total + (point.Profit ?? Number.NaN), 0)).toBe(
       CAP * (OWNED_PRICE - OWNED_COST) + MARGIN
     );
   }, HEAVY_TEST_TIMEOUT_MS);
@@ -1796,7 +1796,7 @@ describe("turnover past the dashboard's costing cap", () => {
     );
     // And its unknowable profit is not invented from that stale figure. The
     // cap's own flag reports the shortfall.
-    expect(dash.salesTrend.reduce((total, point) => total + point.Profit, 0)).toBe(
+    expect(dash.salesTrend.reduce((total, point) => total + (point.Profit ?? Number.NaN), 0)).toBe(
       CAP * (OWNED_PRICE - OWNED_COST) + MARGIN
     );
   }, HEAVY_TEST_TIMEOUT_MS);

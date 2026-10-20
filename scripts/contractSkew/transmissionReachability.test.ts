@@ -104,7 +104,9 @@ const exactLiveSpec = functionSpec({
   }),
 });
 
-describe("transmission reachability through the real TypeChecker and comparator", () => {
+// Every case drives the real TypeChecker; under coverage several take 3-3.5 s,
+// too close to the 5 s default (SCRUM-752).
+describe("transmission reachability through the real TypeChecker and comparator", { timeout: 60_000 }, () => {
   test("SCRUM-178: the exact 11 live false-BREAKING shapes exclude non-running alternatives", () => {
     const webFiles = [
       "app/dealer-site/[[...slug]]/page.tsx",

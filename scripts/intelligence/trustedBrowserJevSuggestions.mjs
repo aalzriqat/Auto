@@ -7,10 +7,14 @@ export const MAX_BROWSER_JEV_RESPONSE_BYTES = 16 * 1024;
 export const BROWSER_JEV_TIMEOUT_MS = 8_000;
 
 const AUTHORITY = "TRUSTED_MAIN_JEV_BROWSER_EXPLORATION";
-const EXECUTABLE_FAMILIES = new Set([
+// Jev may only suggest families it has questions for. This set must stay a
+// subset of the executable handler registry; the SCRUM-826 coverage contract
+// test pins that, so it cannot drift into suggesting an unexecutable family.
+export const TRUSTED_JEV_EXECUTABLE_FAMILIES = Object.freeze([
   "UI_BACKEND_MISMATCH",
   "RTL_PARITY",
 ]);
+const EXECUTABLE_FAMILIES = new Set(TRUSTED_JEV_EXECUTABLE_FAMILIES);
 const QUESTION_TO_FAMILY = Object.freeze({
   family__UI_BACKEND_MISMATCH: "UI_BACKEND_MISMATCH",
   family__RTL_PARITY: "RTL_PARITY",

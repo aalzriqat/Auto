@@ -16,6 +16,7 @@
  * The posting split itself is a later slice and is deliberately NOT touched.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { seedBank } from "../test-utils/bankFixture";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -389,6 +390,8 @@ describe("SCRUM-571 S1 — collections.recordPayment refuses PAYMENT_LINK", () =
         customerId,
         amount: 5,
         method,
+        // SCRUM-54: a bank-method receipt names the physical bank it entered.
+        ...(method === "CASH" ? {} : { bankAccountId: await seedBank(t, orgId) }),
         paymentDate: Date.now(),
       });
       const payment = await t.run((ctx) => ctx.db.get(paymentId));

@@ -1,0 +1,53 @@
+{
+  "id": "financed-v3-direct-to-supplier-closed-period-refused-before-write",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "approvedMinor": 12500000,
+        "contributionMinor": 1375000,
+        "supplierEntitlementMinor": 9000000,
+        "route": "DIRECT_TO_SUPPLIER",
+        "handoverPeriodStatus": "CLOSED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "finalize.refusalCode",
+      "value": "RECOGNITION_PERIOD_NOT_OPEN"
+    },
+    {
+      "observable": "sales.count",
+      "value": 0
+    },
+    {
+      "observable": "ledger.entriesWritten",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum411DirectRoute.test.ts",
+    "testName": "a direct-to-supplier handover dated in a CLOSED accounting period refuses finalize, and nothing is written"
+  },
+  "matrixRow": "pilot-financed-v3-direct-route",
+  "fingerprint": "a68970dc17242916df88500cdff1dfb3300f7244bd1f29d90ebac7dc354d55d3",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum411-server-economics",
+    "firstSeen": "2026-10-14"
+  }
+}

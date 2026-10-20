@@ -249,6 +249,39 @@ const dealRailMessages = defineBilingualMessages({
     "An accountant resolves the payment to the finance company before the transfer can be confirmed.",
     "يعالج المحاسب الدفع لشركة التمويل قبل أن يمكن تأكيد التحويل.",
   ],
+  /**
+   * SCRUM-411 P2-01. The deposit and the contribution are paid to the finance
+   * company BEFORE the deal is closed; the close waits for the payment to be on
+   * the books for the figures the close would freeze. Each names who acts next.
+   */
+  FinalizeNeedsForwardPayment: [
+    "The customer's deposit and the dealership's contribution are paid to the finance company before the deal is closed. Record that payment, then close the deal.",
+    "يُدفع عربون العميل ومساهمة المعرض لشركة التمويل قبل إغلاق الصفقة. سجّل هذا الدفع ثم أغلق الصفقة.",
+  ],
+  FinalizeForwardPaymentStale: [
+    "The payment to the finance company was recorded against different figures than this deal has now. A manager or accountant voids it (Void the payment, above) and records it again before the deal is closed.",
+    "سُجّل الدفع لشركة التمويل على أرقام تختلف عمّا في الصفقة الآن. يلغي المدير أو المحاسب هذا الدفع (إلغاء الدفع، في الأعلى) ويسجّله من جديد قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentPosting: [
+    "The payment to the finance company is recorded but not yet posted to the books. An accountant posts it before the deal is closed.",
+    "الدفع لشركة التمويل مسجَّل لكنه لم يُرحَّل إلى الدفاتر بعد. يرحّله المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentPostingFailed: [
+    "The payment to the finance company failed to post to the books. An accountant resolves it before the deal is closed.",
+    "تعذّر ترحيل الدفع لشركة التمويل إلى الدفاتر. يعالجه المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentReversing: [
+    "The payment to the finance company is being reversed and the reversal is not yet posted. An accountant posts it before the deal is closed.",
+    "يجري عكس الدفع لشركة التمويل ولم يُرحَّل العكس بعد. يرحّله المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentNeedsReview: [
+    "The record of the payment to the finance company does not match the books. An accountant reviews it before the deal is closed.",
+    "سجل الدفع لشركة التمويل لا يطابق الدفاتر. يراجعه المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeFirstPaymentUnfunded: [
+    "The customer's first payment was agreed on the strength of a reservation deposit that has since been refunded or forfeited, so nothing funds it. A manager reopens the approval and amends the first payment before the deal is closed.",
+    "اتُّفق على الدفعة الأولى للعميل اعتمادًا على عربون حجز جرى استرداده أو مصادرته لاحقًا، فلا يوجد ما يموّلها. يعيد المدير فتح الموافقة ويعدّل الدفعة الأولى قبل إغلاق الصفقة.",
+  ],
   ForwardReturnedNotSettledReason: [
     "The finance company returned the payment. An accountant resolves its reversal before the replacement payment can be recorded.",
     "أعادت شركة التمويل الدفعة. يعالج المحاسب عكسها قبل أن يمكن تسجيل الدفعة البديلة.",
@@ -682,6 +715,10 @@ const dealRailMessages = defineBilingualMessages({
   GapDealerShare: ["The dealership then covers", "ويتحمّل المعرض"],
   GapWhereCustomerPays: ["Where the customer's part is paid", "أين يُدفع نصيب العميل"],
   GapWhereCustomerPaysHint: [
+    "Money paid to the dealership is dealership income. Money the customer pays the finance company directly is not: once the payment is confirmed, it lowers what the dealership has to put in, by the same amount. Until then the dealership's contribution is unchanged and the deal cannot close.",
+    "ما يُدفع للمعرض دخلٌ للمعرض. أما ما يدفعه العميل لشركة التمويل مباشرةً فليس دخلاً، بل يُخفِّض ما على المعرض أن يدفعه بالمبلغ نفسه بعد تأكيد الدفعة. وقبل ذلك تبقى مساهمة المعرض كما هي ولا يمكن إغلاق الصفقة.",
+  ],
+  GapWhereCustomerPaysManualHint: [
     "Money paid to the dealership is dealership income, so it is recorded here rather than assumed.",
     "ما يُدفع للمعرض دخلٌ للمعرض، لذا يُسجَّل هنا بدل افتراضه.",
   ],
@@ -705,8 +742,8 @@ const dealRailMessages = defineBilingualMessages({
     "التقاسم يستلزم نصيباً للعميل — اختر «يتحمّله المعرض» بدلاً من ذلك.",
   ],
   GapAllocationMismatch: [
-    "The two amounts must add up to exactly the customer's part.",
-    "يجب أن يساوي مجموع المبلغين نصيب العميل بالضبط.",
+    "The amounts must add up to exactly the customer's part.",
+    "يجب أن يساوي مجموع المبالغ نصيب العميل بالضبط.",
   ],
   GapAllocationComplete: ["Everything is accounted for.", "كل شيء محسوب."],
   GapNotes: ["Notes (optional)", "ملاحظات (اختياري)"],
@@ -874,6 +911,10 @@ const dealRailMessages = defineBilingualMessages({
   ReconcileNeedsAccountant: [
     "Waiting for an accountant or a manager to reconcile this cost.",
     "بانتظار محاسب أو مدير لمطابقة هذه التكلفة.",
+  ],
+  ReconciledNeedsAccountant: [
+    "Reconciled. Changing or removing it needs someone who can confirm finance disbursements.",
+    "تمت المطابقة. تعديل المبلغ أو إزالته يتطلب شخصاً يملك صلاحية تأكيد صرف التمويل.",
   ],
   DirectPaymentWaiting: [
     "Waiting for a manager or an accountant to record the payment.",
@@ -1162,6 +1203,60 @@ const dealOverviewMessages = defineBilingualMessages({
   OverviewGapInstallmentBreakdown: ["Dealership installments", "أقساط للمعرض"],
   OverviewGapCashPlanned: ["Shortfall cash agreed with the customer", "نقد العجز المتفق عليه مع العميل"],
   OverviewGapCashPlannedNote: ["allocated, not received — no receipt yet", "مخصَّص وليس مقبوضًا — لا إيصال بعد"],
+  OverviewGapToFinanceCompanyPlanned: [
+    "Shortfall the customer paid the finance company (confirmed)",
+    "جزء العجز الذي دفعه العميل لشركة التمويل (مؤكَّد)",
+  ],
+  OverviewGapToFinanceCompanyPlannedNote: [
+    "not dealership money — the confirmed payment lowers the dealership's contribution by the same amount",
+    "ليس مالاً للمعرض — الدفعة المؤكَّدة تخفّض مساهمة المعرض بالمبلغ نفسه",
+  ],
+  OverviewGapToFinanceCompanyUnconfirmed: [
+    "Agreed with the finance company, payment not yet confirmed",
+    "متفق عليه مع شركة التمويل، والدفعة غير مؤكَّدة بعد",
+  ],
+  OverviewGapToFinanceCompanyUnconfirmedNote: [
+    "the contribution still includes this amount and the deal cannot close until the payment is confirmed",
+    "ما زالت المساهمة تتضمن هذا المبلغ، ولا يمكن إغلاق الصفقة قبل تأكيد الدفعة",
+  ],
+  // SCRUM-766 PR-B: the card that records the customer's payment to the finance company.
+  CustFcPayTitle: ["Customer payment to the finance company", "دفعة العميل إلى شركة التمويل"],
+  CustFcPayAgreed: ["Agreed", "المتفق عليه"],
+  CustFcPayConfirmed: ["Confirmed paid", "المؤكَّد دفعه"],
+  CustFcPayAwaiting: ["Awaiting confirmation", "بانتظار التأكيد"],
+  CustFcPayAwaitingNote: [
+    "Until the payment is confirmed the dealership's contribution is unchanged and the deal cannot close.",
+    "إلى أن تُؤكَّد الدفعة تبقى مساهمة المعرض كما هي ولا يمكن إغلاق الصفقة.",
+  ],
+  CustFcPayNotAllowed: [
+    "Only a manager or the owner who did not sell this deal can confirm the payment.",
+    "لا يؤكد الدفعة إلا مدير أو مالك لم يبع هذه الصفقة.",
+  ],
+  CustFcPayConfirmAction: ["Confirm payment", "تأكيد الدفعة"],
+  CustFcPayDialogTitle: ["Confirm the customer's payment", "تأكيد دفعة العميل"],
+  CustFcPayDialogDesc: [
+    "Record that the customer really paid the finance company. This lowers the dealership's contribution by the amount confirmed.",
+    "سجّل أن العميل دفع فعلاً لشركة التمويل. يخفّض هذا مساهمة المعرض بالمبلغ المؤكَّد.",
+  ],
+  CustFcPayAmountLabel: ["Amount paid", "المبلغ المدفوع"],
+  CustFcPayAtMost: ["At most", "بحدٍّ أقصى"],
+  CustFcPayDateLabel: ["Date paid", "تاريخ الدفع"],
+  CustFcPayReferenceLabel: ["Payment reference", "مرجع الدفعة"],
+  CustFcPayVoided: ["Taken back", "مسحوب"],
+  CustFcPayPriorAgreement: ["Earlier agreement - not counted", "اتفاق سابق - غير محتسب"],
+  CustFcPayPriorNote: [
+    "A payment confirmed against an agreement that was later withdrawn is not counted toward the current one, and the deal cannot close until it is taken back with a reason. If the transfer still stands, record it again against the current agreement.",
+    "الدفعة المؤكَّدة مقابل اتفاق سُحب لاحقًا لا تُحتسب ضمن الاتفاق الحالي، ولا يمكن إغلاق الصفقة قبل سحب تأكيدها مع ذكر السبب. وإن كان التحويل قائمًا فسجِّله من جديد مقابل الاتفاق الحالي.",
+  ],
+  CustFcPayVoidAction: ["Take back", "سحب التأكيد"],
+  CustFcPayVoidTitle: ["Take back this confirmation", "سحب تأكيد الدفعة"],
+  CustFcPayVoidDesc: [
+    "The dealership's contribution rises again by this amount and the deal cannot close until the payment is confirmed in full.",
+    "تعود مساهمة المعرض لترتفع بهذا المبلغ، ولا يمكن إغلاق الصفقة قبل تأكيد الدفعة بالكامل.",
+  ],
+  CustFcPayVoidReasonLabel: ["Why is it being taken back?", "لماذا يُسحب التأكيد؟"],
+  CustFcPayConfirmedSuccess: ["Payment confirmed", "تم تأكيد الدفعة"],
+  CustFcPayVoidedSuccess: ["Confirmation taken back", "تم سحب تأكيد الدفعة"],
   OverviewCustomerPaidUnknown: ["cannot be totalled — a deposit could not be read", "تعذّر الجمع — عربون غير قابل للقراءة"],
   OverviewCustomerFirstPayment: ["Customer first payment", "الدفعة الأولى من العميل"],
   OverviewFinancierFunds: ["Finance company funded portion", "حصة تمويل شركة التمويل"],
@@ -1312,8 +1407,17 @@ const dealOverviewMessages = defineBilingualMessages({
   /** Legal invoice & deal closing bindings. */
   RecordLegalInvoice: ["Record Legal Invoice", "تسجيل الفاتورة القانونية"],
   RecordLegalInvoiceDesc: [
-    "Record the official legal invoice details for this deal. The legal invoice amount establishes the official sale revenue.",
-    "تسجيل تفاصيل الفاتورة القانونية الرسمية لهذه الصفقة. يُحدّد مبلغ الفاتورة القانونية إيراد البيع الرسمي.",
+    "Optional. Record a legal invoice only if one was really issued, exactly as printed. It is checked against the deal and kept as evidence; it never sets the sale revenue or its date.",
+    "اختياري. سجّل فاتورة قانونية فقط إن صدرت فعلًا، كما هي مطبوعة. تُراجَع مقابل الصفقة وتُحفظ كدليل؛ ولا تحدّد إيراد البيع ولا تاريخه.",
+  ],
+  LegalInvoiceIssuerName: ["Issued by (importer / supplier name)", "صادرة عن (اسم المستورد / المورّد)"],
+  LegalInvoiceIssuerHintConsigned: [
+    "This car belongs to a supplier or importer, so the vehicle invoice to the finance company is theirs. The dealership issues none for its margin.",
+    "هذه السيارة مملوكة لمورّد أو مستورد، لذا فاتورة السيارة إلى شركة التمويل صادرة عنه. المعرض لا يصدر فاتورة عن هامشه.",
+  ],
+  LegalInvoiceAmountHint: [
+    "The finance company's invoice is for the approved amount only; the customer's own gap is not on it.",
+    "فاتورة شركة التمويل بمبلغ الموافقة فقط؛ فجوة العميل الخاصة ليست فيها.",
   ],
   LegalInvoiceAmount: ["Invoice amount", "مبلغ الفاتورة"],
   LegalInvoiceNumber: ["Invoice number", "رقم الفاتورة"],
@@ -1321,14 +1425,6 @@ const dealOverviewMessages = defineBilingualMessages({
   LegalInvoiceDateNotOpenYet: [
     "Today's date opens on the ledger at {time} (midnight UTC). Pick the date printed on the invoice; if it is today, save the invoice after that time.",
     "يبدأ تاريخ اليوم في الدفاتر الساعة {time} (منتصف الليل بتوقيت UTC). اختر التاريخ المطبوع على الفاتورة، وإن كان تاريخ اليوم فاحفظ الفاتورة بعد ذلك الوقت.",
-  ],
-  LegalInvoiceDateDayChanged: [
-    "The day changed while this form was open. Pick the date printed on the invoice.",
-    "تغيّر اليوم بينما كان هذا النموذج مفتوحًا. اختر التاريخ المطبوع على الفاتورة.",
-  ],
-  LegalInvoiceDateNowOpen: [
-    "Today's date is now open on the ledger. Pick the date printed on the invoice.",
-    "أصبح تاريخ اليوم متاحًا الآن في الدفاتر. اختر التاريخ المطبوع على الفاتورة.",
   ],
   LegalInvoiceIssuedTo: ["Issued to", "صادرة إلى"],
   LegalInvoiceIssuedToOther: ["Specify recipient", "تحديد المستلم"],
@@ -1343,6 +1439,22 @@ const dealOverviewMessages = defineBilingualMessages({
   ReconcileNotesPlaceholder: ["e.g. Verified against ministry receipt #12345", "مثال: تم التحقق من وصل الوزارة رقم 12345"],
   ReconcileNotesRequired: ["Record what was checked before reconciling this cost.", "سجّل ما تم التحقق منه قبل تسوية هذا المصروف."],
   ConfirmReconcile: ["Confirm reconciliation", "تأكيد التسوية"],
+  ReconcileVarianceOver: ["Actual is higher than expected by", "الفعلي أعلى من المتوقّع بمقدار"],
+  ReconcileVarianceUnder: ["Actual is lower than expected by", "الفعلي أقل من المتوقّع بمقدار"],
+  ReconcileVarianceNone: ["Actual matches the expected amount", "الفعلي يطابق المبلغ المتوقّع"],
+  ReconcileVarianceNotesHint: [
+    "The actual differs from the expected amount. Say what you checked and why it differs (receipt number, company letter).",
+    "الفعلي يختلف عن المتوقّع. اذكر ما تحققت منه وسبب الاختلاف (رقم الإيصال، كتاب الشركة).",
+  ],
+  ReconcileAmountChanged: [
+    "The recorded amount changed while this form was open. Cancel and reopen it to check the current figure.",
+    "تغيّر المبلغ المسجّل أثناء فتح هذا النموذج. ألغِ وأعد فتحه لمراجعة المبلغ الحالي.",
+  ],
+  ReconcileEvidenceChanged: [
+    "The receipt, paid date or attachments were re-recorded while this form was open. Cancel and reopen it to check the current evidence.",
+    "أُعيد تسجيل الإيصال أو تاريخ الدفع أو المرفقات أثناء فتح هذا النموذج. ألغِ وأعد فتحه لمراجعة الأدلة الحالية.",
+  ],
+  ExecutionFeeCorrectAmount: ["Correct amount", "تصحيح المبلغ"],
   HandoverCostReconciled: ["Cost reconciled", "تمت تسوية المصروف"],
   LegalInvoiceNotRecorded: ["No legal invoice recorded yet.", "لم يتم تسجيل فاتورة قانونية بعد."],
   // SCRUM-407 — the automatic closing readiness that replaced manual classification.
@@ -1377,7 +1489,8 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_HANDOVER_COSTS_PAID: ["Handover costs are paid", "مصاريف التسليم مدفوعة"],
   // SCRUM-629 F-22: the AGREED amount is known — not that the money was received (SCRUM-635).
   ClosingCheck_FIRST_PAYMENT_RECORDED: ["The agreed first payment is known", "الدفعة الأولى المتفق عليها معروفة"],
-  ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
+  ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice (optional) agrees with the deal", "الفاتورة القانونية (اختيارية) تطابق الصفقة"],
+  ClosingCheck_RECOGNITION_PERIOD_OPEN: ["The handover date falls in an open accounting period", "تاريخ التسليم يقع في فترة محاسبية مفتوحة"],
   // SCRUM-420 — generic fallback for a check this bundle has no copy for (S420-01).
   ClosingCheck_UNKNOWN: ["Another closing check", "شرط إغلاق آخر"],
   ClosingReason_UNKNOWN: [
@@ -1385,6 +1498,10 @@ const dealOverviewMessages = defineBilingualMessages({
     "هذا الشرط لم يتحقق بعد، لذا لا يمكن إغلاق الصفقة.",
   ],
   ClosingCheck_FINANCING_RECONCILED: ["The financing figures have been reviewed", "تمت مراجعة أرقام التمويل"],
+  ClosingCheck_CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED: [
+    "The customer's payment to the finance company is confirmed",
+    "دفعة العميل إلى شركة التمويل مؤكَّدة",
+  ],
   // SCRUM-414 — why a check is not met, by the server's reason code (lib/closingReadinessReasonCodes.ts).
   ClosingReason_REMITTANCE_APPROVAL_MISSING: [
     "The finance company's approved purchase amount is not recorded yet, so what it will remit is not known. Record the approval before closing.",
@@ -1521,6 +1638,26 @@ const dealOverviewMessages = defineBilingualMessages({
     "The finance company is the legal buyer, but the recorded invoice was not issued to it. Re-record the invoice before closing.",
     "شركة التمويل هي المشتري القانوني، لكن الفاتورة المسجَّلة لم تصدر باسمها. أعد تسجيل الفاتورة قبل الإغلاق.",
   ],
+  ClosingReason_LEGAL_INVOICE_AMOUNT_MISMATCH: [
+    "The recorded legal invoice does not match the finance company's approved amount. Correct it to the real document before closing.",
+    "الفاتورة القانونية المسجَّلة لا تطابق المبلغ الذي اعتمدته شركة التمويل. صحّحها لتوافق المستند الحقيقي قبل الإغلاق.",
+  ],
+  ClosingReason_LEGAL_INVOICE_WRONG_ISSUER: [
+    "The recorded invoice's issuer does not fit this car's ownership. A supplier's or importer's invoice must name them; the dealership issues none for its margin.",
+    "جهة إصدار الفاتورة المسجَّلة لا تناسب ملكية هذه السيارة. فاتورة المورّد أو المستورد يجب أن تسمّيه؛ والمعرض لا يصدر فاتورة عن هامشه.",
+  ],
+  ClosingReason_RECOGNITION_HANDOVER_PENDING: [
+    "The sale is recognised on the vehicle handover date. Register the handover first.",
+    "يُعترف بالبيع في تاريخ تسليم السيارة. سجّل التسليم أولًا.",
+  ],
+  ClosingReason_RECOGNITION_PERIOD_NOT_OPEN: [
+    "The vehicle was handed over on a date that has no open accounting period. Open or reopen that period before closing.",
+    "سُلّمت السيارة في تاريخ ليست له فترة محاسبية مفتوحة. افتح تلك الفترة أو أعد فتحها قبل الإغلاق.",
+  ],
+  ClosingReason_WITHHELD_RECOGNITION_PERIOD_OPEN: [
+    "The accounting period for the handover date is not open.",
+    "الفترة المحاسبية لتاريخ التسليم غير مفتوحة.",
+  ],
   ClosingReason_CHECK_REFUSED: [
     "This condition could not be confirmed from the deal's records. Have the deal reviewed before closing.",
     "تعذّر تأكيد هذا الشرط من سجلات الصفقة. اطلب مراجعة الصفقة قبل الإغلاق.",
@@ -1570,7 +1707,10 @@ const dealOverviewMessages = defineBilingualMessages({
     "The customer's first payment is not recorded yet.",
     "لم تُسجَّل الدفعة الأولى للعميل بعد.",
   ],
-  ClosingReason_WITHHELD_LEGAL_INVOICE_RECORDED: ["The legal invoice is not recorded yet.", "لم تُسجَّل الفاتورة القانونية بعد."],
+  ClosingReason_WITHHELD_LEGAL_INVOICE_RECORDED: [
+    "The legal invoice is missing, or the one recorded does not agree with this deal.",
+    "الفاتورة القانونية غير مسجَّلة، أو أن المسجَّلة منها لا تتفق مع هذه الصفقة.",
+  ],
   // SCRUM-420 — the financing figures are flagged for a reconciliation review.
   ClosingReason_FINANCING_RECONCILIATION_FLAGGED: [
     "This deal's financing figures are flagged for reconciliation review. Review them and record the review before closing.",
@@ -1579,6 +1719,19 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_WITHHELD_FINANCING_RECONCILED: [
     "The financing figures are still flagged for review.",
     "ما زالت أرقام التمويل موسومة لمراجعة التسوية.",
+  ],
+  // SCRUM-766 PR-B — the customer's agreed payment to the finance company needs a confirmed payment behind it.
+  ClosingReason_CUSTOMER_FINANCE_COMPANY_PAYMENT_UNCONFIRMED: [
+    "The customer agreed to pay part of the shortfall to the finance company, but that payment is not confirmed in full. Confirm the payment before closing, or settle the shortfall another way.",
+    "اتفق العميل على دفع جزء من العجز لشركة التمويل، لكن هذه الدفعة غير مؤكَّدة بالكامل. أكِّد الدفعة قبل الإغلاق، أو سوِّ العجز بطريقة أخرى.",
+  ],
+  ClosingReason_CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED: [
+    "A payment from the customer to the finance company was confirmed against an agreement that has since been withdrawn, so this deal's figures do not account for it. Take that confirmation back with a reason first; then, if the transfer still stands, record it again against the current agreement. Close the deal after that.",
+    "أُكِّدت دفعة من العميل إلى شركة التمويل مقابل اتفاق سُحب لاحقًا، فلا تحتسبها أرقام هذه الصفقة. تراجَع أولًا عن ذلك التأكيد مع ذكر السبب؛ ثم، إن كان التحويل ما زال قائمًا، سجِّله من جديد مقابل الاتفاق الحالي. أغلق الصفقة بعد ذلك.",
+  ],
+  ClosingReason_WITHHELD_CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED: [
+    "A payment the customer made, or agreed to make, to the finance company is not settled in the deal's records yet.",
+    "دفعة سدّدها العميل أو اتفق على سدادها لشركة التمويل لم تُسوَّ بعد في سجلات الصفقة.",
   ],
   ClosingReason_WITHHELD_UNAVAILABLE: [
     "This deal's closing readiness cannot be determined from its current records. Someone with finance access can see why.",
@@ -1804,6 +1957,62 @@ const serverErrorMessages = defineBilingualMessages({
     "This cheque can no longer be returned. Nothing has been changed.",
     "لا يمكن إرجاع هذا الشيك بعد الآن. لم يتم تغيير أي شيء.",
   ],
+  ServerError_CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER: [
+    "This cheque belongs to a cancelled sale and was not presented to the bank. Return it to the customer. Nothing has been changed.",
+    "هذا الشيك يخص صفقة ملغاة ولم يُقدَّم إلى البنك. أعده إلى العميل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_RETURN_AFTER_CREDIT_REFUND: [
+    "Part of this cheque's credit has already been refunded to the customer, so the cheque cannot be returned after clearing. Nothing has been changed. An accountant reviews the case.",
+    "سبق ردّ جزء من رصيد هذا الشيك إلى العميل، لذلك لا يمكن إرجاع الشيك بعد صرفه. لم يتم تغيير أي شيء. يراجع المحاسب الحالة.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_INVALID_AMOUNT: [
+    "Enter a refund amount greater than zero, in whole minor currency units. Nothing has been changed.",
+    "أدخل مبلغ ردّ أكبر من صفر بوحدات العملة الصغرى الكاملة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_INSUFFICIENT: [
+    "The refund is larger than the customer credit that is still available (credit reserved for a sale invoice or already requested is not available). Nothing has been changed.",
+    "مبلغ الردّ أكبر من رصيد العميل المتاح (الرصيد المحجوز لفاتورة بيع أو المطلوب ردّه سابقًا غير متاح). لم يتم تغيير أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_NOT_FOUND: [
+    "Refund request or customer credit not found. Nothing has been changed.",
+    "لم يتم العثور على طلب الردّ أو رصيد العميل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_NOT_PENDING: [
+    "This refund request has already been decided. Nothing has been changed.",
+    "سبق البتّ في طلب الردّ هذا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_NOT_APPROVED: [
+    "This refund request is not approved, or has already been paid. Nothing has been changed.",
+    "طلب الردّ هذا غير معتمد أو سبق دفعه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_RECEIPT_UNPOSTED: [
+    "The original receipt has not reached the general ledger yet, so its credit cannot be refunded. Nothing has been changed.",
+    "لم يصل سند القبض الأصلي إلى دفتر الأستاذ العام بعد، لذلك لا يمكن ردّ رصيده. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_PAYOUT_INVALID: [
+    "Enter the payout reference (at most 120 characters) and a payout date that is not in the future. Nothing has been changed.",
+    "أدخل مرجع الدفع (120 حرفًا كحد أقصى) وتاريخ دفع ليس في المستقبل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_POSTING_FAILED: [
+    "The refund could not be posted to the general ledger, so nothing was paid or changed.",
+    "تعذّر ترحيل الردّ إلى دفتر الأستاذ العام، لذلك لم يُدفع أو يُغيَّر أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_UNAVAILABLE: [
+    "That much customer credit is not available: part of it is reserved for a sale invoice or already requested as a refund. Nothing has been changed.",
+    "مبلغ رصيد العميل المطلوب غير متاح: جزء منه محجوز لفاتورة بيع أو مطلوب ردّه مسبقًا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_NOT_CANCELLABLE: [
+    "Only a pending or approved refund request can be cancelled. Nothing has been changed.",
+    "لا يمكن إلغاء إلا طلب ردّ معلّق أو معتمد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED: [
+    "Give a reason of at most 500 characters to cancel this refund request. Nothing has been changed.",
+    "اذكر سببًا (500 حرف كحد أقصى) لإلغاء طلب الردّ هذا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_INVOICE_UNCOVERED_HELD: [
+    "This sale's invoice can no longer cover the cheque, so it cannot be deposited. Return it to the customer. Nothing has been changed.",
+    "لم تعد فاتورة هذه الصفقة تغطي الشيك، لذلك لا يمكن إيداعه. أعده إلى العميل. لم يتم تغيير أي شيء.",
+  ],
   ServerError_CHEQUE_NOT_FOUND: [
     "Cheque not found. Nothing has been changed.",
     "لم يتم العثور على الشيك. لم يتم تغيير أي شيء.",
@@ -1860,6 +2069,14 @@ const serverErrorMessages = defineBilingualMessages({
     "The bank fee must be a whole, non-negative amount in minor currency units. Nothing has been changed.",
     "يجب أن تكون رسوم البنك عددًا صحيحًا غير سالب بالوحدات الصغرى للعملة. لم يتم تغيير أي شيء.",
   ],
+  ServerError_CHEQUE_CLEAR_BANK_INVALID: [
+    "Select an active bank account in this organization's currency to clear the cheque. Nothing has been changed.",
+    "اختر حسابًا مصرفيًا نشطًا بعملة هذه المؤسسة لتصفية الشيك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_RETURN_FEE_BANK_INVALID: [
+    "Select an active bank account in this organization's currency for the return fee. Nothing has been changed.",
+    "اختر حسابًا مصرفيًا نشطًا بعملة هذه المؤسسة لدفع رسوم إرجاع الشيك. لم يتم تغيير أي شيء.",
+  ],
   ServerError_CHEQUE_RETURN_NO_RECEIPT_LINEAGE: [
     "This cleared cheque has no persisted receipt lineage, so what it moved cannot be determined, and returning it would reopen the debt without reversing the receipt. Nothing has been changed. An accountant reviews the deal.",
     "لا يوجد سجل محفوظ لقيد الاستلام المرتبط بهذا الشيك المصفّى، لذلك لا يمكن تحديد ما حرّكه، وإرجاعه سيعيد فتح الدين دون عكس الاستلام. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
@@ -1869,8 +2086,8 @@ const serverErrorMessages = defineBilingualMessages({
     "لا توجد دفعة تحصيل لهذا الشيك المصفّى ليتم عكسها، وإعادة فتح الدين ستجعله مستحقًا ومحصّلًا في الوقت نفسه. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
   ],
   ServerError_CHEQUE_RETURN_KEY_CONFLICT: [
-    "This same request was already sent with a different cheque, reason or bank fee. Nothing has been changed. Close and reopen the dialog to try again.",
-    "سبق إرسال هذا الطلب نفسه مع شيك أو سبب أو رسوم بنكية مختلفة. لم يتم تغيير أي شيء. أغلق النافذة وأعد فتحها للمحاولة مرة أخرى.",
+    "This same request was already sent with a different cheque, reason, bank fee or bank account. Nothing has been changed. Close and reopen the dialog to try again.",
+    "سبق إرسال هذا الطلب نفسه مع شيك أو سبب أو رسوم بنكية أو حساب مصرفي مختلف. لم يتم تغيير أي شيء. أغلق النافذة وأعد فتحها للمحاولة مرة أخرى.",
   ],
   // SCRUM-693: unwinding a paid finance deal (convex/utils/dealUnwindMessages.ts).
   ServerError_DEAL_CANCEL_USE_UNWIND: [
@@ -2110,9 +2327,41 @@ const serverErrorMessages = defineBilingualMessages({
     "Mark it to be refunded to the customer (paid out separately)",
     "تحديدها للردّ للعميل (يُصرف الردّ بشكل منفصل)",
   ],
+  UnwindDispositionRefundPayout: [
+    "Record a separate customer payout",
+    "تسجيل صرف مستقل للعميل",
+  ],
+  UnwindCustomerPayoutUnavailable: [
+    "Paying this customer credit out is not available yet. Keep it as customer credit.",
+    "صرف رصيد العميل غير متاح حاليًا. احتفظ به كرصيد دائن للعميل.",
+  ],
   UnwindDispositionCredit: [
     "Keep it as customer credit",
     "الاحتفاظ بها كرصيد دائن للعميل",
+  ],
+  UnwindCustomerCreditLabel: [
+    "Customer credit applied to this sale",
+    "رصيد العميل المستخدم في هذا البيع",
+  ],
+  UnwindCustomerPayoutTitle: [
+    "Customer payout details",
+    "تفاصيل المبلغ المصروف للعميل",
+  ],
+  UnwindCustomerPayoutAmountLabel: [
+    "Amount paid to customer",
+    "المبلغ المصروف للعميل",
+  ],
+  UnwindCustomerPayoutMethodLabel: [
+    "Customer payout method",
+    "طريقة الصرف للعميل",
+  ],
+  UnwindCustomerPayoutReferenceLabel: [
+    "Customer payout reference",
+    "مرجع الصرف للعميل",
+  ],
+  UnwindCustomerPayoutDateLabel: [
+    "Customer payout date",
+    "تاريخ الصرف للعميل",
   ],
   UnwindFinishAction: [
     "Refund and reverse the sale",
@@ -2233,7 +2482,76 @@ const quotationUnavailableMessages = defineBilingualMessages({
     "لا يتوفّر لأوتوفلو مبلغ بيع مستهدف ليحتسب منه لهذه الصفقة. سجِّل المبلغ الذي أُرسل فعلياً.",
   ],
 });
+/**
+ * SCRUM-724 mount: the deal-page receipts panel and the Collections refund queue
+ * degrade to these when their own queries fail, and the panel explains a held
+ * cheque the invoice can no longer cover before the server has to refuse it.
+ */
+const customerMoneyMountMessages = defineBilingualMessages({
+  DealReceiptPanelLoadFailed: [
+    "Customer money for this sale could not be loaded. The rest of the deal is unaffected. Reload the page to try again.",
+    "تعذّر تحميل أموال العميل لهذه الصفقة. باقي الصفقة لم يتأثر. أعد تحميل الصفحة للمحاولة مجدداً.",
+  ],
+  RetainedCreditRefundsLoadFailed: [
+    "Customer credit refunds could not be loaded. Reload the page to try again.",
+    "تعذّر تحميل طلبات ردّ رصيد العملاء. أعد تحميل الصفحة للمحاولة مجدداً.",
+  ],
+  DealReceiptChequeExceedsInvoice: [
+    "The invoice can no longer cover this cheque, so it cannot be deposited. Return it to the customer.",
+    "لم تعد الفاتورة تغطي هذا الشيك، لذلك لا يمكن إيداعه. أعده إلى العميل.",
+  ],
+  // Always true: the server reserves for the invoice only on a live intent with
+  // the doors open, so the notice must not claim a reservation (review F1).
+  DealReceiptChequeClearedToCredit: [
+    "Cheque cleared. Its amount is now customer credit; see the credit and any pending invoice application below.",
+    "حُصّل الشيك. أصبح مبلغه رصيداً للعميل؛ راجع الرصيد وأي تطبيق معلّق على الفاتورة أدناه.",
+  ],
+  // An uncoded or untranslated refusal on the refund queue (review R1/F2).
+  RetainedCreditRefundActionFailed: [
+    "The refund action could not be completed. Reload the page to see its current status, then try again.",
+    "تعذّر إتمام إجراء ردّ الرصيد. أعد تحميل الصفحة لرؤية حالته الحالية، ثم حاول مجدداً.",
+  ],
+});
+
+/**
+ * SCRUM-831: the approver's own queue of customer-credit refund requests on the
+ * Approvals page. A manager decides here without the finance ledger; recording the
+ * payout stays in Accounting, so no payout wording belongs to this surface.
+ */
+const refundApprovalQueueMessages = defineBilingualMessages({
+  RefundApprovalQueueTitle: [
+    "Customer credit refunds awaiting approval",
+    "طلبات ردّ رصيد العملاء بانتظار الموافقة",
+  ],
+  RefundApprovalQueueDesc: [
+    "Finance asked to pay customer credit back. Approve or reject each request; recording the payout stays in Accounting.",
+    "طلبت المالية ردّ رصيد عميل. وافق على كل طلب أو ارفضه؛ أما تسجيل الدفع فيبقى في المحاسبة.",
+  ],
+  RefundApprovalQueueLoading: [
+    "Loading refund requests…",
+    "جارٍ تحميل طلبات الردّ…",
+  ],
+  RefundApprovalQueueEmpty: [
+    "No customer credit refunds are waiting for your approval.",
+    "لا توجد طلبات ردّ أرصدة بانتظار موافقتك.",
+  ],
+  RefundApprovalOwnRequest: [
+    "You requested this refund, so a different approver must decide it.",
+    "أنت من قدّم طلب الردّ هذا، لذلك يجب أن يبتّ فيه موافق آخر.",
+  ],
+  RefundApprovalPaused: [
+    "Approving is paused: paying customer credit out is not available during the pilot. The credit stays on the customer's account. You can still reject a request.",
+    "الموافقة متوقفة: دفع أرصدة العملاء غير متاح خلال المرحلة التجريبية. يبقى الرصيد في حساب العميل. ما زال بإمكانك رفض الطلب.",
+  ],
+  RefundApprovalLoadMore: ["Load more requests", "تحميل المزيد من الطلبات"],
+  RefundApprovalLoadingMore: ["Loading more requests…", "جارٍ تحميل المزيد من الطلبات…"],
+  RefundApprovalRequestedBy: ["Requested by", "مقدّم الطلب"],
+  RefundApprovalRequestedOn: ["on", "بتاريخ"],
+});
+
 export const salesEn = {
+  ...refundApprovalQueueMessages.en,
+  ...customerMoneyMountMessages.en,
   ...quoteWizardQaMessages.en,
   ...quotationUnavailableMessages.en,
   ...serverErrorMessages.en,
@@ -2343,6 +2661,10 @@ export const salesEn = {
   DepositRequestedSuccess: "Deposit requested — waiting for a manager or accountant to confirm receipt",
   DepositRequestedLabel: "Deposit requested — awaiting confirmation",
   DepositChooseMethod: "How was it received?",
+  DepositBankLabel: "Bank that received the deposit",
+  DepositBankChoose: "Choose the receiving bank",
+  DepositNoBank: "Create an active bank account in this currency before recording a bank deposit.",
+  DepositTooManyBanks: "Too many bank accounts to choose from. Ask an administrator to narrow the list.",
   DepositMethodRequired: "Choose how the deposit was received (cash, bank transfer, card or cheque) to continue.",
   RefundChooseMethod: "How is it being refunded?",
   RefundMethodRequired: "Choose how the refund is being paid (cash, bank transfer, card or cheque) to continue.",
@@ -2441,8 +2763,6 @@ export const salesEn = {
   NotRecorded: "Not recorded",
   LeaseFinancing: "Lease",
   CashOrDirect: "Cash / Direct",
-  RouteDirectUnavailableHeldDeposit:
-    "A reservation deposit is still held. On this route the dealership bills the customer nothing for the car, so settle the deposit first.",
   RouteDirectUnavailableNoExternalFinancier:
     "No outside financier on this deal, so nobody but the dealership pays the supplier.",
   RouteDirectUnavailableLease:
@@ -2625,6 +2945,15 @@ export const salesEn = {
   RejectApplication: "Reject Application",
   ConfirmDisbursement: "Confirm Disbursement",
   ConfirmDisbursementDesc: "Record receipt of the finance-company funds for this closed deal.",
+  DisbursementBank: "Receiving bank account",
+  DisbursementSelectBank: "Select the bank account that received the funds",
+  DisbursementLoadingBanks: "Loading bank accounts...",
+  DisbursementNoBank:
+    "There is no active bank account in this currency. Add one under Bank Accounts before confirming this receipt.",
+  DisbursementReceivableMissing:
+    "This deal has no finance-company receivable recorded yet, so the receiving bank account cannot be chosen. Finalize the deal first, then confirm the receipt.",
+  DisbursementTooManyBanks:
+    "This organization has too many active bank accounts to list here, so the receiving account cannot be chosen safely. Deactivate unused bank accounts, then try again.",
   DisbursementAmount: "Disbursement Amount",
   ConfirmReceipt: "Confirm Receipt",
   ConfirmSupplierDisbursement: "Record payment to the supplier",
@@ -2983,6 +3312,87 @@ export const salesEn = {
   PositionNotInvolved: "Nothing outstanding",
   PositionUnknown: "Cannot be determined",
   CustomerInvoiceBalance: "Customer invoice balance",
+  DealReceiptPanelTitle: "Customer money after completion",
+  DealReceiptNoInvoice: "No confirmed customer invoice is available for this sale yet.",
+  DealReceiptRecordHeading: "Record money received",
+  DealReceiptAmount: "Amount",
+  DealReceiptMethod: "Payment method",
+  DealReceiptDate: "Date received",
+  DealReceiptReference: "Bank or receipt reference",
+  DealReceiptRetainedExplanation: "The receipt is held as customer credit until its posted entry is applied to this sale invoice.",
+  DealReceiptAvailableToApply: "Invoice amount still available to apply",
+  DealReceiptFullyCovered: "This invoice is fully paid or already covered by pending credit. Record no further payment for this deal.",
+  DealReceiptCurrencyMismatch: "This invoice uses a different currency from customer collections. Receive payment through finance review.",
+  DealReceiptChequeHeading: "Customer cheques",
+  DealReceiptChequeExplanation: "A cheque becomes customer credit only after deposit, clearing, and receipt posting. Apply that credit to the invoice below.",
+  DealReceiptChequeBank: "Bank",
+  DealReceiptChequeNumber: "Cheque number",
+  DealReceiptChequeDate: "Cheque date",
+  DealReceiptRegisterCheque: "Register cheque",
+  DealReceiptChequeHeld: "Held",
+  RetainedCreditChequeCancelledHeld: "Sale cancelled: return this cheque to the customer",
+  RetainedCreditChequeBecomesCredit: "Sale cancelled: becomes customer credit when cleared",
+  RetainedCreditFromCheque: "From cheque",
+  RetainedCreditSaleCancelled: "Originating sale: cancelled",
+  RetainedCreditSaleActive: "Originating sale: active",
+  RetainedCreditRequestRefund: "Request refund",
+  RetainedCreditApplyElsewhere: "Apply to another sale",
+  RetainedCreditApplyElsewhereHint: "Open the other sale and choose this credit there. A cancelled sale never reopens.",
+  RetainedCreditRefundAmount: "Refund amount",
+  RetainedCreditRefundReason: "Reason",
+  RetainedCreditRefundMethod: "Pay out by",
+  RetainedCreditRefundSubmit: "Send for approval",
+  RetainedCreditRefundRequested: "Refund request sent for approval.",
+  RetainedCreditRefundsHeading: "Customer credit refunds",
+  RetainedCreditRefundsEmpty: "No customer credit refunds awaiting action.",
+  RetainedCreditRefundApproved: "Refund approved.",
+  RetainedCreditRefundRejected: "Refund rejected.",
+  RetainedCreditRefundPaid: "Refund paid.",
+  RetainedCreditPayoutReference: "Payout reference",
+  RetainedCreditExecute: "Record payout",
+  RetainedCreditStatusPENDING: "Awaiting approval",
+  RetainedCreditStatusAPPROVED: "Approved, not paid",
+  RetainedCreditPayoutUnavailable: "Paying customer credit out is not available during the pilot. The credit stays on the customer's account. You can still reject or cancel a request.",
+  RetainedCreditRefundCancel: "Cancel request",
+  RetainedCreditCancelReason: "Reason for cancelling",
+  RetainedCreditRefundCancelled: "Refund request cancelled and the credit released.",
+  SaleInvoiceDoorsUnavailable: "Recording or applying customer credit against this sale's invoice is not available during the pilot.",
+  DealReceiptChequeDeposited: "Deposited",
+  DealReceiptDepositCheque: "Mark deposited",
+  DealReceiptClearCheque: "Mark cleared",
+  DealReceiptEnterValidCheque: "Enter a bank, cheque number, date, and available invoice amount.",
+  DealReceiptChequeActionFailed: "Cheque action could not be completed. Check the cheque status before trying again.",
+  DealReceiptChequeRegistered: "Cheque registered. Deposit it when presented to the bank.",
+  DealReceiptChequeDepositNotice: "Cheque marked deposited. Clear it only after the bank confirms payment.",
+  DealReceiptRecordButton: "Record customer receipt",
+  DealReceiptCreditHeading: "Customer credit available to apply",
+  DealReceiptNoCredit: "No customer credit is available yet.",
+  DealReceiptMoreCredit: "More receipt history is available. Load another page to check for credit.",
+  DealReceiptPosted: "Receipt posted",
+  DealReceiptAwaitingPosting: "Awaiting receipt posting",
+  DealReceiptChooseCredit: "Select credit",
+  DealReceiptReserveButton: "Reserve for this invoice",
+  DealReceiptPendingHeading: "Pending invoice applications",
+  DealReceiptNoPending: "No pending applications.",
+  DealReceiptFirstPage: "First page",
+  DealReceiptNextPage: "Next page",
+  DealReceiptReady: "Ready to activate",
+  DealReceiptOriginsVerified: "Receipt and sale journals verified; final posting checks run on activation",
+  DealReceiptTryActivateButton: "Try activation",
+  DealReceiptReviewRequired: "Posting proof unavailable — review required",
+  DealReceiptReason_CLAIM_CHANGED: "Sale or receipt details changed — review required",
+  DealReceiptReason_RECEIPT_UNSETTLED: "Customer receipt is no longer settled — review required",
+  DealReceiptReason_RECEIPT_UNPOSTED: "Waiting for the customer receipt journal to post",
+  DealReceiptReason_SALE_UNPOSTED: "Waiting for the sale completion journal to post",
+  DealReceiptReason_BALANCE_CHANGED: "Available credit or invoice balance changed — review required",
+  DealReceiptReason_PROOF_UNAVAILABLE: "Posting proof unavailable — review required",
+  DealReceiptActivateButton: "Activate",
+  DealReceiptEnterValidPayment: "Enter a positive amount, date, and bank reference where needed.",
+  DealReceiptEnterValidCredit: "Choose posted credit and an available amount in the invoice currency.",
+  DealReceiptActionFailed: "This action could not be completed. Please try again.",
+  DealReceiptRecorded: "Customer receipt recorded and reserved for this invoice. Check its posting status below.",
+  DealReceiptReserved: "Customer credit reserved for this invoice.",
+  DealReceiptActivated: "Invoice application activated.",
   CustomerInvoiceUnproven: "Not confirmed yet",
   CustomerInvoiceStateOpen: "The customer's invoice is still open",
   AppraisalGapLabel: "Shortfall",
@@ -3259,6 +3669,7 @@ export const salesEn = {
   DerivedFundedPortion: "Funded by the finance company",
   DerivedUnfinancedPortion: "Not financed",
   DerivedDealerContribution: "Dealership contribution",
+  DerivedCustomerToFinanceCompany: "Customer payment to the finance company (confirmed)",
   DerivedAppliedLtv: "Applied LTV",
 
   RecordQuotationTitle: "Record the quotation we submitted",
@@ -3338,6 +3749,8 @@ export const salesEn = {
 };
 
 export const salesAr = {
+  ...refundApprovalQueueMessages.ar,
+  ...customerMoneyMountMessages.ar,
   ...quoteWizardQaMessages.ar,
   ...quotationUnavailableMessages.ar,
   ...serverErrorMessages.ar,
@@ -3439,6 +3852,10 @@ export const salesAr = {
   DepositRequestedSuccess: "تم إرسال طلب العربون — بانتظار تأكيد الاستلام من المدير أو المحاسب",
   DepositRequestedLabel: "تم طلب العربون — بانتظار التأكيد",
   DepositChooseMethod: "كيف تم الاستلام؟",
+  DepositBankLabel: "البنك الذي استلم العربون",
+  DepositBankChoose: "اختر البنك المستلم",
+  DepositNoBank: "أنشئ حساباً بنكياً نشطاً بهذه العملة قبل تسجيل عربون بنكي.",
+  DepositTooManyBanks: "عدد الحسابات البنكية كبير جداً. اطلب من المسؤول تقليص القائمة.",
   DepositMethodRequired: "اختر طريقة استلام العربون (نقداً أو تحويل بنكي أو بطاقة أو شيك) للمتابعة.",
   RefundChooseMethod: "كيف سيتم الرد؟",
   RefundMethodRequired: "اختر طريقة رد المبلغ (نقداً أو تحويل بنكي أو بطاقة أو شيك) للمتابعة.",
@@ -3535,8 +3952,6 @@ export const salesAr = {
   NotRecorded: "غير مسجّل",
   LeaseFinancing: "تأجير تمويلي",
   CashOrDirect: "نقدي / مباشر",
-  RouteDirectUnavailableHeldDeposit:
-    "ما زال هناك عربون محجوز. في هذا المسار لا يُطالب المعرض المشتري بثمن السيارة، لذا يجب معالجة العربون أولًا.",
   RouteDirectUnavailableNoExternalFinancier:
     "لا توجد جهة تمويل خارجية في هذه الصفقة، فلا أحد غير المعرض يدفع للمورّد.",
   RouteDirectUnavailableLease:
@@ -3717,6 +4132,15 @@ export const salesAr = {
   RejectApplication: "رفض الطلب",
   ConfirmDisbursement: "تأكيد الصرف",
   ConfirmDisbursementDesc: "تسجيل استلام مبلغ شركة التمويل لهذه الصفقة المغلقة.",
+  DisbursementBank: "الحساب المصرفي المستلِم",
+  DisbursementSelectBank: "اختر الحساب المصرفي الذي استلم المبلغ",
+  DisbursementLoadingBanks: "جاري تحميل الحسابات المصرفية...",
+  DisbursementNoBank:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل تأكيد هذا الاستلام.",
+  DisbursementReceivableMissing:
+    "لا توجد ذمة مدينة على شركة التمويل مسجلة لهذه الصفقة بعد، لذا لا يمكن اختيار الحساب المصرفي المستلِم. أنهِ الصفقة أولاً ثم أكّد الاستلام.",
+  DisbursementTooManyBanks:
+    "لدى هذه المنشأة عدد كبير جداً من الحسابات المصرفية النشطة بحيث لا يمكن عرضها هنا، لذا لا يمكن اختيار الحساب المستلِم بأمان. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
   DisbursementAmount: "مبلغ الصرف",
   ConfirmReceipt: "تأكيد الاستلام",
   ConfirmSupplierDisbursement: "تسجيل الدفع للمورّد",
@@ -4070,6 +4494,87 @@ export const salesAr = {
   PositionNotInvolved: "لا يوجد",
   PositionUnknown: "غير محدَّد",
   CustomerInvoiceBalance: "المتبقي على فاتورة العميل",
+  DealReceiptPanelTitle: "أموال العميل بعد إتمام البيع",
+  DealReceiptNoInvoice: "لا توجد فاتورة عميل مؤكدة لهذا البيع بعد.",
+  DealReceiptRecordHeading: "تسجيل المبلغ المستلم",
+  DealReceiptAmount: "المبلغ",
+  DealReceiptMethod: "طريقة الدفع",
+  DealReceiptDate: "تاريخ الاستلام",
+  DealReceiptReference: "مرجع الحوالة أو الإيصال",
+  DealReceiptRetainedExplanation: "يُحتفظ بالمبلغ كرصيد للعميل حتى يُطبَّق القيد المُرحَّل على فاتورة هذا البيع.",
+  DealReceiptAvailableToApply: "المبلغ المتاح للتطبيق على الفاتورة",
+  DealReceiptFullyCovered: "سُددت هذه الفاتورة أو غطاها رصيد معلّق. لا تسجّل دفعة أخرى لهذه الصفقة.",
+  DealReceiptCurrencyMismatch: "عملة الفاتورة تختلف عن عملة تحصيل العملاء. راجع الشؤون المالية قبل الاستلام.",
+  DealReceiptChequeHeading: "شيكات العميل",
+  DealReceiptChequeExplanation: "يصبح الشيك رصيداً للعميل بعد الإيداع والتحصيل وترحيل الإيصال. طبّق الرصيد على الفاتورة أدناه.",
+  DealReceiptChequeBank: "البنك",
+  DealReceiptChequeNumber: "رقم الشيك",
+  DealReceiptChequeDate: "تاريخ الشيك",
+  DealReceiptRegisterCheque: "تسجيل الشيك",
+  DealReceiptChequeHeld: "محتفظ به",
+  RetainedCreditChequeCancelledHeld: "الصفقة ملغاة: أعد هذا الشيك إلى العميل",
+  RetainedCreditChequeBecomesCredit: "الصفقة ملغاة: يصبح رصيدًا للعميل عند الصرف",
+  RetainedCreditFromCheque: "من الشيك",
+  RetainedCreditSaleCancelled: "الصفقة الأصلية: ملغاة",
+  RetainedCreditSaleActive: "الصفقة الأصلية: قائمة",
+  RetainedCreditRequestRefund: "طلب ردّ",
+  RetainedCreditApplyElsewhere: "تطبيقه على صفقة أخرى",
+  RetainedCreditApplyElsewhereHint: "افتح الصفقة الأخرى واختر هذا الرصيد هناك. الصفقة الملغاة لا تُعاد فتحها.",
+  RetainedCreditRefundAmount: "مبلغ الردّ",
+  RetainedCreditRefundReason: "السبب",
+  RetainedCreditRefundMethod: "طريقة الدفع",
+  RetainedCreditRefundSubmit: "إرسال للموافقة",
+  RetainedCreditRefundRequested: "أُرسل طلب الردّ للموافقة.",
+  RetainedCreditRefundsHeading: "ردّ أرصدة العملاء",
+  RetainedCreditRefundsEmpty: "لا توجد طلبات ردّ أرصدة بانتظار الإجراء.",
+  RetainedCreditRefundApproved: "تمت الموافقة على الردّ.",
+  RetainedCreditRefundRejected: "تم رفض الردّ.",
+  RetainedCreditRefundPaid: "تم دفع الردّ.",
+  RetainedCreditPayoutReference: "مرجع الدفع",
+  RetainedCreditExecute: "تسجيل الدفع",
+  RetainedCreditStatusPENDING: "بانتظار الموافقة",
+  RetainedCreditStatusAPPROVED: "معتمد، لم يُدفع",
+  RetainedCreditPayoutUnavailable: "دفع أرصدة العملاء غير متاح خلال المرحلة التجريبية. يبقى الرصيد في حساب العميل. ما زال بإمكانك رفض الطلب أو إلغاؤه.",
+  RetainedCreditRefundCancel: "إلغاء الطلب",
+  RetainedCreditCancelReason: "سبب الإلغاء",
+  RetainedCreditRefundCancelled: "تم إلغاء طلب الردّ وتحرير الرصيد.",
+  SaleInvoiceDoorsUnavailable: "تسجيل رصيد العميل أو تطبيقه على فاتورة هذا البيع غير متاح خلال المرحلة التجريبية.",
+  DealReceiptChequeDeposited: "مودع",
+  DealReceiptDepositCheque: "تأكيد الإيداع",
+  DealReceiptClearCheque: "تأكيد التحصيل",
+  DealReceiptEnterValidCheque: "أدخل البنك ورقم الشيك والتاريخ ومبلغاً متاحاً على الفاتورة.",
+  DealReceiptChequeActionFailed: "تعذّر إكمال إجراء الشيك. تحقق من حالته قبل المحاولة مجدداً.",
+  DealReceiptChequeRegistered: "سُجل الشيك. أودعه عند تقديمه إلى البنك.",
+  DealReceiptChequeDepositNotice: "سُجل إيداع الشيك. لا تؤكد تحصيله قبل تأكيد البنك.",
+  DealReceiptRecordButton: "تسجيل دفعة العميل",
+  DealReceiptCreditHeading: "رصيد العميل المتاح للتطبيق",
+  DealReceiptNoCredit: "لا يوجد رصيد متاح للعميل بعد.",
+  DealReceiptMoreCredit: "توجد إيصالات أخرى. حمّل صفحة أخرى للتحقق من الرصيد.",
+  DealReceiptPosted: "تم ترحيل الإيصال",
+  DealReceiptAwaitingPosting: "بانتظار ترحيل الإيصال",
+  DealReceiptChooseCredit: "اختيار الرصيد",
+  DealReceiptReserveButton: "حجز الرصيد لهذه الفاتورة",
+  DealReceiptPendingHeading: "طلبات تطبيق الفاتورة المعلّقة",
+  DealReceiptNoPending: "لا توجد طلبات معلّقة.",
+  DealReceiptFirstPage: "الصفحة الأولى",
+  DealReceiptNextPage: "الصفحة التالية",
+  DealReceiptReady: "جاهز للتفعيل",
+  DealReceiptOriginsVerified: "تم التحقق من قيود الإيصال والبيع؛ تُفحَص شروط الترحيل النهائية عند التفعيل",
+  DealReceiptTryActivateButton: "محاولة التفعيل",
+  DealReceiptReviewRequired: "دليل الترحيل غير متاح — يلزم التحقق",
+  DealReceiptReason_CLAIM_CHANGED: "تغيّرت بيانات البيع أو الإيصال — يلزم التحقق",
+  DealReceiptReason_RECEIPT_UNSETTLED: "لم يعد إيصال العميل مسدداً — يلزم التحقق",
+  DealReceiptReason_RECEIPT_UNPOSTED: "بانتظار ترحيل قيد إيصال العميل",
+  DealReceiptReason_SALE_UNPOSTED: "بانتظار ترحيل قيد إتمام البيع",
+  DealReceiptReason_BALANCE_CHANGED: "تغيّر الرصيد المتاح أو المتبقي على الفاتورة — يلزم التحقق",
+  DealReceiptReason_PROOF_UNAVAILABLE: "دليل الترحيل غير متاح — يلزم التحقق",
+  DealReceiptActivateButton: "تفعيل",
+  DealReceiptEnterValidPayment: "أدخل مبلغاً موجباً وتاريخاً ومرجع الحوالة عند الحاجة.",
+  DealReceiptEnterValidCredit: "اختر رصيداً مُرحَّلاً ومبلغاً متاحاً بعملة الفاتورة.",
+  DealReceiptActionFailed: "تعذّر إكمال الإجراء. حاول مرة أخرى.",
+  DealReceiptRecorded: "سُجلت دفعة العميل وحُجزت للفاتورة. تحقق من حالة الترحيل أدناه.",
+  DealReceiptReserved: "حُجز رصيد العميل لهذه الفاتورة.",
+  DealReceiptActivated: "فُعّل تطبيق الفاتورة.",
   CustomerInvoiceUnproven: "لم يُتحقَّق منه بعد",
   CustomerInvoiceStateOpen: "فاتورة العميل لا تزال مفتوحة",
   AppraisalGapLabel: "العجز",
@@ -4249,6 +4754,7 @@ export const salesAr = {
   DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",
   DerivedUnfinancedPortion: "الجزء غير المموَّل",
   DerivedDealerContribution: "مساهمة المعرض",
+  DerivedCustomerToFinanceCompany: "دفعة العميل إلى شركة التمويل (مؤكَّدة)",
   DerivedAppliedLtv: "نسبة التمويل المطبَّقة",
 
   RecordQuotationTitle: "تسجيل عرض السعر المُرسَل",

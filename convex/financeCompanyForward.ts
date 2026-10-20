@@ -1,26 +1,38 @@
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import { query, type MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { runWithIdempotency } from "./utils/idempotency";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { disbursementAccountKey } from "./accounting/postingRules";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { hookFinanceCompanyForwardPaid, hookFinanceCompanyForwardReversed } from "./accounting/workflowHooks";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { directPaymentMethodValidator } from "./utils/handoverCostPayment";
 import { isMinorAmount } from "./utils/financingEconomics";
 import { resolveDealCurrency } from "./utils/settlementDeductions";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
-import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { manualPayerOf } from "./utils/manualFinancePayer";
+import { prospectiveForwardPlan } from "./applications";
+import { heldDepositRowsForVehicle } from "./utils/saleCompletion";
+import { toMinorUnits } from "./utils/money";
+import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
 import {
+  FORWARD_DEPOSIT_PROVENANCE_REFUSAL,
+  FORWARD_VERSIONS_ONLY,
   MAX_FORWARD_VERSIONS,
   deriveForwardState,
+  forwardCancelRefusal,
+  forwardFinalizeBlock,
   forwardReversalKey,
+  type ForwardFinalizeBlock,
   type ForwardProof,
 } from "./utils/financeCompanyForward";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 
 /**
  * SCRUM-435 - the three commands that move the customer's deposit and the
@@ -55,13 +67,30 @@ function cleanReason(raw: string): string {
   return reason;
 }
 
+/** No sale has been created for the deal, so no plan fields are frozen on it. */
+const isUnfinalized = (app: Doc<"financeApplications">): boolean =>
+  app.finalizedSaleId === undefined && app.status !== "CLOSED";
+
+/**
+ * The finance company's transfer is confirmed: to the dealership (`disbursedAt`) on the through
+ * route, or by a supplier advice on file on the direct route. The advice counts by its amount as
+ * well as its date, exactly as both cancel paths read it.
+ */
+const isTransferConfirmed = (app: Doc<"financeApplications">): boolean =>
+  app.disbursedAt !== undefined ||
+  app.supplierDisbursementConfirmedAt !== undefined ||
+  app.supplierDisbursedAmountMinor !== undefined;
+
 async function loadV2Application(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   applicationId: Id<"financeApplications">
 ): Promise<Doc<"financeApplications">> {
   const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId, APPLICATION_NOT_FOUND);
-  if (planVersionOf(app) !== 2) {
+  // SCRUM-411 P2-01: the payment is recorded BEFORE finalizing, when the deal has
+  // no frozen plan version yet. Such a deal is judged against the plan finalize
+  // would freeze; a deal finalized under an older plan still has nothing to record.
+  if (!isUnfinalized(app) && !isForwardPlanVersion(planVersionOf(app))) {
     throw new ConvexError(
       "This deal was finalized before the finance-company forward step existed, so there is nothing to record here. Continue with the transfer confirmation."
     );
@@ -85,6 +114,74 @@ function findOnBooks(proof: ForwardProof, forwardId: Id<"financeCompanyForwards"
   return proof.versions.find((version) => version.forwardId === forwardId);
 }
 
+/** A deposit has a handful of hold rows on one car at most (re-allocations); more cannot be attributed. */
+const MAX_HOLDS_PER_DEPOSIT_VEHICLE = 20;
+
+interface DepositSlice {
+  depositId: Id<"deposits">;
+  holdId?: Id<"depositVehicleHolds">;
+  amountMinor: number;
+}
+
+const refuseProvenance = (): never =>
+  throwAppError(FORWARD_DEPOSIT_PROVENANCE_REFUSAL.code, FORWARD_DEPOSIT_PROVENANCE_REFUSAL.message);
+
+/**
+ * SCRUM-411 P2-02. The deposits (and holds) the deposit part of a forward is made of, read from
+ * the SAME rows the plan's H is derived from (`heldDepositRowsForVehicle`), so the payment and
+ * the plan cannot disagree about which deposit was paid onward. Immutable once written.
+ *
+ * Fails closed: a deposit of another organization, a deposit with more than one live hold on the
+ * car (the amount cannot be pinned to one), or slices that do not add up to the deposit portion
+ * refuse the payment rather than record provenance that is not true. Nothing is owed from a
+ * deposit that is refunded or forfeited (H = 0): no slices, nothing is paid onward.
+ */
+async function depositSlicesFor(
+  ctx: MutationCtx,
+  app: Doc<"financeApplications">,
+  currency: string,
+  depositPortionMinor: number
+): Promise<DepositSlice[]> {
+  if (depositPortionMinor <= 0) return [];
+  const slices: DepositSlice[] = [];
+  let total = 0;
+  for (const row of await heldDepositRowsForVehicle(ctx, app.quoteId, app.vehicleId)) {
+    if (row.orgId !== app.orgId) return refuseProvenance();
+    const amountMinor = toMinorUnits(row.amount, currency);
+    if (amountMinor <= 0) continue;
+    const holds = await ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_deposit_vehicle", (q) => q.eq("depositId", row.depositId).eq("vehicleId", app.vehicleId))
+      .take(MAX_HOLDS_PER_DEPOSIT_VEHICLE + 1);
+    if (holds.length > MAX_HOLDS_PER_DEPOSIT_VEHICLE) return refuseProvenance();
+    const liveHolds = holds.filter(
+      (hold) => hold.active && (hold.allocationStatus === undefined || hold.allocationStatus === "ALLOCATED")
+    );
+    if (liveHolds.length > 1) return refuseProvenance();
+    slices.push({
+      depositId: row.depositId,
+      ...(liveHolds[0] === undefined ? {} : { holdId: liveHolds[0]._id }),
+      amountMinor,
+    });
+    total += amountMinor;
+  }
+  if (total !== depositPortionMinor) return refuseProvenance();
+  return slices;
+}
+
+/**
+ * SCRUM-54: the banks a forward can leave, for the form's required picker. Gated
+ * by the SAME permissions as the payment itself (a manager may hold them without
+ * MANAGE_FINANCE), and read-only: it never creates or selects a bank.
+ */
+export const listForwardBankOptions = query({
+  args: { orgId: v.id("organizations"), currency: v.string() },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, NEEDS_FORWARD_PERMS);
+    return await listEligibleBanks(ctx, args.orgId, args.currency);
+  },
+});
+
 /**
  * Records that the dealership paid the deposit and the contribution to the
  * finance company. Posts Dr AP-Finance / Cr cash-or-bank, dated at the true
@@ -96,6 +193,12 @@ export const recordFinanceCompanyForward = mutation({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
     method: directPaymentMethodValidator,
+    /**
+     * SCRUM-54: the physical bank a bank-account method (transfer, card, cheque) left.
+     * Required for those, refused for cash. Optional in the validator only so a
+     * missing bank is a clear refusal, not a schema error.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     paidAt: v.number(),
     /** The total the payer SAW and pinned; the payment posts only when it is still the amount due. */
     expectedAmountMinor: v.number(),
@@ -105,6 +208,11 @@ export const recordFinanceCompanyForward = mutation({
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId, NEEDS_FORWARD_PERMS);
     const app = await loadV2Application(ctx, args.orgId, args.applicationId);
+    const cashKey = disbursementAccountKey(args.method);
+    const paidFromBank = cashKey === SYSTEM_KEYS.BANK_ACCOUNT;
+    if (args.bankAccountId && !paidFromBank) {
+      throw new ConvexError("A bank account applies only to a bank transfer, card or cheque payment. Nothing has been recorded.");
+    }
     if (!isMinorAmount(args.expectedAmountMinor)) {
       throw new ConvexError("The amount must be a whole number of minor units. Nothing has been recorded.");
     }
@@ -127,6 +235,7 @@ export const recordFinanceCompanyForward = mutation({
         fingerprint: JSON.stringify({
           applicationId: args.applicationId,
           method: args.method,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           paidAt: args.paidAt,
           reference: reference ?? null,
           expectedAmountMinor: args.expectedAmountMinor,
@@ -137,14 +246,30 @@ export const recordFinanceCompanyForward = mutation({
         // the deal has moved on since.
         // SCRUM-693: no payment to the finance company while the deal is being unwound.
         await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
-        if (app.status !== "CLOSED") {
-          throw new ConvexError("The deal must be finalized before the payment to the finance company is recorded. A manager finalizes the deal first.");
+        // SCRUM-411 P2-01. Before the sale the deposit and the contribution are
+        // judged against the plan finalize WOULD freeze (one derivation, shared with
+        // finalize); once CLOSED they are the frozen figures, as before.
+        let prospective: { dueMinor: number; fingerprint: string } | undefined;
+        let planFingerprint: string | undefined = app.financedSaleRecognitionFingerprint;
+        let depositPortionMinor = app.forwardDepositPortionMinor ?? 0;
+        let contributionPortionMinor = app.forwardContributionPortionMinor ?? 0;
+        if (app.status === "APPROVED" && app.finalizedSaleId === undefined) {
+          const plan = await prospectiveForwardPlan(ctx, app, mayReadFinanceEconomics(auth.role));
+          if (plan === null) {
+            throw new ConvexError("Nothing is owed to the finance company on this deal.");
+          }
+          prospective = { dueMinor: plan.forwardDueMinor, fingerprint: plan.fingerprint };
+          planFingerprint = plan.fingerprint;
+          depositPortionMinor = plan.forwardDepositMinor;
+          contributionPortionMinor = plan.forwardContributionMinor;
+        } else if (app.status !== "CLOSED") {
+          throw new ConvexError("The deal must be approved before the payment to the finance company is recorded. Nothing has been recorded.");
         }
-        const proof = await deriveForwardState(ctx, app);
+        const proof = await deriveForwardState(ctx, app, prospective);
         // After the transfer the ONLY payment that may still be recorded is the
         // replacement for one the finance company sent back: the amount owed is
         // due again and nothing else can clear it.
-        if (app.disbursedAt !== undefined && !(proof.returnedExceptionOpen && proof.state === "DUE")) {
+        if (isTransferConfirmed(app) && !(proof.returnedExceptionOpen && proof.state === "DUE")) {
           throw new ConvexError("The finance company's transfer is already confirmed, so this payment can no longer be recorded here. A manager reviews the deal.");
         }
         if (proof.state !== "DUE") {
@@ -164,6 +289,17 @@ export const recordFinanceCompanyForward = mutation({
           throw new ConvexError("This deal has been paid and taken back too many times. An accountant reviews the deal. Nothing has been recorded.");
         }
         const currency = await resolveDealCurrency(ctx, app, "recording this payment");
+        // SCRUM-54: a bank-account method names an active same-org bank in the deal's
+        // currency, judged before the first write (a caught exception would commit).
+        const bankAccountId = paidFromBank
+          ? await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId,
+              bankAccountId: args.bankAccountId,
+              currency,
+              missingMessage: "Select the bank account this payment was made from. Nothing has been recorded.",
+              currencySubject: "deal",
+            })
+          : undefined;
         // SCRUM-27: exactly ONE payer identity - the configured company, or the
         // manual company's name frozen on the application. Neither is refused.
         const manualPayer = manualPayerOf(app);
@@ -176,15 +312,22 @@ export const recordFinanceCompanyForward = mutation({
             : { payerNameSnapshot: manualPayer!.name };
         const allowed = await checkPostingAllowed(ctx, args.orgId, args.paidAt);
         if (!allowed.ok && !allowed.waiting) throw new ConvexError(CLOSED_PERIOD_REFUSAL);
+        // SCRUM-411 P2-02: before the sale the deposit part of H + D is pinned, deposit by
+        // deposit, to the rows the plan was derived from. After the sale (a replacement for a
+        // returned payment) the deposit is already consumed into it and nothing is sliced.
+        const depositSlices =
+          prospective === undefined ? [] : await depositSlicesFor(ctx, app, currency, depositPortionMinor);
 
         const forwardId = await ctx.db.insert("financeCompanyForwards", {
           orgId: args.orgId,
+          bankAccountId,
           applicationId: app._id,
           ...payerIdentity,
           version,
           amountMinor: proof.dueMinor,
-          depositPortionMinor: app.forwardDepositPortionMinor ?? 0,
-          contributionPortionMinor: app.forwardContributionPortionMinor ?? 0,
+          depositPortionMinor,
+          contributionPortionMinor,
+          ...(planFingerprint === undefined ? {} : { planFingerprint }),
           currency,
           method: args.method,
           paidAt: args.paidAt,
@@ -192,6 +335,21 @@ export const recordFinanceCompanyForward = mutation({
           actorId: auth.user._id,
           createdAt: now,
         });
+        for (const slice of depositSlices) {
+          await ctx.db.insert("financeCompanyForwardSlices", {
+            orgId: args.orgId,
+            applicationId: app._id,
+            forwardId,
+            version,
+            depositId: slice.depositId,
+            ...(slice.holdId === undefined ? {} : { holdId: slice.holdId }),
+            vehicleId: app.vehicleId,
+            amountMinor: slice.amountMinor,
+            currency,
+            actorId: auth.user._id,
+            createdAt: now,
+          });
+        }
         await hookFinanceCompanyForwardPaid(ctx, {
           orgId: args.orgId,
           applicationId: app._id,
@@ -201,7 +359,8 @@ export const recordFinanceCompanyForward = mutation({
           amountMinor: proof.dueMinor,
           currency,
           paymentMethod: args.method,
-          cashKey: disbursementAccountKey(args.method),
+          cashKey,
+          bankAccountId,
           actorId: auth.user._id,
           occurredAt: args.paidAt,
         });
@@ -228,7 +387,9 @@ export async function reverseForward(
   if (row.reversalRequestedAt !== undefined) {
     throw new ConvexError("This payment is already being taken back. Nothing has been changed.");
   }
-  const proof = await deriveForwardState(ctx, app);
+  // A deal not finalized yet has no frozen plan: list its versions without judging
+  // them against one.
+  const proof = await deriveForwardState(ctx, app, isUnfinalized(app) ? FORWARD_VERSIONS_ONLY : undefined);
   const version = findOnBooks(proof, row._id);
   const allowed = args.kind === "RETURNED" ? ["ON_BOOKS"] : ["ON_BOOKS", "POSTING_PENDING", "POSTING_FAILED"];
   if (version === undefined || !allowed.includes(version.state)) {
@@ -291,7 +452,8 @@ export const reverseFinanceCompanyForward = mutation({
       },
       async () => {
         await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
-        if (app.disbursedAt !== undefined) {
+        // On either route, once the transfer is confirmed the showroom's payment was not recorded in error.
+        if (isTransferConfirmed(app)) {
           throw new ConvexError("The finance company's transfer is already confirmed. If the finance company returned the money, report it as returned instead.");
         }
         return await reverseForward(
@@ -341,5 +503,141 @@ export const reportFinanceCompanyForwardReturned = mutation({
         );
       }
     );
+  },
+});
+
+/** What the deal screen needs to know about the payment due BEFORE the sale (SCRUM-411 P2-01). */
+export type PreFinalizeForwardState =
+  | "NOT_READY"
+  | "FIRST_PAYMENT_UNFUNDED"
+  | "NOT_OWED"
+  | "SETTLED"
+  | ForwardFinalizeBlock;
+
+const preFinalizeForwardStateValidator = v.union(
+  v.literal("NOT_READY"),
+  v.literal("FIRST_PAYMENT_UNFUNDED"),
+  v.literal("NOT_OWED"),
+  v.literal("SETTLED"),
+  v.literal("UNPAID"),
+  v.literal("STALE"),
+  v.literal("POSTING_PENDING"),
+  v.literal("POSTING_FAILED"),
+  v.literal("REVERSAL_PENDING"),
+  v.literal("NEEDS_REPAIR")
+);
+
+/**
+ * SCRUM-411 P2-01. Whether the deposit and contribution owed to the finance
+ * company are on the books for the plan finalize WOULD freeze, for an approved
+ * deal that is not finalized yet - the question `finalizeDeal` and
+ * `recordFinanceCompanyForward` answer with the SAME derivation
+ * (`prospectiveForwardPlan` + `deriveForwardState` + `forwardFinalizeBlock`), so
+ * the screen cannot offer a close the server will refuse or hide the payment
+ * the server would accept. Read-only; never throws on the deal's own state.
+ *
+ * `null`: the deal is not an approved, unfinalized one, so this question does not
+ * arise (after finalizing, the cockpit's own `forward` block answers it).
+ * `NOT_READY`: the plan cannot be formed yet (the deal is not ready to close),
+ * so nothing is judged - the closing readiness names what is missing.
+ * `FIRST_PAYMENT_UNFUNDED`: the plan is refused because the agreed first payment
+ * was founded on a deposit that is no longer applied (SCRUM-411 P2-03); the screen
+ * names the next action instead of offering a close that finalize will refuse.
+ *
+ * STATUS for everyone allowed to read finance applications; the figures ride in
+ * `money` only for a caller who may read finance economics (ACC-10), and a
+ * withheld figure is `null`, never a zero. `mayRecord` is exactly the permission
+ * pair `recordFinanceCompanyForward` requires. `onBooksForwardId` is an id, not
+ * an amount: the payment a stale figure obliges someone to take back.
+ *
+ * SCRUM-411 B1: the payment is named, and `blocksCancel` raised, WHATEVER the plan
+ * says - from the versions alone (`FORWARD_VERSIONS_ONLY`, the cancel gate's own
+ * proof). A payment whose deposit was later refunded leaves no plan to form, and
+ * the operator must still see the payment to take back and not be offered a cancel
+ * the server refuses. `planReady: false` skips forming the plan (the deal is not
+ * ready to close) and answers only that.
+ */
+export const preFinalizeForwardStatus = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    planReady: v.optional(v.boolean()),
+  },
+  returns: v.union(
+    v.null(),
+    v.object({
+      state: preFinalizeForwardStateValidator,
+      mayRecord: v.boolean(),
+      onBooksForwardId: v.union(v.id("financeCompanyForwards"), v.null()),
+      blocksCancel: v.boolean(),
+      money: v.union(
+        v.null(),
+        v.object({
+          dueMinor: v.number(),
+          depositMinor: v.number(),
+          contributionMinor: v.number(),
+          onBooksMinor: v.number(),
+        })
+      ),
+    })
+  ),
+  handler: async (ctx, args) => {
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId, APPLICATION_NOT_FOUND);
+    if (app.status !== "APPROVED" || app.finalizedSaleId !== undefined) return null;
+
+    const mayReadMoney = mayReadFinanceEconomics(role);
+    const mayRecord =
+      isSystemOwnerRole(role) || NEEDS_FORWARD_PERMS.every((permission) => role.permissions.includes(permission));
+    const liveProof = await deriveForwardState(ctx, app, FORWARD_VERSIONS_ONLY);
+    const status = (
+      state: PreFinalizeForwardState,
+      proof?: ForwardProof,
+      plan?: { forwardDueMinor: number; forwardDepositMinor: number; forwardContributionMinor: number }
+    ) => ({
+      state,
+      mayRecord,
+      onBooksForwardId: (proof ?? liveProof).onBooksForwardId,
+      blocksCancel: forwardCancelRefusal(liveProof) !== null,
+      money:
+        mayReadMoney && proof !== undefined && plan !== undefined
+          ? {
+              dueMinor: plan.forwardDueMinor,
+              depositMinor: plan.forwardDepositMinor,
+              contributionMinor: plan.forwardContributionMinor,
+              onBooksMinor: proof.versions.reduce(
+                (sum, version) => (version.state === "ON_BOOKS" ? sum + version.amountMinor : sum),
+                0
+              ),
+            }
+          : null,
+    });
+
+    if (args.planReady === false) return status("NOT_READY");
+
+    let plan: Awaited<ReturnType<typeof prospectiveForwardPlan>>;
+    try {
+      plan = await prospectiveForwardPlan(ctx, app, mayReadMoney);
+    } catch (error) {
+      if (!(error instanceof ConvexError)) throw error;
+      // An agreed first payment that nothing funds (its deposit was refunded or forfeited) is a
+      // blocker the operator must act on, not a "not ready yet": finalize refuses it too, and
+      // there is nothing to pay until it is resolved.
+      if ((error.data as { code?: unknown } | null)?.code === AppErrorCode.FIRST_PAYMENT_UNFUNDED) {
+        return status("FIRST_PAYMENT_UNFUNDED");
+      }
+      // Any other refusal to form the plan (not ready to close, ...) is the deal's own state,
+      // named by the closing readiness and by finalize itself.
+      return status("NOT_READY");
+    }
+    if (plan === null) return status("NOT_OWED");
+
+    const proof = await deriveForwardState(ctx, app, {
+      dueMinor: plan.forwardDueMinor,
+      fingerprint: plan.fingerprint,
+    });
+    const block = forwardFinalizeBlock(proof);
+    if (block !== null) return status(block, proof, plan);
+    return status(proof.state === "SETTLED" ? "SETTLED" : "NOT_OWED", proof, plan);
   },
 });

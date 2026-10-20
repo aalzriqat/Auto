@@ -29,6 +29,7 @@ export const CreateExpenseSchema = z.object({
   vendor: z.string().optional(),
   payerId: z.string().optional(),
   paymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"]).optional(),
+  bankAccountId: z.string().optional(),
   notes: z.string().max(1000).optional(),
 });
 

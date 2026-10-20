@@ -78,11 +78,12 @@ function pipelineStageKey(row: { hasArrived: boolean; isHeld: boolean }): keyof 
 
 export function SourcingClient() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("PENDING");
   const [payDialogPayable, setPayDialogPayable] = useState<SourcingPayable | null>(null);
   const [paymentNotes, setPaymentNotes] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [bankAccountId, setBankAccountId] = useState<Id<"bankAccounts"> | null>(null);
   const [taxAmount, setTaxAmount] = useState("");
   const [isPaying, setIsPaying] = useState(false);
   const markPaidIdempotencyKeyRef = useRef<string | null>(null);
@@ -96,6 +97,11 @@ export function SourcingClient() {
     api.sourcingPayables.list,
     activeOrgId ? { orgId: activeOrgId, status: statusFilter === "ALL" ? undefined : statusFilter } : "skip"
   );
+  const paymentBanks = useQuery(
+    api.sourcingPayables.listPaymentBankOptions,
+    activeOrgId && payDialogPayable ? { orgId: activeOrgId, payableId: payDialogPayable._id } : "skip"
+  );
+  const bankMethod = paymentMethod === "BANK_TRANSFER" || paymentMethod === "CARD" || paymentMethod === "CHEQUE";
 
   // The live special-order pipeline — cars on order for a customer that have
   // not sold yet. Payables below only exist once the sale completes, so without
@@ -124,6 +130,10 @@ export function SourcingClient() {
 
   const handleMarkPaid = async () => {
     if (!activeOrgId || !payDialogPayable) return;
+    if (bankMethod && (!bankAccountId || paymentBanks?.truncated || !paymentBanks?.banks.some((bank) => bank._id === bankAccountId))) {
+      toast.error(locale === "ar" ? "اختر الحساب المصرفي الذي خرجت منه دفعة المورد." : "Choose the bank account this supplier payment leaves.");
+      return;
+    }
     setIsPaying(true);
     try {
       const trimmedTax = taxAmount.trim();
@@ -142,6 +152,7 @@ export function SourcingClient() {
         payableId: payDialogPayable._id,
         paymentNotes: paymentNotes.trim() || undefined,
         paymentMethod,
+        bankAccountId: bankMethod ? bankAccountId! : undefined,
         taxAmount: parsedTaxAmount,
         idempotencyKey: markPaidIdempotencyKeyRef.current,
       });
@@ -151,6 +162,7 @@ export function SourcingClient() {
       setPayDialogPayable(null);
       setPaymentNotes("");
       setPaymentMethod("CASH");
+      setBankAccountId(null);
       setTaxAmount("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("UnexpectedError" as any));
@@ -401,7 +413,7 @@ export function SourcingClient() {
                           size="sm"
                           variant="outline"
                           className="text-green-600"
-                          onClick={() => { setPayDialogPayable(p); setPaymentNotes(""); setPaymentMethod("CASH"); }}
+                          onClick={() => { setPayDialogPayable(p); setPaymentNotes(""); setPaymentMethod("CASH"); setBankAccountId(null); }}
                         >
                           {t("MarkPaid" as any)}
                         </Button>
@@ -430,10 +442,13 @@ export function SourcingClient() {
         isPaying={isPaying}
         notes={paymentNotes}
         paymentMethod={paymentMethod}
+        bankAccountId={bankAccountId}
+        bankOptions={paymentBanks}
         taxAmount={taxAmount}
         t={t as any}
         onNotesChange={setPaymentNotes}
-        onPaymentMethodChange={setPaymentMethod}
+        onPaymentMethodChange={(method) => { setPaymentMethod(method); setBankAccountId(null); }}
+        onBankAccountChange={setBankAccountId}
         onTaxAmountChange={setTaxAmount}
         onConfirm={handleMarkPaid}
         onOpenChange={(open) => {
@@ -442,6 +457,7 @@ export function SourcingClient() {
             setPayDialogPayable(null);
             setPaymentNotes("");
             setPaymentMethod("CASH");
+            setBankAccountId(null);
             setTaxAmount("");
           }
         }}

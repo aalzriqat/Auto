@@ -848,7 +848,8 @@ function payloadRecord(payload: unknown): Record<string, unknown> | null {
  *  - a cash leg (`custody_entry_`): the entry exists, in this org; its
  *    record exists, in this org, and is the entry's; the entry is a cash
  *    kind whose event type is the row's; the payload names exactly that
- *    entry, record, deal, holder, amount, currency and method;
+ *    entry, record, deal, holder, amount, currency, method and physical bank
+ *    whenever its journal leg reaches BANK_ACCOUNT;
  *  - a fee posting: the line exists, in this org; the payload names that
  *    line, its deal, its currency and fee type, a positive amount, and a
  *    custody record that exists, in this org, on the line's deal, in the
@@ -985,6 +986,20 @@ export async function custodyPostingRefusal(
     if (typeof custody === "string") return custody;
     const app = await loadApplication(custody.applicationId, "the movement's deal");
     if (typeof app === "string") return app;
+    const bankMethod = movement.method === "BANK_TRANSFER" || movement.method === "CARD" ||
+      (movement.kind !== "RETURNED" && movement.method === "CHEQUE");
+    if (bankMethod && !movement.bankAccountId) {
+      return `the movement names ${movement.method} but records no physical bank account, so its bank posting cannot be attributed`;
+    }
+    if (!bankMethod && movement.bankAccountId) {
+      return `the movement records a physical bank account for a non-bank method`;
+    }
+    if (movement.bankAccountId) {
+      const bank = await ctx.db.get(movement.bankAccountId);
+      if (bank === null || bank.orgId !== entry.orgId || bank.currency !== custody.currency) {
+        return `the movement's physical bank account is not in this organization and currency`;
+      }
+    }
     return (
       names("entryId", movement._id, "a movement") ??
       names("custodyId", custody._id, "a custody record") ??
@@ -993,6 +1008,7 @@ export async function custodyPostingRefusal(
       names("amountMinor", movement.amountMinor, "an amount") ??
       names("currency", custody.currency, "a currency") ??
       names("paymentMethod", movement.method, "a payment method") ??
+      names("bankAccountId", movement.bankAccountId?.toString(), "a physical bank account") ??
       envelope(movement.occurredAt, custody.currency, "the movement")
     );
   }

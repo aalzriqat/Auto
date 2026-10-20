@@ -64,6 +64,7 @@ export type CustodyMovementValues = Readonly<{
   intentId: string;
   amountMinor: number;
   method: PaymentMethod;
+  bankAccountId?: Id<"bankAccounts">;
   reference?: string;
   occurredAt?: number;
   note?: string;
@@ -116,6 +117,7 @@ export function CustodyMovementDialog({
   suggestedMinor,
   maxMinor,
   money,
+  bankOptions,
   t,
   onOpenChange,
   onSubmit,
@@ -136,6 +138,7 @@ export function CustodyMovementDialog({
   /** The server's own ceiling (a return cannot exceed what was issued); shown before the round trip. */
   maxMinor?: number;
   money: (minor: number, currency: string) => string;
+  bankOptions?: { banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean };
   t: T;
   onOpenChange: (open: boolean) => void;
   onSubmit: (values: CustodyMovementValues) => void;
@@ -144,6 +147,7 @@ export function CustodyMovementDialog({
   // SCRUM-469: no default. The method picks the ledger account the cash moves
   // through (an omitted one books to the cash drawer), so it is chosen, never assumed.
   const [method, setMethod] = useState<PaymentMethod | undefined>(undefined);
+  const [bankAccountId, setBankAccountId] = useState("");
   const [reference, setReference] = useState("");
   const [date, setDate] = useState("");
   const [note, setNote] = useState("");
@@ -151,6 +155,7 @@ export function CustodyMovementDialog({
   useResetOnOpen(open, () => {
     setAmount(suggestedMinor ? String(suggestedMinor / Math.pow(10, scale)) : "");
     setMethod(undefined);
+    setBankAccountId("");
     setReference("");
     setDate("");
     setNote("");
@@ -166,8 +171,12 @@ export function CustodyMovementDialog({
   // The recipient is the served row the selection names; an id that is not
   // in the list (stale default, empty picker) is not one to move money to.
   const recipient = needsPerson ? members.find((member) => member.userId === userId) : undefined;
+  const needsBank = method !== undefined && method !== "CASH" && !(kind === "RETURNED" && method === "CHEQUE");
+  const receivingBank = kind === "RETURNED";
+  const chosenBank = bankOptions?.banks.find((bank) => bank._id === bankAccountId);
   const canSubmit =
-    minor !== null && isChosenMethod(method) && !exceeds && !busy && (!needsPerson || recipient !== undefined);
+    minor !== null && isChosenMethod(method) && !exceeds && !busy && (!needsPerson || recipient !== undefined) &&
+    (!needsBank || (chosenBank !== undefined && bankOptions?.truncated === false));
 
   const copy = {
     ISSUED: { title: "CustodyIssueTitle", desc: "CustodyIssueDesc", cta: "CustodyIssueCash", exceed: "CustodyAmountExceedsIssued" },
@@ -234,7 +243,7 @@ export function CustodyMovementDialog({
             <PaymentMethodSelect
               t={t}
               value={method}
-              onValueChange={setMethod}
+              onValueChange={(next) => { setMethod(next); setBankAccountId(""); }}
               ariaLabel={t("CustodyAccount")}
               placeholder={t("MoneyMethodChoose")}
             />
@@ -246,6 +255,19 @@ export function CustodyMovementDialog({
               </p>
             )}
           </div>
+
+          {needsBank && (
+            <div className="space-y-1.5">
+              <Label htmlFor={`${id}-bank`}>{t(receivingBank ? "ReceiptBankAccount" : "DirectPaymentBankLabel")}</Label>
+              <select id={`${id}-bank`} data-testid={`${id}-bank`} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={bankAccountId} disabled={!bankOptions || bankOptions.truncated || busy} onChange={(event) => setBankAccountId(event.target.value)}>
+                <option value="">{t(bankOptions ? (receivingBank ? "ReceiptSelectBank" : "DirectPaymentBankChoose") : "CashDrawerLoadingBanks")}</option>
+                {(bankOptions?.banks ?? []).map((bank) => <option key={bank._id} value={bank._id}>{bank.name} ({bank.currency})</option>)}
+              </select>
+              {bankOptions?.truncated && <p role="alert" className="text-xs text-destructive">{t(receivingBank ? "ReceiptTooManyBanks" : "DirectPaymentTooManyBanks")}</p>}
+              {bankOptions && !bankOptions.truncated && bankOptions.banks.length === 0 && <p role="alert" className="text-xs text-destructive">{t(receivingBank ? "ReceiptNoBank" : "DirectPaymentNoBank")}</p>}
+            </div>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -281,6 +303,7 @@ export function CustodyMovementDialog({
                 intentId,
                 amountMinor: minor,
                 method,
+                bankAccountId: needsBank ? chosenBank?._id : undefined,
                 reference: reference.trim() || undefined,
                 note: note.trim() || undefined,
                 // The picked calendar day, exactly, as its UTC midnight; blank means "now".

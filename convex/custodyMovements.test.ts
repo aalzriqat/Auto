@@ -208,7 +208,7 @@ describe("writer decision reads are bounded at MAX_DEAL_CUSTODY_DECISION_RECORDS
       expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId,
       feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", actualAmountMinor: jod(90),
     });
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "matched" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "matched", expectedActualAmountMinor: jod(90), expectedActualEvidenceRevision: 0 });
     await closedRecords(seed, MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
     const readiness = await seed.asUser.query(api.applications.getClosingReadiness, {
       orgId: seed.orgId, applicationId: seed.applicationId,

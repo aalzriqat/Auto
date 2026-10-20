@@ -3,7 +3,7 @@ import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
@@ -17,6 +17,8 @@ import {
   consignedSettlementRouteValidator,
   isConsignedAgentSale,
   recordedConsignedMargin,
+  recordedFinancedConsideration,
+  recordedFinancedNetRevenue,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
   saleIsAgentSale,
@@ -39,11 +41,12 @@ import { auditLog } from "./financialAudit";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
-import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertCustomerCreditPayoutAllowed } from "./utils/customerCreditPayoutContainment";
 import { saleHasActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
 import { assertFinancedSaleHasDeal, assertOperatedDealMode } from "./utils/dealModes";
@@ -59,12 +62,15 @@ import {
   outstandingMinorFromMajor,
 } from "./utils/money";
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
-import { pendingDepositResolution } from "./applications";
+import { pendingDepositResolution, resolveSettlement } from "./applications";
 import { planDepositSettlementApplication } from "./utils/depositSettlementPlan";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { applicationProvesFinancing, hasVerifiedFinancingApplication } from "./utils/financingProvenance";
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
+import { planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -101,9 +107,35 @@ const depositResolutionValidator = v.object({
   // Required for REFUND_TO_CUSTOMER: the deposit's own recorded method may be
   // OTHER, which the release path refuses because it cannot be paid out.
   refundMethod: v.optional(depositMethodValidator),
+  bankAccountId: v.optional(v.id("bankAccounts")),
 });
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
+
+/** Read-only customer-credit evidence for the completed cash-sale cancel form. */
+export const cancellationReceiptStatus = query({
+  args: { orgId: v.id("organizations"), saleId: v.id("sales") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.saleId);
+    if (sale.isDeleted || sale.status !== "COMPLETED" || sale.applicationId) {
+      return { customerReceiptMinor: 0, currency: null, blocked: true };
+    }
+    try {
+      const plan = await planSaleInvoiceReceiptReversal(ctx, args.orgId, sale);
+      const currencies = new Set(plan.applications.map((row) => row.application.currency.toUpperCase()));
+      if (currencies.size > 1) return { customerReceiptMinor: 0, currency: null, blocked: true };
+      return {
+        customerReceiptMinor: plan.totalMinor,
+        currency: plan.applications[0]?.application.currency ?? null,
+        blocked: false,
+      };
+    } catch (error) {
+      console.error("Could not preview sale cancellation receipt state", error);
+      return { customerReceiptMinor: 0, currency: null, blocked: true };
+    }
+  },
+});
 
 /**
  * Lists all sales for an organization, hydrated with related data.
@@ -920,6 +952,12 @@ export const update = mutation({
     gapCost: v.optional(v.number()),
     gapTermMonths: v.optional(v.number()),
     supplierSettlementRoute: v.optional(supplierSettlementRouteValidator),
+    customerPaymentDisposition: v.optional(v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT"))),
+    customerRefundAmountMinor: v.optional(v.number()),
+    customerRefundMethod: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+    customerRefundBankAccountId: v.optional(v.id("bankAccounts")),
+    customerRefundReference: v.optional(v.string()),
+    customerRefundedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -931,8 +969,8 @@ export const update = mutation({
 
     validateInput(UpdateSaleSchema, args);
 
-    const sale = await ctx.db.get(args.saleId);
-    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
+    const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.saleId);
+    if (sale.isDeleted) {
       throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
     }
     // SCRUM-495 (OR-7): refuse only a change INTO a retired financing type, so a legacy
@@ -952,6 +990,13 @@ export const update = mutation({
       );
     }
     const isCancellingCompletedSale = args.status === "CANCELLED" && sale.status === "COMPLETED";
+    const customerDispositionProvided = args.customerPaymentDisposition !== undefined ||
+      args.customerRefundAmountMinor !== undefined || args.customerRefundMethod !== undefined ||
+      args.customerRefundBankAccountId !== undefined ||
+      args.customerRefundReference !== undefined || args.customerRefundedAt !== undefined;
+    if (customerDispositionProvided && !isCancellingCompletedSale) {
+      throwAppError(AppErrorCode.VALIDATION_FAILED, "Customer receipt disposition requires cancellation of a completed sale.");
+    }
     const hasCompletedSaleFinancialChange =
       args.salePrice !== undefined ||
       args.saleDate !== undefined ||
@@ -1064,7 +1109,7 @@ export const update = mutation({
           // SCRUM-435: a v2 deal has payments held by the finance company. This door
           // applies the SAME manager gate and the SAME forward proof as
           // `cancelApplication`, so it is never a way round them.
-          if (planVersionOf(app) === 2) {
+          if (isForwardPlanVersion(planVersionOf(app))) {
             try {
               await requireTenantAuth(ctx, args.orgId, [
                 PERMISSIONS.CANCEL_CLOSED_DEAL,
@@ -1127,7 +1172,56 @@ export const update = mutation({
       // margin. Cancelling a draft is now just a status change, which is the
       // correct semantics for work that was never done.
       if (sale.status === "COMPLETED") {
-        // ⚠️ THE PARENT REVERSAL RUNS FIRST, AND ITS OUTCOME IS A GATE.
+        const invoicePlan = await planSaleInvoiceReceiptReversal(ctx, args.orgId, sale);
+        if (invoicePlan.totalMinor > 0) {
+          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+        }
+        // SCRUM-724 / SCRUM-795 c22479 + Sol Q7: the customer REFUND disposition is a
+        // new payout. Refuse it at this door before any validation hint or write,
+        // after the MANAGE_FINANCE check above; the shared helper refuses too.
+        if ((args.customerPaymentDisposition === "REFUND" && invoicePlan.totalMinor > 0) ||
+            [args.customerRefundAmountMinor, args.customerRefundMethod,
+              args.customerRefundBankAccountId, args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined)) {
+          assertCustomerCreditPayoutAllowed();
+        }
+        if (invoicePlan.totalMinor > 0 && !args.customerPaymentDisposition) {
+          throwAppError(AppErrorCode.VALIDATION_FAILED, "Choose whether to refund or retain the customer's invoice credit.");
+        }
+        if (invoicePlan.totalMinor === 0 && customerDispositionProvided) {
+          throwAppError(AppErrorCode.VALIDATION_FAILED, "This sale has no active customer invoice credit to dispose.");
+        }
+        const refundFields = [args.customerRefundAmountMinor, args.customerRefundMethod,
+          args.customerRefundReference, args.customerRefundedAt];
+        const allRefundFields = refundFields.every((value) => value !== undefined);
+        if (refundFields.some((value) => value !== undefined) && !allRefundFields) {
+          throwAppError(AppErrorCode.VALIDATION_FAILED, "Customer payout amount, method, date and reference are required together.");
+        }
+        const refundReference = args.customerRefundReference?.trim();
+        if (refundReference !== undefined && (refundReference.length === 0 || refundReference.length > 120)) {
+          throwAppError(AppErrorCode.VALIDATION_FAILED, "Provide a customer payout reference of at most 120 characters.");
+        }
+        if (args.customerRefundedAt !== undefined &&
+            (!Number.isSafeInteger(args.customerRefundedAt) || args.customerRefundedAt > cancellationDate || args.customerRefundedAt < 0)) {
+          throwAppError(AppErrorCode.VALIDATION_FAILED, "Provide a valid customer payout date that is not in the future.");
+        }
+        await disposeActiveSaleInvoiceReceipts(ctx, {
+          orgId: args.orgId,
+          applications: invoicePlan.applications,
+          disposition: args.customerPaymentDisposition ?? "RETAIN_CREDIT",
+          payout: allRefundFields ? {
+            amountMinor: args.customerRefundAmountMinor!,
+            method: args.customerRefundMethod!,
+            bankAccountId: args.customerRefundBankAccountId,
+            reference: refundReference!,
+            paidAt: args.customerRefundedAt!,
+          } : undefined,
+          actorId: user._id,
+          reason: "Cash sale cancelled: customer receipt disposition",
+          now: cancellationDate,
+        });
+        // The receipt disposition above and this parent reversal are one
+        // transaction. The parent outcome gates every operational reinstatement
+        // below; any refusal rolls the customer payout back as well.
         //
         // Operational reinstatement used to run first and hand the deposit
         // back before anyone knew whether the sale's journal had actually
@@ -1754,11 +1848,21 @@ async function assertCommissionRecognitionMatches(
   }
 }
 
+/** Eligible physical banks for a direct commission payment; names only. */
+export const listCommissionBankOptions = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
 export const markCommissionPaid = mutation({
   args: {
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -1773,7 +1877,10 @@ export const markCommissionPaid = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ saleId: args.saleId, paymentMethod }),
+        fingerprint: JSON.stringify({
+          saleId: args.saleId, paymentMethod,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
+        }),
       },
       async () => {
         const sale = await ctx.db.get(args.saleId);
@@ -1792,6 +1899,18 @@ export const markCommissionPaid = mutation({
         }
         if (sale.commissionAmount == null || sale.commissionAmount <= 0) {
           throwAppError(AppErrorCode.VALIDATION_FAILED, "This sale has no commission amount to pay.");
+        }
+        if (paymentMethod !== "CASH") {
+          await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId,
+            bankAccountId: args.bankAccountId,
+            currency: await getOrgCurrency(ctx, args.orgId),
+            missingMessage: "Select the physical bank account used to pay this commission.",
+            currencySubject: "commission payment",
+            errorCode: AppErrorCode.COMMISSION_BANK_INVALID,
+          });
+        } else if (args.bankAccountId) {
+          throwAppError(AppErrorCode.COMMISSION_BANK_INVALID, "A cash commission cannot name a bank account.");
         }
         // Only when the accrual is genuinely absent. The safety-net accrual
         // below is dated to the sale, so for a sale that never accrued, a closed
@@ -1830,6 +1949,7 @@ export const markCommissionPaid = mutation({
           commissionPaidAt: now,
           commissionPaidBy: user._id,
           commissionPaymentMethod: paymentMethod,
+          commissionBankAccountId: args.bankAccountId,
           commissionPaymentIdempotencyKey: args.idempotencyKey,
         });
         const currency = await getOrgCurrency(ctx, args.orgId);
@@ -1862,6 +1982,7 @@ export const markCommissionPaid = mutation({
           amountMinor,
           currency,
           paymentMethod,
+          bankAccountId: args.bankAccountId,
           actorId: user._id,
           occurredAt: now,
         });
@@ -2689,6 +2810,7 @@ export const dealCockpit = query({
       recordedMargin: recordedConsignedMargin(sale),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      recordedConsideration: recordedFinancedConsideration(sale),
       // The FACTS, not a pre-derived boolean: `saleIsAgentSale` asks the one
       // admissibility derivation itself, so this screen cannot reach a
       // different verdict than `saleEconomics` does about the same sale.
@@ -2772,9 +2894,19 @@ export const dealCockpit = query({
       sale.status === "COMPLETED"
         ? await resolveCustomerInvoicePosition(ctx, sale, { orgId: args.orgId, currency })
         : { state: "NONE", outstandingMinor: null };
-    const settlementComplete =
-      dealCancelled ||
-      settlementIsComplete({ financier: "NONE", supplier: supplierObligation, customer: customerPosition.state });
+    let settlementComplete: boolean;
+    if (sale.applicationId) {
+      const app = await ctx.db.get(sale.applicationId);
+      settlementComplete =
+        applicationProvesFinancing(app, sale) &&
+        app !== null &&
+        sale.status === "COMPLETED" &&
+        (await resolveSettlement(ctx, app)).moneySettled;
+    } else {
+      settlementComplete =
+        dealCancelled ||
+        settlementIsComplete({ financier: "NONE", supplier: supplierObligation, customer: customerPosition.state });
+    }
 
     const stages = deriveCashDealStages({
       saleStatus: sale.status,
@@ -2995,8 +3127,10 @@ export const dealCockpit = query({
       capitalizedCost,
       supplierSettlementRoute: sale.supplierSettlementRoute,
       recordedMargin: recordedConsignedMargin(sale),
+      recordedNetRevenue: recordedFinancedNetRevenue(sale, await getOrgCurrency(ctx, sale.orgId)),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      recordedConsideration: recordedFinancedConsideration(sale),
       // Always false on this screen in practice — `money` is already null for a
       // sale that HAS an application, because its real screen is the
       // application-keyed one. Passed rather than hardcoded so the two can never

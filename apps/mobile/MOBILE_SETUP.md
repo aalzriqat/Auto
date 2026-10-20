@@ -53,7 +53,7 @@ When you ship a new native build:
 2. Host the signed APK somewhere with an `https` URL.
 3. Publish it so installed apps prompt to update — run as a super admin:
    ```bash
-   CONVEX_DEPLOYMENT=prod:kindly-hound-172 npx convex run mobileReleases:publishRelease \
+   CONVEX_DEPLOYMENT=prod:clever-mockingbird-719 npx convex run mobileReleases:publishRelease \
      '{"platform":"ANDROID","buildNumber":2,"versionName":"1.1.0","runtimeVersion":"1.0.0","apkUrl":"https://.../autoflow-1.1.0.apk"}'
    ```
    (`buildNumber` must exceed the current latest.) Older installs see the

@@ -2,6 +2,7 @@ import { defineBilingualMessages } from "../defineBilingualMessages";
 
 const workspaceMessages = defineBilingualMessages({
   Call: ["Call", "اتصال"],
+  RecordedCostInputs: ["Recorded purchase price and expenses", "سعر الشراء والمصاريف المسجلة"],
   NewLead: ["New lead", "عميل محتمل جديد"],
   NewQuote: ["New quote", "عرض سعر جديد"],
   ResultsCount: ["{count} results", "{count} نتيجة"],
@@ -66,6 +67,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   AccountingAdminSections: ["Admin", "الإدارة"],
   // SCRUM-542. The English text must equal FIXED_ASSET_DATE_REFUSALS in convex/fixedAssets.ts.
   DisposalAccountingDateLabel: ["Accounting date", "التاريخ المحاسبي"],
+  // SCRUM-850. The English text must equal POSTED_LEDGER_ACTIVITY_MESSAGE in convex/accountingCutover.ts.
+  ServerError_OPENING_BALANCE_AFTER_LEDGER_ACTIVITY: [
+    "This organization already has posted ledger activity, so an opening balance cannot be posted. The cutover needs finance-owner review.",
+    "لدى هذه المنشأة قيود مرحَّلة في دفتر الأستاذ، لذا لا يمكن ترحيل رصيد افتتاحي. يلزم أن يراجع المسؤول المالي تصحيح أرصدة الانتقال.",
+  ],
   ServerError_ASSET_EVENT_DATE_INVALID: [
     "The accounting date is not a valid date.",
     "التاريخ المحاسبي غير صالح.",
@@ -286,6 +292,18 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
     "لا يمكن تسجيل الدفعات أو الأرصدة الدائنة أو الشيكات الخاصة بعملية بيع على ذمة مدينة منفصلة. لم يتم تغيير أي شيء.",
   ],
+  ServerError_CUSTOMER_CREDIT_PAYOUT_DISABLED: [
+    "Paying customer credit out is not available during the pilot. Keep it as customer credit instead. Nothing has been changed.",
+    "صرف رصيد العميل غير متاح خلال المرحلة التجريبية. احتفظ به كرصيد دائن للعميل بدلًا من ذلك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED: [
+    "A cash payout of customer credit is not supported yet. Use a bank transfer. Nothing has been changed.",
+    "صرف رصيد العميل نقدًا غير مدعوم بعد. استخدم التحويل البنكي. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_SALE_INVOICE_RECEIPT_DOORS_DISABLED: [
+    "Recording or applying customer credit against a sale invoice is not available during the pilot. Nothing has been changed.",
+    "تسجيل رصيد العميل أو تطبيقه على فاتورة البيع غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
   ServerError_PAYMENT_LINKS_DISABLED: [
     "Payment links are not available yet. Nothing has been changed.",
     "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",
@@ -363,6 +381,18 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_COST_CORRECTION_PAYMENT_METHOD_REQUIRED: [
     "Choose the account the refund was received into.",
     "اختر الحساب الذي استُلم فيه المبلغ المسترد.",
+  ],
+  ServerError_COST_CORRECTION_BANK_INVALID: [
+    "Select an active bank account in the vehicle currency for this correction.",
+    "اختر حساباً مصرفياً نشطاً بعملة المركبة لهذا التصحيح.",
+  ],
+  ServerError_COST_CORRECTION_BANK_NOT_APPLICABLE: [
+    "Remove the bank account for a correction that does not move money through a bank.",
+    "احذف الحساب المصرفي لتصحيح لا يحرك أموالاً عبر البنك.",
+  ],
+  ServerError_COST_CORRECTION_HELD_CHEQUE_UNSUPPORTED: [
+    "A received supplier cheque cannot be recorded here until its custody and clearing can be tracked. Record a bank or cash refund only after that money is actually received.",
+    "لا يمكن تسجيل شيك مورد مستلم هنا حتى يمكن تتبع حيازته وتحصيله. سجّل استرداداً بنكياً أو نقدياً فقط بعد استلام المال فعلياً.",
   ],
   // SCRUM-725 (D-44 c). The EN text equals the server message.
   ServerError_COST_CORRECTION_RESTATEMENT_PERIOD_OPEN: [
@@ -447,6 +477,78 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_FORWARD_CANCEL_NEEDS_REPAIR: [
     "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.",
     "سجل الدفعة المسدَّدة لشركة التمويل لا يطابق الدفاتر. يراجعه المحاسب قبل أن يمكن إلغاء هذه الصفقة.",
+  ],
+  // SCRUM-411 P2-01. Finalizing, and the finance company's transfer, are refused until the deposit and
+  // contribution payment to the company is on the books (convex/utils/financeCompanyForward.ts
+  // forwardGateRefusal). The EN text equals the server message.
+  // SCRUM-411 P2-02 containment (convex/utils/financeCompanyForward.ts assertDepositNotInLiveForward).
+  ServerError_DEPOSIT_PAID_ONWARD_TO_FINANCE_COMPANY: [
+    "This deposit has already been paid to the finance company as part of the deal's first payment. Take that payment back before the deposit is refunded, forfeited, voided or paid out.",
+    "هذا العربون سُدِّد فعلاً لشركة التمويل ضمن الدفعة الأولى للصفقة. تُسترجع تلك الدفعة قبل أن يُردّ العربون أو يُصادَر أو يُلغى أو يُصرف.",
+  ],
+  // SCRUM-411 P2-02 (convex/utils/financeCompanyForward.ts FORWARD_DEPOSIT_PROVENANCE_REFUSAL).
+  ServerError_FORWARD_DEPOSIT_PROVENANCE_UNCLEAR: [
+    "The deposits held on this deal changed since the amount due was worked out, or cannot be tied to the payment. Review the deal and try again. Nothing has been recorded.",
+    "تغيّرت العرابين المحجوزة على هذه الصفقة منذ احتساب المبلغ المستحق، أو يتعذّر ربطها بالدفعة. راجع الصفقة وحاول مرة أخرى. لم يُسجَّل شيء.",
+  ],
+  // SCRUM-411 P2-01 / SCRUM-766 Q2 (convex/utils/financeCompanyForward.ts CUSTOMER_PAYMENT_FORWARD_LIVE_REFUSAL).
+  ServerError_CUSTOMER_PAYMENT_FORWARD_LIVE: [
+    "The deposit and the dealership's contribution have already been paid to the finance company, or that payment is not yet settled on the books. Recording or taking back the customer's payment to the finance company would change the amount that was paid. A manager reports the payment as returned by the company, or takes it back, and an accountant resolves anything unsettled, before this is changed. Nothing has been changed.",
+    "تم سداد العربون ومساهمة المعرض إلى شركة التمويل بالفعل، أو أن تلك الدفعة لم تُسوَّ في الدفاتر بعد. تسجيل دفعة العميل لشركة التمويل أو استرجاعها سيغيّر المبلغ الذي سُدِّد. يسجّل المدير أن الشركة أعادت الدفعة أو يسترجعها، ويعالج المحاسب أي دفعة غير مسوّاة، قبل إجراء هذا التغيير. لم يتغيّر شيء.",
+  ],
+  // SCRUM-411 P2-01 (convex/utils/financeCompanyForward.ts DEAL_ECONOMICS_FORWARD_LIVE_REFUSAL).
+  ServerError_DEAL_ECONOMICS_FORWARD_LIVE: [
+    "The deposit and the dealership's contribution have already been paid to the finance company, or that payment is not yet settled on the books. This change would alter the amount that was paid. A manager reports the payment as returned by the company, or takes it back, and an accountant resolves anything unsettled, before the deal's figures are changed. Nothing has been changed.",
+    "تم سداد العربون ومساهمة المعرض إلى شركة التمويل بالفعل، أو أن تلك الدفعة لم تُسوَّ في الدفاتر بعد. هذا التغيير سيغيّر المبلغ الذي سُدِّد. يسجّل المدير أن الشركة أعادت الدفعة أو يسترجعها، ويعالج المحاسب أي دفعة غير مسوّاة، قبل تغيير أرقام الصفقة. لم يتغيّر شيء.",
+  ],
+  ServerError_FORWARD_FINALIZE_UNPAID: [
+    "The deposit and contribution owed to the finance company have not been paid yet. A manager or accountant records the payment to the finance company before finalizing.",
+    "العربون ومساهمة المعرض المستحقان لشركة التمويل لم يُسدَّدا بعد. يسجّل المدير أو المحاسب الدفعة المسدَّدة لشركة التمويل قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_FINALIZE_STALE: [
+    "The payment to the finance company was recorded against different figures than this deal has now (the approved amount, the deposit or the contribution changed since). A manager or accountant takes that payment back and records it again before finalizing.",
+    "سُجّلت الدفعة المسدَّدة لشركة التمويل وفق أرقام تختلف عن أرقام هذه الصفقة الآن (تغيّر المبلغ المعتمد أو العربون أو مساهمة المعرض منذ ذلك الحين). يسترجع المدير أو المحاسب تلك الدفعة ويسجّلها من جديد قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_FINALIZE_POSTING_PENDING: [
+    "The payment to the finance company is recorded but not yet posted to the books. An accountant must post it before finalizing.",
+    "الدفعة المسدَّدة لشركة التمويل مسجَّلة لكنها لم تُرحَّل إلى الدفاتر بعد. يجب أن يرحّلها المحاسب قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_FINALIZE_POSTING_FAILED: [
+    "The payment to the finance company failed to post to the books. An accountant must resolve it before finalizing.",
+    "فشل ترحيل الدفعة المسدَّدة لشركة التمويل إلى الدفاتر. يجب أن يعالجها المحاسب قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_FINALIZE_REVERSAL_PENDING: [
+    "The payment to the finance company is being reversed and the reversal is not yet posted. An accountant must post it before finalizing.",
+    "الدفعة المسدَّدة لشركة التمويل قيد العكس ولم يُرحَّل العكس بعد. يجب أن يرحّله المحاسب قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_FINALIZE_NEEDS_REPAIR: [
+    "The record of the payment to the finance company does not match the books. An accountant must review it before finalizing.",
+    "سجل الدفعة المسدَّدة لشركة التمويل لا يطابق الدفاتر. يجب أن يراجعه المحاسب قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_TRANSFER_UNPAID: [
+    "The deposit and contribution owed to the finance company have not been paid yet. A manager or accountant records that payment before the transfer can be confirmed.",
+    "العربون ومساهمة المعرض المستحقان لشركة التمويل لم يُسدَّدا بعد. يسجّل المدير أو المحاسب تلك الدفعة قبل أن يمكن تأكيد التحويل.",
+  ],
+  ServerError_FORWARD_TRANSFER_POSTING_PENDING: [
+    "The payment to the finance company is recorded but not yet posted to the books. An accountant must post it before the transfer can be confirmed.",
+    "الدفعة المسدَّدة لشركة التمويل مسجَّلة لكنها لم تُرحَّل إلى الدفاتر بعد. يجب أن يرحّلها المحاسب قبل أن يمكن تأكيد التحويل.",
+  ],
+  ServerError_FORWARD_TRANSFER_POSTING_FAILED: [
+    "The payment to the finance company failed to post to the books. An accountant must resolve it before the transfer can be confirmed.",
+    "فشل ترحيل الدفعة المسدَّدة لشركة التمويل إلى الدفاتر. يجب أن يعالجها المحاسب قبل أن يمكن تأكيد التحويل.",
+  ],
+  ServerError_FORWARD_TRANSFER_REVERSAL_PENDING: [
+    "The payment to the finance company is being reversed and the reversal is not yet posted. An accountant must post it before the transfer can be confirmed.",
+    "الدفعة المسدَّدة لشركة التمويل قيد العكس ولم يُرحَّل العكس بعد. يجب أن يرحّله المحاسب قبل أن يمكن تأكيد التحويل.",
+  ],
+  ServerError_FORWARD_TRANSFER_NEEDS_REPAIR: [
+    "The record of the payment to the finance company does not match the books. An accountant must review it before the transfer can be confirmed.",
+    "سجل الدفعة المسدَّدة لشركة التمويل لا يطابق الدفاتر. يجب أن يراجعه المحاسب قبل أن يمكن تأكيد التحويل.",
+  ],
+  // SCRUM-411 P2-03 (convex/utils/financedSaleRecognition.ts FIRST_PAYMENT_UNFUNDED_MESSAGE). The EN text equals the server message.
+  ServerError_FIRST_PAYMENT_UNFUNDED: [
+    "The customer's first payment on this deal was agreed on the strength of a reservation deposit that is not being applied to it, so that first payment would be funded by nothing. Apply the deposit to the transaction settlement, or reopen the approval and amend the first payment, before finalizing.",
+    "اتُّفق على الدفعة الأولى للعميل في هذه الصفقة اعتمادًا على عربون حجز لا يُطبَّق عليها، فستكون الدفعة الأولى بلا أي مصدر تمويل. طبّق العربون على تسوية المعاملة، أو أعد فتح الموافقة وعدّل الدفعة الأولى، قبل إتمام الصفقة.",
   ],
   // SCRUM-413 S413B-4/L-2
   ServerError_OWNER_NAMED_ROLE_LOCKED: [
@@ -779,6 +881,15 @@ export const commonEn = {
   CommissionPaidSuccess: "Commission marked as paid.",
   CommissionUnpaidSuccess: "Commission marked as unpaid.",
   CommissionPaymentFailed: "Failed to update commission payment.",
+  CommissionRetryOriginalBank: "Retrying with the original bank:",
+  CommissionRetrySameDetails: "The response may have been lost. Retry this commission payment with the same method and bank until its outcome is confirmed.",
+  ServerError_COMMISSION_BANK_INVALID: "Select an active bank account in the commission currency for a bank payment.",
+  ServerError_PAYROLL_BANK_INVALID: "Select an active bank account in the payroll currency for a bank payment.",
+  ServerError_PAYROLL_BANK_NOT_APPLICABLE: "Remove the bank account for a cash or held-cheque payment.",
+  ServerError_ASSET_BANK_INVALID: "Select an active bank account in the asset currency for this payment.",
+  ServerError_ASSET_BANK_NOT_APPLICABLE: "Remove the bank account for a cash purchase or disposal without proceeds.",
+  PayrollRetrySameDetails: "The response may have been lost. Retry with the same amount, method and bank until its outcome is confirmed.",
+  PayrollRetryOriginalBank: "Retry with the original bank:",
   NoCommissionRecords: "No commission records found. Set a commission rate on team members to start tracking.",
   MissingPurchaseCost: "No purchase cost",
   MissingPurchaseCostHint: "This vehicle has no recorded purchase cost, so no commission could be calculated. Set the purchase cost on the vehicle, then set the commission.",
@@ -921,6 +1032,12 @@ export const commonEn = {
   OpeningBalancePostedToast: "Opening balance posted.",
   OpeningBalanceSubmittedToast: "Opening balance saved for approval.",
   OpeningBalanceSelectAccount: "Select an account",
+  OpeningBalanceBankAccount: "Bank account",
+  OpeningBalanceSelectBank: "Select a bank account",
+  OpeningBalanceNoBankAccounts:
+    "There is no active bank account in this currency. Add one under Bank Accounts first.",
+  OpeningBalanceBankMissing:
+    "A bank line on this draft has no usable bank account selected, so it cannot be posted.",
   TransactionRegister: "Transaction Register",
   TransactionRegisterDesc: "Operational money activity from sales, deposits, collections, and expenses.",
   GLReports: "GL Reports",
@@ -949,6 +1066,8 @@ export const commonEn = {
   ReconciliationTargetUpdated: "Reconciliation target updated.",
   BankAccountDeactivated: "Bank account deactivated.",
   BookBalanceFor: "Book balance for",
+  BookBalanceUnavailableNoBankAttribution: "Balance unavailable: some ledger bank activity cannot be verified for this account.",
+  BookBalanceUnavailableHistoryIncomplete: "Balance unavailable: the bank history cannot be fully verified, so no balance is shown rather than an unverified one.",
   Reconciliation: "Reconciliation",
   UploadStatement: "Upload Statement",
   UploadStatementDesc: "Upload a CSV or XLSX bank statement to match against posted transactions.",
@@ -1278,6 +1397,32 @@ export const commonEn = {
   CloseCashDrawer: "Close Cash Drawer",
   CloseCashDrawerDesc: "Enter the counted cash. The system computes the variance before approval.",
   CashDrawerClosed: "Cash drawer closed for approval.",
+  ApproveCashDrawer: "Approve Cash Drawer",
+  DirectPaymentBankLabel: "Bank account paid from",
+  LandedCostLegacyBankReview: "An earlier bank-funded landed cost has no recorded physical bank. Finance must review its original payment before these costs can be changed.",
+  DirectPaymentBankChoose: "Select the bank account this was paid from",
+  DirectPaymentBankRequired: "Select the bank account this payment was made from.",
+  DirectPaymentNoBank:
+    "There is no active bank account in this currency. Add one under Bank Accounts before recording a bank transfer, card or cheque payment.",
+  DirectPaymentTooManyBanks:
+    "This currency has too many active bank accounts to list here, so a bank payment cannot be recorded from this screen. Deactivate the accounts that are no longer used, then try again.",
+  ReceiptBankAccount: "Bank account received into",
+  ReceiptSelectBank: "Select the bank account that received this payment",
+  ChequeClearRetryBank: "Retrying the same cheque clearance with its original bank choice:",
+  ChequeReturnRetrySameDetails: "The response was lost. Retry this return with its original details:",
+  ChequeReturnFeeBank: "Bank account charged the return fee",
+  ReceiptNoBank:
+    "There is no active bank account in this currency. Add one under Bank Accounts before recording a bank transfer or card payment.",
+  ReceiptTooManyBanks:
+    "This currency has too many active bank accounts to list here, so a bank transfer or card payment cannot be recorded from this screen. Deactivate the accounts that are no longer used, then try again.",
+  CashDrawerDepositBank: "Deposit bank account",
+  CashDrawerSelectBank: "Select the bank account receiving this cash",
+  CashDrawerLoadingBanks: "Loading bank accounts...",
+  CashDrawerNoDepositBank:
+    "There is no active bank account in this currency. Add one under Bank Accounts before approving this deposit.",
+  CashDrawerTooManyBanks:
+    "This currency has too many active bank accounts to list here, so the deposit cannot be approved from this screen. Deactivate the accounts that are no longer used, then try again.",
+  ConfirmCashDrawerApprovalNoDeposit: "Approve this cash drawer count? Nothing was counted, so no bank deposit will be made.",
   Payments: "Payments",
   CollectionOutstanding: "Outstanding",
   CollectionOverdue: "Overdue",
@@ -1776,6 +1921,15 @@ export const commonAr = {
   CommissionPaidSuccess: "تم تحديد العمولة كمدفوعة.",
   CommissionUnpaidSuccess: "تم إرجاع العمولة إلى غير مدفوعة.",
   CommissionPaymentFailed: "فشل تحديث دفعة العمولة.",
+  CommissionRetryOriginalBank: "إعادة المحاولة بالحساب المصرفي الأصلي:",
+  CommissionRetrySameDetails: "قد تكون الاستجابة قد فُقدت. أعد محاولة دفع العمولة بنفس الطريقة والحساب المصرفي حتى تتأكد من النتيجة.",
+  ServerError_COMMISSION_BANK_INVALID: "اختر حساباً مصرفياً نشطاً بعملة العمولة للدفع المصرفي.",
+  ServerError_PAYROLL_BANK_INVALID: "اختر حساباً مصرفياً نشطاً بعملة الرواتب للدفع المصرفي.",
+  ServerError_PAYROLL_BANK_NOT_APPLICABLE: "احذف الحساب المصرفي عند الدفع النقدي أو استلام شيك محتفظ به.",
+  ServerError_ASSET_BANK_INVALID: "اختر حساباً مصرفياً نشطاً بعملة الأصل لهذه الدفعة.",
+  ServerError_ASSET_BANK_NOT_APPLICABLE: "احذف الحساب المصرفي عند الشراء النقدي أو التخلص من الأصل دون متحصلات.",
+  PayrollRetrySameDetails: "قد تكون الاستجابة قد فُقدت. أعد المحاولة بنفس المبلغ والطريقة والحساب المصرفي حتى تتأكد من النتيجة.",
+  PayrollRetryOriginalBank: "أعد المحاولة بالحساب المصرفي الأصلي:",
   NoCommissionRecords: "لم يتم العثور على سجلات عمولة. قم بتعيين نسبة عمولة لأعضاء الفريق للبدء في التتبع.",
   MissingPurchaseCost: "لا توجد تكلفة شراء",
   MissingPurchaseCostHint: "لا توجد تكلفة شراء مسجلة لهذه المركبة، لذلك تعذّر احتساب أي عمولة. أدخل تكلفة الشراء على المركبة ثم عيّن العمولة.",
@@ -1915,6 +2069,12 @@ export const commonAr = {
   OpeningBalancePostedToast: "تم ترحيل الرصيد الافتتاحي.",
   OpeningBalanceSubmittedToast: "تم حفظ الرصيد الافتتاحي بانتظار الموافقة.",
   OpeningBalanceSelectAccount: "اختر الحساب",
+  OpeningBalanceBankAccount: "الحساب المصرفي",
+  OpeningBalanceSelectBank: "اختر الحساب المصرفي",
+  OpeningBalanceNoBankAccounts:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية أولاً.",
+  OpeningBalanceBankMissing:
+    "أحد بنود البنك في هذه المسودة لا يحدد حساباً مصرفياً صالحاً، لذا لا يمكن ترحيلها.",
   TransactionRegister: "سجل الحركات",
   TransactionRegisterDesc: "حركات مالية تشغيلية من المبيعات والعربون والتحصيلات والمصروفات.",
   GLReports: "تقارير الأستاذ العام",
@@ -1943,6 +2103,8 @@ export const commonAr = {
   ReconciliationTargetUpdated: "تم تحديث حساب المطابقة.",
   BankAccountDeactivated: "تم تعطيل الحساب البنكي.",
   BookBalanceFor: "الرصيد الدفتري لـ",
+  BookBalanceUnavailableNoBankAttribution: "الرصيد غير متاح: لا يمكن التحقق من بعض حركات البنك في دفتر الأستاذ لهذا الحساب.",
+  BookBalanceUnavailableHistoryIncomplete: "الرصيد غير متاح: تعذّر التحقق الكامل من سجل البنك، لذا لا يُعرض رصيد بدلاً من رصيد غير موثّق.",
   Reconciliation: "المطابقة البنكية",
   UploadStatement: "رفع كشف حساب",
   UploadStatementDesc: "ارفع كشف حساب بصيغة CSV أو XLSX لمطابقته مع الحركات المرحّلة.",
@@ -2271,6 +2433,32 @@ export const commonAr = {
   CloseCashDrawer: "إغلاق صندوق النقد",
   CloseCashDrawerDesc: "أدخل النقد المعدود. سيحسب النظام الفرق قبل الموافقة.",
   CashDrawerClosed: "تم إغلاق صندوق النقد للموافقة.",
+  ApproveCashDrawer: "اعتماد صندوق النقد",
+  DirectPaymentBankLabel: "الحساب المصرفي المدفوع منه",
+  LandedCostLegacyBankReview: "توجد تكلفة إضافية سابقة دُفعت عبر البنك دون تسجيل الحساب المصرفي الفعلي. يجب أن تراجع المالية الدفعة الأصلية قبل تعديل هذه التكاليف.",
+  DirectPaymentBankChoose: "اختر الحساب المصرفي الذي دُفع منه",
+  DirectPaymentBankRequired: "اختر الحساب المصرفي الذي تم الدفع منه.",
+  DirectPaymentNoBank:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل تسجيل دفعة تحويل مصرفي أو بطاقة أو شيك.",
+  DirectPaymentTooManyBanks:
+    "عدد الحسابات المصرفية النشطة بهذه العملة أكبر من أن يُعرض هنا، لذا لا يمكن تسجيل دفعة مصرفية من هذه الشاشة. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
+  ReceiptBankAccount: "الحساب المصرفي المستلم",
+  ReceiptSelectBank: "اختر الحساب المصرفي الذي استلم هذه الدفعة",
+  ChequeClearRetryBank: "إعادة محاولة تحصيل الشيك باستخدام الحساب المصرفي المختار أولاً:",
+  ChequeReturnRetrySameDetails: "فُقد الرد. أعد محاولة إرجاع الشيك بتفاصيله الأصلية:",
+  ChequeReturnFeeBank: "الحساب المصرفي الذي خُصمت منه رسوم الإرجاع",
+  ReceiptNoBank:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل تسجيل دفعة تحويل مصرفي أو بطاقة.",
+  ReceiptTooManyBanks:
+    "عدد الحسابات المصرفية النشطة بهذه العملة أكبر من أن يُعرض هنا، لذا لا يمكن تسجيل دفعة تحويل مصرفي أو بطاقة من هذه الشاشة. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
+  CashDrawerDepositBank: "الحساب المصرفي للإيداع",
+  CashDrawerSelectBank: "اختر الحساب المصرفي الذي سيستلم هذا النقد",
+  CashDrawerLoadingBanks: "جاري تحميل الحسابات المصرفية...",
+  CashDrawerNoDepositBank:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل اعتماد هذا الإيداع.",
+  CashDrawerTooManyBanks:
+    "عدد الحسابات المصرفية النشطة بهذه العملة أكبر من أن يُعرض هنا، لذا لا يمكن اعتماد الإيداع من هذه الشاشة. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
+  ConfirmCashDrawerApprovalNoDeposit: "اعتماد عدّ صندوق النقد؟ لم يُعدّ أي نقد، لذا لن يتم أي إيداع مصرفي.",
   Payments: "الدفعات",
   CollectionOutstanding: "المتبقي",
   CollectionOverdue: "المتأخر",

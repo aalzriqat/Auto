@@ -1,4 +1,4 @@
-import { useMutation, usePaginatedQuery } from "convex/react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import * as ImagePicker from "expo-image-picker";
 import { useEffect, useRef, useState } from "react";
 import { Alert, Image, Pressable, ScrollView, Text, View } from "react-native";
@@ -27,12 +27,14 @@ const EMPTY_OWNERSHIP: {
   sourcedFromName: string;
   sourceCost: string;
   purchasePaymentMethod: MobileAcquisitionMethod;
+  purchaseBankAccountId: string;
   purchaseSupplierName: string;
 } = {
   ownership: "",
   sourcedFromName: "",
   sourceCost: "",
   purchasePaymentMethod: "",
+  purchaseBankAccountId: "",
   purchaseSupplierName: "",
 };
 
@@ -59,6 +61,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
   const router = useRouter();
   const [editing, setEditing] = useState<MobileVehicle | null>(null);
   const [open, setOpen] = useState(false);
+  const acquisitionBanks = useQuery(api.vehicles.listAcquisitionBankOptions, open ? { orgId, purpose: editing ? "EDIT" : "CREATE" } : "skip");
   const [vehicleStep, setVehicleStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [decodingVin, setDecodingVin] = useState(false);
@@ -122,7 +125,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
   ];
   const { errors, reset, validate } = useFormErrors<
     | "make" | "model" | "year" | "mileage" | "sellingPrice" | "vin"
-    | "ownership" | "sourcedFromName" | "sourceCost" | "purchasePrice" | "purchasePaymentMethod" | "purchaseSupplierName"
+    | "ownership" | "sourcedFromName" | "sourceCost" | "purchasePrice" | "purchasePaymentMethod" | "purchaseBankAccountId" | "purchaseSupplierName"
   >();
   const vehicleVinReadiness = getMobileVinReadiness(form.vin);
   const selectedVehicleStatusLabel = getOptionLabel(
@@ -133,6 +136,10 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     form.status,
     form.status,
   );
+  const firstPurchaseEdit = !!editing && editing.sourceType !== "SOURCED" &&
+    !(editing.purchasePrice !== undefined && editing.purchasePrice > 0) &&
+    (parseOptionalNumber(form.purchasePrice) ?? 0) > 0;
+  const showPurchaseSettlement = !editing ? form.ownership === "STOCK" : firstPurchaseEdit;
 
   useEffect(() => {
     formVinRef.current = form.vin;
@@ -327,6 +334,9 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     const purchasePrice = parseOptionalNumber(form.purchasePrice);
     const consignment = form.ownership === "SOURCED";
     const owned = form.ownership === "STOCK";
+    const firstPurchase = creating ? owned && purchasePrice !== undefined && purchasePrice > 0 : firstPurchaseEdit;
+    const bankPurchase = firstPurchase &&
+      (form.purchasePaymentMethod === "BANK_TRANSFER" || form.purchasePaymentMethod === "CARD" || form.purchasePaymentMethod === "CHEQUE");
     const ownershipErrors = {
       ownership: creating && !form.ownership ? requiredSelectionMessage(locale) : undefined,
       sourcedFromName: creating && consignment ? requiredText(form.sourcedFromName, locale) : undefined,
@@ -334,8 +344,9 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
       // Same terms as web and the server: an owned car may be entered unpriced, but a
       // price that is entered must be positive and must say how it was paid.
       purchasePrice: creating && owned && form.purchasePrice.trim() && !(purchasePrice !== undefined && purchasePrice > 0) ? invalidNumberMessage(locale) : undefined,
-      purchasePaymentMethod: creating && owned && purchasePrice !== undefined && purchasePrice > 0 && !form.purchasePaymentMethod ? requiredSelectionMessage(locale) : undefined,
-      purchaseSupplierName: creating && owned && form.purchasePaymentMethod === "ON_ACCOUNT" ? requiredText(form.purchaseSupplierName, locale) : undefined,
+      purchasePaymentMethod: firstPurchase && !form.purchasePaymentMethod ? requiredSelectionMessage(locale) : undefined,
+      purchaseBankAccountId: bankPurchase && (!form.purchaseBankAccountId || !acquisitionBanks?.banks.some((bank) => bank._id === form.purchaseBankAccountId) || acquisitionBanks.truncated) ? requiredSelectionMessage(locale) : undefined,
+      purchaseSupplierName: firstPurchase && form.purchasePaymentMethod === "ON_ACCOUNT" ? requiredText(form.purchaseSupplierName, locale) : undefined,
     };
     const ownershipGap = Object.values(ownershipErrors).some(Boolean);
     const valid = validate({
@@ -353,7 +364,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
       // The ownership questions live on step 2 of 3 and the save button on step 3,
       // so a refusal there must take the operator back to the unanswered question
       // rather than leave the error on a screen they have already left.
-      if (!valid && creating && vehicleStep === 2 && ownershipGap) setVehicleStep(1);
+      if (!valid && vehicleStep === 2 && ownershipGap) setVehicleStep(1);
       return;
     }
     setSaving(true);
@@ -377,7 +388,12 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
         imageIds: photos.map((photo) => photo.id),
       };
       if (editing) {
-        await updateVehicle({ ...payload, purchasePrice, vehicleId: editing._id });
+        await updateVehicle({
+          ...payload, purchasePrice, vehicleId: editing._id,
+          ...(firstPurchase ? { purchasePaymentMethod: form.purchasePaymentMethod as Exclude<MobileAcquisitionMethod, ""> } : {}),
+          ...(firstPurchase && form.purchasePaymentMethod === "ON_ACCOUNT" ? { purchaseSupplierName: form.purchaseSupplierName.trim() } : {}),
+          ...(bankPurchase ? { bankAccountId: form.purchaseBankAccountId } : {}),
+        });
       } else {
         createVehicleKeyRef.current ??= `vehicle-create:${crypto.randomUUID()}`;
         // The two ownership shapes are mutually exclusive on the wire: a consignment
@@ -394,6 +410,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
               ...(form.purchasePaymentMethod === "ON_ACCOUNT"
                 ? { purchaseSupplierName: form.purchaseSupplierName.trim() }
                 : {}),
+              ...(bankPurchase ? { bankAccountId: form.purchaseBankAccountId } : {}),
             };
         await createVehicle({
           ...payload,
@@ -623,26 +640,43 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
                   {form.ownership === "STOCK" ? (
                     <>
                       <FormField error={errors.purchasePrice} keyboardType="numeric" label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={form.purchasePrice} onChangeText={(purchasePrice) => setForm((prev) => ({ ...prev, purchasePrice }))} />
-                      <SelectField
-                        error={errors.purchasePaymentMethod}
-                        label={locale === "ar" ? "طريقة الدفع" : "Payment method"}
-                        value={form.purchasePaymentMethod}
-                        onChange={(value) => setForm((prev) => ({ ...prev, purchasePaymentMethod: value as MobileAcquisitionMethod }))}
-                        options={[
-                          { label: locale === "ar" ? "نقداً" : "Cash", value: "CASH" },
-                          { label: locale === "ar" ? "تحويل بنكي" : "Bank transfer", value: "BANK_TRANSFER" },
-                          { label: locale === "ar" ? "شيك" : "Cheque", value: "CHEQUE" },
-                          { label: locale === "ar" ? "بطاقة" : "Card", value: "CARD" },
-                          { label: locale === "ar" ? "على الحساب" : "On account", value: "ON_ACCOUNT" },
-                        ]}
-                      />
-                      {form.purchasePaymentMethod === "ON_ACCOUNT" ? (
-                        <FormField error={errors.purchaseSupplierName} label={locale === "ar" ? "المورّد المستحق عليه الحساب" : "Supplier owed on account"} value={form.purchaseSupplierName} onChangeText={(purchaseSupplierName) => setForm((prev) => ({ ...prev, purchaseSupplierName }))} />
-                      ) : null}
                     </>
                   ) : null}
                 </>
               )}
+              {showPurchaseSettlement ? (
+                <>
+                  <SelectField
+                    error={errors.purchasePaymentMethod}
+                    label={locale === "ar" ? "طريقة الدفع" : "Payment method"}
+                    value={form.purchasePaymentMethod}
+                    onChange={(value) => setForm((prev) => ({ ...prev, purchasePaymentMethod: value as MobileAcquisitionMethod, purchaseBankAccountId: "" }))}
+                    options={[
+                      { label: locale === "ar" ? "نقداً" : "Cash", value: "CASH" },
+                      { label: locale === "ar" ? "تحويل بنكي" : "Bank transfer", value: "BANK_TRANSFER" },
+                      { label: locale === "ar" ? "شيك" : "Cheque", value: "CHEQUE" },
+                      { label: locale === "ar" ? "بطاقة" : "Card", value: "CARD" },
+                      { label: locale === "ar" ? "على الحساب" : "On account", value: "ON_ACCOUNT" },
+                    ]}
+                  />
+                  {form.purchasePaymentMethod === "BANK_TRANSFER" || form.purchasePaymentMethod === "CARD" || form.purchasePaymentMethod === "CHEQUE" ? (
+                    <>
+                      <SelectField
+                        error={errors.purchaseBankAccountId}
+                        label={locale === "ar" ? "الحساب المصرفي المدفوع منه" : "Bank account paid from"}
+                        value={form.purchaseBankAccountId}
+                        options={(acquisitionBanks?.banks ?? []).map((bank) => ({ value: bank._id, label: `${bank.name} · ${bank.currency}` }))}
+                        onChange={(purchaseBankAccountId) => setForm((prev) => ({ ...prev, purchaseBankAccountId }))}
+                      />
+                      {acquisitionBanks?.truncated ? <Text style={styles.warningText}>{locale === "ar" ? "عدد الحسابات المصرفية أكبر من أن يُعرض هنا." : "Too many active bank accounts to list."}</Text> : null}
+                      {acquisitionBanks && !acquisitionBanks.truncated && acquisitionBanks.banks.length === 0 ? <Text style={styles.warningText}>{locale === "ar" ? "لا يوجد حساب مصرفي نشط بهذه العملة." : "No active bank account is available in this currency."}</Text> : null}
+                    </>
+                  ) : null}
+                  {form.purchasePaymentMethod === "ON_ACCOUNT" ? (
+                    <FormField error={errors.purchaseSupplierName} label={locale === "ar" ? "المورّد المستحق عليه الحساب" : "Supplier owed on account"} value={form.purchaseSupplierName} onChangeText={(purchaseSupplierName) => setForm((prev) => ({ ...prev, purchaseSupplierName }))} />
+                  ) : null}
+                </>
+              ) : null}
               <FormField error={errors.sellingPrice} keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Selling price"} value={form.sellingPrice} onChangeText={(sellingPrice) => setForm((prev) => ({ ...prev, sellingPrice }))} />
               <SelectField
                 label={locale === "ar" ? "الحالة" : "Status"}

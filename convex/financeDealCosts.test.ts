@@ -314,6 +314,8 @@ describe("itemized deal costs", () => {
       orgId: seed.orgId,
       feeId,
       notes: "Matched to the licensing receipt.",
+      expectedActualAmountMinor: jod(137),
+      expectedActualEvidenceRevision: 0,
     });
     expect((await readCosts(seed)).fees[0]?.status).toBe("RECONCILED");
 
@@ -339,6 +341,9 @@ describe("itemized deal costs", () => {
         orgId: seed.orgId,
         feeId,
         notes: "Looks about right.",
+        // An estimate has no actual to pin; the refusal for that comes first.
+        expectedActualAmountMinor: 0,
+        expectedActualEvidenceRevision: 0,
       })
     ).rejects.toThrow(/estimate is not evidence/i);
   });
@@ -656,6 +661,8 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
     const { custodyId, feeId } = await settledCustody(seed);
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched.",
+      expectedActualAmountMinor: jod(700),
+      expectedActualEvidenceRevision: 0,
     });
     await invoiceIt(seed, "INV-9");
     expect(await closingCheck(seed, "CUSTODY_SETTLED")).toMatchObject({ status: "READY" });
@@ -686,8 +693,9 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
     const feeId = await addFee(seed, { actualAmountMinor: jod(120) });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched.",
+      expectedActualAmountMinor: jod(120),
+      expectedActualEvidenceRevision: 0,
     });
-    await invoiceIt(seed, "INV-10");
     expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
 
     await addFee(seed);
@@ -701,7 +709,6 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
 
   test("a deal with nothing itemized is not closable", async () => {
     const seed = await withCompany(await seedDeal());
-    await invoiceIt(seed, "INV-12");
 
     // Both awaiting-counts are zero for an empty list, so reading only those
     // let "nobody itemized anything" through as complete — the exact state the
@@ -1068,6 +1075,8 @@ describe("reconciled work is not destroyable from below", () => {
     const feeId = await addFee(seed, { actualAmountMinor: jod(750) });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched receipt #4471.",
+      expectedActualAmountMinor: jod(750),
+      expectedActualEvidenceRevision: 0,
     });
 
     // Re-recording the amount is the MORE destructive of the two routes:
@@ -1095,6 +1104,8 @@ describe("reconciled work is not destroyable from below", () => {
     const feeId = await addFee(seed, { actualAmountMinor: jod(750) });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched receipt #4471.",
+      expectedActualAmountMinor: jod(750),
+      expectedActualEvidenceRevision: 0,
     });
 
     await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { expectedCurrency: "JOD",
@@ -1117,11 +1128,15 @@ describe("reconciled work is not destroyable from below", () => {
     const feeId = await addFee(seed, { actualAmountMinor: jod(750) });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched receipt #4471.",
+      expectedActualAmountMinor: jod(750),
+      expectedActualEvidenceRevision: 0,
     });
 
     await expect(
       seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
         orgId: seed.orgId, feeId, notes: "ok",
+        expectedActualAmountMinor: jod(750),
+        expectedActualEvidenceRevision: 0,
       })
     ).rejects.toThrow(/already been reconciled/i);
     expect((await readCosts(seed)).fees[0]?.reconciliationNotes).toBe(
@@ -1162,24 +1177,14 @@ describe("reconciled work is not destroyable from below", () => {
 });
 
 describe("the legal invoice and automatic closing readiness", () => {
-  test("readiness is blocked until the legal invoice is recorded", async () => {
+  test("readiness never waits for a legal invoice: absent, the check is not applicable (SCRUM-411)", async () => {
     const seed = await withCompany(await seedDeal());
 
-    expect(await closingCheck(seed, "LEGAL_INVOICE_RECORDED")).toMatchObject({
-      status: "BLOCKED", reason: expect.stringMatching(/legal invoice/i),
-    });
+    expect(await closingCheck(seed, "LEGAL_INVOICE_RECORDED")).toMatchObject({ status: "NOT_APPLICABLE", reason: null });
   });
 
   test("estimates run the deal but cannot close it", async () => {
     const seed = await withCompany(await seedDeal());
-    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: seed.orgId,
-      applicationId: seed.applicationId,
-      legalInvoiceAmountMinor: jod(10_500),
-      legalInvoiceNumber: "INV-2026-0042",
-      legalInvoiceDate: Date.now(),
-      issuedTo: "FINANCE_COMPANY",
-    });
     const feeId = await addFee(seed, { estimatedAmountMinor: jod(120) });
 
     expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
@@ -1197,9 +1202,12 @@ describe("the legal invoice and automatic closing readiness", () => {
 
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched to the receipt.",
+      expectedActualAmountMinor: jod(137),
+      // The actual was recorded once above, so the evidence is at revision 1.
+      expectedActualEvidenceRevision: 1,
     });
     expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
-    expect(await closingCheck(seed, "LEGAL_INVOICE_RECORDED")).toMatchObject({ status: "READY", reason: null });
+    expect(await closingCheck(seed, "LEGAL_INVOICE_RECORDED")).toMatchObject({ status: "NOT_APPLICABLE", reason: null });
   });
 
   test("voided custody-cost history cannot strand reconciliation or closing readiness", async () => {
@@ -1253,6 +1261,8 @@ describe("the legal invoice and automatic closing readiness", () => {
       orgId: seed.orgId,
       feeId: liveFeeId,
       notes: "Matched to the receipt.",
+      expectedActualAmountMinor: jod(120),
+      expectedActualEvidenceRevision: 0,
     });
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId,
@@ -1289,6 +1299,8 @@ describe("the legal invoice and automatic closing readiness", () => {
     const feeId = await addFee(seed, { actualAmountMinor: jod(120) });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched to the receipt.",
+      expectedActualAmountMinor: jod(120),
+      expectedActualEvidenceRevision: 0,
     });
     await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
@@ -1561,6 +1573,8 @@ describe("a deducted cost write establishes the remittance from what the company
       orgId: seed.orgId,
       feeId,
       notes: "Matched to the settlement advice.",
+      expectedActualAmountMinor: fee.actualAmountMinor,
+      expectedActualEvidenceRevision: 0,
     });
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId,
@@ -1667,5 +1681,197 @@ describe("a deducted cost write establishes the remittance from what the company
     // exactly why the flag is recorded per line and never inferred from who paid.
     expect(app?.expectedDealerRemittanceMinor).toBe(jod(10_500));
     expect(app?.economicsRevision).toBe(7);
+  });
+});
+
+/**
+ * SCRUM-834: closing readiness (`COSTS_CLOSABLE`) judges EVERY live line, so
+ * every fee type a deal can carry has to be recordable, reconcilable and
+ * removable by the same mutations -- including the types the Handover screen's
+ * add form never offers. The screen routes for them are
+ * `HandoverCostRowRoutes.test.tsx`; this is the backend half of the same claim.
+ */
+describe("every live fee type can be taken from blocking to closable", () => {
+  const SHAPES = [
+    { feeType: "APPRAISAL_FEE", paidTo: "APPRAISER", accountingTreatment: "APPRAISAL_EXPENSE" },
+    { feeType: "ADMINISTRATIVE_FEE", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE" },
+    { feeType: "COMMISSION", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE" },
+    // Never bound as the execution fee: a plain finance-company charge.
+    { feeType: "FINANCE_COMPANY_FEE", paidTo: "FINANCE_COMPANY", accountingTreatment: "FINANCE_COMPANY_COMMISSION" },
+  ] as const;
+
+  async function addShape(seed: Seed, shape: (typeof SHAPES)[number], actualAmountMinor?: number) {
+    return await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      feeType: shape.feeType,
+      description: "Unplanned charge",
+      estimatedAmountMinor: jod(100),
+      ...(actualAmountMinor !== undefined ? { actualAmountMinor } : {}),
+      paidBy: "DEALER",
+      paidTo: shape.paidTo,
+      accountingTreatment: shape.accountingTreatment,
+    });
+  }
+
+  async function feeRow(seed: Seed, feeId: Id<"financeDealFees">) {
+    return (await readCosts(seed)).fees.find((fee) => fee._id === feeId);
+  }
+
+  test.each(SHAPES)("$feeType: no actual -> actual recorded -> reconciled, each step moving the readiness reason", async (shape) => {
+    const seed = await withCompany(await seedDeal(`ladder_${shape.feeType}`));
+    const feeId = await addShape(seed, shape);
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/no actual amount recorded/i),
+    });
+
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      expectedCurrency: "JOD", orgId: seed.orgId, feeId, actualAmountMinor: jod(137),
+    });
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/nobody has checked/i),
+    });
+    // The screen pins the revision it served: one re-record makes it 1.
+    expect(await feeRow(seed, feeId)).toMatchObject({ feeType: shape.feeType, status: "ACTUAL_RECORDED", actualEvidenceRevision: 1 });
+
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId, notes: "Matched to the receipt.",
+      expectedActualAmountMinor: jod(137),
+      expectedActualEvidenceRevision: 1,
+    });
+    expect(await feeRow(seed, feeId)).toMatchObject({ status: "RECONCILED" });
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
+  });
+
+  test.each(SHAPES)("$feeType: a reconcile pinned to evidence that was re-recorded since is refused and nothing changes", async (shape) => {
+    const seed = await withCompany(await seedDeal(`stale_${shape.feeType}`));
+    const feeId = await addShape(seed, shape, jod(80));
+    // Same amount, new receipt: only the evidence moves.
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      expectedCurrency: "JOD", orgId: seed.orgId, feeId, actualAmountMinor: jod(80), receiptReference: "REC-2",
+    });
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+        orgId: seed.orgId, feeId, notes: "Matched.",
+        expectedActualAmountMinor: jod(80),
+        expectedActualEvidenceRevision: 0,
+      })
+    ).rejects.toThrow(/re-recorded since you opened it/i);
+    expect(await feeRow(seed, feeId)).toMatchObject({ status: "ACTUAL_RECORDED" });
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/nobody has checked/i),
+    });
+  });
+
+  test.each(SHAPES)("$feeType: removing the unchecked line clears the blocker while a reconciled sibling stands", async (shape) => {
+    const seed = await withCompany(await seedDeal(`void_${shape.feeType}`));
+    const sibling = await addFee(seed, { actualAmountMinor: jod(120) });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId: sibling, notes: "Matched.", expectedActualAmountMinor: jod(120), expectedActualEvidenceRevision: 0,
+    });
+    const feeId = await addShape(seed, shape, jod(60));
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "BLOCKED" });
+
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "Charged to the wrong deal" });
+
+    expect((await readCosts(seed)).fees.map((fee) => fee._id)).toEqual([sibling]);
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
+  });
+
+  test.each(SHAPES)("$feeType: the currency guard holds -- an amount counted in another currency is refused, and a line already in one blocks closing until it is removed", async (shape) => {
+    const seed = await withCompany(await seedDeal(`ccy_${shape.feeType}`));
+    const sibling = await addFee(seed, { actualAmountMinor: jod(120) });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId: sibling, notes: "Matched.", expectedActualAmountMinor: jod(120), expectedActualEvidenceRevision: 0,
+    });
+    const feeId = await addShape(seed, shape, jod(80));
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        expectedCurrency: "USD", orgId: seed.orgId, feeId, actualAmountMinor: jod(90),
+      })
+    ).rejects.toThrow(/entered in USD|recorded in JOD|currency/i);
+    expect((await feeRow(seed, feeId))?.actualAmountMinor).toBe(jod(80));
+
+    // A legacy / raw-edited line in another currency is never reconciled into a green check.
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { currency: "USD" }));
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/not in JOD/i),
+    });
+    // Nor can its actual be re-recorded in the deal's currency over the line's own...
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        expectedCurrency: "JOD", orgId: seed.orgId, feeId, actualAmountMinor: jod(90),
+      })
+    ).rejects.toThrow(/recorded in USD|currency/i);
+    // ...but removing it needs a reason, and then nothing foreign is left to block.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "  " })
+    ).rejects.toThrow(/say why/i);
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "BLOCKED" });
+
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "Legacy USD line on a JOD deal" });
+
+    expect((await readCosts(seed)).fees.map((fee) => fee._id)).toEqual([sibling]);
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
+    const voided = await seed.t.run((ctx) => ctx.db.get(feeId));
+    expect(voided).toMatchObject({ voidReason: "Legacy USD line on a JOD deal", currency: "USD" });
+    expect(voided?.voidedBy).toBe(seed.userId);
+  });
+
+  test("a member without create:finance_application cannot remove a foreign-currency line, and the blocker stays", async () => {
+    const seed = await withCompany(await seedDeal("ccy_role"));
+    const feeId = await addShape(seed, SHAPES[0], jod(80));
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { currency: "USD" }));
+    const accountant = DEFAULT_ROLE_TEMPLATES.find((role) => !role.permissions.includes("create:finance_application"));
+    if (!accountant) throw new Error("no role template lacks create:finance_application");
+    await seed.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "costs_noedit", email: "noedit@x.com" });
+      const roleId = await ctx.db.insert("roles", { orgId: seed.orgId, name: accountant.name, permissions: [...accountant.permissions] });
+      await ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId });
+    });
+    await expect(
+      seed.t.withIdentity({ subject: "costs_noedit" }).mutation(api.financeDealCosts.voidDealFee, {
+        orgId: seed.orgId, feeId, reason: "Legacy USD line",
+      })
+    ).rejects.toThrow(/permission/i);
+    expect((await feeRow(seed, feeId))?._id).toBe(feeId);
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "BLOCKED", reason: expect.stringMatching(/not in JOD/i) });
+  });
+
+  test.each(SHAPES)("$feeType: the tenant guard holds -- another organization's accountant can reconcile nothing", async (shape) => {
+    const seed = await withCompany(await seedDeal(`tenant_${shape.feeType}`));
+    const feeId = await addShape(seed, shape, jod(80));
+    const otherOrg = await seed.t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() });
+      const userId = await ctx.db.insert("users", { clerkId: "costs_outsider", email: "out@x.com" });
+      const roleId = await ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true });
+      await ctx.db.insert("memberships", { orgId, userId, roleId });
+      return orgId;
+    });
+    const outsider = seed.t.withIdentity({ subject: "costs_outsider" });
+    await expect(
+      outsider.mutation(api.financeDealCosts.reconcileDealFee, {
+        orgId: otherOrg, feeId, notes: "Matched.", expectedActualAmountMinor: jod(80), expectedActualEvidenceRevision: 0,
+      })
+    ).rejects.toThrow();
+    expect(await feeRow(seed, feeId)).toMatchObject({ status: "ACTUAL_RECORDED" });
+  });
+
+  test.each(SHAPES)("$feeType: the freeze guard holds -- once the deal is closed the line can no longer be removed or re-recorded", async (shape) => {
+    const seed = await withCompany(await seedDeal(`frozen_${shape.feeType}`));
+    const feeId = await addShape(seed, shape, jod(80));
+    // `dealEconomicsFrozen` reads a CLOSED application the same as a finalized sale.
+    await seed.t.run((ctx) => ctx.db.patch(seed.applicationId, { status: "CLOSED" }));
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "Too late" })
+    ).rejects.toThrow(/finalized/i);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        expectedCurrency: "JOD", orgId: seed.orgId, feeId, actualAmountMinor: jod(90),
+      })
+    ).rejects.toThrow(/finalized/i);
+    expect(await feeRow(seed, feeId)).toMatchObject({ actualAmountMinor: jod(80) });
   });
 });

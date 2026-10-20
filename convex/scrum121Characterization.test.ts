@@ -120,12 +120,18 @@ async function seedFinanceMember(t: ReturnType<typeof convexTestWithComponents>)
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Layla", lastName: "Nasser", phone: "+962790000000" })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
   return {
     orgId,
     userId,
     approverId,
     customerId,
+    bankAccountId,
     asFinance: t.withIdentity({ subject: "c121_user", clerkId: "c121_user" }),
     asApprover: t.withIdentity({ subject: "c121_approver", clerkId: "c121_approver" }),
   };
@@ -906,7 +912,7 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
 
   test("clearCheque queues one AR credit for the cheque face amount", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -929,7 +935,7 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
     });
     const baseline = await accountingCommands(t, orgId);
 
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
 
     const after = await accountingCommands(t, orgId);
     const key = (c: unknown) => JSON.stringify(c);
@@ -2218,7 +2224,7 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
    */
   test("R3_03_clearCheque_reaches_the_same_allocation_site_after_the_bank_confirmed_the_funds", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, bankAccountId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -2242,7 +2248,7 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
 
     // Clearing works today and allocates through collections.ts:364 — the same
     // writer call site recordPayment uses, reached after the bank confirmed.
-    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId });
+    await asFinance.mutation(api.collections.clearCheque, { idempotencyKey: crypto.randomUUID(), orgId, chequeId, bankAccountId });
 
     await t.run(async (ctx) => {
       const row = await ctx.db.get(receivableId);

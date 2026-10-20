@@ -36,6 +36,7 @@ export function PaymentMethodSelect<M extends string = PaymentMethod>({
   methods = DEFAULT_PAYMENT_METHODS as unknown as readonly M[],
   ariaLabel,
   placeholder,
+  disabled = false,
 }: Readonly<{
   t: Translate;
   value: M | undefined;
@@ -49,9 +50,10 @@ export function PaymentMethodSelect<M extends string = PaymentMethod>({
    * from looking empty.
    */
   placeholder?: string;
+  disabled?: boolean;
 }>) {
   return (
-    <Select value={value} onValueChange={(method) => onValueChange(method as M)}>
+    <Select value={value} disabled={disabled} onValueChange={(method) => onValueChange(method as M)}>
       <SelectTrigger aria-label={ariaLabel}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
