@@ -5,6 +5,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
   decideReplayEnvironment,
+  replayLaneAction,
   replayOrgRefusals,
   REPLAY_CURRENCY_SCALES,
   type ReplayAttestation,
@@ -47,12 +48,14 @@ import {
  * (accountingCutover.postOpeningBalanceDirect), but ONLY inside an isolation
  * boundary (playwright/fixtures/replayIsolation.ts): the replay writes to the
  * books, so it runs only when the backend itself attests, through
- * e2eBootstrap.replayAttestation, that it is a disposable preview and that the
- * organization was created by the trusted seed on it. Production deployments
- * are refused outright. Without that attestation the replay is SKIPPED (shown
- * as skipped, never passed). The trusted-main E2E lane seeds such an org, so the
- * replay can run there once the lane is allowed to run it; every other lane
- * skips. The backend tests are the evidence meanwhile:
+ * e2eBootstrap.replayAttestation, that it is a disposable preview whose
+ * organization the trusted seed created AND that this run set the per-run nonce
+ * (E2E_REPLAY_RUN_NONCE) on it; the class and marker alone survive promotion.
+ * Production deployments are refused outright. Without that attestation the
+ * replay is SKIPPED (shown as skipped, never passed), or FAILS where the lane
+ * requires it (E2E_REPLAY_REQUIRED=1). Only a lane that creates a dedicated
+ * preview and sets the nonce on it can run the replay (SCRUM-795 follow-up,
+ * #635); every other lane skips. The backend tests are the evidence meanwhile:
  * convex/manualJournalAccountingDate.test.ts and accountingPhase10.test.ts
  * (switch mocked off).
  */
@@ -254,28 +257,37 @@ test.describe("accounting register: a posted journal", () => {
   test("shows its accounting date, period and balanced debit/credit totals", async ({ page }) => {
     // 1. ISOLATION BOUNDARY. This replay WRITES to the books (creating a period wakes held rows and schedules
     //    outbox work; the opening balance is a posted journal), so it runs only when the BACKEND ITSELF attests,
-    //    over the connection this test uses, that it is a disposable preview and that the organization was
-    //    created by the trusted seed on it (e2eBootstrap.replayAttestation: preview class, marker minted on this
-    //    deployment, org bound to the marker and created after it). An operator-supplied name is not trusted.
+    //    over the connection this test uses, that it is a disposable preview whose org the trusted seed created
+    //    AND that this run set a per-run secret nonce on it (e2eBootstrap.replayAttestation). The preview class
+    //    and the marker survive promotion to production; the nonce, set by the lane on the fresh preview for one
+    //    run and expiring, does not. The nonce and run id are sent as arguments and compared by the server, and
+    //    are never logged or returned. An operator-supplied name is not trusted.
     //    A refused guard (production, or URL/backend/marker disagree) FAILS. Without the attestation the replay
-    //    is SKIPPED, which the report shows as skipped (never passed); that is unavailable evidence, not
-    //    certification, and the backend tests stay the evidence. See replayIsolation.ts and its unit test.
+    //    is SKIPPED (shown as skipped, never passed) unless the lane requires it (E2E_REPLAY_REQUIRED=1), where
+    //    it FAILS. A skip is unavailable evidence, not certification; the backend tests stay the evidence.
+    //    See replayIsolation.ts and its unit test.
     await gotoOrgRoute(page, "accounting");
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
     const client = await authenticatedConvexClient(page);
-    const attestation = await client
-      .query(api.e2eBootstrap.replayAttestation, { orgId })
-      .then(
-        (value) => value as ReplayAttestation,
-        () => null
-      );
-    const environment = decideReplayEnvironment(
-      process.env.NEXT_PUBLIC_CONVEX_URL,
-      attestation,
-      process.env.E2E_REPLAY_DEDICATED_ORG === "1"
+    const nonce = process.env.E2E_REPLAY_RUN_NONCE;
+    const runId = process.env.E2E_REPLAY_RUN_ID;
+    // No nonce, no query: nothing is sent to a backend that was not bound to this run.
+    const attestation =
+      nonce && runId
+        ? await client.query(api.e2eBootstrap.replayAttestation, { orgId, nonce, runId }).then(
+            (value) => value as ReplayAttestation,
+            () => null
+          )
+        : null;
+    const verdict = replayLaneAction(
+      decideReplayEnvironment(process.env.NEXT_PUBLIC_CONVEX_URL, attestation, {
+        dedicatedOrg: process.env.E2E_REPLAY_DEDICATED_ORG === "1",
+        nonce,
+      }),
+      process.env.E2E_REPLAY_REQUIRED === "1"
     );
-    if (environment.kind === "REFUSED") throw new Error(`GL register replay refused: ${environment.reason}`);
-    test.skip(environment.kind === "NOT_RUN", `GL register replay not run: ${environment.kind === "NOT_RUN" ? environment.reason : ""}`);
+    if (verdict.action === "FAIL") throw new Error(verdict.reason);
+    test.skip(verdict.action === "SKIP", verdict.action === "SKIP" ? verdict.reason : "");
 
     // Every read happens BEFORE the first write. The organization must be freshly created: no period, no
     // journal in any status (POSTED and REVERSED included, the mutation's own refusal rule), no opening

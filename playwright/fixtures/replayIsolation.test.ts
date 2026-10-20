@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   decideReplayEnvironment,
   deploymentNameOf,
+  replayLaneAction,
   replayOrgRefusals,
   REPLAY_MAX_ORG_AGE_MS,
+  REPLAY_NONCE_MIN_LENGTH,
   type ReplayAttestation,
+  type ReplayLane,
   type ReplayOrgFacts,
 } from "./replayIsolation";
 
@@ -20,8 +23,10 @@ describe("deploymentNameOf", () => {
   });
 });
 
-describe("decideReplayEnvironment (allow-list on the backend's own attestation)", () => {
+describe("decideReplayEnvironment (allow-list on the backend's attestation bound to this run's nonce)", () => {
   const url = "https://happy-otter-123.convex.cloud";
+  const NONCE = "0123456789abcdef0123456789abcdef";
+  const lane: ReplayLane = { dedicatedOrg: true, nonce: NONCE };
   const good: ReplayAttestation = {
     attested: true,
     reasons: [],
@@ -31,64 +36,96 @@ describe("decideReplayEnvironment (allow-list on the backend's own attestation)"
   };
   const with_ = (over: Partial<ReplayAttestation>): ReplayAttestation => ({ ...good, ...over });
 
-  it("runs only on a positive attestation whose URL, backend and marker name one deployment", () => {
-    expect(decideReplayEnvironment(url, good, true)).toEqual({ kind: "RUN", deployment: "happy-otter-123" });
+  it("runs only on a positive attestation, this run's nonce, a dedicated org and one deployment name everywhere", () => {
+    expect(decideReplayEnvironment(url, good, lane)).toEqual({ kind: "RUN", deployment: "happy-otter-123" });
+  });
+
+  it("is NOT RUN for the promoted-preview scenario: class and marker attest, but the lane holds no nonce", () => {
+    // The backend says attested (class preview + marker + seed org) because those survive promotion.
+    for (const nonce of [undefined, "", "short", "x".repeat(REPLAY_NONCE_MIN_LENGTH - 1)]) {
+      const verdict = decideReplayEnvironment(url, good, { dedicatedOrg: true, nonce });
+      expect(verdict.kind).toBe("NOT_RUN");
+      expect(JSON.stringify(verdict)).not.toContain(NONCE);
+    }
+    expect(decideReplayEnvironment(url, good, { dedicatedOrg: true, nonce: "x".repeat(REPLAY_NONCE_MIN_LENGTH) }).kind).toBe("RUN");
+  });
+
+  it("is NOT RUN when the backend refuses the nonce (wrong, expired, not set), whatever the lane holds", () => {
+    for (const reason of ["NONCE_MISMATCH", "EXPIRED", "NONCE_NOT_SET", "RUN_ID_MISMATCH"]) {
+      expect(decideReplayEnvironment(url, with_({ attested: false, reasons: [reason] }), lane)).toMatchObject({
+        kind: "NOT_RUN",
+        reason: expect.stringContaining(reason),
+      });
+    }
   });
 
   it("is NOT RUN, never a run, when the marker or attestation is missing or unreadable", () => {
-    expect(decideReplayEnvironment(url, null, true).kind).toBe("NOT_RUN");
-    expect(decideReplayEnvironment(url, undefined, true).kind).toBe("NOT_RUN");
-    expect(decideReplayEnvironment(url, with_({ attested: false, reasons: ["NO_MARKER"] }), true).kind).toBe("NOT_RUN");
-    expect(decideReplayEnvironment(url, with_({ attested: false, reasons: ["CLASS_NOT_PREVIEW"] }), true)).toMatchObject({
+    expect(decideReplayEnvironment(url, null, lane).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, undefined, lane).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, with_({ attested: false, reasons: ["NO_MARKER"] }), lane).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, with_({ attested: false, reasons: ["CLASS_NOT_PREVIEW"] }), lane)).toMatchObject({
       kind: "NOT_RUN",
       reason: expect.stringContaining("CLASS_NOT_PREVIEW"),
     });
   });
 
-  it("is NOT RUN unless the lane declares the org dedicated, even with a positive attestation", () => {
-    expect(decideReplayEnvironment(url, good, false).kind).toBe("NOT_RUN");
+  it("does not trust an operator-supplied name: attested false stays NOT RUN whatever the URL says", () => {
+    expect(decideReplayEnvironment(url, with_({ attested: false, reasons: [] }), lane).kind).toBe("NOT_RUN");
+  });
+
+  it("is NOT RUN unless the lane declares the org dedicated, even with a positive attestation and nonce", () => {
+    expect(decideReplayEnvironment(url, good, { nonce: NONCE }).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, good, { dedicatedOrg: false, nonce: NONCE }).kind).toBe("NOT_RUN");
     expect(decideReplayEnvironment(url, good).kind).toBe("NOT_RUN");
   });
 
-  it("still refuses production when the dedicated-org flag is absent", () => {
-    expect(decideReplayEnvironment("https://clever-mockingbird-719.convex.cloud", good, false).kind).toBe("REFUSED");
-  });
-
-  it("does not trust an operator-supplied name: an attestation of false stays NOT RUN whatever the URL says", () => {
-    expect(decideReplayEnvironment(url, with_({ attested: false, reasons: [] }), true).kind).toBe("NOT_RUN");
-  });
-
   it.each(["clever-mockingbird-719", "kindly-hound-172", "focused-starfish-265"])(
-    "refuses production %s even when the backend attests (a marker on a prod-named deployment)",
+    "refuses production %s even when the backend attests and the lane holds a nonce",
     (name) => {
       const prodUrl = `https://${name}.convex.cloud`;
-      expect(decideReplayEnvironment(prodUrl, with_({ deploymentName: name, markerDeploymentName: name }), true).kind).toBe("REFUSED");
-      expect(decideReplayEnvironment(prodUrl, null, true).kind).toBe("REFUSED");
-      expect(decideReplayEnvironment(prodUrl, with_({ attested: false, reasons: ["NO_MARKER"] }), true).kind).toBe("REFUSED");
+      const attested = with_({ deploymentName: name, markerDeploymentName: name });
+      expect(decideReplayEnvironment(prodUrl, attested, lane).kind).toBe("REFUSED");
+      expect(decideReplayEnvironment(prodUrl, null, lane).kind).toBe("REFUSED");
+      expect(decideReplayEnvironment(prodUrl, with_({ attested: false, reasons: ["NO_MARKER"] }), lane).kind).toBe("REFUSED");
+      expect(decideReplayEnvironment(prodUrl, attested, {}).kind).toBe("REFUSED");
       // A preview URL whose backend or marker names production is refused too.
-      expect(decideReplayEnvironment(url, with_({ deploymentName: name }), true).kind).toBe("REFUSED");
-      expect(decideReplayEnvironment(url, with_({ markerDeploymentName: name }), true).kind).toBe("REFUSED");
+      expect(decideReplayEnvironment(url, with_({ deploymentName: name }), lane).kind).toBe("REFUSED");
+      expect(decideReplayEnvironment(url, with_({ markerDeploymentName: name }), lane).kind).toBe("REFUSED");
     }
   );
 
   it("refuses when the URL, the backend and the marker do not name one deployment", () => {
-    expect(decideReplayEnvironment(url, with_({ deploymentName: "other-fox-9" }), true).kind).toBe("REFUSED");
-    expect(decideReplayEnvironment(url, with_({ markerDeploymentName: "other-fox-9" }), true).kind).toBe("REFUSED");
-    expect(decideReplayEnvironment("https://other-fox-9.convex.cloud", good, true).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment(url, with_({ deploymentName: "other-fox-9" }), lane).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment(url, with_({ markerDeploymentName: "other-fox-9" }), lane).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment("https://other-fox-9.convex.cloud", good, lane).kind).toBe("REFUSED");
   });
 
   it("refuses an attested deployment that does not name itself everywhere", () => {
-    expect(decideReplayEnvironment(url, with_({ deploymentName: null }), true).kind).toBe("REFUSED");
-    expect(decideReplayEnvironment(url, with_({ markerDeploymentName: null }), true).kind).toBe("REFUSED");
-    expect(decideReplayEnvironment("http://localhost:3210", good, true).kind).toBe("REFUSED");
-    expect(decideReplayEnvironment(undefined, good, true).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment(url, with_({ deploymentName: null }), lane).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment(url, with_({ markerDeploymentName: null }), lane).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment("http://localhost:3210", good, lane).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment(undefined, good, lane).kind).toBe("REFUSED");
   });
 
   it("is NOT RUN when the organization was not created by the seed recently", () => {
-    expect(decideReplayEnvironment(url, with_({ orgAgeMs: REPLAY_MAX_ORG_AGE_MS + 1 }), true).kind).toBe("NOT_RUN");
-    expect(decideReplayEnvironment(url, with_({ orgAgeMs: null }), true).kind).toBe("NOT_RUN");
-    expect(decideReplayEnvironment(url, with_({ orgAgeMs: -1 }), true).kind).toBe("NOT_RUN");
-    expect(decideReplayEnvironment(url, with_({ orgAgeMs: REPLAY_MAX_ORG_AGE_MS }), true).kind).toBe("RUN");
+    expect(decideReplayEnvironment(url, with_({ orgAgeMs: REPLAY_MAX_ORG_AGE_MS + 1 }), lane).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, with_({ orgAgeMs: null }), lane).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, with_({ orgAgeMs: -1 }), lane).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, with_({ orgAgeMs: REPLAY_MAX_ORG_AGE_MS }), lane).kind).toBe("RUN");
+  });
+});
+
+describe("replayLaneAction", () => {
+  it("runs on RUN, fails on REFUSED, and skips a NOT RUN unless the lane requires the replay", () => {
+    expect(replayLaneAction({ kind: "RUN", deployment: "d" }, false)).toEqual({ action: "RUN" });
+    expect(replayLaneAction({ kind: "RUN", deployment: "d" }, true)).toEqual({ action: "RUN" });
+    expect(replayLaneAction({ kind: "REFUSED", reason: "r" }, false).action).toBe("FAIL");
+    expect(replayLaneAction({ kind: "REFUSED", reason: "r" }, true).action).toBe("FAIL");
+    expect(replayLaneAction({ kind: "NOT_RUN", reason: "r" }, false).action).toBe("SKIP");
+    expect(replayLaneAction({ kind: "NOT_RUN", reason: "r" }, true)).toMatchObject({
+      action: "FAIL",
+      reason: expect.stringContaining("requires it"),
+    });
   });
 });
 
