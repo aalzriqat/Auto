@@ -3,6 +3,7 @@ import { newContainedContext } from "../containedContext";
 import { gotoOrgRoute, APPROVER_AUTH_FILE, resolveOrgId, authenticatedConvexClient } from "../utils";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { assertStillPending, pickSeededDraft } from "../legacyDraftScope";
 
 /**
  * SCRUM-795 (SCRUM-50): manual journals are OFF for the narrowed pilot (owner
@@ -30,7 +31,10 @@ import type { Id } from "../../convex/_generated/dataModel";
  * So the real-backend approve refusal is its own test, REGISTERED ONLY where the
  * flag is "1" (a missing draft FAILS there). In every other lane (candidate
  * swarm, PR lanes) it is not registered: not run, not skipped, NOT CLAIMED, and
- * those lanes prove only the UI state and the create refusal. The refusal is sent as the
+ * those lanes prove only the UI state and the create refusal. In trusted-main
+ * E2E a dropped flag cannot go green: scripts/assertApproveDoorRan.mjs reads the
+ * Playwright JSON report and requires exactly one passed approve-door test.
+ * The refusal is sent as the
  * approver seat (a different user from the draft's creator), so it is the pilot
  * switch and not separation of duties.
  *
@@ -58,7 +62,12 @@ function refusalCode(error: unknown): string | undefined {
     : undefined;
 }
 
-type Pending = Array<{ _id: Id<"manualJournalDrafts">; memo: string; createdBy: Id<"users"> }>;
+type Pending = Array<{
+  _id: Id<"manualJournalDrafts">;
+  memo: string;
+  createdBy: Id<"users">;
+  orgId: Id<"organizations">;
+}>;
 
 async function proveLegacyApproveRefused(browser: Browser, orgId: Id<"organizations">): Promise<void> {
   // (ii-b) approve of the seeded legacy draft is refused. MANDATORY where the draft is seeded.
@@ -73,7 +82,7 @@ async function proveLegacyApproveRefused(browser: Browser, orgId: Id<"organizati
     const pending = (await approverClient.query(api.financialAudit.listPendingManualJournals, {
       orgId,
     })) as Pending;
-    const seeded = pending.find((d) => d.memo === LEGACY_MEMO);
+    const seeded = pickSeededDraft(pending, LEGACY_MEMO, orgId);
     if (!seeded) {
       throw new Error(
         "fixture missing: e2e bootstrap did not seed the SCRUM-795 legacy draft (run the bootstrap with E2E_SEED_LEGACY_MANUAL_JOURNAL=1)"
@@ -97,7 +106,7 @@ async function proveLegacyApproveRefused(browser: Browser, orgId: Id<"organizati
     const after = (await approverClient.query(api.financialAudit.listPendingManualJournals, {
       orgId,
     })) as Pending;
-    expect(after.some((d) => d._id === seeded._id)).toBe(true);
+    assertStillPending(after, seeded._id, orgId);
 
     // (i-b) Reject stays enabled for a second finance user (the creator cannot
     // reject their own draft). Looked at, not clicked.
