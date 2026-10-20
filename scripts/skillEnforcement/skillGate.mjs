@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Claude Code PreToolUse hook. Blocks git commit / git push / PR creation
  * (and the GitHub MCP write tools) unless the skills the README table requires
@@ -16,6 +15,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyPaths, invokedSkills, requiredSkills } from "./policy.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
@@ -33,26 +33,39 @@ export function gitExecutable(exists = existsSync, resolve = resolveTrustedGitEx
 }
 
 const ARG = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
+// Where a command word can start: line start, a separator, a subshell, or after
+// a wrapper (env, command, exec, xargs, sudo, time, nohup, VAR=x, sh -c '). Not
+// after echo, grep and the like, so `echo git commit` is not a commit.
+const LEAD = String.raw`(?:^|[;&|(\`{\n]|\$\(|\b(?:env|command|exec|xargs|sudo|time|nohup)\b(?:\s+-\S+|\s+\w+=\S*)*|\b(?:ba|z|da)?sh\s+-\w*c\s+['"]|\b\w+=\S*)\s*`;
 const GIT_STEP = new RegExp(
-  String.raw`\bgit\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b([^;&|\n'")]*)`,
+  String.raw`${LEAD}(?:[\w./~-]*/)?git\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b([^;&|\n'")]*)`,
   "g",
 );
 const ALL_FLAG = /(?:^|\s)(?:--all|-[a-zA-Z]*a[a-zA-Z]*)(?=\s|$)/;
+const DIR_OPTION = new RegExp(String.raw`(?:^|\s)-C\s+(${ARG})`, "g");
+const OPAQUE_REPO_OPTION = /(?:^|\s)--(?:git-dir|work-tree)\b/;
+const unquote = (a) => a.replace(/^(["'])(.*)\1$/, "$2");
 
 /**
- * Commit, push and PR steps named anywhere in a shell command, with whether
- * -a/--all was passed. The scan is over the raw text on purpose: it also sees
- * `bash -c 'git commit'`, `env git push`, `$(git commit)` and `xargs git push`.
- * It over-matches (`echo git commit` counts), which only costs a skill check.
- * Residual bypass: a command built at run time (`g=git; $g commit`), a git
- * alias, or a script or other program that runs git itself.
+ * Commit, push and PR steps named in a shell command, with whether -a/--all was
+ * passed, the `-C <dir>` directories git runs in, and whether the repository is
+ * redirected by --git-dir/--work-tree (then the files are unknown). The scan is
+ * over the raw text, so it sees `bash -c 'git commit'`, `env git push` and
+ * `$(git commit)`. `echo git commit` is not a step. Residual bypass: a command
+ * built at run time (`g=git; $g commit`), a git alias, or a script or program
+ * that runs git itself.
  */
 export function gitSteps(command) {
   const steps = [];
   for (const m of command.matchAll(GIT_STEP)) {
-    steps.push({ step: m[2], all: ALL_FLAG.test(m[3]) });
+    steps.push({
+      step: m[2],
+      all: ALL_FLAG.test(m[3]),
+      dirs: [...m[1].matchAll(DIR_OPTION)].map((d) => unquote(d[1])),
+      opaque: OPAQUE_REPO_OPTION.test(m[1]),
+    });
   }
-  if (/\bgh\s+pr\s+create\b/.test(command)) steps.push({ step: "pr", all: false });
+  if (/\bgh\s+pr\s+create\b/.test(command)) steps.push({ step: "pr", all: false, dirs: [], opaque: false });
   return steps;
 }
 
@@ -83,7 +96,8 @@ function branchFiles(git, preferUpstream) {
   return null;
 }
 
-function bashStep({ step, all }, git) {
+function bashStep({ step, all, dirs, opaque }, cwd, exe) {
+  const git = exe && !opaque ? makeGit(dirs.reduce((dir, d) => path.resolve(dir, d), cwd), exe) : null;
   if (!git) return { step, files: null };
   try {
     if (step === "commit") {
@@ -101,7 +115,7 @@ function bashStep({ step, all }, git) {
 export function stepsFor(input, exe = gitExecutable()) {
   const { tool_name: tool, tool_input: ti = {}, cwd = process.cwd() } = input;
   const git = exe ? makeGit(cwd, exe) : null;
-  if (tool === "Bash") return gitSteps(String(ti.command ?? "")).map((s) => bashStep(s, git));
+  if (tool === "Bash") return gitSteps(String(ti.command ?? "")).map((s) => bashStep(s, cwd, exe));
   if (tool === "mcp__github__create_pull_request") return [{ step: "pr", files: git ? branchFiles(git, false) : null }];
   if (tool === "mcp__github__push_files") {
     return [{ step: "push", files: (ti.files ?? []).map((f) => f.path).filter(Boolean) }];

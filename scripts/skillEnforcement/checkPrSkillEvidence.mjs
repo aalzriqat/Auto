@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * CI entry for the `skill-evidence` check. Env: GH_TOKEN, REPO (owner/name),
  * PR_NUMBER. Reads the PR body and files live through the REST API (the event
@@ -23,9 +22,9 @@ async function getPages(fetchImpl, token, path) {
   for (let page = 1; page <= 30; page++) {
     const rows = await getJson(fetchImpl, token, `${path}?per_page=100&page=${page}`);
     all.push(...rows);
-    if (rows.length < 100) break;
+    if (rows.length < 100) return all;
   }
-  return all;
+  throw new Error(`${path} has more than 3000 entries; the check cannot read them all`);
 }
 
 /** Returns {exitCode, lines}. All I/O goes through the injected fetch. */
@@ -39,10 +38,12 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
   const files = fileRows.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean));
   // The PR's own range: head plus every commit GitHub lists for the PR.
   // A main commit from before the PR is not accepted as a certified SHA.
-  const own = (await getPages(fetchImpl, GH_TOKEN, `${base}/commits`)).map((c) => c.sha);
+  const commits = await getPages(fetchImpl, GH_TOKEN, `${base}/commits`);
+  const own = commits.map((c) => c.sha);
+  const commitText = commits.map((c) => c.commit?.message ?? "").join("\n");
   own.push(pr.head.sha);
   const isPrCommit = async (sha) => own.some((c) => c.startsWith(sha.toLowerCase()));
-  const result = await evaluate({ body: pr.body ?? "", files, isPrCommit });
+  const result = await evaluate({ body: pr.body ?? "", files, isPrCommit, commitText });
   if (!result.required) {
     return { exitCode: 0, lines: ["skill-evidence: no money, permission or gate paths touched; not required."] };
   }

@@ -41,9 +41,14 @@ describe("classifyPaths", () => {
     ]);
     expect(c.gate).toEqual(["AGENTS.md", ".github/workflows/deploy-production.yml"]);
   });
-  test("unrelated files are not sensitive", () => {
-    const c = classifyPaths(["convex/socialInbox.ts", "docs/readme.md", "convex/utils/vin.ts"]);
-    expect(c.sensitive).toEqual([]);
+  test("every backend source file is sensitive by default, generated and non-source files are not", () => {
+    const c = classifyPaths([
+      "convex/claims.ts", "convex/customers.ts", "convex/branches.ts", "convex/dealerProductDeferrals.ts",
+      "convex/exchangeRates.ts", "convex/workOrders.ts", "convex/adminSupportAgents.ts", "convex/socialInbox.ts",
+      "convex/sub/deep.ts", "convex/utils/vin.ts", "convex/_generated/api.d.ts", "convex/README.md", "docs/readme.md",
+    ]);
+    expect(c.sensitive).toHaveLength(10);
+    expect(c.sensitive).not.toContain("convex/_generated/api.d.ts");
     expect(c.gate).toEqual([]);
   });
 });
@@ -74,21 +79,29 @@ describe("invokedSkills", () => {
 });
 
 describe("gitSteps", () => {
+  const step = (st: string, all = false, dirs: string[] = [], opaque = false) => ({ step: st, all, dirs, opaque });
   test.each([
-    ["git commit -m x", [{ step: "commit", all: false }]],
-    ["git commit -am x", [{ step: "commit", all: true }]],
-    ["git -C /repo push -u origin b", [{ step: "push", all: false }]],
-    ["pnpm lint && git push", [{ step: "push", all: false }]],
-    ["FOO=1 git commit --all -m x", [{ step: "commit", all: true }]],
-    ["gh pr create --title x", [{ step: "pr", all: false }]],
+    ["git commit -m x", [step("commit")]],
+    ["git commit -am x", [step("commit", true)]],
+    ["git -C /repo push -u origin b", [step("push", false, ["/repo"])]],
+    ["pnpm lint && git push", [step("push")]],
+    ["FOO=1 git commit --all -m x", [step("commit", true)]],
+    ["gh pr create --title x", [step("pr")]],
     ["git status", []],
     ["git log --oneline", []],
-    ["bash -c 'git commit -m x'", [{ step: "commit", all: false }]],
-    ['sh -c "git -C /r push origin b"', [{ step: "push", all: false }]],
-    ["env FOO=1 git push", [{ step: "push", all: false }]],
-    ["echo $(git commit -am x)", [{ step: "commit", all: true }]],
-    ["git commit --amend", [{ step: "commit", all: false }]],
-    ["echo git commit", [{ step: "commit", all: false }]],
+    ["bash -c 'git commit -m x'", [step("commit")]],
+    ['sh -c "git -C /r push origin b"', [step("push", false, ["/r"])]],
+    ["env FOO=1 git push", [step("push")]],
+    ["echo $(git commit -am x)", [step("commit", true)]],
+    ["git commit --amend", [step("commit")]],
+    ["command git commit -m x", [step("commit")]],
+    ["/usr/bin/git push", [step("push")]],
+    ["(git push)", [step("push")]],
+    ["git --git-dir=/x/.git commit -m y", [step("commit", false, [], true)]],
+    ["git -C a -C b commit -m y", [step("commit", false, ["a", "b"])]],
+    ["echo git commit", []],
+    ["grep 'git push' notes.txt", []],
+    ["printf 'git commit'", []],
   ])("%s", (cmd, expected) => expect(gitSteps(cmd)).toEqual(expected));
 });
 
@@ -197,6 +210,50 @@ describe("evaluate (PR check)", () => {
     const r = await evaluate({ body, files: money });
     expect(r.problems.join("\n")).toContain("/simplify output");
   });
+  test.each([
+    ["zero failures", "Tests  0 failed | 12 passed"],
+    ["prose with no failure sign", "no error seen, all expected"],
+  ])("red run with %s is rejected", async (_n, out) => {
+    const body = fill().replace(/FAIL sales[\s\S]*?to be 0/, out);
+    expect((await evaluate({ body, files: money })).problems.join("\n")).toContain("does not show a failure");
+  });
+  test("a failure count or AssertionError is accepted", async () => {
+    const body = fill().replace(/FAIL sales[\s\S]*?to be 0/, "Tests  1 failed | 11 passed");
+    expect((await evaluate({ body, files: money, isPrCommit: async () => true })).ok).toBe(true);
+  });
+  test("a fence under another label is not the red run's", async () => {
+    const body = fill().replace(/- Red run:\n```\n[\s\S]*?\n```\n/, "- Red run: none\n");
+    const r = await evaluate({ body, files: money });
+    expect(r.problems.join("\n")).toContain("Red run");
+  });
+  test.each([
+    ["Seat 1 model", "not-opus-5.5"],
+    ["Seat 1 model", "opus-5.5-mini"],
+    ["Seat 2 effort", "medium-high"],
+    ["Seat 2 model", "gpt-6-sol-pro"],
+  ])("%s %j is rejected", async (label, value) => {
+    expect((await evaluate({ body: fill({ [label]: value }), files: money })).ok).toBe(false);
+  });
+  test("model with a parenthesised note is accepted", async () => {
+    const r = await evaluate({
+      body: fill({ "Seat 1 model": "Opus 5.5 (claude-opus-5-5)", "Seat 2 model": "gpt-6-sol (Codex)" }),
+      files: money,
+      isPrCommit: async () => true,
+    });
+    expect(r.problems).toEqual([]);
+  });
+  test("Seat 1 link equal to the implementer's link in a footer or a commit message is rejected", async () => {
+    const same = "https://claude.ai/code/session_IMPL999";
+    const inFooter = fill({ "Seat 1 session": same });
+    expect((await evaluate({ body: inFooter, files: money })).problems.join("\n")).toContain("separate session");
+    const viaCommit = await evaluate({
+      body: fill().replace("intro\nhttps://claude.ai/code/session_IMPL999\n", "intro\n"),
+      files: money,
+      isPrCommit: async () => true,
+      commitText: "fix\n\nClaude-Session: https://claude.ai/code/session_SEAT1abc",
+    });
+    expect(viaCommit.problems.join("\n")).toContain("separate session");
+  });
   test("gate-only change needs no red run", async () => {
     const r = await evaluate({ body: fill().replace(/- Red run:\n```\n[\s\S]*?\n```\n/, ""), files: [".github/x.yml"] });
     expect(r.problems.join("\n")).not.toContain("Red run");
@@ -213,19 +270,10 @@ describe("isPlaceholder", () => {
 });
 
 describe("classifyPaths edge cases", () => {
-  test("utils keyword files, root prefixes, gate scripts and plain code", () => {
-    const c = classifyPaths([
-      "convex/utils/depositHelpers.test.ts",
-      "convex/accountingLedger.ts",
-      "convex/migrateRoles.ts",
-      "scripts/assertReleaseChecks.mjs",
-      "convex/socialInbox.ts",
-      "convex/utils/vin.ts",
-      "convex/sub/sales.ts",
-      "lib/format.tsx",
-    ]);
-    expect(c.sensitive).toEqual(["convex/utils/depositHelpers.test.ts", "convex/accountingLedger.ts", "convex/migrateRoles.ts"]);
+  test("gate scripts and plain code", () => {
+    const c = classifyPaths(["scripts/assertReleaseChecks.mjs", "lib/format.tsx", "./convex/sales.ts"]);
     expect(c.gate).toEqual(["scripts/assertReleaseChecks.mjs"]);
+    expect(c.sensitive).toEqual(["convex/sales.ts"]);
     expect(c.code).toContain("lib/format.tsx");
   });
 });
@@ -275,6 +323,24 @@ describe("hook against a real git repository", () => {
     expect(steps.map((s: { step: string }) => s.step)).toEqual(["commit", "push"]);
     expect(steps[1].files).toContain("convex/sales.ts");
   });
+  test("-C targets the other repository's staged files, not the cwd's", () => {
+    const other = mkdtempSync(path.join(tmpdir(), "gate-other-"));
+    try {
+      sh(other, "init", "-q", "-b", "main");
+      mkdirSync(path.join(other, "convex"));
+      writeFileSync(path.join(other, "convex/claims.ts"), "export {};");
+      sh(other, "add", ".");
+      const steps = stepsFor(bash(`git -C ${other} commit -m x`), exe!);
+      expect(steps[0].files).toEqual(["convex/claims.ts"]);
+      expect(stepsFor(bash("git --git-dir=/nope commit -m x"), exe!)[0].files).toBeNull();
+      expect(stepsFor(bash("git -C /does/not/exist commit -m x"), exe!)[0].files).toBeNull();
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+  test("echo of a git command is not gated", () => {
+    expect(run(JSON.stringify(bash("echo git commit")), () => "", exe!)).toBe("");
+  });
   test("no git executable makes the change unknown and therefore gated", () => {
     expect(decide(bash("git push"), "", null as unknown as string)).toContain("tdd");
   });
@@ -316,6 +382,14 @@ describe("check (CI entry)", () => {
   test("passes with a filled section whose SHAs belong to the PR", async () => {
     const r = await check(env, api(fill(), ["convex/sales.ts"], ["abc1234ffff"]) as typeof fetch);
     expect(r.lines).toEqual(["skill-evidence: section present and consistent."]);
+  });
+  test("a PR with more than 3000 files is an error, not a silent pass", async () => {
+    const big = (async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => (String(url).includes("/files") ? Array.from({ length: 100 }, (_, i) => ({ filename: `a${i}.md` })) : { body: "", head: { sha: "abc1234" } }),
+    })) as unknown as typeof fetch;
+    await expect(check(env, big)).rejects.toThrow("3000");
   });
   test("surfaces an API error", async () => {
     const bad = (async () => ({ ok: false, status: 403 })) as unknown as typeof fetch;

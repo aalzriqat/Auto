@@ -6,32 +6,14 @@
  * mechanical. It never replaces the two-seat review.
  */
 
-/** Keywords in a `convex/utils/` file name that mark money, permission or tenancy code. */
-const UTIL_KEYWORDS = [
-  "money", "deposit", "sale", "commission", "cost", "financ", "invoice", "ledger", "payroll",
-  "prepaid", "expense", "settlement", "supplier", "cheque", "customercredit", "fee", "vat",
-  "bank", "cash", "dealunwind", "handover", "amort", "partner", "payment", "economics", "quote",
-  "retained", "profit", "gross", "custody", "commit", "execution", "materialization",
-  "closewarnings", "manualfinance", "orgreset", "vehicleownership", "permissions", "tenancy",
-  "idempotency", "auditlog",
-];
-
-/** `convex/<name>.ts` files that hold money, permission, tenancy or schema logic. */
-const ROOT_NAMES = new Set([
-  "sales", "deposits", "deposit", "depositRequests", "depositRevenueImpact", "collections",
-  "collectionReminderActions", "expenses", "payroll", "bankAccounts", "bankReconciliation",
-  "bankBalanceBackfill", "cashDrawer", "financingEconomics", "customerFinanceCompanyPayments",
-  "dealUnwind", "dealCommissions", "dealOverview", "dealWorkspace", "applications",
-  "prepaidExpenses", "partnerEquity", "paymentIntents", "paymentVouchers", "retainedCreditRefunds",
-  "subledger", "sourcingPayables", "fixedAssets", "chartOfAccounts", "transactions", "commitments",
-  "vatReport", "reports", "orgFinancialReset", "orgResetPreflight", "quotes",
-  "journalReportEligibility", "diagnosePrepaidLedgerIntegrity", "chequeLineageAudit",
-  "financialAudit", "aggregates", "subscriptions", "vehicleEdits", "vehicles",
-  "sourcedAgentImpact", "dashboardExpenseSummary", "dashboard", "crons", "http", "schema", "roles",
-  "memberships", "users", "organizations", "orgSettings", "approvals", "adminAuth", "adminOrgs",
-  "adminData", "adminUsers", "adminImpersonation",
-]);
-const ROOT_PREFIXES = ["accounting", "finance", "supplier", "migrate"];
+/**
+ * Default deny: every file under `convex/` is treated as money, permission,
+ * tenancy or schema code unless it is generated or not source. A name list
+ * missed claims.ts, customers.ts, branches.ts and others, and a missed file
+ * takes the no-evidence pass, so the safe default is the whole backend.
+ */
+const BACKEND_EXEMPT_PREFIXES = ["convex/_generated/"];
+const BACKEND_SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".json"];
 
 const GATE_EXACT = new Set(["AGENTS.md", "regression/rulings.json"]);
 const GATE_PREFIXES = [".github/", ".claude/", "scripts/skillEnforcement/", "scripts/intelligence/"];
@@ -39,26 +21,14 @@ const GATE_SCRIPTS = ["assertRelease", "checkReleaseAuthority", "verifyZeroState
 
 const CODE_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs", ".cjs"];
 
-function stem(file) {
-  return file.replace(/\.test\.ts$/, "").replace(/\.ts$/, "");
-}
-
 function isGate(p) {
   if (GATE_EXACT.has(p) || GATE_PREFIXES.some((x) => p.startsWith(x))) return true;
   return p.startsWith("scripts/") && GATE_SCRIPTS.some((x) => p.slice("scripts/".length).startsWith(x));
 }
 
 function isMoney(p) {
-  if (!p.startsWith("convex/")) return false;
-  const rest = p.slice("convex/".length);
-  if (rest.startsWith("accounting/")) return true;
-  if (rest.startsWith("utils/")) {
-    const name = stem(rest.slice("utils/".length)).toLowerCase();
-    return !name.includes("/") && UTIL_KEYWORDS.some((k) => name.includes(k));
-  }
-  if (rest.includes("/") || !rest.endsWith(".ts")) return false;
-  const name = stem(rest);
-  return ROOT_NAMES.has(name) || ROOT_PREFIXES.some((x) => name.startsWith(x));
+  if (!p.startsWith("convex/") || BACKEND_EXEMPT_PREFIXES.some((x) => p.startsWith(x))) return false;
+  return BACKEND_SOURCE_EXTENSIONS.some((e) => p.endsWith(e));
 }
 
 export function classifyPaths(paths) {
