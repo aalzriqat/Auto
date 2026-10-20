@@ -716,7 +716,7 @@ describe("resetOrgFinancialData never strands a payslip's commission line refere
           })
         );
       }
-      for (const lineId of lineIds) {
+      for (const lineId of [...lineIds].reverse()) {
         await ctx.db.insert("payrollItems", {
           orgId, runId, userId, baseSalaryMinor: 0, commissionMinor: 1000,
           otherEarningsMinor: 0, advanceDeductionMinor: 0, otherDeductionMinor: 0,
