@@ -118,6 +118,9 @@ export const AppErrorCode = {
   RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED: "RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED",
   CHEQUE_INVOICE_UNCOVERED_HELD: "CHEQUE_INVOICE_UNCOVERED_HELD",
   SALE_INVOICE_RECEIPT_DOORS_DISABLED: "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+  // SCRUM-760 decision B: the cleared-cheque return is blocked for the narrow pilot
+  // (utils/postDeliveryDoorContainment.ts). Translated under ServerError_<code>.
+  CLEARED_CHEQUE_RETURN_PILOT_DISABLED: "CLEARED_CHEQUE_RETURN_PILOT_DISABLED",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",
