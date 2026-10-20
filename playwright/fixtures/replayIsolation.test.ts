@@ -3,6 +3,8 @@ import {
   decideReplayEnvironment,
   deploymentNameOf,
   replayOrgRefusals,
+  REPLAY_MAX_ORG_AGE_MS,
+  type ReplayAttestation,
   type ReplayOrgFacts,
 } from "./replayIsolation";
 
@@ -18,29 +20,75 @@ describe("deploymentNameOf", () => {
   });
 });
 
-describe("decideReplayEnvironment", () => {
-  const preview = "https://happy-otter-123.convex.cloud";
+describe("decideReplayEnvironment (allow-list on the backend's own attestation)", () => {
+  const url = "https://happy-otter-123.convex.cloud";
+  const good: ReplayAttestation = {
+    attested: true,
+    reasons: [],
+    deploymentName: "happy-otter-123",
+    markerDeploymentName: "happy-otter-123",
+    orgAgeMs: 60_000,
+  };
+  const with_ = (over: Partial<ReplayAttestation>): ReplayAttestation => ({ ...good, ...over });
 
-  it.each(["clever-mockingbird-719", "kindly-hound-172", "focused-starfish-265"])("refuses production %s whatever else is set", (name) => {
-    expect(decideReplayEnvironment(`https://${name}.convex.cloud`, undefined).kind).toBe("REFUSED");
-    expect(decideReplayEnvironment(`https://${name}.convex.cloud`, name).kind).toBe("REFUSED");
-    expect(decideReplayEnvironment(preview, name).kind).toBe("REFUSED");
+  it("runs only on a positive attestation whose URL, backend and marker name one deployment", () => {
+    expect(decideReplayEnvironment(url, good, true)).toEqual({ kind: "RUN", deployment: "happy-otter-123" });
   });
 
-  it("is NOT RUN, never a run, when no disposable deployment was named", () => {
-    expect(decideReplayEnvironment(preview, undefined).kind).toBe("NOT_RUN");
-    expect(decideReplayEnvironment(preview, "  ").kind).toBe("NOT_RUN");
-    expect(decideReplayEnvironment(undefined, undefined).kind).toBe("NOT_RUN");
+  it("is NOT RUN, never a run, when the marker or attestation is missing or unreadable", () => {
+    expect(decideReplayEnvironment(url, null, true).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, undefined, true).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, with_({ attested: false, reasons: ["NO_MARKER"] }), true).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, with_({ attested: false, reasons: ["CLASS_NOT_PREVIEW"] }), true)).toMatchObject({
+      kind: "NOT_RUN",
+      reason: expect.stringContaining("CLASS_NOT_PREVIEW"),
+    });
   });
 
-  it("refuses when the URL is not the deployment that was named, or names no deployment", () => {
-    expect(decideReplayEnvironment(preview, "other-fox-9").kind).toBe("REFUSED");
-    expect(decideReplayEnvironment("http://localhost:3210", "happy-otter-123").kind).toBe("REFUSED");
-    expect(decideReplayEnvironment(undefined, "happy-otter-123").kind).toBe("REFUSED");
+  it("is NOT RUN unless the lane declares the org dedicated, even with a positive attestation", () => {
+    expect(decideReplayEnvironment(url, good, false).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, good).kind).toBe("NOT_RUN");
   });
 
-  it("runs only when the named disposable deployment is the one addressed", () => {
-    expect(decideReplayEnvironment(preview, "happy-otter-123")).toEqual({ kind: "RUN", deployment: "happy-otter-123" });
+  it("still refuses production when the dedicated-org flag is absent", () => {
+    expect(decideReplayEnvironment("https://clever-mockingbird-719.convex.cloud", good, false).kind).toBe("REFUSED");
+  });
+
+  it("does not trust an operator-supplied name: an attestation of false stays NOT RUN whatever the URL says", () => {
+    expect(decideReplayEnvironment(url, with_({ attested: false, reasons: [] }), true).kind).toBe("NOT_RUN");
+  });
+
+  it.each(["clever-mockingbird-719", "kindly-hound-172", "focused-starfish-265"])(
+    "refuses production %s even when the backend attests (a marker on a prod-named deployment)",
+    (name) => {
+      const prodUrl = `https://${name}.convex.cloud`;
+      expect(decideReplayEnvironment(prodUrl, with_({ deploymentName: name, markerDeploymentName: name }), true).kind).toBe("REFUSED");
+      expect(decideReplayEnvironment(prodUrl, null, true).kind).toBe("REFUSED");
+      expect(decideReplayEnvironment(prodUrl, with_({ attested: false, reasons: ["NO_MARKER"] }), true).kind).toBe("REFUSED");
+      // A preview URL whose backend or marker names production is refused too.
+      expect(decideReplayEnvironment(url, with_({ deploymentName: name }), true).kind).toBe("REFUSED");
+      expect(decideReplayEnvironment(url, with_({ markerDeploymentName: name }), true).kind).toBe("REFUSED");
+    }
+  );
+
+  it("refuses when the URL, the backend and the marker do not name one deployment", () => {
+    expect(decideReplayEnvironment(url, with_({ deploymentName: "other-fox-9" }), true).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment(url, with_({ markerDeploymentName: "other-fox-9" }), true).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment("https://other-fox-9.convex.cloud", good, true).kind).toBe("REFUSED");
+  });
+
+  it("refuses an attested deployment that does not name itself everywhere", () => {
+    expect(decideReplayEnvironment(url, with_({ deploymentName: null }), true).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment(url, with_({ markerDeploymentName: null }), true).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment("http://localhost:3210", good, true).kind).toBe("REFUSED");
+    expect(decideReplayEnvironment(undefined, good, true).kind).toBe("REFUSED");
+  });
+
+  it("is NOT RUN when the organization was not created by the seed recently", () => {
+    expect(decideReplayEnvironment(url, with_({ orgAgeMs: REPLAY_MAX_ORG_AGE_MS + 1 }), true).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, with_({ orgAgeMs: null }), true).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, with_({ orgAgeMs: -1 }), true).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, with_({ orgAgeMs: REPLAY_MAX_ORG_AGE_MS }), true).kind).toBe("RUN");
   });
 });
 
@@ -55,7 +103,7 @@ describe("replayOrgRefusals", () => {
     usableAccountCount: 2,
   };
 
-  it("allows a freshly created organization", () => {
+  it("allows an organization with nothing the mutation would refuse", () => {
     expect(replayOrgRefusals(fresh)).toEqual([]);
   });
 

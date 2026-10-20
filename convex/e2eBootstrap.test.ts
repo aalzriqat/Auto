@@ -1,6 +1,6 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
 import {
@@ -1184,5 +1184,82 @@ describe("setHuntSeatRole — SCRUM-768 hunt seat re-roling", () => {
         expectedCloudUrl: CLOUD_URL,
       }),
     ).rejects.toThrow(/no user row/);
+  });
+});
+describe("replayAttestation — the positive attestation the GL replay requires (SCRUM-795)", () => {
+  async function seededAs() {
+    const t = await markedDeployment();
+    const result = await bootstrap(t);
+    return {
+      t,
+      orgId: result.orgId,
+      asPrimary: t.withIdentity({ subject: PRIMARY.clerkUserId, clerkId: PRIMARY.clerkUserId }),
+    };
+  }
+
+  test("attests a seeded preview: class, marker for this deployment, org bound to it and created after it", async () => {
+    const { asPrimary, orgId } = await seededAs();
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId });
+    expect(attestation).toMatchObject({
+      attested: true,
+      reasons: [],
+      deploymentName: "the-one-preview",
+      markerDeploymentName: "the-one-preview",
+    });
+    expect(attestation.orgAgeMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test("does not attest when the deployment declares no preview class (production answers false)", async () => {
+    const { asPrimary, orgId } = await seededAs();
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "");
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId });
+    expect(attestation.attested).toBe(false);
+    expect(attestation.reasons).toContain("CLASS_NOT_PREVIEW");
+  });
+
+  test("does not attest when the marker names another deployment, is not bound to the org, or is missing", async () => {
+    const { t, asPrimary, orgId } = await seededAs();
+    await t.run(async (ctx) => {
+      const marker = await ctx.db.query("e2ePreviewBootstrap").first();
+      await ctx.db.patch(marker!._id, { convexCloudUrl: "https://another-one.convex.cloud" });
+    });
+    const foreign = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId });
+    expect(foreign.attested).toBe(false);
+    expect(foreign.reasons).toContain("MARKER_NOT_THIS_DEPLOYMENT");
+    expect(foreign.markerDeploymentName).toBe("another-one");
+
+    await t.run(async (ctx) => {
+      const marker = await ctx.db.query("e2ePreviewBootstrap").first();
+      await ctx.db.patch(marker!._id, { convexCloudUrl: CLOUD_URL, orgId: undefined });
+    });
+    const unbound = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId });
+    expect(unbound.attested).toBe(false);
+    expect(unbound.reasons).toContain("ORG_NOT_BOUND_TO_MARKER");
+
+    await t.run(async (ctx) => {
+      const marker = await ctx.db.query("e2ePreviewBootstrap").first();
+      await ctx.db.delete(marker!._id);
+    });
+    const none = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId });
+    expect(none.attested).toBe(false);
+    expect(none.reasons).toContain("NO_MARKER");
+  });
+
+  test("does not attest an organization created before the marker", async () => {
+    const { t, asPrimary, orgId } = await seededAs();
+    await t.run(async (ctx) => {
+      const marker = await ctx.db.query("e2ePreviewBootstrap").first();
+      await ctx.db.patch(marker!._id, { markedAt: Date.now() + 60_000 });
+    });
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId });
+    expect(attestation.attested).toBe(false);
+    expect(attestation.reasons).toContain("ORG_PREDATES_MARKER");
+  });
+
+  test("refuses a caller who is not a member of the organization", async () => {
+    const { t, orgId } = await seededAs();
+    await expect(
+      t.withIdentity({ subject: "user_outsider", clerkId: "user_outsider" }).query(api.e2eBootstrap.replayAttestation, { orgId }),
+    ).rejects.toThrow();
   });
 });

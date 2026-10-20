@@ -3,7 +3,12 @@ import { newContainedContext } from "../containedContext";
 import { gotoOrgRoute, APPROVER_AUTH_FILE, resolveOrgId, authenticatedConvexClient } from "../utils";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { decideReplayEnvironment, replayOrgRefusals, REPLAY_CURRENCY_SCALES } from "../fixtures/replayIsolation";
+import {
+  decideReplayEnvironment,
+  replayOrgRefusals,
+  REPLAY_CURRENCY_SCALES,
+  type ReplayAttestation,
+} from "../fixtures/replayIsolation";
 
 /**
  * SCRUM-795 (SCRUM-50): manual journals are OFF for the narrowed pilot (owner
@@ -41,13 +46,15 @@ import { decideReplayEnvironment, replayOrgRefusals, REPLAY_CURRENCY_SCALES } fr
  * second test below through an owner's opening balance
  * (accountingCutover.postOpeningBalanceDirect), but ONLY inside an isolation
  * boundary (playwright/fixtures/replayIsolation.ts): the replay writes to the
- * books, so it runs only on a deployment the operator names as disposable
- * (E2E_REPLAY_DISPOSABLE_DEPLOYMENT) and only in a freshly created organization
- * with no period and no journal in any status. Production deployments are
- * refused outright. No current lane sets that variable, so everywhere today the
- * replay reports an explicit NOT RUN (never a pass) and the backend tests are
- * the evidence: convex/manualJournalAccountingDate.test.ts and
- * accountingPhase10.test.ts (switch mocked off).
+ * books, so it runs only when the backend itself attests, through
+ * e2eBootstrap.replayAttestation, that it is a disposable preview and that the
+ * organization was created by the trusted seed on it. Production deployments
+ * are refused outright. Without that attestation the replay is SKIPPED (shown
+ * as skipped, never passed). The trusted-main E2E lane seeds such an org, so the
+ * replay can run there once the lane is allowed to run it; every other lane
+ * skips. The backend tests are the evidence meanwhile:
+ * convex/manualJournalAccountingDate.test.ts and accountingPhase10.test.ts
+ * (switch mocked off).
  */
 const REFUSAL_CODE = "MANUAL_JOURNALS_DISABLED";
 const LEGACY_MEMO = "E2E legacy pending draft (SCRUM-795)";
@@ -246,24 +253,29 @@ async function listAllJournals(
 test.describe("accounting register: a posted journal", () => {
   test("shows its accounting date, period and balanced debit/credit totals", async ({ page }) => {
     // 1. ISOLATION BOUNDARY. This replay WRITES to the books (creating a period wakes held rows and schedules
-    //    outbox work; the opening balance is a posted journal), so it runs only against a disposable, freshly
-    //    created test organization on a deployment the operator names as disposable, and never on production.
-    //    Where a lane cannot provide that, the replay reports NOT RUN (an annotation and an early return, never
-    //    a silent pass); the backend tests stay the evidence there. See replayIsolation.ts and the unit test.
-    const environment = decideReplayEnvironment(
-      process.env.NEXT_PUBLIC_CONVEX_URL,
-      process.env.E2E_REPLAY_DISPOSABLE_DEPLOYMENT
-    );
-    if (environment.kind === "REFUSED") throw new Error(`GL register replay refused: ${environment.reason}`);
-    if (environment.kind === "NOT_RUN") {
-      test.info().annotations.push({ type: "NOT RUN", description: `GL register replay: ${environment.reason}` });
-      console.warn(`NOT RUN: GL register replay: ${environment.reason}`);
-      return;
-    }
-
+    //    outbox work; the opening balance is a posted journal), so it runs only when the BACKEND ITSELF attests,
+    //    over the connection this test uses, that it is a disposable preview and that the organization was
+    //    created by the trusted seed on it (e2eBootstrap.replayAttestation: preview class, marker minted on this
+    //    deployment, org bound to the marker and created after it). An operator-supplied name is not trusted.
+    //    A refused guard (production, or URL/backend/marker disagree) FAILS. Without the attestation the replay
+    //    is SKIPPED, which the report shows as skipped (never passed); that is unavailable evidence, not
+    //    certification, and the backend tests stay the evidence. See replayIsolation.ts and its unit test.
     await gotoOrgRoute(page, "accounting");
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
     const client = await authenticatedConvexClient(page);
+    const attestation = await client
+      .query(api.e2eBootstrap.replayAttestation, { orgId })
+      .then(
+        (value) => value as ReplayAttestation,
+        () => null
+      );
+    const environment = decideReplayEnvironment(
+      process.env.NEXT_PUBLIC_CONVEX_URL,
+      attestation,
+      process.env.E2E_REPLAY_DEDICATED_ORG === "1"
+    );
+    if (environment.kind === "REFUSED") throw new Error(`GL register replay refused: ${environment.reason}`);
+    test.skip(environment.kind === "NOT_RUN", `GL register replay not run: ${environment.kind === "NOT_RUN" ? environment.reason : ""}`);
 
     // Every read happens BEFORE the first write. The organization must be freshly created: no period, no
     // journal in any status (POSTED and REVERSED included, the mutation's own refusal rule), no opening

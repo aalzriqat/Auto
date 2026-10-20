@@ -144,7 +144,8 @@
  * product works.
  */
 import { v, ConvexError } from "convex/values";
-import { internalQuery } from "./_generated/server";
+import { internalQuery, query } from "./_generated/server";
+import { requireTenantAuth } from "./utils/tenancy";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -1357,6 +1358,56 @@ export const setHuntSeatRole = internalMutation({
       seat,
       role: role.name,
       permissionsResetToTemplate: differs,
+    };
+  },
+});
+
+// ─── The replay attestation (SCRUM-795) ──────────────────────────────────────
+
+/**
+ * What the GL-register replay (playwright/tests/accounting.spec.ts) needs from the deployment BEFORE it is allowed
+ * to write to the books: a positive attestation, read from the backend actually in use, that this is a disposable
+ * preview and that the organization it is about to write to was created by the trusted seed on this very deployment.
+ *
+ * It never throws and never reveals a value: every refusal is a fixed reason code, so it is safe to expose on
+ * production, where it answers `attested: false` (no `AUTOFLOW_DEPLOYMENT_CLASS=preview`, no marker). Read-only.
+ * It authorizes nothing by itself; the replay's guard decides.
+ *
+ * Freshness is PROVEN from provenance, not inferred from emptiness: the marker is minted only on an empty
+ * deployment (`assertDeploymentLooksDisposable`), names this deployment, and is bound to the QA organization by
+ * `bootstrapE2EOrganization`; an organization created at or after the marker's `markedAt` was therefore created by
+ * the seed here. `orgAgeMs` lets the guard also bound how long ago.
+ */
+export const replayAttestation = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const reasons: string[] = [];
+    const attempt = (code: string, check: () => void) => {
+      try {
+        check();
+      } catch {
+        reasons.push(code);
+      }
+    };
+    attempt("CLASS_NOT_PREVIEW", () => assertPreviewDeploymentClass("replay attestation"));
+    attempt("CONFIGURED_LIKE_REAL_DEPLOYMENT", () => assertNotConfiguredLikeARealDeployment("replay attestation"));
+    const marker = await readMarker(ctx);
+    if (!marker) {
+      reasons.push("NO_MARKER");
+    } else {
+      attempt("MARKER_NOT_THIS_DEPLOYMENT", () => assertMarkerBelongsToThisDeployment(marker));
+      if (marker.orgId !== args.orgId) reasons.push("ORG_NOT_BOUND_TO_MARKER");
+    }
+    const org = await ctx.db.get(args.orgId);
+    if (!org) reasons.push("NO_ORG");
+    else if (marker && org._creationTime < marker.markedAt) reasons.push("ORG_PREDATES_MARKER");
+    return {
+      attested: reasons.length === 0,
+      reasons,
+      deploymentName: deploymentNameFromUrl(currentCloudUrl()),
+      markerDeploymentName: marker ? deploymentNameFromUrl(marker.convexCloudUrl ?? null) : null,
+      orgAgeMs: org ? Date.now() - org._creationTime : null,
     };
   },
 });
