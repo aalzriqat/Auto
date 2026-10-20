@@ -1534,6 +1534,8 @@ export async function runRehearsalCases(ctx) {
       // cell: an authorized actor with valid arguments (including a valid return fee bank) is refused with
       // the specific containment code, and the clearing, the settled debt and the ledger are all untouched.
       // Re-enabling the door converts this back into the full reversal cell in the same change.
+      const preReturnFailedOutbox = await ownerMust("query", "accountingOutbox:listPending", { orgId, status: "FAILED", limit: 200 });
+      const preReturnFailedIds = (preReturnFailedOutbox ?? []).map((row) => String(row._id)).sort((a, b) => a.localeCompare(b));
       const preReturnEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", { orgId, limit: 200 });
       const preReturnEventIds = (preReturnEvents ?? []).map((event) => String(event._id)).sort((a, b) => a.localeCompare(b));
       const returned = await ownerCall("mutation", "collections:returnClearedCheque", {
@@ -1548,7 +1550,7 @@ export async function runRehearsalCases(ctx) {
       expectEqual(returned.errorCode, "CLEARED_CHEQUE_RETURN_PILOT_DISABLED", "the cleared-cheque return's refusal code");
 
       // UNCHANGED, as far as this case reads: the same events (none added, none reversed), the clearing still POSTED with its
-      // lines intact, the debt still settled, the cheque still CLEARED, no failed outbox row.
+      // lines intact, the debt still settled, the cheque still CLEARED, the FAILED outbox list identical to its pre-refusal read.
       const postReturnEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", { orgId, limit: 200 });
       const postReturnEventIds = (postReturnEvents ?? []).map((event) => String(event._id)).sort((a, b) => a.localeCompare(b));
       if (JSON.stringify(postReturnEventIds) !== JSON.stringify(preReturnEventIds)) {
@@ -1582,8 +1584,9 @@ export async function runRehearsalCases(ctx) {
         status: "FAILED",
         limit: 200,
       });
-      if ((failedOutbox ?? []).length > 0) {
-        fail(`the refused return left ${failedOutbox.length} FAILED accounting event(s) behind`);
+      const postReturnFailedIds = (failedOutbox ?? []).map((row) => String(row._id)).sort((a, b) => a.localeCompare(b));
+      if (JSON.stringify(postReturnFailedIds) !== JSON.stringify(preReturnFailedIds)) {
+        fail(`the refused return changed the FAILED accounting outbox (before ${preReturnFailedIds.length}, after ${postReturnFailedIds.length})`);
       }
 
       return {

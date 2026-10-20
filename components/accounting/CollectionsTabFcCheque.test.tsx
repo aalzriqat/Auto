@@ -298,7 +298,13 @@ describe("Collections, Cheques tab: Return", () => {
       cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "CLEARED" }),
     ]);
     await openChequesTab();
-    expect(screen.getByTestId("cheque-return-pilot-disabled").textContent).toBe(arabic);
+    const rendered = screen.getByTestId("cheque-return-pilot-disabled").textContent;
+    // Hard-coded literals (copied from lib/i18n/domains/common.ts) so a missing or key-valued AR entry cannot pass.
+    const expectedArabic = "إرجاع شيك تمت تسويته بالفعل غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.";
+    expect(rendered).toBe(expectedArabic);
+    expect(rendered).not.toBe("ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED");
+    expect(rendered).not.toBe("Returning a cheque that has already cleared is not available during the pilot. Nothing has been changed.");
+    expect(arabic).toBe(expectedArabic);
   });
 
   test("SCRUM-760 shipped state, CONTROL: a DEPOSITED customer cheque keeps an enabled Return (returnCheque is not blocked)", async () => {
