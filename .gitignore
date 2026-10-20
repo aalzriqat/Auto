@@ -91,6 +91,7 @@ sentry-wizard-installation-error-*.log
 /DEAL-FINANCIALS-SPEC.md
 /.claude/*
 !/.claude/skills/
+!/.claude/settings.json
 /.agents/
 /graphify-out/
 /.mem0/

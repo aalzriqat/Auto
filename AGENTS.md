@@ -16,6 +16,8 @@ Convex agent skills for common tasks can be installed by running
 
 Shared skills live in `.claude/skills/`. Read `.claude/skills/README.md` for which skill to use in which situation and for what is deliberately not adopted. The skills sit below this file and the project instructions in precedence. They never replace the two-seat review for money changes, and a subagent they suggest is not a review seat.
 
+Invocation is enforced, not optional. A session hook (`.claude/settings.json`) blocks commit, push and PR creation until the skills required for the touched paths have been invoked, and the required `skill-evidence` PR check fails a money, permission or gate PR whose body lacks a filled `## Skill evidence` section (red run, `/simplify` output, Seat 1 session and model, Seat 2 model and effort). See the Enforcement section of `.claude/skills/README.md`. These checks never write `review-evidence/*.json`.
+
 ## Pilot release gate (owner standard, 2026-10-07)
 
 The pilot release, which happens before the repository transfer, is gated by Jira epic
