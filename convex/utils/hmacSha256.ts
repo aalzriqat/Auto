@@ -2,10 +2,13 @@
  * HMAC-SHA256, pure and synchronous, with no imports.
  *
  * Why this exists: the GL-replay attestation (e2eBootstrap.replayAttestation) must compare a proof the client derived
- * from a per-run secret without that secret travelling as a query argument. Web Crypto's `crypto.subtle` is
- * asynchronous and its availability in every Convex runtime was not verifiable from this repository, so the primitive
- * is implemented here and pinned by the RFC 4231 test vectors and by a cross-check against Node's `createHmac`
- * (convex/utils/hmacSha256.test.ts, playwright/fixtures/replayProof.test.ts).
+ * from a per-run secret without that secret travelling as a query argument. This is NOT because crypto.subtle is
+ * unavailable: the repository already uses it (convex/http.ts, websites.ts, accounting/postingRules.ts,
+ * memberships.ts). It is a design choice: the binding verdict (`replayRunBindingReasons`) stays a pure synchronous
+ * function that unit tests can drive with fixed clocks and vectors, and the primitive is pinned by the FIPS 180 and
+ * RFC 4231 vectors and by a cross-check against Node's `createHmac` (convex/utils/hmacSha256.test.ts,
+ * playwright/fixtures/replayProof.test.ts). Swapping to crypto.subtle is possible (the query handler is async) at the
+ * cost of making that verdict async.
  */
 
 const K = new Uint32Array([

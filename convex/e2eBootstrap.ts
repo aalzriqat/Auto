@@ -1373,14 +1373,15 @@ export const setHuntSeatRole = internalMutation({
  *   npx convex env set E2E_REPLAY_RUN_EXPIRES_AT <epoch ms, at most 2 hours ahead; the lane uses at most 1 hour>
  *
  * and passes the same nonce and run id to the Playwright process as E2E_REPLAY_RUN_NONCE and E2E_REPLAY_RUN_ID. When
- * the run ends, the lane REMOVES all three from the preview (`npx convex env remove <name>`) and then deletes the
- * preview. NEVER set these on a production deployment.
+ * the run ends, on every run that reaches cleanup, the lane REMOVES all three from the preview (`npx convex env
+ * remove <name>`) and then deletes the preview. The expiry is the bound for a hard runner death or a failed removal.
+ * NEVER set these on a production deployment.
  *
  * WHAT THIS DOES AND DOES NOT PROVE. The preview class and the marker survive promotion to production (see the module
  * header), and so would these three variables if the preview were promoted while they are set. This module cannot
  * detect a promotion: the installed convex package (1.42.1) exposes only CONVEX_CLOUD_URL and CONVEX_SITE_URL to a
  * function, no deployment-type signal, and a promotion keeps the URL and the environment. What bounds the exposure is
- * therefore operational and short: the lane's removal of the three variables at the end of every run (after which this
+ * therefore operational and short: the lane's removal of the three variables on every run that reaches cleanup (after which this
  * query answers NONCE_NOT_SET), the expiry, and the 2 hour cap enforced here, so a preview promoted mid-run could
  * attest only until the run ends or at most 2 hours. A deployment whose name differs from the one the marker vouches
  * for (a re-homed or copied deployment) is refused by `assertMarkerBelongsToThisDeployment`.
@@ -1391,7 +1392,7 @@ const REPLAY_EXPIRES_ENV_VAR = "E2E_REPLAY_RUN_EXPIRES_AT";
 /** 128 bits of entropy as hex is 32 characters; shorter is refused. */
 export const REPLAY_NONCE_MIN_LENGTH = 32;
 const REPLAY_NONCE_PATTERN = /^[A-Za-z0-9_-]+$/;
-const REPLAY_RUN_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+export const REPLAY_RUN_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const REPLAY_PROOF_PATTERN = /^[0-9a-f]{64}$/;
 /** A run is short; an expiry further ahead than this is itself refused. The lane uses at most one hour. */
 export const REPLAY_MAX_LIFETIME_MS = 2 * 60 * 60 * 1000;

@@ -51,14 +51,11 @@ export function deploymentNameOf(convexUrl: string | undefined): string | null {
   return match ? match[1]! : null;
 }
 
-/**
- * Decides whether the replay may write, from the configured Convex URL and the backend's own attestation.
- * Order matters: production is refused first, then an absent or negative attestation is NOT RUN, then the three
- * names (URL, backend, marker) must agree. Only a positive attestation that names the deployment the URL
- * addresses, and the marker names the same one, is RUN.
- */
 /** 128 bits of entropy as hex is 32 characters; a shorter nonce is refused. Must match the server's minimum. */
 export const REPLAY_NONCE_MIN_LENGTH = 32;
+
+/** Same pattern as the server's `REPLAY_RUN_ID_PATTERN`; a cross-test pins them together. */
+export const REPLAY_RUN_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** What the lane gives the test process. Every field only ever NARROWS; none replaces the backend's attestation. */
 export interface ReplayLane {
@@ -70,6 +67,12 @@ export interface ReplayLane {
   runId?: string;
 }
 
+/**
+ * Decides whether the replay may write, from the configured Convex URL and the backend's own attestation.
+ * Order matters: production is refused first, then an absent or negative attestation is NOT RUN, then the three
+ * names (URL, backend, marker) must agree. Only a positive attestation that names the deployment the URL
+ * addresses, and the marker names the same one, is RUN.
+ */
 export function decideReplayEnvironment(
   convexUrl: string | undefined,
   attestation: ReplayAttestation | null | undefined,
@@ -87,7 +90,7 @@ export function decideReplayEnvironment(
       reason: "the lane did not declare the org dedicated to this replay, and its writes would change what later specs in the run read",
     };
   }
-  if (typeof lane.runId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(lane.runId)) {
+  if (typeof lane.runId !== "string" || !REPLAY_RUN_ID_PATTERN.test(lane.runId)) {
     return {
       kind: "NOT_RUN",
       reason: "the lane gave no well-formed run id (E2E_REPLAY_RUN_ID: 1 to 64 of A-Z a-z 0-9 _ -), so this deployment was not bound to this run",
