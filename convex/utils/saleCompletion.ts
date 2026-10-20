@@ -2253,7 +2253,6 @@ async function assertCashPayFirstBeforeWrites(
     financingType: args.financingType,
     financedSalePlan: args.financedSalePlan,
     treatment: args.depositResolution?.treatment,
-    treatmentReason: args.depositResolution?.reason,
     settlesDirectToSupplierOnSourcedStock:
       vehicle.sourceType === "SOURCED" && !dealershipCollectsGross(consignedSettlementRoute(args)),
   });

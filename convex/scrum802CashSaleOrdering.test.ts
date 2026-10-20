@@ -218,6 +218,56 @@ describe("the pay-first refusal is raised before the first write on every comple
     });
   });
 
+  // Codex Seat 2 (dffcd464): on a SHARED (allocated multi-car) deposit these treatments pay nothing either, so the unpaid
+  // balance is refused before the sale row is inserted rather than left to the completion's own later refusal.
+  describe.each([
+    ["REFUND_TO_CUSTOMER", { treatment: "REFUND_TO_CUSTOMER", refundMethod: "CASH" }],
+    ["FORFEITED", { treatment: "FORFEITED" }],
+    ["OTHER (with a reason)", { treatment: "OTHER", reason: "manager-approved arrangement" }],
+    ["OTHER (no reason)", { treatment: "OTHER" }],
+  ] as const)("a fully allocated two-car deposit whose treatment is stated as %s", (label, depositResolution) => {
+    async function twoCarQuote(tag: string) {
+      const s = await seedCashDealer(`ordsh${tag}`, MODULES);
+      const second = await s.mkVehicle(`VINSH${tag}`, { purchasePrice: 17000 });
+      const items = [{ vehicleId: s.vehicleId, unitPrice: 20_000 }, { vehicleId: second, unitPrice: 20_000 }];
+      const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+        orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, vehiclePrice: 40_000, downPayment: 0, termMonths: 0,
+        vehicleItems: items,
+      });
+      await deposit(s, quoteId, 40_000);
+      await s.asUser.mutation(api.deposits.allocateToVehicles, {
+        orgId: s.orgId, quoteId, allocations: [{ vehicleId: s.vehicleId, amount: 20_000 }, { vehicleId: second, amount: 20_000 }],
+      });
+      return { s, quoteId, items };
+    }
+    const tag = label.replace(/[^A-Za-z]/g, "").slice(0, 12);
+
+    test("completeSale is refused on the unpaid balance with zero writes", async () => {
+      const { s, quoteId } = await twoCarQuote(`a${tag}`);
+      const writes: string[] = [];
+      const refusal = await refusalDataOf(
+        s.t.run((ctx) => completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution })))
+      );
+      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(writes).toEqual([]);
+    });
+
+    test("completeSalesForLineItems is refused for BOTH cars with zero writes", async () => {
+      const { s, quoteId, items } = await twoCarQuote(`b${tag}`);
+      const writes: string[] = [];
+      const refusal = await refusalDataOf(
+        s.t.run((ctx) =>
+          completeSalesForLineItems(recordingCtx(asMutationCtx(ctx), writes), {
+            orgId: s.orgId, quoteId, vehicleItems: items, customerId: s.customerId, salespersonId: s.userId,
+            saleDate: Date.now(), financingType: "CASH", actorId: s.userId, depositResolution,
+          })
+        )
+      );
+      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(writes).toEqual([]);
+    });
+  });
+
   test("completeSale: a part deposit (no trade-in) is refused with zero writes", async () => {
     const s = await seedCashDealer("ordpartonly", MODULES);
     const quoteId = await quoteFor(s);

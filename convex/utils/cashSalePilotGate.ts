@@ -90,13 +90,13 @@ export type PayFirstDepositTreatment =
  *  - the stated treatment decides whether that money reaches the invoice: no treatment, APPLY_TO_DEALER_AMOUNT and
  *    APPLY_TO_TRANSACTION_SETTLEMENT on the dealership-collects-gross route (or owned stock) are applied against the
  *    invoice; REFUND_TO_CUSTOMER, FORFEITED, OTHER and the supplier-settlement route apply nothing to it;
- *  - a case the completion refuses for its own reason (a deposit larger than the bill with no treatment stated, a shared
- *    deposit refunded from here, an OTHER treatment with no reason, an unallocated multi-car deposit) is left to that
- *    refusal, which has always come first.
+ *  - this holds for a deposit shared between cars as well: REFUND_TO_CUSTOMER, FORFEITED and OTHER never pay the invoice;
+ *  - a case the completion refuses for its own reason and that could still pay (a deposit larger than the bill with no
+ *    treatment stated, an unallocated multi-car deposit) is left to that refusal, which has always come first.
  *
- * Known limits, all failing closed: (a) for REFUND_TO_CUSTOMER / FORFEITED on an unshared deposit the unpaid-balance
- * refusal now comes BEFORE the release path's own refusals (for example "Deposit creator cannot resolve their own deposit
- * refund or forfeiture"); both are refusals and nothing is written. (b) `allocatedDepositForVehicle` reads a hold-less
+ * Known limits, all failing closed: (a) for REFUND_TO_CUSTOMER / FORFEITED / OTHER the unpaid-balance refusal now comes
+ * BEFORE the release path's own refusals ("Deposit creator cannot resolve their own deposit refund or forfeiture", the
+ * shared-deposit refund/other refusals, the OTHER-needs-a-reason refusal); both are refusals and nothing is written. (b) `allocatedDepositForVehicle` reads a hold-less
  * deposit on a quote as the single-vehicle shape without checking `deposit.vehicleId`; `deposits.create` writes hold rows
  * for multi-vehicle quotes, so only a legacy hold-less deposit on a multi-vehicle quote can pass this check wrongly, and
  * the post-allocation backstop then refuses it and the transaction rolls it back.
@@ -114,8 +114,6 @@ export async function assertCashSaleDepositsPayInvoiceBeforeWrites(
     financedSalePlan?: unknown;
     /** The treatment the caller states for the held deposit, if any. */
     treatment?: PayFirstDepositTreatment;
-    /** The reason an OTHER treatment must carry. */
-    treatmentReason?: string;
     /** Consigned/agent stock settled DIRECT_TO_SUPPLIER: the deposit goes to the supplier settlement, not the invoice. */
     settlesDirectToSupplierOnSourcedStock: boolean;
   }
@@ -129,7 +127,6 @@ export async function assertCashSaleDepositsPayInvoiceBeforeWrites(
   });
   if (allocation.kind === "NOT_ALLOCATED") return; // the completion's allocation-required refusal comes first
   const heldMinor = allocation.allocatedMinor;
-  const sharedHold = allocation.kind === "ALLOCATED";
   const fitsTheBill = heldMinor <= args.invoiceMinor;
 
   let appliedMinor: number | "LEFT_TO_COMPLETION";
@@ -149,10 +146,11 @@ export async function assertCashSaleDepositsPayInvoiceBeforeWrites(
         break;
       case "REFUND_TO_CUSTOMER":
       case "FORFEITED":
-        appliedMinor = sharedHold ? "LEFT_TO_COMPLETION" : 0;
-        break;
       case "OTHER":
-        appliedMinor = sharedHold || !args.treatmentReason?.trim() ? "LEFT_TO_COMPLETION" : 0;
+        // None of these pays the invoice, whether the deposit is shared with other cars or not and whether or not an
+        // OTHER carries a reason: the unpaid balance is refused here, before the sale row, and the release path's own
+        // refusals (shared deposit, missing reason, creator cannot resolve) are not reached.
+        appliedMinor = 0;
         break;
     }
   }
