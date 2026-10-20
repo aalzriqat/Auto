@@ -63,7 +63,10 @@ describe("replay lane workflow", () => {
     // Preview-only, replay-lane-only guards run before any set.
     expect(run.indexOf("e2e-main-replay-lane-*")).toBeGreaterThan(-1);
     expect(run.indexOf("e2e-main-replay-lane-*")).toBeLessThan(run.indexOf("convex env set"));
+    expect(run.indexOf("preview:*")).toBeGreaterThan(-1);
     expect(run.indexOf("preview:*")).toBeLessThan(run.indexOf("convex env set"));
+    expect(run).toContain('if [ -n "${CONVEX_DEPLOYMENT:-}" ]; then');
+    expect(run.indexOf('if [ -n "${CONVEX_DEPLOYMENT:-}" ]')).toBeLessThan(run.indexOf("convex env set"));
     expect(steps[bind].env?.CONVEX_DEPLOY_KEY).toBe("${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}");
     expect(run).toMatch(/set -euo pipefail/);
   });
@@ -83,14 +86,30 @@ describe("replay lane workflow", () => {
     const uses = run.split("\n").filter((line) => line.includes("$NONCE"));
     expect(uses.map((l) => l.trim())).toEqual([
       'echo "::add-mask::$NONCE"',
-      "printf '%s' \"$NONCE\" | retry_convex pnpm exec convex env set --force --preview-name \"$CONVEX_PREVIEW_NAME\" E2E_REPLAY_RUN_NONCE >/dev/null",
+      "printf '%s' \"$NONCE\" | pnpm exec convex env set --force --preview-name \"$CONVEX_PREVIEW_NAME\" E2E_REPLAY_RUN_NONCE >/dev/null",
       'echo "E2E_REPLAY_RUN_NONCE=$NONCE"',
     ]);
+    // The stdin pipe sits inside a function that the retry wrapper calls, so EVERY attempt re-pipes the value.
+    expect(run).toMatch(/set_nonce\(\) \{\n\s+printf '%s' "\$NONCE" \| pnpm exec convex env set/);
+    expect(run).toContain("retry_convex set_nonce");
+    expect(run).not.toMatch(/\|\s*retry_convex/);
     // No step anywhere prints the variable or enables shell tracing.
     for (const s of steps) {
       expect(s.run ?? "", s.name).not.toMatch(/set -[a-z]*x|set -o xtrace/);
     }
     expect(text).not.toMatch(/ACTIONS_STEP_DEBUG/);
+  });
+
+  it("lets no step except the bind step and the Playwright step name the nonce, and none dumps the environment", () => {
+    const bind = indexOf("E2E_REPLAY_RUN_NONCE");
+    steps.forEach((s, i) => {
+      const body = JSON.stringify(s);
+      const mentions = /E2E_REPLAY_RUN_NONCE|\$NONCE|\$\{NONCE/.test(body);
+      const isPlaywright = (s.run ?? "").includes("playwright test");
+      if (i !== bind && !isPlaywright) expect(mentions, s.name).toBe(false);
+      // A bare `env`, `printenv`, `set` (no flags), `export -p` or `declare -p` dumps every variable, masked or not.
+      expect(s.run ?? "", s.name).not.toMatch(/(^|[;&|]\s*|\n\s*)(env|printenv|set|export -p|declare -p|compgen -v)\s*(\||;|$|\n)/);
+    });
   });
 
   it("keeps the cleanup: pin right after create, delete last under always()", () => {

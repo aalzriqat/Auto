@@ -99,7 +99,8 @@ jobs:
       # expiry that exist only on the deployment this job just created, so a promoted preview (which keeps the
       # class variable and the marker) can never attest. They are set with --preview-name and the preview deploy
       # key, which cannot address production; a failure to set any of them fails the job. The nonce goes to the
-      # CLI on stdin (never argv), is masked, is written only to GITHUB_ENV and is never echoed.
+      # CLI on stdin (never argv), is masked and is never echoed. It is written to GITHUB_ENV, so it is ambient (masked)
+      # in every later step; the structural test pins that no later step prints it.
       - name: Bind the replay run to this preview
         run: |
           set -euo pipefail
@@ -128,7 +129,12 @@ jobs:
               delay=$((delay * 2))
             done
           }
-          printf '%s' "$NONCE" | retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_NONCE >/dev/null
+          # Stdin is consumed by one attempt, so the value is piped again on EVERY attempt (piping straight
+          # into the retry wrapper would hand attempts 2 to 5 an empty stdin).
+          set_nonce() {
+            printf '%s' "$NONCE" | pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_NONCE >/dev/null
+          }
+          retry_convex set_nonce
           retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_ID "$GITHUB_RUN_ID" >/dev/null
           retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_EXPIRES_AT "$EXPIRES_AT" >/dev/null
           {
