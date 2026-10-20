@@ -4,6 +4,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getPostedLines } from "./accountingReports";
+import { payFullPriceByDeposit } from "../test-utils/cashDealerFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -34,7 +35,7 @@ async function seed(
   const buyerAgent = await mkUser("buyer");
   const executor = await mkUser("exec");
   const outsider = await mkUser("outsider");
-  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Admin", permissions }));
+  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Admin", permissions: [...permissions, "confirm:finance_disbursement"] }));
   for (const member of [userId, buyerAgent, executor]) {
     await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: member, roleId }));
   }
@@ -51,8 +52,10 @@ async function seed(
     ctx.db.insert("customers", { orgId, firstName: "A", lastName: "B", email: `${suffix}@example.com` })
   );
   const asAdmin = t.withIdentity({ subject: `admin_${suffix}`, clerkId: `admin_${suffix}` });
+  // SCRUM-802 (pilot): the cash sale is only a fixture here, so it is completed the pilot way, paid in full by deposit.
+  const quoteId = await payFullPriceByDeposit(asAdmin, { orgId, customerId, vehicleId, price: 15000 });
   const saleId = await asAdmin.mutation(api.sales.create, {
-    idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId,
+    idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId, quoteId,
     salePrice: 15000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
   });
   return { orgId, userId, buyerAgent, executor, outsider, saleId, asAdmin };
@@ -244,13 +247,20 @@ describe("dealCommissions: several lines on one deal", () => {
     const before = await snapshot(t, s.orgId, s.saleId);
     const otherBefore = await snapshot(t, other.orgId, other.saleId);
     // The before-snapshot must hold the seeded state, or every "unchanged" comparison below is vacuous:
-    // each org already has its sale-completed posting queued (PENDING) and nothing posted.
-    expect(before.pending.map((p) => [p.kind, p.status, p.idempotencyKey, p.orgId])).toEqual([
-      ["POST", "PENDING", `sale_completed_${s.saleId}`, s.orgId],
-    ]);
-    expect(otherBefore.pending.map((p) => [p.kind, p.status, p.idempotencyKey, p.orgId])).toEqual([
-      ["POST", "PENDING", `sale_completed_${other.saleId}`, other.orgId],
-    ]);
+    // each org already has its cash pay-first postings queued (deposit received, deposit applied, sale
+    // completed; all PENDING) and nothing posted, and no commission accrual yet.
+    const seededKeys = (rows: typeof before.pending, orgId: typeof s.orgId, saleId: typeof s.saleId) => {
+      for (const row of rows) {
+        expect([row.kind, row.status, row.orgId]).toEqual(["POST", "PENDING", orgId]);
+      }
+      const keys = rows.map((p) => p.idempotencyKey);
+      expect(keys.filter((k) => k?.startsWith("deposit_received_"))).toHaveLength(1);
+      expect(keys.filter((k) => k?.startsWith("deposit_applied_"))).toHaveLength(1);
+      expect(keys.filter((k) => k === `sale_completed_${saleId}`)).toHaveLength(1);
+      expect(keys).toHaveLength(3);
+    };
+    seededKeys(before.pending, s.orgId, s.saleId);
+    seededKeys(otherBefore.pending, other.orgId, other.saleId);
     expect(before.events).toEqual([]);
     expect(before.journalLines).toEqual([]);
     const otherLineId = await other.asAdmin.mutation(api.dealCommissions.addLine, {

@@ -17,6 +17,12 @@ import {
 } from "./depositHelpers";
 import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
+import {
+  assertCashSaleCarriesNoExtras,
+  assertCashSaleDepositsPayInvoiceBeforeWrites,
+  assertCashSaleInvoiceFullyPaid,
+  isCashCompletion,
+} from "./cashSalePilotGate";
 import { requireOrgMember } from "./tenancy";
 import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
@@ -1938,6 +1944,8 @@ async function applySaleCompletionSideEffects(
     });
   }
 
+  // What a trade-in allocated to the invoice in this completion; the pay-first rule reads it (owner: deposit only).
+  let tradeInAppliedMinor = 0;
   if (args.tradeInVehicleId && args.tradeInValue && args.tradeInValue > 0) {
     if (args.tradeInVehicleId === args.vehicleId) {
       throw new ConvexError("A vehicle cannot be traded in against its own sale.");
@@ -1969,6 +1977,7 @@ async function applySaleCompletionSideEffects(
     }
 
     const tradeInValueMinor = toMinorUnits(args.tradeInValue, prepared.currency);
+    tradeInAppliedMinor = tradeInValueMinor;
     const tradeInPaymentId = await createCanonicalPayment(ctx, {
       orgId: args.orgId,
       branchId: prepared.vehicle.branchId,
@@ -2007,6 +2016,15 @@ async function applySaleCompletionSideEffects(
     // computeVehicleCapitalizedCost picks it up correctly if/when it's later resold.
     await ctx.db.patch(args.tradeInVehicleId, { purchasePrice: args.tradeInValue });
   }
+
+  // SCRUM-802: until the invoice receipt resolver exists, a cash sale completes
+  // only when deposits have already paid its invoice in full.
+  await assertCashSaleInvoiceFullyPaid(ctx, {
+    financingType: args.financingType,
+    financedSalePlan: args.financedSalePlan,
+    saleReceivableId,
+    tradeInAppliedMinor,
+  });
 
   // For sourced vehicles the dealership owes the supplier his entitlement out
   // of the gross it collected — but only on the route where it actually
@@ -2197,6 +2215,49 @@ export async function createDraftSale(
   return await insertSaleRecord(ctx, args, prepared, "PENDING");
 }
 
+/**
+ * SCRUM-802: the pay-first refusal, read-only and BEFORE the first write of a completion (see
+ * `assertCashSaleDepositsPayInvoiceBeforeWrites`). Sizes the invoice with the same `customerBilledLinesMinor` the completion
+ * bills with, so a consigned sale the customer is not billed for is not misjudged.
+ */
+async function assertCashPayFirstBeforeWrites(
+  ctx: MutationCtx,
+  args: Pick<
+    SaleCompletionArgs,
+    | "orgId" | "vehicleId" | "salePrice" | "taxAmount" | "dealerFees" | "warrantySold" | "gapSold"
+    | "quoteId" | "financingType" | "financedSalePlan" | "supplierSettlementRoute" | "depositResolution"
+  >
+): Promise<void> {
+  if (!isCashCompletion(args)) return;
+  const vehicle = await ctx.db.get(args.vehicleId);
+  if (!vehicle) return; // the completion's own vehicle refusals come first
+  const currency = await getOrgCurrency(ctx, args.orgId);
+  const invoiceMinor = sumBilledLinesMinor(
+    customerBilledLinesMinor({
+      salePrice: args.salePrice,
+      taxAmount: args.taxAmount,
+      dealerFees: args.dealerFees,
+      warrantySold: args.warrantySold,
+      gapSold: args.gapSold,
+      currency,
+      isSourced: vehicle.sourceType === "SOURCED",
+      settlementRoute: consignedSettlementRoute(args),
+      financedSalePlan: args.financedSalePlan,
+    })
+  );
+  await assertCashSaleDepositsPayInvoiceBeforeWrites(ctx, {
+    quoteId: args.quoteId,
+    vehicleId: args.vehicleId,
+    currency,
+    invoiceMinor,
+    financingType: args.financingType,
+    financedSalePlan: args.financedSalePlan,
+    treatment: args.depositResolution?.treatment,
+    settlesDirectToSupplierOnSourcedStock:
+      vehicle.sourceType === "SOURCED" && !dealershipCollectsGross(consignedSettlementRoute(args)),
+  });
+}
+
 export async function completeSale(
   ctx: MutationCtx,
   args: SaleCompletionArgs,
@@ -2208,11 +2269,15 @@ export async function completeSale(
       "Sales completion must be explicit. Use createDraft for PENDING sales."
     );
   }
+  // SCRUM-802: the choke point behind every door's own early check; nothing below has written yet.
+  assertCashSaleCarriesNoExtras(args);
 
   // Amounts and the canonical commitment check both run inside this call,
   // before the insert, so a refusal leaves no sale row, no vehicle status
   // change, no receivable and no queued accounting event behind.
   const prepared = await prepareSaleCompletion(ctx, args, "COMPLETION", door);
+  // SCRUM-802: still no write has happened; refuse an unpayable cash sale here (trade-in does not count).
+  await assertCashPayFirstBeforeWrites(ctx, args);
   const saleId = await insertSaleRecord(ctx, args, prepared, "COMPLETED", prepared.commissionAmount);
   await applySaleCompletionSideEffects(ctx, args, prepared, saleId);
 
@@ -2261,9 +2326,9 @@ export async function completeSalesForLineItems(
   const total = args.vehicleItems.reduce((sum, item) => sum + item.unitPrice, 0);
   const saleIds: Id<"sales">[] = [];
 
-  for (const item of args.vehicleItems) {
+  const completionArgsFor = (item: { vehicleId: Id<"vehicles">; unitPrice: number }): SaleCompletionArgs => {
     const share = total > 0 ? item.unitPrice / total : 1 / args.vehicleItems.length;
-    const saleId = await completeSale(ctx, {
+    return {
       orgId: args.orgId,
       vehicleId: item.vehicleId,
       customerId: args.customerId,
@@ -2281,8 +2346,27 @@ export async function completeSalesForLineItems(
       depositResolution: args.depositResolution,
       idempotencyKey: args.idempotencyKey ? `${args.idempotencyKey}:${item.vehicleId}` : undefined,
       actorId: args.actorId,
-    });
-    saleIds.push(saleId);
+    };
+  };
+
+  // SCRUM-802: judge EVERY car's pay-first before the first car writes, so a funded first car and a short second car
+  // leave nothing behind for either (the loop below would otherwise write the first car's sale before refusing).
+  for (const item of args.vehicleItems) {
+    const itemArgs = completionArgsFor(item);
+    // The extras refusal keeps its precedence over the pay-first one (as in `completeSale`).
+    assertCashSaleCarriesNoExtras(itemArgs);
+    try {
+      await assertCashPayFirstBeforeWrites(ctx, itemArgs);
+    } catch (refusal) {
+      // Only on this refusal path: let the completion's own earlier checks (a deposit request still waiting, a quote
+      // that does not match, ...) speak first, exactly as `completeSale` would have ordered them. Reads only.
+      await prepareSaleCompletion(ctx, itemArgs, "COMPLETION");
+      throw refusal;
+    }
+  }
+
+  for (const item of args.vehicleItems) {
+    saleIds.push(await completeSale(ctx, completionArgsFor(item)));
   }
 
   return saleIds;
@@ -2358,10 +2442,15 @@ export async function completeExistingSale(
     existingCommissionAmount: sale.commissionAmount,
   };
 
+  // SCRUM-802: as `completeSale`; the draft's own money terms, before any write.
+  assertCashSaleCarriesNoExtras(completionArgs);
+
   // Same authority, same position: before the status patch, so a draft that
   // cannot legally complete stays a draft rather than becoming a COMPLETED sale
   // whose accounting is refused afterwards.
   const prepared = await prepareSaleCompletion(ctx, completionArgs, "COMPLETION");
+  // SCRUM-802: before the status patch, as `completeSale`.
+  await assertCashPayFirstBeforeWrites(ctx, completionArgs);
   await ctx.db.patch(args.saleId, {
     status: "COMPLETED",
     commissionAmount: prepared.commissionAmount,

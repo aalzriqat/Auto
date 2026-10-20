@@ -308,9 +308,25 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Recording or applying customer credit against a sale invoice is not available during the pilot. Nothing has been changed.",
     "تسجيل رصيد العميل أو تطبيقه على فاتورة البيع غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
   ],
+  ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED: [
+    "Returning a cheque that has already cleared is not available during the pilot. Nothing has been changed.",
+    "إرجاع شيك تمت تسويته بالفعل غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
   ServerError_PAYMENT_LINKS_DISABLED: [
     "Payment links are not available yet. Nothing has been changed.",
     "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CASH_SALE_BALANCE_UNPAID_REFUSED: [
+    "A cash sale can only be completed once the customer's full payment is recorded as a deposit. Record the remaining payment as a deposit first. Nothing has been changed.",
+    "لا يمكن إتمام البيع النقدي إلا بعد تسجيل دفعة العميل كاملة كعربون. سجّل المبلغ المتبقي كعربون أولًا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CASH_SALE_TAX_FEES_WARRANTY_REFUSED: [
+    "A cash sale that includes tax, fees, a warranty or GAP cannot be completed yet, because its full amount cannot be recorded as a deposit. Complete it without them. Nothing has been changed.",
+    "لا يمكن إتمام بيع نقدي يتضمن ضريبة أو رسومًا أو ضمانًا أو تأمين GAP حاليًا، لأن مبلغه الكامل لا يمكن تسجيله كعربون. أتمّه بدونها. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED: [
+    "This customer has a sale invoice that is not fully paid. A payment cannot be recorded without linking it to a sale yet. Record the payment as a deposit instead. Nothing has been changed.",
+    "لدى هذا العميل فاتورة بيع غير مسددة بالكامل، ولا يمكن تسجيل دفعة غير مرتبطة ببيع حاليًا. سجّل الدفعة كعربون بدلًا من ذلك. لم يتم تغيير أي شيء.",
   ],
   ServerError_ORG_FINANCIAL_RESET_IN_PROGRESS: [
     "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
