@@ -35,7 +35,7 @@ export function gitExecutable(exists = existsSync, resolve = resolveTrustedGitEx
 const ARG = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
 const GIT_STEP = new RegExp(
   String.raw`\bgit(?:\.exe)?\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b`,
-  "g",
+  "gi",
 );
 // A match is skipped only when git is an argument to one of these, as in
 // `echo git commit` or `grep 'git push' notes`. Anything else counts: do, then,
@@ -287,6 +287,82 @@ function normalizeWords(command) {
   return quote ? command : out;
 }
 
+// The class rule. A command word or git subcommand the shell would expand, unescape
+// or glob (`$'\\x67it'`, `${V:-git}`, `git${IFS}push`, `{git,}`, `./g*t`) cannot be read
+// statically, so its segment is an unknown commit and push.
+const HEREDOC = /(<<-?\s*(['"]?)(\w+)\2[^\n]*)\n[\s\S]*?\n[ \t]*\3(?=\n|$)/g;
+const PLAIN_WORD = /^[\w./~:@+=%,-]*$/;
+const RUNNER_PREFIX = new Set(["sudo", "env", "command", "exec", "nohup", "time", "nice", "timeout", "xargs", "builtin"]);
+const SEGMENT_WORDS_SKIPPED = new Set(["!", "do", "then", "else", "{", "(", "}", ")", "[", "[[", "]", "]]"]);
+const OPTIONS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);
+
+/** Segments of words from the shell text; a word is dirty when the shell would transform it. */
+function shellWords(command) {
+  const segments = [[]];
+  let word = null;
+  let quote = null;
+  const flush = () => {
+    if (word) segments.at(-1).push(word);
+    word = null;
+  };
+  const add = (ch, dirty) => {
+    word ??= { text: "", dirty: false };
+    word.text += ch;
+    if (dirty) word.dirty = true;
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else add(ch, false);
+    } else if (quote === '"') {
+      if (ch === '"') quote = null;
+      else add(ch, ch === "$" || ch === "`" || ch === "\\");
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      word ??= { text: "", dirty: false };
+    } else if (ch === ";" || ch === "&" || ch === "|" || ch === "\n") {
+      flush();
+      segments.push([]);
+    } else if (/\s/.test(ch) || ((ch === "(" || ch === ")") && !word?.text.endsWith("$"))) flush();
+    else add(ch, !PLAIN_WORD.test(ch));
+  }
+  flush();
+  return segments;
+}
+
+function expandsCommandOrSubcommand(command) {
+  const joined = command.replace(/\\\r?\n/g, "").replace(HEREDOC, "$1");
+  for (const words of shellWords(joined)) {
+    let i = 0;
+    let prefixed = false;
+    for (; i < words.length; i++) {
+      const w = words[i];
+      if (/^\w+=/.test(w.text) || /^\d*[<>]/.test(w.text) || SEGMENT_WORDS_SKIPPED.has(w.text)) continue;
+      if (prefixed && (/^-/.test(w.text) || /^\d+$/.test(w.text))) continue;
+      if (!w.dirty && RUNNER_PREFIX.has(w.text.toLowerCase())) {
+        prefixed = true;
+        continue;
+      }
+      break;
+    }
+    const command_ = words[i];
+    if (!command_) continue;
+    if (command_.dirty) return true;
+    if (command_.text.split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase() !== "git") continue;
+    for (let j = i + 1; j < words.length; j++) {
+      const w = words[j];
+      if (OPTIONS_WITH_VALUE.has(w.text)) {
+        j++;
+        continue;
+      }
+      if (/^-/.test(w.text) && !w.dirty) continue;
+      return w.dirty;
+    }
+  }
+  return false;
+}
+
 const unknownStep = (step) => ({ step, all: false, dirs: [], opaque: false, paths: [], unknown: true });
 
 /**
@@ -302,16 +378,17 @@ const unknownStep = (step) => ({ step, all: false, dirs: [], opaque: false, path
  * and a git alias (`-c alias.*`, or a subcommand that is not a built-in) are
  * gated as unknown steps. Residual bypass: a script or program that runs git itself.
  */
-export function gitSteps(command) {
+export function gitSteps(original) {
+  const command = original.replace(/\\\r?\n/g, "");
   const steps = [];
   const scan = blankQuotedText(command);
   for (const found of scan.matchAll(GIT_STEP)) {
     if (isTextArgument(scan, found.index)) continue;
     // Options are read from the original text: a blanked `-C "my dir"` would lose its path.
-    const m = new RegExp(GIT_STEP.source).exec(command.slice(found.index, found.index + found[0].length)) ?? found;
+    const m = new RegExp(GIT_STEP.source, "i").exec(command.slice(found.index, found.index + found[0].length)) ?? found;
     m.index = found.index;
     const before = command.slice(0, m.index);
-    const step = m[2];
+    const step = m[2].toLowerCase();
     const args = step === "commit" ? commitArgs(command.slice(m.index + m[0].length)) : { all: false, paths: [], unknown: false };
     const cdAll = [...before.matchAll(CD)].map((d) => unquote(d[1]));
     const cdDirs = cdAll.filter((d) => !DYNAMIC.test(d));
@@ -331,11 +408,12 @@ export function gitSteps(command) {
   if (UNPARSEABLE.some((re) => re.test(scan) || re.test(dequoted)) || mayBeAlias(words) || ALIAS_CONFIG.test(dequoted)) {
     steps.push(unknownStep("commit"), unknownStep("push"));
   }
+  if (expandsCommandOrSubcommand(original)) steps.push(unknownStep("commit"), unknownStep("push"));
   // A quoted or escaped command word (`"git" push`, `g"it" push`, `git "push"`) is the same
   // command to the shell. Steps seen only after normalising are unknown: the files cannot be read.
   const seen = normalizeWords(command);
   for (const type of ["commit", "push"]) {
-    const found = [...seen.matchAll(GIT_STEP)].filter((m) => m[2] === type && !isTextArgument(seen, m.index)).length;
+    const found = [...seen.matchAll(GIT_STEP)].filter((m) => m[2].toLowerCase() === type && !isTextArgument(seen, m.index)).length;
     const have = steps.filter((st) => st.step === type).length;
     for (let i = have; i < found; i++) steps.push(unknownStep(type));
   }
