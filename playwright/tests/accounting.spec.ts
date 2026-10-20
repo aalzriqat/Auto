@@ -3,14 +3,6 @@ import { newContainedContext } from "../containedContext";
 import { gotoOrgRoute, APPROVER_AUTH_FILE, resolveOrgId, authenticatedConvexClient } from "../utils";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { replayProof } from "../fixtures/replayProof";
-import {
-  decideReplayEnvironment,
-  replayLaneAction,
-  replayOrgRefusals,
-  REPLAY_CURRENCY_SCALES,
-  type ReplayAttestation,
-} from "../fixtures/replayIsolation";
 
 /**
  * SCRUM-795 (SCRUM-50): manual journals are OFF for the narrowed pilot (owner
@@ -41,24 +33,15 @@ import {
  * approver seat (a different user from the draft's creator), so it is the pilot
  * switch and not separation of duties.
  *
- * RETIRED (SCRUM-795 switch): the former 10-step lifecycle's steps 1-6 (browser
- * create, second-identity approve), because the pilot build cannot post a manual
- * journal. Steps 7-10 (the GL register row's accounting date, the period label
- * and the balanced debit/credit lines of a POSTED journal) are replayed by the
- * second test below through an owner's opening balance
- * (accountingCutover.postOpeningBalanceDirect), but ONLY inside an isolation
- * boundary (playwright/fixtures/replayIsolation.ts): the replay writes to the
- * books, so it runs only when the backend itself attests, through
- * e2eBootstrap.replayAttestation, that it is a disposable preview whose
- * organization the trusted seed created AND that this run set the per-run nonce
- * (E2E_REPLAY_RUN_NONCE) on it; the class and marker alone survive promotion.
- * Production deployments are refused outright. Without that attestation the
- * replay is SKIPPED (shown as skipped, never passed), or FAILS where the lane
- * requires it (E2E_REPLAY_REQUIRED=1). Only a lane that creates a dedicated
- * preview and sets the nonce on it can run the replay (SCRUM-795 follow-up,
- * #635); every other lane skips. The backend tests are the evidence meanwhile:
- * convex/manualJournalAccountingDate.test.ts and accountingPhase10.test.ts
- * (switch mocked off).
+ * RETIRED (SCRUM-795 switch): the former 10-step lifecycle, because the pilot
+ * build cannot post a manual journal. Its steps 7-10 (the GL register row's
+ * accounting date, the period label and the balanced debit/credit lines of a
+ * POSTED journal) are NOT RUN and NOT CLAIMED by this spec. A replay through an
+ * owner's opening balance needs a design that cannot write to a promoted
+ * production deployment; that work is parked on branch claude/replay-parked.
+ * The evidence for the declared-date and closed-period rules is the backend
+ * tests with the switch mocked off: convex/manualJournalAccountingDate.test.ts
+ * and convex/accountingPhase10.test.ts.
  */
 const REFUSAL_CODE = "MANUAL_JOURNALS_DISABLED";
 const LEGACY_MEMO = "E2E legacy pending draft (SCRUM-795)";
@@ -211,203 +194,5 @@ test.describe("accounting workspace", () => {
     await expect(
       page.getByRole("heading", { name: /chart of accounts|accounting/i }).first()
     ).toBeVisible();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Posted-row replay (formerly steps 7-10 of the retired manual-journal lifecycle)
-// ---------------------------------------------------------------------------
-
-type JournalRow = {
-  _id: Id<"journalEntries">;
-  status: string;
-  memo: string;
-  accountingDate: number;
-};
-type JournalDetail = {
-  entry: { _id: Id<"journalEntries">; memo: string; currency?: string; accountingDate: number; periodId?: Id<"accountingPeriods">; status: string };
-  period: { fiscalYear: number; periodNumber: number; startDate: number; endDate: number } | null;
-  lines: Array<{ debitMinor: number; creditMinor: number; accountingDate?: number; scale?: number }>;
-};
-
-// Written out by hand, never taken from the product: 15 Aug 2026 12:00 UTC, in
-// the 2026 period 8 window (1 Aug 00:00 UTC to 31 Aug 23:59:59.999 UTC).
-const OPENING_DATE = Date.UTC(2026, 7, 15, 12);
-const OPENING_UNITS = 100;
-
-/** Every journal of the organization, in any status, read through the query's own cursor to the last page. */
-async function listAllJournals(
-  client: Awaited<ReturnType<typeof authenticatedConvexClient>>,
-  orgId: Id<"organizations">
-): Promise<JournalRow[]> {
-  const rows: JournalRow[] = [];
-  let cursor: string | null = null;
-  for (let pageNumber = 0; pageNumber < 500; pageNumber += 1) {
-    const page: { page: JournalRow[]; isDone: boolean; continueCursor: string } = await client.query(
-      api.accountingLedger.listJournalEntries,
-      { orgId, paginationOpts: { numItems: 200, cursor } }
-    );
-    rows.push(...page.page);
-    if (page.isDone) return rows;
-    cursor = page.continueCursor;
-  }
-  throw new Error("the journal list could not be read to completion within 500 pages");
-}
-
-test.describe("accounting register: a posted journal", () => {
-  test("shows its accounting date, period and balanced debit/credit totals", async ({ page }) => {
-    // 1. ISOLATION BOUNDARY. This replay WRITES to the books (creating a period wakes held rows and schedules
-    //    outbox work; the opening balance is a posted journal), so it runs only when the BACKEND ITSELF attests,
-    //    over the connection this test uses, that it is a disposable preview whose org the trusted seed created
-    //    AND that this run set a per-run secret nonce on it (e2eBootstrap.replayAttestation). The preview class
-    //    and the marker survive promotion to production; the nonce, set by the lane on the fresh preview for one
-    //    run and expiring, does not. The nonce itself is never sent as a query argument: the spec sends an
-    //    HMAC-SHA256 proof over the org id and run id keyed by the nonce, and the server recomputes it. The
-    //    nonce is not printed by this spec and is not on any command line it runs. The lane removes the run
-    //    values from the preview on every run that reaches cleanup; the expiry is the bound otherwise. An operator-supplied name is not trusted.
-    //    A refused guard (production, or URL/backend/marker disagree) FAILS. Without the attestation the replay
-    //    is SKIPPED (shown as skipped, never passed) unless the lane requires it (E2E_REPLAY_REQUIRED=1), where
-    //    it FAILS. A skip is unavailable evidence, not certification; the backend tests stay the evidence.
-    //    See replayIsolation.ts and its unit test.
-    await gotoOrgRoute(page, "accounting");
-    const orgId = (await resolveOrgId(page)) as Id<"organizations">;
-    const client = await authenticatedConvexClient(page);
-    const nonce = process.env.E2E_REPLAY_RUN_NONCE;
-    const runId = process.env.E2E_REPLAY_RUN_ID;
-    // No nonce, no query: nothing is sent to a backend that was not bound to this run.
-    const attestation =
-      nonce && runId
-        ? await client.query(api.e2eBootstrap.replayAttestation, { orgId, runId, proof: replayProof(nonce, orgId, runId) }).then(
-            (value) => value as ReplayAttestation,
-            () => null
-          )
-        : null;
-    const verdict = replayLaneAction(
-      decideReplayEnvironment(process.env.NEXT_PUBLIC_CONVEX_URL, attestation, {
-        dedicatedOrg: process.env.E2E_REPLAY_DEDICATED_ORG === "1",
-        nonce,
-        runId,
-      }),
-      process.env.E2E_REPLAY_REQUIRED === "1"
-    );
-    if (verdict.action === "FAIL") throw new Error(verdict.reason);
-    test.skip(verdict.action === "SKIP", verdict.action === "SKIP" ? verdict.reason : "");
-
-    // Every read happens BEFORE the first write. The organization must be freshly created: no period, no
-    // journal in any status (POSTED and REVERSED included, the mutation's own refusal rule), no opening
-    // balance, a supported currency and two usable accounts. Anything else FAILS; it never skips.
-    const allJournals = await listAllJournals(client, orgId);
-    const status = (await client.query(api.accountingCutover.openingBalanceStatus, { orgId })) as {
-      posted: boolean;
-      pendingDraftId: string | null;
-      canPostDirectly: boolean;
-      currency: string;
-    };
-    const periods = (await client.query(api.accountingPeriods.list, { orgId })) as Array<{ _id: Id<"accountingPeriods"> }>;
-    const accounts = (await client.query(api.chartOfAccounts.list, { orgId })) as Array<{
-      _id: Id<"chartOfAccounts">;
-      allowManualPosting: boolean;
-      active: boolean;
-    }>;
-    const usable = accounts.filter((a) => a.allowManualPosting && a.active);
-    const refusals = replayOrgRefusals({
-      currency: status.currency,
-      periodCount: periods.length,
-      journalCount: allJournals.length,
-      openingBalancePosted: status.posted,
-      pendingOpeningDraft: status.pendingDraftId !== null,
-      canPostDirectly: status.canPostDirectly,
-      usableAccountCount: usable.length,
-    });
-    expect(refusals, "the GL register replay needs a freshly created disposable organization").toEqual([]);
-
-    // 2. The writes: a period for the date, then an owner's opening balance with hand-written literals.
-    const periodId = (await client.mutation(api.accountingPeriods.create, {
-      orgId,
-      fiscalYear: 2026,
-      periodNumber: 8,
-      startDate: Date.UTC(2026, 7, 1, 0, 0, 0, 0),
-      endDate: Date.UTC(2026, 8, 0, 23, 59, 59, 999),
-      openImmediately: true,
-    })) as Id<"accountingPeriods">;
-    const minor = OPENING_UNITS * 10 ** REPLAY_CURRENCY_SCALES[status.currency]!;
-    const memo = `E2E opening balance register replay ${Date.now()}`;
-    await client.mutation(api.accountingCutover.postOpeningBalanceDirect, {
-      orgId,
-      asOfDate: OPENING_DATE,
-      memo,
-      expectedCurrency: status.currency,
-      lines: [
-        { accountId: usable[0]._id, debitMinor: minor, creditMinor: 0 },
-        { accountId: usable[1]._id, debitMinor: 0, creditMinor: minor },
-      ],
-    });
-    const known = { memo, debitMinor: minor, date: OPENING_DATE, periodId };
-    const posted = (await listAllJournals(client, orgId)).filter((row) => row.status === "POSTED");
-    const target = posted.find((row) => row.memo === known.memo);
-    expect(target, "the opening balance this test posted must be listed").toBeDefined();
-
-    // 2. What the backend holds for it, and the invariants that must hold whatever its source.
-    const detail = (await client.query(api.accountingLedger.getJournalEntry, {
-      orgId,
-      journalEntryId: target!._id,
-    })) as JournalDetail | null;
-    expect(detail, "the posted journal must be readable").not.toBeNull();
-    const { entry, period, lines } = detail!;
-    expect(period, "a posted journal sits in an accounting period").not.toBeNull();
-    expect(entry.accountingDate).toBeGreaterThanOrEqual(period!.startDate);
-    expect(entry.accountingDate).toBeLessThanOrEqual(period!.endDate);
-    expect(lines.length).toBeGreaterThanOrEqual(2);
-    for (const line of lines) expect(line.accountingDate).toBe(entry.accountingDate);
-    const debitMinor = lines.reduce((sum, line) => sum + line.debitMinor, 0);
-    const creditMinor = lines.reduce((sum, line) => sum + line.creditMinor, 0);
-    expect(debitMinor).toBeGreaterThan(0);
-    expect(debitMinor, "debits equal credits").toBe(creditMinor);
-    // The journal this test posted: every figure is a hand-written literal.
-    expect(entry.accountingDate).toBe(known.date);
-    expect(entry.periodId).toBe(known.periodId);
-    expect(period!.fiscalYear).toBe(2026);
-    expect(period!.periodNumber).toBe(8);
-    expect(debitMinor).toBe(known.debitMinor);
-    expect(creditMinor).toBe(known.debitMinor);
-
-    // 3. The register shows the same date, period and lines.
-    await page.getByRole("tab", { name: /journal/i }).first().click();
-    const registerTab = page.getByRole("tab", { name: /register|general ledger/i }).first();
-    await expect(registerTab).toBeVisible();
-    await registerTab.click();
-
-    const row = page.locator(`[data-testid='journal-entry-row'][data-entry-id='${entry._id}']`);
-    for (let loads = 0; loads < 500 && !(await row.isVisible()); loads += 1) {
-      const more = page.getByTestId("gl-load-more-btn");
-      if (!(await more.isVisible())) break;
-      await more.click();
-    }
-    await expect(row).toBeVisible();
-    await expect(row.getByTestId("journal-entry-date")).toContainText(
-      new Date(entry.accountingDate).toLocaleDateString("en-US")
-    );
-
-    await row.getByTestId("view-entry-lines-btn").click();
-    await expect(page.getByTestId("dialog-entry-memo")).toContainText(entry.memo);
-    await expect(page.getByTestId("dialog-entry-period")).toContainText(
-      `${period!.fiscalYear}-P${period!.periodNumber}`
-    );
-    const lineRows = page.getByTestId("journal-line-row");
-    await expect(lineRows).toHaveCount(lines.length);
-
-    // Debit and credit columns, summed off the screen, equal the backend's totals in major units.
-    const scale = lines[0].scale ?? REPLAY_CURRENCY_SCALES[entry.currency ?? ""] ?? Number.NaN;
-    const columnTotal = async (testId: "line-debit" | "line-credit"): Promise<number> => {
-      const texts = await page.getByTestId(testId).allTextContents();
-      return texts.reduce((sum, text) => {
-        const amount = Number(text.replace(/[^0-9.]/g, ""));
-        return sum + (Number.isFinite(amount) ? amount : 0);
-      }, 0);
-    };
-    expect(await columnTotal("line-debit")).toBeCloseTo(debitMinor / 10 ** scale, scale);
-    expect(await columnTotal("line-credit")).toBeCloseTo(creditMinor / 10 ** scale, scale);
-
-    await page.keyboard.press("Escape");
   });
 });
