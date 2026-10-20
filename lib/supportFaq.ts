@@ -126,8 +126,8 @@ export const supportFaqCategories: FaqCategory[] = [
           ar: "لماذا تحتاج عملية البيع إلى موافقة قبل إتمامها؟",
         },
         answer: {
-          en: "If a deal's profit falls below your dealership's configured minimum-profit threshold, it's automatically routed to a Manager/Owner for approval. You'll see it waiting on the Approvals page.",
-          ar: "إذا كان ربح الصفقة أقل من الحد الأدنى للربح المحدد لمعرضكم، يتم توجيهها تلقائياً إلى المدير/المالك للموافقة. ستجدها بانتظار الموافقة في صفحة الموافقات.",
+          en: "If the vehicle has a Minimum Price Uplift above 0 and a financed deal's final price minus the list price is less than it (including a price below the list price), the deal is automatically routed to a Manager/Owner for approval. You'll see it waiting on the Approvals page. This is not a loss check: it does not stop a sale below cost, cash quotes are not covered, and a minimum of 0 turns it off.",
+          ar: "إذا كان للمركبة حد أدنى للزيادة فوق سعر القائمة أكبر من 0، وكان سعر صفقة بالتمويل النهائي مطروحاً منه سعر القائمة أقل من هذا الحد (بما في ذلك السعر الأقل من سعر القائمة)، يتم توجيه الصفقة تلقائياً إلى المدير/المالك للموافقة. ستجدها بانتظار الموافقة في صفحة الموافقات. هذا ليس فحصاً للخسارة: لا يمنع بيعاً بأقل من التكلفة، ولا يشمل عروض الأسعار النقدية، والحد الأدنى 0 يعطّله.",
         },
       },
       {

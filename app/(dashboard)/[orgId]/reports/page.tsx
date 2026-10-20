@@ -232,6 +232,13 @@ export default function ReportsPage() {
     0
   );
 
+  // The server returns the commission fields only to a caller who may view
+  // commissions; without them the extra columns are not drawn at all.
+  const showCommissions = salesReport?.totalCommissions != null;
+  const showPerformanceCommissions = (performanceReport ?? []).some(
+    (perf: { totalCommissions?: number | null }) => perf.totalCommissions != null
+  );
+
   const handlePrint = () => window.print();
   const dateFilterProps = { startDateStr, endDateStr, setStartDateStr, setEndDateStr, selectedSalesperson, setSelectedSalesperson, salespersonOptions };
 
@@ -330,6 +337,12 @@ export default function ReportsPage() {
               </div>
             )}
 
+            {showCommissions && (salesReport?.commissionIncompleteSaleCount ?? 0) > 0 && (
+              <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+                {salesReport?.commissionIncompleteSaleCount} {t("ReportCommissionsIncomplete")}
+              </div>
+            )}
+
             <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -341,6 +354,12 @@ export default function ReportsPage() {
                     <TableHead className="text-right">{t("SalePrice") || "Sale Price"}</TableHead>
                     <TableHead className="text-right">{t("TotalCost") || "Total Cost"}</TableHead>
                     <TableHead className="text-right">{t("NetProfit") || "Net Profit"}</TableHead>
+                    {showCommissions && (
+                      <>
+                        <TableHead className="text-right">{t("ReportCommissionsColumn")}</TableHead>
+                        <TableHead className="text-right">{t("ReportNetAfterCommissions")}</TableHead>
+                      </>
+                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -367,11 +386,24 @@ export default function ReportsPage() {
                           format(sale.netProfit)
                         )}
                       </TableCell>
+                      {showCommissions && (
+                        <>
+                          <TableCell className="text-right">
+                            {sale.commissionsTotal === null ? "—" : format(sale.commissionsTotal)}
+                            {sale.commissionPending && (
+                              <span className="block text-xs text-amber-700 dark:text-amber-400">{t("DealCommissionsPendingSale")}</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-medium">
+                            {sale.netProfitAfterCommissions === null ? "—" : format(sale.netProfitAfterCommissions)}
+                          </TableCell>
+                        </>
+                      )}
                     </TableRow>
                   ))}
                   {!filteredSales?.length && (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-6 text-muted-foreground">
+                      <TableCell colSpan={showCommissions ? 9 : 7} className="text-center py-6 text-muted-foreground">
                         {t("NoSalesFoundPeriod") || "No sales found in this period."}
                       </TableCell>
                     </TableRow>
@@ -680,6 +712,9 @@ export default function ReportsPage() {
                     <TableHead className="text-right">{t("VehiclesSold")}</TableHead>
                     <TableHead className="text-right">{t("TotalRevenue")}</TableHead>
                     <TableHead className="text-right">{t("NetProfit")}</TableHead>
+                    {showPerformanceCommissions && (
+                      <TableHead className="text-right">{t("ReportNetAfterCommissions")}</TableHead>
+                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -731,11 +766,23 @@ export default function ReportsPage() {
                           </span>
                         )}
                       </TableCell>
+                      {showPerformanceCommissions && (
+                        <TableCell className="text-right font-medium">
+                          {perf.totalNetProfitAfterCommissions === null || perf.totalNetProfitAfterCommissions === undefined
+                            ? "—"
+                            : format(perf.totalNetProfitAfterCommissions)}
+                          {(perf.commissionIncompleteSaleCount ?? 0) > 0 && (
+                            <span className="block whitespace-nowrap text-xs font-normal text-amber-700 dark:text-amber-400">
+                              {t("ProfitKnownOnly").replace("{count}", String(perf.commissionIncompleteSaleCount))}
+                            </span>
+                          )}
+                        </TableCell>
+                      )}
                     </TableRow>
                   ))}
                   {!performanceReport?.length && (
                     <TableRow>
-                      <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">
+                      <TableCell colSpan={showPerformanceCommissions ? 5 : 4} className="text-center py-6 text-muted-foreground">
                         {t("NoPerformanceData")}
                       </TableCell>
                     </TableRow>

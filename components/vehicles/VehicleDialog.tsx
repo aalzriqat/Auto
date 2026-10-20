@@ -20,6 +20,7 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -936,10 +937,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="minimumProfit"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("MinimumProfit" as any) || "Minimum Profit Requirement"} (JOD)</FormLabel>
+                    <FormLabel>{t("MinimumPriceUplift")} (JOD)</FormLabel>
                     <FormControl>
                       <Input type="number" {...field} />
                     </FormControl>
+                    <FormDescription>{t("MinimumPriceUpliftHelp")}</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
