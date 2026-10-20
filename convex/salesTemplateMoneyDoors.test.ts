@@ -1,6 +1,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectAppError } from "../test-utils/expectAppError";
+import { settleOutbox } from "../test-utils/outboxWork";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -20,7 +21,7 @@ vi.mock("./rateLimit", () => ({
  * This one proves the doors it covers honour it: a REAL default SALES-template
  * actor (the permission list is read from `DEFAULT_ROLE_TEMPLATES`, not
  * hand-written) is refused with the exact FORBIDDEN code and message, and a
- * full-content snapshot of EVERY table is identical afterwards, so a refusal
+ * full-content snapshot of every table in `schema.tables` is identical afterwards, so a refusal
  * that patched a row in place cannot pass.
  *
  * Covered doors (the only ones this file claims): collections.recordPayment,
@@ -30,9 +31,10 @@ vi.mock("./rateLimit", () => ({
  * releaseVehicleAllocation, resolveReleasedAllocation (an acquiring and a
  * forfeiting treatment); depositRequests.confirm.
  *
- * Every deposit and cheque door is refused in a state where it is EXECUTABLE:
- * after the SALES refusal, a real MANAGER-template actor (ACCOUNTANT for the manage:finance cheque doors) makes the same call in
- * the same state and it succeeds and changes tables. So the refusal is about
+ * Every door listed above is refused in a state where it is EXECUTABLE: after
+ * the SALES refusal, a real MANAGER-template actor (ACCOUNTANT-template for the
+ * manage:finance doors) makes the same call in the same state, and it succeeds
+ * and changes tables. So the refusal is about
  * the actor, not about missing data. Not covered: reserveSaleInvoiceReceipt
  * (no such function on this branch).
  *
@@ -90,6 +92,16 @@ async function setup() {
   // and "after" snapshots and make a refusal look like a write.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   await owner.mutation(api.chartOfAccounts.initialize, { orgId });
+  const year = new Date().getUTCFullYear();
+  await owner.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(year, 0, 1),
+    endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    fiscalYear: year,
+    periodNumber: 1,
+  });
+  const period = (await owner.query(api.accountingPeriods.list, { orgId }))[0];
+  await owner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Nora", lastName: "Khaled", createdAt: now })
@@ -146,6 +158,9 @@ async function setup() {
     amount: 40,
   })) as Id<"postDatedCheques">;
 
+  // Post the owner's receipt to the ledger, so retained credit can really be applied.
+  await settleOutbox(t, orgId);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   // A quote and a deposit request: a salesperson is allowed to make both, and they
   // are the rows the deposit doors act on.
   const quoteId = await sales.mutation(api.quotes.saveQuote, {
@@ -284,6 +299,16 @@ const DOORS: Door[] = [
     a.mutation(api.deposits.release, { orgId: s.orgId, depositId: w.depositId!, resolution: "FORFEITED", idempotencyKey: crypto.randomUUID() })],
   ["deposits.voidDeposit", "deposit", APPROVE, (a, s, w) =>
     a.mutation(api.deposits.voidDeposit, { orgId: s.orgId, depositId: w.depositId!, reason: "entered in error" })],
+  ["collections.recordPayment", "none", FINANCE, (a, s) =>
+    a.mutation(api.collections.recordPayment, { orgId: s.orgId, customerId: s.customerId, amount: 25, method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID() })],
+  ["collections.registerCheque", "none", FINANCE, (a, s) =>
+    a.mutation(api.collections.registerCheque, { orgId: s.orgId, customerId: s.customerId, bank: "Test Bank", chequeNumber: "000999", chequeDate: Date.now() + 86_400_000, amount: 10 })],
+  ["collections.clearCheque", "none", FINANCE, (a, s) =>
+    a.mutation(api.collections.clearCheque, { orgId: s.orgId, chequeId: s.chequeId, idempotencyKey: crypto.randomUUID() })],
+  ["collections.applyRetainedCredit", "none", FINANCE, (a, s) =>
+    a.mutation(api.collections.applyRetainedCredit, { orgId: s.orgId, receiptMovementId: s.receiptMovementId, receivableId: s.receivableId, requestedAmount: 10, idempotencyKey: crypto.randomUUID() })],
+  ["vehicles.createReservation (with a deposit)", "none", `${PERMISSIONS.EDIT_VEHICLES}, ${CONFIRM}`, (a, s) =>
+    a.mutation(api.vehicles.createReservation, { orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, depositAmount: 500, depositMethod: "CASH", idempotencyKey: crypto.randomUUID() })],
   ["depositRequests.confirm", "none", CONFIRM, (a, s) =>
     a.mutation(api.depositRequests.confirm, { orgId: s.orgId, requestId: s.requestId, amount: 1500, method: "CASH", idempotencyKey: crypto.randomUUID() })],
   ["collections.depositCheque", "none", FINANCE, (a, s) =>
@@ -294,98 +319,16 @@ const DOORS: Door[] = [
     a.mutation(api.collections.returnClearedCheque, { orgId: s.orgId, chequeId: s.chequeId, returnReason: "bounced", idempotencyKey: crypto.randomUUID() })],
 ];
 
-describe("SCRUM-444: a default SALES-template actor cannot move money through any door", () => {
+describe("SCRUM-444: a default SALES-template actor cannot move money through the doors this file covers", () => {
   test("control: the setup rows exist, so each refusal below is about the actor, not missing data", async () => {
     const s = await setup();
     const rows = await dbSnapshot(s.t, ["receivables", "receiptMovements", "postDatedCheques", "quotes", "depositRequests"]);
     for (const table of Object.keys(rows)) expect(rows[table], table).toHaveLength(1);
   });
 
-  test("collections.recordPayment is refused and nothing is written", async () => {
-    const s = await setup();
-    await expectRefusedWithoutWriting(
-      s,
-      () =>
-        s.sales.mutation(api.collections.recordPayment, {
-          idempotencyKey: crypto.randomUUID(),
-          orgId: s.orgId,
-          customerId: s.customerId,
-          amount: 25,
-          method: "CASH",
-          paymentDate: Date.now(),
-        }),
-      PERMISSIONS.MANAGE_FINANCE
-    );
-  });
-
-  test("collections.registerCheque is refused and nothing is written", async () => {
-    const s = await setup();
-    await expectRefusedWithoutWriting(
-      s,
-      () =>
-        s.sales.mutation(api.collections.registerCheque, {
-          orgId: s.orgId,
-          customerId: s.customerId,
-          bank: "Test Bank",
-          chequeNumber: "000999",
-          chequeDate: Date.now() + 86_400_000,
-          amount: 10,
-        }),
-      PERMISSIONS.MANAGE_FINANCE
-    );
-  });
-
-  test("collections.clearCheque is refused and the held cheque is unchanged", async () => {
-    const s = await setup();
-    await expectRefusedWithoutWriting(
-      s,
-      () =>
-        s.sales.mutation(api.collections.clearCheque, {
-          orgId: s.orgId,
-          chequeId: s.chequeId,
-          idempotencyKey: crypto.randomUUID(),
-        }),
-      PERMISSIONS.MANAGE_FINANCE
-    );
-    const cheque = await s.t.run((ctx) => ctx.db.get(s.chequeId));
-    expect(cheque?.status).toBe("HELD");
-  });
-
-  test("collections.applyRetainedCredit is refused and the retained receipt is untouched", async () => {
-    const s = await setup();
-    await expectRefusedWithoutWriting(
-      s,
-      () =>
-        s.sales.mutation(api.collections.applyRetainedCredit, {
-          orgId: s.orgId,
-          receiptMovementId: s.receiptMovementId,
-          receivableId: s.receivableId,
-          requestedAmount: 10,
-          idempotencyKey: crypto.randomUUID(),
-        }),
-      PERMISSIONS.MANAGE_FINANCE
-    );
-  });
-
-  test("vehicles.createReservation with a deposit is refused for the SALES template", async () => {
-    const s = await setup();
-    // EDIT_VEHICLES is checked first and SALES holds only EDIT_VEHICLES_REQUEST, so the
-    // refusal names it; the deposit authority is the second requirement.
+  test("the SALES template holds neither authority a deposit-carrying reservation needs", () => {
     expect(templatePermissions("SALES")).not.toContain(PERMISSIONS.EDIT_VEHICLES);
     expect(templatePermissions("SALES")).not.toContain(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    await expectRefusedWithoutWriting(
-      s,
-      () =>
-        s.sales.mutation(api.vehicles.createReservation, {
-          orgId: s.orgId,
-          vehicleId: s.vehicleId,
-          customerId: s.customerId,
-          depositAmount: 500,
-          depositMethod: "CASH",
-          idempotencyKey: crypto.randomUUID(),
-        }),
-      `${PERMISSIONS.EDIT_VEHICLES}, ${PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT}`
-    );
   });
 
   test.each(DOORS)("%s is refused for SALES in an executable state, and the authorised template can make the same call", async (_door, stage, permission, call) => {
