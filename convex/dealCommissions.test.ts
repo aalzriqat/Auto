@@ -2,8 +2,9 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { DEAL_COMMISSION_LINES_PILOT_DISABLED } from "./utils/dealCommissionLines";
 import type { Id } from "./_generated/dataModel";
-import { getPostedLines } from "./accountingReports";
+import { makeFunctionReference } from "convex/server";
 import { payFullPriceByDeposit } from "../test-utils/cashDealerFixture";
 
 vi.mock("./rateLimit", () => ({
@@ -14,8 +15,10 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
-// The pilot switch is ON in the build (convex/dealCommissionsPilot.test.ts pins
-// that). These tests exercise the certified-by-test behaviour with it off.
+// The kill switch DEAL_COMMISSION_LINES_PILOT_DISABLED is false in the build (lines are on), pinned below
+// and mocked ON only in convex/dealCommissionsPilot.test.ts. These tests run with it as built.
+
+const beginEligibility = makeFunctionReference<"mutation", { orgId: Id<"organizations"> }>("journalReportEligibility:begin");
 
 const ADMIN = ["view:commissions", "manage:commissions", "view:sales", "create:sales", "view:vehicles", "edit:sales"];
 
@@ -62,6 +65,15 @@ async function seed(
 }
 
 describe("dealCommissions: several lines on one deal", () => {
+  // Fake timers are installed per test that settles the ledger; always restore them.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("the kill switch is off in this build: lines are enabled (production runs the same constant)", () => {
+    expect(DEAL_COMMISSION_LINES_PILOT_DISABLED).toBe(false);
+  });
+
   test("the owner example of purchase 50 and sale 50 and execution 25 JOD totals 125 JOD", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const s = await seed(t, "example");
@@ -106,9 +118,6 @@ describe("dealCommissions: several lines on one deal", () => {
   // SALE_COMPLETED / sale-commission events. Without waiting for it those
   // postings land between or before the snapshots. Fake timers plus
   // finishAllScheduledFunctions is the documented way to let it finish.
-  afterEach(() => {
-    vi.useRealTimers();
-  });
   const settle = (t: Harness) => t.finishAllScheduledFunctions(vi.runAllTimers);
   async function openChartAndPeriod(t: Harness, s: Awaited<ReturnType<typeof seed>>) {
     await t.run((ctx) =>
@@ -159,6 +168,12 @@ describe("dealCommissions: several lines on one deal", () => {
     await other.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: other.orgId, saleId: other.saleId, commissionAmount: 70 });
     await openChartAndPeriod(t, other);
     await settle(t);
+    // READY through the real operator door: begin schedules the backfill that flags every posted line.
+    await t.mutation(beginEligibility, { orgId: s.orgId });
+    await t.mutation(beginEligibility, { orgId: other.orgId });
+    await settle(t);
+    const tbBefore = await s.asAdmin.query(api.accountingReports.trialBalance, { orgId: s.orgId, fromDate: 0 });
+    const otherTbBefore = await other.asAdmin.query(api.accountingReports.trialBalance, { orgId: other.orgId, fromDate: 0 });
     const before = await snapshot(t, s.orgId, s.saleId);
     const otherBefore = await snapshot(t, other.orgId, other.saleId);
     const otherLineId = await other.asAdmin.mutation(api.dealCommissions.addLine, {
@@ -173,7 +188,7 @@ describe("dealCommissions: several lines on one deal", () => {
     // The other org really did post an accrual of its own in the same window,
     // and it is visible to an unscoped read but not to this org's snapshot.
     expect(otherAfter.events.filter((e) => e.sourceId === otherLineId && e.eventType === "COMMISSION_ACCRUED")).toHaveLength(1);
-    expect(otherAfter.events.length).toBe(otherBefore.events.length + 1);
+    expect(otherAfter.events).toHaveLength(otherBefore.events.length + 1);
     const everyone = await allTenantRowCounts(t);
     expect(everyone.events).toBe(after.events.length + otherAfter.events.length);
     expect(everyone.journalLines).toBe(after.journalLines.length + otherAfter.journalLines.length);
@@ -209,27 +224,27 @@ describe("dealCommissions: several lines on one deal", () => {
     expect(entry?.orgId).toBe(s.orgId);
     expect(entry?.status).toBe("POSTED");
     for (const line of newLines) expect(line.reportPosted).toBe(true);
-    // Reader-visible state, read through the report reader itself. getPostedLines
-    // takes its fast path (journalLines by_org_reportPosted_date, reportPosted === true)
-    // only when journalReportEligibility.phase is READY, so the test establishes READY
-    // for this org (the line flags it relies on were written by the real posting above,
-    // not by this test) and asserts the phase before reading. Every returned row is
-    // checked for orgId BEFORE any filtering, so a foreign row cannot be dropped silently.
-    // The second org also has posted accrual lines, so a leak would be visible here.
-    const reader = await t.run(async (ctx) => {
-      const existing = await ctx.db.query("journalReportEligibility").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).unique();
-      if (!existing) await ctx.db.insert("journalReportEligibility", { orgId: s.orgId, phase: "READY", cursor: null });
-      const phase = (await ctx.db.query("journalReportEligibility").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).unique())?.phase;
-      return { phase, lines: await getPostedLines(ctx, s.orgId) };
-    });
-    expect(reader.phase).toBe("READY");
-    expect(reader.lines.length).toBeGreaterThan(0);
-    for (const line of reader.lines) expect(line.orgId).toBe(s.orgId);
-    expect(otherAfter.journalLines.length).toBeGreaterThan(0);
-    const readerLines = reader.lines;
-    expect(readerLines.filter((l) => l.journalEntryId === entryId).map((l) => l._id).sort()).toEqual(newLines.map((l) => l._id).sort());
-    expect(newLines.find((l) => l.accountId === accounts.expense)).toMatchObject({ orgId: s.orgId, debitMinor: 25_125, creditMinor: 0 });
-    expect(newLines.find((l) => l.accountId === accounts.payable)).toMatchObject({ orgId: s.orgId, debitMinor: 0, creditMinor: 25_125 });
+    // Reader-visible state, through the public trial balance. With fromDate set it
+    // reads journal lines via getPostedLines, whose fast path (reportPosted lines)
+    // is taken only when journalReportEligibility.phase is READY; READY was reached
+    // before the line was added by the operator door (begin, then its backfill), and
+    // is re-asserted here, so the accrual below was read by the reader, not by the test.
+    const phaseOf = (orgId: Id<"organizations">) =>
+      t.run(async (ctx) => (await ctx.db.query("journalReportEligibility").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique())?.phase);
+    expect(await phaseOf(s.orgId)).toBe("READY");
+    expect(await phaseOf(other.orgId)).toBe("READY");
+    const tbAfter = await s.asAdmin.query(api.accountingReports.trialBalance, { orgId: s.orgId, fromDate: 0 });
+    const otherTbAfter = await other.asAdmin.query(api.accountingReports.trialBalance, { orgId: other.orgId, fromDate: 0 });
+    const amountsOn = (tb: typeof tbAfter, accountId: Id<"chartOfAccounts">) => {
+      const row = tb.rows.find((r) => r.accountId === accountId);
+      return { debitMinor: row?.debitMinor ?? 0, creditMinor: row?.creditMinor ?? 0 };
+    };
+    expect(amountsOn(tbAfter, accounts.expense).debitMinor - amountsOn(tbBefore, accounts.expense).debitMinor).toBe(25_125);
+    expect(amountsOn(tbAfter, accounts.payable).creditMinor - amountsOn(tbBefore, accounts.payable).creditMinor).toBe(25_125);
+    expect(tbAfter.isBalanced).toBe(true);
+    // The other organization's 11 JOD accrual stays in its own report only.
+    expect(otherTbAfter.totalDebits).toBe(otherTbBefore.totalDebits + 11_000);
+    expect(tbAfter.totalDebits - tbBefore.totalDebits).toBe(25_125);
     // The salesperson's own commission is untouched, on the same org's sale.
     expect(before.saleOrgId).toBe(s.orgId);
     expect(after.saleOrgId).toBe(s.orgId);
