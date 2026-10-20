@@ -34,7 +34,7 @@ export function gitExecutable(exists = existsSync, resolve = resolveTrustedGitEx
 
 const ARG = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
 const GIT_STEP = new RegExp(
-  String.raw`\bgit(?:\.exe)?\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b`,
+  String.raw`\bgit(?:\.\w+)?\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b`,
   "gi",
 );
 // A match is skipped only when git is an argument to one of these, as in
@@ -94,7 +94,7 @@ const EXECUTES_QUOTED = /\$\(|`/;
 
 function commandWord(segment) {
   const word = segment.trim().split(/\s+/).find((w) => w && !/^\w+=/.test(w) && !SKIPPED_WORDS.has(w)) ?? "";
-  return word.split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+  return word.split(/[\\/]/).pop().replace(/\.\w+$/i, "").toLowerCase();
 }
 
 function isTextOnlySegment(text) {
@@ -109,7 +109,7 @@ function isTextOnlySegment(text) {
   const words = splitArgs(text);
   if (words === null) return false;
   const code = words.slice(1).some(({ text: w }) => {
-    const base = w.split(/[\\/]/).pop().replace(/\.exe$/i, "");
+    const base = w.split(/[\\/]/).pop().replace(/\.\w+$/i, "");
     return RUNS_CODE_SHORT_FLAG.test(w) || RUNS_CODE_FLAG.test(w) || RUNS_CODE_WORD.test(base);
   });
   return !code && !/[<>]\(/.test(text.replace(/"[^"]*"|'[^']*'/g, " "));
@@ -167,7 +167,7 @@ const GIT_BUILTINS = new Set([
   "update-index", "update-ref", "verify-commit", "verify-tag", "version", "whatchanged", "worktree", "write-tree",
 ]);
 const GIT_COMMAND = new RegExp(
-  String.raw`${COMMAND_POSITION}(?:[\w./~-]*/)?git(?:\.exe)?\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+([^\s;&|()]+)`,
+  String.raw`${COMMAND_POSITION}(?:[\w./~-]*/)?git(?:\.\w+)?\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+([^\s;&|()]+)`,
   "gi",
 );
 // The same, once quotes are removed (`git "-c" alias.p=push p`); only the config options are read there.
@@ -294,9 +294,10 @@ const HEREDOC = /(<<-?\s*(['"]?)(\w+)\2[^\n]*)\n[\s\S]*?\n[ \t]*\3(?=\n|$)/g;
 const PLAIN_WORD = /^[\w./~:@+=%,-]*$/;
 const RUNNER_PREFIX = new Set(["sudo", "env", "command", "exec", "nohup", "time", "nice", "timeout", "xargs", "parallel", "builtin"]);
 const FEEDS_ARGUMENTS = new Set(["xargs", "parallel"]);
-const GIT_LIKE = /^(?:.*[\\/])?git(?:-[\w-]+)?(?:\.exe)?$/i;
+const GIT_LIKE = /^(?:.*[\\/])?git(?:-[\w-]+)?(?:\.\w+)?$/i;
+const stem = (word) => word.split(/[\\/]/).pop().replace(/\.\w+$/, "").toLowerCase();
 const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
-const gitHelper = (word) => /^git-([\w-]+?)(?:\.exe)?$/i.exec(word.split(/[\\/]/).pop())?.[1].toLowerCase();
+const gitHelper = (word) => /^git-([\w-]+)$/.exec(stem(word))?.[1];
 const SEGMENT_WORDS_SKIPPED = new Set(["!", "do", "then", "else", "{", "(", "}", ")", "[", "[[", "]", "]]"]);
 const OPTIONS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);
 
@@ -343,15 +344,15 @@ function expandsCommandOrSubcommand(command) {
     let feeds = false;
     if (words.some((w) => w.text === "expand_aliases")) return true;
     // git anywhere after xargs, parallel or find -exec: the subcommand may arrive on stdin or after options with values.
-    const feeder = words.findIndex((w) => FEEDS_ARGUMENTS.has(w.text.split(/[\\/]/).pop().toLowerCase()) || FIND_EXEC.has(w.text));
+    const feeder = words.findIndex((w) => FEEDS_ARGUMENTS.has(stem(w.text)) || FIND_EXEC.has(w.text));
     if (feeder >= 0 && words.slice(feeder + 1).some((w, k) => GIT_LIKE.test(w.text) || (k === 0 && FIND_EXEC.has(words[feeder].text) && w.dirty))) return true;
     for (; i < words.length; i++) {
       const w = words[i];
       if (/^\w+=/.test(w.text) || /^\d*[<>]/.test(w.text) || SEGMENT_WORDS_SKIPPED.has(w.text)) continue;
       if (prefixed && (/^-/.test(w.text) || /^\d+$/.test(w.text))) continue;
-      if (!w.dirty && RUNNER_PREFIX.has(w.text.toLowerCase())) {
+      if (!w.dirty && RUNNER_PREFIX.has(stem(w.text))) {
         prefixed = true;
-        feeds ||= FEEDS_ARGUMENTS.has(w.text.toLowerCase());
+        feeds ||= FEEDS_ARGUMENTS.has(stem(w.text));
         continue;
       }
       break;
@@ -359,7 +360,7 @@ function expandsCommandOrSubcommand(command) {
     const command_ = words[i];
     if (!command_) continue;
     if (command_.dirty) return true;
-    const base = command_.text.split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+    const base = stem(command_.text);
     if (base === "alias") return true;
     const helper = gitHelper(command_.text);
     if (helper !== undefined) {
