@@ -107,6 +107,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "collections.submitCashierReconciliation": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "customers.softDelete": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "deposits.create": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
+  "dealCommissions.addLine": { bucket: "STATE_GUARDED", mechanism: "mints a dealCommissionLines row and accrues under `commission_line_accrued_${lineId}`, so the posting key alone is blind to a retry; the replay is refused because an active line with the same kind and employee on the sale already exists, the sale must be COMPLETED, and a sale holds at most 100 line rows" },
+  "dealCommissions.removeLine": { bucket: "STATE_GUARDED", mechanism: "refuses a line already removed or paid; reverses the accrual under `commission_line_reversed_${lineId}` (the pre-existing line), deduped by_org_idempotency, and marks the line removed in the same transaction" },
   "dealUnwind.abandonDealUnwind": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; posts nothing — ends an ACTIVE unwind (SCRUM-693)" },
   "dealUnwind.finishDealUnwind": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the unwind must be ACTIVE (it leaves COMPLETED); the receipt reversal is keyed on the disbursement version it reverses and proven POSTED, and it and the closed-deal teardown commit or roll back together (SCRUM-693 ruling B)" },
   "dealUnwind.recordDealUnwindForwardReturn": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; STEP_DONE once forwardReturn is recorded, and reverseForward refuses a forward already reversed (SCRUM-693)" },
@@ -678,7 +680,8 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 149 -> 150: `accountingPeriods.create` (SCRUM-807): a period created with openImmediately now
     // schedules `accountingOutbox.wakePeriodHeldRows`, which schedules `claimOutboxRow` and so reaches posting
     // by function reference. It is the same wake `open` performs; `accountingPeriods.lock` is still excluded.
-    expect(population).toHaveLength(150);
+    // 150 -> 152: `dealCommissions.addLine` and `.removeLine` (extra deal commission lines), both classified above.
+    expect(population).toHaveLength(152);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {
