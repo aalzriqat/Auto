@@ -96,7 +96,7 @@ describe("dealCommissions: several lines on one deal", () => {
   // What a line does to the books (convex/dealCommissions.ts addLine ->
   // hookDealCommissionLineAccrued, convex/accounting/workflowHooks.ts). The
   // readiness fixture is the one convex/dealCommissionLinesLedger.test.ts uses.
-  type Harness = ReturnType<typeof convexTestWithComponents>;
+  type Harness = ReturnType<typeof convexTestWithComponents<typeof schema>>;
   // chartOfAccounts.initialize and accountingPeriods.open schedule
   // drainPendingAccountingEvents with runAfter(0), which posts the queued
   // SALE_COMPLETED / sale-commission events. Without waiting for it those
@@ -119,13 +119,28 @@ describe("dealCommissions: several lines on one deal", () => {
       await s.asAdmin.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: period._id });
     }
   }
-  const snapshot = (t: Harness, saleId: Id<"sales">) =>
-    t.run(async (ctx) => ({
-      events: await ctx.db.query("accountingEvents").collect(),
-      pending: await ctx.db.query("pendingAccountingEvents").collect(),
-      journalLines: await ctx.db.query("journalLines").collect(),
+  // Scoped to one organization by index, and every returned row is asserted to
+  // carry that orgId, so a snapshot that leaked another tenant's rows (or a
+  // query that lost its org filter) fails here instead of passing silently.
+  // pendingAccountingEvents has no plain by_org index, so it is filtered on orgId.
+  const snapshot = async (t: Harness, orgId: Id<"organizations">, saleId: Id<"sales">) => {
+    const snap = await t.run(async (ctx) => ({
+      events: await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      pending: await ctx.db.query("pendingAccountingEvents").filter((q) => q.eq(q.field("orgId"), orgId)).collect(),
+      journalLines: await ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
       sale: (await ctx.db.get(saleId))?.commissionAmount ?? null,
       saleOrgId: (await ctx.db.get(saleId))?.orgId ?? null,
+    }));
+    for (const row of [...snap.events, ...snap.pending, ...snap.journalLines]) expect(row.orgId).toBe(orgId);
+    expect(snap.saleOrgId).toBe(orgId);
+    return snap;
+  };
+  // Rows of every tenant, to prove the fixture really holds another org's data.
+  const allTenantRowCounts = (t: Harness) =>
+    t.run(async (ctx) => ({
+      events: (await ctx.db.query("accountingEvents").collect()).length,
+      pending: (await ctx.db.query("pendingAccountingEvents").collect()).length,
+      journalLines: (await ctx.db.query("journalLines").collect()).length,
     }));
 
   test("with a chart ready, a line posts exactly one accrual: Dr Commission Expense / Cr Commission Payable, exact fils", async () => {
@@ -134,13 +149,31 @@ describe("dealCommissions: several lines on one deal", () => {
     const s = await seed(t, "ledger", [...ADMIN, "view:finance", "manage:finance"]);
     await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
     await openChartAndPeriod(t, s);
+    // A second organization with its own books and its own commission activity,
+    // including a line posted between the two snapshots.
+    const other = await seed(t, "ledgerother", [...ADMIN, "view:finance", "manage:finance"]);
+    await other.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: other.orgId, saleId: other.saleId, commissionAmount: 70 });
+    await openChartAndPeriod(t, other);
     await settle(t);
-    const before = await snapshot(t, s.saleId);
+    const before = await snapshot(t, s.orgId, s.saleId);
+    const otherBefore = await snapshot(t, other.orgId, other.saleId);
+    const otherLineId = await other.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: other.orgId, saleId: other.saleId, kind: "EXECUTION", employeeId: other.executor, amount: 11,
+    });
     const lineId = await s.asAdmin.mutation(api.dealCommissions.addLine, {
       orgId: s.orgId, saleId: s.saleId, kind: "EXECUTION", employeeId: s.executor, amount: 25.125,
     });
     await settle(t);
-    const after = await snapshot(t, s.saleId);
+    const after = await snapshot(t, s.orgId, s.saleId);
+    const otherAfter = await snapshot(t, other.orgId, other.saleId);
+    // The other org really did post an accrual of its own in the same window,
+    // and it is visible to an unscoped read but not to this org's snapshot.
+    expect(otherAfter.events.filter((e) => e.sourceId === otherLineId && e.eventType === "COMMISSION_ACCRUED")).toHaveLength(1);
+    expect(otherAfter.events.length).toBe(otherBefore.events.length + 1);
+    const everyone = await allTenantRowCounts(t);
+    expect(everyone.events).toBe(after.events.length + otherAfter.events.length);
+    expect(everyone.journalLines).toBe(after.journalLines.length + otherAfter.journalLines.length);
+    expect(everyone.pending).toBe(after.pending.length + otherAfter.pending.length);
 
     const newEvents = after.events.filter((e) => !before.events.some((b) => b._id === e._id));
     expect(newEvents.map((e) => [e.eventType, e.sourceType, e.sourceId, e.orgId])).toEqual([
@@ -183,18 +216,28 @@ describe("dealCommissions: several lines on one deal", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     vi.useFakeTimers();
     const s = await seed(t, "nochart");
+    // Another organization, also without a chart, queues its own accrual between the snapshots.
+    const other = await seed(t, "nochartother");
     await settle(t);
-    const before = await snapshot(t, s.saleId);
+    const before = await snapshot(t, s.orgId, s.saleId);
+    const otherBefore = await snapshot(t, other.orgId, other.saleId);
+    const otherLineId = await other.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: other.orgId, saleId: other.saleId, kind: "EXECUTION", employeeId: other.executor, amount: 9,
+    });
     const lineId = await s.asAdmin.mutation(api.dealCommissions.addLine, {
       orgId: s.orgId, saleId: s.saleId, kind: "EXECUTION", employeeId: s.executor, amount: 25,
     });
     await settle(t);
-    const after = await snapshot(t, s.saleId);
+    const after = await snapshot(t, s.orgId, s.saleId);
+    const otherAfter = await snapshot(t, other.orgId, other.saleId);
+    expect(
+      otherAfter.pending.filter((p) => !otherBefore.pending.some((b) => b._id === p._id)).map((p) => p.idempotencyKey)
+    ).toEqual([`commission_line_accrued_${otherLineId}`]);
+    const everyone = await allTenantRowCounts(t);
+    expect(everyone.pending).toBe(after.pending.length + otherAfter.pending.length);
     expect(after.events).toEqual(before.events);
     expect(after.journalLines).toEqual(before.journalLines);
     expect(after.sale).toBe(before.sale);
-    expect(after.saleOrgId).toBe(s.orgId);
-    for (const row of [...before.events, ...before.journalLines, ...after.pending]) expect(row.orgId).toBe(s.orgId);
     const queued = after.pending.filter((p) => !before.pending.some((b) => b._id === p._id));
     expect(queued.map((p) => [p.kind, p.status, p.idempotencyKey, p.orgId])).toEqual([
       ["POST", "PENDING", `commission_line_accrued_${lineId}`, s.orgId],
