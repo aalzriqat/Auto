@@ -929,6 +929,11 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       const outboxAfterFirst = await outboxOf();
       const snapshotAfterFirst = await storedPeriodSnapshot(s, periodId);
       expect(snapshotAfterFirst).toEqual(SNAPSHOT_AFTER_REVERSAL);
+      // Whole stored documents (ids, shards, timestamps, running totals), not a projection.
+      const snapshotRowsOf = () => s.t.run(async (ctx) => (await ctx.db.query("accountBalanceSnapshots").collect())
+        .filter((row) => row.orgId === s.orgId && row.periodId === periodId));
+      const snapshotRowsAfterFirst = await snapshotRowsOf();
+      expect(snapshotRowsAfterFirst.length).toBeGreaterThan(0);
       await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
       await settle();
       // Replay: nothing is posted again, so journal, events, the whole outbox rows and the snapshots are identical.
@@ -936,6 +941,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       expect(await eventsOf()).toEqual(eventsAfterFirst);
       expect(await outboxOf()).toEqual(outboxAfterFirst);
       expect(await storedPeriodSnapshot(s, periodId)).toEqual(SNAPSHOT_AFTER_REVERSAL);
+      expect(await snapshotRowsOf()).toEqual(snapshotRowsAfterFirst);
     } finally {
       vi.useRealTimers();
     }
