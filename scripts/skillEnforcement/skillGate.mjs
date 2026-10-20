@@ -45,13 +45,80 @@ const SEGMENT_BREAK = /[;&|\n(){`]|\$\(/;
 const isTextArgument = (command, index) =>
   TEXT_COMMANDS.has(command.slice(0, index).split(SEGMENT_BREAK).pop().trim().split(/\s+/)[0]);
 
-// Commands the scan cannot read: text piped into a shell, a command word held in
-// a variable, eval. They are gated as an unknown commit and push, whatever
-// produces the text, rather than skipped.
+// Commands the scan cannot read: text piped into a shell, eval and its
+// PowerShell forms (iex, Invoke-Expression, `& $cmd`, -Command), a shell -c with
+// a dynamic argument, a command word held in a variable, and git aliases. They
+// are gated as an unknown commit and push, whatever produces the text, rather
+// than skipped. Quoted text that is an argument to a non-shell command is not
+// code, so it is blanked out before these patterns run (see blankQuotedText).
 const SHELL_PIPE = new RegExp(
   String.raw`\|&?\s*(?:(?:sudo|env|exec|command|xargs)\s+(?:-\S+\s+)*)?(?:[\w./~-]*/)?(?:bash|sh|zsh|dash|ksh|pwsh|powershell|cmd)\b`,
 );
-const UNPARSEABLE = [SHELL_PIPE, /\beval\b/, /\$\{?\w+\}?\s+(?:commit|push)\b/];
+const COMMAND_POSITION = String.raw`(?:^|[;&|(\n{!\`]|\$\(|\b(?:do|then|else|sudo|env|exec|command|xargs|time|nice|nohup)\s)\s*`;
+const EVAL_LIKE = new RegExp(`${COMMAND_POSITION}(?:eval|iex|invoke-expression)\\b`, "i");
+const UNPARSEABLE = [
+  SHELL_PIPE,
+  EVAL_LIKE,
+  /(?<!&)&\s*\$\{?\w+/,
+  /\b(?:pwsh|powershell)(?:\.exe)?\b[^|;&\n]*\s-(?:c|command|ec|encodedcommand)\b/i,
+  /\b(?:ba|z|da|k)?sh\s+-\w*c\s+["']?\$/,
+  /\$\{?\w+\}?\s+(?:commit|push)\b/,
+];
+
+// Words whose quoted arguments are code, so their quoted text is kept for scanning.
+const SHELLISH = new Set([
+  "bash", "sh", "zsh", "dash", "ksh", "pwsh", "powershell", "cmd", "eval", "iex", "invoke-expression",
+  "sudo", "env", "command", "exec", "xargs", "timeout", "nice", "nohup", "time", "ssh", "su",
+]);
+const SKIPPED_WORDS = new Set(["!", "do", "then", "else", "{", "(", "&&", "||"]);
+
+function commandWord(segment) {
+  const word = segment.trim().split(/\s+/).find((w) => w && !/^\w+=/.test(w) && !SKIPPED_WORDS.has(w)) ?? "";
+  return word.split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+}
+
+/**
+ * The command with the text of quoted arguments replaced by spaces (same length),
+ * unless the quote belongs to a shell-like command. `grep -rn "eval(" src` and
+ * `jira comment "git push failed"` hold text, not commands; `bash -c '...'` holds code.
+ */
+function blankQuotedText(command) {
+  const out = [...command];
+  let segmentStart = 0;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === '"' || ch === "'") {
+      const close = command.indexOf(ch, i + 1);
+      if (close < 0) break;
+      if (!SHELLISH.has(commandWord(command.slice(segmentStart, i)))) {
+        for (let k = i + 1; k < close; k++) out[k] = " ";
+      }
+      i = close;
+    } else if (/[;&|\n(){`]/.test(ch)) segmentStart = i + 1;
+  }
+  return out.join("");
+}
+
+// Git subcommands that are not aliases. Anything else after `git` (or any
+// `-c alias.*`/`--config-env`) may be an alias for push or commit.
+const GIT_BUILTINS = new Set([
+  "add", "am", "apply", "archive", "bisect", "blame", "branch", "bundle", "cat-file", "checkout", "cherry",
+  "cherry-pick", "clean", "clone", "commit", "commit-tree", "config", "count-objects", "credential", "describe",
+  "diff", "difftool", "fetch", "for-each-ref", "format-patch", "fsck", "gc", "grep", "hash-object", "help",
+  "init", "log", "ls-files", "ls-remote", "ls-tree", "maintenance", "merge", "merge-base", "mergetool", "mv",
+  "name-rev", "notes", "pack-refs", "prune", "pull", "push", "range-diff", "rebase", "reflog", "remote",
+  "repack", "replace", "request-pull", "reset", "restore", "rev-list", "rev-parse", "revert", "rm", "shortlog",
+  "show", "show-ref", "sparse-checkout", "stash", "status", "submodule", "switch", "symbolic-ref", "tag",
+  "update-index", "update-ref", "verify-commit", "verify-tag", "version", "whatchanged", "worktree", "write-tree",
+]);
+const GIT_COMMAND = new RegExp(
+  String.raw`${COMMAND_POSITION}(?:[\w./~-]*/)?git\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+([^\s;&|()]+)`,
+  "gi",
+);
+const mayBeAlias = (text) =>
+  [...text.matchAll(GIT_COMMAND)].some(
+    (m) => /-c\s+alias\.|--config-env/i.test(m[1]) || !GIT_BUILTINS.has(m[2].toLowerCase()),
+  );
 const REPO_ENV = /\b(?:GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)=/;
 const CD = /(?:^|[;&|(\n{])\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|()]+)/g;
 const DIR_OPTION = new RegExp(String.raw`(?:^|\s)-C\s+(${ARG})`, "g");
@@ -151,14 +218,20 @@ const unknownStep = (step) => ({ step, all: false, dirs: [], opaque: false, path
  * commit names, and whether the arguments could not be read (then the files are
  * unknown and the change is treated as money). The scan is over the raw text,
  * so it sees `bash -c 'git commit'`, `env git push` and `$(git commit)`.
- * `echo git commit` and `grep 'git push'` are not steps, but text piped into a
- * shell, eval and a command word in a variable are gated as unknown steps.
- * Residual bypass: a git alias, or a script or program that runs git itself.
+ * `echo git commit` and `grep 'git push'` are not steps, and quoted text that is
+ * an argument to a non-shell command is never scanned. Text piped into a shell,
+ * eval and its PowerShell forms, a dynamic `sh -c`, a command word in a variable
+ * and a git alias (`-c alias.*`, or a subcommand that is not a built-in) are
+ * gated as unknown steps. Residual bypass: a script or program that runs git itself.
  */
 export function gitSteps(command) {
   const steps = [];
-  for (const m of command.matchAll(GIT_STEP)) {
-    if (isTextArgument(command, m.index)) continue;
+  const scan = blankQuotedText(command);
+  for (const found of scan.matchAll(GIT_STEP)) {
+    if (isTextArgument(scan, found.index)) continue;
+    // Options are read from the original text: a blanked `-C "my dir"` would lose its path.
+    const m = new RegExp(GIT_STEP.source).exec(command.slice(found.index, found.index + found[0].length)) ?? found;
+    m.index = found.index;
     const before = command.slice(0, m.index);
     const step = m[2];
     const args = step === "commit" ? commitArgs(command.slice(m.index + m[0].length)) : { all: false, paths: [], unknown: false };
@@ -174,7 +247,7 @@ export function gitSteps(command) {
     });
   }
   if (/\bgh\s+pr\s+create\b/.test(command)) steps.push({ ...unknownStep("pr"), unknown: false });
-  if (UNPARSEABLE.some((re) => re.test(command))) steps.push(unknownStep("commit"), unknownStep("push"));
+  if (UNPARSEABLE.some((re) => re.test(scan)) || mayBeAlias(scan)) steps.push(unknownStep("commit"), unknownStep("push"));
   return steps;
 }
 
