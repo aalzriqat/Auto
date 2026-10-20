@@ -15,17 +15,29 @@
  * edit is a guard on mistakes, not a boundary.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { classifyPaths, invokedSkills, requiredSkills } from "./policy.mjs";
+import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 const UNKNOWN_BASE = { sensitive: ["(changed files unknown)"], gate: [], code: ["(unknown)"] };
+const EXTRA_GIT_PATHS = ["/usr/local/bin/git", "/opt/homebrew/bin/git", "/usr/bin/git", "/bin/git"];
+
+/** Absolute git path, never PATH-resolved. Null when none is found (callers treat the change as unknown). */
+export function gitExecutable(exists = existsSync, resolve = resolveTrustedGitExecutable) {
+  try {
+    return resolve();
+  } catch {
+    return EXTRA_GIT_PATHS.find((p) => exists(p)) ?? null;
+  }
+}
 
 const ARG = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
 const GIT_STEP = new RegExp(
   String.raw`\bgit\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b([^;&|\n'")]*)`,
   "g",
 );
+const ALL_FLAG = /(?:^|\s)(?:--all|-[a-zA-Z]*a[a-zA-Z]*)(?=\s|$)/;
 
 /**
  * Commit, push and PR steps named anywhere in a shell command, with whether
@@ -38,39 +50,32 @@ const GIT_STEP = new RegExp(
 export function gitSteps(command) {
   const steps = [];
   for (const m of command.matchAll(GIT_STEP)) {
-    const all = /(^|\s)(--all|-[a-zA-Z]*a[a-zA-Z]*)(?=\s|$)/.test(m[3]);
-    steps.push({ step: m[2], all });
+    steps.push({ step: m[2], all: ALL_FLAG.test(m[3]) });
   }
   if (/\bgh\s+pr\s+create\b/.test(command)) steps.push({ step: "pr", all: false });
   return steps;
 }
 
-function git(cwd, args) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-    .split("\n")
-    .filter(Boolean);
+function makeGit(cwd, exe) {
+  return (args, timeout) =>
+    execFileSync(exe, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout })
+      .split("\n")
+      .filter(Boolean);
 }
 
-let fetched = false;
-function freshenMain(cwd) {
-  if (fetched) return;
-  fetched = true;
+/** Files this branch changes: since its upstream if it has one, else since main. Null if unknown. */
+function branchFiles(git, preferUpstream) {
   try {
     // A stale origin/main makes the diff list other people's merged files.
-    execFileSync("git", ["fetch", "-q", "origin", "main"], { cwd, stdio: "ignore", timeout: 15000 });
+    git(["fetch", "-q", "origin", "main"], 15000);
   } catch {
     /* offline: fall back to the refs we have */
   }
-}
-
-/** Files this branch changes: since its upstream if it has one, else since main. */
-function branchFiles(cwd, preferUpstream) {
   const bases = preferUpstream ? ["@{upstream}", "origin/main", "main"] : ["origin/main", "main"];
-  freshenMain(cwd);
   for (const base of bases) {
     try {
-      const mb = git(cwd, ["merge-base", base, "HEAD"])[0];
-      if (mb) return git(cwd, ["diff", "--name-only", `${mb}...HEAD`]);
+      const mb = git(["merge-base", base, "HEAD"])[0];
+      if (mb) return git(["diff", "--name-only", `${mb}...HEAD`]);
     } catch {
       /* try next base */
     }
@@ -78,27 +83,26 @@ function branchFiles(cwd, preferUpstream) {
   return null;
 }
 
-export function stepsFor(input) {
-  const { tool_name: tool, tool_input: ti = {}, cwd = process.cwd() } = input;
-  if (tool === "Bash") {
-    return gitSteps(String(ti.command ?? "")).map((s) => {
-      let files;
-      try {
-        if (s.step === "commit") {
-          files = git(cwd, ["diff", "--cached", "--name-only"]);
-          if (s.all) files = [...files, ...git(cwd, ["diff", "--name-only"])];
-        } else {
-          files = branchFiles(cwd, s.step === "push");
-          // `git commit … && git push` in one command: the commit is not made yet.
-          if (files && s.step === "push") files = [...files, ...git(cwd, ["diff", "--cached", "--name-only"])];
-        }
-      } catch {
-        files = null;
-      }
-      return { step: s.step, files };
-    });
+function bashStep({ step, all }, git) {
+  if (!git) return { step, files: null };
+  try {
+    if (step === "commit") {
+      const staged = git(["diff", "--cached", "--name-only"]);
+      return { step, files: all ? [...staged, ...git(["diff", "--name-only"])] : staged };
+    }
+    const files = branchFiles(git, step === "push");
+    // `git commit … && git push` in one command: the commit is not made yet.
+    return { step, files: files && step === "push" ? files.concat(git(["diff", "--cached", "--name-only"])) : files };
+  } catch {
+    return { step, files: null };
   }
-  if (tool === "mcp__github__create_pull_request") return [{ step: "pr", files: branchFiles(cwd, false) }];
+}
+
+export function stepsFor(input, exe = gitExecutable()) {
+  const { tool_name: tool, tool_input: ti = {}, cwd = process.cwd() } = input;
+  const git = exe ? makeGit(cwd, exe) : null;
+  if (tool === "Bash") return gitSteps(String(ti.command ?? "")).map((s) => bashStep(s, git));
+  if (tool === "mcp__github__create_pull_request") return [{ step: "pr", files: git ? branchFiles(git, false) : null }];
   if (tool === "mcp__github__push_files") {
     return [{ step: "push", files: (ti.files ?? []).map((f) => f.path).filter(Boolean) }];
   }
@@ -108,10 +112,12 @@ export function stepsFor(input) {
   return [];
 }
 
-export function decide(input, transcriptText) {
+export function decide(input, transcriptText, exe) {
+  const steps = stepsFor(input, exe);
+  if (steps.length === 0) return null;
   const have = invokedSkills(transcriptText);
   const problems = [];
-  for (const { step, files } of stepsFor(input)) {
+  for (const { step, files } of steps) {
     const classes = files ? classifyPaths(files) : UNKNOWN_BASE;
     for (const { skill, why } of requiredSkills(step, classes)) {
       if (!have.has(skill)) problems.push(`  - ${skill} (${why}) before ${step}`);
@@ -121,31 +127,27 @@ export function decide(input, transcriptText) {
   return [
     "Blocked by the skill gate (.claude/skills/README.md, scripts/skillEnforcement).",
     "Invoke these skills with the Skill tool in this session, apply them, then retry:",
-    ...[...new Set(problems)],
+    ...new Set(problems),
     "Money and permission fixes also need a red run of the new test before the fix. The PR check verifies the evidence section.",
   ].join("\n");
 }
 
-function main() {
-  const input = JSON.parse(readFileSync(0, "utf8"));
+/** Hook entry: JSON in, JSON out. Exported so tests drive it without a process. */
+export function run(rawInput, readTranscript = (p) => readFileSync(p, "utf8"), exe) {
+  const input = JSON.parse(rawInput);
   let transcript = "";
   try {
-    transcript = readFileSync(input.transcript_path, "utf8");
+    transcript = readTranscript(input.transcript_path);
   } catch {
-    // No readable transcript means no proof of invocation: gate still applies.
+    // No readable transcript means no proof of invocation: the gate still applies.
   }
-  const reason = decide(input, transcript);
-  if (reason) {
-    process.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: reason,
-        },
-      }),
-    );
-  }
+  const reason = decide(input, transcript, exe);
+  if (!reason) return "";
+  return JSON.stringify({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
+  });
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  process.stdout.write(run(readFileSync(0, "utf8")));
+}

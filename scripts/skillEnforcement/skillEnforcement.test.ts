@@ -3,10 +3,15 @@
  * controls: each refusal cell has a matching pass cell so a gate that always
  * passes, or always blocks, turns a test red.
  */
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { classifyPaths, invokedSkills, requiredSkills } from "./policy.mjs";
-import { decide, gitSteps } from "./skillGate.mjs";
-import { evaluate, TEMPLATE } from "./prSkillEvidence.mjs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { decide, gitExecutable, gitSteps, run, stepsFor } from "./skillGate.mjs";
+import { check } from "./checkPrSkillEvidence.mjs";
+import { evaluate, isPlaceholder, TEMPLATE } from "./prSkillEvidence.mjs";
 
 let n = 0;
 const skillCall = (skill: string, isError = false) => {
@@ -195,5 +200,125 @@ describe("evaluate (PR check)", () => {
   test("gate-only change needs no red run", async () => {
     const r = await evaluate({ body: fill().replace(/- Red run:\n```\n[\s\S]*?\n```\n/, ""), files: [".github/x.yml"] });
     expect(r.problems.join("\n")).not.toContain("Red run");
+  });
+});
+
+describe("isPlaceholder", () => {
+  test.each(["", "TODO", "tbd.", "n/a", "<real output>", "  pending  "])("%j is a placeholder", (b) =>
+    expect(isPlaceholder(b)).toBe(true),
+  );
+  test.each(["Promise<void> ok", "2 tests pending", "<a>\n<b>", "no changes needed"])("%j is real", (b) =>
+    expect(isPlaceholder(b)).toBe(false),
+  );
+});
+
+describe("classifyPaths edge cases", () => {
+  test("utils keyword files, root prefixes, gate scripts and plain code", () => {
+    const c = classifyPaths([
+      "convex/utils/depositHelpers.test.ts",
+      "convex/accountingLedger.ts",
+      "convex/migrateRoles.ts",
+      "scripts/assertReleaseChecks.mjs",
+      "convex/socialInbox.ts",
+      "convex/utils/vin.ts",
+      "convex/sub/sales.ts",
+      "lib/format.tsx",
+    ]);
+    expect(c.sensitive).toEqual(["convex/utils/depositHelpers.test.ts", "convex/accountingLedger.ts", "convex/migrateRoles.ts"]);
+    expect(c.gate).toEqual(["scripts/assertReleaseChecks.mjs"]);
+    expect(c.code).toContain("lib/format.tsx");
+  });
+});
+
+describe("gitExecutable", () => {
+  test("falls back to a fixed list, then to null", () => {
+    const boom = () => {
+      throw new Error("none");
+    };
+    expect(gitExecutable((p) => p === "/opt/homebrew/bin/git", boom)).toBe("/opt/homebrew/bin/git");
+    expect(gitExecutable(() => false, boom)).toBeNull();
+    expect(gitExecutable(() => false, () => "/usr/bin/git")).toBe("/usr/bin/git");
+  });
+});
+
+describe("hook against a real git repository", () => {
+  const exe = gitExecutable();
+  const sh = (cwd: string, ...args: string[]) =>
+    execFileSync(exe!, args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  let dir = "";
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "gate-"));
+    sh(dir, "init", "-q", "-b", "main");
+    writeFileSync(path.join(dir, "README.md"), "x");
+    sh(dir, "add", ".");
+    sh(dir, "commit", "-q", "-m", "base");
+    mkdirSync(path.join(dir, "convex"));
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const bash = (command: string) => ({ tool_name: "Bash", tool_input: { command }, cwd: dir });
+
+  test("a staged money file blocks commit without skills and passes with them", () => {
+    writeFileSync(path.join(dir, "convex/sales.ts"), "export {};");
+    sh(dir, "add", "convex/sales.ts");
+    const denied = run(JSON.stringify(bash("git commit -m x")), () => "", exe!);
+    expect(JSON.parse(denied).hookSpecificOutput.permissionDecision).toBe("deny");
+    const t = transcript("tdd", "blast-radius");
+    expect(run(JSON.stringify(bash("git commit -m x")), () => t, exe!)).toBe("");
+  });
+  test("a non-git command is ignored and an unreadable transcript still gates", () => {
+    expect(run(JSON.stringify(bash("ls")), () => { throw new Error("x"); }, exe!)).toBe("");
+    const out = run(JSON.stringify(bash("git commit -am x")), () => { throw new Error("x"); }, exe!);
+    expect(out).toContain("tdd");
+  });
+  test("push uses the branch diff; with no main to compare it treats the change as money", () => {
+    const steps = stepsFor(bash("git commit -m y && git push"), exe!);
+    expect(steps.map((s: { step: string }) => s.step)).toEqual(["commit", "push"]);
+    expect(steps[1].files).toContain("convex/sales.ts");
+  });
+  test("no git executable makes the change unknown and therefore gated", () => {
+    expect(decide(bash("git push"), "", null as unknown as string)).toContain("tdd");
+  });
+  test("PR creation tool reads the branch files", () => {
+    const steps = stepsFor({ tool_name: "mcp__github__create_pull_request", tool_input: {}, cwd: dir }, exe!);
+    expect(steps[0].step).toBe("pr");
+  });
+  test("push_files and delete tools read their own paths", () => {
+    expect(stepsFor({ tool_name: "mcp__github__push_files", tool_input: { files: [{ path: "a.ts" }, {}] } }, exe!)[0].files).toEqual(["a.ts"]);
+    expect(stepsFor({ tool_name: "mcp__github__delete_file", tool_input: { path: "b.ts" } }, exe!)[0].files).toEqual(["b.ts"]);
+    expect(stepsFor({ tool_name: "Read", tool_input: {} }, exe!)).toEqual([]);
+  });
+});
+
+describe("check (CI entry)", () => {
+  const env = { REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "t" };
+  const api = (body: string, files: string[], commits: string[]) => async (url: string) => {
+    const u = String(url);
+    const json = u.includes("/files")
+      ? files.map((filename) => ({ filename }))
+      : u.includes("/commits")
+        ? commits.map((sha) => ({ sha }))
+        : { body, head: { sha: "abc1234567890" } };
+    return { ok: true, status: 200, json: async () => json } as Response;
+  };
+  test("rejects bad environment", async () => {
+    await expect(check({ REPO: "x", PR_NUMBER: "1", GH_TOKEN: "t" })).rejects.toThrow("required");
+  });
+  test("not required for a docs-only PR", async () => {
+    const r = await check(env, api("", ["docs/a.md"], []) as typeof fetch);
+    expect(r.exitCode).toBe(0);
+    expect(r.lines[0]).toContain("not required");
+  });
+  test("fails with the template when evidence is missing", async () => {
+    const r = await check(env, api("nothing", ["convex/sales.ts"], []) as typeof fetch);
+    expect(r.exitCode).toBe(1);
+    expect(r.lines.join("\n")).toContain("## Skill evidence");
+  });
+  test("passes with a filled section whose SHAs belong to the PR", async () => {
+    const r = await check(env, api(fill(), ["convex/sales.ts"], ["abc1234ffff"]) as typeof fetch);
+    expect(r.lines).toEqual(["skill-evidence: section present and consistent."]);
+  });
+  test("surfaces an API error", async () => {
+    const bad = (async () => ({ ok: false, status: 403 })) as unknown as typeof fetch;
+    await expect(check(env, bad)).rejects.toThrow("403");
   });
 });

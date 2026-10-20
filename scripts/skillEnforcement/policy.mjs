@@ -6,39 +6,69 @@
  * mechanical. It never replaces the two-seat review.
  */
 
-const MONEY_UTILS =
-  /^convex\/utils\/[^/]*(money|deposit|sale|commission|cost|financ|invoice|ledger|payroll|prepaid|expense|settlement|supplier|cheque|fcCheque|customerCredit|fee|vat|bank|cash|dealUnwind|handover|amort|partner|payment|economics|quote|retained|profit|gross|custody|commit|execution|materialization|closeWarnings|manualFinance|orgReset|vehicleOwnership|permissions|tenancy|idempotency|financialGuards|auditLog)[^/]*$/i;
-
-const MONEY_ROOT =
-  /^convex\/(accounting[^/]*|sales|deposits?|depositRequests|depositRevenueImpact|collections|collectionReminderActions|expenses|payroll|bankAccounts|bankReconciliation|bankBalanceBackfill|cashDrawer|finance[^/]*|financingEconomics|customerFinanceCompanyPayments|dealUnwind|dealCommissions|dealOverview|dealWorkspace|applications|prepaidExpenses|partnerEquity|paymentIntents|paymentVouchers|retainedCreditRefunds|subledger|supplier[^/]*|sourcingPayables|fixedAssets|chartOfAccounts|transactions|commitments|vatReport|reports|orgFinancialReset|orgResetPreflight|quotes|journalReportEligibility|diagnosePrepaidLedgerIntegrity|chequeLineageAudit|financialAudit|migrate[^/]*|aggregates|subscriptions|vehicleEdits|vehicles|sourcedAgentImpact|dashboardExpenseSummary|dashboard|crons|http|schema|roles|memberships|users|organizations|orgSettings|approvals|admin(Auth|Orgs|Data|Users|Impersonation))(\.test)?\.ts$/;
-
-/** Gate and production-safeguard files: AGENTS.md says these need both seats. */
-const GATE = [
-  /^AGENTS\.md$/,
-  /^\.github\//,
-  /^\.claude\//,
-  /^scripts\/skillEnforcement\//,
-  /^scripts\/(assertRelease|checkReleaseAuthority|verifyZeroState|rolloutProduction)[^/]*$/,
-  /^scripts\/intelligence\//,
-  /^regression\/rulings\.json$/,
+/** Keywords in a `convex/utils/` file name that mark money, permission or tenancy code. */
+const UTIL_KEYWORDS = [
+  "money", "deposit", "sale", "commission", "cost", "financ", "invoice", "ledger", "payroll",
+  "prepaid", "expense", "settlement", "supplier", "cheque", "customercredit", "fee", "vat",
+  "bank", "cash", "dealunwind", "handover", "amort", "partner", "payment", "economics", "quote",
+  "retained", "profit", "gross", "custody", "commit", "execution", "materialization",
+  "closewarnings", "manualfinance", "orgreset", "vehicleownership", "permissions", "tenancy",
+  "idempotency", "auditlog",
 ];
 
-const MONEY = [
-  MONEY_UTILS,
-  MONEY_ROOT,
-  /^convex\/accounting\//,
-];
+/** `convex/<name>.ts` files that hold money, permission, tenancy or schema logic. */
+const ROOT_NAMES = new Set([
+  "sales", "deposits", "deposit", "depositRequests", "depositRevenueImpact", "collections",
+  "collectionReminderActions", "expenses", "payroll", "bankAccounts", "bankReconciliation",
+  "bankBalanceBackfill", "cashDrawer", "financingEconomics", "customerFinanceCompanyPayments",
+  "dealUnwind", "dealCommissions", "dealOverview", "dealWorkspace", "applications",
+  "prepaidExpenses", "partnerEquity", "paymentIntents", "paymentVouchers", "retainedCreditRefunds",
+  "subledger", "sourcingPayables", "fixedAssets", "chartOfAccounts", "transactions", "commitments",
+  "vatReport", "reports", "orgFinancialReset", "orgResetPreflight", "quotes",
+  "journalReportEligibility", "diagnosePrepaidLedgerIntegrity", "chequeLineageAudit",
+  "financialAudit", "aggregates", "subscriptions", "vehicleEdits", "vehicles",
+  "sourcedAgentImpact", "dashboardExpenseSummary", "dashboard", "crons", "http", "schema", "roles",
+  "memberships", "users", "organizations", "orgSettings", "approvals", "adminAuth", "adminOrgs",
+  "adminData", "adminUsers", "adminImpersonation",
+]);
+const ROOT_PREFIXES = ["accounting", "finance", "supplier", "migrate"];
 
-const CODE = /\.(ts|tsx|js|mjs|cjs)$/;
+const GATE_EXACT = new Set(["AGENTS.md", "regression/rulings.json"]);
+const GATE_PREFIXES = [".github/", ".claude/", "scripts/skillEnforcement/", "scripts/intelligence/"];
+const GATE_SCRIPTS = ["assertRelease", "checkReleaseAuthority", "verifyZeroState", "rolloutProduction"];
+
+const CODE_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs", ".cjs"];
+
+function stem(file) {
+  return file.replace(/\.test\.ts$/, "").replace(/\.ts$/, "");
+}
+
+function isGate(p) {
+  if (GATE_EXACT.has(p) || GATE_PREFIXES.some((x) => p.startsWith(x))) return true;
+  return p.startsWith("scripts/") && GATE_SCRIPTS.some((x) => p.slice("scripts/".length).startsWith(x));
+}
+
+function isMoney(p) {
+  if (!p.startsWith("convex/")) return false;
+  const rest = p.slice("convex/".length);
+  if (rest.startsWith("accounting/")) return true;
+  if (rest.startsWith("utils/")) {
+    const name = stem(rest.slice("utils/".length)).toLowerCase();
+    return !name.includes("/") && UTIL_KEYWORDS.some((k) => name.includes(k));
+  }
+  if (rest.includes("/") || !rest.endsWith(".ts")) return false;
+  const name = stem(rest);
+  return ROOT_NAMES.has(name) || ROOT_PREFIXES.some((x) => name.startsWith(x));
+}
 
 export function classifyPaths(paths) {
   const out = { sensitive: [], gate: [], code: [] };
   for (const raw of paths) {
     const p = raw.replace(/^\.\//, "");
     if (!p) continue;
-    if (GATE.some((r) => r.test(p))) out.gate.push(p);
-    if (MONEY.some((r) => r.test(p))) out.sensitive.push(p);
-    if (CODE.test(p)) out.code.push(p);
+    if (isGate(p)) out.gate.push(p);
+    if (isMoney(p)) out.sensitive.push(p);
+    if (CODE_EXTENSIONS.some((e) => p.endsWith(e))) out.code.push(p);
   }
   return out;
 }
@@ -67,6 +97,23 @@ export function requiredSkills(step, classes) {
   return [...need].map(([skill, why]) => ({ skill, why }));
 }
 
+const normSkill = (s) => String(s).replace(/^\/+/, "").split(":").pop();
+const COMMAND_MARKER = /<command-name>\/?([^<\s]+)<\/command-name>/g;
+
+function parseLine(line) {
+  try {
+    return line.trim() ? JSON.parse(line) : null;
+  } catch {
+    return null;
+  }
+}
+
+function userTexts(msg) {
+  if (typeof msg?.content === "string") return [msg.content];
+  const blocks = Array.isArray(msg?.content) ? msg.content : [];
+  return blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text);
+}
+
 /**
  * Skills invoked in a Claude Code JSONL transcript. Two sources count, and only
  * these two:
@@ -77,40 +124,26 @@ export function requiredSkills(step, classes) {
  * Assistant prose that merely contains the marker text counts for nothing.
  */
 export function invokedSkills(transcriptText) {
-  const norm = (s) => String(s).replace(/^\/+/, "").split(":").pop();
   const calls = new Map(); // tool_use id -> skill
-  const ok = new Set();
-  const typed = new Set();
-  const marker = /<command-name>\/?([^<\s]+)<\/command-name>/g;
-  for (const line of transcriptText.split("\n")) {
-    if (!line.trim()) continue;
-    let rec;
-    try {
-      rec = JSON.parse(line);
-    } catch {
-      continue;
-    }
+  const answered = new Set();
+  const seen = new Set();
+  for (const rec of transcriptText.split("\n").map(parseLine)) {
     const msg = rec?.message;
     const role = msg?.role ?? rec?.type;
     const blocks = Array.isArray(msg?.content) ? msg.content : [];
     if (role === "assistant") {
       for (const b of blocks) {
         if (b?.type === "tool_use" && b.name === "Skill" && b.input?.skill && b.id) {
-          calls.set(b.id, norm(b.input.skill));
+          calls.set(b.id, normSkill(b.input.skill));
         }
       }
     } else if (role === "user") {
       for (const b of blocks) {
-        if (b?.type === "tool_result" && b.tool_use_id && !b.is_error) ok.add(b.tool_use_id);
+        if (b?.type === "tool_result" && b.tool_use_id && !b.is_error) answered.add(b.tool_use_id);
       }
-      const texts =
-        typeof msg?.content === "string"
-          ? [msg.content]
-          : blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text);
-      for (const t of texts) for (const m of t.matchAll(marker)) typed.add(norm(m[1]));
+      for (const t of userTexts(msg)) for (const m of t.matchAll(COMMAND_MARKER)) seen.add(normSkill(m[1]));
     }
   }
-  const seen = new Set(typed);
-  for (const [id, skill] of calls) if (ok.has(id)) seen.add(skill);
+  for (const [id, skill] of calls) if (answered.has(id)) seen.add(skill);
   return seen;
 }
