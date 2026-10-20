@@ -63,38 +63,74 @@ const UNPARSEABLE = [
   /\b(?:pwsh|powershell)(?:\.exe)?\b[^|;&\n]*\s-(?:c|command|ec|encodedcommand)\b/i,
   /\b(?:ba|z|da|k)?sh\s+-\w*c\s+["']?\$/,
   /\$\{?\w+\}?\s+(?:commit|push)\b/,
+  /\b(?:start-process|saps)\b[^;&|\n]*\bgit\b/i,
 ];
 
-// Words whose quoted arguments are code, so their quoted text is kept for scanning.
-const SHELLISH = new Set([
-  "bash", "sh", "zsh", "dash", "ksh", "pwsh", "powershell", "cmd", "eval", "iex", "invoke-expression",
-  "sudo", "env", "command", "exec", "xargs", "timeout", "nice", "nohup", "time", "ssh", "su",
-]);
+// Allowlist. Quoted text is blanked only in a segment whose command is known to
+// treat it as text and nothing else. Everything else (pnpm exec, npx, find -exec,
+// watch, parallel, node -e, python -c, Start-Process, ...) keeps its quotes
+// scanned and fails closed.
+const TEXT_ONLY_COMMANDS = new Set(["echo", "printf", "grep", "egrep", "fgrep", "rg", "jira"]);
 const SKIPPED_WORDS = new Set(["!", "do", "then", "else", "{", "(", "&&", "||"]);
+// Anything in the segment that could make the command run its arguments as code.
+const RUNS_CODE_FLAG = /\s-(?:c|e|E|ec)(?=\s|$)|\s-(?:command|encodedcommand|argumentlist|exec|execute)\b/i;
+const RUNS_CODE_WORD = new RegExp(
+  String.raw`\b(?:bash|sh|zsh|dash|ksh|pwsh|powershell|cmd|eval|iex|invoke-expression|node|python\d*|ruby|perl|php|xargs|parallel|watch|find|start-process|saps|npx|pnpm|npm|yarn|env|sudo|exec|timeout|nice|nohup|time|ssh|su)\b`,
+  "i",
+);
+const EXECUTES_QUOTED = /\$\(|`/;
 
 function commandWord(segment) {
   const word = segment.trim().split(/\s+/).find((w) => w && !/^\w+=/.test(w) && !SKIPPED_WORDS.has(w)) ?? "";
   return word.split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
 }
 
+function isTextOnlySegment(text) {
+  const word = commandWord(text);
+  const known =
+    TEXT_ONLY_COMMANDS.has(word) ||
+    (word === "git" && /\bcommit\b/.test(text)) ||
+    (word === "gh" && /^\s*(?:\w+=\S*\s+)*gh\s+(?:pr|issue)\b/.test(text));
+  // Flags and words are looked for outside the quotes: a message may say "eval(" or "sh".
+  const bare = text.replace(/"[^"]*"|'[^']*'/g, " ").replace(/^\s*(?:\w+=\S*\s+)*(?:gh|git)\b/, "");
+  return known && !RUNS_CODE_FLAG.test(bare) && !RUNS_CODE_WORD.test(bare);
+}
+
 /**
- * The command with the text of quoted arguments replaced by spaces (same length),
- * unless the quote belongs to a shell-like command. `grep -rn "eval(" src` and
- * `jira comment "git push failed"` hold text, not commands; `bash -c '...'` holds code.
+ * The command with quoted text replaced by spaces (same length), only inside a
+ * segment that isTextOnlySegment accepts, and never inside a quote that
+ * executes (`"$(…)"`, backticks). `grep -rn "eval(" src`, `echo "git push"` and
+ * `jira comment add "git push failed"` hold text; `pnpm exec sh -c '…'` holds code.
  */
 function blankQuotedText(command) {
   const out = [...command];
-  let segmentStart = 0;
+  const spans = []; // [start, end) of each quote-aware segment
+  let start = 0;
+  let quote = null;
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
-    if (ch === '"' || ch === "'") {
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (/[;&|\n(){`]/.test(ch)) {
+      spans.push([start, i]);
+      start = i + 1;
+    }
+  }
+  spans.push([start, command.length]);
+  for (const [from, to] of spans) {
+    const text = command.slice(from, to);
+    if (!isTextOnlySegment(text)) continue;
+    for (let i = from; i < to; i++) {
+      const ch = command[i];
+      if (ch !== '"' && ch !== "'") continue;
       const close = command.indexOf(ch, i + 1);
-      if (close < 0) break;
-      if (!SHELLISH.has(commandWord(command.slice(segmentStart, i)))) {
+      if (close < 0 || close >= to) break;
+      if (!EXECUTES_QUOTED.test(command.slice(i + 1, close))) {
         for (let k = i + 1; k < close; k++) out[k] = " ";
       }
       i = close;
-    } else if (/[;&|\n(){`]/.test(ch)) segmentStart = i + 1;
+    }
   }
   return out.join("");
 }

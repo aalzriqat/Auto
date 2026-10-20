@@ -126,7 +126,9 @@ describe("gitSteps", () => {
     ['grep -rn "eval(" src', []],
     ['echo "git push"', []],
     ['jira comment add "git push failed"', []],
-    ['python -c "x = 1; eval(2)"', []],
+    ['gh pr comment 5 --body "ran git push, then git commit"', []],
+    ['gh issue create --title "git push fails" --body "eval( broke"', []],
+    ['git commit -m "fix: git push eval( iex"', [step("commit")]],
     ['rg "iex $x" notes', []],
     ["git status", []],
     ["git diff HEAD~1 -- a.ts", []],
@@ -169,6 +171,21 @@ describe("gitSteps", () => {
     const steps = gitSteps(cmd);
     expect(steps.length).toBeGreaterThan(0);
     expect(steps.every((st: { unknown: boolean }) => st.unknown)).toBe(true);
+  });
+  test.each([
+    "pnpm exec sh -c 'git push'",
+    "npx -y sh -c 'git commit -m x'",
+    "find . -name x -exec sh -c 'git push' \\;",
+    "watch 'git push'",
+    "parallel 'git push' ::: a",
+    "Start-Process git -ArgumentList 'push'",
+    "saps git -ArgumentList 'commit'",
+    "node -e \"require('child_process').execSync('git push')\"",
+    "python -c \"import os; os.system('git push')\"",
+    'echo "$(git push)"',
+    "python -c \"x = 1; eval(2)\"",
+  ])("code in quotes under a non-text command is still scanned: %s", (cmd) => {
+    expect(gitSteps(cmd).length).toBeGreaterThan(0);
   });
   test.each(["ls | shasum", "echo hi | grep sh", "cat a | wc -l"])("%s is not a shell pipe", (cmd) =>
     expect(gitSteps(cmd)).toEqual([]),
