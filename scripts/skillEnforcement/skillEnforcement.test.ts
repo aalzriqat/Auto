@@ -228,6 +228,30 @@ describe("gitSteps", () => {
     expect(gitSteps(cmd).length).toBeGreaterThan(0);
   });
   test.each([
+    'rg "--pre" git x push',
+    "rg '--pre=sh' x .",
+    'rg "--hostname-bin" "git push" x',
+    "rg \"--pre\" 'sh' p f",
+    "rg --pr\"e\" sh x .",
+    '"rg" --pre sh x .',
+    "gh issue create \"--editor\" --title 'git push'",
+    "gh pr create '-e' --title 'git push'",
+    "git \"-c\" alias.p=push p origin",
+    "\"git\" -c alias.p=push p origin",
+    "git '--config-env=alias.p=A' p",
+    "r\"g\" --pre 'git push' x",
+    "\"sh\" -c 'git push'",
+  ])("a quoted executing flag or command word is still found: %s", (cmd) => {
+    expect(gitSteps(cmd).length).toBeGreaterThan(0);
+  });
+  test.each([
+    ['rg "-n" "git push" src', []],
+    ['git -C d commit -m "x git push"', [expect.objectContaining({ step: "commit" })]],
+    ['rg -C 2 "git push" src', []],
+  ])("a quoted harmless flag does not disable blanking: %s", (cmd, expected) => {
+    expect(gitSteps(cmd)).toEqual(expected);
+  });
+  test.each([
     'rg -n "git push" src',
     "rg --pre-glob '*.pdf' foo docs",
     'rg -i --glob "*.ts" "git commit" .',

@@ -82,10 +82,12 @@ const UNPARSEABLE = [
 // scanned and fails closed.
 const TEXT_ONLY_COMMANDS = new Set(["echo", "printf", "grep", "egrep", "fgrep", "rg", "jira"]);
 const SKIPPED_WORDS = new Set(["!", "do", "then", "else", "{", "(", "&&", "||"]);
-// Anything in the segment that could make the command run its arguments as code.
-const RUNS_CODE_FLAG = /\s-(?:c|e|E|ec)(?=\s|$)|\s-(?:command|encodedcommand|argumentlist|exec|execute)\b|\s--(?:pre|pre-glob|hostname-bin|editor)(?=[\s=]|$)/i;
+// Flags and words that make a command run its arguments as code. They are looked
+// for on the dequoted words of the segment, so `rg "--pre" …` and `"sh" -c …` count.
+const RUNS_CODE_SHORT_FLAG = /^-(?:c|e|E)$/;
+const RUNS_CODE_FLAG = /^(?:-(?:ec|command|encodedcommand|argumentlist|exec|execute)$|--(?:pre|pre-glob|hostname-bin|editor)(?:=|$))/i;
 const RUNS_CODE_WORD = new RegExp(
-  String.raw`\b(?:bash|sh|zsh|dash|ksh|pwsh|powershell|cmd|eval|iex|invoke-expression|node|python\d*|ruby|perl|php|xargs|parallel|watch|find|start-process|saps|npx|pnpm|npm|yarn|env|sudo|exec|timeout|nice|nohup|time|ssh|su)\b`,
+  String.raw`^(?:bash|sh|zsh|dash|ksh|pwsh|powershell|cmd|eval|iex|invoke-expression|node|python\d*|ruby|perl|php|xargs|parallel|watch|find|start-process|saps|npx|pnpm|npm|yarn|env|sudo|exec|timeout|nice|nohup|time|ssh|su)$`,
   "i",
 );
 const EXECUTES_QUOTED = /\$\(|`/;
@@ -102,10 +104,15 @@ function isTextOnlySegment(text) {
   const known =
     TEXT_ONLY_COMMANDS.has(word) ||
     (word === "git" && /\bcommit\b/.test(text)) ||
-    (word === "gh" && /^\s*(?:\w+=\S*\s+)*gh\s+(?:pr|issue)\b/.test(text));
-  // Flags and words are looked for outside the quotes: a message may say "eval(" or "sh".
-  const bare = text.replace(/"[^"]*"|'[^']*'/g, " ").replace(/^\s*(?:\w+=\S*\s+)*(?:gh|git)\b/, "");
-  return known && !RUNS_CODE_FLAG.test(bare) && !RUNS_CODE_WORD.test(bare) && !/[<>]\(/.test(bare);
+    (word === "gh" && /^\s*gh\s+(?:pr|issue)\b/.test(text));
+  if (!known) return false;
+  const words = splitArgs(text);
+  if (words === null) return false;
+  const code = words.slice(1).some(({ text: w }) => {
+    const base = w.split(/[\\/]/).pop().replace(/\.exe$/i, "");
+    return RUNS_CODE_SHORT_FLAG.test(w) || RUNS_CODE_FLAG.test(w) || RUNS_CODE_WORD.test(base);
+  });
+  return !code && !/[<>]\(/.test(text.replace(/"[^"]*"|'[^']*'/g, " "));
 }
 
 /**
@@ -163,6 +170,8 @@ const GIT_COMMAND = new RegExp(
   String.raw`${COMMAND_POSITION}(?:[\w./~-]*/)?git\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+([^\s;&|()]+)`,
   "gi",
 );
+// The same, once quotes are removed (`git "-c" alias.p=push p`); only the config options are read there.
+const ALIAS_CONFIG = /\bgit\b[^|;&\n]*\s(?:-c\s+alias\.|--config-env)/i;
 const mayBeAlias = (text) =>
   [...text.matchAll(GIT_COMMAND)].some(
     (m) => /-c\s+alias\.|--config-env/i.test(m[1]) || !GIT_BUILTINS.has(m[2].toLowerCase()),
@@ -295,7 +304,11 @@ export function gitSteps(command) {
     });
   }
   if (/\bgh\s+pr\s+create\b/.test(command)) steps.push({ ...unknownStep("pr"), unknown: false });
-  if (UNPARSEABLE.some((re) => re.test(scan)) || mayBeAlias(scan)) steps.push(unknownStep("commit"), unknownStep("push"));
+  // Quotes do not hide a word from the shell: `rg "--pre" sh` and `"sh" -c` are the same commands.
+  const dequoted = scan.replace(/["']/g, "");
+  if (UNPARSEABLE.some((re) => re.test(scan) || re.test(dequoted)) || mayBeAlias(scan) || ALIAS_CONFIG.test(dequoted)) {
+    steps.push(unknownStep("commit"), unknownStep("push"));
+  }
   return steps;
 }
 
