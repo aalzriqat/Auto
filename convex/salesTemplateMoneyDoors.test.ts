@@ -69,6 +69,7 @@ async function setup() {
     })
   );
 
+  let ownerUserId: Id<"users"> | undefined;
   async function member(key: string, roleName: string, permissions: string[], isSystemOwnerRole = false) {
     const userId = await t.run((ctx) =>
       ctx.db.insert("users", { clerkId: `user_${key}`, email: `${key}@test.com`, name: `User ${key}` })
@@ -77,11 +78,21 @@ async function setup() {
       ctx.db.insert("roles", { orgId, name: roleName, permissions, ...(isSystemOwnerRole ? { isSystemOwnerRole: true } : {}) })
     );
     await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    if (key === "owner") ownerUserId = userId;
     return t.withIdentity({ subject: `user_${key}`, clerkId: `user_${key}` });
   }
 
   // `owner` only prepares real money rows for the refusals to be tried against.
   const owner = await member("owner", "OWNER", [PERMISSIONS.MANAGE_FINANCE], true);
+  // collections.clearCheque requires a physical bank in the org currency (SCRUM-571 cheque
+  // clearing rule); a legitimate active USD bank, so a refusal is never about this argument.
+  const bankAccountId = await t.run((ctx) =>
+    ctx.db.insert("bankAccounts", {
+      orgId, name: "Collection bank", currency: "USD", openingBalanceMinor: 0,
+      openingBalanceDate: now, isActive: true, isReconciliationTarget: false,
+      createdBy: ownerUserId!, createdAt: now, updatedAt: now,
+    })
+  );
   const sales = await member("sales", "SALES", templatePermissions("SALES"));
   const manager = await member("manager", "MANAGER", templatePermissions("MANAGER"));
   const accountant = await member("accountant", "ACCOUNTANT", templatePermissions("ACCOUNTANT"));
@@ -179,7 +190,7 @@ async function setup() {
   })) as Id<"depositRequests">;
   vi.useRealTimers();
 
-  return { t, orgId, owner, sales, manager, accountant, quoteId, requestId, customerId, vehicleId, receivableId, receiptMovementId: receiptMovement._id, chequeId };
+  return { t, orgId, owner, sales, manager, accountant, quoteId, requestId, customerId, vehicleId, bankAccountId, receivableId, receiptMovementId: receiptMovement._id, chequeId };
 }
 
 type Fixture = Awaited<ReturnType<typeof setup>>;
@@ -223,6 +234,7 @@ async function buildWorld(s: Fixture, stage: Stage): Promise<World> {
         await s.owner.mutation(api.collections.clearCheque, {
           orgId: s.orgId,
           chequeId: s.chequeId,
+          bankAccountId: s.bankAccountId,
           idempotencyKey: crypto.randomUUID(),
         });
       }
@@ -304,7 +316,7 @@ const DOORS: Door[] = [
   ["collections.registerCheque", "none", FINANCE, (a, s) =>
     a.mutation(api.collections.registerCheque, { orgId: s.orgId, customerId: s.customerId, bank: "Test Bank", chequeNumber: "000999", chequeDate: Date.now() + 86_400_000, amount: 10 })],
   ["collections.clearCheque", "none", FINANCE, (a, s) =>
-    a.mutation(api.collections.clearCheque, { orgId: s.orgId, chequeId: s.chequeId, idempotencyKey: crypto.randomUUID() })],
+    a.mutation(api.collections.clearCheque, { orgId: s.orgId, chequeId: s.chequeId, bankAccountId: s.bankAccountId, idempotencyKey: crypto.randomUUID() })],
   ["collections.applyRetainedCredit", "none", FINANCE, (a, s) =>
     a.mutation(api.collections.applyRetainedCredit, { orgId: s.orgId, receiptMovementId: s.receiptMovementId, receivableId: s.receivableId, requestedAmount: 10, idempotencyKey: crypto.randomUUID() })],
   ["vehicles.createReservation (with a deposit)", "none", `${PERMISSIONS.EDIT_VEHICLES}, ${CONFIRM}`, (a, s) =>
