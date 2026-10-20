@@ -779,7 +779,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "convex/financialAudit.ts",
       "convex/accountingPeriods.ts",
       "components/accounting/**",
-      // SCRUM-849: the manual-journal date and closed-period swarm mission (attack, oracle and their tests) judges STATE_TRANSITION.
+      // SCRUM-849 / SCRUM-795: the accounting-date swarm mission (attack, oracle and their tests) judges STATE_TRANSITION. It now covers only the refused create door while manual journals are off; the date and closed-period rules are proven by the backend tests below.
       "scripts/intelligence/browserSwarmAccountingDate*",
     ],
     profile: profile({ economicImpact: "INDIRECT" }),

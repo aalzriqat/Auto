@@ -49,7 +49,7 @@ import {
 import { asArray, inconclusive, isRecord } from "./browserSwarmSeedHelpers";
 
 /** The date the refused create declares. It only has to be a plausible date: the refusal must not depend on it. */
-export const OPEN_DECLARED_DATE = Date.UTC(2020, 1, 15, 12);
+export const REFUSED_CREATE_DECLARED_DATE = Date.UTC(2020, 1, 15, 12);
 
 /** The journal is balanced at this amount in the minor units of whatever the accounts' currency is. */
 const JOURNAL_AMOUNT_MINOR = 12_345;
@@ -128,7 +128,6 @@ function parseDraft(row: Record<string, unknown>): DraftView | null {
   };
 }
 
-
 /** Every pending draft of the organization, parsed; null when any row cannot be reduced to what a refusal must not change. */
 async function readPendingDrafts(env: BoundaryMissionEnv, command: Command): Promise<DraftView[] | null> {
   const pending: unknown = await command(() => env.client.query(api.financialAudit.listPendingManualJournals, { orgId: env.orgId as Id<"organizations"> }));
@@ -196,7 +195,7 @@ export function accountingDateSpec(options: MissionTiming) {
             memo,
             lines: sentLines.map((line) => ({ ...line, accountId: line.accountId as Id<"chartOfAccounts"> })),
             idempotencyKey: `${nonce}-off`,
-            accountingDate: OPEN_DECLARED_DATE,
+            accountingDate: REFUSED_CREATE_DECLARED_DATE,
           }),
         MANUAL_JOURNALS_DISABLED_REFUSAL,
         signal,
