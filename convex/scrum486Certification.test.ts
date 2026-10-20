@@ -3505,8 +3505,8 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
 // the same person would pay one role twice, so it is refused. Expected amounts are
 // literals: 250,000 JOD minor on the sale row, 40,000 SALE line for another
 // employee, 30,000 PURCHASE and 20,000 EXECUTION lines for the salesperson.
-describe("SCRUM-854 deal commission lines: salesperson is never paid a second SALE commission (harness only)", () => {
-  test("SALE line for the sale's own salesperson is refused with nothing written; other employee SALE and the salesperson's PURCHASE/EXECUTION are allowed", async () => {
+describe("SCRUM-854 deal commission lines: the salesperson is refused a second SALE line in the cases run (250, 1 and 5 against a 250 sale commission) (harness only)", () => {
+  test("SALE line for the sale's own salesperson is refused with nothing written; other employee SALE and the salesperson's PURCHASE/EXECUTION are allowed; a second organization's rows never move", async () => {
     const d = await paidFinancedDealWithDeposit("s854dup");
     const { s, saleId } = d;
     const sale = await s.t.run((ctx) => ctx.db.get(saleId));
@@ -3519,26 +3519,78 @@ describe("SCRUM-854 deal commission lines: salesperson is never paid a second SA
         .withIndex("by_org_user", (q) => q.eq("orgId", s.orgId).eq("userId", otherEmployeeId)).unique();
       expect(m).not.toBeNull();
     });
-    const lineRows = () => s.t.run(async (ctx) => (await ctx.db.query("dealCommissionLines").collect())
-      .map((r) => ({ orgId: r.orgId, saleId: r.saleId, kind: r.kind, employeeId: r.employeeId, amountMinor: r.amountMinor, removed: r.removedAt !== undefined })));
+
+    // A second organization with its own sale (copied from this one, different commission and
+    // salesperson) and its own commission lines, so an unscoped scan or total would see foreign rows.
+    const other = await authorizedOtherTenant(s, "s854dup");
+    const foreign = await s.t.run(async (ctx) => {
+      const foreignUser = await ctx.db.query("users").withIndex("by_clerkId", (q) => q.eq("clerkId", "s854dup_other_owner")).unique();
+      const { _id: _i, _creationTime: _c, ...saleRow } = (await ctx.db.get(saleId))!;
+      const foreignSaleId = await ctx.db.insert("sales", {
+        ...saleRow, orgId: other.orgId, salespersonId: foreignUser!._id, commissionAmount: 999,
+      });
+      const line = (kind: "SALE" | "PURCHASE", employeeId: typeof salespersonId, amountMinor: number) =>
+        ctx.db.insert("dealCommissionLines", {
+          orgId: other.orgId, saleId: foreignSaleId, kind, employeeId, amountMinor, currency: "JOD", createdBy: foreignUser!._id,
+        });
+      // A SALE line for the foreign sale's own (different) salesperson, one for THIS org's salesperson
+      // id, and a PURCHASE line.
+      await line("SALE", foreignUser!._id, 7_000);
+      await line("SALE", salespersonId, 8_000);
+      await line("PURCHASE", foreignUser!._id, 9_000);
+      return { foreignSaleId, foreignUserId: foreignUser!._id };
+    });
+
+    // Every scan is scoped by organization (and sale) through by_org_sale, and every returned row is asserted.
+    const scopedRows = async (orgId: typeof s.orgId, scanSaleId?: typeof saleId) => {
+      const rows = await s.t.run(async (ctx) => ctx.db.query("dealCommissionLines")
+        .withIndex("by_org_sale", (q) => scanSaleId === undefined ? q.eq("orgId", orgId) : q.eq("orgId", orgId).eq("saleId", scanSaleId))
+        .collect());
+      for (const r of rows) expect(r.orgId).toBe(orgId);
+      return rows.map((r) => ({ orgId: r.orgId, saleId: r.saleId, kind: r.kind, employeeId: r.employeeId, amountMinor: r.amountMinor, removed: r.removedAt !== undefined }));
+    };
+    const foreignRows = () => scopedRows(other.orgId);
+    const foreignBefore = await foreignRows();
+    expect(foreignBefore).toHaveLength(3);
+    expect(foreignBefore.map((r) => [r.kind, r.employeeId, r.amountMinor])).toEqual([
+      ["SALE", foreign.foreignUserId, 7_000], ["SALE", salespersonId, 8_000], ["PURCHASE", foreign.foreignUserId, 9_000],
+    ]);
+    // The unscoped table does hold the foreign rows, so a scan that forgot the organization would be wrong.
+    expect(await s.t.run(async (ctx) => (await ctx.db.query("dealCommissionLines").collect()).length)).toBe(3);
+
+    // The payable total read through forSale, proved against an organization-and-sale-scoped recomputation.
     const readTotal = async () => {
       const view = await s.owner.as.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId });
+      const saleNow = await s.t.run((ctx) => ctx.db.get(saleId));
+      expect(saleNow!.orgId).toBe(s.orgId);
+      const recomputed = Math.round(saleNow!.commissionAmount! * 1000)
+        + (await scopedRows(s.orgId, saleId)).filter((r) => !r.removed).reduce((sum, r) => sum + r.amountMinor, 0);
+      expect(view.totalMinor).toBe(recomputed);
       return { totalMinor: view.totalMinor, saleCommissionMinor: view.salesperson.amountMinor, lines: view.lines.length };
     };
+    const expectForeignUntouched = async () => {
+      expect(await foreignRows()).toEqual(foreignBefore);
+      // Foreign total literal: 999 sale-row commission plus 7,000 + 8,000 + 9,000.
+      const view = await other.owner.query(api.dealCommissions.forSale, { orgId: other.orgId, saleId: foreign.foreignSaleId });
+      expect(view.totalMinor).toBe(999_000 + 24_000);
+    };
 
-    // Before: only the 250,000 sale-row commission exists; no line rows at all.
-    expect(await lineRows()).toHaveLength(0);
+    // Before: only the 250,000 sale-row commission exists in this org; no line rows at all.
+    expect(await scopedRows(s.orgId)).toHaveLength(0);
+    expect(await scopedRows(s.orgId, saleId)).toHaveLength(0);
     expect(await readTotal()).toEqual({ totalMinor: 250_000, saleCommissionMinor: 250_000, lines: 0 });
 
-    // The duplicate SALE line is refused, whatever the amount, and every table is unchanged.
+    // The duplicate SALE line is refused (amounts 250 and 1 run here), and every table is unchanged.
     await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealCommissions.addLine, {
       orgId: s.orgId, saleId, kind: "SALE", employeeId: salespersonId, amount: 250,
     }), { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" });
     await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealCommissions.addLine, {
       orgId: s.orgId, saleId, kind: "SALE", employeeId: salespersonId, amount: 1,
     }), { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" });
-    expect(await lineRows()).toHaveLength(0);
+    expect(await scopedRows(s.orgId)).toHaveLength(0);
+    expect(await scopedRows(s.orgId, saleId)).toHaveLength(0);
     expect(await readTotal()).toEqual({ totalMinor: 250_000, saleCommissionMinor: 250_000, lines: 0 });
+    await expectForeignUntouched();
 
     // Allowed: SALE for another employee, PURCHASE and EXECUTION for the salesperson.
     await s.owner.as.mutation(api.dealCommissions.addLine, {
@@ -3550,19 +3602,23 @@ describe("SCRUM-854 deal commission lines: salesperson is never paid a second SA
     await s.owner.as.mutation(api.dealCommissions.addLine, {
       orgId: s.orgId, saleId, kind: "EXECUTION", employeeId: salespersonId, amount: 20,
     });
-    const rows = await lineRows();
+    const rows = await scopedRows(s.orgId, saleId);
     expect(rows).toHaveLength(3);
+    expect(await scopedRows(s.orgId)).toHaveLength(3);
     expect(rows.every((r) => r.orgId === s.orgId && r.saleId === saleId && !r.removed)).toBe(true);
     expect(rows.map((r) => [r.kind, r.employeeId, r.amountMinor])).toEqual([
       ["SALE", otherEmployeeId, 40_000], ["PURCHASE", salespersonId, 30_000], ["EXECUTION", salespersonId, 20_000],
     ]);
     // 250,000 + 40,000 + 30,000 + 20,000: the salesperson's SALE role is paid once.
     expect(await readTotal()).toEqual({ totalMinor: 340_000, saleCommissionMinor: 250_000, lines: 3 });
+    await expectForeignUntouched();
 
-    // The duplicate is still refused once other lines exist, and changes nothing.
+    // The duplicate (amount 5 here) is still refused once other lines exist, and changes nothing.
     await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealCommissions.addLine, {
       orgId: s.orgId, saleId, kind: "SALE", employeeId: salespersonId, amount: 5,
     }), { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" });
+    expect(await scopedRows(s.orgId, saleId)).toEqual(rows);
     expect(await readTotal()).toEqual({ totalMinor: 340_000, saleCommissionMinor: 250_000, lines: 3 });
+    await expectForeignUntouched();
   }, 30_000);
 });
