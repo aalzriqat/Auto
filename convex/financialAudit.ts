@@ -76,6 +76,8 @@ type AuditActionType =
   // allocations, payment, its cash-received posting); the trail records who
   // asserted it and what was undone, because the ledger shows only the reversal.
   | "RETURN_FINANCE_DISBURSEMENT_CHEQUE"
+  | "ADD_DEAL_COMMISSION_LINE"
+  | "REMOVE_DEAL_COMMISSION_LINE"
   // SCRUM-693: the steps of unwinding a paid finance deal from the deal page.
   | "DEAL_UNWIND_STARTED"
   | "DEAL_UNWIND_FORWARD_RETURNED"
