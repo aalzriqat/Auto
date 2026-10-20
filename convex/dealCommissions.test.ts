@@ -5,6 +5,7 @@ import { api } from "./_generated/api";
 import { DEAL_COMMISSION_LINES_PILOT_DISABLED } from "./utils/dealCommissionLines";
 import type { Id } from "./_generated/dataModel";
 import { makeFunctionReference } from "convex/server";
+import { getPostedLines } from "./accountingReports";
 import { payFullPriceByDeposit } from "../test-utils/cashDealerFixture";
 
 vi.mock("./rateLimit", () => ({
@@ -206,14 +207,18 @@ describe("dealCommissions: several lines on one deal", () => {
     const entryId: Id<"journalEntries"> | undefined = newEvents[0].journalEntryId;
     expect(entryId).toBeTruthy();
 
-    const accountRows = await t.run(async (ctx) => {
-      const byKey = async (key: string) =>
-        (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", key)).unique())!;
-      return { expense: await byKey("COMMISSION_EXPENSE"), payable: await byKey("COMMISSION_PAYABLE") };
-    });
-    expect(accountRows.expense.orgId).toBe(s.orgId);
-    expect(accountRows.payable.orgId).toBe(s.orgId);
-    const accounts = { expense: accountRows.expense._id, payable: accountRows.payable._id };
+    const commissionAccounts = async (orgId: Id<"organizations">) => {
+      const rows = await t.run(async (ctx) => {
+        const byKey = async (key: string) =>
+          (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", key)).unique())!;
+        return { expense: await byKey("COMMISSION_EXPENSE"), payable: await byKey("COMMISSION_PAYABLE") };
+      });
+      expect(rows.expense.orgId).toBe(orgId);
+      expect(rows.payable.orgId).toBe(orgId);
+      return { expense: rows.expense._id, payable: rows.payable._id };
+    };
+    const accounts = await commissionAccounts(s.orgId);
+    const otherAccounts = await commissionAccounts(other.orgId);
     const newLines = after.journalLines.filter((l) => !before.journalLines.some((b) => b._id === l._id));
     expect(newLines).toHaveLength(2);
     for (const line of newLines) {
@@ -233,6 +238,24 @@ describe("dealCommissions: several lines on one deal", () => {
       t.run(async (ctx) => (await ctx.db.query("journalReportEligibility").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique())?.phase);
     expect(await phaseOf(s.orgId)).toBe("READY");
     expect(await phaseOf(other.orgId)).toBe("READY");
+    // trialBalance silently skips a line whose account is not in this organization's chart, so a
+    // foreign line could enter the reader and leave the totals unchanged. Read the reader's own
+    // lines and assert, per row, the organization and that the account belongs to this chart.
+    const readerLines = async (orgId: Id<"organizations">) =>
+      t.run(async (ctx) => {
+        const lines = await getPostedLines(ctx, orgId);
+        const chart = await ctx.db.query("chartOfAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+        return { lines, chartIds: chart.map((a) => a._id as string) };
+      });
+    for (const org of [s.orgId, other.orgId]) {
+      const { lines, chartIds: chartIdList } = await readerLines(org);
+      const chartIds = new Set(chartIdList);
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line.orgId).toBe(org);
+        expect(chartIds.has(line.accountId as string)).toBe(true);
+      }
+    }
     const tbAfter = await s.asAdmin.query(api.accountingReports.trialBalance, { orgId: s.orgId, fromDate: 0 });
     const otherTbAfter = await other.asAdmin.query(api.accountingReports.trialBalance, { orgId: other.orgId, fromDate: 0 });
     const amountsOn = (tb: typeof tbAfter, accountId: Id<"chartOfAccounts">) => {
@@ -242,9 +265,16 @@ describe("dealCommissions: several lines on one deal", () => {
     expect(amountsOn(tbAfter, accounts.expense).debitMinor - amountsOn(tbBefore, accounts.expense).debitMinor).toBe(25_125);
     expect(amountsOn(tbAfter, accounts.payable).creditMinor - amountsOn(tbBefore, accounts.payable).creditMinor).toBe(25_125);
     expect(tbAfter.isBalanced).toBe(true);
-    // The other organization's 11 JOD accrual stays in its own report only.
-    expect(otherTbAfter.totalDebits).toBe(otherTbBefore.totalDebits + 11_000);
     expect(tbAfter.totalDebits - tbBefore.totalDebits).toBe(25_125);
+    // The other organization's 11 JOD accrual is in its own report only: its own
+    // Commission Expense debit and Commission Payable credit move by 11,000, and it is balanced.
+    expect(amountsOn(otherTbAfter, otherAccounts.expense).debitMinor - amountsOn(otherTbBefore, otherAccounts.expense).debitMinor).toBe(11_000);
+    expect(amountsOn(otherTbAfter, otherAccounts.payable).creditMinor - amountsOn(otherTbBefore, otherAccounts.payable).creditMinor).toBe(11_000);
+    expect(otherTbAfter.isBalanced).toBe(true);
+    expect(otherTbAfter.totalDebits - otherTbBefore.totalDebits).toBe(11_000);
+    // Neither report carries the other organization's accounts.
+    expect(tbAfter.rows.some((r) => r.accountId === otherAccounts.expense || r.accountId === otherAccounts.payable)).toBe(false);
+    expect(otherTbAfter.rows.some((r) => r.accountId === accounts.expense || r.accountId === accounts.payable)).toBe(false);
     // The salesperson's own commission is untouched, on the same org's sale.
     expect(before.saleOrgId).toBe(s.orgId);
     expect(after.saleOrgId).toBe(s.orgId);
