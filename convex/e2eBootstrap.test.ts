@@ -9,6 +9,7 @@ import {
   E2E_PRIMARY_ROLE_NAME,
   HUNT_SEAT_ROLES,
   constantTimeEqual,
+  REPLAY_MAX_LIFETIME_MS,
   replayProofFor,
   replayRunBindingReasons,
 } from "./e2eBootstrap";
@@ -1397,6 +1398,29 @@ describe("replayAttestation — the positive attestation the GL replay requires 
     expect(none.reasons).toContain("NO_MARKER");
   });
 
+  test("does not attest a deployment configured like a real one (a real-deployment env marker is set)", async () => {
+    stubRunBinding();
+    const { asPrimary, orgId } = await seededAs();
+    vi.stubEnv("RESEND_API_KEY", "re_live_example");
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) });
+    expect(attestation.attested).toBe(false);
+    expect(attestation.reasons).toContain("CONFIGURED_LIKE_REAL_DEPLOYMENT");
+    expect(JSON.stringify(attestation)).not.toContain("re_live_example");
+  });
+
+  test("an organization created exactly at the marker's time is attested (the boundary is strict)", async () => {
+    stubRunBinding();
+    const { t, asPrimary, orgId } = await seededAs();
+    await t.run(async (ctx) => {
+      const marker = await ctx.db.query("e2ePreviewBootstrap").first();
+      const org = await ctx.db.get(orgId);
+      await ctx.db.patch(marker!._id, { markedAt: org!._creationTime });
+    });
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) });
+    expect(attestation.reasons).not.toContain("ORG_PREDATES_MARKER");
+    expect(attestation.attested).toBe(true);
+  });
+
   test("does not attest an organization created before the marker", async () => {
     stubRunBinding();
     const { t, asPrimary, orgId } = await seededAs();
@@ -1473,6 +1497,15 @@ describe("replayRunBindingReasons — the pure run binding", () => {
       expect(replayRunBindingReasons(sentOk, { ...env, expiresAt }, now)).toContain("EXPIRY_NOT_SET");
     },
   );
+
+  test("pins the clock edges: expiry == now refuses, now + 2h passes, now + 2h + 1 refuses", () => {
+    const at = (expiresAt: number) => replayRunBindingReasons(sentOk, { ...env, expiresAt: String(expiresAt) }, now);
+    expect(at(now)).toEqual(["EXPIRED"]);
+    expect(at(now - 1)).toEqual(["EXPIRED"]);
+    expect(at(now + 1)).toEqual([]);
+    expect(at(now + REPLAY_MAX_LIFETIME_MS)).toEqual([]);
+    expect(at(now + REPLAY_MAX_LIFETIME_MS + 1)).toEqual(["EXPIRY_TOO_FAR"]);
+  });
 
   test("accepts a plain integer expiry", () => {
     expect(replayRunBindingReasons(sentOk, { ...env, expiresAt: String(now + 5000) }, now)).toEqual([]);
