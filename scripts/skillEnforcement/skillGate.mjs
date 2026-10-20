@@ -63,6 +63,8 @@ const PROCESS_API = String.raw`child_process|execSync|execFileSync|execFile|spaw
 const PERL_RUBY_RUNNER = String.raw`\b(?:perl|ruby)\b[^\n]*?\s-(?:e|E|pe)\b`;
 const PERL_RUBY_SHELL = String.raw`\b(?:system|exec|qx|popen|open3|spawn)\b|\bopen\b[^\n]*\||\`|%x`;
 const UNPARSEABLE = [
+  // ripgrep runs the --pre and --hostname-bin programs it is given.
+  /\brg\b[^|;&\n]*\s--(?:pre|hostname-bin)(?=[\s=]|$)/,
   new RegExp(`${INLINE_RUNNER}[^\\n]*?(?:${PROCESS_API})`, "i"),
   new RegExp(`${PERL_RUBY_RUNNER}[^\\n]*?(?:${PERL_RUBY_SHELL})`, "i"),
   SHELL_PIPE,
@@ -81,7 +83,7 @@ const UNPARSEABLE = [
 const TEXT_ONLY_COMMANDS = new Set(["echo", "printf", "grep", "egrep", "fgrep", "rg", "jira"]);
 const SKIPPED_WORDS = new Set(["!", "do", "then", "else", "{", "(", "&&", "||"]);
 // Anything in the segment that could make the command run its arguments as code.
-const RUNS_CODE_FLAG = /\s-(?:c|e|E|ec)(?=\s|$)|\s-(?:command|encodedcommand|argumentlist|exec|execute)\b/i;
+const RUNS_CODE_FLAG = /\s-(?:c|e|E|ec)(?=\s|$)|\s-(?:command|encodedcommand|argumentlist|exec|execute)\b|\s--(?:pre|pre-glob|hostname-bin|editor)(?=[\s=]|$)/i;
 const RUNS_CODE_WORD = new RegExp(
   String.raw`\b(?:bash|sh|zsh|dash|ksh|pwsh|powershell|cmd|eval|iex|invoke-expression|node|python\d*|ruby|perl|php|xargs|parallel|watch|find|start-process|saps|npx|pnpm|npm|yarn|env|sudo|exec|timeout|nice|nohup|time|ssh|su)\b`,
   "i",
@@ -94,6 +96,8 @@ function commandWord(segment) {
 }
 
 function isTextOnlySegment(text) {
+  // A leading VAR=value can redirect what the tool runs (EDITOR, GH_EDITOR, RIPGREP_CONFIG_PATH, GIT_SSH_COMMAND, ...).
+  if (/^\s*\w+=/.test(text)) return false;
   const word = commandWord(text);
   const known =
     TEXT_ONLY_COMMANDS.has(word) ||
@@ -101,7 +105,7 @@ function isTextOnlySegment(text) {
     (word === "gh" && /^\s*(?:\w+=\S*\s+)*gh\s+(?:pr|issue)\b/.test(text));
   // Flags and words are looked for outside the quotes: a message may say "eval(" or "sh".
   const bare = text.replace(/"[^"]*"|'[^']*'/g, " ").replace(/^\s*(?:\w+=\S*\s+)*(?:gh|git)\b/, "");
-  return known && !RUNS_CODE_FLAG.test(bare) && !RUNS_CODE_WORD.test(bare);
+  return known && !RUNS_CODE_FLAG.test(bare) && !RUNS_CODE_WORD.test(bare) && !/[<>]\(/.test(bare);
 }
 
 /**

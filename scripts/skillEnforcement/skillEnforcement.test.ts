@@ -212,6 +212,28 @@ describe("gitSteps", () => {
     expect(steps.every((st: { unknown: boolean }) => st.unknown)).toBe(true);
   });
   test.each([
+    "rg --pre 'git push' x .",
+    "rg --pre=sh x .",
+    "rg -n --pre 'sh' pattern file",
+    "rg --pre-glob '*.x' --pre 'git push' p f",
+    "rg --hostname-bin 'git push' x",
+    "EDITOR='git push' gh pr create --title t",
+    "GH_EDITOR='git commit -am x' gh pr edit 1",
+    "RIPGREP_CONFIG_PATH=cfg rg 'git push' a",
+    "FOO=1 grep 'git push' a",
+    "gh issue create --editor --title 'git push'",
+    "gh pr create -e --title 'git push'",
+    "git -c core.editor='git push' commit -e -m x",
+  ])("an executing flag or environment keeps the command scanned and gated: %s", (cmd) => {
+    expect(gitSteps(cmd).length).toBeGreaterThan(0);
+  });
+  test.each([
+    'rg -n "git push" src',
+    "rg --pre-glob '*.pdf' foo docs",
+    'rg -i --glob "*.ts" "git commit" .',
+    'grep -rn "git push" docs',
+  ])("a search for the words is still not a command: %s", (cmd) => expect(gitSteps(cmd)).toEqual([]));
+  test.each([
     'node -e "console.log(1)"',
     "python3 -c 'print(2)'",
     "node script.js --eval",
