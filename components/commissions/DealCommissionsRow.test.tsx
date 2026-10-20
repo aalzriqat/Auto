@@ -1,5 +1,5 @@
-import { describe, expect, test, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi, beforeEach } from "vitest";
+import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 
 const useQueryMock = vi.fn();
 vi.mock("convex/react", () => ({ useQuery: (...args: unknown[]) => useQueryMock(...args) }));
@@ -30,6 +30,10 @@ const view = (over: Record<string, unknown> = {}) => ({
   writesEnabled: true,
   ...over,
 });
+
+// vitest runs without globals, so RTL does not auto-unmount between tests;
+// without this the DOM leaks and getByText finds duplicates under shuffle.
+afterEach(cleanup);
 
 beforeEach(() => {
   permissions = ["view:commissions"];
