@@ -252,6 +252,23 @@ describe("the pay-first refusal is raised before the first write on every comple
       expect(writes).toEqual([]);
     });
 
+    test("completeExistingSale (a draft bound to the shared quote) is refused with zero writes", async () => {
+      const { s, quoteId } = await twoCarQuote(`d${tag}`);
+      const draftId = await s.asUser.mutation(api.sales.createDraft, {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 20_000, saleDate: Date.now(),
+        financingType: "CASH", idempotencyKey: crypto.randomUUID(),
+      } as never);
+      await s.t.run((ctx) => ctx.db.patch(draftId, { quoteId }));
+      const writes: string[] = [];
+      const refusal = await refusalDataOf(
+        s.t.run((ctx) =>
+          completeExistingSale(recordingCtx(asMutationCtx(ctx), writes), { orgId: s.orgId, saleId: draftId, actorId: s.userId, depositResolution })
+        )
+      );
+      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(writes).toEqual([]);
+    });
+
     test("completeSalesForLineItems is refused for BOTH cars with zero writes", async () => {
       const { s, quoteId, items } = await twoCarQuote(`b${tag}`);
       const writes: string[] = [];
@@ -266,6 +283,79 @@ describe("the pay-first refusal is raised before the first write on every comple
       expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
       expect(writes).toEqual([]);
     });
+  });
+
+  // Shared allocation at minor-unit precision (JOD has 3 decimals): prices and shares that do not divide evenly. One
+  // minor unit short on either car refuses the whole completion; exact shares complete both cars.
+  describe("a shared two-car deposit allocated at minor-unit precision", () => {
+    const PRICE_A = 20_000.001;
+    const PRICE_B = 10_000.003;
+    async function oddQuote(tag: string, shareA: number, shareB: number) {
+      const s = await seedCashDealer(`ordodd${tag}`, MODULES);
+      const second = await s.mkVehicle(`VINODD${tag}`, { purchasePrice: 17000 });
+      const items = [{ vehicleId: s.vehicleId, unitPrice: PRICE_A }, { vehicleId: second, unitPrice: PRICE_B }];
+      const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+        orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, vehiclePrice: 30_000.004, downPayment: 0, termMonths: 0,
+        vehicleItems: items,
+      });
+      await deposit(s, quoteId, Math.round((shareA + shareB) * 1000) / 1000);
+      await s.asUser.mutation(api.deposits.allocateToVehicles, {
+        orgId: s.orgId, quoteId, allocations: [{ vehicleId: s.vehicleId, amount: shareA }, { vehicleId: second, amount: shareB }],
+      });
+      const run = (writes: string[], treatment?: "APPLY_TO_DEALER_AMOUNT") =>
+        s.t.run((ctx) =>
+          completeSalesForLineItems(recordingCtx(asMutationCtx(ctx), writes), {
+            orgId: s.orgId, quoteId, vehicleItems: items, customerId: s.customerId, salespersonId: s.userId,
+            saleDate: Date.now(), financingType: "CASH", actorId: s.userId, ...(treatment ? { depositResolution: { treatment } } : {}),
+          })
+        );
+      return { s, run };
+    }
+
+    test.each([
+      ["the first car", 20_000.0, PRICE_B],
+      ["the second car", PRICE_A, 10_000.002],
+    ])("one minor unit short on %s refuses the whole completion with zero writes", async (label, shareA, shareB) => {
+      const { run } = await oddQuote(`short${label.length}`, shareA, shareB);
+      const writes: string[] = [];
+      const refusal = await refusalDataOf(run(writes, "APPLY_TO_DEALER_AMOUNT"));
+      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(writes).toEqual([]);
+    });
+
+    test("control: exact shares complete both cars (the pre-check does not over-refuse at minor-unit precision)", async () => {
+      const { run } = await oddQuote("exact", PRICE_A, PRICE_B);
+      const writes: string[] = [];
+      const saleIds = await run(writes, "APPLY_TO_DEALER_AMOUNT");
+      expect(saleIds).toHaveLength(2);
+      expect(writes.length).toBeGreaterThan(0);
+    });
+  });
+
+  test.each([
+    ["no stated treatment", undefined],
+    ["APPLY_TO_DEALER_AMOUNT", { treatment: "APPLY_TO_DEALER_AMOUNT" as const }],
+  ])("control: a fully paying shared two-car allocation (%s) still completes both cars", async (label, depositResolution) => {
+    const s = await seedCashDealer(`ordshok${label.length}`, MODULES);
+    const second = await s.mkVehicle(`VINSHOK${label.length}`, { purchasePrice: 17000 });
+    const items = [{ vehicleId: s.vehicleId, unitPrice: 20_000 }, { vehicleId: second, unitPrice: 20_000 }];
+    const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, vehiclePrice: 40_000, downPayment: 0, termMonths: 0,
+      vehicleItems: items,
+    });
+    await deposit(s, quoteId, 40_000);
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId, quoteId, allocations: [{ vehicleId: s.vehicleId, amount: 20_000 }, { vehicleId: second, amount: 20_000 }],
+    });
+    const writes: string[] = [];
+    const saleIds = await s.t.run((ctx) =>
+      completeSalesForLineItems(recordingCtx(asMutationCtx(ctx), writes), {
+        orgId: s.orgId, quoteId, vehicleItems: items, customerId: s.customerId, salespersonId: s.userId,
+        saleDate: Date.now(), financingType: "CASH", actorId: s.userId, ...(depositResolution ? { depositResolution } : {}),
+      })
+    );
+    expect(saleIds).toHaveLength(2);
+    expect(writes.length).toBeGreaterThan(0);
   });
 
   test("completeSale: a part deposit (no trade-in) is refused with zero writes", async () => {
