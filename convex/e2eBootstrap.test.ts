@@ -1386,6 +1386,27 @@ describe("replayRunBindingReasons — the pure run binding", () => {
     expect(constantTimeEqual("abc", "ab")).toBe(false);
   });
 
+  test("an equal-length nonce differing only in the last or the first character is a mismatch (no prefix compare)", () => {
+    const lastDiffers = NONCE.slice(0, -1) + (NONCE.endsWith("f") ? "e" : "f");
+    const firstDiffers = (NONCE.startsWith("a") ? "b" : "a") + NONCE.slice(1);
+    expect(lastDiffers).toHaveLength(NONCE.length);
+    expect(firstDiffers).toHaveLength(NONCE.length);
+    for (const wrong of [lastDiffers, firstDiffers]) {
+      expect(replayRunBindingReasons({ nonce: wrong, runId: "r1" }, env, now)).toEqual(["NONCE_MISMATCH"]);
+    }
+  });
+
+  test.each(["0x10", "1e9", " 123", "123 ", "+123", "1_000", "-5", "12.5", ""])(
+    "rejects the expiry string %j, which Number() might accept but is not a plain integer",
+    (expiresAt) => {
+      expect(replayRunBindingReasons({ nonce: NONCE, runId: "r1" }, { ...env, expiresAt }, now)).toContain("EXPIRY_NOT_SET");
+    },
+  );
+
+  test("accepts a plain integer expiry", () => {
+    expect(replayRunBindingReasons({ nonce: NONCE, runId: "r1" }, { ...env, expiresAt: String(now + 5000) }, now)).toEqual([]);
+  });
+
   test("rejects a non-numeric expiry and a nonce with characters outside the alphabet", () => {
     expect(replayRunBindingReasons({ nonce: NONCE, runId: "r1" }, { ...env, expiresAt: "soon" }, now)).toContain("EXPIRY_NOT_SET");
     const odd = "0123456789abcdef0123456789abcde!";
