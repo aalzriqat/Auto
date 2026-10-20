@@ -494,7 +494,6 @@ export default function Step1QuoteSetup({
           <VehicleCostBar
             vehicleId={selectedVehicle._id}
             purchasePrice={selectedVehicle.purchasePrice}
-            salePrice={Number(watchedPrice) || selectedVehicle.sellingPrice}
           />
         )}
 
