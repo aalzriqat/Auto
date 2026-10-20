@@ -36,6 +36,7 @@ describe("SCRUM-795 control — the same fixtures succeed when the switch is off
       draftId: created.draftId,
     });
     const draft = await w.t.run((ctx) => ctx.db.get(created.draftId));
+    expect(draft?.orgId).toEqual(w.orgId);
     expect(draft?.status).toBe("POSTED");
     expect(draft?.journalEntryId).toBeDefined();
   });
@@ -47,14 +48,17 @@ describe("SCRUM-795 control — the same fixtures succeed when the switch is off
       draftId: w.legacyDraftId,
     });
     const draft = await w.t.run((ctx) => ctx.db.get(w.legacyDraftId));
+    expect(draft?.orgId).toEqual(w.orgId);
     expect(draft?.status).toBe("POSTED");
     const entries = await w.t.run((ctx) => ctx.db.query("journalEntries").take(50));
     expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) expect(entry.orgId).toEqual(w.orgId);
   });
 
   test("the exact call that the default build refuses returns alreadyCreated with the seeded legacy draft", async () => {
     const w = await seedManualJournalWorld(MODULE_GLOB, "on_true_replay");
     const seeded = await w.t.run((ctx) => ctx.db.get(w.legacyDraftId));
+    expect(seeded?.orgId).toEqual(w.orgId);
     const replay = await w.asPoster.mutation(api.financialAudit.createManualJournal, {
       orgId: w.orgId,
       memo: seeded!.memo,

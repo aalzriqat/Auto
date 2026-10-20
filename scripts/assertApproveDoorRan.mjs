@@ -26,18 +26,21 @@ function isApproveDoorFile(file) {
   return f === APPROVE_DOOR_FILE || f === APPROVE_DOOR_FILE.replace("playwright/tests/", "");
 }
 
-function collectTests(suite, found) {
+// `describes` is the chain of describe titles BELOW the root file suite. It must be
+// exactly [APPROVE_DOOR_DESCRIBE]: no extra ancestors, no nesting of the same name.
+function collectTests(suite, found, describes = []) {
   for (const spec of suite.specs ?? []) {
     if (
       spec.title === APPROVE_DOOR_TITLE &&
-      suite.title === APPROVE_DOOR_DESCRIBE &&
+      describes.length === 1 &&
+      describes[0] === APPROVE_DOOR_DESCRIBE &&
       isApproveDoorFile(spec.file ?? suite.file)
     ) {
       const tests = (spec.tests ?? []).filter((t) => t.projectName === APPROVE_DOOR_PROJECT);
       for (const t of tests) found.push(t);
     }
   }
-  for (const child of suite.suites ?? []) collectTests(child, found);
+  for (const child of suite.suites ?? []) collectTests(child, found, [...describes, child.title]);
 }
 
 /** Returns a list of error strings; empty means the approve door was proven. */

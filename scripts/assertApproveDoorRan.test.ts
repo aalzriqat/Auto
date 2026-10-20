@@ -78,6 +78,45 @@ describe("assertApproveDoorRan (SCRUM-795)", () => {
     };
     expect(approveDoorErrors(r)).toEqual([]);
   });
+  describe("single-field negatives: each changes exactly ONE thing from the real passing entry", () => {
+    const real = () => fileSuite("accounting.spec.ts", APPROVE_DOOR_DESCRIBE, pass);
+    it("control: the unmodified entry passes", () => {
+      expect(approveDoorErrors({ suites: [real()] })).toEqual([]);
+    });
+    it("file differs (only the file)", () => {
+      const s = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], "decoy.spec.ts");
+      const suite = { title: "accounting.spec.ts", file: "accounting.spec.ts", suites: [{ title: APPROVE_DOOR_DESCRIBE, file: "accounting.spec.ts", specs: [s] }] };
+      expect(approveDoorErrors({ suites: [suite] })).toEqual([expect.stringContaining("was not registered")]);
+    });
+    it("suffix path x/accounting.spec.ts (only the file)", () => {
+      const s = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], "x/accounting.spec.ts");
+      expect(approveDoorErrors(report(s))).toEqual([expect.stringContaining("was not registered")]);
+    });
+    it("nested describe of the same name (only the ancestry)", () => {
+      const nested = {
+        title: "accounting.spec.ts",
+        file: "accounting.spec.ts",
+        suites: [{ title: APPROVE_DOOR_DESCRIBE, file: "accounting.spec.ts", suites: [{ title: APPROVE_DOOR_DESCRIBE, file: "accounting.spec.ts", specs: [pass] }] }],
+      };
+      expect(approveDoorErrors({ suites: [nested] })).toEqual([expect.stringContaining("was not registered")]);
+    });
+    it("extra outer describe ancestor (only the ancestry)", () => {
+      const outer = {
+        title: "accounting.spec.ts",
+        file: "accounting.spec.ts",
+        suites: [{ title: "extra", file: "accounting.spec.ts", suites: [{ title: APPROVE_DOOR_DESCRIBE, file: "accounting.spec.ts", specs: [pass] }] }],
+      };
+      expect(approveDoorErrors({ suites: [outer] })).toEqual([expect.stringContaining("was not registered")]);
+    });
+    it("different describe (only the describe)", () => {
+      const r = { suites: [fileSuite("accounting.spec.ts", "different describe", pass)] };
+      expect(approveDoorErrors(r)).toEqual([expect.stringContaining("was not registered")]);
+    });
+    it("different project (only the project)", () => {
+      const s = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], "accounting.spec.ts", "setup");
+      expect(approveDoorErrors(report(s))).toEqual([expect.stringContaining("was not registered")]);
+    });
+  });
   it("accepts the repo-relative spec path as well as the testDir-relative one", () => {
     const s = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], APPROVE_DOOR_FILE);
     expect(approveDoorErrors(report(s))).toEqual([]);
