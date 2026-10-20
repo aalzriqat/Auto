@@ -116,6 +116,7 @@ describe("dealCommissions: several lines on one deal", () => {
       pending: await ctx.db.query("pendingAccountingEvents").collect(),
       journalLines: await ctx.db.query("journalLines").collect(),
       sale: (await ctx.db.get(saleId))?.commissionAmount ?? null,
+      saleOrgId: (await ctx.db.get(saleId))?.orgId ?? null,
     }));
 
   test("with a chart ready, a line posts exactly one accrual: Dr Commission Expense / Cr Commission Payable, exact fils", async () => {
@@ -135,16 +136,32 @@ describe("dealCommissions: several lines on one deal", () => {
     ]);
     expect(after.pending).toEqual(before.pending);
 
-    const accounts = await t.run(async (ctx) => {
+    // The accrual is a POSTED event, and both journal lines belong to the entry it points at.
+    expect(newEvents[0].status).toBe("POSTED");
+    const entryId: Id<"journalEntries"> | undefined = newEvents[0].journalEntryId;
+    expect(entryId).toBeTruthy();
+
+    const accountRows = await t.run(async (ctx) => {
       const byKey = async (key: string) =>
-        (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", key)).unique())!._id;
+        (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", key)).unique())!;
       return { expense: await byKey("COMMISSION_EXPENSE"), payable: await byKey("COMMISSION_PAYABLE") };
     });
+    expect(accountRows.expense.orgId).toBe(s.orgId);
+    expect(accountRows.payable.orgId).toBe(s.orgId);
+    const accounts = { expense: accountRows.expense._id, payable: accountRows.payable._id };
     const newLines = after.journalLines.filter((l) => !before.journalLines.some((b) => b._id === l._id));
     expect(newLines).toHaveLength(2);
+    for (const line of newLines) {
+      expect(line.orgId).toBe(s.orgId);
+      expect(line.journalEntryId).toBe(entryId);
+    }
+    const entry = await t.run((ctx) => ctx.db.get(entryId!));
+    expect(entry?.orgId).toBe(s.orgId);
     expect(newLines.find((l) => l.accountId === accounts.expense)).toMatchObject({ orgId: s.orgId, debitMinor: 25_125, creditMinor: 0 });
     expect(newLines.find((l) => l.accountId === accounts.payable)).toMatchObject({ orgId: s.orgId, debitMinor: 0, creditMinor: 25_125 });
-    // The salesperson's own commission is untouched.
+    // The salesperson's own commission is untouched, on the same org's sale.
+    expect(before.saleOrgId).toBe(s.orgId);
+    expect(after.saleOrgId).toBe(s.orgId);
     expect(before.sale).toBe(50);
     expect(after.sale).toBe(50);
   });
@@ -160,6 +177,8 @@ describe("dealCommissions: several lines on one deal", () => {
     expect(after.events).toEqual(before.events);
     expect(after.journalLines).toEqual(before.journalLines);
     expect(after.sale).toBe(before.sale);
+    expect(after.saleOrgId).toBe(s.orgId);
+    for (const row of [...before.events, ...before.journalLines, ...after.pending]) expect(row.orgId).toBe(s.orgId);
     const queued = after.pending.filter((p) => !before.pending.some((b) => b._id === p._id));
     expect(queued.map((p) => [p.kind, p.status, p.idempotencyKey, p.orgId])).toEqual([
       ["POST", "PENDING", `commission_line_accrued_${lineId}`, s.orgId],

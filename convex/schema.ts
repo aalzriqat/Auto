@@ -1012,6 +1012,9 @@ export default defineSchema({
    *   and posts under its idempotency key once the chart or period is ready.
    * - Removing an unpaid line, or cancelling its sale, reverses that accrual and
    *   sets `removedAt` (hookDealCommissionLineReversed). A paid line refuses both.
+   * - A paid line (`paidAt` set, not removed) also blocks deal unwind: start and
+   *   finish refuse with DEAL_UNWIND_COMMISSION_PAID (convex/dealUnwind.ts
+   *   assertDealUnwindable).
    * - Payroll pays an unpaid line on the employee's payslip (`payrollItems.
    *   commissionLineIds`, convex/payroll.ts isDealLineOwed), then sets `paidAt`.
    * The salesperson's own commission stays on `sales.commissionAmount` with its
