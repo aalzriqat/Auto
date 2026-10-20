@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { getPostedLines } from "./accountingReports";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -58,7 +59,7 @@ async function seed(
 }
 
 describe("dealCommissions: several lines on one deal", () => {
-  test("the owner's example: purchase 50 + sale 50 + execution 25 JOD totals 125 JOD", async () => {
+  test("the owner example of purchase 50 and sale 50 and execution 25 JOD totals 125 JOD", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const s = await seed(t, "example");
     // The salesperson's sale commission lives on the sale row (existing path).
@@ -143,7 +144,7 @@ describe("dealCommissions: several lines on one deal", () => {
       journalLines: (await ctx.db.query("journalLines").collect()).length,
     }));
 
-  test("with a chart ready, a line posts exactly one accrual: Dr Commission Expense / Cr Commission Payable, exact fils", async () => {
+  test("with a chart ready a line posts exactly one accrual debiting Commission Expense and crediting Commission Payable in exact fils", async () => {
     vi.useFakeTimers();
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const s = await seed(t, "ledger", [...ADMIN, "view:finance", "manage:finance"]);
@@ -203,13 +204,26 @@ describe("dealCommissions: several lines on one deal", () => {
     }
     const entry = await t.run((ctx) => ctx.db.get(entryId!));
     expect(entry?.orgId).toBe(s.orgId);
-    // Reader-visible state: accountingReports.getPostedLines selects journalLines
-    // with reportPosted === true (by_org_reportPosted_date), and reads POSTED entries.
     expect(entry?.status).toBe("POSTED");
     for (const line of newLines) expect(line.reportPosted).toBe(true);
-    const readerLines = await t.run((ctx) =>
-      ctx.db.query("journalLines").withIndex("by_org_reportPosted_date", (q) => q.eq("orgId", s.orgId).eq("reportPosted", true)).collect()
-    );
+    // Reader-visible state, read through the report reader itself. getPostedLines
+    // takes its fast path (journalLines by_org_reportPosted_date, reportPosted === true)
+    // only when journalReportEligibility.phase is READY, so the test establishes READY
+    // for this org (the line flags it relies on were written by the real posting above,
+    // not by this test) and asserts the phase before reading. Every returned row is
+    // checked for orgId BEFORE any filtering, so a foreign row cannot be dropped silently.
+    // The second org also has posted accrual lines, so a leak would be visible here.
+    const reader = await t.run(async (ctx) => {
+      const existing = await ctx.db.query("journalReportEligibility").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).unique();
+      if (!existing) await ctx.db.insert("journalReportEligibility", { orgId: s.orgId, phase: "READY", cursor: null });
+      const phase = (await ctx.db.query("journalReportEligibility").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).unique())?.phase;
+      return { phase, lines: await getPostedLines(ctx, s.orgId) };
+    });
+    expect(reader.phase).toBe("READY");
+    expect(reader.lines.length).toBeGreaterThan(0);
+    for (const line of reader.lines) expect(line.orgId).toBe(s.orgId);
+    expect(otherAfter.journalLines.length).toBeGreaterThan(0);
+    const readerLines = reader.lines;
     expect(readerLines.filter((l) => l.journalEntryId === entryId).map((l) => l._id).sort()).toEqual(newLines.map((l) => l._id).sort());
     expect(newLines.find((l) => l.accountId === accounts.expense)).toMatchObject({ orgId: s.orgId, debitMinor: 25_125, creditMinor: 0 });
     expect(newLines.find((l) => l.accountId === accounts.payable)).toMatchObject({ orgId: s.orgId, debitMinor: 0, creditMinor: 25_125 });
@@ -220,7 +234,7 @@ describe("dealCommissions: several lines on one deal", () => {
     expect(after.sale).toBe(50);
   });
 
-  test("with no chart yet, a line posts nothing now: the accrual is queued once and the sale commission is untouched", async () => {
+  test("with no chart yet a line posts nothing now and the accrual is queued once and the sale commission is untouched", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     vi.useFakeTimers();
     const s = await seed(t, "nochart");
@@ -377,7 +391,7 @@ describe("reports show the margin after commissions (display only)", () => {
     return { t, s };
   }
 
-  test("net after commissions = margin - (sale commission + lines); the margin itself is unchanged", async () => {
+  test("net after commissions is margin minus sale commission and lines and the margin itself is unchanged", async () => {
     const { s } = await costedSale("rep1", [...ADMIN, "view:reports"]);
     await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
     await s.asAdmin.mutation(api.dealCommissions.addLine, { orgId: s.orgId, saleId: s.saleId, kind: "PURCHASE", employeeId: s.buyerAgent, amount: 50 });
