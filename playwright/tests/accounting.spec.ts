@@ -3,6 +3,7 @@ import { newContainedContext } from "../containedContext";
 import { gotoOrgRoute, APPROVER_AUTH_FILE, resolveOrgId, authenticatedConvexClient } from "../utils";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { replayProof } from "../fixtures/replayProof";
 import {
   decideReplayEnvironment,
   replayLaneAction,
@@ -260,8 +261,10 @@ test.describe("accounting register: a posted journal", () => {
     //    over the connection this test uses, that it is a disposable preview whose org the trusted seed created
     //    AND that this run set a per-run secret nonce on it (e2eBootstrap.replayAttestation). The preview class
     //    and the marker survive promotion to production; the nonce, set by the lane on the fresh preview for one
-    //    run and expiring, does not. The nonce and run id are sent as arguments and compared by the server, and
-    //    are never logged or returned. An operator-supplied name is not trusted.
+    //    run and expiring, does not. The nonce itself is never sent as a query argument: the spec sends an
+    //    HMAC-SHA256 proof over the org id and run id keyed by the nonce, and the server recomputes it. The
+    //    nonce is not printed by this spec and is not on any command line it runs. The lane removes the run
+    //    values from the preview at the end of every run. An operator-supplied name is not trusted.
     //    A refused guard (production, or URL/backend/marker disagree) FAILS. Without the attestation the replay
     //    is SKIPPED (shown as skipped, never passed) unless the lane requires it (E2E_REPLAY_REQUIRED=1), where
     //    it FAILS. A skip is unavailable evidence, not certification; the backend tests stay the evidence.
@@ -274,7 +277,7 @@ test.describe("accounting register: a posted journal", () => {
     // No nonce, no query: nothing is sent to a backend that was not bound to this run.
     const attestation =
       nonce && runId
-        ? await client.query(api.e2eBootstrap.replayAttestation, { orgId, nonce, runId }).then(
+        ? await client.query(api.e2eBootstrap.replayAttestation, { orgId, runId, proof: replayProof(nonce, orgId, runId) }).then(
             (value) => value as ReplayAttestation,
             () => null
           )
@@ -283,6 +286,7 @@ test.describe("accounting register: a posted journal", () => {
       decideReplayEnvironment(process.env.NEXT_PUBLIC_CONVEX_URL, attestation, {
         dedicatedOrg: process.env.E2E_REPLAY_DEDICATED_ORG === "1",
         nonce,
+        runId,
       }),
       process.env.E2E_REPLAY_REQUIRED === "1"
     );

@@ -64,8 +64,10 @@ export const REPLAY_NONCE_MIN_LENGTH = 32;
 export interface ReplayLane {
   /** E2E_REPLAY_DEDICATED_ORG=1: the org is reserved for this replay, so its writes cannot change what other specs read. */
   dedicatedOrg?: boolean;
-  /** E2E_REPLAY_RUN_NONCE: the per-run secret the lane also set on the fresh preview. Never logged or returned. */
+  /** E2E_REPLAY_RUN_NONCE: the per-run secret the lane also set on the fresh preview. Not printed, not sent. */
   nonce?: string;
+  /** E2E_REPLAY_RUN_ID: 1 to 64 of [A-Za-z0-9_-], the same value the lane set on the preview. */
+  runId?: string;
 }
 
 export function decideReplayEnvironment(
@@ -85,7 +87,13 @@ export function decideReplayEnvironment(
       reason: "the lane did not declare the org dedicated to this replay, and its writes would change what later specs in the run read",
     };
   }
-  if (typeof lane.nonce !== "string" || lane.nonce.length < REPLAY_NONCE_MIN_LENGTH) {
+  if (typeof lane.runId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(lane.runId)) {
+    return {
+      kind: "NOT_RUN",
+      reason: "the lane gave no well-formed run id (E2E_REPLAY_RUN_ID: 1 to 64 of A-Z a-z 0-9 _ -), so this deployment was not bound to this run",
+    };
+  }
+  if (typeof lane.nonce !== "string" || lane.nonce.length < REPLAY_NONCE_MIN_LENGTH || !/^[A-Za-z0-9_-]+$/.test(lane.nonce)) {
     return {
       kind: "NOT_RUN",
       reason: `the lane gave no per-run nonce of at least ${REPLAY_NONCE_MIN_LENGTH} characters (E2E_REPLAY_RUN_NONCE), so this deployment was not bound to this run; a promoted preview keeps its class and marker but never has the nonce`,

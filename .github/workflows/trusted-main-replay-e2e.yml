@@ -62,7 +62,15 @@ jobs:
       - name: Name the disposable replay preview
         run: |
           set -euo pipefail
-          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$GITHUB_REF/replay-lane/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" "")"
+          # ONE source for the run id: the preview name, the value set on Convex and the value Playwright
+          # computes its proof with all come from this variable. 1 to 64 of [A-Za-z0-9_-] (the server's contract).
+          RUN_ID="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          case "$RUN_ID" in
+            ""|*[!A-Za-z0-9_-]*) echo "::error::The replay run id is malformed."; exit 1 ;;
+          esac
+          if [ "${#RUN_ID}" -gt 64 ]; then echo "::error::The replay run id is too long."; exit 1; fi
+          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$GITHUB_REF/replay-lane/$RUN_ID" "")"
+          echo "E2E_REPLAY_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
           echo "CONVEX_PREVIEW_NAME=$NAME" >> "$GITHUB_ENV"
           echo "Preview deployment name: $NAME"
 
@@ -121,7 +129,15 @@ jobs:
           fi
           NONCE="$(openssl rand -hex 16)"
           echo "::add-mask::$NONCE"
-          EXPIRES_AT="$(( ($(date +%s) + 7200) * 1000 ))"
+          # The server's contract: at least 32 characters of [A-Za-z0-9_-]. 16 random bytes as hex is exactly that.
+          case "$NONCE" in
+            *[!0-9a-f]*) echo "::error::The replay nonce is malformed."; exit 1 ;;
+          esac
+          if [ "${#NONCE}" -ne 32 ]; then echo "::error::The replay nonce has the wrong length."; exit 1; fi
+          case "$E2E_REPLAY_RUN_ID" in
+            ""|*[!A-Za-z0-9_-]*) echo "::error::The replay run id is malformed."; exit 1 ;;
+          esac
+          EXPIRES_AT="$(( ($(date +%s) + 3600) * 1000 ))"
           retry_convex() {
             local attempt delay
             delay=2
@@ -138,12 +154,19 @@ jobs:
             printf '%s' "$NONCE" | pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_NONCE >/dev/null
           }
           retry_convex set_nonce
-          retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_ID "$GITHUB_RUN_ID" >/dev/null
+          retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_ID "$E2E_REPLAY_RUN_ID" >/dev/null
           retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_EXPIRES_AT "$EXPIRES_AT" >/dev/null
-          {
-            echo "E2E_REPLAY_RUN_NONCE=$NONCE"
-            echo "E2E_REPLAY_RUN_ID=$GITHUB_RUN_ID"
-          } >> "$GITHUB_ENV"
+          # Read each value back from THIS preview and compare silently (nothing is printed), so a set that landed
+          # elsewhere or not at all fails the step instead of surfacing later as a skipped replay.
+          verify_var() {
+            local got
+            got="$(pnpm exec convex env get --preview-name "$CONVEX_PREVIEW_NAME" "$1" 2>/dev/null)" || return 1
+            [ "$got" = "$2" ]
+          }
+          retry_convex verify_var E2E_REPLAY_RUN_NONCE "$NONCE"
+          retry_convex verify_var E2E_REPLAY_RUN_ID "$E2E_REPLAY_RUN_ID"
+          retry_convex verify_var E2E_REPLAY_RUN_EXPIRES_AT "$EXPIRES_AT"
+          echo "E2E_REPLAY_RUN_NONCE=$NONCE" >> "$GITHUB_ENV"
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
           CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}

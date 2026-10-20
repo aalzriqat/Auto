@@ -77,23 +77,69 @@ describe("replay lane workflow", () => {
     expect(run).toMatch(/set -euo pipefail/);
   });
 
-  it("expires the nonce within six hours", () => {
+  it("derives the run id once, and the value on Convex and the value for Playwright are that one value", () => {
+    const nameStep = steps.findIndex((s) => (s.run ?? "").includes("--print-name"));
+    const nameRun = steps[nameStep].run ?? "";
+    // The only definition: id and attempt, charset- and length-checked against the server's contract.
+    expect(nameRun).toContain('RUN_ID="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"');
+    expect(nameRun).toContain('*[!A-Za-z0-9_-]*) echo "::error::The replay run id is malformed."; exit 1 ;;');
+    expect(nameRun).toContain('echo "::error::The replay run id is too long."; exit 1');
+    expect(nameRun).toContain('"${#RUN_ID}" -gt 64');
+    expect(nameRun).toContain('echo "E2E_REPLAY_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"');
+    // No other step assigns it, and none derives it from the raw run id again.
+    steps.forEach((s, i) => {
+      if (i === nameStep) return;
+      expect(s.run ?? "", s.name).not.toMatch(/E2E_REPLAY_RUN_ID=|RUN_ID="/);
+      expect(s.run ?? "", s.name).not.toMatch(/"\$GITHUB_RUN_ID"|\$\{GITHUB_RUN_ID\}/);
+    });
+    // Convex gets exactly the variable the name step wrote; Playwright gets the same one.
+    const bind = steps[bindIndex()].run ?? "";
+    expect(bind).toContain('E2E_REPLAY_RUN_ID "$E2E_REPLAY_RUN_ID"');
+    expect(bind).toContain('retry_convex verify_var E2E_REPLAY_RUN_ID "$E2E_REPLAY_RUN_ID"');
+    expect(bind).not.toMatch(/GITHUB_RUN_ID|GITHUB_RUN_ATTEMPT/);
+    const playwright = steps.find((s) => (s.run ?? "").includes("playwright test"))!;
+    expect(playwright.env?.E2E_REPLAY_RUN_ID).toBe("${{ env.E2E_REPLAY_RUN_ID }}");
+    // And nothing in the workflow hands Playwright a different run id expression.
+    expect(text.match(/E2E_REPLAY_RUN_ID: /g)).toHaveLength(1);
+  });
+
+  it("validates the nonce and run id against the server's contract and reads all three values back from the preview", () => {
+    const run = steps[bindIndex()].run ?? "";
+    expect(run).toContain('case "$NONCE" in\n  *[!0-9a-f]*)');
+    expect(run).toContain('"${#NONCE}" -ne 32');
+    expect(run).toContain('case "$E2E_REPLAY_RUN_ID" in');
+    for (const name of ["E2E_REPLAY_RUN_NONCE", "E2E_REPLAY_RUN_ID", "E2E_REPLAY_RUN_EXPIRES_AT"]) {
+      expect(run, name).toMatch(new RegExp(`retry_convex verify_var ${name} `));
+    }
+    expect(run).toContain('convex env get --preview-name "$CONVEX_PREVIEW_NAME" "$1" 2>/dev/null');
+    // The read-backs come after every set and before the nonce reaches GITHUB_ENV.
+    expect(run.lastIndexOf("convex env set")).toBeLessThan(run.indexOf("retry_convex verify_var"));
+    expect(run.lastIndexOf("retry_convex verify_var")).toBeLessThan(run.indexOf('>> "$GITHUB_ENV"'));
+  });
+
+  it("expires the nonce within one hour (the server accepts at most two hours ahead, and clock drift must not refuse it)", () => {
     const run = steps[bindIndex()].run ?? "";
     const seconds = Number(/date \+%s\) \+ (\d+)\)/.exec(run)?.[1]);
     expect(seconds).toBeGreaterThan(0);
-    expect(seconds).toBeLessThanOrEqual(6 * 60 * 60);
+    expect(seconds).toBeLessThanOrEqual(60 * 60);
   });
 
   it("masks the nonce and never echoes it", () => {
     const run = steps[bindIndex()].run ?? "";
     expect(run).toContain("openssl rand -hex 16");
-    expect(run.indexOf("::add-mask::$NONCE")).toBeGreaterThan(run.indexOf("openssl rand"));
+    // The mask is the very next line after the value exists, before any validation or use.
+    const lines = run.split("\n").map((l) => l.trim());
+    const gen = lines.findIndex((l) => l.startsWith('NONCE="$(openssl rand -hex 16)"'));
+    expect(gen).toBeGreaterThan(-1);
+    expect(lines[gen + 1]).toBe('echo "::add-mask::$NONCE"');
     // The only places the value appears: the mask, a stdin pipe into the CLI, and the GITHUB_ENV file.
     const uses = run.split("\n").filter((line) => line.includes("$NONCE"));
     expect(uses.map((l) => l.trim())).toEqual([
       'echo "::add-mask::$NONCE"',
+      'case "$NONCE" in',
       "printf '%s' \"$NONCE\" | pnpm exec convex env set --force --preview-name \"$CONVEX_PREVIEW_NAME\" E2E_REPLAY_RUN_NONCE >/dev/null",
-      'echo "E2E_REPLAY_RUN_NONCE=$NONCE"',
+      'retry_convex verify_var E2E_REPLAY_RUN_NONCE "$NONCE"',
+      'echo "E2E_REPLAY_RUN_NONCE=$NONCE" >> "$GITHUB_ENV"',
     ]);
     // The stdin pipe sits inside a function that the retry wrapper calls, so EVERY attempt re-pipes the value.
     expect(run).toMatch(/set_nonce\(\) \{\n\s+printf '%s' "\$NONCE" \| pnpm exec convex env set/);
@@ -125,7 +171,7 @@ describe("replay lane workflow", () => {
     const create = indexOf("--preview-create");
     expect(nameStep).toBeGreaterThan(-1);
     expect(nameStep).toBeLessThan(create);
-    expect(steps[nameStep].run).toContain('--print-name "$GITHUB_REF/replay-lane/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"');
+    expect(steps[nameStep].run).toContain('--print-name "$GITHUB_REF/replay-lane/$RUN_ID"');
     expect(steps[create].run).toContain('--preview-create "$CONVEX_PREVIEW_NAME"');
     // No step may take the name from an output of create or pin.
     expect(text).not.toMatch(/steps\.[\w-]+\.outputs\.preview_name|needs\.[\w-]+\.outputs/);

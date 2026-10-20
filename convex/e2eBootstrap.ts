@@ -146,6 +146,7 @@
 import { v, ConvexError } from "convex/values";
 import { internalQuery, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
+import { hmacSha256Hex } from "./utils/hmacSha256";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -1365,25 +1366,35 @@ export const setHuntSeatRole = internalMutation({
 // ─── The replay attestation (SCRUM-795) ──────────────────────────────────────
 
 /**
- * The per-run secrets the replay lane sets on the FRESH preview, right after creating it:
+ * The per-run values the replay lane sets on the FRESH preview, right after creating it:
  *
  *   npx convex env set E2E_REPLAY_RUN_NONCE      <random, >= 32 hex chars (128 bits)>
- *   npx convex env set E2E_REPLAY_RUN_ID         <the lane's run id>
- *   npx convex env set E2E_REPLAY_RUN_EXPIRES_AT <epoch ms, no more than 6 hours ahead>
+ *   npx convex env set E2E_REPLAY_RUN_ID         <the lane's run id: 1 to 64 of [A-Za-z0-9_-]>
+ *   npx convex env set E2E_REPLAY_RUN_EXPIRES_AT <epoch ms, at most 2 hours ahead; the lane uses at most 1 hour>
  *
- * and passes the same nonce and run id to the Playwright process as E2E_REPLAY_RUN_NONCE and E2E_REPLAY_RUN_ID. The
- * lane deletes the preview when it finishes. NEVER set these on a production deployment. They exist to bind the
- * attestation to something a PROMOTED preview cannot have: the class variable and the marker survive promotion (see
- * the module header), a nonce set only for one run on one disposable deployment does not, and it expires.
+ * and passes the same nonce and run id to the Playwright process as E2E_REPLAY_RUN_NONCE and E2E_REPLAY_RUN_ID. When
+ * the run ends, the lane REMOVES all three from the preview (`npx convex env remove <name>`) and then deletes the
+ * preview. NEVER set these on a production deployment.
+ *
+ * WHAT THIS DOES AND DOES NOT PROVE. The preview class and the marker survive promotion to production (see the module
+ * header), and so would these three variables if the preview were promoted while they are set. This module cannot
+ * detect a promotion: the installed convex package (1.42.1) exposes only CONVEX_CLOUD_URL and CONVEX_SITE_URL to a
+ * function, no deployment-type signal, and a promotion keeps the URL and the environment. What bounds the exposure is
+ * therefore operational and short: the lane's removal of the three variables at the end of every run (after which this
+ * query answers NONCE_NOT_SET), the expiry, and the 2 hour cap enforced here, so a preview promoted mid-run could
+ * attest only until the run ends or at most 2 hours. A deployment whose name differs from the one the marker vouches
+ * for (a re-homed or copied deployment) is refused by `assertMarkerBelongsToThisDeployment`.
  */
 const REPLAY_NONCE_ENV_VAR = "E2E_REPLAY_RUN_NONCE";
 const REPLAY_RUN_ID_ENV_VAR = "E2E_REPLAY_RUN_ID";
 const REPLAY_EXPIRES_ENV_VAR = "E2E_REPLAY_RUN_EXPIRES_AT";
-/** 128 bits of entropy as hex is 32 characters; shorter is refused on both sides. */
+/** 128 bits of entropy as hex is 32 characters; shorter is refused. */
 export const REPLAY_NONCE_MIN_LENGTH = 32;
 const REPLAY_NONCE_PATTERN = /^[A-Za-z0-9_-]+$/;
-/** A run is short; an expiry further ahead than this is itself refused. */
-export const REPLAY_MAX_LIFETIME_MS = 6 * 60 * 60 * 1000;
+const REPLAY_RUN_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const REPLAY_PROOF_PATTERN = /^[0-9a-f]{64}$/;
+/** A run is short; an expiry further ahead than this is itself refused. The lane uses at most one hour. */
+export const REPLAY_MAX_LIFETIME_MS = 2 * 60 * 60 * 1000;
 
 /** Equal-length strings compared without an early exit on the first differing character. */
 export function constantTimeEqual(a: string, b: string): boolean {
@@ -1398,22 +1409,36 @@ function wellFormedNonce(value: string | undefined): value is string {
 }
 
 /**
- * Pure verdict on the run binding: the nonce and run id the CALLER sent against the ones this deployment holds in its
- * environment, and the expiry. Returns fixed reason codes only; no value is ever returned or logged.
+ * The proof the client sends instead of the nonce: lower-case hex HMAC-SHA256 keyed by the nonce over
+ * `${orgId}:${runId}`. Bound to the organization and the run, so a proof for one cannot be replayed for another, and
+ * it does not reveal the nonce. (A proof for the same org and run can be replayed until the expiry; all it can do is
+ * ask this same read-only question again.)
+ */
+export function replayProofFor(nonce: string, orgId: string, runId: string): string {
+  return hmacSha256Hex(nonce, `${orgId}:${runId}`);
+}
+
+/**
+ * Pure verdict on the run binding: the proof the CALLER sent against the one recomputed from this deployment's
+ * environment, and the expiry. Every malformed input fails closed. Returns fixed reason codes only.
  */
 export function replayRunBindingReasons(
-  sent: { nonce: string; runId: string },
+  sent: { orgId: string; runId: string; proof: string },
   env: { nonce: string | undefined; runId: string | undefined; expiresAt: string | undefined },
   now: number
 ): string[] {
   const reasons: string[] = [];
+  const nonceOk = wellFormedNonce(env.nonce);
   if (!env.nonce) reasons.push("NONCE_NOT_SET");
-  else if (!wellFormedNonce(env.nonce)) reasons.push("NONCE_TOO_SHORT");
-  if (!wellFormedNonce(sent.nonce)) reasons.push("SENT_NONCE_TOO_SHORT");
-  if (wellFormedNonce(env.nonce) && wellFormedNonce(sent.nonce) && !constantTimeEqual(env.nonce, sent.nonce)) {
-    reasons.push("NONCE_MISMATCH");
+  else if (!nonceOk) reasons.push("NONCE_TOO_SHORT");
+  if (!REPLAY_RUN_ID_PATTERN.test(sent.runId)) reasons.push("SENT_RUN_ID_MALFORMED");
+  if (!env.runId || !REPLAY_RUN_ID_PATTERN.test(env.runId) || !constantTimeEqual(env.runId, sent.runId)) {
+    reasons.push("RUN_ID_MISMATCH");
   }
-  if (!env.runId || sent.runId.length === 0 || !constantTimeEqual(env.runId, sent.runId)) reasons.push("RUN_ID_MISMATCH");
+  if (!REPLAY_PROOF_PATTERN.test(sent.proof)) reasons.push("PROOF_MALFORMED");
+  else if (nonceOk && !constantTimeEqual(replayProofFor(env.nonce!, sent.orgId, sent.runId), sent.proof)) {
+    reasons.push("PROOF_MISMATCH");
+  }
   const expiresAt = env.expiresAt === undefined || !/^\d+$/.test(env.expiresAt) ? Number.NaN : Number(env.expiresAt);
   if (!Number.isFinite(expiresAt)) reasons.push("EXPIRY_NOT_SET");
   else if (expiresAt <= now) reasons.push("EXPIRED");
@@ -1424,25 +1449,27 @@ export function replayRunBindingReasons(
 /**
  * What the GL-register replay (playwright/tests/accounting.spec.ts) needs from the deployment BEFORE it is allowed
  * to write to the books: a positive attestation, read from the backend actually in use, that this is a disposable
- * preview, that the organization was seeded on it, and that THIS RUN set the per-run nonce on it.
+ * preview, that the organization was seeded on it, and that THIS RUN set the per-run values on it.
  *
- * The preview class and the marker survive promotion to production, so they are necessary but NOT sufficient. The
- * nonce is the part production cannot have: the client sends its own nonce and run id as arguments and the server
- * compares them, in constant time, with its environment, so a backend cannot attest by itself and a deployment that
- * never had the nonce set cannot attest at all.
+ * The preview class and the marker survive promotion, so they are necessary but NOT sufficient. The client sends a
+ * proof (HMAC of the org and run id keyed by the run nonce) and the server recomputes it, in constant time, from its
+ * environment: the nonce itself is not sent as a query argument, is not returned by the server, is not printed by the
+ * spec and is not on any command line the spec runs. A deployment that never had the values set cannot attest, and
+ * once the lane removes them at the end of the run it cannot attest any more. See the note on the constants above for
+ * what this cannot detect.
  *
- * Never throws on a refused attestation (it returns `attested: false` and fixed reason codes) and never returns the
- * nonce; callers must be finance members of the organization (`VIEW_FINANCE`), anyone else is refused by the tenant
- * check before an attestation is produced. Read-only. It authorizes nothing by itself; the replay's guard decides.
+ * Never throws on a refused attestation (it returns `attested: false` and fixed reason codes); callers must be
+ * finance members of the organization (`VIEW_FINANCE`), anyone else is refused by the tenant check before an
+ * attestation is produced. Read-only. It authorizes nothing by itself; the replay's guard decides.
  *
- * Freshness is provenance plus the nonce plus a 2 hour bound, which the CLIENT guard applies to the `orgAgeMs` this
- * query returns (the server enforces only the nonce's own expiry), not proof that the org has not been used since it
- * was seeded: the marker is minted only on an empty deployment, names this deployment and is bound to the QA organization
+ * Freshness is provenance plus the run values plus a 2 hour bound, which the CLIENT guard applies to the `orgAgeMs`
+ * this query returns (the server enforces only the expiry), not proof that the org has not been used since it was
+ * seeded: the marker is minted only on an empty deployment, names this deployment and is bound to the QA organization
  * by `bootstrapE2EOrganization`, and an organization created at or after the marker's `markedAt` was created by the
  * seed here. The replay's own pre-write reads (no period, no journal in any status) are the check on use since.
  */
 export const replayAttestation = query({
-  args: { orgId: v.id("organizations"), nonce: v.string(), runId: v.string() },
+  args: { orgId: v.id("organizations"), runId: v.string(), proof: v.string() },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const reasons: string[] = [];
@@ -1467,7 +1494,7 @@ export const replayAttestation = query({
     else if (marker && org._creationTime < marker.markedAt) reasons.push("ORG_PREDATES_MARKER");
     reasons.push(
       ...replayRunBindingReasons(
-        { nonce: args.nonce, runId: args.runId },
+        { orgId: args.orgId, runId: args.runId, proof: args.proof },
         {
           nonce: process.env[REPLAY_NONCE_ENV_VAR],
           runId: process.env[REPLAY_RUN_ID_ENV_VAR],
