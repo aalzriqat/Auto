@@ -59,8 +59,12 @@ const EVAL_LIKE = new RegExp(`${COMMAND_POSITION}(?:eval|iex|invoke-expression)\
 // An inline interpreter (node -e, python -c, deno eval, ...) whose code reaches a process API can run git.
 const INLINE_RUNNER = String.raw`\b(?:node(?:js)?|bun|deno|python[\d.]*|perl|ruby|php)\b[^\n]*?(?:\s-(?:e|c|E|pe)\b|\s--eval\b|\seval\s)`;
 const PROCESS_API = String.raw`child_process|execSync|execFileSync|execFile|spawn|subprocess|os\.system|os\.popen|Deno\.Command`;
+// perl and ruby reach a shell through language syntax too: system, exec, qx, backticks, %x, a piped open, IO.popen, Open3.
+const PERL_RUBY_RUNNER = String.raw`\b(?:perl|ruby)\b[^\n]*?\s-(?:e|E|pe)\b`;
+const PERL_RUBY_SHELL = String.raw`\b(?:system|exec|qx|popen|open3|spawn)\b|\bopen\b[^\n]*\||\`|%x`;
 const UNPARSEABLE = [
   new RegExp(`${INLINE_RUNNER}[^\\n]*?(?:${PROCESS_API})`, "i"),
+  new RegExp(`${PERL_RUBY_RUNNER}[^\\n]*?(?:${PERL_RUBY_SHELL})`, "i"),
   SHELL_PIPE,
   EVAL_LIKE,
   /(?<!&)&\s*\$\{?\w+/,

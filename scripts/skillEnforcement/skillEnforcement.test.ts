@@ -194,8 +194,18 @@ describe("gitSteps", () => {
     "python -c 'import os; os.popen(cmd)'",
     "deno eval \"new Deno.Command('sh')\" # child_process",
     "bun -e \"Bun.spawn(['sh'])\"",
-    "perl -e 'system(\"sh\")' # spawn",
-    "ruby -e 'system(cmd)' # subprocess",
+    "perl -e 'system(\"sh\")'",
+    "ruby -e 'system(cmd)'",
+    "perl -e 'exec $c'",
+    "perl -e '$o = qx{$c}'",
+    "perl -e 'open(P, \"|$c\")'",
+    "perl -E 'say `$c`'",
+    "ruby -e 'IO.popen(c)'",
+    "ruby -e 'exec c'",
+    "ruby -e 'x = %x(#{c})'",
+    "ruby -e 'require \"open3\"; Open3.capture2(c)'",
+    "ruby -e 'spawn(c)'",
+    "ruby -e 'puts `#{c}`'",
   ])("inline runner using process APIs is gated as an unknown commit and push: %s", (cmd) => {
     const steps = gitSteps(cmd);
     expect(steps.length).toBeGreaterThan(0);
@@ -206,6 +216,10 @@ describe("gitSteps", () => {
     "python3 -c 'print(2)'",
     "node script.js --eval",
     "bun -e \"console.log(Date.now())\"",
+    "perl -e 'print 1'",
+    "perl -e 'open(F, \"<x\"); print <F>'",
+    "ruby -e 'puts 1'",
+    "ruby -e 'puts [1, 2].sum'",
   ])("a plain inline runner stays ungated: %s", (cmd) => expect(gitSteps(cmd)).toEqual([]));
   test.each(["ls | shasum", "echo hi | grep sh", "cat a | wc -l"])("%s is not a shell pipe", (cmd) =>
     expect(gitSteps(cmd)).toEqual([]),
