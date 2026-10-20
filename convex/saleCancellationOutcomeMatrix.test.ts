@@ -530,10 +530,12 @@ describe("SCRUM-704 (i) replaying a cancellation after it succeeded", () => {
 
   test("door (a), a DIFFERENT key on the already-CANCELLED deal changes nothing but its idempotency record (SCRUM-760 fix of the former finding); door (b) never did", async () => {
     // First cancel of a CLOSED deal leaves the reinstated deposit holding the car
-    // (RESERVED, hold active). `cancelApplication`'s already-CANCELLED branch then
-    // runs `releaseHoldForApplicationQuote`, so the number of cancel CALLS - not
-    // the deal - decides whether the car is on sale. A cash sale cancelled twice
-    // never leaves that state (see the previous test and the cross-check below).
+    // (RESERVED, hold active) pending a refund-or-forfeit decision. A repeated cancel
+    // with a different key must not release that hold: `cancelApplication`'s
+    // already-CANCELLED branch returns early for a deal that was finalized, so the
+    // number of cancel CALLS never decides whether the car is on sale; only the
+    // deposit decision does. A cash sale cancelled twice behaves the same (see the
+    // previous test and the cross-check below).
     const a = await financedDeal("a_newkey");
     await a.cancel("first");
     const afterFirst = await outcome(a);
