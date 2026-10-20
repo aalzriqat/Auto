@@ -122,11 +122,11 @@ describe("dealCommissions: several lines on one deal", () => {
   // Scoped to one organization by index, and every returned row is asserted to
   // carry that orgId, so a snapshot that leaked another tenant's rows (or a
   // query that lost its org filter) fails here instead of passing silently.
-  // pendingAccountingEvents has no plain by_org index, so it is filtered on orgId.
+  // pendingAccountingEvents is read through by_org_status, using the orgId prefix only (every status).
   const snapshot = async (t: Harness, orgId: Id<"organizations">, saleId: Id<"sales">) => {
     const snap = await t.run(async (ctx) => ({
       events: await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
-      pending: await ctx.db.query("pendingAccountingEvents").filter((q) => q.eq(q.field("orgId"), orgId)).collect(),
+      pending: await ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", orgId)).collect(),
       journalLines: await ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
       sale: (await ctx.db.get(saleId))?.commissionAmount ?? null,
       saleOrgId: (await ctx.db.get(saleId))?.orgId ?? null,
@@ -203,6 +203,14 @@ describe("dealCommissions: several lines on one deal", () => {
     }
     const entry = await t.run((ctx) => ctx.db.get(entryId!));
     expect(entry?.orgId).toBe(s.orgId);
+    // Reader-visible state: accountingReports.getPostedLines selects journalLines
+    // with reportPosted === true (by_org_reportPosted_date), and reads POSTED entries.
+    expect(entry?.status).toBe("POSTED");
+    for (const line of newLines) expect(line.reportPosted).toBe(true);
+    const readerLines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_org_reportPosted_date", (q) => q.eq("orgId", s.orgId).eq("reportPosted", true)).collect()
+    );
+    expect(readerLines.filter((l) => l.journalEntryId === entryId).map((l) => l._id).sort()).toEqual(newLines.map((l) => l._id).sort());
     expect(newLines.find((l) => l.accountId === accounts.expense)).toMatchObject({ orgId: s.orgId, debitMinor: 25_125, creditMinor: 0 });
     expect(newLines.find((l) => l.accountId === accounts.payable)).toMatchObject({ orgId: s.orgId, debitMinor: 0, creditMinor: 25_125 });
     // The salesperson's own commission is untouched, on the same org's sale.
@@ -221,6 +229,16 @@ describe("dealCommissions: several lines on one deal", () => {
     await settle(t);
     const before = await snapshot(t, s.orgId, s.saleId);
     const otherBefore = await snapshot(t, other.orgId, other.saleId);
+    // The before-snapshot must hold the seeded state, or every "unchanged" comparison below is vacuous:
+    // each org already has its sale-completed posting queued (PENDING) and nothing posted.
+    expect(before.pending.map((p) => [p.kind, p.status, p.idempotencyKey, p.orgId])).toEqual([
+      ["POST", "PENDING", `sale_completed_${s.saleId}`, s.orgId],
+    ]);
+    expect(otherBefore.pending.map((p) => [p.kind, p.status, p.idempotencyKey, p.orgId])).toEqual([
+      ["POST", "PENDING", `sale_completed_${other.saleId}`, other.orgId],
+    ]);
+    expect(before.events).toEqual([]);
+    expect(before.journalLines).toEqual([]);
     const otherLineId = await other.asAdmin.mutation(api.dealCommissions.addLine, {
       orgId: other.orgId, saleId: other.saleId, kind: "EXECUTION", employeeId: other.executor, amount: 9,
     });
