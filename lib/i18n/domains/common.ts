@@ -296,6 +296,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Adding commission lines to a deal is not available during the pilot. Nothing has been changed.",
     "إضافة بنود العمولات إلى الصفقة غير متاحة خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
   ],
+  ServerError_DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON: [
+    "The salesperson's sale commission is already set on the sale itself. Change it there instead of adding a second sale commission. Nothing has been changed.",
+    "عمولة البيع الخاصة بالبائع محددة مسبقًا على عملية البيع نفسها. عدّلها هناك بدل إضافة عمولة بيع ثانية. لم يتم تغيير أي شيء.",
+  ],
   ServerError_CUSTOMER_CREDIT_PAYOUT_DISABLED: [
     "Paying customer credit out is not available during the pilot. Keep it as customer credit instead. Nothing has been changed.",
     "صرف رصيد العميل غير متاح خلال المرحلة التجريبية. احتفظ به كرصيد دائن للعميل بدلًا من ذلك. لم يتم تغيير أي شيء.",
