@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { payFullPriceByDeposit } from "../test-utils/cashDealerFixture";
 
 vi.mock("./utils/dealCommissionLines", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./utils/dealCommissionLines")>()),
@@ -28,7 +29,7 @@ test("with the kill switch on, addLine is refused server-side and the read still
     ctx.db.insert("users", { clerkId: "pilot_user", email: "pilot@example.com", name: "Sam" })
   );
   const roleId = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "Admin", permissions: ["view:commissions", "manage:commissions", "view:sales", "create:sales", "view:vehicles"] })
+    ctx.db.insert("roles", { orgId, name: "Admin", permissions: ["view:commissions", "manage:commissions", "view:sales", "create:sales", "view:vehicles", "confirm:finance_disbursement"] })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   await t.run((ctx) =>
@@ -44,8 +45,10 @@ test("with the kill switch on, addLine is refused server-side and the read still
     ctx.db.insert("customers", { orgId, firstName: "A", lastName: "B", email: "ab@example.com" })
   );
   const asUser = t.withIdentity({ subject: "pilot_user", clerkId: "pilot_user" });
+  // SCRUM-802 (pilot): the cash sale is only a fixture here, so it is completed the pilot way, paid in full by deposit.
+  const quoteId = await payFullPriceByDeposit(asUser, { orgId, customerId, vehicleId, price: 15000 });
   const saleId = await asUser.mutation(api.sales.create, {
-    idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId,
+    idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId, quoteId,
     salePrice: 15000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
   });
 
