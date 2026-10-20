@@ -1428,8 +1428,9 @@ export async function runRehearsalCases(ctx) {
 
   // ── RV1 — returning a CLEARED cheque is an expected refusal for the pilot (SCRUM-760) ──
   //
-  // While the door is blocked the case proves the refusal and that nothing moved. When the door is
-  // activated (post-pilot, after its own certification) this becomes the full reversal cell again:
+  // While the door is blocked the case proves the refusal and that the accounting
+  // events, the clearing entry and its lines, the receivable, the cheque status and the FAILED outbox
+  // list are unchanged (other tables are not read here). When the door is activated (post-pilot, after its own certification) this becomes the full reversal cell again:
   // ACC-3, the reversal must be SYMMETRIC (the money comes back off and the history stays: the original
   // posting remains with a linked, equal-and-opposite reversing entry, and the debt is owed again).
   await recordCase(
@@ -1546,7 +1547,7 @@ export async function runRehearsalCases(ctx) {
       if (returned.ok) fail("returning a CLEARED cheque was ACCEPTED, but the pilot blocks that door server-side");
       expectEqual(returned.errorCode, "CLEARED_CHEQUE_RETURN_PILOT_DISABLED", "the cleared-cheque return's refusal code");
 
-      // NOTHING CHANGED: the same events (none added, none reversed), the clearing still POSTED with its
+      // UNCHANGED, as far as this case reads: the same events (none added, none reversed), the clearing still POSTED with its
       // lines intact, the debt still settled, the cheque still CLEARED, no failed outbox row.
       const postReturnEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", { orgId, limit: 200 });
       const postReturnEventIds = (postReturnEvents ?? []).map((event) => String(event._id)).sort((a, b) => a.localeCompare(b));
