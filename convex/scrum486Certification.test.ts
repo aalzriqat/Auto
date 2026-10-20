@@ -843,15 +843,35 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(await d.bankBalance()).toBe(12_500_000);
   }, 30_000);
 
+  /** Stored snapshots after the receipt and before the return: sale (1210 Dr, 4100 Cr, 5100 Dr, 1400 Cr) and receipt (1110 Dr, 1210 Cr). */
+  const SNAPSHOT_BEFORE_RETURN = {
+    "1110|JOD": { debit: 12_500_000, credit: 0 },
+    "1210|JOD": { debit: 12_500_000, credit: 12_500_000 },
+    "1400|JOD": { debit: 0, credit: 10_000_000 },
+    "4100|JOD": { debit: 0, credit: 12_500_000 },
+    "5100|JOD": { debit: 10_000_000, credit: 0 },
+  };
+  /** After the inverse posts: 1110 gains a 12,500,000 credit and 1210 a 12,500,000 debit; nothing else moves. */
+  const SNAPSHOT_AFTER_REVERSAL = {
+    ...SNAPSHOT_BEFORE_RETURN,
+    "1110|JOD": { debit: 12_500_000, credit: 12_500_000 },
+    "1210|JOD": { debit: 25_000_000, credit: 12_500_000 },
+  };
+
   test("owned configured financier × CHEQUE tender × cleared cheque return with no open period: the return succeeds, the reversal is DEFERRED, then posts exactly once a period opens", async () => {
     const d = await clearedFinanceChequeDeal("s486fcperiod");
     const { s, applicationId, cleared } = d;
-    const setPeriods = (status: "OPEN" | "CLOSED") => s.t.run(async (ctx) => {
-      for (const period of await ctx.db.query("accountingPeriods").collect()) {
-        if (period.orgId === s.orgId) await ctx.db.patch(period._id, { status });
-      }
-    });
-    await setPeriods("CLOSED");
+    // Periods move only through the public accounting-period mutations (oracle gate contract item 1).
+    const ownPeriodIds = async () => (await s.owner.as.query(api.accountingPeriods.list, { orgId: s.orgId })).map((p) => p._id);
+    const [periodId] = await ownPeriodIds();
+    expect(await ownPeriodIds()).toHaveLength(1);
+    // Stored account snapshots, summed over shards as the trial balance reads them, are asserted at each stage.
+    expect(await storedPeriodSnapshot(s, periodId)).toEqual(SNAPSHOT_BEFORE_RETURN);
+    for (const periodId of await ownPeriodIds()) {
+      const checklist = await s.owner.as.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId });
+      await s.owner.as.mutation(api.accountingPeriods.close, { orgId: s.orgId, periodId, acknowledgedWarnings: checklist.warnings });
+    }
+    expect(await s.owner.as.query(api.accountingPeriods.currentOpenPeriod, { orgId: s.orgId })).toBeNull();
     const rowsBefore = await journalRows(s);
     // With every period closed a role without the authority is still refused FORBIDDEN, writing nothing.
     await expectRefusedAndUnchanged(
@@ -869,6 +889,8 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
 
     // Deferred state: the closed period is not written into (the ledger still shows the receipt), but the
     // business state moves now: payment VOIDED, debt reopened, deal expecting the next receipt, cheque RETURNED.
+    // The deferred reversal wrote nothing into the account snapshots.
+    expect(await storedPeriodSnapshot(s, periodId)).toEqual(SNAPSHOT_BEFORE_RETURN);
     expect(await journalRows(s)).toEqual(rowsBefore);
     expect(netByAccount(await journalRows(s))).toEqual({
       "1110|JOD": 12_500_000, "1400|JOD": -10_000_000, "4100|JOD": -12_500_000, "5100|JOD": 10_000_000,
@@ -898,17 +920,48 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     }));
     expect(stale?.code).toBe("FINANCE_CONFIRM_STALE_REQUEST");
 
-    // Once a period opens the outbox drains the queued reversal: the exact inverse posts once.
-    await setPeriods("OPEN");
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-    try {
-      await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+    // Reopening a period through the public mutation wakes the outbox: the exact inverse posts once, and a
+    // second drain finds nothing left to post (exactly once, not at-least-once).
+    const settle = async () => {
       for (let pass = 0; pass < 10; pass += 1) {
         await s.t.finishAllScheduledFunctions(vi.runAllTimers);
         const inFlight = (await s.t.run(async (ctx) => await ctx.db.system.query("_scheduled_functions").collect()))
           .filter((f) => f.state.kind === "pending" || f.state.kind === "inProgress").length;
         if (inFlight === 0) break;
       }
+    };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      for (const periodId of await ownPeriodIds()) {
+        await s.owner.as.mutation(api.accountingPeriods.reopen, {
+          orgId: s.orgId, periodId, reason: "Certification: the deferred cheque-return reversal must post",
+        });
+      }
+      await settle();
+      await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+      await settle();
+      const afterFirstDrains = await journalRows(s);
+      const eventsOf = () => s.t.run(async (ctx) => (await ctx.db.query("accountingEvents").collect())
+        .filter((row) => row.orgId === s.orgId));
+      const outboxOf = () => s.t.run(async (ctx) => (await ctx.db.query("pendingAccountingEvents").collect())
+        .filter((row) => row.orgId === s.orgId));
+      const eventsAfterFirst = await eventsOf();
+      const outboxAfterFirst = await outboxOf();
+      const snapshotAfterFirst = await storedPeriodSnapshot(s, periodId);
+      expect(snapshotAfterFirst).toEqual(SNAPSHOT_AFTER_REVERSAL);
+      // Whole stored documents (ids, shards, timestamps, running totals), not a projection.
+      const snapshotRowsOf = () => s.t.run(async (ctx) => (await ctx.db.query("accountBalanceSnapshots").collect())
+        .filter((row) => row.orgId === s.orgId && row.periodId === periodId));
+      const snapshotRowsAfterFirst = await snapshotRowsOf();
+      expect(snapshotRowsAfterFirst.length).toBeGreaterThan(0);
+      await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+      await settle();
+      // Replay: nothing is posted again, so journal, events, the whole outbox rows and the snapshots are identical.
+      expect(await journalRows(s)).toEqual(afterFirstDrains);
+      expect(await eventsOf()).toEqual(eventsAfterFirst);
+      expect(await outboxOf()).toEqual(outboxAfterFirst);
+      expect(await storedPeriodSnapshot(s, periodId)).toEqual(SNAPSHOT_AFTER_REVERSAL);
+      expect(await snapshotRowsOf()).toEqual(snapshotRowsAfterFirst);
     } finally {
       vi.useRealTimers();
     }
