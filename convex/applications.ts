@@ -5724,14 +5724,14 @@ export const returnFinanceDisbursementCheque = mutation({
       async () => {
         // A missing row and another organisation's row answer identically, so the
         // refusal never discloses that a foreign row exists.
-        const app = await ctx.db.get(args.applicationId);
-        if (!app || app.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
+        const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId)
+          .catch(() => refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND"));
         await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
         if (app.disbursedAt === undefined || app.disbursedAmountMinor === undefined) {
           refuseFinanceReturn("FINANCE_RETURN_NOT_DISBURSED");
         }
-        const cheque = await ctx.db.get(args.chequeId);
-        if (!cheque || cheque.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
+        const cheque = await requireOwnedRow(ctx, args.orgId, "postDatedCheques", args.chequeId)
+          .catch(() => refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND"));
         if (cheque.status !== "CLEARED" || cheque.isDeleted === true) {
           refuseFinanceReturn("FINANCE_RETURN_CHEQUE_NOT_CLEARED");
         }
