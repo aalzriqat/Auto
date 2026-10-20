@@ -920,6 +920,7 @@ export interface MobileVehicleReservation {
 export interface MobileProfitApprovalCheck {
   status: "PENDING" | "APPROVED" | "REJECTED";
   requestedProfit: number;
+  minimumProfit?: number;
 }
 
 export interface MobileQuote {

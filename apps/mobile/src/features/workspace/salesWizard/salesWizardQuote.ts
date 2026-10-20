@@ -43,6 +43,48 @@ export function priceUpliftNeedsApproval(uplift: number, minimumUplift: number):
   return minimumUplift > 0 && uplift < minimumUplift;
 }
 
+export type MobileApprovalRequest = {
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  /** What the server stored: final price minus list price when it was requested. */
+  requestedProfit: number;
+  minimumProfit?: number;
+};
+
+/**
+ * The server honours an approval only for EXACTLY the terms it was recorded for
+ * (requestMatchesTerms in convex/utils/profitApproval.ts): a later, higher or
+ * lower price needs a new approval. This is the one matcher the wizard uses.
+ */
+export function approvalMatchesTerms(
+  request: MobileApprovalRequest | null | undefined,
+  uplift: number,
+  minimumUplift: number
+): boolean {
+  if (!request) return false;
+  const same = (a: number, b: number) => Math.round(a * 1000) === Math.round(b * 1000);
+  return same(request.requestedProfit, uplift) && (request.minimumProfit === undefined || same(request.minimumProfit, minimumUplift));
+}
+
+/** Everything the wizard shows or blocks on for the minimum price uplift, from one place. */
+export function profitApprovalGate(args: {
+  isCash: boolean;
+  hasVehicle: boolean;
+  uplift: number;
+  minimum: number;
+  approval: MobileApprovalRequest | null | undefined;
+}) {
+  const needsApproval = !args.isCash && args.hasVehicle && priceUpliftNeedsApproval(args.uplift, args.minimum);
+  const exact = approvalMatchesTerms(args.approval, args.uplift, args.minimum);
+  const approvalValid = needsApproval && exact && args.approval?.status === "APPROVED";
+  return {
+    needsApproval,
+    approvalValid,
+    pending: needsApproval && exact && args.approval?.status === "PENDING",
+    rejected: needsApproval && exact && args.approval?.status === "REJECTED",
+    blocked: needsApproval && !approvalValid,
+  };
+}
+
 /**
  * Mirrors the backend financing-term authority before the mobile wizard allows
  * a financed quote to advance or submit.

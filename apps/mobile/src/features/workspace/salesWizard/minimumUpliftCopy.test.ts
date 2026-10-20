@@ -29,4 +29,11 @@ describe("SCRUM-260 mobile minimum price uplift copy", () => {
     expect(body).toContain("(500)");
     expect(body).toContain(disclosure);
   });
+
+  test.each([
+    ["en", "Markup added to base price"],
+    ["ar", "الإضافة على السعر الأساسي"],
+  ] as const)("%s: the input is labelled for what it is, not as a price uplift or profit", (locale, label) => {
+    expect(upliftFieldLabel(locale)).toBe(label);
+  });
 });

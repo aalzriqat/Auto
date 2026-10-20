@@ -29,4 +29,9 @@ describe("minimum price uplift copy", () => {
       expect(help).not.toMatch(absent);
     });
   }
+
+  test("the quote-setup input is labelled as the markup added to the base price, in both languages", () => {
+    expect(dictionaries.en.DealerProfit).toBe("Markup added to base price");
+    expect(dictionaries.ar.DealerProfit).toBe("الإضافة على السعر الأساسي");
+  });
 });

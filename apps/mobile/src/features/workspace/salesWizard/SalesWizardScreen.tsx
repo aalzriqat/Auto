@@ -45,8 +45,8 @@ import {
   effectiveMobileQuoteVehiclePrice,
   manualExecutionFeeInputValue,
   mobileFinancingTermIsValid,
-  priceUpliftNeedsApproval,
   priceUpliftOverList,
+  profitApprovalGate,
 } from "./salesWizardQuote";
 
 export type WizardPaymentType = "CASH" | "INSTALLMENT";
@@ -258,10 +258,14 @@ export function SalesWizardScreen({
   // The server compares final price minus list price with the minimum, so the
   // alert, the gate and the approval match use that same figure.
   const uplift = priceUpliftOverList(price, profit, selectedVehicle?.sellingPrice ?? 0);
-  const isProfitBelowMinimum = !isCash && Boolean(vehicleId) && priceUpliftNeedsApproval(uplift, minimumProfit);
-  const hasValidApproval =
-    pendingApproval?.status === "APPROVED" && uplift >= pendingApproval.requestedProfit;
-  const isBlockedByProfit = isProfitBelowMinimum && !hasValidApproval;
+  const profitGate = profitApprovalGate({
+    isCash,
+    hasVehicle: Boolean(vehicleId),
+    uplift,
+    minimum: minimumProfit,
+    approval: pendingApproval,
+  });
+  const isBlockedByProfit = profitGate.blocked;
 
   // Mirrors useFinanceComparison: gate on customer statuses, filter by each
   // company's acceptedStatuses, then run the murabaha math per company.
@@ -1037,11 +1041,11 @@ export function SalesWizardScreen({
                     <Text style={styles.approvalBody}>
                       {upliftBelowMinimumBody(locale, money(uplift, locale), money(minimumProfit, locale))}
                     </Text>
-                    {pendingApproval?.status === "PENDING" && pendingApproval.requestedProfit === uplift ? (
+                    {profitGate.pending ? (
                       <Text style={styles.approvalPending}>
                         {locale === "ar" ? "الطلب قيد الانتظار — بانتظار المدير." : "Approval request pending — waiting for a manager."}
                       </Text>
-                    ) : pendingApproval?.status === "REJECTED" && pendingApproval.requestedProfit === uplift ? (
+                    ) : profitGate.rejected ? (
                       <Text style={styles.approvalRejected}>
                         {upliftRejectedText(locale)}
                       </Text>
@@ -1060,7 +1064,7 @@ export function SalesWizardScreen({
                     )}
                   </View>
                 ) : null}
-                {hasValidApproval && isProfitBelowMinimum ? (
+                {profitGate.approvalValid ? (
                   <View style={styles.approvedNote}>
                     <Icon color="success" name="check" size={16} />
                     <Text style={styles.approvedNoteText}>

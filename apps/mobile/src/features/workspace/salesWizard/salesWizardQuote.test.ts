@@ -12,6 +12,7 @@ import {
   mobileFinancingTermIsValid,
   priceUpliftNeedsApproval,
   priceUpliftOverList,
+  profitApprovalGate,
 } from "./salesWizardQuote";
 
 describe("Mobile Quote Contract & Wizard (S1-R11-H1)", () => {
@@ -128,5 +129,52 @@ describe("SCRUM-260 price uplift is final price minus list price", () => {
     expect(priceUpliftNeedsApproval(1000, 1000)).toBe(false);
     expect(priceUpliftNeedsApproval(-5, 0)).toBe(false);
     expect(priceUpliftNeedsApproval(-5, 1000)).toBe(true);
+    // The shared gate uses the same rule as the helper.
+    expect(profitApprovalGate({ isCash: false, hasVehicle: true, minimum: 1000, uplift: 500, approval: null }).needsApproval).toBe(
+      priceUpliftNeedsApproval(500, 1000)
+    );
+  });
+});
+
+describe("SCRUM-260 mobile approval gate follows the server's exact-terms rule", () => {
+  const base = { isCash: false, hasVehicle: true, minimum: 1000 };
+  const approved = (requestedProfit: number, minimumProfit = 1000) => ({ status: "APPROVED" as const, requestedProfit, minimumProfit });
+
+  test("an approval for exactly the current uplift and minimum unblocks", () => {
+    const gate = profitApprovalGate({ ...base, uplift: 200, approval: approved(200) });
+    expect(gate).toMatchObject({ needsApproval: true, approvalValid: true, blocked: false });
+  });
+
+  test("stale approval: +200 was approved, the price moved to +500, so it is blocked again", () => {
+    const gate = profitApprovalGate({ ...base, uplift: 500, approval: approved(200) });
+    expect(gate).toMatchObject({ needsApproval: true, approvalValid: false, blocked: true });
+  });
+
+  test("an approval does not carry over to a higher price that now clears the minimum either way", () => {
+    expect(profitApprovalGate({ ...base, uplift: 1500, approval: approved(200) })).toMatchObject({ needsApproval: false, blocked: false });
+  });
+
+  test("an approval recorded against a different minimum is stale", () => {
+    const gate = profitApprovalGate({ ...base, uplift: 200, approval: approved(200, 800) });
+    expect(gate).toMatchObject({ approvalValid: false, blocked: true });
+  });
+
+  test("pending and rejected requests only apply to the exact uplift", () => {
+    expect(profitApprovalGate({ ...base, uplift: 200, approval: { status: "PENDING", requestedProfit: 200, minimumProfit: 1000 } })).toMatchObject({ pending: true, blocked: true });
+    expect(profitApprovalGate({ ...base, uplift: 300, approval: { status: "PENDING", requestedProfit: 200, minimumProfit: 1000 } })).toMatchObject({ pending: false, blocked: true });
+    expect(profitApprovalGate({ ...base, uplift: 200, approval: { status: "REJECTED", requestedProfit: 200, minimumProfit: 1000 } })).toMatchObject({ rejected: true, blocked: true });
+  });
+
+  test("minimum 0 never needs approval, whatever the uplift", () => {
+    expect(profitApprovalGate({ ...base, minimum: 0, uplift: -50, approval: null })).toMatchObject({ needsApproval: false, blocked: false });
+  });
+
+  test("a price below list needs approval when a minimum is set", () => {
+    expect(profitApprovalGate({ ...base, uplift: -1000, approval: null })).toMatchObject({ needsApproval: true, blocked: true });
+  });
+
+  test("cash is exempt, and so is no vehicle", () => {
+    expect(profitApprovalGate({ ...base, isCash: true, uplift: -1000, approval: null }).blocked).toBe(false);
+    expect(profitApprovalGate({ ...base, hasVehicle: false, uplift: -1000, approval: null }).blocked).toBe(false);
   });
 });
