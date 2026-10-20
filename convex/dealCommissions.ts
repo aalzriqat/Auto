@@ -18,15 +18,14 @@ import { allLinesForSale, MAX_DEAL_COMMISSION_LINE_ROWS } from "./utils/dealComm
 import {
   scaleForCurrency,
   supportedCurrencyScale,
-  toMinorUnits,
   toMinorSameCurrencyOrUndefined,
-  assertFiniteNumber,
 } from "./utils/money";
 import {
   DEAL_COMMISSION_LINES_PILOT_DISABLED,
   MAX_DEAL_COMMISSION_LINES,
   MAX_DEAL_COMMISSION_NOTE_LENGTH,
   sumCommissionMinor,
+  parseCommissionAmountMinor,
 } from "./utils/dealCommissionLines";
 
 const kindValidator = v.union(v.literal("SALE"), v.literal("PURCHASE"), v.literal("EXECUTION"));
@@ -170,23 +169,23 @@ export const addLine = mutation({
         );
       }
 
-      assertFiniteNumber(args.amount, "commission amount");
       const currency = await getOrgCurrency(ctx, args.orgId);
       if (supportedCurrencyScale(currency) === null) {
         throwAppError(AppErrorCode.VALIDATION_FAILED, "The organization currency is not supported for commissions.");
       }
-      const amountMinor = toMinorUnits(args.amount, currency);
-      // Exact, not approximately exact: the typed figure must be precisely the
-      // recorded one. More decimals than the currency holds (or a float that is
-      // merely close to a valid amount) would otherwise be stored as a different
-      // number than the one the manager typed.
+      // Exact decimal parse: the recorded figure is precisely the typed one.
       const scale = scaleForCurrency(currency);
-      if (amountMinor / Math.pow(10, scale) !== args.amount) {
-        throwAppError(AppErrorCode.VALIDATION_FAILED, `A commission amount can have at most ${scale} decimals.`);
+      const parsed = parseCommissionAmountMinor(args.amount, scale);
+      if (!parsed.ok) {
+        const message = {
+          invalid: "The commission amount is not a valid number.",
+          nonpositive: "A commission line must be greater than zero.",
+          decimals: `A commission amount can have at most ${scale} decimals.`,
+          range: "The commission amount is too large.",
+        }[parsed.reason];
+        throwAppError(AppErrorCode.VALIDATION_FAILED, message);
       }
-      if (amountMinor <= 0) {
-        throwAppError(AppErrorCode.VALIDATION_FAILED, "A commission line must be greater than zero.");
-      }
+      const amountMinor = parsed.minor;
 
       const note = args.note?.trim() || undefined;
       if (note && note.length > MAX_DEAL_COMMISSION_NOTE_LENGTH) {

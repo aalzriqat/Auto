@@ -62,3 +62,35 @@ export function netProfitAfterCommissionsMinor(
   const net = profitMinor - commissionsMinor;
   return Number.isSafeInteger(net) ? net : null;
 }
+
+/** A single commission above this (major units) is refused as a typo. */
+export const MAX_DEAL_COMMISSION_MAJOR = 1_000_000_000;
+
+export type CommissionAmountResult =
+  | { ok: true; minor: number }
+  | { ok: false; reason: "invalid" | "nonpositive" | "decimals" | "range" };
+
+/**
+ * Exact minor units for a typed commission amount, or why it is refused.
+ *
+ * Works on the decimal text of the number (JavaScript prints the shortest text
+ * that round-trips), not on `amount * 10^scale`, so the recorded figure is
+ * exactly the typed one: no value is rounded into a different amount, and a
+ * float that is only close to a valid amount (0.1 + 0.2, 50.0000000001) is
+ * refused rather than snapped. Amounts above MAX_DEAL_COMMISSION_MAJOR are
+ * refused so every accepted value is far inside the range where a double holds
+ * its digits exactly.
+ */
+export function parseCommissionAmountMinor(amount: number, scale: number): CommissionAmountResult {
+  if (!Number.isFinite(amount)) return { ok: false, reason: "invalid" };
+  if (amount <= 0) return { ok: false, reason: "nonpositive" };
+  if (amount > MAX_DEAL_COMMISSION_MAJOR) return { ok: false, reason: "range" };
+  const text = String(amount);
+  // Exponent form (1e-7) is more precision than any currency here holds.
+  if (!/^\d+(\.\d+)?$/.test(text)) return { ok: false, reason: "decimals" };
+  const [whole, fraction = ""] = text.split(".");
+  if (fraction.length > scale) return { ok: false, reason: "decimals" };
+  const minor = Number(whole) * Math.pow(10, scale) + Number(fraction.padEnd(scale, "0") || "0");
+  if (!Number.isSafeInteger(minor)) return { ok: false, reason: "range" };
+  return { ok: true, minor };
+}

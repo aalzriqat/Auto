@@ -684,3 +684,64 @@ describe("resetOrgFinancialData never strands a payrollItem's run reference", ()
     });
   });
 });
+
+describe("resetOrgFinancialData never strands a payslip's commission line reference", () => {
+  test("a partial pass keeps every line while any payroll item still names it", async () => {
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Commission Line Motors", createdAt: Date.now(), suspended: true })
+    );
+    await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset_cl", email: "cl@x.com" });
+      const runId = await ctx.db.insert("payrollRuns", {
+        orgId, periodYear: 2026, periodMonth: 9, currency: "JOD", status: "DRAFT",
+        totalGrossMinor: 3000, totalNetMinor: 3000, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VINRESETCL", make: "Kia", model: "Rio", year: 2024, mileage: 10,
+        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
+        status: "AVAILABLE",
+      });
+      const customerId = await ctx.db.insert("customers", { orgId, firstName: "Line", lastName: "Customer" });
+      const saleId = await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 15000,
+        saleDate: Date.now(), status: "COMPLETED" as const,
+      });
+      const lineIds = [];
+      for (let i = 0; i < 3; i += 1) {
+        lineIds.push(
+          await ctx.db.insert("dealCommissionLines", {
+            orgId, saleId, kind: "PURCHASE", employeeId: userId,
+            amountMinor: 1000, currency: "JOD", createdBy: userId,
+          })
+        );
+      }
+      for (const lineId of lineIds) {
+        await ctx.db.insert("payrollItems", {
+          orgId, runId, userId, baseSalaryMinor: 0, commissionMinor: 1000,
+          otherEarningsMinor: 0, advanceDeductionMinor: 0, otherDeductionMinor: 0,
+          grossMinor: 1000, netMinor: 1000, currency: "JOD", commissionSaleIds: [],
+          commissionLineIds: [lineId], createdAt: Date.now(),
+        });
+      }
+    });
+
+    let remaining = Number.POSITIVE_INFINITY;
+    for (let pass = 0; pass < 20 && remaining > 0; pass += 1) {
+      const res = await runContinuationBatch(t, orgId, 1);
+      remaining = res.remaining;
+      await t.run(async (ctx) => {
+        for (const item of await ctx.db.query("payrollItems").collect()) {
+          for (const lineId of item.commissionLineIds ?? []) {
+            expect(await ctx.db.get(lineId), `pass ${pass}: payrollItem names a missing line`).not.toBeNull();
+          }
+        }
+      });
+    }
+    expect(remaining).toBe(0);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("dealCommissionLines").collect()).toHaveLength(0);
+      expect(await ctx.db.query("payrollItems").collect()).toHaveLength(0);
+    });
+  });
+});
