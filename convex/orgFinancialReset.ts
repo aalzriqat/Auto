@@ -178,6 +178,11 @@ const RESET_TABLES = [
   "payrollItems",
   "payrollRuns",
   "employeeCompensation",
+  // Extra deal commission lines are listed AFTER payroll items: a payslip lists the
+  // lines it pays (`commissionLineIds`), and payroll skips a missing line, so a line
+  // must never be deleted while a surviving payslip still names it. CHILD_TABLES
+  // defers the lines until no payroll item remains (batches commit separately).
+  "dealCommissionLines",
   // Finance applications and their children. Ordering IS a safety property,
   // contrary to what this comment used to claim: the batch limit applies to
   // each table separately, so a run that clears one of two fee rows and then
@@ -338,6 +343,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     "transactions",
     // payrollItems.commissionSaleIds is a REQUIRED v.array(v.id("sales")).
     "payrollItems",
+    "dealCommissionLines",
     "commitmentAuthorityWork",
     "depositCancellationPendings",
     // SCRUM-724: `receiptRetainedPositions.originatingSaleId` (immutable lineage).
@@ -345,6 +351,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   ],
   quotes: ["sales", "financeApplications", "deposits", "receivables"],
   payrollRuns: ["payrollItems"],
+  dealCommissionLines: ["payrollItems"],
 };
 
 /**
@@ -403,6 +410,7 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   expenses: "by_org",
   dashboardExpenseMonths: "by_org_generation_month",
   dashboardExpenseSummaryState: "by_org_generation",
+  dealCommissionLines: "by_org_sale",
   payrollItems: "by_org",
   payrollRuns: "by_org",
   employeeCompensation: "by_org",
