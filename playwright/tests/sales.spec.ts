@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { createVehicle, gotoOrgRoute, testDataSuffix } from "../utils";
+import { recordQuoteDeposit } from "../fixtures/dealScenarios";
 
 test.describe("sales", () => {
   test("can record a cash sale end to end via the sales wizard", async ({
@@ -45,6 +46,12 @@ test.describe("sales", () => {
     // after a quote — it never calls sales.completeFromQuote, so no sale is
     // actually recorded unless "Submit Sale" is clicked.
     await expect(page.getByText("Quote Generated Successfully!")).toBeVisible();
+    // SCRUM-802 (owner ruling, Option A): pilot cash procedure. A cash sale
+    // completes only when its full price is already held as a deposit, so the
+    // customer's full payment (the 15,000 selling price createVehicle sets) is
+    // recorded as a deposit first and Submit Sale then applies it. Completing
+    // an unpaid cash sale is refused by the backend.
+    await recordQuoteDeposit(page, { amount: 15_000, method: "CASH" });
     await page
       .getByRole("button", { name: "Submit Sale", exact: true })
       .click();
