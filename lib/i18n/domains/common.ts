@@ -292,6 +292,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
     "لا يمكن تسجيل الدفعات أو الأرصدة الدائنة أو الشيكات الخاصة بعملية بيع على ذمة مدينة منفصلة. لم يتم تغيير أي شيء.",
   ],
+  ServerError_DEAL_COMMISSION_LINES_DISABLED: [
+    "Adding commission lines to a deal is not available during the pilot. Nothing has been changed.",
+    "إضافة بنود العمولات إلى الصفقة غير متاحة خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
   ServerError_CUSTOMER_CREDIT_PAYOUT_DISABLED: [
     "Paying customer credit out is not available during the pilot. Keep it as customer credit instead. Nothing has been changed.",
     "صرف رصيد العميل غير متاح خلال المرحلة التجريبية. احتفظ به كرصيد دائن للعميل بدلًا من ذلك. لم يتم تغيير أي شيء.",
@@ -791,7 +795,7 @@ export const commonEn = {
   PendingDeals: "Pending Deals",
   AwaitingApproval: "Awaiting Approval",
   ResumeDeal: "Resume Deal",
-  RequestedProfit: "Requested profit",
+  RequestedProfit: "Requested price uplift",
   ApprovalCancelled: "Deal request cancelled",
   FailedToCancelApproval: "Failed to cancel request",
 
@@ -1565,7 +1569,7 @@ export const commonEn = {
 
   // Profit approval requests
   NoPendingApprovals: "No pending approvals",
-  AllCaughtUp: "All caught up! There are no profit approval requests waiting.",
+  AllCaughtUp: "All caught up! There are no price approval requests waiting.",
   MinimumAllowed: "Minimum Allowed",
   ShortBy: "Short by",
   ApprovalApprovedMsg: "Request approved successfully",
@@ -1831,7 +1835,7 @@ export const commonAr = {
   PendingDeals: "الصفقات المعلقة",
   AwaitingApproval: "في انتظار الموافقة",
   ResumeDeal: "استئناف الصفقة",
-  RequestedProfit: "الربح المطلوب",
+  RequestedProfit: "الزيادة المطلوبة فوق سعر القائمة",
   ApprovalCancelled: "تم إلغاء طلب الصفقة",
   FailedToCancelApproval: "فشل إلغاء الطلب",
 
@@ -2601,7 +2605,7 @@ export const commonAr = {
 
   // Profit approval requests
   NoPendingApprovals: "لا توجد موافقات معلقة",
-  AllCaughtUp: "أنت في الموعد! لا توجد طلبات موافقة ربح في الانتظار.",
+  AllCaughtUp: "أنت في الموعد! لا توجد طلبات موافقة على السعر في الانتظار.",
   MinimumAllowed: "الحد الأدنى المسموح",
   ShortBy: "ينقصه",
   ApprovalApprovedMsg: "تمت الموافقة على الطلب بنجاح",

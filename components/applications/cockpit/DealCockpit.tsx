@@ -197,6 +197,7 @@ import { useClosingReadiness } from "./useClosingReadiness";
 import { usePreFinalizeForward, type PreFinalizeForward } from "./usePreFinalizeForward";
 import { closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
 import { ProfitApprovalNotice, useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
+import { DealCommissionsRow } from "@/components/commissions/DealCommissionsRow";
 import { formatMinorAmount, formatMoneyAmount } from "@/lib/moneyDisplay";
 
 /**
@@ -462,6 +463,13 @@ const PROFIT_BLOCKED_REASON: Record<
   SaleNotCompleted: "ProfitSaleNotCompleted",
   FinancedDirectUnverified: "ProfitFinancedDirectUnverified",
 };
+
+/** What the money card hands the commissions row: the headline profit and its own formatter. */
+type DealCommissionsSlot = (args: {
+  profitMinor: number | null;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}) => React.ReactNode;
 
 /** The same labels the legal-invoice dialog offers, so the record reads as it was entered. */
 const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
@@ -3059,6 +3067,9 @@ export function DealCockpit({
     <>
       <DealCockpitView
         orgId={orgId}
+        renderCommissions={({ profitMinor, money, t }) => (
+          <DealCommissionsRow orgId={orgId} saleId={deal?.canonicalSaleId} profitMinor={profitMinor} money={money} t={t} />
+        )}
       deal={deal}
       stageDeepLink={stageDeepLink}
       backHref={`/${orgId}/deals`}
@@ -4273,6 +4284,9 @@ export function SaleDealCockpit({
     <>
       <DealCockpitView
         orgId={orgId}
+        renderCommissions={({ profitMinor, money, t }) => (
+          <DealCommissionsRow orgId={orgId} saleId={deal?.saleId} profitMinor={profitMinor} money={money} t={t} />
+        )}
         deal={deal}
         stageDeepLink={stageDeepLink}
         backHref={`/${orgId}/deals`}
@@ -4775,9 +4789,12 @@ function MoneyPanel({
   parties,
   overview,
   customerInvoice,
+  renderCommissions,
   t,
 }: Readonly<{
   money: (minor: number) => string;
+  /** The employee commissions row, supplied by the container that holds the permissions. */
+  renderCommissions?: DealCommissionsSlot;
   profit: DealMoney["profit"];
   summary: SummaryEvidence;
   /**
@@ -4855,6 +4872,12 @@ function MoneyPanel({
         ) : (
           <ProfitHeadline profit={canonicalProfit} money={money} t={t} />
         )}
+        {renderCommissions?.({
+          profitMinor:
+            typeof canonicalProfit !== "string" && canonicalProfit.available ? canonicalProfit.amountMinor : null,
+          money,
+          t,
+        })}
         {overview && !overview.loading && overview.data?.financialSummary && (
           <DealFinancialOverview summary={overview.data.financialSummary} money={overview.moneyIn} t={t} />
         )}
@@ -5021,7 +5044,10 @@ export function DealCockpitView({
   deposits,
   disbursement,
   closingChecklist,
+  renderCommissions,
 }: Readonly<{
+  /** Renders the employee commissions row on the money card; absent in a plain view. */
+  renderCommissions?: DealCommissionsSlot;
   orgId?: Id<"organizations">;
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
@@ -6324,6 +6350,7 @@ export function DealCockpitView({
                     : null
                 }
                 customerInvoice={deal.money.customerInvoice}
+                renderCommissions={renderCommissions}
                 t={t}
               />
 
