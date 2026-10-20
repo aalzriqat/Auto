@@ -35,7 +35,7 @@ const PAYLOAD_FIELD_LABEL_KEYS: Record<string, string> = {
   fuelType: "FuelType",
   transmission: "Transmission",
   purchasePrice: "PurchasePrice",
-  minimumProfit: "MinimumProfit",
+  minimumProfit: "MinimumPriceUplift",
   sellingPrice: "SellingPrice",
   status: "Status",
   sourceType: "VehicleSource",
