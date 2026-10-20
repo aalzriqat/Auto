@@ -14,7 +14,13 @@
  * pass-through mock, a spread after the key (it restores the real value), a nested object, `|| true`, a variable, a
  * shorthand, a `vi.doMock` nothing imports after, a conditional or later-undone mock do not count. The evaluator reads
  * object-literal factories only; any other factory shape is refused (so the suite must be written in the plain shape).
- * The independent `turnsSwitchOff` text detector additionally flags any unmarked mock of the gate modules.
+ *
+ * Limits, stated plainly. The independent unmarked-file detector (`turnsSwitchOff`) is a text regex: it flags a
+ * literal-specifier mock of the gate modules or a literal switch assignment, not every possible spelling. The AST
+ * evaluator runs on MARKED files only. Computed specifiers (string concatenation, template literals with
+ * substitutions) and mocks hidden in helper files the scan does not read are a known follow-up gap. The marked-file
+ * verifier checks only the module's basename, and a spread that is a nested call can fool it; that fails safe (the
+ * suite then runs with the containment on).
  */
 import { describe, expect, test } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -99,7 +105,8 @@ function testFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-// Anything that turns the switch off or replaces the gate module, however it is spelled. Two independent detectors:
+// A TEXT detector for the common spellings of turning the switch off or replacing the gate module (not every possible
+// spelling; see the header). Two independent detectors:
 // (1) any vi.mock / vi.doMock call that names either gate module (optional extension, import(...) form, any quote or
 //     backtick), and (2) the switch's name used as an object key with any value other than the literal `true`
 //     (false, !1, 0, undefined, null, a variable...).
@@ -351,7 +358,7 @@ describe("SCRUM-802 opt-out census", () => {
     expect(readFileSync("vitest.setup.ts", "utf8")).not.toContain("CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED");
   });
 
-  test("the detector goes red on every spelling vitest honours (self-test)", () => {
+  test("the text detector goes red on the listed spellings (self-test)", () => {
     const N = "CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED";
     const escapes = [
       `vi.mock("./utils/saleDebtContainment", async () => ({ ${N}: false }));`,

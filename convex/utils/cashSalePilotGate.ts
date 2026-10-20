@@ -94,6 +94,13 @@ export type PayFirstDepositTreatment =
  *    deposit refunded from here, an OTHER treatment with no reason, an unallocated multi-car deposit) is left to that
  *    refusal, which has always come first.
  *
+ * Known limits, all failing closed: (a) for REFUND_TO_CUSTOMER / FORFEITED on an unshared deposit the unpaid-balance
+ * refusal now comes BEFORE the release path's own refusals (for example "Deposit creator cannot resolve their own deposit
+ * refund or forfeiture"); both are refusals and nothing is written. (b) `allocatedDepositForVehicle` reads a hold-less
+ * deposit on a quote as the single-vehicle shape without checking `deposit.vehicleId`; `deposits.create` writes hold rows
+ * for multi-vehicle quotes, so only a legacy hold-less deposit on a multi-vehicle quote can pass this check wrongly, and
+ * the post-allocation backstop then refuses it and the transaction rolls it back.
+ *
  * `assertCashSaleInvoiceFullyPaid` after the allocations stays as the backstop on the actual invoice balance.
  */
 export async function assertCashSaleDepositsPayInvoiceBeforeWrites(
@@ -135,6 +142,9 @@ export async function assertCashSaleDepositsPayInvoiceBeforeWrites(
         appliedMinor = fitsTheBill ? heldMinor : "LEFT_TO_COMPLETION";
         break;
       case "APPLY_TO_TRANSACTION_SETTLEMENT":
+        // Defensive: on the direct-to-supplier route of sourced stock the customer is billed nothing for the car, so a
+        // cash invoice there is 0 and returns before this switch. Kept so the mirror of `resolveReservationDeposits`
+        // stays complete if that ever changes.
         appliedMinor = args.settlesDirectToSupplierOnSourcedStock ? 0 : fitsTheBill ? heldMinor : "LEFT_TO_COMPLETION";
         break;
       case "REFUND_TO_CUSTOMER":
