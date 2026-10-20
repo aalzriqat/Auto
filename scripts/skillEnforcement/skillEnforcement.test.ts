@@ -274,6 +274,23 @@ describe("gitSteps", () => {
     "git ${V:-push} origin",
     "git -C d $'pu\\x73h'",
     "echo ok && {git,} push",
+    "echo push | xargs git",
+    "echo push | xargs -n1 git",
+    "printf 'push\\0' | xargs -0 git",
+    "xargs -I{} git {} < cmds",
+    "echo push | parallel git",
+    "find . -exec git push ';'",
+    "find . -execdir git-push ';'",
+    "git-push origin main",
+    "git-commit -m x",
+    "/usr/lib/git-core/git-push origin main",
+    "git-push.exe origin main",
+    "GIT-PUSH origin main",
+    "git-nonsense",
+    "shopt -s expand_aliases; alias g=git; g push",
+    "alias g=git\ng push",
+    "builtin alias g=git",
+    "shopt -s expand_aliases",
   ])("an expansion, escape or glob in the command or subcommand word fails closed: %s", (cmd) => {
     const steps = gitSteps(cmd);
     expect(steps.length).toBeGreaterThan(0);
@@ -301,6 +318,10 @@ describe("gitSteps", () => {
     "2>&1 echo hi",
     "echo hi >out.txt",
     "ls &>/dev/null",
+    "git-status",
+    "find . -name '*.ts' -exec grep -l x {} ';'",
+    "echo a | xargs echo",
+    "unalias g",
   ])("ordinary shell is not gated by the class rule: %s", (cmd) => expect(gitSteps(cmd)).toEqual([]));
   test.each([
     'rg "--pre" git x push',

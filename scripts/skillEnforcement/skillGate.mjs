@@ -292,7 +292,10 @@ function normalizeWords(command) {
 // statically, so its segment is an unknown commit and push.
 const HEREDOC = /(<<-?\s*(['"]?)(\w+)\2[^\n]*)\n[\s\S]*?\n[ \t]*\3(?=\n|$)/g;
 const PLAIN_WORD = /^[\w./~:@+=%,-]*$/;
-const RUNNER_PREFIX = new Set(["sudo", "env", "command", "exec", "nohup", "time", "nice", "timeout", "xargs", "builtin"]);
+const RUNNER_PREFIX = new Set(["sudo", "env", "command", "exec", "nohup", "time", "nice", "timeout", "xargs", "parallel", "builtin"]);
+const FEEDS_ARGUMENTS = new Set(["xargs", "parallel"]);
+const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+const gitHelper = (word) => /^git-([\w-]+?)(?:\.exe)?$/i.exec(word.split(/[\\/]/).pop())?.[1].toLowerCase();
 const SEGMENT_WORDS_SKIPPED = new Set(["!", "do", "then", "else", "{", "(", "}", ")", "[", "[[", "]", "]]"]);
 const OPTIONS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);
 
@@ -336,12 +339,17 @@ function expandsCommandOrSubcommand(command) {
   for (const words of shellWords(joined)) {
     let i = 0;
     let prefixed = false;
+    let feeds = false;
+    if (words.some((w) => w.text === "expand_aliases")) return true;
+    const execAt = words.findIndex((w) => FIND_EXEC.has(w.text));
+    if (execAt >= 0 && words[execAt + 1] && (words[execAt + 1].dirty || /^(?:.*[\\/])?git(?:[-.].*)?$/i.test(words[execAt + 1].text))) return true;
     for (; i < words.length; i++) {
       const w = words[i];
       if (/^\w+=/.test(w.text) || /^\d*[<>]/.test(w.text) || SEGMENT_WORDS_SKIPPED.has(w.text)) continue;
       if (prefixed && (/^-/.test(w.text) || /^\d+$/.test(w.text))) continue;
       if (!w.dirty && RUNNER_PREFIX.has(w.text.toLowerCase())) {
         prefixed = true;
+        feeds ||= FEEDS_ARGUMENTS.has(w.text.toLowerCase());
         continue;
       }
       break;
@@ -349,7 +357,16 @@ function expandsCommandOrSubcommand(command) {
     const command_ = words[i];
     if (!command_) continue;
     if (command_.dirty) return true;
-    if (command_.text.split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase() !== "git") continue;
+    const base = command_.text.split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+    if (base === "alias") return true;
+    const helper = gitHelper(command_.text);
+    if (helper !== undefined) {
+      if (!GIT_BUILTINS.has(helper) || helper === "commit" || helper === "push") return true;
+      continue;
+    }
+    if (base !== "git") continue;
+    // `xargs git` / `parallel git`: the subcommand arrives on stdin.
+    if (feeds) return true;
     for (let j = i + 1; j < words.length; j++) {
       const w = words[j];
       if (OPTIONS_WITH_VALUE.has(w.text)) {
