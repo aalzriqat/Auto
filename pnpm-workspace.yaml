@@ -249,6 +249,14 @@ overrides:
   #
   # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
   "@modelcontextprotocol/sdk": 1.32.1
+  # vite: GHSA-587h-7wmj-h5pm (HIGH, launch-editor `fs.existsSync()` existence
+  # check bypass on Windows; vulnerable >=8.0.0 <=8.1.5, patched >=8.1.6).
+  # Reached only via vitest (a dev dependency) through @vitest/mocker and
+  # @vitest/coverage-v8, never by the app or the backend. Pinned exact:
+  # 8.1.6 was published 2026-10-06, well clear of the age gate.
+  #
+  # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
+  vite: 8.1.6
 # GHSA-mh99 (brace-expansion unbounded-expansion DoS) is patched by the pins
 # above. Separate per-major overrides remain necessary because minimatch@3's
 # old-API CommonJS consumers are incompatible with the 5.x export shape.
