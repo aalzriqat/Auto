@@ -42,6 +42,7 @@ import { assertValidAccountingDate } from "./accountingPeriods";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP, FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertClearedChequeReturnAllowed } from "./utils/postDeliveryDoorContainment";
 import { RETAINED_CREDIT_MESSAGES } from "./utils/retainedCreditMessages";
 import {
   areSaleInvoiceReceiptDoorsDisabled,
@@ -49,6 +50,7 @@ import {
   isCustomerCreditPayoutDisabled,
 } from "./utils/customerCreditPayoutContainment";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
+import { assertNoOpenSaleInvoiceForUnlinkedReceipt } from "./utils/cashSalePilotGate";
 import {
   assertNoSaleIdOnNewReceivable,
   assertReceiptTargetNotSaleLinked,
@@ -1538,6 +1540,14 @@ export const recordPayment = mutation({
       receivableId: args.receivableId,
       saleId: args.saleId,
     });
+    // SCRUM-802: an UNLINKED receipt (no receivable, no sale) from a customer who
+    // owes a sale invoice would park as unapplied while the invoice stays open;
+    // the pilot procedure is a deposit. Same pre-wrapper placement as above.
+    await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, {
+      receivableId: args.receivableId,
+      invoiceSaleId: args.invoiceSaleId,
+      customerId: args.customerId,
+    });
     const validateInvoiceIntent = async () => {
       if (args.invoiceSaleId) {
         const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.invoiceSaleId);
@@ -2097,6 +2107,15 @@ export async function registerChequeCore(
   // registration via applications.registerExpectedPayment passes none). No
   // write has happened yet.
   assertReceivableNotSaleLinked(null, args.saleId);
+  // SCRUM-802: a customer cheque is customer money too — park nothing against an open sale invoice. A finance
+  // company's cheque is the financier's money, not the customer's, so that drawer is exempt.
+  if (args.drawerType !== "FINANCE_COMPANY") {
+    await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, {
+      receivableId: args.receivableId,
+      invoiceSaleId: args.invoiceSaleId,
+      customerId: args.customerId,
+    });
+  }
 
   let receivable: Doc<"receivables"> | null = null;
   if (args.receivableId) {
@@ -2693,6 +2712,18 @@ export const replaceCheque = mutation({
       amount = args.amount;
     }
 
+    // SCRUM-802: the replacement is a NEW customer instrument; an unlinked one would park customer money against an
+    // open sale invoice exactly like a new registration, so it takes the same gate. A finance-company cheque is
+    // the financier's money and is exempt, as in registerChequeCore. Refusing strands nothing: the held cheque stays
+    // as it is and the customer's payment is recorded as a deposit (the pilot procedure).
+    if (!fcLineage) {
+      await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, {
+        receivableId: oldCheque.receivableId,
+        invoiceSaleId: replacementInvoiceSaleId,
+        customerId: oldCheque.customerId,
+      });
+    }
+
     const currency = await getOrgCurrency(ctx, args.orgId);
     const now = Date.now();
     const newChequeId = await ctx.db.insert("postDatedCheques", {
@@ -2748,6 +2779,11 @@ export const returnClearedCheque = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-760 decision B: reversing a cheque after the bank cleared it is a post-delivery money
+    // reversal excluded from the narrow pilot. Refused right after tenant auth, before any read or
+    // write and before the idempotency wrapper (a stored replay is refused too).
+    // See utils/postDeliveryDoorContainment.ts.
+    assertClearedChequeReturnAllowed();
     if (
       args.bankFeeMinor !== undefined &&
       (!Number.isSafeInteger(args.bankFeeMinor) || args.bankFeeMinor < 0)

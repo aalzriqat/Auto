@@ -288,6 +288,15 @@ import {
   releaseRootIfNoLiveBasis,
 } from "./commitments";
 
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
