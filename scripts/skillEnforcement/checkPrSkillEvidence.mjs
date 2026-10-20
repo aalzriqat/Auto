@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { evaluate, TEMPLATE } from "./prSkillEvidence.mjs";
 
 const API = "https://api.github.com";
+const FORM_ONLY =
+  "This check verifies form only. The seats' own signed PR comments are the authoritative evidence of review.";
 
 async function getJson(fetchImpl, token, path) {
   const res = await fetchImpl(`${API}${path}`, {
@@ -19,8 +21,11 @@ async function getJson(fetchImpl, token, path) {
 
 async function getPages(fetchImpl, token, path) {
   const all = [];
-  for (let page = 1; page <= 30; page++) {
+  // GitHub lists at most 3000 entries. Reading page 31 distinguishes exactly
+  // 3000 (page 31 is empty) from more than 3000 (page 31 has rows).
+  for (let page = 1; page <= 31; page++) {
     const rows = await getJson(fetchImpl, token, `${path}?per_page=100&page=${page}`);
+    if (page === 31 && rows.length > 0) break;
     all.push(...rows);
     if (rows.length < 100) return all;
   }
@@ -47,12 +52,14 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
   if (!result.required) {
     return { exitCode: 0, lines: ["skill-evidence: no money, permission or gate paths touched; not required."] };
   }
-  if (result.ok) return { exitCode: 0, lines: ["skill-evidence: section present and consistent."] };
+  if (result.ok) return { exitCode: 0, lines: ["skill-evidence: section present and consistent.", FORM_ONLY] };
   return {
     exitCode: 1,
     lines: [
       "skill-evidence: FAILED",
       ...result.problems.map((p) => `- ${p}`),
+      "",
+      FORM_ONLY,
       "",
       `Add this to the PR body and fill it in:\n\n${TEMPLATE}`,
     ],

@@ -13,7 +13,8 @@
  * takes the no-evidence pass, so the safe default is the whole backend.
  */
 const BACKEND_EXEMPT_PREFIXES = ["convex/_generated/"];
-const BACKEND_SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".json"];
+const NON_SOURCE_EXTENSIONS = [".md", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico"];
+const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 
 const GATE_EXACT = new Set(["AGENTS.md", "regression/rulings.json"]);
 const GATE_PREFIXES = [".github/", ".claude/", "scripts/skillEnforcement/", "scripts/intelligence/"];
@@ -28,16 +29,24 @@ function isGate(p) {
 
 function isMoney(p) {
   if (!p.startsWith("convex/") || BACKEND_EXEMPT_PREFIXES.some((x) => p.startsWith(x))) return false;
-  return BACKEND_SOURCE_EXTENSIONS.some((e) => p.endsWith(e));
+  return !NON_SOURCE_EXTENSIONS.some((e) => p.toLowerCase().endsWith(e));
 }
 
+/**
+ * `sensitive` drives the hook and the PR check. `behaviour` is the part of it
+ * that is not a test file: only a change with an empty `behaviour` list (test
+ * files and docs) may use the "No behaviour change" form instead of a red run.
+ */
 export function classifyPaths(paths) {
-  const out = { sensitive: [], gate: [], code: [] };
+  const out = { sensitive: [], behaviour: [], gate: [], code: [] };
   for (const raw of paths) {
     const p = raw.replace(/^\.\//, "");
     if (!p) continue;
     if (isGate(p)) out.gate.push(p);
-    if (isMoney(p)) out.sensitive.push(p);
+    if (isMoney(p)) {
+      out.sensitive.push(p);
+      if (!TEST_FILE.test(p)) out.behaviour.push(p);
+    }
     if (CODE_EXTENSIONS.some((e) => p.endsWith(e))) out.code.push(p);
   }
   return out;

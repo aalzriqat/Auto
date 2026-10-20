@@ -3,11 +3,13 @@
  * and the same code judges every PR. The workflow runs it from the base branch
  * (pull_request_target), so a PR cannot edit its own judge.
  *
- * It checks that the evidence is present, well formed and internally
- * consistent: Seat 1 is a different session and Opus 5.5, Seat 2 is gpt-6-sol
+ * It verifies form only. The seats' own signed PR comments, not this check,
+ * are the authoritative evidence that a review happened. It checks that the
+ * evidence is present, well formed and internally consistent: Seat 1 is a different session and Opus 5.5, Seat 2 is gpt-6-sol
  * at medium or lower, the red run shows a failure, and certified SHAs are the
- * PR head or a commit in the PR's own range. It cannot prove the text is true;
- * the links let the owner verify.
+ * PR head or a commit in the PR's own range, and the red run names a test file
+ * that is in the PR diff. It cannot prove the text is true; the links let the
+ * owner verify.
  */
 import { classifyPaths, requiredSkills } from "./policy.mjs";
 
@@ -75,28 +77,45 @@ function checkSkills(t, classes) {
 const NO_BEHAVIOUR_CHANGE = /no behaviou?r change/i;
 
 /**
- * A change with no behaviour change (docs, comments, renames) has no failing
- * test to show. It may replace the red run with a one-line reason, but only
- * when both seat SHA lines confirm "no behaviour change" for that SHA.
+ * A change that touches only test files and docs has no failing test to show.
+ * It may replace the red run with a one-line reason, but only when no changed
+ * file is money or permission source and both seat SHA lines confirm "no
+ * behaviour change" for that SHA. Any sensitive source file needs a real red run.
  */
-function noBehaviourChange(t) {
+function noBehaviourChange(t, classes) {
+  if (classes.behaviour.length > 0) return false;
   const reason = line(t, "Red run")?.match(/^no behaviou?r change\b\s*[:\u2013-]?\s*(.*)$/i)?.[1] ?? null;
   if (reason === null || reason.length < 10 || isPlaceholder(reason)) return false;
   return ["Seat 1 SHA", "Seat 2 SHA"].every((l) => NO_BEHAVIOUR_CHANGE.test(line(t, l) ?? ""));
 }
 
-function checkOutputs(t, sensitive) {
-  const problems = [];
-  if (sensitive && !noBehaviourChange(t)) {
-    const red = fenced(t, "Red run");
-    if (red === undefined || isPlaceholder(red)) {
-      problems.push('"Red run" needs a fenced block with the failing test output from before the fix.');
-    } else if (!FAILURE_SIGNS.test(red)) {
-      problems.push('"Red run" output does not show a failure.');
-    }
+const TEST_FILE_TOKEN = /[\w@./-]+\.(?:test|spec)\.[cm]?[jt]sx?/g;
+const REVIEW_AXES = /reuse|simplif|efficien|altitude|no changes|no findings/i;
+const MIN_SIMPLIFY_LENGTH = 40;
+
+const inDiff = (token, files) => {
+  const t = token.replace(/^\.\//, "");
+  return files.some((f) => f === t || f.endsWith(`/${t}`));
+};
+
+function checkRedRun(t, files, classes) {
+  if (noBehaviourChange(t, classes)) return [];
+  const red = fenced(t, "Red run");
+  if (red === undefined || isPlaceholder(red)) {
+    return ['"Red run" needs a fenced block with the failing test output from before the fix.'];
   }
-  if (isPlaceholder(fenced(t, "/simplify output"))) {
-    problems.push('"/simplify output" needs a fenced block with the real output.');
+  if (!FAILURE_SIGNS.test(red)) return ['"Red run" output does not show a failure.'];
+  if (!(red.match(TEST_FILE_TOKEN) ?? []).some((tok) => inDiff(tok, files))) {
+    return ['"Red run" must name a test file in this PR (a path that appears in the PR diff) and show its failure.'];
+  }
+  return [];
+}
+
+function checkOutputs(t, files, classes) {
+  const problems = classes.sensitive.length > 0 ? checkRedRun(t, files, classes) : [];
+  const simplify = fenced(t, "/simplify output");
+  if (simplify === undefined || isPlaceholder(simplify) || simplify.length < MIN_SIMPLIFY_LENGTH || !REVIEW_AXES.test(simplify)) {
+    problems.push('"/simplify output" needs a fenced block with the real output: at least 40 characters that name what was reviewed (reuse, simplification, efficiency, altitude, or no changes/findings).');
   }
   return problems;
 }
@@ -139,7 +158,7 @@ export async function evaluate({ body, files, isPrCommit, commitText = "" }) {
   if (!sec) return { required: true, ok: false, problems: [`PR body has no "${SECTION}" section.`] };
   const problems = [
     ...checkSkills(sec.text, classes),
-    ...checkOutputs(sec.text, classes.sensitive.length > 0),
+    ...checkOutputs(sec.text, files, classes),
     ...checkSeats(sec.text, `${withoutSeat1Line(body)}\n${commitText}`),
     ...(await checkShas(sec.text, isPrCommit)),
   ];
