@@ -1,0 +1,266 @@
+name: Trusted Main Replay E2E (Playwright)
+
+# SCRUM-795 / SCRUM-800: the dedicated lane for the accounting GL-register replay
+# (playwright/tests/accounting.spec.ts, "accounting register: a posted journal").
+#
+# The replay writes to the books (an accounting period and a posted opening balance), so it can only run in an
+# organization nothing else reads. trusted-main-e2e.yml shares one QA organization across the whole suite, so the
+# replay never runs there. This lane gives it its OWN disposable preview, its OWN seed (and so its own freshly
+# created organization) and runs ONLY that spec. Same trust model as trusted-main-e2e.yml: it runs only on main
+# (push, or a dispatch that the ref check below confines to main), never on pull requests, with the repository's
+# existing CONVEX_PREVIEW_DEPLOY_KEY, Clerk and E2E secrets and no new ones.
+#
+# In this lane a skipped replay is a FAILURE: E2E_REPLAY_REQUIRED=1 turns the spec's skip into a thrown error, and
+# scripts/assertReplayLaneRan.mjs then fails unless the JSON report shows the replay test as a single passing
+# attempt. The backend's own attestation (e2eBootstrap.replayAttestation) and the production deny list in
+# playwright/fixtures/replayIsolation.ts still decide whether it may write; nothing here relaxes them.
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Its own group, so a push cancels only the previous replay lane and never trusted-main-e2e.yml. A cancelled run
+# still executes its always() cleanup steps, but they overlap the new run's create (the two previews have different
+# names, so they do not collide), and a delete that fails leaves a preview behind. The 1 hour nonce expiry and the
+# 2 hour pin backstop bound what runner loss, a force-cancel or a failed removal can leave.
+concurrency:
+  group: trusted-main-replay-playwright-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Derived BEFORE anything is created, from this run's id and attempt, so it is known to every later step
+      # whether or not create or pin ran. It differs from trusted-main-e2e.yml's name and from every other run's:
+      # --preview-create DELETES and recreates the named deployment, so a shared name would let lanes (or a run
+      # and its predecessor) destroy each other's backend. The digest is of this exact string.
+      - name: Name the disposable replay preview
+        run: |
+          set -euo pipefail
+          # ONE source for the run id: the preview name, the value set on Convex and the value Playwright
+          # computes its proof with all come from this variable. 1 to 64 of [A-Za-z0-9_-] (the server's contract).
+          RUN_ID="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          case "$RUN_ID" in
+            ""|*[!A-Za-z0-9_-]*) echo "::error::The replay run id is malformed."; exit 1 ;;
+          esac
+          if [ "${#RUN_ID}" -gt 64 ]; then echo "::error::The replay run id is too long."; exit 1; fi
+          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$GITHUB_REF/replay-lane/$RUN_ID" "")"
+          echo "E2E_REPLAY_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          echo "CONVEX_PREVIEW_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Preview deployment name: $NAME"
+
+      - name: Recreate Convex E2E backend
+        run: |
+          set -euo pipefail
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" = "5" ]; then return 1; fi
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+          retry_convex pnpm exec convex deploy \
+            --typecheck enable \
+            --preview-create "$CONVEX_PREVIEW_NAME" \
+            --preview-run e2eBootstrap:markPreviewDeployment \
+            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"; echo "CONVEX_PREVIEW_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      # SCRUM-377: record which deployment this run owns and shorten its expiry,
+      # so the deployment quota is freed even if the run dies before cleanup.
+      - name: Pin the disposable preview for cleanup
+        if: always() && env.CONVEX_PREVIEW_URL != ''
+        run: node scripts/previewDeploymentLifecycle.mjs pin --strict
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          # A two hour backstop (the job times out at 30 minutes), not the 12 hour default.
+          CONVEX_PREVIEW_PIN_TTL_MS: "7200000"
+
+      # SCRUM-795: bind this run to THIS preview. The backend's attestation also needs a per-run nonce, run id and
+      # expiry that exist only on the deployment this job just created, so a promoted preview (which keeps the
+      # class variable and the marker) can never attest. They are set with --preview-name and the preview deploy
+      # key, which cannot address production; a failure to set any of them fails the job. The nonce goes to the
+      # CLI on stdin (never argv), is masked and is never echoed. It is written to GITHUB_ENV, so it is ambient (masked)
+      # in every later step; the structural test pins that no later step prints it.
+      - name: Bind the replay run to this preview
+        run: |
+          set -euo pipefail
+          case "$CONVEX_PREVIEW_NAME" in
+            e2e-main-replay-lane-*) ;;
+            *) echo "::error::Refusing to bind a replay run to a deployment that is not the replay-lane preview."; exit 1 ;;
+          esac
+          case "$CONVEX_DEPLOY_KEY" in
+            preview:*) ;;
+            *) echo "::error::The deploy key is not a preview key."; exit 1 ;;
+          esac
+          if [ -n "${CONVEX_DEPLOYMENT:-}" ]; then
+            echo "::error::CONVEX_DEPLOYMENT is set; refusing to set the replay nonce."
+            exit 1
+          fi
+          NONCE="$(openssl rand -hex 16)"
+          echo "::add-mask::$NONCE"
+          # The server's contract: at least 32 characters of [A-Za-z0-9_-]. 16 random bytes as hex is exactly that.
+          case "$NONCE" in
+            *[!0-9a-f]*) echo "::error::The replay nonce is malformed."; exit 1 ;;
+          esac
+          if [ "${#NONCE}" -ne 32 ]; then echo "::error::The replay nonce has the wrong length."; exit 1; fi
+          case "$E2E_REPLAY_RUN_ID" in
+            ""|*[!A-Za-z0-9_-]*) echo "::error::The replay run id is malformed."; exit 1 ;;
+          esac
+          EXPIRES_AT="$(( ($(date +%s) + 3600) * 1000 ))"
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" = "5" ]; then return 1; fi
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+          # Stdin is consumed by one attempt, so the value is piped again on EVERY attempt (piping straight
+          # into the retry wrapper would hand attempts 2 to 5 an empty stdin).
+          set_nonce() {
+            printf '%s' "$NONCE" | pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_NONCE >/dev/null
+          }
+          retry_convex set_nonce
+          retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_ID "$E2E_REPLAY_RUN_ID" >/dev/null
+          retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_EXPIRES_AT "$EXPIRES_AT" >/dev/null
+          # Read each value back from THIS preview and compare silently (nothing is printed), so a set that landed
+          # elsewhere or not at all fails the step instead of surfacing later as a skipped replay.
+          verify_var() {
+            local got
+            got="$(pnpm exec convex env get --preview-name "$CONVEX_PREVIEW_NAME" "$1" 2>/dev/null)" || return 1
+            [ "$got" = "$2" ]
+          }
+          retry_convex verify_var E2E_REPLAY_RUN_NONCE "$NONCE"
+          retry_convex verify_var E2E_REPLAY_RUN_ID "$E2E_REPLAY_RUN_ID"
+          retry_convex verify_var E2E_REPLAY_RUN_EXPIRES_AT "$EXPIRES_AT"
+          echo "E2E_REPLAY_RUN_NONCE=$NONCE" >> "$GITHUB_ENV"
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+
+      # The seed creates the QA organization after the marker, which is what the attestation checks. This lane
+      # does not seed any legacy draft: the replay needs an organization with no journal in any status.
+      - name: Seed the QA dealership
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      # Only the accounting spec, no retries (a retry would meet a non-empty organization and could mask a real
+      # failure), and the JSON report that the next step reads. The auth setup project runs as the chromium
+      # project's dependency.
+      - name: Run the accounting replay spec
+        run: >-
+          pnpm exec playwright test playwright/tests/accounting.spec.ts
+          --project=chromium --retries=0 --reporter=list,json
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
+          E2E_REPLAY_DEDICATED_ORG: "1"
+          E2E_REPLAY_REQUIRED: "1"
+          E2E_REPLAY_RUN_NONCE: ${{ env.E2E_REPLAY_RUN_NONCE }}
+          E2E_REPLAY_RUN_ID: ${{ env.E2E_REPLAY_RUN_ID }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: replay-lane-report.json
+          CI: true
+
+      # Fails unless the replay test itself passed as a single attempt. A skip exits 0 in Playwright, so this is
+      # the proof that the replay ran. It prints counts only: no titles, errors, URLs or organization data.
+      - name: Assert the replay ran
+        if: always()
+        run: node scripts/assertReplayLaneRan.mjs replay-lane-report.json replay-lane-summary.md
+
+      # Invalidate the attestation BEFORE the delete: if the delete fails or the preview is later promoted, the
+      # nonce, run id and expiry are already gone, so nothing can attest. Best effort per variable (removing an
+      # unset variable succeeds); only the variable NAMES are ever printed, never values.
+      - name: Invalidate the replay attestation
+        if: always() && env.CONVEX_PREVIEW_URL != ''
+        run: |
+          set -uo pipefail
+          case "$CONVEX_PREVIEW_NAME" in
+            e2e-main-replay-lane-*) ;;
+            *) echo "::error::Refusing to touch a deployment that is not the replay-lane preview."; exit 1 ;;
+          esac
+          case "$CONVEX_DEPLOY_KEY" in
+            preview:*) ;;
+            *) echo "::error::The deploy key is not a preview key."; exit 1 ;;
+          esac
+          if [ -n "${CONVEX_DEPLOYMENT:-}" ]; then
+            echo "::error::CONVEX_DEPLOYMENT is set; refusing to remove variables."
+            exit 1
+          fi
+          for VAR in E2E_REPLAY_RUN_NONCE E2E_REPLAY_RUN_ID E2E_REPLAY_RUN_EXPIRES_AT; do
+            if ! pnpm exec convex env remove --preview-name "$CONVEX_PREVIEW_NAME" "$VAR" >/dev/null 2>&1; then
+              echo "::warning::Could not remove $VAR from the replay preview; the delete step still runs."
+            fi
+          done
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+
+      # Cleanup runs on every run that reaches this step (always()). It is NOT a guarantee for runner loss, a
+      # force-cancel or a failed removal: the 1 hour nonce expiry and the 2 hour pin backstop are the bound there.
+      # --strict: a refused or failed delete, or a preview that is still there afterwards, fails the job loudly.
+      # Only the artifact upload follows, so the cleanup never waits on an optional step. If create never handed back a URL, no step can name the deployment (the CLI picks
+      # its random name); that residual gap has no attestation on it, because the nonce is only set after pin.
+      - name: Delete the disposable preview
+        if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
+        run: node scripts/previewDeploymentLifecycle.mjs delete --strict
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      # Counts only. The Playwright report, traces and videos are NOT uploaded: this repository is public.
+      - name: Upload the replay lane summary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: trusted-main-replay-lane-summary
+          path: replay-lane-summary.md
+          if-no-files-found: ignore
+          retention-days: 14
