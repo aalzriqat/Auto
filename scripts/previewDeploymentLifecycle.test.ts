@@ -5,6 +5,9 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   PIN_TTL_MS,
+  PIN_TTL_ENV,
+  PIN_TTL_FLOOR_MS,
+  pinTtlMs,
   carriesPreviewIdentity,
   deletePreview,
   deploymentNameFromUrl,
@@ -166,6 +169,27 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
     ]);
     expect(readFileSync(ghEnv, "utf8")).toBe("CONVEX_PREVIEW_CREATED_AT=" + CREATED_AT + "\n");
     expect(readFileSync(ghOut, "utf8")).toBe("preview_created_at=" + CREATED_AT + "\n");
+  });
+
+  it("pin accepts a shorter lane TTL, and refuses a longer, tiny or malformed one after recording ownership", async () => {
+    const TWO_HOURS = 2 * 60 * 60 * 1000;
+    expect(pinTtlMs({})).toBe(PIN_TTL_MS);
+    expect(pinTtlMs({ [PIN_TTL_ENV]: String(TWO_HOURS) })).toBe(TWO_HOURS);
+    const shorter = api(preview());
+    await pinPreview({ env: env({ [PIN_TTL_ENV]: String(TWO_HOURS) }), fetchImpl: shorter.fetchImpl, now: () => NOW });
+    expect(writes(shorter.calls)).toEqual([expect.objectContaining({ body: { expiresAt: NOW + TWO_HOURS } })]);
+    for (const bad of [String(PIN_TTL_MS + 1), String(PIN_TTL_FLOOR_MS - 1), "0", "-5", "2h", "1.5e6", " 7200000"]) {
+      expect(() => pinTtlMs({ [PIN_TTL_ENV]: bad }), bad).toThrow(/between 15 minutes/);
+    }
+    const dir = mkdtempSync(path.join(tmpdir(), "scrum377-"));
+    const ghEnv = path.join(dir, "env");
+    writeFileSync(ghEnv, "");
+    const refused = api(preview());
+    await expect(
+      pinPreview({ env: env({ [PIN_TTL_ENV]: "99999999999", GITHUB_ENV: ghEnv }), fetchImpl: refused.fetchImpl, now: () => NOW }),
+    ).rejects.toThrow(/between 15 minutes/);
+    expect(writes(refused.calls)).toEqual([]);
+    expect(readFileSync(ghEnv, "utf8")).toBe("CONVEX_PREVIEW_CREATED_AT=" + CREATED_AT + "\n");
   });
 
   it("pin never lengthens an expiry that is already sooner", async () => {

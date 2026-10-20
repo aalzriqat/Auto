@@ -11,6 +11,11 @@ import { pathToFileURL } from "node:url";
 
 export const REPLAY_SUITE_TITLE = "accounting register: a posted journal";
 export const REPLAY_SPEC_TITLE = "shows its accounting date, period and balanced debit/credit totals";
+// Identity of the run the report must describe: the replay's own file, run under the chromium project. The auth
+// setup file is the chromium project's dependency, so it is the only other file allowed in the report.
+export const REPLAY_SPEC_FILE = "accounting.spec.ts";
+export const REPLAY_SETUP_FILE = "auth.setup.ts";
+export const REPLAY_PROJECT = "chromium";
 
 function* walkSpecs(suite, path = []) {
   const here = suite.title ? [...path, suite.title] : path;
@@ -25,9 +30,25 @@ export function evaluateReplayReport(report) {
   if (!report || typeof report !== "object" || !Array.isArray(report.suites)) {
     return { ok: false, problems: ["the Playwright JSON report is missing or unreadable"], counts };
   }
+  // Fail closed on a report whose shape or identity is not the expected one.
+  if (!Array.isArray(report.errors)) {
+    problems.push("the report has no top-level errors list");
+  } else if (report.errors.length !== 0) {
+    problems.push(`the run reported ${report.errors.length} top-level error(s)`);
+  }
+  const projects = report.config?.projects;
+  if (!Array.isArray(projects) || !projects.some((project) => project?.name === REPLAY_PROJECT)) {
+    problems.push(`the report's config does not name the ${REPLAY_PROJECT} project`);
+  }
+  const files = report.suites.map((suite) => suite?.file);
+  if (!files.includes(REPLAY_SPEC_FILE)) problems.push(`the report does not contain ${REPLAY_SPEC_FILE}`);
+  if (files.some((file) => file !== REPLAY_SPEC_FILE && file !== REPLAY_SETUP_FILE)) {
+    problems.push("the report contains a test file other than the replay spec and its auth setup");
+  }
   for (const suite of report.suites) {
     for (const { spec, path } of walkSpecs(suite)) {
-      const isReplay = path.includes(REPLAY_SUITE_TITLE) && spec.title === REPLAY_SPEC_TITLE;
+      const isReplay =
+        suite.file === REPLAY_SPEC_FILE && path.includes(REPLAY_SUITE_TITLE) && spec.title === REPLAY_SPEC_TITLE;
       for (const test of spec.tests ?? []) {
         const status = test.status;
         if (status === "expected" || status === "unexpected" || status === "flaky" || status === "skipped") {
@@ -37,7 +58,14 @@ export function evaluateReplayReport(report) {
           counts.replayTests += 1;
           const results = test.results ?? [];
           const last = results[results.length - 1];
-          if (status === "expected" && results.length === 1 && last?.status === "passed") counts.replayPassed += 1;
+          if (
+            status === "expected" &&
+            results.length === 1 &&
+            last?.status === "passed" &&
+            test.projectName === REPLAY_PROJECT
+          ) {
+            counts.replayPassed += 1;
+          }
         }
       }
     }

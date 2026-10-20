@@ -55,13 +55,14 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
 
-      # A name that differs from trusted-main-e2e.yml's. --preview-create DELETES and recreates the named
-      # deployment, so sharing the name would let the two lanes destroy each other's backend mid-run. The digest
-      # is of this exact string, which also keys this lane's concurrency group's ref.
+      # Derived BEFORE anything is created, from this run's id and attempt, so it is known to every later step
+      # whether or not create or pin ran. It differs from trusted-main-e2e.yml's name and from every other run's:
+      # --preview-create DELETES and recreates the named deployment, so a shared name would let lanes (or a run
+      # and its predecessor) destroy each other's backend. The digest is of this exact string.
       - name: Name the disposable replay preview
         run: |
           set -euo pipefail
-          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$GITHUB_REF/replay-lane" "")"
+          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$GITHUB_REF/replay-lane/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" "")"
           echo "CONVEX_PREVIEW_NAME=$NAME" >> "$GITHUB_ENV"
           echo "Preview deployment name: $NAME"
 
@@ -91,9 +92,11 @@ jobs:
       # so the deployment quota is freed even if the run dies before cleanup.
       - name: Pin the disposable preview for cleanup
         if: always() && env.CONVEX_PREVIEW_URL != ''
-        run: node scripts/previewDeploymentLifecycle.mjs pin
+        run: node scripts/previewDeploymentLifecycle.mjs pin --strict
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          # A two hour backstop (the job times out at 30 minutes), not the 12 hour default.
+          CONVEX_PREVIEW_PIN_TTL_MS: "7200000"
 
       # SCRUM-795: bind this run to THIS preview. The backend's attestation also needs a per-run nonce, run id and
       # expiry that exist only on the deployment this job just created, so a promoted preview (which keeps the
@@ -118,7 +121,7 @@ jobs:
           fi
           NONCE="$(openssl rand -hex 16)"
           echo "::add-mask::$NONCE"
-          EXPIRES_AT="$(( ($(date +%s) + 10800) * 1000 ))"
+          EXPIRES_AT="$(( ($(date +%s) + 7200) * 1000 ))"
           retry_convex() {
             local attempt delay
             delay=2
@@ -198,8 +201,39 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # Invalidate the attestation BEFORE the delete: if the delete fails or the preview is later promoted, the
+      # nonce, run id and expiry are already gone, so nothing can attest. Best effort per variable (removing an
+      # unset variable succeeds); only the variable NAMES are ever printed, never values.
+      - name: Invalidate the replay attestation
+        if: always() && env.CONVEX_PREVIEW_URL != ''
+        run: |
+          set -uo pipefail
+          case "$CONVEX_PREVIEW_NAME" in
+            e2e-main-replay-lane-*) ;;
+            *) echo "::error::Refusing to touch a deployment that is not the replay-lane preview."; exit 1 ;;
+          esac
+          case "$CONVEX_DEPLOY_KEY" in
+            preview:*) ;;
+            *) echo "::error::The deploy key is not a preview key."; exit 1 ;;
+          esac
+          if [ -n "${CONVEX_DEPLOYMENT:-}" ]; then
+            echo "::error::CONVEX_DEPLOYMENT is set; refusing to remove variables."
+            exit 1
+          fi
+          for VAR in E2E_REPLAY_RUN_NONCE E2E_REPLAY_RUN_ID E2E_REPLAY_RUN_EXPIRES_AT; do
+            if ! pnpm exec convex env remove --preview-name "$CONVEX_PREVIEW_NAME" "$VAR" >/dev/null 2>&1; then
+              echo "::warning::Could not remove $VAR from the replay preview; the delete step still runs."
+            fi
+          done
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+
+      # Last step, always(). --strict: a refused or failed delete, or a preview that is still there afterwards,
+      # fails the job loudly. If create never handed back a URL, no step can name the deployment (the CLI picks
+      # its random name); that residual gap has no attestation on it, because the nonce is only set after pin.
       - name: Delete the disposable preview
         if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
-        run: node scripts/previewDeploymentLifecycle.mjs delete
+        run: node scripts/previewDeploymentLifecycle.mjs delete --strict
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}

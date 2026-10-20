@@ -24,6 +24,12 @@ const indexOf = (needle: string) => {
   return hits[0];
 };
 
+const bindIndex = () => {
+  const hits = steps.flatMap((s, i) => (s.name === "Bind the replay run to this preview" ? [i] : []));
+  expect(hits).toHaveLength(1);
+  return hits[0];
+};
+
 describe("replay lane workflow", () => {
   it("runs only on main: push to main and dispatch, a ref guard, and no pull-request-family trigger", () => {
     expect(Object.keys(workflow.on).sort()).toEqual(["push", "workflow_dispatch"]);
@@ -44,7 +50,7 @@ describe("replay lane workflow", () => {
   });
 
   it("sets the three run variables on the preview, by name, before the seed and the spec", () => {
-    const bind = indexOf("E2E_REPLAY_RUN_NONCE");
+    const bind = bindIndex();
     const seed = steps.findIndex((s) => (s.run ?? "").trim() === "node scripts/e2ePreviewBootstrap.mjs");
     expect(seed).toBeGreaterThan(-1);
     const playwright = indexOf("playwright test");
@@ -72,14 +78,14 @@ describe("replay lane workflow", () => {
   });
 
   it("expires the nonce within six hours", () => {
-    const run = steps[indexOf("E2E_REPLAY_RUN_EXPIRES_AT")].run ?? "";
+    const run = steps[bindIndex()].run ?? "";
     const seconds = Number(/date \+%s\) \+ (\d+)\)/.exec(run)?.[1]);
     expect(seconds).toBeGreaterThan(0);
     expect(seconds).toBeLessThanOrEqual(6 * 60 * 60);
   });
 
   it("masks the nonce and never echoes it", () => {
-    const run = steps[indexOf("E2E_REPLAY_RUN_NONCE")].run ?? "";
+    const run = steps[bindIndex()].run ?? "";
     expect(run).toContain("openssl rand -hex 16");
     expect(run.indexOf("::add-mask::$NONCE")).toBeGreaterThan(run.indexOf("openssl rand"));
     // The only places the value appears: the mask, a stdin pipe into the CLI, and the GITHUB_ENV file.
@@ -101,10 +107,12 @@ describe("replay lane workflow", () => {
   });
 
   it("lets no step except the bind step and the Playwright step name the nonce, and none dumps the environment", () => {
-    const bind = indexOf("E2E_REPLAY_RUN_NONCE");
+    const bind = bindIndex();
     steps.forEach((s, i) => {
       const body = JSON.stringify(s);
-      const mentions = /E2E_REPLAY_RUN_NONCE|\$NONCE|\$\{NONCE/.test(body);
+      // The VALUE: $NONCE, ${NONCE, $E2E_REPLAY_RUN_NONCE, ${E2E_REPLAY_RUN_NONCE or env.E2E_REPLAY_RUN_NONCE. The
+      // bare variable NAME (the invalidation loop removes it) is not the value.
+      const mentions = /\$\{?NONCE|\$\{?E2E_REPLAY_RUN_NONCE|env\.E2E_REPLAY_RUN_NONCE|E2E_REPLAY_RUN_NONCE=/.test(body);
       const isPlaywright = (s.run ?? "").includes("playwright test");
       if (i !== bind && !isPlaywright) expect(mentions, s.name).toBe(false);
       // A bare `env`, `printenv`, `set` (no flags), `export -p` or `declare -p` dumps every variable, masked or not.
@@ -112,9 +120,54 @@ describe("replay lane workflow", () => {
     });
   });
 
-  it("keeps the cleanup: pin right after create, delete last under always()", () => {
+  it("names the preview before create, from this run, and every step uses that one name", () => {
+    const nameStep = steps.findIndex((s) => (s.run ?? "").includes("--print-name"));
+    const create = indexOf("--preview-create");
+    expect(nameStep).toBeGreaterThan(-1);
+    expect(nameStep).toBeLessThan(create);
+    expect(steps[nameStep].run).toContain('--print-name "$GITHUB_REF/replay-lane/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"');
+    expect(steps[create].run).toContain('--preview-create "$CONVEX_PREVIEW_NAME"');
+    // No step may take the name from an output of create or pin.
+    expect(text).not.toMatch(/steps\.[\w-]+\.outputs\.preview_name|needs\.[\w-]+\.outputs/);
+  });
+
+  it("pins strictly with a short backstop, and deletes strictly as the last step under always()", () => {
+    const pinStep = steps[indexOf("previewDeploymentLifecycle.mjs pin")];
+    expect(pinStep.run?.trim()).toBe("node scripts/previewDeploymentLifecycle.mjs pin --strict");
+    expect(pinStep.if).toBe("always() && env.CONVEX_PREVIEW_URL != ''");
+    const ttl = Number(pinStep.env?.CONVEX_PREVIEW_PIN_TTL_MS);
+    expect(ttl).toBeGreaterThanOrEqual(15 * 60 * 1000);
+    expect(ttl).toBeLessThanOrEqual(2 * 60 * 60 * 1000);
     const del = steps.at(-1)!;
-    expect(del.run).toContain("previewDeploymentLifecycle.mjs delete");
+    expect(del.run?.trim()).toBe("node scripts/previewDeploymentLifecycle.mjs delete --strict");
     expect(del.if).toBe("always() && env.CONVEX_PREVIEW_CREATED_AT != ''");
+    expect(del.env?.CONVEX_PREVIEW_DEPLOY_KEY).toBe("${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}");
+    expect(steps.filter((s) => (s.run ?? "").includes("previewDeploymentLifecycle.mjs delete"))).toHaveLength(1);
+  });
+
+  it("removes the three run variables from the preview, by name, always, before the delete", () => {
+    const inv = steps.findIndex((s) => s.name === "Invalidate the replay attestation");
+    expect(inv).toBeGreaterThan(-1);
+    const del = steps.length - 1;
+    expect(inv).toBeLessThan(del);
+    // Nothing between the invalidation and the delete could make the delete wait on something that may not run.
+    expect(del - inv).toBe(1);
+    const step = steps[inv];
+    expect(step.if).toBe("always() && env.CONVEX_PREVIEW_URL != ''");
+    expect(step.env?.CONVEX_DEPLOY_KEY).toBe("${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}");
+    const run = step.run ?? "";
+    expect(run).toContain("for VAR in E2E_REPLAY_RUN_NONCE E2E_REPLAY_RUN_ID E2E_REPLAY_RUN_EXPIRES_AT; do");
+    expect(run).toContain('pnpm exec convex env remove --preview-name "$CONVEX_PREVIEW_NAME" "$VAR" >/dev/null 2>&1');
+    expect(run).not.toMatch(/--prod|--deployment|--url|--admin-key/);
+    // Same preview-only guards as the bind step, before any removal.
+    for (const guard of ["e2e-main-replay-lane-*", "preview:*", 'if [ -n "${CONVEX_DEPLOYMENT:-}" ]']) {
+      expect(run.indexOf(guard), guard).toBeGreaterThan(-1);
+      expect(run.indexOf(guard), guard).toBeLessThan(run.indexOf("convex env remove"));
+    }
+    // A removal that fails is a warning, never an abort of the loop or of the step that precedes the delete.
+    expect(run).toContain("::warning::");
+    expect(run).not.toMatch(/set -[a-z]*e/);
+    // It never prints a value: only the variable name, and no output of the CLI.
+    expect(run).not.toMatch(/\$NONCE|E2E_REPLAY_RUN_NONCE\}|env\.E2E_REPLAY/);
   });
 });

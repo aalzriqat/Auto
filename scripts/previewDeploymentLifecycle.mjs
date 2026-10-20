@@ -50,6 +50,19 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 // chains ~120 minutes of job timeouts, and runner queueing between its jobs is
 // unbounded; twelve hours keeps a live run's preview alive through long queues.
 export const PIN_TTL_MS = 12 * 60 * 60 * 1000;
+// A lane may ask for a SHORTER backstop through CONVEX_PREVIEW_PIN_TTL_MS (the replay lane uses two hours). Only
+// shorter: a value above PIN_TTL_MS, below the floor or not an integer is refused, never clamped or ignored.
+export const PIN_TTL_ENV = "CONVEX_PREVIEW_PIN_TTL_MS";
+export const PIN_TTL_FLOOR_MS = 15 * 60 * 1000;
+export function pinTtlMs(env = {}) {
+  const raw = env[PIN_TTL_ENV];
+  if (raw === undefined || raw === "") return PIN_TTL_MS;
+  const value = Number(raw);
+  if (!/^\d+$/.test(String(raw)) || !Number.isSafeInteger(value) || value < PIN_TTL_FLOOR_MS || value > PIN_TTL_MS) {
+    refuse(PIN_TTL_ENV + " must be an integer number of milliseconds between 15 minutes and " + PIN_TTL_MS + ".");
+  }
+  return value;
+}
 const SAFE_PREVIEW_NAME = /^[a-z0-9][a-z0-9._-]{0,60}$/;
 export const DEPLOYMENT_NAME = /^[a-z]+-[a-z]+-\d+$/;
 // Production. The key cannot reach it; this list makes the refusal local too.
@@ -203,7 +216,7 @@ export async function pinPreview({ env = process.env, fetchImpl = fetch, now = D
   if (!d) refuse("Deployment " + inputs.deploymentName + " does not exist right after creation.");
   // Record ownership first: even if shortening the expiry fails, delete works.
   publish(env, { createdAt: d.createTime });
-  const expiresAt = now() + PIN_TTL_MS;
+  const expiresAt = now() + pinTtlMs(env);
   if (typeof d.expiresAt === "number" && d.expiresAt <= expiresAt) {
     return { deploymentName: inputs.deploymentName, createdAt: d.createTime, expiresAt: d.expiresAt };
   }

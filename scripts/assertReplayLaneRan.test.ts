@@ -10,13 +10,20 @@ import {
   renderSummary,
 } from "./assertReplayLaneRan.mjs";
 
-type T = { status: string; results: Array<Record<string, unknown>> };
-const t = (status: string, results: Array<Record<string, unknown>>): T => ({ status, results });
+type T = { status: string; results: Array<Record<string, unknown>>; projectName?: string };
+const t = (status: string, results: Array<Record<string, unknown>>, projectName = "chromium"): T => ({
+  status,
+  results,
+  projectName,
+});
 function report(replay: T | null, others: T[] = []) {
   return {
+    errors: [],
+    config: { projects: [{ name: "setup" }, { name: "chromium" }] },
     suites: [
       {
         title: "accounting.spec.ts",
+        file: "accounting.spec.ts",
         suites: [
           { title: "accounting workspace", specs: others.map((x, i) => ({ title: `other ${i}`, tests: [x] })) },
           { title: REPLAY_SUITE_TITLE, specs: replay ? [{ title: REPLAY_SPEC_TITLE, tests: [replay] }] : [] },
@@ -60,8 +67,50 @@ describe("evaluateReplayReport", () => {
   });
 
   it("does not credit a same-titled test outside the replay suite", () => {
-    const wrongSuite = { suites: [{ title: "other", specs: [{ title: REPLAY_SPEC_TITLE, tests: [passed] }] }] };
+    const wrongSuite = { ...report(null), suites: [{ title: "other", file: "accounting.spec.ts", specs: [{ title: REPLAY_SPEC_TITLE, tests: [passed] }] }] };
     expect(evaluateReplayReport(wrongSuite).ok).toBe(false);
+  });
+
+  describe("report identity (fails closed)", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const base = () => report(passed, [passed]) as Record<string, any>;
+
+    it("accepts the auth setup file next to the replay spec", () => {
+      const r = base();
+      r.suites.push({ title: "auth.setup.ts", file: "auth.setup.ts", specs: [{ title: "authenticate", tests: [t("expected", [{ status: "passed" }], "setup")] }] });
+      expect(evaluateReplayReport(r).ok).toBe(true);
+    });
+
+    it("rejects a replay that ran under another project", () => {
+      expect(evaluateReplayReport(report(t("expected", [{ status: "passed" }], "webkit"))).ok).toBe(false);
+    });
+
+    it("rejects top-level errors, a missing errors list, and a non-empty one", () => {
+      const withErrors = base();
+      withErrors.errors = [{ message: "boom" }];
+      expect(evaluateReplayReport(withErrors).ok).toBe(false);
+      const missing = base();
+      delete missing.errors;
+      expect(evaluateReplayReport(missing).ok).toBe(false);
+    });
+
+    it("rejects a config that does not name the chromium project", () => {
+      const r = base();
+      r.config = { projects: [{ name: "firefox" }] };
+      expect(evaluateReplayReport(r).ok).toBe(false);
+      const none = base();
+      delete none.config;
+      expect(evaluateReplayReport(none).ok).toBe(false);
+    });
+
+    it("rejects a report from another spec file, or one that adds a second file", () => {
+      const wrongFile = base();
+      wrongFile.suites[0].file = "deals.spec.ts";
+      expect(evaluateReplayReport(wrongFile).ok).toBe(false);
+      const extra = base();
+      extra.suites.push({ title: "other.spec.ts", file: "other.spec.ts", specs: [] });
+      expect(evaluateReplayReport(extra).ok).toBe(false);
+    });
   });
 });
 
