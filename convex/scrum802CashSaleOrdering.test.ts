@@ -71,26 +71,47 @@ const asMutationCtx = (ctx: unknown): MutationCtx => ctx as MutationCtx;
 /**
  * Read-back for the controls that complete a sale: not just "an id came back" but the resulting state, read straight
  * from the tables (not through the code under test), scoped to the test organization, and with literal expectations.
- * For each sale (the expected invoice in exact minor units, and the car): the sale belongs to the org and is COMPLETED;
- * exactly one customer sale invoice exists, with exactly that amount and status PAID (a CANCELLED, REVERSED or
- * WRITTEN_OFF invoice also reads as "nothing owed", so the status is asserted, not just a zero balance); the ACTIVE
- * payment allocations on it sum to exactly the invoice (computed here, not by `outstandingFromReceivableDoc`, so an
- * over-allocation is not hidden by a floor at zero); exactly one deposit-application row exists for the sale, APPLIED
- * (not REVERSING or REVERSED) against the customer's receivable, for exactly the invoice; and the deposit holds: for a
- * shared deposit exactly one hold consumed by this sale (APPLIED, inactive, exactly the invoice), for a single-car
- * quote exactly zero hold rows for the car or the sale.
+ * For each sale (the expected invoice and deposit in exact minor units, the car, the quote and the deposit the scenario created):
+ * the sale belongs to the org and is COMPLETED; exactly one customer sale invoice exists, for the sale customer, in
+ * the org currency, with exactly that amount and status PAID (a CANCELLED, REVERSED or WRITTEN_OFF invoice also reads as
+ * "nothing owed", so the status is asserted, not just a zero balance); exactly one payment allocation exists on it,
+ * ACTIVE, in the org, for exactly the invoice (computed here, not by `outstandingFromReceivableDoc`, so an
+ * over-allocation is not hidden by a floor at zero), and the canonical payment behind it (read through
+ * `allocation.paymentId`) is an incoming, SETTLED customer payment in the org for exactly the scenario's deposit
+ * (the code books one payment per deposit, so on a shared two-car deposit that is the whole deposit, not the car's
+ * share; on a single-car deposit it equals the invoice); exactly one
+ * deposit-application row exists for the sale, APPLIED (not REVERSING or REVERSED) against the customer's receivable,
+ * for exactly the invoice, naming the sale customer, the car, the scenario's quote and the scenario's deposit; and the
+ * deposit holds: for a shared deposit exactly one hold consumed by this sale (APPLIED, inactive, exactly the invoice),
+ * for a single-car quote exactly zero hold rows for the car or the sale.
+ *
+ * The deposit row itself is read too: in the org, on the scenario's quote and customer, APPLIED, no longer held, for
+ * exactly the deposit amount.
+ *
+ * Not asserted: the journal / ledger lines the sale posts (other suites own them), and the hold's own quote or
+ * deposit linkage beyond the one-hold count.
  */
 async function expectCompletedAndPaidInFull(
   s: SeededCashDealer,
-  sales: Array<{ saleId: Id<"sales">; vehicleId: Id<"vehicles">; invoiceMinor: number }>,
+  sales: Array<{
+    saleId: Id<"sales">;
+    vehicleId: Id<"vehicles">;
+    invoiceMinor: number;
+    /** The whole deposit the scenario created. One canonical payment is booked per deposit, so on a shared deposit it is larger than each car's invoice. */
+    depositMinor: number;
+    quoteId: Id<"quotes">;
+    depositId: Id<"deposits">;
+  }>,
   opts: { shared: boolean }
 ) {
   await s.t.run(async (ctx) => {
     const docs = await ctx.db.query("receivableDocuments").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
     const allocations = await ctx.db.query("paymentAllocations").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
     const applications = await ctx.db.query("depositApplications").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+    // `depositVehicleHolds` has no by_org index (only by_deposit, by_vehicle_active, by_deposit_vehicle), so the org
+    // filter is in JS; a full scan is acceptable in a one-org convex-test database.
     const holds = (await ctx.db.query("depositVehicleHolds").collect()).filter((h) => h.orgId === s.orgId);
-    for (const { saleId, vehicleId, invoiceMinor } of sales) {
+    for (const { saleId, vehicleId, invoiceMinor, depositMinor, quoteId, depositId } of sales) {
       const sale = await ctx.db.get(saleId);
       expect(sale?.orgId).toBe(s.orgId);
       expect(sale?.status).toBe("COMPLETED");
@@ -100,14 +121,42 @@ async function expectCompletedAndPaidInFull(
       const [invoice] = invoices;
       expect(invoice.orgId).toBe(s.orgId);
       expect(invoice.payerType).toBe("CUSTOMER");
+      expect(invoice.customerId).toBe(s.customerId);
+      expect(invoice.currency).toBe("JOD");
       expect(invoice.originalAmountMinor).toBe(invoiceMinor);
       expect(invoice.status).toBe("PAID");
-      const active = allocations.filter((a) => a.receivableDocumentId === invoice._id && a.status === "ACTIVE");
-      expect(active.reduce((sum, a) => sum + a.amountMinor, 0)).toBe(invoiceMinor);
+      const onInvoice = allocations.filter((a) => a.receivableDocumentId === invoice._id);
+      expect(onInvoice).toHaveLength(1);
+      const [allocation] = onInvoice;
+      expect(allocation.orgId).toBe(s.orgId);
+      expect(allocation.status).toBe("ACTIVE");
+      expect(allocation.amountMinor).toBe(invoiceMinor);
+      expect(onInvoice.filter((a) => a.status === "ACTIVE").reduce((sum, a) => sum + a.amountMinor, 0)).toBe(invoiceMinor);
+      const payment = await ctx.db.get(allocation.paymentId);
+      expect(payment?.orgId).toBe(s.orgId);
+      expect(payment?.direction).toBe("IN");
+      expect(payment?.payerType).toBe("CUSTOMER");
+      expect(payment?.status).toBe("SETTLED");
+      expect(payment?.amountMinor).toBe(depositMinor);
+      expect(payment?.currency).toBe("JOD");
+      expect(payment?.customerId).toBe(s.customerId);
+      expect(allocations.filter((a) => a.paymentId === allocation.paymentId && a.status === "ACTIVE").reduce((sum, a) => sum + a.amountMinor, 0)).toBe(depositMinor);
+
+      const depositRow = await ctx.db.get(depositId);
+      expect(depositRow?.orgId).toBe(s.orgId);
+      expect(depositRow?.quoteId).toBe(quoteId);
+      expect(depositRow?.customerId).toBe(s.customerId);
+      expect(depositRow?.status).toBe("APPLIED");
+      expect(depositRow?.holdActive).toBe(false);
+      expect(depositRow?.amountMinor).toBe(depositMinor);
 
       const mine = applications.filter((a) => a.saleId === saleId);
       expect(mine).toHaveLength(1);
       expect(mine[0].orgId).toBe(s.orgId);
+      expect(mine[0].customerId).toBe(s.customerId);
+      expect(mine[0].vehicleId).toBe(vehicleId);
+      expect(mine[0].quoteId).toBe(quoteId);
+      expect(mine[0].depositId).toBe(depositId);
       expect(mine[0].status).toBe("APPLIED");
       expect(mine[0].reversedAt).toBeUndefined();
       expect(mine[0].reversalStartedAt).toBeUndefined();
@@ -361,7 +410,7 @@ describe("the pay-first refusal is raised before the first write on every comple
         orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, vehiclePrice: 30_000.004, downPayment: 0, termMonths: 0,
         vehicleItems: items,
       });
-      await deposit(s, quoteId, Math.round((shareA + shareB) * 1000) / 1000);
+      const depositId = await deposit(s, quoteId, Math.round((shareA + shareB) * 1000) / 1000);
       await s.asUser.mutation(api.deposits.allocateToVehicles, {
         orgId: s.orgId, quoteId, allocations: [{ vehicleId: s.vehicleId, amount: shareA }, { vehicleId: second, amount: shareB }],
       });
@@ -372,7 +421,7 @@ describe("the pay-first refusal is raised before the first write on every comple
             saleDate: Date.now(), financingType: "CASH", actorId: s.userId, ...(treatment ? { depositResolution: { treatment } } : {}),
           })
         );
-      return { s, run, items };
+      return { s, run, items, quoteId, depositId };
     }
 
     test.each([
@@ -387,16 +436,16 @@ describe("the pay-first refusal is raised before the first write on every comple
     });
 
     test("control: exact shares complete both cars (the pre-check does not over-refuse at minor-unit precision)", async () => {
-      const { s, run, items } = await oddQuote("exact", PRICE_A, PRICE_B);
+      const { s, run, items, quoteId, depositId } = await oddQuote("exact", PRICE_A, PRICE_B);
       const writes: string[] = [];
       const saleIds = await run(writes, "APPLY_TO_DEALER_AMOUNT");
       expect(saleIds).toHaveLength(2);
-      expect(writes.length).toBeGreaterThan(0);
+      expect(writes.length).toBeGreaterThan(0); // anti-vacuity guard: the recorder saw real writes
       await expectCompletedAndPaidInFull(
         s,
         [
-          { saleId: saleIds[0], vehicleId: s.vehicleId, invoiceMinor: 20_000_001 },
-          { saleId: saleIds[1], vehicleId: items[1].vehicleId, invoiceMinor: 10_000_003 },
+          { saleId: saleIds[0], vehicleId: s.vehicleId, invoiceMinor: 20_000_001, quoteId, depositId, depositMinor: 30_000_004 },
+          { saleId: saleIds[1], vehicleId: items[1].vehicleId, invoiceMinor: 10_000_003, quoteId, depositId, depositMinor: 30_000_004 },
         ],
         { shared: true }
       );
@@ -414,7 +463,7 @@ describe("the pay-first refusal is raised before the first write on every comple
       orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId, vehiclePrice: 40_000, downPayment: 0, termMonths: 0,
       vehicleItems: items,
     });
-    await deposit(s, quoteId, 40_000);
+    const depositId = await deposit(s, quoteId, 40_000);
     await s.asUser.mutation(api.deposits.allocateToVehicles, {
       orgId: s.orgId, quoteId, allocations: [{ vehicleId: s.vehicleId, amount: 20_000 }, { vehicleId: second, amount: 20_000 }],
     });
@@ -426,12 +475,12 @@ describe("the pay-first refusal is raised before the first write on every comple
       })
     );
     expect(saleIds).toHaveLength(2);
-    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.length).toBeGreaterThan(0); // anti-vacuity guard: the recorder saw real writes
     await expectCompletedAndPaidInFull(
       s,
       [
-        { saleId: saleIds[0], vehicleId: items[0].vehicleId, invoiceMinor: 20_000_000 },
-        { saleId: saleIds[1], vehicleId: items[1].vehicleId, invoiceMinor: 20_000_000 },
+        { saleId: saleIds[0], vehicleId: items[0].vehicleId, invoiceMinor: 20_000_000, quoteId, depositId, depositMinor: 40_000_000 },
+        { saleId: saleIds[1], vehicleId: items[1].vehicleId, invoiceMinor: 20_000_000, quoteId, depositId, depositMinor: 40_000_000 },
       ],
       { shared: true }
     );
@@ -474,31 +523,31 @@ describe("the pay-first refusal is raised before the first write on every comple
   test("control: APPLY_TO_TRANSACTION_SETTLEMENT on owned stock with the full deposit still completes (the pre-check does not over-refuse)", async () => {
     const s = await seedCashDealer("ordsettle", MODULES);
     const quoteId = await quoteFor(s);
-    await deposit(s, quoteId, 20_000);
+    const depositId = await deposit(s, quoteId, 20_000);
     const writes: string[] = [];
     const saleId = await s.t.run((ctx) =>
       completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" } }))
     );
     expect(saleId).toBeTruthy();
-    expect(writes.length).toBeGreaterThan(0);
-    await expectCompletedAndPaidInFull(s, [{ saleId, vehicleId: s.vehicleId, invoiceMinor: 20_000_000 }], { shared: false });
+    expect(writes.length).toBeGreaterThan(0); // anti-vacuity guard: the recorder saw real writes
+    await expectCompletedAndPaidInFull(s, [{ saleId, vehicleId: s.vehicleId, invoiceMinor: 20_000_000, quoteId, depositId, depositMinor: 20_000_000 }], { shared: false });
   });
 
   test("control: no stated treatment and an exact deposit completes", async () => {
     const s = await seedCashDealer("ordnotreat", MODULES);
     const quoteId = await quoteFor(s);
-    await deposit(s, quoteId, 20_000);
+    const depositId = await deposit(s, quoteId, 20_000);
     const writes: string[] = [];
     const saleId = await s.t.run((ctx) => completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId })));
     expect(saleId).toBeTruthy();
-    expect(writes.length).toBeGreaterThan(0);
-    await expectCompletedAndPaidInFull(s, [{ saleId, vehicleId: s.vehicleId, invoiceMinor: 20_000_000 }], { shared: false });
+    expect(writes.length).toBeGreaterThan(0); // anti-vacuity guard: the recorder saw real writes
+    await expectCompletedAndPaidInFull(s, [{ saleId, vehicleId: s.vehicleId, invoiceMinor: 20_000_000, quoteId, depositId, depositMinor: 20_000_000 }], { shared: false });
   });
 
   test("control: a fully deposited cash sale still completes through the same recording context (the recorder sees real writes)", async () => {
     const s = await seedCashDealer("ordok", MODULES);
     const quoteId = await quoteFor(s);
-    await deposit(s, quoteId, 20_000);
+    const depositId = await deposit(s, quoteId, 20_000);
     const writes: string[] = [];
     const saleId = await s.t.run((ctx) =>
       completeSale(
@@ -507,7 +556,7 @@ describe("the pay-first refusal is raised before the first write on every comple
       )
     );
     expect(saleId).toBeTruthy();
-    expect(writes.length).toBeGreaterThan(0); // anti-vacuity: an empty list above would otherwise prove nothing
-    await expectCompletedAndPaidInFull(s, [{ saleId, vehicleId: s.vehicleId, invoiceMinor: 20_000_000 }], { shared: false });
+    expect(writes.length).toBeGreaterThan(0); // anti-vacuity guard: an empty list above would otherwise prove nothing
+    await expectCompletedAndPaidInFull(s, [{ saleId, vehicleId: s.vehicleId, invoiceMinor: 20_000_000, quoteId, depositId, depositMinor: 20_000_000 }], { shared: false });
   });
 });
