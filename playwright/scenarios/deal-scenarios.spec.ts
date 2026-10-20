@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 import type { Id } from "../../convex/_generated/dataModel";
 import { APPROVER_AUTH_FILE, authenticatedConvexClient, resolveOrgId, testDataSuffix } from "../utils";
 import { ensureFinanceCompany } from "../fixtures/financedDeal";
@@ -12,6 +13,7 @@ import {
   createCostedVehicle,
   decideDeposit,
   ensureCompany,
+  ensureReceivingBank,
   quoteFinancedDeal,
   recordApproved,
   resolveAppraisalGap,
@@ -49,8 +51,8 @@ import {
  * The two agree while the first payment is at most the unfunded part, the only
  * case the owner has ruled. Scenarios whose first payment is above it (the LTV
  * 90 / 3,000 first-payment ones, contribution 0) pin the CURRENT formula, which
- * lends less than approved × ratio; that case is open on SCRUM-613, and those
- * expectations change with its ruling.
+ * lends less than approved × ratio; the owner ruled this correct (SCRUM-613 F-19,
+ * option أ, c22368), so these expectations stand.
  * Nothing here imports a money helper, so a wrong formula in production cannot
  * certify itself (SCRUM-486 A10).
  *
@@ -76,7 +78,6 @@ const BASE = {
   downPayment: 3_000,
   quotation: 13_000,
   approved: 13_000,
-  legalInvoice: 13_000,
 };
 
 /**
@@ -453,7 +454,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     company: LTV90,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 12_000,
     expectedPayment: "BANK_TRANSFER",
     // OR-1: the company owes the APPROVED 12,000.
     // funded = min(12,000×0.9=10,800, 12,000−3,000=9,000) = 9,000; contribution 0.
@@ -468,7 +468,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     company: LTV70,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 12_000,
     expectedPayment: "BANK_TRANSFER",
     forwardMethod: "BANK_TRANSFER",
     // funded = min(12,000×0.7=8,400, 9,000) = 8,400; contribution = 12,000 − 8,400 − 3,000 = 600.
@@ -561,7 +560,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     company: LTV90,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 13_000,
     gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0 },
     expectedPayment: "BANK_TRANSFER",
     // funded = min(10,800, 9,000) = 9,000; contribution 0. Net shortfall (SCRUM-766)
@@ -582,7 +580,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     company: LTV70,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 12_400,
     gap: { mode: "SPLIT", customerShare: 400, cash: 0, installments: 400 },
     expectedPayment: "BANK_TRANSFER",
     forwardMethod: "BANK_TRANSFER",
@@ -601,17 +598,37 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
       disbursement: { "1110": { dr: jod(12_000) }, "1210": { cr: jod(12_000) } },
     },
   },
-  // F24 (customer pays the gap to the finance company) is RETIRED by SCRUM-766: that
-  // destination is refused until PR-B (customer-pays-FC reduces the showroom
-  // contribution). It returns, re-ruled, with PR-B; the refusal itself is pinned by
-  // convex/financingEconomics.test.ts.
+  {
+    id: "F24",
+    title: "LTV 70, approved 12,000 of 13,000: net shortfall 700, customer pays 400 to the finance company, dealer 300",
+    company: LTV70,
+    ...BASE,
+    approved: 12_000,
+    gap: { mode: "SPLIT", customerShare: 400, cash: 0, installments: 0, toFinanceCompany: 400 },
+    expectedPayment: "BANK_TRANSFER",
+    forwardMethod: "BANK_TRANSFER",
+    // As F23, but the customer's 400 goes to the finance company (SCRUM-766 PR-B): the
+    // contribution is 12,000 − 8,400 − 3,000 = 600 less the 400 = 200, and no customer
+    // receivable exists. The server derives the consideration (plan v3: approved 12,000 +
+    // receivable 0 = 12,000); no legal invoice is entered.
+    expect: {
+      close: {
+        "1210": { dr: jod(12_000) },
+        "4100": { cr: jod(12_000) },
+        "4180": { dr: jod(200) },
+        "2220": { cr: jod(200) },
+        ...COST_OF_SALE,
+      },
+      forward: { "2220": { dr: jod(200) }, "1110": { cr: jod(200) } },
+      disbursement: { "1110": { dr: jod(12_000) }, "1210": { cr: jod(12_000) } },
+    },
+  },
   {
     id: "F25",
     title: "LTV 90, 400 cash deposit, net shortfall 900: customer 500 (300 cash + 200 instalments), dealer 400",
     company: LTV90,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 12_500,
     deposit: { amount: 400, method: "CASH" },
     gap: { mode: "SPLIT", customerShare: 500, cash: 300, installments: 200 },
     expectedPayment: "CHEQUE",
@@ -685,10 +702,13 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
             `${s.id} LTV${s.company.ltvPercent} deposit=${s.deposit ? `${s.deposit.amount}/${s.deposit.method}` : "none"} expected=${s.expectedPayment} forward=${s.forwardMethod ?? "none"} — ${s.title}`,
         ).join("\n"),
     );
-    const context = await browser.newContext({ storageState: "playwright/.auth/user.json" });
+    const context = await newContainedContext(browser, { storageState: "playwright/.auth/user.json" });
     const page = await context.newPage();
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
-    await ensureLedgerMonthOpen(await authenticatedConvexClient(page), orgId);
+    const seedClient = await authenticatedConvexClient(page);
+    await ensureLedgerMonthOpen(seedClient, orgId);
+    // SCRUM-54: the bank every BANK_TRANSFER / CHEQUE receipt is explicitly received into.
+    await ensureReceivingBank(seedClient, orgId);
     await ensureFinanceCompany(page);
     await ensureCompany(page, LTV70);
     await context.close();
@@ -715,7 +735,7 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
       }
       const dealUrl = await startApplication(page, customer);
 
-      const approver = await browser.newContext({ storageState: APPROVER_AUTH_FILE });
+      const approver = await newContainedContext(browser, { storageState: APPROVER_AUTH_FILE });
       const managerPage = await approver.newPage();
       try {
         await approveCreditDecision(managerPage, dealUrl);
@@ -744,7 +764,7 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
           page,
           orgId,
           s.expect.disbursement,
-          () => confirmDisbursement(managerPage),
+          () => confirmDisbursement(managerPage, s.expectedPayment),
           s.expect.knownDefect?.step === "disbursement" ? s.expect.knownDefect : undefined,
         );
         await managerPage.screenshot({
@@ -1000,7 +1020,6 @@ const CANCEL_SCENARIOS: CancelScenario[] = [
     company: LTV90,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 13_000,
     gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0 },
     expectedPayment: "BANK_TRANSFER",
     cancelAfterClose: true,
@@ -1023,7 +1042,7 @@ test.describe("cancelled financed deals: the reversal and the deposit decision, 
   );
 
   test.beforeAll(async ({ browser }) => {
-    const context = await browser.newContext({ storageState: "playwright/.auth/user.json" });
+    const context = await newContainedContext(browser, { storageState: "playwright/.auth/user.json" });
     const page = await context.newPage();
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
     await ensureLedgerMonthOpen(await authenticatedConvexClient(page), orgId);
@@ -1053,7 +1072,7 @@ test.describe("cancelled financed deals: the reversal and the deposit decision, 
       }
       const dealUrl = await startApplication(page, customer);
 
-      const approver = await browser.newContext({ storageState: APPROVER_AUTH_FILE });
+      const approver = await newContainedContext(browser, { storageState: APPROVER_AUTH_FILE });
       const managerPage = await approver.newPage();
       try {
         await approveCreditDecision(managerPage, dealUrl);

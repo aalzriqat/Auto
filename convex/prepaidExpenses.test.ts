@@ -21,6 +21,7 @@ import { Id } from "./_generated/dataModel";
 import { recognizedThroughMonthsMinor, monthAmountMinor } from "./utils/expenseAmortization";
 import { computePrepaidRecognitionShortfall } from "./accountingReports";
 import { toYearMonth } from "./prepaidExpenses";
+import { seedBank } from "../test-utils/bankFixture";
 
 import { settleOutbox, heldRows, makeDue } from "../test-utils/outboxWork";
 
@@ -880,6 +881,31 @@ describe("Phase 2 — correctSchedule term cap and idempotency", () => {
 });
 
 describe("Phase 4 — VAT-aware refunds", () => {
+  test("bank refund requires an identified physical bank and attributes its journal", async () => {
+    const { t, orgId, asOwner } = await seedDealer("refund-bank");
+    await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
+      orgId, title: "Prepaid cover", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await t.run((ctx) => ctx.db.query("prepaidExpenseSchedules").first());
+    const args = { orgId, scheduleId: schedule!._id, refundMinor: 300_000,
+      refundPaymentMethod: "BANK_TRANSFER" as const, reason: "Vendor refund", idempotencyKey: crypto.randomUUID() };
+    const before = await t.run(async (ctx) => ({
+      corrections: (await ctx.db.query("prepaidScheduleCorrections").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }));
+    await expect(asOwner.mutation(api.prepaidExpenses.correctSchedule, args)).rejects.toThrow(/bank account/i);
+    expect(await t.run(async (ctx) => ({
+      corrections: (await ctx.db.query("prepaidScheduleCorrections").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }))).toEqual(before);
+    const refundBankAccountId = await seedBank(t, orgId);
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, { ...args, refundBankAccountId });
+    const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const lines = await t.run((ctx) => ctx.db.query("journalLines").collect());
+    expect(lines.filter((line) => line.accountId === bank?._id && line.bankAccountId === refundBankAccountId))
+      .toEqual([expect.objectContaining({ debitMinor: 300_000 })]);
+  });
   test("a refund with a VAT portion posts a balanced 3-line journal: cash debit gross, Prepaid Expenses credit net, VAT_RECEIVABLE credit tax", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("vat-refund");
     await asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
@@ -1979,12 +2005,14 @@ describe("prepaid corrections — refuse to post ahead of the original entry", (
   test("allows the refund once the original entry's date has been reached", async () => {
     const { t, orgId, asOwner } = await seedDealer("date-ok");
     const { scheduleId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+    const refundBankAccountId = await seedBank(t, orgId);
 
     // Same correction, now booked after December rather than before it.
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 11, 20));
     try {
       await asOwner.mutation(api.prepaidExpenses.correctSchedule, { idempotencyKey: crypto.randomUUID(),
         orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
+        refundBankAccountId,
         reason: "Vendor refunded",
       });
     } finally {
@@ -2193,6 +2221,33 @@ describe("prepaid corrections — the accountant can date the correction", () =>
       c.db.query("accountingEvents").filter((q) => q.eq(q.field("eventType"), "PREPAID_EXPENSE_WRITTEN_OFF")).first()
     );
     expect(event!.accountingDate).toBe(chosen);
+  });
+
+  test("a maker's refund bank survives approval and is revalidated before posting", async () => {
+    const { t, orgId, scheduleId } = await seedPostedPrepaid("correction-approval-bank");
+    const maker = await addFinanceUser(t, orgId, "maker-bank");
+    const checker = await addFinanceUser(t, orgId, "checker-bank");
+    const refundBankAccountId = await seedBank(t, orgId);
+    const submitted = await maker.asUser.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
+      refundBankAccountId, writeOffMinor: 100_000,
+      reason: "Vendor credit note and uncovered balance", idempotencyKey: "bank-request",
+    });
+    expect(submitted.status).toBe("PENDING");
+    const requestId = submitted.requestId!;
+    expect((await t.run((ctx) => ctx.db.get(requestId)))?.refundBankAccountId).toBe(refundBankAccountId);
+    await t.run((ctx) => ctx.db.patch(refundBankAccountId, { isActive: false }));
+    await expect(checker.asUser.mutation(api.prepaidExpenses.approveCorrectionRequest, { orgId, requestId }))
+      .rejects.toThrow(/inactive/);
+    expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("PENDING");
+    await t.run((ctx) => ctx.db.patch(refundBankAccountId, { isActive: true }));
+    await checker.asUser.mutation(api.prepaidExpenses.approveCorrectionRequest, { orgId, requestId });
+    const correction = await t.run((ctx) => ctx.db.query("prepaidScheduleCorrections").first());
+    expect(correction?.refundBankAccountId).toBe(refundBankAccountId);
+    const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const bankLines = await t.run(async (ctx) =>
+      (await ctx.db.query("journalLines").collect()).filter((line) => line.accountId === bank?._id));
+    expect(bankLines).toEqual([expect.objectContaining({ bankAccountId: refundBankAccountId, debitMinor: 300_000 })]);
   });
 
   test("an approval is refused if the chosen date's period closed while the request waited", async () => {

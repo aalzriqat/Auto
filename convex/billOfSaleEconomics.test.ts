@@ -11,9 +11,11 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex runtime.
  */
 import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
+import { seedBank } from "../test-utils/bankFixture";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { expectQuoteEconomicsDrifted } from "../test-utils/quoteEconomicsDrifted";
 import { expectAppError } from "../test-utils/expectAppError";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -137,10 +139,20 @@ async function readyFinancedDeal(s: Seeded, quoteExtra: Record<string, unknown> 
 const finalize = (s: Seeded, applicationId: Id<"financeApplications">) =>
   s.as.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
 
+/**
+ * SCRUM-411 P2-01: the dealership pays the finance company what it owes (deposit + contribution)
+ * BEFORE finalizing; a no-op when nothing is owed. Success paths use this; the refusal tests
+ * use `finalize` as is, so they write nothing.
+ */
+async function finalizePaid(s: Seeded, applicationId: Id<"financeApplications">) {
+  await payForwardBeforeFinalize(s, s.as, applicationId);
+  return await finalize(s, applicationId);
+}
+
 /** A real Deal: manual finance company quote -> application -> approval -> finalizeDeal. */
 async function financedSaleThroughDeal(s: Seeded, quoteExtra: Record<string, unknown> = {}) {
   const { applicationId, quoteId } = await readyFinancedDeal(s, quoteExtra);
-  const saleId = await finalize(s, applicationId);
+  const saleId = await finalizePaid(s, applicationId);
   return { saleId: saleId as Id<"sales">, applicationId, quoteId };
 }
 
@@ -606,12 +618,13 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
         orgId: s.orgId, applicationId, actualAmountMinor: 100 * SCALE, expectedCurrency: "JOD",
         paidBy: "DEALER", idempotencyKey: crypto.randomUUID(),
       });
-      await s.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Execution fee reconciled." });
+      await s.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Execution fee reconciled.", expectedActualAmountMinor: 100 * SCALE, expectedActualEvidenceRevision: 0 });
       await s.as.mutation(api.financeDealCosts.recordDirectFeePayment, {
-        orgId: s.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: 100 * SCALE,
+        orgId: s.orgId, feeId, method: "BANK_TRANSFER", bankAccountId: await seedBank(s.t, s.orgId),
+        paidAt: Date.now(), expectedAmountMinor: 100 * SCALE,
         idempotencyKey: crypto.randomUUID(),
       });
-      const saleId = (await finalize(s, applicationId)) as Id<"sales">;
+      const saleId = (await finalizePaid(s, applicationId)) as Id<"sales">;
       expect(await query(s, saleId)).toEqual({
         kind: "FINANCED", currency: "JOD", vehiclePrice: 12_000, downPayment: 2_000, executionFees: 100,
         capitalisedCommission, amountFinanced, termMonths: 48, flatAnnualProfitRatePercent: 5,
@@ -762,7 +775,7 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
   test("control: with no drift the deal finalizes", async () => {
     const s = await seedDealership("d528ctl");
     const { applicationId } = await readyFinancedDeal(s);
-    const saleId = (await finalize(s, applicationId)) as Id<"sales">;
+    const saleId = (await finalizePaid(s, applicationId)) as Id<"sales">;
     const sale = await s.t.run((ctx) => ctx.db.get(saleId));
     expect(sale).toMatchObject({ salePrice: 12_000, downPayment: 0, loanAmount: 12_000, termMonths: 48, financingType: "FINANCED" });
   });
@@ -783,6 +796,7 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
     const s = await seedDealership("d528replay");
     const { applicationId, quoteId } = await readyFinancedDeal(s);
     const args = { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId };
+    await payForwardBeforeFinalize(s, s.as, applicationId);
     const first = await s.as.mutation(api.applications.finalizeDeal, args);
     await s.t.run((ctx) => ctx.db.patch(quoteId, { vehiclePrice: 1 }));
     expect(await s.as.mutation(api.applications.finalizeDeal, args)).toBe(first);
@@ -882,7 +896,7 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
       expect(app).toMatchObject({ quoteModeAtSubmission: "CONFIGURED_FINANCE_COMPANY", companyId });
       expect(app!.customerQuotePricingSnapshot).toBeDefined();
 
-      const saleId = (await finalize(s, applicationId)) as Id<"sales">;
+      const saleId = (await finalizePaid(s, applicationId)) as Id<"sales">;
       expect(await s.t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ financingType: "FINANCED", status: "COMPLETED" });
       expect(await query(s, saleId)).toMatchObject({ kind: "FINANCED", flatAnnualProfitRatePercent: 5 });
     });
@@ -895,7 +909,7 @@ describe("SCRUM-528 - finalizeDeal builds the sale only from quote economics tha
         await ctx.db.patch(quoteId, { mode: undefined });
       });
       // Not compared: the deal finalizes as a plain CASH sale.
-      const saleId = (await finalize(s, applicationId)) as Id<"sales">;
+      const saleId = (await finalizePaid(s, applicationId)) as Id<"sales">;
       expect(await s.t.run((ctx) => ctx.db.get(saleId))).toMatchObject({ financingType: "CASH", status: "COMPLETED" });
     });
   });

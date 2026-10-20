@@ -192,131 +192,13 @@ export const getCronStatus = query({
   },
 });
 
-// ─── Operational-log retention ───────────────────────────────────────────────
+// ─── Operational history is retained ─────────────────────────────────────────
 //
-// `cronHeartbeats` and `webhookLogs` are append-only diagnostics that nothing
-// ever deleted: heartbeats grew ~288 rows/day and webhook logs ~100/day, on
-// every deployment, forever. Both are only ever read as "what happened
-// recently", so anything past the window is pure carrying cost.
-
-const CRON_HEARTBEAT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const WEBHOOK_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-
-/**
- * `notifications` is the third table nothing ever deleted from, and the only
- * one of the three holding user-facing data rather than diagnostics — so it
- * gets a much longer window and a different justification.
- *
- * It grows with activity: one row per manager per notifiable event, plus one
- * per inbound social message. The shared dev deployment reached 4,201 unread on
- * a single account; production is younger but has the same unbounded shape.
- * Capping the badge read (`notifications.unreadCount`) removed the
- * *performance* consequence, which is why this is retention rather than a
- * rescue — nobody is waiting on it.
- *
- * ## Why age alone, and not "only if read"
- *
- * Deleting only read rows sounds safer and is actually a starvation bug: the
- * sweep walks oldest-first, and a user who never reads anything leaves the
- * oldest rows permanently ineligible, so every hourly run rescans the same
- * block and deletes nothing forever. Staying bounded *and* selective would need
- * a new composite index on (isRead, _creationTime).
- *
- * Age alone is also the more honest rule. A ninety-day-old notification is not
- * actionable whether or not anyone opened it — the lead, sale or task it points
- * at is long since resolved or abandoned, and the row is a pointer to a record
- * that still exists in its own table. Nothing is lost that the underlying data
- * does not already hold.
- *
- * Ninety days rather than thirty because this is the one window a user could
- * notice: the notifications page is a history view, and a quarter of history is
- * a defensible thing to keep.
- */
-const NOTIFICATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
-/** Per-table, per-run delete ceiling — keeps one sweep well inside a mutation's
- *  write budget. Hourly runs clear a backlog of tens of thousands within a day. */
-const RETENTION_DELETE_BATCH = 1000;
-
-export const pruneOperationalLogs = internalMutation({
-  args: {
-    /**
-     * Overrides `NOTIFICATION_RETENTION_MS` for one run.
-     *
-     * Exists because notifications are aged by `_creationTime`, and
-     * `convex-test` stamps that from the real clock — `vi.setSystemTime` does
-     * not reach it, so a test cannot seed a row that is already old. The other
-     * two tables carry their own `ranAt`/`createdAt`, which a test sets freely;
-     * this is the seam that gives notifications equivalent coverage.
-     *
-     * The cron passes nothing. Deliberately narrow rather than a general
-     * "prune everything older than X" knob: a caller passing 0 deletes every
-     * notification on the deployment, so it stays internal and documented as a
-     * test seam rather than an operator tool.
-     */
-    notificationRetentionMsOverride: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const now = Date.now();
-
-    const staleHeartbeats = await ctx.db
-      .query("cronHeartbeats")
-      .withIndex("by_ranAt", (q) => q.lt("ranAt", now - CRON_HEARTBEAT_RETENTION_MS))
-      .take(RETENTION_DELETE_BATCH);
-
-    // The newest heartbeat per job survives regardless of age, so the admin
-    // Cron Status panel never goes blank for a job whose interval is longer
-    // than the retention window (the depreciation cron runs monthly). Names are
-    // taken from the batch rather than from CRON_HEARTBEAT_JOBS so a job that
-    // was never registered there still keeps its last row instead of being
-    // erased — deleting the only evidence a cron ever ran is unrecoverable.
-    const jobNames = Array.from(new Set(staleHeartbeats.map((row) => row.jobName)));
-    const newestPerJob = await Promise.all(
-      jobNames.map((jobName) => newestHeartbeatForJob(ctx, jobName))
-    );
-    const keep = new Set(
-      newestPerJob.filter((row) => row !== null).map((row) => row!._id)
-    );
-
-    let heartbeatsDeleted = 0;
-    for (const row of staleHeartbeats) {
-      if (keep.has(row._id)) continue;
-      await ctx.db.delete(row._id);
-      heartbeatsDeleted++;
-    }
-
-    const staleWebhookLogs = await ctx.db
-      .query("webhookLogs")
-      .withIndex("by_createdAt", (q) => q.lt("createdAt", now - WEBHOOK_LOG_RETENTION_MS))
-      .take(RETENTION_DELETE_BATCH);
-
-    let webhookLogsDeleted = 0;
-    for (const row of staleWebhookLogs) {
-      await ctx.db.delete(row._id);
-      webhookLogsDeleted++;
-    }
-
-    // `notifications` carries no `createdAt` of its own, so this uses the
-    // built-in `by_creation_time` index. That is exactly the ordering the sweep
-    // wants — oldest first — and keeps the read a bounded indexed range rather
-    // than a filtered table scan.
-    const notificationRetentionMs =
-      args.notificationRetentionMsOverride ?? NOTIFICATION_RETENTION_MS;
-    const staleNotifications = await ctx.db
-      .query("notifications")
-      .withIndex("by_creation_time", (q) =>
-        q.lt("_creationTime", now - notificationRetentionMs)
-      )
-      .take(RETENTION_DELETE_BATCH);
-
-    let notificationsDeleted = 0;
-    for (const row of staleNotifications) {
-      await ctx.db.delete(row._id);
-      notificationsDeleted++;
-    }
-
-    return { heartbeatsDeleted, webhookLogsDeleted, notificationsDeleted };
-  },
-});
+// SCRUM-807: `cronHeartbeats`, `webhookLogs`, `notifications` and
+// `facebookRevocations` are never deleted by application code. The owner requires
+// every Convex record preserved until a new retention policy is ruled, so the
+// former `pruneOperationalLogs` sweep (cron and manual path) was removed rather
+// than disabled. convex/adminSystem.test.ts pins its absence.
 
 export const listWebhookLogs = query({
   args: { paginationOpts: paginationOptsValidator },

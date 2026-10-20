@@ -8,6 +8,7 @@
  */
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { payInvoice } from "../test-utils/saleInvoiceFixtures";
+import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -110,17 +111,16 @@ async function prepareDeal(s: FinSeed, opts: { gap: number }) {
   await s.asUser.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
-  await s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-    orgId: s.orgId, applicationId, legalInvoiceAmountMinor: VP * SCALE,
-    legalInvoiceNumber: `INV-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
-  });
   const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
     expectedCurrency: "JOD", idempotencyKey: key(), orgId: s.orgId, applicationId,
     feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER",
     accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false, actualAmountMinor: 0,
     description: "No closing costs.",
   });
-  await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match." });
+  await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
+  // SCRUM-411 P2-01: no deposit is held and the dealer bears no gap share, so nothing is
+  // owed onward and no payment is recorded before finalize.
+  expect(await payForwardBeforeFinalize(s, s.asUser, applicationId)).toBeNull();
   await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: key(), orgId: s.orgId, applicationId });
   return { applicationId, approved };
 }
@@ -161,6 +161,7 @@ describe("SCRUM-571 s2a: finalize, confirmDisbursement, read (the live false-COM
 
     await s.asUser.mutation(api.applications.confirmDisbursement, {
       idempotencyKey: key(), orgId: s.orgId, applicationId, disbursedAmountMinor: approved * SCALE,
+      bankAccountId: await insertReceiptBank({ t: s.t, orgId: s.orgId, owner: { userId: s.userId } }),
     });
 
     const read = await readDeal(s, applicationId);
@@ -175,6 +176,7 @@ describe("SCRUM-571 s2a: finalize, confirmDisbursement, read (the live false-COM
     const { applicationId, approved } = await prepareDeal(s, { gap: GAP });
     await s.asUser.mutation(api.applications.confirmDisbursement, {
       idempotencyKey: key(), orgId: s.orgId, applicationId, disbursedAmountMinor: approved * SCALE,
+      bankAccountId: await insertReceiptBank({ t: s.t, orgId: s.orgId, owner: { userId: s.userId } }),
     });
     const { receivableId } = await invoiceOf(s, applicationId);
     await s.t.run((ctx) =>

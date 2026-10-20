@@ -824,6 +824,9 @@ describe("the appraisal-gap stage", () => {
     expect(within(dialog).getByTestId("gap-readiness").textContent).toBe("GapDestinationsIncomplete");
     fireEvent.change(within(dialog).getByLabelText("GapCashToDealer"), { target: { value: "700" } });
     fireEvent.change(within(dialog).getByLabelText("GapInstallmentsToDealer"), { target: { value: "150" } });
+    // Blank is not zero for the finance-company box either.
+    expect(within(dialog).getByTestId("gap-readiness").textContent).toBe("GapDestinationsIncomplete");
+    fireEvent.change(within(dialog).getByLabelText("GapToFinanceCompany"), { target: { value: "0" } });
     expect(within(dialog).getByTestId("gap-readiness").textContent).toBe("GapAllocationComplete");
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
@@ -881,11 +884,13 @@ describe("the appraisal-gap stage", () => {
     expect(within(dialog).getByText("GapDealerShare").parentElement?.textContent).toContain("400");
     fireEvent.change(within(dialog).getByLabelText("GapCashToDealer"), { target: { value: "350" } });
     fireEvent.change(within(dialog).getByLabelText("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(within(dialog).getByLabelText("GapToFinanceCompany"), { target: { value: "0" } });
     const submit = within(dialog).getByRole("button", { name: "ResolveGapAction" }) as HTMLButtonElement;
     // 350 ≠ 450: the shared identity refuses, and the reason is named.
     expect(submit.disabled).toBe(true);
     expect(within(dialog).getByTestId("gap-readiness").textContent).toBe("GapAllocationMismatch");
-    fireEvent.change(within(dialog).getByLabelText("GapInstallmentsToDealer"), { target: { value: "100" } });
+    // The last 100 goes straight to the finance company (SCRUM-766 PR-B).
+    fireEvent.change(within(dialog).getByLabelText("GapToFinanceCompany"), { target: { value: "100" } });
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
 
@@ -894,8 +899,8 @@ describe("the appraisal-gap stage", () => {
       customerGapShareMinor: 450_000,
       dealerGapShareMinor: 400_000,
       customerGapCashToDealerMinor: 350_000,
-      customerGapInstallmentToDealerMinor: 100_000,
-      customerGapToFinanceCompanyMinor: 0,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 100_000,
     });
   });
 

@@ -85,6 +85,22 @@ async function setup(options: { transactionLimits?: boolean } = {}) {
 
 type Ctx = Awaited<ReturnType<typeof setup>>;
 
+async function makeDepositBank(s: Ctx) {
+  const now = Date.now();
+  return s.t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId: s.orgId,
+    name: "Deposit receipt bank",
+    currency: "JOD",
+    openingBalanceMinor: 0,
+    openingBalanceDate: now,
+    isActive: true,
+    isReconciliationTarget: false,
+    createdBy: s.manager.userId,
+    createdAt: now,
+    updatedAt: now,
+  }));
+}
+
 async function makeQuote(s: Ctx, overrides: { customerId?: Id<"customers">; vehicleId?: Id<"vehicles"> } = {}) {
   return await s.sales.as.mutation(api.quotes.saveQuote, {
     orgId: s.orgId,
@@ -157,12 +173,14 @@ describe("deposits.create authority (the SCRUM-444 defect)", () => {
   test.each(["manager", "accountant"] as const)("control: a %s posts exactly one deposit", async (who) => {
     const s = await setup();
     const quoteId = await makeQuote(s);
+    const bankAccountId = await makeDepositBank(s);
 
     const depositId = await s[who].as.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
       amount: 1500,
       method: "BANK_TRANSFER",
+      bankAccountId,
       idempotencyKey: crypto.randomUUID(),
     });
 
@@ -297,12 +315,14 @@ describe("depositRequests.confirm", () => {
     async (who) => {
       const s = await setup();
       const { requestId } = await pending(s);
+      const bankAccountId = await makeDepositBank(s);
 
       const depositId = await s[who].as.mutation(api.depositRequests.confirm, {
         orgId: s.orgId,
         requestId,
         amount: 1500,
         method: "CARD",
+        bankAccountId,
         idempotencyKey: crypto.randomUUID(),
       });
 
@@ -667,12 +687,14 @@ describe("DA-01: a reservation that carries a deposit needs the money authority"
     ).rejects.toThrow(/choose how the deposit was received/i);
     expect(await moneyFootprint(s)).toEqual(NO_MONEY);
 
+    const bankAccountId = await makeDepositBank(s);
     await s.manager.as.mutation(api.vehicles.createReservation, {
       orgId: s.orgId,
       vehicleId: s.vehicleId,
       customerId: s.customerId,
       depositAmount: 500,
       depositMethod: "BANK_TRANSFER",
+      depositBankAccountId: bankAccountId,
       idempotencyKey: crypto.randomUUID(),
     });
     const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());

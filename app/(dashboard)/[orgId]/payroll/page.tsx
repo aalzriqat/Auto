@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -22,9 +22,13 @@ import {
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
+import { PayrollBankPicker } from "@/components/payroll/PayrollBankPicker";
 import { Wallet, Coins, CalendarClock } from "lucide-react";
 
 const METHODS = ["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"] as const;
+type PayrollMethod = (typeof METHODS)[number];
+const recoveryUsesBank = (method: PayrollMethod) => method === "BANK_TRANSFER" || method === "CARD";
 
 export default function PayrollPage() {
   const { activeOrgId } = useOrg();
@@ -43,6 +47,8 @@ export default function PayrollPage() {
   const compensation = useQuery(api.payroll.listCompensation, activeOrgId ? { orgId: activeOrgId } : "skip");
   const advances = useQuery(api.payroll.listAdvances, activeOrgId ? { orgId: activeOrgId } : "skip");
   const runs = useQuery(api.payroll.listRuns, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const payrollBanks = useQuery(api.payroll.listPayrollBankOptions,
+    activeOrgId && canManage ? { orgId: activeOrgId } : "skip");
 
   const setCompensation = useMutation(api.payroll.setCompensation);
   const recordAdvance = useMutation(api.payroll.recordAdvance);
@@ -57,23 +63,43 @@ export default function PayrollPage() {
   const [advUser, setAdvUser] = useState("");
   const [advAmount, setAdvAmount] = useState("");
   const [advMethod, setAdvMethod] = useState<(typeof METHODS)[number]>("CASH");
+  const [advBankId, setAdvBankId] = useState("");
+  const [uncertainAdvance, setUncertainAdvance] = useState(false);
+  const [uncertainAdvanceBankName, setUncertainAdvanceBankName] = useState<string | null>(null);
   // Locks the "Record advance" button while a disbursement is in flight.
   const [submittingAdvance, setSubmittingAdvance] = useState(false);
   // How the money actually moved — advance recoveries and payroll payments hit
   // different GL cash accounts depending on the method, so neither is hardcoded.
   // Per-advance so changing one row's method never silently changes another's.
   const [recoverMethods, setRecoverMethods] = useState<Record<string, (typeof METHODS)[number]>>({});
+  const [recoverBankIds, setRecoverBankIds] = useState<Record<string, string>>({});
+  const [uncertainRecoveries, setUncertainRecoveries] = useState<Set<string>>(new Set());
+  const [uncertainRecoveryBankNames, setUncertainRecoveryBankNames] = useState<Record<string, string>>({});
   // Per-advance partial repayment amount (blank = recover the full balance).
   const [recoverAmounts, setRecoverAmounts] = useState<Record<string, string>>({});
   // Advances with a repayment in flight — the row's button is disabled so a
   // double-click can't book a second partial recovery against the re-read balance.
   const [recoveringIds, setRecoveringIds] = useState<Set<string>>(new Set());
-  const [payMethod, setPayMethod] = useState<(typeof METHODS)[number]>("BANK_TRANSFER");
+  const [payMethods, setPayMethods] = useState<Record<string, PayrollMethod>>({});
+  const [payBankIds, setPayBankIds] = useState<Record<string, string>>({});
+  const [uncertainRun, setUncertainRun] = useState<string | null>(null);
+  const [uncertainRunBankName, setUncertainRunBankName] = useState<string | null>(null);
   const [runYear, setRunYear] = useState(String(new Date().getFullYear()));
   const [runMonth, setRunMonth] = useState(String(new Date().getMonth() + 1));
   const [openRun, setOpenRun] = useState<Id<"payrollRuns"> | null>(null);
 
   const salaryByUser = new Map((compensation ?? []).map((c) => [c.userId, c.monthlySalary]));
+  const bankIsOffered = (id: string) => !!id && !!payrollBanks && !payrollBanks.truncated &&
+    payrollBanks.banks.some((bank) => bank._id === id);
+
+  useEffect(() => {
+    if (!uncertainRun || !runs) return;
+    const current = runs.find((run) => run._id === uncertainRun);
+    if (current && current.status !== "APPROVED") {
+      setUncertainRun(null);
+      setUncertainRunBankName(null);
+    }
+  }, [runs, uncertainRun]);
 
   async function saveSalary(userId: string) {
     if (!activeOrgId) return;
@@ -90,6 +116,10 @@ export default function PayrollPage() {
 
   async function submitAdvance() {
     if (!activeOrgId || !advUser || submittingAdvance) return;
+    if (advMethod !== "CASH" && !uncertainAdvance && !bankIsOffered(advBankId)) {
+      toast.error(t("DirectPaymentBankRequired" as any));
+      return;
+    }
     const value = Number.parseFloat(advAmount);
     if (Number.isNaN(value) || value <= 0) return;
     // Issuing an advance disburses cash. SCRUM-57: the identity is held for
@@ -100,12 +130,21 @@ export default function PayrollPage() {
     const idempotencyKey = commandId.for(intent);
     setSubmittingAdvance(true);
     try {
-      await recordAdvance({ orgId: activeOrgId, userId: advUser as Id<"users">, amount: value, method: advMethod, idempotencyKey });
+      await recordAdvance({ orgId: activeOrgId, userId: advUser as Id<"users">, amount: value,
+        method: advMethod, bankAccountId: advMethod === "CASH" ? undefined : advBankId as Id<"bankAccounts">,
+        idempotencyKey });
       commandId.retire(intent);
+      setUncertainAdvance(false);
+      setUncertainAdvanceBankName(null);
       toast.success(t("AdvanceRecorded" as any));
-      setAdvUser(""); setAdvAmount("");
+      setAdvUser(""); setAdvAmount(""); setAdvBankId("");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (isConvexError(e)) { commandId.retire(intent); setUncertainAdvance(false); setUncertainAdvanceBankName(null); }
+      else {
+        setUncertainAdvance(true);
+        setUncertainAdvanceBankName(payrollBanks?.banks.find((bank) => bank._id === advBankId)?.name ?? advBankId);
+      }
+      toast.error(getLocalizedErrorMessage(e, t));
     } finally {
       setSubmittingAdvance(false);
     }
@@ -127,6 +166,11 @@ export default function PayrollPage() {
       amount = parsed;
     }
     const method = recoverMethods[advanceId] ?? "CASH";
+    const bankId = recoverBankIds[advanceId] ?? "";
+    if (recoveryUsesBank(method) && !uncertainRecoveries.has(advanceId) && !bankIsOffered(bankId)) {
+      toast.error(t("DirectPaymentBankRequired" as any));
+      return;
+    }
     // SCRUM-57: held for THIS repayment intent across retries, and retired on
     // success so a later genuine repayment of the same advance is a new
     // command. A fresh key per attempt deduped nothing after a lost response.
@@ -134,12 +178,26 @@ export default function PayrollPage() {
     const idempotencyKey = commandId.for(intent);
     setRecoveringIds((s) => new Set(s).add(advanceId));
     try {
-      await recoverAdvance({ orgId: activeOrgId, advanceId: advanceId as Id<"employeeAdvances">, method, amount, idempotencyKey });
+      await recoverAdvance({ orgId: activeOrgId, advanceId: advanceId as Id<"employeeAdvances">,
+        method, amount, bankAccountId: recoveryUsesBank(method) ? bankId as Id<"bankAccounts"> : undefined,
+        idempotencyKey });
       commandId.retire(intent);
+      setUncertainRecoveries((current) => { const next = new Set(current); next.delete(advanceId); return next; });
+      setUncertainRecoveryBankNames((current) => { const next = { ...current }; delete next[advanceId]; return next; });
       toast.success(t("AdvanceRecovered" as any));
       setRecoverAmounts((m) => { const n = { ...m }; delete n[advanceId]; return n; });
+      setRecoverBankIds((m) => { const n = { ...m }; delete n[advanceId]; return n; });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (isConvexError(e)) {
+        commandId.retire(intent);
+        setUncertainRecoveries((current) => { const next = new Set(current); next.delete(advanceId); return next; });
+        setUncertainRecoveryBankNames((current) => { const next = { ...current }; delete next[advanceId]; return next; });
+      } else {
+        setUncertainRecoveries((current) => new Set(current).add(advanceId));
+        setUncertainRecoveryBankNames((current) => ({ ...current,
+          [advanceId]: payrollBanks?.banks.find((bank) => bank._id === bankId)?.name ?? bankId }));
+      }
+      toast.error(getLocalizedErrorMessage(e, t));
     } finally {
       setRecoveringIds((s) => { const n = new Set(s); n.delete(advanceId); return n; });
     }
@@ -152,8 +210,17 @@ export default function PayrollPage() {
 
   async function payRunHandler(runId: Id<"payrollRuns">) {
     if (!activeOrgId) return;
+    const method = payMethods[runId] ?? "BANK_TRANSFER";
+    const bankId = payBankIds[runId] ?? "";
+    if (method !== "CASH" && uncertainRun !== runId && !bankIsOffered(bankId)) {
+      toast.error(t("DirectPaymentBankRequired" as any));
+      return;
+    }
     try {
-      const res = await payRun({ orgId: activeOrgId, runId, method: payMethod });
+      const res = await payRun({ orgId: activeOrgId, runId, method,
+        bankAccountId: method === "CASH" ? undefined : bankId as Id<"bankAccounts"> });
+      setUncertainRun(null);
+      setUncertainRunBankName(null);
       // Payment recomputes from live state; if a payslip drifted from the
       // approved amount the run is sent back for re-approval instead of paying.
       if (res?.status === "NEEDS_REAPPROVAL") {
@@ -162,7 +229,12 @@ export default function PayrollPage() {
         toast.success(t("PayrollRunPaid" as any));
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      if (isConvexError(e)) { setUncertainRun(null); setUncertainRunBankName(null); }
+      else {
+        setUncertainRun(runId);
+        setUncertainRunBankName(payrollBanks?.banks.find((bank) => bank._id === bankId)?.name ?? bankId);
+      }
+      toast.error(getLocalizedErrorMessage(e, t));
     }
   }
 
@@ -230,24 +302,34 @@ export default function PayrollPage() {
                   <Label className="text-xs">{t("TeamMember" as any)}</Label>
                   <SearchableSelect
                     value={advUser} onValueChange={setAdvUser} className="w-48"
+                    disabled={uncertainAdvance || submittingAdvance}
                     placeholder={t("SelectTeamMember" as any)}
                     options={(members ?? []).map((m) => ({ value: m.userId, label: m.userName }))}
                   />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">{t("Amount" as any)}</Label>
-                  <Input type="number" min="0" className="h-9 w-28" value={advAmount} onChange={(e) => setAdvAmount(e.target.value)} />
+                  <Input type="number" min="0" className="h-9 w-28" value={advAmount}
+                    disabled={uncertainAdvance || submittingAdvance} onChange={(e) => setAdvAmount(e.target.value)} />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">{t("PaymentMethodLabel" as any)}</Label>
-                  <Select value={advMethod} onValueChange={(v) => setAdvMethod(v as (typeof METHODS)[number])}>
+                  <Select value={advMethod} disabled={uncertainAdvance || submittingAdvance}
+                    onValueChange={(v) => { setAdvMethod(v as PayrollMethod); setAdvBankId(""); }}>
                     <SelectTrigger className="w-40 h-9"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {METHODS.map((mth) => <SelectItem key={mth} value={mth}>{t(`PaymentMethod_${mth}` as any)}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
+                {advMethod !== "CASH" && <PayrollBankPicker id="advance-paying-bank" value={advBankId}
+                  onChange={setAdvBankId} options={payrollBanks} disabled={uncertainAdvance || submittingAdvance}
+                  frozenName={uncertainAdvance ? uncertainAdvanceBankName : null}
+                  t={t as (key: string) => string} />}
                 <Button onClick={submitAdvance} disabled={submittingAdvance}>{t("RecordAdvance" as any)}</Button>
+                {uncertainAdvance && <p role="status" className="text-xs text-muted-foreground">
+                  {t("PayrollRetrySameDetails" as any)}
+                </p>}
               </div>
             )}
             <Table>
@@ -284,19 +366,32 @@ export default function PayrollPage() {
                               placeholder={t("FullAmount" as any)}
                               value={recoverAmounts[a._id] ?? ""}
                               onChange={(e) => setRecoverAmounts((m) => ({ ...m, [a._id]: e.target.value }))}
-                              disabled={recoveringIds.has(a._id)}
+                              disabled={recoveringIds.has(a._id) || uncertainRecoveries.has(a._id)}
                               className="h-8 w-24 text-end"
                               title={t("PartialRepaymentHint" as any)}
                             />
                             <Select
                               value={recoverMethods[a._id] ?? "CASH"}
-                              onValueChange={(v) => setRecoverMethods((m) => ({ ...m, [a._id]: v as (typeof METHODS)[number] }))}
+                              disabled={recoveringIds.has(a._id) || uncertainRecoveries.has(a._id)}
+                              onValueChange={(v) => {
+                                setRecoverMethods((m) => ({ ...m, [a._id]: v as PayrollMethod }));
+                                setRecoverBankIds((m) => ({ ...m, [a._id]: "" }));
+                              }}
                             >
                               <SelectTrigger className="w-36 h-8"><SelectValue /></SelectTrigger>
                               <SelectContent>
                                 {METHODS.map((mth) => <SelectItem key={mth} value={mth}>{t(`PaymentMethod_${mth}` as any)}</SelectItem>)}
                               </SelectContent>
                             </Select>
+                            {recoveryUsesBank(recoverMethods[a._id] ?? "CASH") &&
+                              <PayrollBankPicker id={`recovery-bank-${a._id}`} value={recoverBankIds[a._id] ?? ""}
+                                onChange={(value) => setRecoverBankIds((m) => ({ ...m, [a._id]: value }))}
+                                options={payrollBanks} disabled={recoveringIds.has(a._id) || uncertainRecoveries.has(a._id)}
+                                frozenName={uncertainRecoveries.has(a._id) ? uncertainRecoveryBankNames[a._id] : null}
+                                t={t as (key: string) => string} />}
+                            {uncertainRecoveries.has(a._id) && <span role="status" className="text-xs text-muted-foreground">
+                              {t("PayrollRetrySameDetails" as any)}
+                            </span>}
                             <Button
                               size="sm"
                               variant="outline"
@@ -374,13 +469,29 @@ export default function PayrollPage() {
                       )}
                       {canManage && r.status === "APPROVED" && (
                         <div className="inline-flex items-center gap-1.5">
-                          <Select value={payMethod} onValueChange={(v) => setPayMethod(v as (typeof METHODS)[number])}>
+                          <Select value={payMethods[r._id] ?? "BANK_TRANSFER"} disabled={uncertainRun !== null}
+                            onValueChange={(v) => {
+                              setPayMethods((current) => ({ ...current, [r._id]: v as PayrollMethod }));
+                              setPayBankIds((current) => ({ ...current, [r._id]: "" }));
+                            }}>
                             <SelectTrigger className="w-36 h-8"><SelectValue /></SelectTrigger>
                             <SelectContent>
                               {METHODS.map((mth) => <SelectItem key={mth} value={mth}>{t(`PaymentMethod_${mth}` as any)}</SelectItem>)}
                             </SelectContent>
                           </Select>
-                          <Button size="sm" onClick={() => payRunHandler(r._id)}>{t("Pay" as any)}</Button>
+                          {(payMethods[r._id] ?? "BANK_TRANSFER") !== "CASH" &&
+                            <PayrollBankPicker id={`payroll-paying-bank-${r._id}`}
+                            value={payBankIds[r._id] ?? ""}
+                            onChange={(bankId) => setPayBankIds((current) => ({ ...current, [r._id]: bankId }))}
+                            options={payrollBanks}
+                            disabled={uncertainRun !== null}
+                            frozenName={uncertainRun === r._id ? uncertainRunBankName : null}
+                            t={t as (key: string) => string} />}
+                          {uncertainRun === r._id && <span role="status" className="text-xs text-muted-foreground">
+                            {t("PayrollRetrySameDetails" as any)}
+                          </span>}
+                          <Button size="sm" disabled={uncertainRun !== null && uncertainRun !== r._id}
+                            onClick={() => payRunHandler(r._id)}>{t("Pay" as any)}</Button>
                         </div>
                       )}
                     </TableCell>

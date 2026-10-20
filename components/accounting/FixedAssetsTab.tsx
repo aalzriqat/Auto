@@ -53,6 +53,50 @@ import {
 } from "./fixedAsset.schema";
 
 type FixedAsset = Doc<"fixedAssets">;
+type AssetBankOptions = {
+  banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>;
+  truncated: boolean;
+} | undefined;
+
+function AssetBankChoice({
+  inputId, value, onChange, options, incoming, t,
+}: Readonly<{
+  inputId: string;
+  value: string | undefined;
+  onChange: (value: string | undefined) => void;
+  options: AssetBankOptions;
+  incoming: boolean;
+  t: ReturnType<typeof useLanguage>["t"];
+}>) {
+  const eligible = options?.banks.find((bank) => bank._id === value);
+  const unavailable = options?.truncated === true;
+  const empty = options !== undefined && !unavailable && options.banks.length === 0;
+  const message = unavailable
+    ? incoming ? "ReceiptTooManyBanks" : "DirectPaymentTooManyBanks"
+    : empty ? incoming ? "ReceiptNoBank" : "DirectPaymentNoBank" : null;
+  return (
+    <div className="space-y-1.5">
+      <label htmlFor={inputId} className="text-sm font-medium">
+        {t(incoming ? "ReceiptBankAccount" : "DirectPaymentBankLabel")}
+      </label>
+      <select
+        id={inputId}
+        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+        value={eligible?._id ?? ""}
+        onChange={(event) => onChange(event.target.value || undefined)}
+        disabled={options === undefined || unavailable || empty}
+        required
+        aria-describedby={message ? `${inputId}-status` : undefined}
+      >
+        <option value="">{t(options === undefined ? "CashDrawerLoadingBanks" : incoming ? "ReceiptSelectBank" : "DirectPaymentBankChoose")}</option>
+        {(options?.banks ?? []).map((bank) => (
+          <option key={bank._id} value={bank._id}>{bank.name} · {bank.currency}</option>
+        ))}
+      </select>
+      {message && <p id={`${inputId}-status`} role="status" className="text-sm text-muted-foreground">{t(message)}</p>}
+    </div>
+  );
+}
 
 function AssetStatusBadge({ t, asset }: Readonly<{ t: (key: any) => string; asset: FixedAsset }>) {
   if (asset.costMinor == null) {
@@ -251,6 +295,7 @@ function CapitalizeAssetDialog({
   // would retry under a new identity and capitalize the asset twice. Same
   // pattern as the collections dialogs.
   const idempotencyKeyRef = useRef<string | null>(null);
+  const bankOptions = useQuery(api.fixedAssets.listBankOptions, open ? { orgId } : "skip");
 
   const form = useForm<CapitalizeAssetFormValues>({
     resolver: zodResolver(capitalizeAssetSchema),
@@ -261,6 +306,7 @@ function CapitalizeAssetDialog({
       salvageValue: 0,
       usefulLifeMonths: 60,
       paymentMethod: "CASH",
+      bankAccountId: undefined,
       notes: "",
     },
   });
@@ -270,7 +316,16 @@ function CapitalizeAssetDialog({
     if (!nextOpen) form.reset();
   }
 
+  const paymentMethod = form.watch("paymentMethod");
+  const bankSelection = form.watch("bankAccountId");
+  const needsBank = paymentMethod !== "CASH";
+
   async function onSubmit(values: CapitalizeAssetFormValues) {
+    const bank = needsBank ? bankOptions?.banks.find((candidate) => candidate._id === values.bankAccountId) : undefined;
+    if (needsBank && !bank) {
+      form.setError("bankAccountId", { message: t("DirectPaymentBankRequired") });
+      return;
+    }
     await submitWithFeedback(async () => {
       idempotencyKeyRef.current ??= `asset-capitalize:${crypto.randomUUID()}`;
       await capitalize({
@@ -282,6 +337,7 @@ function CapitalizeAssetDialog({
         salvageValueMinor: Math.round(values.salvageValue * factor),
         usefulLifeMonths: values.usefulLifeMonths,
         paymentMethod: values.paymentMethod,
+        bankAccountId: bank?._id,
         notes: values.notes?.trim() || undefined,
       });
       // Only a SUCCESS retires the identity. A failure keeps it so the
@@ -387,12 +443,35 @@ function CapitalizeAssetDialog({
                 <FormItem>
                   <FormLabel>{t("PaymentMethodLabel" as any)}</FormLabel>
                   <FormControl>
-                    <PaymentMethodSelect t={t as any} value={field.value} onValueChange={field.onChange} />
+                    <PaymentMethodSelect t={t as any} value={field.value} onValueChange={(value) => {
+                      field.onChange(value);
+                      form.setValue("bankAccountId", undefined);
+                      form.clearErrors("bankAccountId");
+                    }} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
+
+            {needsBank && (
+              <>
+                <AssetBankChoice
+                  inputId="asset-capitalization-bank"
+                  value={bankSelection}
+                  onChange={(value) => {
+                    form.setValue("bankAccountId", value);
+                    form.clearErrors("bankAccountId");
+                  }}
+                  options={bankOptions}
+                  incoming={false}
+                  t={t}
+                />
+                {form.formState.errors.bankAccountId?.message && (
+                  <p role="alert" className="text-sm text-destructive">{form.formState.errors.bankAccountId.message}</p>
+                )}
+              </>
+            )}
 
             <FormField
               control={form.control}
@@ -576,6 +655,7 @@ function DisposeAssetDialog({
 }>) {
   const { t } = useLanguage();
   const dispose = useMutation(api.fixedAssets.dispose);
+  const bankOptions = useQuery(api.fixedAssets.listBankOptions, { orgId, assetId: asset._id });
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   const netBookMinor = (asset.costMinor ?? 0) - (asset.accumulatedDepreciationMinor ?? 0);
@@ -584,15 +664,28 @@ function DisposeAssetDialog({
     resolver: zodResolver(disposeAssetSchema),
     // The ledger's calendar is UTC: the server refuses a UTC day that has not begun, so the
     // default is the UTC day (a user ahead of UTC would otherwise default to a refused date).
-    defaultValues: { proceeds: 0, occurredAt: economicTodayDateInput() },
+    defaultValues: { proceeds: 0, bankAccountId: undefined, occurredAt: economicTodayDateInput() },
   });
+  const proceeds = form.watch("proceeds");
+  const bankSelection = form.watch("bankAccountId");
 
   async function onSubmit(values: DisposeAssetFormValues) {
+    const proceedsMinor = Math.round(values.proceeds * factor);
+    if (values.proceeds > 0 && proceedsMinor === 0) {
+      form.setError("proceeds", { message: t("DisposalProceedsLabel" as any) });
+      return;
+    }
+    const bank = proceedsMinor > 0 ? bankOptions?.banks.find((candidate) => candidate._id === values.bankAccountId) : undefined;
+    if (proceedsMinor > 0 && !bank) {
+      form.setError("bankAccountId", { message: t("ReceiptSelectBank") });
+      return;
+    }
     await submitWithFeedback(async () => {
       await dispose({
         orgId,
         assetId: asset._id,
-        proceedsMinor: Math.round(values.proceeds * factor),
+        proceedsMinor,
+        bankAccountId: bank?._id,
         occurredAt: dateInputToMs(values.occurredAt),
       });
       toast.success(t("AssetDisposed" as any));
@@ -642,6 +735,25 @@ function DisposeAssetDialog({
                 )}
               />
             </div>
+
+            {proceeds > 0 && (
+              <>
+                <AssetBankChoice
+                  inputId="asset-disposal-bank"
+                  value={bankSelection}
+                  onChange={(value) => {
+                    form.setValue("bankAccountId", value);
+                    form.clearErrors("bankAccountId");
+                  }}
+                  options={bankOptions}
+                  incoming
+                  t={t}
+                />
+                {form.formState.errors.bankAccountId?.message && (
+                  <p role="alert" className="text-sm text-destructive">{form.formState.errors.bankAccountId.message}</p>
+                )}
+              </>
+            )}
 
             <DialogFooter>
               <DialogFooterActions

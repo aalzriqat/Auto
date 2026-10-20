@@ -115,6 +115,7 @@ export type DealCustodyActions = Readonly<{
    * has answered — an empty picker is a dead end, not a choice.
    */
   members: ReadonlyArray<CustodyMember> | undefined;
+  bankOptions?: { banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean };
   /** Live employee-paid lines with an actual, not yet charged to any record. */
   eligibleFees: ReadonlyArray<CustodyEligibleFee>;
   scaleOf: (currency: string) => number;
@@ -713,6 +714,7 @@ export function DealCustodyPanel({
             defaultUserId={plannedRecipient}
             suggestedMinor={plan?.amountMinor ?? recommended?.recommendedMinor ?? null}
             money={money}
+            bankOptions={actions.bankOptions}
             t={t}
             onOpenChange={(o) => !o && dismiss()}
             onSubmit={(values) => {
@@ -743,6 +745,7 @@ export function DealCustodyPanel({
                 suggestedMinor={dialog.movement === "REIMBURSED" ? maxMinor ?? null : dialog.movement === "RETURNED" ? (s?.employeeOwesDealerMinor ?? null) : null}
                 maxMinor={maxMinor}
                 money={money}
+                bankOptions={actions.bankOptions}
                 t={t}
                 onOpenChange={(o) => !o && dismiss()}
                 onSubmit={(values) => run(() => actions.onMove(dialog.custodyId, dialog.movement, values))}

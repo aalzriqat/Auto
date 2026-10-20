@@ -86,12 +86,18 @@ export async function seedWorld() {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Layla", lastName: "Nasser", phone: "+962790000000" })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
   return {
     t,
     orgId,
     userId,
     approverId,
     customerId,
+    bankAccountId,
     asFinance: t.withIdentity({ subject: "s571s1_user", clerkId: "s571s1_user" }),
     asApprover: t.withIdentity({ subject: "s571s1_approver", clerkId: "s571s1_approver" }),
   };
@@ -603,6 +609,7 @@ describe("SCRUM-571 s1 R3 — cheque registration and clearing refuse sale linea
       idempotencyKey: crypto.randomUUID(),
       orgId: w.orgId,
       chequeId,
+      bankAccountId: w.bankAccountId,
     });
     expect((await w.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("CLEARED");
     expect((await w.t.run((ctx) => ctx.db.get(receivableId)))?.outstandingAmount).toBe(300);

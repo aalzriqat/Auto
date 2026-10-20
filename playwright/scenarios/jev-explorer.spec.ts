@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { callJev } from "../../scripts/intelligence/jevImpact.mjs";
 import { resolveOrgId } from "../utils";
+import { isCommitActionName } from "./jevExplorerActions";
+import { namesProduction, servesOtherThan } from "./productionGuard";
 
 /**
  * A random explorer (SCRUM-595): walk the dashboard by clicking what is on
@@ -25,12 +27,9 @@ import { resolveOrgId } from "../utils";
  * TypeSafe (Codex AF-430-03).
  */
 
-const PRODUCTION_DEPLOYMENT = "kindly-hound-172";
 const STEPS = Number(process.env.JEV_EXPLORER_STEPS ?? 40);
 const SEED = Number(process.env.JEV_EXPLORER_SEED ?? Date.now() % 100_000);
 
-const COMMIT_WORDS =
-  /delete|remove|cancel|void|revers|refund|forfeit|post|close|approve|reject|confirm|submit|save|send|sign ?out|log ?out|archive|pay|transfer|disburse|finali[sz]e|record|import|upload|invite|حذف|إلغاء|تأكيد|حفظ|إرسال|خروج|اعتماد|رفض|ترحيل|دفع|تسجيل/i;
 /**
  * Screens that write just by being looked at: opening a conversation marks it
  * read (ChatThread / FloatingChatWindow → directMessages.markRead), opening an
@@ -152,7 +151,7 @@ async function candidates(page: Page): Promise<Array<{ el: Locator; name: string
     const name = ((await el.getAttribute("aria-label")) || (await el.innerText().catch(() => "")))
       .trim()
       .slice(0, 80);
-    if (!name || COMMIT_WORDS.test(name)) continue;
+    if (!name || isCommitActionName(name)) continue;
     const href = await el.getAttribute("href").catch(() => null);
     if (href && WRITES_ON_VIEW.test(href)) continue;
     const key = `${name}\u0000${href ?? ""}`;
@@ -264,7 +263,7 @@ test.describe("Jev explorer (advisory)", () => {
     const host = new URL(baseURL ?? "http://localhost:3000").hostname;
     test.skip(!["localhost", "127.0.0.1"].includes(host), "Explorer runs against a local app only.");
     test.skip(
-      (process.env.NEXT_PUBLIC_CONVEX_URL ?? "").includes(PRODUCTION_DEPLOYMENT),
+      namesProduction(process.env.NEXT_PUBLIC_CONVEX_URL),
       "Explorer never runs against the production backend.",
     );
 
@@ -304,7 +303,7 @@ test.describe("Jev explorer (advisory)", () => {
     const served = sockets.filter((u) => u.includes(".convex.cloud")).map((u) => convexDeploymentOf(u) ?? u);
     test.skip(served.length === 0, "Could not observe which backend the served app uses; not exploring.");
     test.skip(
-      served.some((d) => d === PRODUCTION_DEPLOYMENT || d !== expectedDeployment),
+      servesOtherThan(served, expectedDeployment!),
       `The served app talks to ${[...new Set(served)].join(", ")}, not the preview ${expectedDeployment}.`,
     );
 

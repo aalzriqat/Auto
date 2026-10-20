@@ -30,12 +30,19 @@ import {
   mergeVerdicts,
   parseConvexRunJson,
   pollIntervalMs,
+  bankRebuildStopMessage,
+  bankRefusalMessage,
+  rebuildBankBalances,
+  renderBankRebuildSummary,
   renderReleaseSummary,
   requireBoundProductionKey,
 } from "./releaseGuard.ts";
 
 const REPORT_FN = "adminSystem:materializationReportForRelease";
 const START_FN = "migrations:startSocialConversationBackfills";
+const BANK_BACKFILL_FN = "bankBalanceBackfill:runPage";
+/** 16 journal lines per page, so this bounds one org at 160,000 bank lines. */
+const MAX_BANK_PAGES_PER_ORG = 10_000;
 
 const PAGE_SIZE = 50;
 /** A cursor that stops advancing would otherwise page forever. */
@@ -63,6 +70,7 @@ const CONVEX_CLI = path.join(process.cwd(), "node_modules", "convex", "bin", "ma
 
 let lastVerdict = null;
 let lastOutcome = "continue";
+let bankSummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -82,6 +90,7 @@ function writeSummary(extra) {
     verdict,
     outcome: lastOutcome === "continue" ? "failed" : lastOutcome,
   });
+  if (bankSummary) body += `\n### Bank balances\n\n${bankSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -252,10 +261,40 @@ const started = convex(["run", START_FN, "{}"]);
 if (!started.ok) fail(started.reason);
 console.log(`  fan-out: ${JSON.stringify(started.value)}`);
 
+// ─── 2b. Rebuild every organization's bank balance aggregates ───────────────
+
+// SCRUM-54: bank balances read from per-org aggregate trees, and a state built
+// for an older layout is withheld, so until this finishes every bank balance in
+// that org reads as unavailable. Synchronous, page by page, through the same
+// operator key; `runPage` is idempotent and returns READY at once for an org
+// already rebuilt, so a re-run resumes rather than restarts. It runs while the
+// Social Inbox fan-out proceeds in the background.
+console.log(`Rebuilding bank balance aggregates…`);
+// ONE deadline covers this phase and the verification below, so the two can
+// never add up past the job's own timeout and kill it before the summary.
+const rolloutStartedAt = Date.now();
+// Until verification runs, the summary shows the pre-rollout report rather
+// than an empty "0/0" that reads as if the Social Inbox had been checked.
+lastVerdict = before.verdict;
+const bank = rebuildBankBalances({
+  orgs: before.orgs,
+  runPage: (orgId) => convex(["run", BANK_BACKFILL_FN, JSON.stringify({ orgId })]),
+  now: Date.now,
+  startedAt: rolloutStartedAt,
+  timeoutMs: TIMEOUT_MS,
+  maxPages: MAX_BANK_PAGES_PER_ORG,
+  log: (level, line) => (level === "error" ? console.error(line) : console.log(line)),
+});
+bankSummary = renderBankRebuildSummary(bank);
+console.log(`  ${bankSummary}`);
+// Hard stops: the shared deadline and the page cap end the whole phase.
+const bankStop = bankRebuildStopMessage(bank, MAX_BANK_PAGES_PER_ORG);
+if (bankStop) fail(bankStop);
+
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 
-const startedAt = Date.now();
-console.log(`Verifying the rollout (deadline ${Math.round(TIMEOUT_MS / 60_000)} minutes)…`);
+const startedAt = rolloutStartedAt;
+console.log(`Verifying the rollout (deadline ${Math.round(TIMEOUT_MS / 60_000)} minutes from the rebuild's start)…`);
 
 // The loop variable IS the end condition: every branch below either leaves it
 // at "continue" or sets a terminal value.
@@ -278,6 +317,13 @@ while (lastOutcome === "continue") {
 
 for (const p of lastVerdict.anomalies) {
   console.warn(`  ⚠ ${p.org} ${p.platform ?? "—"} ${p.kind}: ${p.detail}`);
+}
+
+const bankRefusal = lastOutcome === "verified" ? bankRefusalMessage(bank) : null;
+if (bankRefusal) {
+  // The heading must not read "verified" on a run that fails.
+  lastOutcome = "failed";
+  fail(bankRefusal);
 }
 
 if (lastOutcome === "verified") {

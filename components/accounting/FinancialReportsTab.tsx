@@ -36,6 +36,7 @@ export function FinancialReportsTab() {
   const { t, locale } = useLanguage();
   const [fromDate, setFromDate] = useState(firstDayOfCurrentMonth);
   const [toDate, setToDate] = useState(todayInputDate);
+  const [activeReport, setActiveReport] = useState("trialBalance");
 
   const fromDateMs = useMemo(() => dateInputToStartOfDayMs(fromDate), [fromDate]);
   const toDateMs = useMemo(() => dateInputToEndOfDayMs(toDate), [toDate]);
@@ -45,19 +46,19 @@ export function FinancialReportsTab() {
 
   const trialBalance = useQuery(
     api.accountingReports.trialBalance,
-    activeOrgId ? { orgId: activeOrgId, toDate: toDateMs } : "skip"
+    activeOrgId && activeReport === "trialBalance" ? { orgId: activeOrgId, toDate: toDateMs } : "skip"
   );
   const incomeStatement = useQuery(
     api.accountingReports.incomeStatement,
-    activeOrgId ? { orgId: activeOrgId, fromDate: fromDateMs, toDate: toDateMs } : "skip"
+    activeOrgId && activeReport === "incomeStatement" ? { orgId: activeOrgId, fromDate: fromDateMs, toDate: toDateMs } : "skip"
   );
   const balanceSheet = useQuery(
     api.accountingReports.balanceSheet,
-    activeOrgId ? { orgId: activeOrgId, asOfDate: toDateMs } : "skip"
+    activeOrgId && activeReport === "balanceSheet" ? { orgId: activeOrgId, asOfDate: toDateMs } : "skip"
   );
   const vatReturn = useQuery(
     api.vatReport.generateVatSummary,
-    activeOrgId ? { orgId: activeOrgId, fromDate: fromDateMs, toDate: toDateMs } : "skip"
+    activeOrgId && activeReport === "vatReturn" ? { orgId: activeOrgId, fromDate: fromDateMs, toDate: toDateMs } : "skip"
   );
 
   if (!activeOrgId) return null;
@@ -75,7 +76,7 @@ export function FinancialReportsTab() {
         </div>
       </div>
 
-      <Tabs defaultValue="trialBalance" className="space-y-4">
+      <Tabs value={activeReport} onValueChange={setActiveReport} className="space-y-4">
         <div className="overflow-x-auto">
           <TabsList className="w-max bg-muted">
             <TabsTrigger value="trialBalance">{t("TrialBalance")}</TabsTrigger>

@@ -5,6 +5,7 @@ import { Loader2, Landmark, HandCoins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 import {
   Dialog,
@@ -57,6 +58,21 @@ type DisbursementConfirmationDialogProps = {
    * trigger — the same shape `RegisterExpectedPaymentDialog` already offers.
    */
   withTrigger?: boolean;
+  /**
+   * SCRUM-54, DEALERSHIP mode only. Present when the receipt reached a bank
+   * (BANK_TRANSFER / CHEQUE): the operator must name which one, explicitly - the
+   * confirm stays disabled until they do, and a single bank is not preselected.
+   * `options` is undefined while loading. Absent for a CASH receipt.
+   */
+  bank?: {
+    options: ReadonlyArray<{ _id: string; name: string; currency: string }> | undefined;
+    value: string;
+    onChange: (bankAccountId: string) => void;
+    /** The server read more active banks than it will list: fail closed, never claim "none". */
+    truncated?: boolean;
+    /** The deal's finance-company receivable is missing, so the eligible currency is unknown. */
+    receivableMissing?: boolean;
+  };
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
@@ -72,6 +88,7 @@ export function DisbursementConfirmationDialog({
   onConfirmSupplier,
   defaultAmountMajor,
   withTrigger = true,
+  bank,
   t,
   onOpenChange,
   onConfirm,
@@ -134,6 +151,13 @@ export function DisbursementConfirmationDialog({
         };
 
   const isReceipt = mode === "DEALERSHIP";
+  const needsBank = isReceipt && bank !== undefined;
+  // A truncated list cannot prove there is no eligible bank, so it is its own state.
+  const bankListTruncated = needsBank && bank.truncated === true;
+  // Likewise a missing receivable: no currency to match, so "no eligible bank" would be untrue.
+  const receivableMissing = needsBank && bank.receivableMissing === true;
+  const bankListUnavailable = bankListTruncated || receivableMissing;
+  const noEligibleBank = needsBank && !bankListUnavailable && bank.options !== undefined && bank.options.length === 0;
   const accentClass = isReceipt
     ? "bg-emerald-600 hover:bg-emerald-700 text-white"
     : "border-amber-500/50 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400";
@@ -168,9 +192,50 @@ export function DisbursementConfirmationDialog({
           <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
         {isReceipt ? (
-          <div className="rounded-md border bg-muted/50 p-3">
-            <p className="text-xs text-muted-foreground">{copy.amountLabel}</p>
-            <p className="mt-1 text-lg font-semibold tabular-nums">{amountLabel}</p>
+          <div className="space-y-3">
+            <div className="rounded-md border bg-muted/50 p-3">
+              <p className="text-xs text-muted-foreground">{copy.amountLabel}</p>
+              <p className="mt-1 text-lg font-semibold tabular-nums">{amountLabel}</p>
+            </div>
+            {needsBank && (
+              <div className="space-y-1.5">
+                <Select
+                  value={bank.value}
+                  onValueChange={bank.onChange}
+                  disabled={submitting || bank.options === undefined || noEligibleBank || bankListUnavailable}
+                >
+                  <SelectTrigger aria-label={t("DisbursementBank")}>
+                    <SelectValue
+                      placeholder={t(bank.options === undefined ? "DisbursementLoadingBanks" : "DisbursementSelectBank")}
+                    />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    {(bank.options ?? []).map((option) => (
+                      <SelectItem key={option._id} value={option._id}>
+                        <bdi>{option.name}</bdi>
+                        {" · "}
+                        <span className="text-xs text-muted-foreground">{option.currency}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {noEligibleBank && (
+                  <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">
+                    {t("DisbursementNoBank")}
+                  </p>
+                )}
+                {bankListTruncated && (
+                  <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">
+                    {t("DisbursementTooManyBanks")}
+                  </p>
+                )}
+                {receivableMissing && (
+                  <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">
+                    {t("DisbursementReceivableMissing")}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           /* The advice is a document about two other parties, so it is typed in
@@ -263,7 +328,11 @@ export function DisbursementConfirmationDialog({
             // `!(x > 0)`, not `x <= 0` — SonarCloud suggests the latter and they
             // differ on NaN. A non-numeric entry must keep the button disabled,
             // and `NaN <= 0` is false, which would enable it and submit NaN.
-            disabled={submitting || (!isReceipt && !(Number(amount) > 0))}
+            disabled={
+              submitting ||
+              (!isReceipt && !(Number(amount) > 0)) ||
+              (needsBank && (noEligibleBank || bankListUnavailable || bank.value === ""))
+            }
             variant={isReceipt ? "default" : "outline"}
             className={accentClass}
           >

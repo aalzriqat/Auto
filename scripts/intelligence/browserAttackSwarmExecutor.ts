@@ -165,7 +165,31 @@ async function runHandlerWithCancellation(
     // can still mutate the shared preview. A handler is required to observe the
     // AbortSignal and quiesce; if it does not, the worker intentionally remains
     // blocked until the outer job timeout kills the process.
-    await task.catch(() => undefined);
+    const late = await task.then(
+      (value) => value,
+      () => null,
+    );
+    // SCRUM-826 D7: a handler that had already proven a breach when the abort
+    // arrived concludes with it. Both outcomes fail the run, so this only
+    // keeps product proof from being relabelled a harness error. Nothing
+    // else survives the timeout: a late PASS is never certified, and a
+    // result without durable artifacts, or one that reports its own harness
+    // failure, stays a harness error. Worker binding is validated by the
+    // caller exactly as for an on-time result.
+    if (
+      late !== null &&
+      late.oracle.passed === false &&
+      !late.harnessError &&
+      late.artifacts.length > 0
+    ) {
+      return {
+        ...late,
+        oracle: {
+          ...late.oracle,
+          summary: late.oracle.summary + " [concluded after the mission timeout]",
+        },
+      };
+    }
     throw timeoutError;
   } finally {
     if (timer !== undefined) clearTimeout(timer);

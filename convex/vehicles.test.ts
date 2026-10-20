@@ -828,12 +828,24 @@ describe("inventory intelligence", () => {
   });
 
   test("createReservation with deposit records a real held deposit and accounting event", async () => {
-    const { t, orgId, asUser } = await setup();
+    const { t, orgId, userId, asUser } = await setup();
     const vehicleId = await asUser.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Deposit", lastName: "Customer" })
     );
+    const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId,
+      name: "Reservation deposit bank",
+      currency: "JOD",
+      openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(),
+      isActive: true,
+      isReconciliationTarget: false,
+      createdBy: userId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }));
 
     const reservationId = await asUser.mutation(api.vehicles.createReservation, {
       idempotencyKey: crypto.randomUUID(),
@@ -842,6 +854,7 @@ describe("inventory intelligence", () => {
       customerId,
       depositAmount: 750,
       depositMethod: "CARD",
+      depositBankAccountId: bankAccountId,
     });
 
     await t.run(async (ctx) => {

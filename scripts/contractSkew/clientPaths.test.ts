@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { extractClientCalls } from "./clientPaths.mjs";
 import { compareNode, validatorTree } from "./contractTree.mjs";
 
@@ -467,6 +469,22 @@ describe("clientPaths extractor", () => {
     expect(binders.length).toBeGreaterThan(0);
     expect(causes.has("DESTRUCTURED_BINDING") || causes.has("WRAPPER_RETURN")).toBe(true);
     expect(causes.has("DYNAMIC_IDENTITY")).toBe(true);
+  });
+
+  test("diagnosticsCount is computed on demand, and still counts the program's semantic errors", () => {
+    // SCRUM-752: a full semantic check was ~40 s of every whole-tree extraction
+    // and nothing read it, so the field is a getter. Reading it must still run
+    // the real check against the same program.
+    const dir = mkdtempSync(path.join(tmpdir(), "skew-diagnostics-"));
+    try {
+      const file = path.join(dir, "broken.ts");
+      writeFileSync(file, 'export const n: number = "not a number";\n');
+      const extraction = extractClientCalls([file], "tsconfig.json");
+      expect(typeof Object.getOwnPropertyDescriptor(extraction, "diagnosticsCount")?.get).toBe("function");
+      expect(extraction.diagnosticsCount).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("CASE 5f: an `any` value is opaque, and recorded as an unknown", () => {

@@ -1,0 +1,58 @@
+{
+  "id": "financed-v3-handover-in-closed-period-refuses-finalize-before-any-write",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "approvedMinor": 12500000,
+        "handoverPeriodStatus": "CLOSED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "finalize.refusalCode",
+      "value": "RECOGNITION_PERIOD_NOT_OPEN"
+    },
+    {
+      "observable": "application.finalizedSale",
+      "value": "none"
+    },
+    {
+      "observable": "sales.count",
+      "value": 0
+    },
+    {
+      "observable": "ledger.entriesWritten",
+      "value": 0
+    },
+    {
+      "observable": "saleJournal.totalNetMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum411ServerSaleEconomics.test.ts",
+    "testName": "a handover dated in a CLOSED accounting period blocks the close before anything is written"
+  },
+  "matrixRow": "pilot-financed-v3-period",
+  "fingerprint": "ddc0cdece19d0bd7c3febd349c243a54d609e18f0662ee9644f1016fd6dfc696",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum411-server-economics",
+    "firstSeen": "2026-10-14"
+  }
+}

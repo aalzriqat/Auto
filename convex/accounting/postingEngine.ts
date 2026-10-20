@@ -13,7 +13,7 @@ import { MutationCtx } from "../_generated/server";
 import { assertPostingAllowed } from "../accountingPeriods";
 import { resolveSystemAccount } from "../chartOfAccounts";
 import { scaleForCurrency, assertValidMinorAmount } from "../utils/money";
-import { SystemKey } from "../utils/defaultChart";
+import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
 import {
   applyPostingRule,
   validateBalance,
@@ -552,6 +552,28 @@ export async function postAccountingEvent(
     );
   }
 
+  // The GL bank control is attributable only when its physical bank is
+  // identified. This is the final posting boundary for direct and queued
+  // events, including event types whose old payloads predate bank identity.
+  // Validate before the first event/journal insert: a caller that catches this
+  // refusal may commit its own status, but it cannot leave an unbanked GL line.
+  for (const spec of ruleResult.lines) {
+    if (spec.accountSystemKey !== SYSTEM_KEYS.BANK_ACCOUNT) {
+      if (spec.bankAccountId !== undefined) {
+        throw new ConvexError("A non-bank journal line cannot name a physical bank account.");
+      }
+      continue;
+    }
+    const bankId = spec.bankAccountId && ctx.db.normalizeId("bankAccounts", spec.bankAccountId);
+    if (!bankId) {
+      throw new ConvexError("A bank posting requires its physical bank account. Nothing was posted.");
+    }
+    const bank = await ctx.db.get("bankAccounts", bankId);
+    if (!bank || bank.orgId !== cmd.orgId || bank.currency.toUpperCase() !== currency) {
+      throw new ConvexError("The bank posting's physical account cannot be verified. Nothing was posted.");
+    }
+  }
+
   // 7. Validate balance before resolving accounts
   validateBalance(ruleResult.lines);
 
@@ -628,8 +650,10 @@ export async function postAccountingEvent(
       vehicleId: (l.vehicleId || undefined) as Id<"vehicles"> | undefined,
       customerId: (l.customerId || undefined) as Id<"customers"> | undefined,
       salespersonId: (l.salespersonId || undefined) as Id<"users"> | undefined,
+      financeCompanyId: (l.financeCompanyId || undefined) as Id<"financeCompanies"> | undefined,
       // SCRUM-27: a manual finance company's name, so its lines are attributable.
       payerNameSnapshot: l.payerNameSnapshot || undefined,
+      bankAccountId: (l.bankAccountId || undefined) as Id<"bankAccounts"> | undefined,
       description: l.description,
     });
     await incrementAccountSnapshot(ctx, {
