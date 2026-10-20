@@ -795,7 +795,7 @@ export const commonEn = {
   PendingDeals: "Pending Deals",
   AwaitingApproval: "Awaiting Approval",
   ResumeDeal: "Resume Deal",
-  RequestedProfit: "Requested profit",
+  RequestedProfit: "Requested price uplift",
   ApprovalCancelled: "Deal request cancelled",
   FailedToCancelApproval: "Failed to cancel request",
 
@@ -1569,7 +1569,7 @@ export const commonEn = {
 
   // Profit approval requests
   NoPendingApprovals: "No pending approvals",
-  AllCaughtUp: "All caught up! There are no profit approval requests waiting.",
+  AllCaughtUp: "All caught up! There are no price approval requests waiting.",
   MinimumAllowed: "Minimum Allowed",
   ShortBy: "Short by",
   ApprovalApprovedMsg: "Request approved successfully",
@@ -1835,7 +1835,7 @@ export const commonAr = {
   PendingDeals: "الصفقات المعلقة",
   AwaitingApproval: "في انتظار الموافقة",
   ResumeDeal: "استئناف الصفقة",
-  RequestedProfit: "الربح المطلوب",
+  RequestedProfit: "الزيادة المطلوبة فوق سعر القائمة",
   ApprovalCancelled: "تم إلغاء طلب الصفقة",
   FailedToCancelApproval: "فشل إلغاء الطلب",
 
@@ -2605,7 +2605,7 @@ export const commonAr = {
 
   // Profit approval requests
   NoPendingApprovals: "لا توجد موافقات معلقة",
-  AllCaughtUp: "أنت في الموعد! لا توجد طلبات موافقة ربح في الانتظار.",
+  AllCaughtUp: "أنت في الموعد! لا توجد طلبات موافقة على السعر في الانتظار.",
   MinimumAllowed: "الحد الأدنى المسموح",
   ShortBy: "ينقصه",
   ApprovalApprovedMsg: "تمت الموافقة على الطلب بنجاح",
