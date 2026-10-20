@@ -67,10 +67,21 @@ export function requiredSkills(step, classes) {
   return [...need].map(([skill, why]) => ({ skill, why }));
 }
 
-/** Parse a Claude Code JSONL transcript and return the set of skills invoked. */
+/**
+ * Skills invoked in a Claude Code JSONL transcript. Two sources count, and only
+ * these two:
+ *  - an assistant `Skill` tool call whose tool_result came back without error
+ *    (an unknown or failed skill is not an invocation);
+ *  - a `<command-name>/skill</command-name>` marker in a user-role message that
+ *    is not a tool result, which is how the harness records a typed /skill.
+ * Assistant prose that merely contains the marker text counts for nothing.
+ */
 export function invokedSkills(transcriptText) {
-  const seen = new Set();
   const norm = (s) => String(s).replace(/^\/+/, "").split(":").pop();
+  const calls = new Map(); // tool_use id -> skill
+  const ok = new Set();
+  const typed = new Set();
+  const marker = /<command-name>\/?([^<\s]+)<\/command-name>/g;
   for (const line of transcriptText.split("\n")) {
     if (!line.trim()) continue;
     let rec;
@@ -79,24 +90,27 @@ export function invokedSkills(transcriptText) {
     } catch {
       continue;
     }
-    const content = rec?.message?.content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (block?.type === "tool_use" && block.name === "Skill" && block.input?.skill) {
-          seen.add(norm(block.input.skill));
-        }
-        // user typed /skill-name: harness records <command-name>
-        if (block?.type === "text" && typeof block.text === "string") {
-          for (const m of block.text.matchAll(/<command-name>\/?([^<\s]+)<\/command-name>/g)) {
-            seen.add(norm(m[1]));
-          }
+    const msg = rec?.message;
+    const role = msg?.role ?? rec?.type;
+    const blocks = Array.isArray(msg?.content) ? msg.content : [];
+    if (role === "assistant") {
+      for (const b of blocks) {
+        if (b?.type === "tool_use" && b.name === "Skill" && b.input?.skill && b.id) {
+          calls.set(b.id, norm(b.input.skill));
         }
       }
-    } else if (typeof content === "string") {
-      for (const m of content.matchAll(/<command-name>\/?([^<\s]+)<\/command-name>/g)) {
-        seen.add(norm(m[1]));
+    } else if (role === "user") {
+      for (const b of blocks) {
+        if (b?.type === "tool_result" && b.tool_use_id && !b.is_error) ok.add(b.tool_use_id);
       }
+      const texts =
+        typeof msg?.content === "string"
+          ? [msg.content]
+          : blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text);
+      for (const t of texts) for (const m of t.matchAll(marker)) typed.add(norm(m[1]));
     }
   }
+  const seen = new Set(typed);
+  for (const [id, skill] of calls) if (ok.has(id)) seen.add(skill);
   return seen;
 }

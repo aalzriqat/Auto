@@ -5,14 +5,16 @@
  *
  * It checks that the evidence is present, well formed and internally
  * consistent (Seat 1 is a different session and Opus 5.5, Seat 2 is gpt-6-sol at
- * medium or lower, the red run actually shows a failure, certified SHAs belong
- * to the PR). It cannot prove the text is true; the links let the owner verify.
+ * medium or lower, the red run actually shows a failure, certified SHAs are the PR head or a commit in the PR's own range). It cannot prove the text is true; the links let the owner verify.
  */
 import { classifyPaths, requiredSkills } from "./policy.mjs";
 
 export const SECTION = "## Skill evidence";
 const SESSION_URL = /https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/g;
-const PLACEHOLDER = /\b(todo|tbd|pending|placeholder|lorem)\b|<[^>\n]*>|^\s*(n\/a|none|-)?\s*$/i;
+// A block is a placeholder only when it is the whole content: empty, a single
+// <angle-bracket instruction>, or a bare TODO-style word. Real output may
+// contain generics (Promise<void>) or the word "pending".
+const PLACEHOLDER = /^\s*(<[^<>\n]*>|(n\/a|none|-|todo|tbd|pending|placeholder)\.?)?\s*$/i;
 
 function section(body) {
   const i = body.indexOf(SECTION);
@@ -31,10 +33,10 @@ function fenced(text, label) {
 }
 
 /**
- * @param {{body:string, files:string[], isAncestor?:(sha:string)=>Promise<boolean>}} p
+ * @param {{body:string, files:string[], isPrCommit?:(sha:string)=>Promise<boolean>}} p
  * @returns {Promise<{required:boolean, ok:boolean, problems:string[]}>}
  */
-export async function evaluate({ body, files, isAncestor }) {
+export async function evaluate({ body, files, isPrCommit }) {
   const classes = classifyPaths(files);
   const sensitive = classes.sensitive.length > 0;
   const gate = classes.gate.length > 0;
@@ -74,7 +76,7 @@ export async function evaluate({ body, files, isAncestor }) {
   for (const seat of ["Seat 1", "Seat 2"]) {
     const sha = line(t, `${seat} SHA`)?.match(/^[0-9a-f]{7,40}\b/i)?.[0];
     if (!sha) problems.push(`"${seat} SHA" must be the certified head SHA.`);
-    else if (isAncestor && !(await isAncestor(sha))) problems.push(`${seat} SHA ${sha} is not part of this PR's history.`);
+    else if (isPrCommit && !(await isPrCommit(sha))) problems.push(`${seat} SHA ${sha} is not the PR head or a commit in this PR's own range.`);
   }
   return { required: true, ok: problems.length === 0, problems };
 }

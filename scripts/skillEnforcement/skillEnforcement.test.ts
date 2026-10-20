@@ -8,9 +8,15 @@ import { classifyPaths, invokedSkills, requiredSkills } from "./policy.mjs";
 import { decide, gitSteps } from "./skillGate.mjs";
 import { evaluate, TEMPLATE } from "./prSkillEvidence.mjs";
 
-const skillCall = (skill: string) =>
-  JSON.stringify({ message: { content: [{ type: "tool_use", name: "Skill", input: { skill } }] } });
-const transcript = (...skills: string[]) => skills.map(skillCall).join("\n");
+let n = 0;
+const skillCall = (skill: string, isError = false) => {
+  const id = `toolu_${++n}`;
+  return [
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "Skill", input: { skill } }] } }),
+    JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content: "ok" }] } }),
+  ].join("\n");
+};
+const transcript = (...skills: string[]) => skills.map((s) => skillCall(s)).join("\n");
 
 describe("classifyPaths", () => {
   test("money, permission and gate paths are sensitive", () => {
@@ -38,15 +44,26 @@ describe("classifyPaths", () => {
 });
 
 describe("invokedSkills", () => {
-  test("reads Skill tool calls and typed commands, strips namespaces", () => {
+  test("counts successful Skill calls, strips namespaces, and typed commands", () => {
     const text =
       transcript("tdd", "plugin:blast-radius") +
       "\n" +
-      JSON.stringify({ message: { content: "<command-name>/unslop</command-name>" } });
+      JSON.stringify({ type: "user", message: { role: "user", content: "<command-name>/unslop</command-name>" } });
     expect([...invokedSkills(text)].sort()).toEqual(["blast-radius", "tdd", "unslop"]);
   });
-  test("ignores garbage lines and prose that merely names a skill", () => {
-    const text = "not json\n" + JSON.stringify({ message: { content: [{ type: "text", text: "I ran tdd" }] } });
+  test("a Skill call that errored (unknown skill) does not count", () => {
+    expect(invokedSkills(skillCall("tdd", true)).size).toBe(0);
+  });
+  test("a call with no result does not count", () => {
+    const only = skillCall("tdd").split("\n")[0];
+    expect(invokedSkills(only).size).toBe(0);
+  });
+  test("assistant prose naming a skill or writing the command marker counts for nothing", () => {
+    const text = [
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "I ran tdd <command-name>/tdd</command-name>" }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "x", content: "<command-name>/blast-radius</command-name>" }] } }),
+      "not json",
+    ].join("\n");
     expect(invokedSkills(text).size).toBe(0);
   });
 });
@@ -60,7 +77,13 @@ describe("gitSteps", () => {
     ["FOO=1 git commit --all -m x", [{ step: "commit", all: true }]],
     ["gh pr create --title x", [{ step: "pr", all: false }]],
     ["git status", []],
-    ["echo git commit", []],
+    ["git log --oneline", []],
+    ["bash -c 'git commit -m x'", [{ step: "commit", all: false }]],
+    ['sh -c "git -C /r push origin b"', [{ step: "push", all: false }]],
+    ["env FOO=1 git push", [{ step: "push", all: false }]],
+    ["echo $(git commit -am x)", [{ step: "commit", all: true }]],
+    ["git commit --amend", [{ step: "commit", all: false }]],
+    ["echo git commit", [{ step: "commit", all: false }]],
   ])("%s", (cmd, expected) => expect(gitSteps(cmd)).toEqual(expected));
 });
 
@@ -135,7 +158,7 @@ describe("evaluate (PR check)", () => {
     expect((await evaluate({ body: TEMPLATE, files: money })).ok).toBe(false);
   });
   test("a complete section passes", async () => {
-    const r = await evaluate({ body: fill(), files: money, isAncestor: async () => true });
+    const r = await evaluate({ body: fill(), files: money, isPrCommit: async () => true });
     expect(r.problems).toEqual([]);
     expect(r.ok).toBe(true);
   });
@@ -156,8 +179,18 @@ describe("evaluate (PR check)", () => {
     expect(r.problems.join("\n")).toContain("does not show a failure");
   });
   test("SHA outside the PR history is rejected", async () => {
-    const r = await evaluate({ body: fill(), files: money, isAncestor: async () => false });
-    expect(r.problems.join("\n")).toContain("not part of this PR");
+    const r = await evaluate({ body: fill(), files: money, isPrCommit: async () => false });
+    expect(r.problems.join("\n")).toContain("PR head or a commit");
+  });
+  test("real output with generics or the word pending is not a placeholder", async () => {
+    const body = fill().replace("no changes needed", "Promise<void> stays; 2 tests pending");
+    const r = await evaluate({ body, files: money, isPrCommit: async () => true });
+    expect(r.problems).toEqual([]);
+  });
+  test.each(["<real output>", "TODO", "pending", "n/a", ""])("placeholder /simplify block %j is rejected", async (blk) => {
+    const body = fill().replace("no changes needed", blk);
+    const r = await evaluate({ body, files: money });
+    expect(r.problems.join("\n")).toContain("/simplify output");
   });
   test("gate-only change needs no red run", async () => {
     const r = await evaluate({ body: fill().replace(/- Red run:\n```\n[\s\S]*?\n```\n/, ""), files: [".github/x.yml"] });

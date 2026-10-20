@@ -21,29 +21,27 @@ import { classifyPaths, invokedSkills, requiredSkills } from "./policy.mjs";
 
 const UNKNOWN_BASE = { sensitive: ["(changed files unknown)"], gate: [], code: ["(unknown)"] };
 
-/** First git subcommand of each shell segment, with whether -a/--all was passed. */
+const ARG = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
+const GIT_STEP = new RegExp(
+  String.raw`\bgit\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b([^;&|\n'")]*)`,
+  "g",
+);
+
+/**
+ * Commit, push and PR steps named anywhere in a shell command, with whether
+ * -a/--all was passed. The scan is over the raw text on purpose: it also sees
+ * `bash -c 'git commit'`, `env git push`, `$(git commit)` and `xargs git push`.
+ * It over-matches (`echo git commit` counts), which only costs a skill check.
+ * Residual bypass: a command built at run time (`g=git; $g commit`), a git
+ * alias, or a script or other program that runs git itself.
+ */
 export function gitSteps(command) {
   const steps = [];
-  for (const segment of command.split(/&&|\|\||[;|\n]/)) {
-    const tokens = segment.trim().split(/\s+/).filter(Boolean);
-    let i = 0;
-    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
-    if (tokens[i] === "gh" && tokens[i + 1] === "pr" && tokens[i + 2] === "create") {
-      steps.push({ step: "pr", all: false });
-      continue;
-    }
-    if (tokens[i] !== "git") continue;
-    i++;
-    while (i < tokens.length && tokens[i].startsWith("-")) {
-      i += tokens[i] === "-C" || tokens[i] === "-c" ? 2 : 1;
-    }
-    const sub = tokens[i];
-    if (sub === "commit" || sub === "push") {
-      const rest = tokens.slice(i + 1);
-      const all = rest.some((t) => t === "--all" || /^-[a-zA-Z]*a[a-zA-Z]*$/.test(t));
-      steps.push({ step: sub, all });
-    }
+  for (const m of command.matchAll(GIT_STEP)) {
+    const all = /(^|\s)(--all|-[a-zA-Z]*a[a-zA-Z]*)(?=\s|$)/.test(m[3]);
+    steps.push({ step: m[2], all });
   }
+  if (/\bgh\s+pr\s+create\b/.test(command)) steps.push({ step: "pr", all: false });
   return steps;
 }
 

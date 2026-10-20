@@ -19,16 +19,14 @@ async function main() {
   const files = gh([`repos/${REPO}/pulls/${PR_NUMBER}/files`, "--paginate", "--jq", ".[] | .filename, (.previous_filename // empty)"])
     .split("\n")
     .filter(Boolean);
-  const head = pr.head.sha;
-  const isAncestor = async (sha) => {
-    try {
-      const status = gh([`repos/${REPO}/compare/${sha}...${head}`, "--jq", ".status"]).trim();
-      return status === "ahead" || status === "identical";
-    } catch {
-      return false;
-    }
-  };
-  const result = await evaluate({ body: pr.body ?? "", files, isAncestor });
+  // The PR's own range: head plus every commit GitHub lists for the PR.
+  // A main commit from before the PR is not accepted as a certified SHA.
+  const own = gh([`repos/${REPO}/pulls/${PR_NUMBER}/commits`, "--paginate", "--jq", ".[].sha"])
+    .split("\n")
+    .filter(Boolean);
+  own.push(pr.head.sha);
+  const isPrCommit = async (sha) => own.some((c) => c.startsWith(sha.toLowerCase()));
+  const result = await evaluate({ body: pr.body ?? "", files, isPrCommit });
   if (!result.required) {
     console.log("skill-evidence: no money, permission or gate paths touched; not required.");
     return;
