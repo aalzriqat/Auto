@@ -94,7 +94,8 @@ const EXECUTES_QUOTED = /\$\(|`/;
 
 function commandWord(segment) {
   const word = segment.trim().split(/\s+/).find((w) => w && !/^\w+=/.test(w) && !SKIPPED_WORDS.has(w)) ?? "";
-  return word.split(/[\\/]/).pop().replace(/\.\w+$/i, "").toLowerCase();
+  // Allowlist side: the bare command name only, optionally .exe. A path or another extension (./grep, echo.sh, jira.cmd) is not the known tool.
+  return /^[a-z]+(?:\.exe)?$/i.test(word) ? word.replace(/\.exe$/i, "").toLowerCase() : "";
 }
 
 function isTextOnlySegment(text) {
