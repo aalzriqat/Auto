@@ -198,6 +198,8 @@ export const AppErrorCode = {
   // SCRUM-724/SCRUM-795 c22479 + Sol Q7: pilot containment of customer-credit payouts. Translated under ServerError_<code>.
   CUSTOMER_CREDIT_PAYOUT_DISABLED: "CUSTOMER_CREDIT_PAYOUT_DISABLED",
   DEAL_COMMISSION_LINES_DISABLED: "DEAL_COMMISSION_LINES_DISABLED",
+  // SCRUM-854. A SALE line for the sale's own salesperson would pay the same role twice. Translated under ServerError_<code>.
+  DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON",
   CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED: "CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED",
   // SCRUM-113. `approvals.respondToApproval` refuses APPROVED when the request's vehicle is
   // missing, in another organisation or soft-deleted; REJECTED stays allowed. Translated under
