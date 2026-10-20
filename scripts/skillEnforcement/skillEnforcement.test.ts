@@ -192,7 +192,7 @@ describe("gitSteps", () => {
     "node --eval \"require('node:child_process').spawn('sh')\"",
     "python3 -c \"import subprocess as s; s.run(['g'+'it','push'])\"",
     "python -c 'import os; os.popen(cmd)'",
-    "deno eval \"new Deno.Command('sh')\" # child_process",
+    "deno eval \"new Deno.Command('sh')\"",
     "bun -e \"Bun.spawn(['sh'])\"",
     "perl -e 'system(\"sh\")'",
     "ruby -e 'system(cmd)'",
