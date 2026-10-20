@@ -826,12 +826,13 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
   test("owned configured financier × CHEQUE tender × cleared cheque return with no open period: the return succeeds, the reversal is DEFERRED, then posts exactly once a period opens", async () => {
     const d = await clearedFinanceChequeDeal("s486fcperiod");
     const { s, applicationId, cleared } = d;
-    const setPeriods = (status: "OPEN" | "CLOSED") => s.t.run(async (ctx) => {
-      for (const period of await ctx.db.query("accountingPeriods").collect()) {
-        if (period.orgId === s.orgId) await ctx.db.patch(period._id, { status });
-      }
-    });
-    await setPeriods("CLOSED");
+    // Periods move only through the public accounting-period mutations (oracle gate contract item 1).
+    const ownPeriodIds = async () => (await s.owner.as.query(api.accountingPeriods.list, { orgId: s.orgId })).map((p) => p._id);
+    for (const periodId of await ownPeriodIds()) {
+      const checklist = await s.owner.as.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId });
+      await s.owner.as.mutation(api.accountingPeriods.close, { orgId: s.orgId, periodId, acknowledgedWarnings: checklist.warnings });
+    }
+    expect(await s.owner.as.query(api.accountingPeriods.currentOpenPeriod, { orgId: s.orgId })).toBeNull();
     const rowsBefore = await journalRows(s);
     // With every period closed a role without the authority is still refused FORBIDDEN, writing nothing.
     await expectRefusedAndUnchanged(
@@ -878,17 +879,30 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     }));
     expect(stale?.code).toBe("FINANCE_CONFIRM_STALE_REQUEST");
 
-    // Once a period opens the outbox drains the queued reversal: the exact inverse posts once.
-    await setPeriods("OPEN");
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-    try {
-      await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+    // Reopening a period through the public mutation wakes the outbox: the exact inverse posts once, and a
+    // second drain finds nothing left to post (exactly once, not at-least-once).
+    const settle = async () => {
       for (let pass = 0; pass < 10; pass += 1) {
         await s.t.finishAllScheduledFunctions(vi.runAllTimers);
         const inFlight = (await s.t.run(async (ctx) => await ctx.db.system.query("_scheduled_functions").collect()))
           .filter((f) => f.state.kind === "pending" || f.state.kind === "inProgress").length;
         if (inFlight === 0) break;
       }
+    };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      for (const periodId of await ownPeriodIds()) {
+        await s.owner.as.mutation(api.accountingPeriods.reopen, {
+          orgId: s.orgId, periodId, reason: "Certification: the deferred cheque-return reversal must post",
+        });
+      }
+      await settle();
+      await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+      await settle();
+      const afterFirstDrains = await journalRows(s);
+      await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+      await settle();
+      expect(await journalRows(s)).toEqual(afterFirstDrains);
     } finally {
       vi.useRealTimers();
     }
