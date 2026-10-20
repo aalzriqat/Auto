@@ -267,3 +267,43 @@ describe("reports show the margin after commissions (display only)", () => {
     expect(perf[0].totalCommissions).toBeNull();
   });
 });
+
+// SCRUM-854: the salesperson's own sale commission lives on the sale row, so a
+// SALE line for that same person would pay them twice for one role on the deal.
+describe("dealCommissions: no second SALE commission for the salesperson (SCRUM-854)", () => {
+  test("a SALE line for the sale's own salesperson is refused and nothing is written", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const s = await seed(t, "dupsale");
+    await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
+
+    const attempt = s.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId: s.saleId, kind: "SALE", employeeId: s.userId, amount: 50,
+    });
+    await expect(attempt).rejects.toMatchObject({
+      data: { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" },
+    });
+
+    const view = await s.asAdmin.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId: s.saleId });
+    expect(view.lines).toEqual([]);
+    // The salesperson is owed the one 50.000 JOD commission, not 100.000.
+    expect(view.totalMinor).toBe(50_000);
+    const rows = await t.run((ctx) => ctx.db.query("dealCommissionLines").collect());
+    expect(rows).toEqual([]);
+  });
+
+  test("the salesperson can still earn a different type, and another employee a SALE line", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const s = await seed(t, "othertypes");
+    await s.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId: s.saleId, kind: "PURCHASE", employeeId: s.userId, amount: 10,
+    });
+    await s.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId: s.saleId, kind: "SALE", employeeId: s.buyerAgent, amount: 20,
+    });
+    const view = await s.asAdmin.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId: s.saleId });
+    expect(view.lines.map((l) => [l.kind, l.amountMinor])).toEqual([
+      ["PURCHASE", 10_000],
+      ["SALE", 20_000],
+    ]);
+  });
+});
