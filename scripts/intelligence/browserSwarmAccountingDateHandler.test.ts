@@ -10,8 +10,10 @@ import type { MissionBrowser, MissionBrowserRuntime, MissionSeat } from "./brows
 
 /**
  * SCRUM-795 (retargeting SCRUM-849 ACC-3) — handler-level tests for ACCOUNTING_DATE_BOUNDARY judged by
- * STATE_TRANSITION, now an EXPECTED-REFUSAL attack: manual journals are off for the pilot, so
- * `createManualJournal` and `approveManualJournal` must both be refused with the pilot message and change nothing.
+ * STATE_TRANSITION, now an EXPECTED-REFUSAL attack on the CREATE door only: manual journals are off for the pilot, so
+ * `createManualJournal` must be refused with the pilot message and change nothing. The approve door is out of this
+ * mission's scope (the swarm lane never holds the legacy draft); it is covered by
+ * convex/manualJournalsPilotOff.scrum795.test.ts and the trusted-main E2E.
  *
  * The real handler runs end to end against a scripted two-seat backend. Every literal below is written out by
  * hand, never taken from the production scenario, and each fault flips exactly one fact of the product's
@@ -22,17 +24,11 @@ interface Faults {
   noLegacyDraft?: boolean;
   /** The switch is off for create only: the draft is prepared. */
   createAccepted?: boolean;
-  /** The switch is off for approve only: the legacy draft is approved and a journal is posted. */
-  approveAccepted?: boolean;
   /** Create is refused, but for a reason that is not the pilot switch. */
   createOtherRefusal?: boolean;
-  /** Approve is refused, but for a reason that is not the pilot switch. */
-  approveOtherRefusal?: boolean;
-  /** Approve is refused with the pilot message, yet the legacy draft's money and reviewer were changed. */
-  approveAltersDraft?: boolean;
-  /** Approve is refused with the pilot message, yet the legacy draft was rejected. */
-  approveConsumesDraft?: boolean;
   /** Create is refused with the pilot message, yet a journal carrying the memo was posted. */
+  createConsumesDraft?: boolean;
+  createAltersDraft?: boolean;
   createWritesJournal?: boolean;
   /** Create is refused with the pilot message, yet a draft carrying the memo was prepared. */
   createWritesDraft?: boolean;
@@ -50,7 +46,6 @@ interface Faults {
   smallPages?: boolean;
   /** The chart offers fewer than two accounts that accept manual posting. */
   fewAccounts?: boolean;
-  seatsSplit?: boolean;
   screenFails?: boolean;
 }
 
@@ -118,6 +113,11 @@ class World {
       this.drafts.set(draftId, { id: draftId, memo: String(a.memo), accountingDate: Number(a.accountingDate), lines: a.lines as Draft["lines"], status: "PENDING_APPROVAL", createdBy: actor });
       return { alreadyCreated: false, draftId };
     }
+    if (f.createConsumesDraft) this.drafts.get("draft-legacy")!.status = "REJECTED";
+    if (f.createAltersDraft) {
+      const legacy = this.drafts.get("draft-legacy")!;
+      legacy.lines = legacy.lines.map((line, index) => (index === 0 ? { ...line, debitMinor: line.debitMinor + 1 } : line));
+    }
     if (f.createWritesJournal) this.addEntry(String(a.memo));
     if (f.createWritesDraft) {
       const draftId = this.id("draft");
@@ -125,23 +125,6 @@ class World {
     }
     if (f.strayJournalAppears) this.addEntry("someone else's sale");
     if (f.existingJournalChanges) (this.entries.get("je-existing") as Entry).status = "VOIDED";
-    throw new ConvexError({ code: "MANUAL_JOURNALS_DISABLED", message: PILOT_MESSAGE });
-  }
-
-  private approve(actor: string, draftId: string): unknown {
-    const f = this.faults;
-    const draft = this.drafts.get(draftId);
-    if (f.approveOtherRefusal) throw new ConvexError("Manual journal reviewer cannot be the same as the poster.");
-    if (f.approveAccepted && draft) {
-      draft.status = "POSTED";
-      const journalId = this.addEntry(draft.memo);
-      return { resourceId: journalId, journalId };
-    }
-    if (draft && f.approveAltersDraft) {
-      draft.lines = draft.lines.map((line, index) => (index === 0 ? { ...line, debitMinor: line.debitMinor + 1 } : line));
-      draft.reviewedBy = actor;
-    }
-    if (draft && f.approveConsumesDraft) draft.status = "REJECTED";
     throw new ConvexError({ code: "MANUAL_JOURNALS_DISABLED", message: PILOT_MESSAGE });
   }
 
@@ -162,8 +145,6 @@ class World {
             ];
       case "financialAudit:createManualJournal":
         return this.create(actor, a);
-      case "financialAudit:approveManualJournal":
-        return this.approve(actor, String(a.draftId));
       case "financialAudit:listPendingManualJournals":
         if (f.pendingMalformed) return { drafts: [] };
         return [...this.drafts.values()]
@@ -216,7 +197,7 @@ function harness(faults: Faults = {}, options: { signal?: AbortSignal; finishFai
   const pages = new Map<Page, FakePage>();
   const runtimeApi: MissionBrowserRuntime = {
     open: async (_context, seat = "primary") => {
-      const fake = new FakePage(world, seat, faults.seatsSplit && seat === "approver" ? "org-other" : "org1");
+      const fake = new FakePage(world, seat, "org1");
       const page = fake as unknown as Page;
       pages.set(page, fake);
       const entry = { seat, finished: false };
@@ -287,35 +268,30 @@ const breach = async (faults: Faults, ...patterns: RegExp[]) => {
   return h;
 };
 
-describe("SCRUM-795 manual-journals-off handler: the discriminating scenario", () => {
-  it("PASSES a correct product: create and approve are refused with the pilot message and nothing changes", async () => {
+describe("SCRUM-795 manual-journals-off handler: the discriminating scenario (create door only)", () => {
+  it("PASSES a correct product: create is refused with the pilot message and nothing changes", async () => {
     const h = harness();
     const result = (await h.run()) as { oracle: { passed: boolean; kind: string; summary: string } };
     expect(result.oracle).toMatchObject({ passed: true, kind: "STATE_TRANSITION" });
-    expect(h.opened.map((entry) => entry.seat).sort()).toEqual(["approver", "primary"]);
+    expect(h.opened.map((entry) => entry.seat)).toEqual(["primary"]);
     expect(h.opened.every((entry) => entry.finished)).toBe(true);
     expect(h.world.calls).toContain("ui:goto /org1/accounting");
     expect(h.evidence).toHaveLength(1);
     expect(h.evidence[0]).toMatchObject({
       attack: "ACCOUNTING_DATE_BOUNDARY",
       oracle: "STATE_TRANSITION",
-      legacyPendingDraftPresent: true,
       createAttempt: { kind: "REFUSED" },
-      approveAttempt: { kind: "REFUSED" },
       unjudged: [],
       violations: [],
     });
-    expect(h.evidence[0]?.notExercised).toEqual(["MANUAL_JOURNAL_FORM", "POSTING_RULES_WHILE_OFF", "LOCKED_PERIOD", "OUTBOX_POSTING", "PERIOD_REOPEN"]);
-    expect(result.oracle.summary).toMatch(/Not read: the manual-journal form/);
+    expect(h.evidence[0]?.notExercised).toEqual(["APPROVE_DOOR", "MANUAL_JOURNAL_FORM", "POSTING_RULES_WHILE_OFF", "LOCKED_PERIOD", "OUTBOX_POSTING", "PERIOD_REOPEN"]);
+    expect(result.oracle.summary).toMatch(/Not read: the approveManualJournal door/);
   });
 
-  it("attempts create as the owner and approves the legacy draft as the second seat, never as the preparer", async () => {
+  it("attempts create as the owner on a well-formed request, and never calls or claims approve", async () => {
     const h = harness();
     await h.run();
-    expect(h.world.calls.filter((call) => /financialAudit:(create|approve)/.test(call))).toEqual([
-      "owner:financialAudit:createManualJournal",
-      "manager:financialAudit:approveManualJournal",
-    ]);
+    expect(h.world.calls.filter((call) => /financialAudit:(create|approve)/.test(call))).toEqual(["owner:financialAudit:createManualJournal"]);
     const create = h.world.argsOf.find((entry) => entry.name === "financialAudit:createManualJournal");
     // A well-formed balanced request on the first two eligible accounts: not the inactive, restricted or non-manual ones.
     expect(create?.args.lines).toEqual([
@@ -323,9 +299,13 @@ describe("SCRUM-795 manual-journals-off handler: the discriminating scenario", (
       { accountId: "acct-e", debitMinor: 0, creditMinor: 12_345 },
     ]);
     expect(create?.args.accountingDate).toBe(Date.UTC(2020, 1, 15, 12));
-    expect(h.world.argsOf.find((entry) => entry.name === "financialAudit:approveManualJournal")?.args.draftId).toBe("draft-legacy");
-    // The attempts leave the preview exactly as it was: nothing to clean up.
+    expect(h.evidence[0]).not.toHaveProperty("approveAttempt");
     expect(h.world.calls.filter((call) => /reject|accountingPeriods:/.test(call))).toEqual([]);
+  });
+
+  it("PASSES the same on a preview with no legacy pending draft, because the mission no longer claims the approve door", async () => {
+    const result = (await harness({ noLegacyDraft: true }).run()) as { oracle: { passed: boolean } };
+    expect(result.oracle.passed).toBe(true);
   });
 
   it("PASSES a correct product whose journal pages hold one row each", async () => {
@@ -339,10 +319,6 @@ describe("SCRUM-795 manual-journals-off handler: negative controls", () => {
     await breach({ createAccepted: true }, /preparing a manual journal while manual journals are off was accepted/);
   });
 
-  it("FAILS an approve that was accepted and posted a journal", async () => {
-    await breach({ approveAccepted: true }, /approving a legacy pending manual journal while manual journals are off was accepted/);
-  });
-
   it("FAILS a refused-looking create that posted a journal carrying its memo", async () => {
     await breach({ createWritesJournal: true }, /journal carrying the refused memo was posted anyway/);
   });
@@ -351,12 +327,12 @@ describe("SCRUM-795 manual-journals-off handler: negative controls", () => {
     await breach({ createWritesDraft: true }, /draft carrying the refused memo was prepared anyway/);
   });
 
-  it("FAILS a refusal that altered the still-pending legacy draft's money and reviewer", async () => {
-    await breach({ approveAltersDraft: true }, /lines changed/, /reviewedBy changed/);
+  it("FAILS a refused create that consumed an existing pending draft", async () => {
+    await breach({ createConsumesDraft: true }, /left the pending list/);
   });
 
-  it("FAILS a refusal that consumed the legacy draft", async () => {
-    await breach({ approveConsumesDraft: true }, /left the pending list/);
+  it("FAILS a refused create that altered an existing pending draft", async () => {
+    await breach({ createAltersDraft: true }, /lines changed/);
   });
 
   it("FAILS the same breach found through real cursor pagination", async () => {
@@ -364,29 +340,15 @@ describe("SCRUM-795 manual-journals-off handler: negative controls", () => {
   });
 });
 
-describe("SCRUM-795 manual-journals-off handler: a door that cannot be exercised FAILS (AGENTS.md: cannot run is a failure, never a skip)", () => {
+describe("SCRUM-795 manual-journals-off handler: a claim that cannot be observed FAILS (AGENTS.md: cannot run is a failure, never a skip)", () => {
   const notIncomplete = (h: ReturnType<typeof harness>) => {
     expect(h.evidence).toHaveLength(1);
     expect(h.evidence[0]).not.toMatchObject({ outcome: "INCONCLUSIVE" });
     expect(h.opened.every((entry) => entry.finished)).toBe(true);
   };
 
-  it("FAILS, never passes, when the preview holds no legacy pending draft, so the approval door is never exercised", async () => {
-    const h = await breach({ noLegacyDraft: true }, /approving a legacy pending manual journal while manual journals are off was not exercised/);
-    expect(h.world.calls.filter((call) => /approveManualJournal/.test(call))).toEqual([]);
-    // The create door was still attempted and refused: only the approval is missing.
-    expect(h.world.calls.filter((call) => /createManualJournal/.test(call))).toHaveLength(1);
-    expect(h.evidence[0]).toMatchObject({ legacyPendingDraftPresent: false, approveAttempt: null, violations: [expect.stringMatching(/was not exercised/)] });
-    notIncomplete(h);
-  });
-
   it("FAILS when create is refused for another reason than the pilot switch", async () => {
     const h = await breach({ createOtherRefusal: true }, /preparing a manual journal while manual journals are off was not exercised: it failed for a reason other than the pilot refusal/);
-    notIncomplete(h);
-  });
-
-  it("FAILS when approve is refused for another reason than the pilot switch", async () => {
-    const h = await breach({ approveOtherRefusal: true }, /approving a legacy pending manual journal while manual journals are off was not exercised: it failed for a reason other than the pilot refusal/);
     notIncomplete(h);
   });
 
@@ -396,37 +358,29 @@ describe("SCRUM-795 manual-journals-off handler: a door that cannot be exercised
     notIncomplete(h);
   });
 
-  it("FAILS, with nothing attempted, when the second seat signs in to another organization", async () => {
-    const h = await breach({ seatsSplit: true }, /nothing was attempted/, /never observed/);
-    expect(h.world.calls.filter((call) => /financialAudit:/.test(call))).toEqual([]);
+  it("FAILS when the pending list cannot be read, so unchanged drafts were never observed", async () => {
+    const h = await breach({ pendingMalformed: true }, /pending drafts could not be read/);
     notIncomplete(h);
   });
 
-  it("FAILS when the pending list cannot be read, so no draft could be approved", async () => {
-    const h = await breach({ pendingMalformed: true }, /approving a legacy pending manual journal while manual journals are off was not exercised/);
-    expect(h.world.calls.filter((call) => /approveManualJournal/.test(call))).toEqual([]);
+  it("FAILS when the pending list holds a malformed row", async () => {
+    const h = await breach({ pendingRowMalformed: true }, /pending drafts could not be read/);
     notIncomplete(h);
   });
 
-  it("FAILS when the pending list holds a malformed legacy draft, so it could not be approved", async () => {
-    const h = await breach({ pendingRowMalformed: true }, /approving a legacy pending manual journal while manual journals are off was not exercised/);
-    expect(h.world.calls.filter((call) => /approveManualJournal/.test(call))).toEqual([]);
+  it("FAILS when the organization journal list is malformed, so an unchanged ledger was never observed", async () => {
+    const h = await breach({ orgListMalformed: true }, /journals could not be read/);
     notIncomplete(h);
   });
 });
 
 describe("SCRUM-795 manual-journals-off handler: inconclusive, never a pass", () => {
-
-  it("is INCONCLUSIVE when another source writes a journal during the attempts", async () => {
+  it("is INCONCLUSIVE when another source writes a journal during the attempt", async () => {
     await inconclusive({ strayJournalAppears: true }, /no link to another source/);
   });
 
-  it("is INCONCLUSIVE when an existing journal changes during the attempts", async () => {
+  it("is INCONCLUSIVE when an existing journal changes during the attempt", async () => {
     await inconclusive({ existingJournalChanges: true }, /changed during the refused approval/);
-  });
-
-  it("is INCONCLUSIVE when the organization journal list is malformed", async () => {
-    await inconclusive({ orgListMalformed: true }, /came back malformed/);
   });
 
   it("is INCONCLUSIVE when the accounting screen cannot be opened for the screenshot", async () => {

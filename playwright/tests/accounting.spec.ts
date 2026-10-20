@@ -220,15 +220,23 @@ const OPENING_UNITS = 100;
 // Minor-unit scale per currency, hand-written: 3 for JOD/KWD/BHD/OMR, 2 otherwise.
 const scaleOf = (currency: string): number => (["JOD", "KWD", "BHD", "OMR"].includes(currency) ? 3 : 2);
 
+/** Every POSTED journal of the organization, read through the query's own cursor to the last page. */
 async function listPostedJournals(
   client: Awaited<ReturnType<typeof authenticatedConvexClient>>,
   orgId: Id<"organizations">
 ): Promise<JournalRow[]> {
-  const page = (await client.query(api.accountingLedger.listJournalEntries, {
-    orgId,
-    paginationOpts: { numItems: 100, cursor: null },
-  })) as { page: JournalRow[] };
-  return page.page.filter((row) => row.status === "POSTED");
+  const rows: JournalRow[] = [];
+  let cursor: string | null = null;
+  for (let pageNumber = 0; pageNumber < 500; pageNumber += 1) {
+    const page: { page: JournalRow[]; isDone: boolean; continueCursor: string } = await client.query(
+      api.accountingLedger.listJournalEntries,
+      { orgId, paginationOpts: { numItems: 200, cursor } }
+    );
+    rows.push(...page.page.filter((row) => row.status === "POSTED"));
+    if (page.isDone) return rows;
+    cursor = page.continueCursor;
+  }
+  throw new Error("the journal list could not be read to completion within 500 pages");
 }
 
 test.describe("accounting register: a posted journal", () => {
@@ -238,32 +246,19 @@ test.describe("accounting register: a posted journal", () => {
     const client = await authenticatedConvexClient(page);
 
     // 1. A POSTED journal to look at. A scenario that finds none FAILS; it never skips.
-    let known: { memo: string; debitMinor: number } | null = null;
+    //    Every read that decides whether an opening balance can be posted happens BEFORE the first write: the
+    //    whole ledger is paged (not just a first page), and the pending-draft, posted and owner checks are read.
+    let known: { memo: string; debitMinor: number; date: number; periodId: Id<"accountingPeriods"> } | null = null;
     let posted = await listPostedJournals(client, orgId);
     if (posted.length === 0) {
-      const periods = (await client.query(api.accountingPeriods.list, { orgId })) as Array<{
-        _id: Id<"accountingPeriods">;
-        fiscalYear: number;
-        periodNumber: number;
-        status: string;
-      }>;
-      const p8 = periods.find((p) => p.fiscalYear === 2026 && p.periodNumber === 8);
-      if (!p8) {
-        await client.mutation(api.accountingPeriods.create, {
-          orgId,
-          fiscalYear: 2026,
-          periodNumber: 8,
-          startDate: Date.UTC(2026, 7, 1, 0, 0, 0, 0),
-          endDate: Date.UTC(2026, 8, 0, 23, 59, 59, 999),
-          openImmediately: true,
-        });
-      } else if (p8.status !== "OPEN") {
-        await client.mutation(api.accountingPeriods.open, { orgId, periodId: p8._id });
-      }
       const status = (await client.query(api.accountingCutover.openingBalanceStatus, { orgId })) as {
+        posted: boolean;
+        pendingDraftId: string | null;
         canPostDirectly: boolean;
         currency: string;
       };
+      expect(status.posted, "an opening balance is posted but no posted journal was listed").toBe(false);
+      expect(status.pendingDraftId, "an opening-balance draft is pending, so none can be posted here").toBeNull();
       expect(status.canPostDirectly, "the owner seat must be able to post an opening balance").toBe(true);
       const accounts = (await client.query(api.chartOfAccounts.list, { orgId })) as Array<{
         _id: Id<"chartOfAccounts">;
@@ -272,11 +267,46 @@ test.describe("accounting register: a posted journal", () => {
       }>;
       const usable = accounts.filter((a) => a.allowManualPosting && a.active);
       expect(usable.length).toBeGreaterThanOrEqual(2);
+      const periods = (await client.query(api.accountingPeriods.list, { orgId })) as Array<{
+        _id: Id<"accountingPeriods">;
+        fiscalYear: number;
+        periodNumber: number;
+        startDate: number;
+        endDate: number;
+        status: string;
+      }>;
+      // Prefer a period that is already OPEN, so nothing is written before the posting is attempted. Only
+      // when none is open is 2026-P8 created (the one write the posting itself needs).
+      const open = periods.find((p) => p.status === "OPEN");
+      let periodId: Id<"accountingPeriods">;
+      let asOfDate: number;
+      if (open) {
+        periodId = open._id;
+        // Noon UTC on the period's first day: hand-derivable, inside the period.
+        asOfDate = open.startDate + 12 * 60 * 60 * 1000;
+        expect(asOfDate).toBeLessThanOrEqual(open.endDate);
+      } else {
+        asOfDate = OPENING_DATE;
+        const p8 = periods.find((p) => p.fiscalYear === 2026 && p.periodNumber === 8);
+        if (!p8) {
+          periodId = (await client.mutation(api.accountingPeriods.create, {
+            orgId,
+            fiscalYear: 2026,
+            periodNumber: 8,
+            startDate: Date.UTC(2026, 7, 1, 0, 0, 0, 0),
+            endDate: Date.UTC(2026, 8, 0, 23, 59, 59, 999),
+            openImmediately: true,
+          })) as Id<"accountingPeriods">;
+        } else {
+          periodId = p8._id;
+          if (p8.status !== "OPEN") await client.mutation(api.accountingPeriods.open, { orgId, periodId: p8._id });
+        }
+      }
       const minor = OPENING_UNITS * 10 ** scaleOf(status.currency);
       const memo = `E2E opening balance register replay ${Date.now()}`;
       await client.mutation(api.accountingCutover.postOpeningBalanceDirect, {
         orgId,
-        asOfDate: OPENING_DATE,
+        asOfDate,
         memo,
         expectedCurrency: status.currency,
         lines: [
@@ -284,8 +314,16 @@ test.describe("accounting register: a posted journal", () => {
           { accountId: usable[1]._id, debitMinor: 0, creditMinor: minor },
         ],
       });
-      known = { memo, debitMinor: minor };
+      known = { memo, debitMinor: minor, date: asOfDate, periodId };
       posted = await listPostedJournals(client, orgId);
+    } else {
+      // EXPLICIT, not silent: an existing posted journal is checked for internal consistency and for the screen
+      // agreeing with the backend, but NOT against hand-written literals, which only a journal this test posts has.
+      test.info().annotations.push({
+        type: "EXISTING_ROW",
+        description:
+          "ledger already held a posted journal: date/period/debit-credit checked for consistency and UI-vs-backend agreement, not against hand-written literals",
+      });
     }
     const target = known ? posted.find((row) => row.memo === known!.memo) : posted[0];
     expect(target, "a posted journal must exist to replay the register assertions").toBeDefined();
@@ -308,9 +346,8 @@ test.describe("accounting register: a posted journal", () => {
     expect(debitMinor, "debits equal credits").toBe(creditMinor);
     if (known) {
       // The journal this test posted: every figure is a hand-written literal.
-      expect(entry.accountingDate).toBe(OPENING_DATE);
-      expect(period!.fiscalYear).toBe(2026);
-      expect(period!.periodNumber).toBe(8);
+      expect(entry.accountingDate).toBe(known.date);
+      expect(entry.periodId).toBe(known.periodId);
       expect(debitMinor).toBe(known.debitMinor);
       expect(creditMinor).toBe(known.debitMinor);
     }
@@ -322,7 +359,7 @@ test.describe("accounting register: a posted journal", () => {
     await registerTab.click();
 
     const row = page.locator(`[data-testid='journal-entry-row'][data-entry-id='${entry._id}']`);
-    for (let loads = 0; loads < 50 && !(await row.isVisible()); loads += 1) {
+    for (let loads = 0; loads < 500 && !(await row.isVisible()); loads += 1) {
       const more = page.getByTestId("gl-load-more-btn");
       if (!(await more.isVisible())) break;
       await more.click();
@@ -331,7 +368,6 @@ test.describe("accounting register: a posted journal", () => {
     await expect(row.getByTestId("journal-entry-date")).toContainText(
       new Date(entry.accountingDate).toLocaleDateString("en-US")
     );
-    if (known) await expect(row.getByTestId("journal-entry-date")).toContainText(/8\/15\/2026|Aug 15, 2026/);
 
     await row.getByTestId("view-entry-lines-btn").click();
     await expect(page.getByTestId("dialog-entry-memo")).toContainText(entry.memo);
