@@ -3198,12 +3198,18 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
     const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
       orgId: s.orgId, customerId: s.customerId, vehicleId, mode: "CASH", vehiclePrice: 12_500, downPayment: 0, termMonths: 0,
     });
+    // SCRUM-802 (pilot): a cash sale completes only once its full price is held as a deposit.
+    await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 12_500, method: "CASH", idempotencyKey: "s760cccash-full-deposit",
+    });
     await s.owner.as.mutation(api.sales.create, {
       orgId: s.orgId, idempotencyKey: "s760cccash-sale", quoteId, vehicleId, customerId: s.customerId,
       salespersonId: s.owner.userId, salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED",
     });
     expect(await trialBalanceNormalBalance(s)).toEqual({
-      "1100|JOD": -9_800_000, "1200|JOD": 12_500_000, "4100|JOD": 12_500_000, "5100|JOD": 9_800_000,
+      // Cash: -9,800,000 (the corrected purchase) + 12,500,000 (the full-price deposit) = +2,700,000, the margin; the
+      // deposit settled the invoice, so no receivable remains.
+      "1100|JOD": 2_700_000, "4100|JOD": 12_500_000, "5100|JOD": 9_800_000,
     });
     expect(await publicIncomeStatement(s)).toMatchObject({
       totalRevenue: 12_500_000, totalCogs: 9_800_000, grossProfit: 2_700_000, netIncome: 2_700_000,
