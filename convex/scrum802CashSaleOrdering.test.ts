@@ -77,7 +77,7 @@ const asMutationCtx = (ctx: unknown): MutationCtx => ctx as MutationCtx;
  * "nothing owed", so the status is asserted, not just a zero balance); exactly one payment allocation exists on it,
  * ACTIVE, in the org, for exactly the invoice (computed here, not by `outstandingFromReceivableDoc`, so an
  * over-allocation is not hidden by a floor at zero), and the canonical payment behind it (read through
- * `allocation.paymentId`) is an incoming, SETTLED customer payment in the org for exactly the scenario's deposit
+ * `allocation.paymentId`, and the same payment the deposit row points at) is an incoming, SETTLED, non-trade-in customer payment in the org, keyed `deposit_received_<depositId>`, for exactly the scenario's deposit
  * (the code books one payment per deposit, so on a shared two-car deposit that is the whole deposit, not the car's
  * share; on a single-car deposit it equals the invoice); exactly one
  * deposit-application row exists for the sale, APPLIED (not REVERSING or REVERSED) against the customer's receivable,
@@ -139,6 +139,8 @@ async function expectCompletedAndPaidInFull(
       expect(payment?.status).toBe("SETTLED");
       expect(payment?.amountMinor).toBe(depositMinor);
       expect(payment?.currency).toBe("JOD");
+      expect(payment?.idempotencyKey).toBe(`deposit_received_${depositId}`);
+      expect(payment?.method).not.toBe("TRADE_IN");
       expect(payment?.customerId).toBe(s.customerId);
       expect(allocations.filter((a) => a.paymentId === allocation.paymentId && a.status === "ACTIVE").reduce((sum, a) => sum + a.amountMinor, 0)).toBe(depositMinor);
 
@@ -149,6 +151,7 @@ async function expectCompletedAndPaidInFull(
       expect(depositRow?.status).toBe("APPLIED");
       expect(depositRow?.holdActive).toBe(false);
       expect(depositRow?.amountMinor).toBe(depositMinor);
+      expect(depositRow?.canonicalPaymentId).toBe(allocation.paymentId);
 
       const mine = applications.filter((a) => a.saleId === saleId);
       expect(mine).toHaveLength(1);
