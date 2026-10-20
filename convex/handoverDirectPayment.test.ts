@@ -57,6 +57,23 @@ interface Seed {
 }
 
 async function seedDeal(suffix: string): Promise<Seed> {
+  // `chartOfAccounts.initialize` and `accountingPeriods.create` each queue an outbox
+  // drain (`drainPendingAccountingEvents`, `wakePeriodHeldRows`) with `runAfter(0)`.
+  // On a real timer it fires whenever the event loop first yields, which can be after
+  // a test has queued a row against a CLOSED period (test order decides): it claims
+  // the row, the attempt fails, and the row sits DISPATCHED with a lease, so the
+  // test's own `drainOnce` posts nothing. Fake timers must be installed BEFORE the
+  // drains are scheduled for `finishAllScheduledFunctions` to run them (convex-test),
+  // so they complete here, while there is nothing to claim.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  try {
+    return await seedDealWithFakeTimers(suffix);
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+async function seedDealWithFakeTimers(suffix: string): Promise<Seed> {
   const t = convexTestWithComponents(schema, MODULES);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `Direct ${suffix}`, createdAt: Date.now() }));
   const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `Other ${suffix}`, createdAt: Date.now() }));
@@ -104,15 +121,7 @@ async function seedDeal(suffix: string): Promise<Seed> {
     startDate: Date.UTC(year - 1, 0, 1), endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
     openImmediately: true,
   });
-  // `chartOfAccounts.initialize` and `accountingPeriods.create` each queue an outbox
-  // drain (`drainPendingAccountingEvents`, `wakePeriodHeldRows`) with `runAfter(0)`.
-  // convex-test runs it on a REAL timer at the next macrotask, so it fires whenever
-  // the event loop first yields, which can be after a test has queued a row against
-  // a CLOSED period (test order decides). It then claims the row, the attempt fails,
-  // and the row sits DISPATCHED with a lease, so the test's own `drainOnce` posts
-  // nothing. Let those drains run now, while there is nothing to claim.
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  await t.finishInProgressScheduledFunctions();
+  await pump(t);
   return { t, orgId, otherOrgId, userId, employeeId, applicationId, asUser, asSales };
 }
 
