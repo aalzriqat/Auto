@@ -27,9 +27,10 @@ import type { Id } from "../../convex/_generated/dataModel";
  *   - The accounting rehearsal preview must stay UNSEEDED: a pending manual
  *     draft blocks the period-close checklist, which would turn its case P1
  *     (close the only open period) UNPROVEN.
- * So the real-backend approve refusal is MANDATORY where the flag is "1" (a
- * missing draft FAILS there) and is recorded as an explicit "NOT RUN"
- * annotation elsewhere; it is never silently passed. The refusal is sent as the
+ * So the real-backend approve refusal is its own test, REGISTERED ONLY where the
+ * flag is "1" (a missing draft FAILS there). In every other lane (candidate
+ * swarm, PR lanes) it is not registered: not run, not skipped, NOT CLAIMED, and
+ * those lanes prove only the UI state and the create refusal. The refusal is sent as the
  * approver seat (a different user from the draft's creator), so it is the pilot
  * switch and not separation of duties.
  *
@@ -46,8 +47,6 @@ import type { Id } from "../../convex/_generated/dataModel";
 const REFUSAL_CODE = "MANUAL_JOURNALS_DISABLED";
 const LEGACY_MEMO = "E2E legacy pending draft (SCRUM-795)";
 const LEGACY_SEEDED = process.env.E2E_SEED_LEGACY_MANUAL_JOURNAL === "1";
-const NOT_RUN =
-  "real-backend approve refusal: this preview is not seeded with the legacy draft (seeded only by trusted-main-e2e; SCRUM-795)";
 
 function refusalCode(error: unknown): string | undefined {
   const data = (error as { data?: unknown } | null)?.data;
@@ -116,9 +115,8 @@ async function proveLegacyApproveRefused(browser: Browser, orgId: Id<"organizati
 }
 
 test.describe("accounting workspace", () => {
-  test("manual journals are off for the pilot: notice in the UI, refusal from the backend", async ({
+  test("manual journals are off for the pilot: notice in the UI, create refused by the backend", async ({
     page,
-    browser,
   }) => {
     await gotoOrgRoute(page, "accounting");
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
@@ -173,13 +171,8 @@ test.describe("accounting workspace", () => {
     expect(createError, "create must be refused").toBeDefined();
     expect(refusalCode(createError)).toBe(REFUSAL_CODE);
 
-    // (ii-b) the real-backend approve refusal needs the seeded legacy draft.
-    if (LEGACY_SEEDED) {
-      await proveLegacyApproveRefused(browser, orgId);
-    } else {
-      test.info().annotations.push({ type: "NOT RUN", description: NOT_RUN });
-      console.warn(NOT_RUN);
-    }
+    // (ii-b) the real-backend approve refusal is a SEPARATE test, registered
+    // only when the seed flag is "1" (see the end of this file).
 
     // The rest of the accounting workspace still navigates.
     await page.getByRole("tab", { name: /receivables|claims/i }).first().click();
@@ -196,3 +189,19 @@ test.describe("accounting workspace", () => {
     ).toBeVisible();
   });
 });
+
+// The approve-door proof exists ONLY in a lane that seeds the legacy draft. In
+// every other lane this test is not registered, so it is neither run, skipped
+// nor claimed (SCRUM-795). Where the flag is "1" a missing draft FAILS.
+if (LEGACY_SEEDED) {
+  test.describe("accounting workspace: legacy manual-journal draft (seeded lane only)", () => {
+    test("approve of the seeded legacy draft is refused by the backend and the draft stays pending", async ({
+      page,
+      browser,
+    }) => {
+      await gotoOrgRoute(page, "accounting");
+      const orgId = (await resolveOrgId(page)) as Id<"organizations">;
+      await proveLegacyApproveRefused(browser, orgId);
+    });
+  });
+}

@@ -38,6 +38,10 @@ interface Faults {
   existingJournalChanges?: boolean;
   /** The organization-wide journal list is not a page. */
   orgListMalformed?: boolean;
+  /** The journal list returns a row that belongs to another organization. */
+  foreignTenantEntry?: boolean;
+  /** The pending list returns a draft that belongs to another organization. */
+  foreignTenantDraft?: boolean;
   /** The pending list is not an array. */
   pendingMalformed?: boolean;
   /** The pending list serves the legacy draft with malformed lines. */
@@ -61,6 +65,7 @@ interface Draft {
 
 interface Entry {
   _id: string;
+  orgId: string;
   memo: string;
   periodId: string;
   accountingDate: number;
@@ -78,7 +83,7 @@ class World {
   private nextId = 0;
 
   constructor(readonly faults: Faults) {
-    this.entries.set("je-existing", { _id: "je-existing", memo: "sale 1", periodId: "period-now", accountingDate: LEGACY_DATE, status: "POSTED" });
+    this.entries.set("je-existing", { _id: "je-existing", orgId: "org1", memo: "sale 1", periodId: "period-now", accountingDate: LEGACY_DATE, status: "POSTED" });
     if (!faults.noLegacyDraft) {
       this.drafts.set("draft-legacy", {
         id: "draft-legacy",
@@ -101,7 +106,7 @@ class World {
 
   private addEntry(memo: string): string {
     const id = this.id("je");
-    this.entries.set(id, { _id: id, memo, periodId: "period-now", accountingDate: Date.now(), status: "POSTED" });
+    this.entries.set(id, { _id: id, orgId: "org1", memo, periodId: "period-now", accountingDate: Date.now(), status: "POSTED" });
     return id;
   }
 
@@ -152,7 +157,7 @@ class World {
           .map((d) => ({
             _id: d.id,
             _creationTime: 1,
-            orgId: "org1",
+            orgId: f.foreignTenantDraft ? "org2" : "org1",
             status: d.status,
             memo: d.memo,
             lines: f.pendingRowMalformed ? "not an array" : d.lines,
@@ -165,7 +170,7 @@ class World {
           }));
       case "accountingLedger:listJournalEntries": {
         if (f.orgListMalformed) return "not a page";
-        const rows = [...this.entries.values()];
+        const rows = [...this.entries.values()].map((e) => (f.foreignTenantEntry ? { ...e, orgId: "org2" } : e));
         const options = a.paginationOpts as { numItems: number; cursor: string | null };
         const start = options.cursor === null ? 0 : Number(options.cursor);
         const next = start + (f.smallPages ? 1 : options.numItems);
@@ -370,6 +375,16 @@ describe("SCRUM-795 manual-journals-off handler: a claim that cannot be observed
 
   it("FAILS when the organization journal list is malformed, so an unchanged ledger was never observed", async () => {
     const h = await breach({ orgListMalformed: true }, /journals could not be read/);
+    notIncomplete(h);
+  });
+
+  it("FAILS when the journal list returns a row from another organization", async () => {
+    const h = await breach({ foreignTenantEntry: true }, /journals could not be read/);
+    notIncomplete(h);
+  });
+
+  it("FAILS when the pending list returns a draft from another organization", async () => {
+    const h = await breach({ foreignTenantDraft: true }, /pending drafts could not be read/);
     notIncomplete(h);
   });
 });

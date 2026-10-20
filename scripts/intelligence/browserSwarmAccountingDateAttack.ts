@@ -59,6 +59,11 @@ const MAX_ENTRY_PAGES = 50;
 
 type Command = ReturnType<typeof missionCommands>["command"];
 
+/** A row read for this mission must belong to the mission's own organization; a row that names another tenant (or none) is never evidence. */
+function assertTenantRow(row: Record<string, unknown>, orgId: string, what: string): void {
+  if (row.orgId !== orgId) return inconclusive(`${what} returned a row that does not belong to the mission's organization`);
+}
+
 function parseEntry(row: unknown): EntryView {
   if (!isRecord(row) || typeof row._id !== "string") return inconclusive("listJournalEntries returned a malformed entry");
   return {
@@ -89,7 +94,12 @@ async function readEntries(env: BoundaryMissionEnv, command: Command, periodId: 
       }),
     );
     if (!isRecord(page) || typeof page.isDone !== "boolean") return inconclusive(`the journals of ${scope} came back malformed`);
-    rows.push(...asArray(page.page, "listJournalEntries").map(parseEntry));
+    rows.push(
+      ...asArray(page.page, "listJournalEntries").map((row) => {
+        if (isRecord(row)) assertTenantRow(row, env.orgId, "listJournalEntries");
+        return parseEntry(row);
+      }),
+    );
     if (page.isDone) return rows;
     if (typeof page.continueCursor !== "string" || page.continueCursor === "" || page.continueCursor === requestCursor) {
       return inconclusive(`the journals of ${scope} came back malformed: no cursor to continue from`);
@@ -131,7 +141,11 @@ function parseDraft(row: Record<string, unknown>): DraftView | null {
 /** Every pending draft of the organization, parsed; null when any row cannot be reduced to what a refusal must not change. */
 async function readPendingDrafts(env: BoundaryMissionEnv, command: Command): Promise<DraftView[] | null> {
   const pending: unknown = await command(() => env.client.query(api.financialAudit.listPendingManualJournals, { orgId: env.orgId as Id<"organizations"> }));
-  const views = asArray(pending, "listPendingManualJournals").map((row) => (isRecord(row) ? parseDraft(row) : null));
+  const views = asArray(pending, "listPendingManualJournals").map((row) => {
+    if (!isRecord(row)) return null;
+    assertTenantRow(row, env.orgId, "listPendingManualJournals");
+    return parseDraft(row);
+  });
   return views.every((view): view is DraftView => view !== null) ? views : null;
 }
 
