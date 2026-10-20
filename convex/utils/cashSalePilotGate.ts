@@ -30,7 +30,7 @@ export function isCashCompletion(args: {
  * No. Only deposits do, so a cash sale settled by a trade-in alone, or by a part deposit plus a trade-in, is refused.
  * Trade-in settlement of a cash sale is a post-pilot activation gate. This constant is read only through
  * `cashSaleOutstandingForPayFirst` (the exact post-allocation gate). The read-only pre-write check
- * `assertCashSaleDepositsCanCoverInvoice` never reads it: it counts deposits only, by construction. So flipping this
+ * `assertCashSaleDepositsPayInvoiceBeforeWrites` never reads it: it counts deposits only, by construction. So flipping this
  * to `true` does NOT enable trade-in settlement; that needs a real rule change (the pre-write check as well), a new
  * certification round and the owner's approval. A test pins the constant at `false`.
  */
@@ -71,16 +71,32 @@ export async function assertCashSaleInvoiceFullyPaid(
   }
 }
 
+/** What the completion's deposit resolution is told to do with the held deposit (mirrors `args.depositResolution`). */
+export type PayFirstDepositTreatment =
+  | "APPLY_TO_DEALER_AMOUNT"
+  | "APPLY_TO_TRANSACTION_SETTLEMENT"
+  | "REFUND_TO_CUSTOMER"
+  | "FORFEITED"
+  | "OTHER";
+
 /**
- * The READ-ONLY, pre-write form of the pay-first rule (Codex Seat 2: the refusal must come before the first write on
- * every completion path, not be rolled back after them). Deposits are the only money that can reach a cash sale's invoice
- * (a trade-in does not count, `TRADE_IN_COUNTS_TOWARD_CASH_PAY_FIRST`), and a car can consume no more than its own
- * allocated share of the quote's held deposit, so an invoice larger than that share can never be paid first: refuse now.
- * Necessary, not sufficient: `assertCashSaleInvoiceFullyPaid` after the allocations stays the exact final gate (for
- * example a deposit whose treatment diverts it from the invoice). A multi-car quote whose deposit has not been allocated
- * defers to the completion's own allocation-required refusal, which has always come first.
+ * The READ-ONLY, pre-write form of the pay-first rule (Codex Seat 2: the refusal must come before the first sale write on
+ * every completion path, not be rolled back after the writes). It derives, WITHOUT writing, the amount
+ * `resolveReservationDeposits` would apply to this car's customer invoice, and refuses on the exact unpaid balance:
+ *
+ *  - only the car's own held, allocated deposit can be applied (`allocatedDepositForVehicle`); a forfeited, refunded or
+ *    already-applied deposit is not "held" and a trade-in never counts (`TRADE_IN_COUNTS_TOWARD_CASH_PAY_FIRST` is not
+ *    read here: this check counts deposits only, by construction);
+ *  - the stated treatment decides whether that money reaches the invoice: no treatment, APPLY_TO_DEALER_AMOUNT and
+ *    APPLY_TO_TRANSACTION_SETTLEMENT on the dealership-collects-gross route (or owned stock) are applied against the
+ *    invoice; REFUND_TO_CUSTOMER, FORFEITED, OTHER and the supplier-settlement route apply nothing to it;
+ *  - a case the completion refuses for its own reason (a deposit larger than the bill with no treatment stated, a shared
+ *    deposit refunded from here, an OTHER treatment with no reason, an unallocated multi-car deposit) is left to that
+ *    refusal, which has always come first.
+ *
+ * `assertCashSaleInvoiceFullyPaid` after the allocations stays as the backstop on the actual invoice balance.
  */
-export async function assertCashSaleDepositsCanCoverInvoice(
+export async function assertCashSaleDepositsPayInvoiceBeforeWrites(
   ctx: QueryCtx | MutationCtx,
   args: {
     quoteId?: Id<"quotes">;
@@ -89,6 +105,12 @@ export async function assertCashSaleDepositsCanCoverInvoice(
     invoiceMinor: number;
     financingType?: "CASH" | "FINANCED" | "LEASE";
     financedSalePlan?: unknown;
+    /** The treatment the caller states for the held deposit, if any. */
+    treatment?: PayFirstDepositTreatment;
+    /** The reason an OTHER treatment must carry. */
+    treatmentReason?: string;
+    /** Consigned/agent stock settled DIRECT_TO_SUPPLIER: the deposit goes to the supplier settlement, not the invoice. */
+    settlesDirectToSupplierOnSourcedStock: boolean;
   }
 ): Promise<void> {
   if (!CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED || !isCashCompletion(args) || args.invoiceMinor <= 0) return;
@@ -98,8 +120,34 @@ export async function assertCashSaleDepositsCanCoverInvoice(
     vehicleId: args.vehicleId,
     currency: args.currency,
   });
-  if (allocation.kind === "NOT_ALLOCATED") return;
-  if (allocation.allocatedMinor < args.invoiceMinor) refuseSaleDebt("CASH_SALE_BALANCE_UNPAID_REFUSED");
+  if (allocation.kind === "NOT_ALLOCATED") return; // the completion's allocation-required refusal comes first
+  const heldMinor = allocation.allocatedMinor;
+  const sharedHold = allocation.kind === "ALLOCATED";
+  const fitsTheBill = heldMinor <= args.invoiceMinor;
+
+  let appliedMinor: number | "LEFT_TO_COMPLETION";
+  if (heldMinor === 0) {
+    appliedMinor = 0; // no deposit, or a car carrying none of it
+  } else {
+    switch (args.treatment) {
+      case undefined:
+      case "APPLY_TO_DEALER_AMOUNT":
+        appliedMinor = fitsTheBill ? heldMinor : "LEFT_TO_COMPLETION";
+        break;
+      case "APPLY_TO_TRANSACTION_SETTLEMENT":
+        appliedMinor = args.settlesDirectToSupplierOnSourcedStock ? 0 : fitsTheBill ? heldMinor : "LEFT_TO_COMPLETION";
+        break;
+      case "REFUND_TO_CUSTOMER":
+      case "FORFEITED":
+        appliedMinor = sharedHold ? "LEFT_TO_COMPLETION" : 0;
+        break;
+      case "OTHER":
+        appliedMinor = sharedHold || !args.treatmentReason?.trim() ? "LEFT_TO_COMPLETION" : 0;
+        break;
+    }
+  }
+  if (appliedMinor === "LEFT_TO_COMPLETION") return;
+  if (appliedMinor < args.invoiceMinor) refuseSaleDebt("CASH_SALE_BALANCE_UNPAID_REFUSED");
 }
 
 const positive = (n: number | null | undefined): boolean => typeof n === "number" && n > 0;

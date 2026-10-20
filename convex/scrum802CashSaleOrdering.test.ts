@@ -8,7 +8,11 @@
  *
  * A write-recording db and scheduler wrap the context handed to the shared completion functions
  * (`completeSale`, `completeExistingSale`, `completeSalesForLineItems`); a refused completion must have recorded NO
- * write at all. The control proves the recorder sees real writes when a sale does complete.
+ * write at all. The pre-check is the EXACT unpaid-balance check (it derives what the deposit resolution would apply to
+ * the invoice), so the cells include a fully deposited sale whose deposit is stated as refunded, forfeited or OTHER, a
+ * deposit already refunded or forfeited, and a part deposit. Mutation-checked: disabling the pre-check turns every
+ * refusal cell red; the control cells, which complete a sale, stay green by design (they prove the recorder sees real
+ * writes and that the pre-check does not over-refuse).
  *
  * Real switch (nothing here mocks the gate; the census pins that). Evidence boundary: convex-test, not production.
  */
@@ -154,6 +158,120 @@ describe("the pay-first refusal is raised before the first write on every comple
     );
     expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
     expect(writes).toEqual([]);
+  });
+
+  // Codex batch 3: the pre-check must be the EXACT unpaid-balance check, not "could a deposit cover the invoice". A
+  // deposit that is fully allocated but then forfeited, refunded or set aside (OTHER) never reaches the invoice.
+  describe.each([
+    ["REFUND_TO_CUSTOMER", { treatment: "REFUND_TO_CUSTOMER", refundMethod: "CASH" }],
+    ["FORFEITED", { treatment: "FORFEITED" }],
+    ["OTHER (with a reason)", { treatment: "OTHER", reason: "manager-approved arrangement" }],
+  ] as const)("a fully deposited cash sale whose deposit is stated as %s", (_label, depositResolution) => {
+    test("completeSale is refused on the unpaid balance with zero writes", async () => {
+      const s = await seedCashDealer(`ordt${_label.length}${_label[0]}`, MODULES);
+      const quoteId = await quoteFor(s);
+      await deposit(s, quoteId, 20_000);
+      const writes: string[] = [];
+      const refusal = await refusalDataOf(
+        s.t.run((ctx) => completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution })))
+      );
+      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(writes).toEqual([]);
+    });
+
+    test("completeExistingSale (a draft) is refused with zero writes", async () => {
+      const s = await seedCashDealer(`ordd${_label.length}${_label[0]}`, MODULES);
+      const quoteId = await quoteFor(s);
+      await deposit(s, quoteId, 20_000);
+      const draftId = await s.asUser.mutation(api.sales.createDraft, {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 20_000, saleDate: Date.now(),
+        financingType: "CASH", idempotencyKey: crypto.randomUUID(),
+      } as never);
+      // The draft door takes no quote; completing a draft that is bound to one is the shape under test.
+      await s.t.run((ctx) => ctx.db.patch(draftId, { quoteId }));
+      const writes: string[] = [];
+      const refusal = await refusalDataOf(
+        s.t.run((ctx) =>
+          completeExistingSale(recordingCtx(asMutationCtx(ctx), writes), { orgId: s.orgId, saleId: draftId, actorId: s.userId, depositResolution })
+        )
+      );
+      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(writes).toEqual([]);
+    });
+
+    test("completeSalesForLineItems refuses a single funded car with zero writes", async () => {
+      const s = await seedCashDealer(`ordl${_label.length}${_label[0]}`, MODULES);
+      const quoteId = await quoteFor(s);
+      await deposit(s, quoteId, 20_000);
+      const writes: string[] = [];
+      const refusal = await refusalDataOf(
+        s.t.run((ctx) =>
+          completeSalesForLineItems(recordingCtx(asMutationCtx(ctx), writes), {
+            orgId: s.orgId, quoteId, vehicleItems: [{ vehicleId: s.vehicleId, unitPrice: 20_000 }],
+            customerId: s.customerId, salespersonId: s.userId, saleDate: Date.now(), financingType: "CASH", actorId: s.userId,
+            depositResolution,
+          })
+        )
+      );
+      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(writes).toEqual([]);
+    });
+  });
+
+  test("completeSale: a part deposit (no trade-in) is refused with zero writes", async () => {
+    const s = await seedCashDealer("ordpartonly", MODULES);
+    const quoteId = await quoteFor(s);
+    await deposit(s, quoteId, 12_000);
+    const writes: string[] = [];
+    const refusal = await refusalDataOf(
+      s.t.run((ctx) =>
+        completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" } }))
+      )
+    );
+    expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+    expect(writes).toEqual([]);
+  });
+
+  test.each(["REFUNDED", "FORFEITED"] as const)(
+    "completeSale: a deposit already %s before the completion is no longer held and cannot pay the invoice (zero writes)",
+    async (resolution) => {
+      const s = await seedCashDealer(`ordgone${resolution[0]}`, MODULES);
+      const quoteId = await quoteFor(s);
+      await deposit(s, quoteId, 20_000);
+      const depositId = (await s.t.run((ctx) => ctx.db.query("deposits").collect()))[0]._id;
+      // Not under test: the deposit screen's release; the row just has to leave the held state first.
+      await s.t.run((ctx) => ctx.db.patch(depositId, { status: resolution, holdActive: false }));
+      const writes: string[] = [];
+      const refusal = await refusalDataOf(
+        s.t.run((ctx) =>
+          completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" } }))
+        )
+      );
+      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(writes).toEqual([]);
+    }
+  );
+
+  test("control: APPLY_TO_TRANSACTION_SETTLEMENT on owned stock with the full deposit still completes (the pre-check does not over-refuse)", async () => {
+    const s = await seedCashDealer("ordsettle", MODULES);
+    const quoteId = await quoteFor(s);
+    await deposit(s, quoteId, 20_000);
+    const writes: string[] = [];
+    const saleId = await s.t.run((ctx) =>
+      completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" } }))
+    );
+    expect(saleId).toBeTruthy();
+    expect(writes.length).toBeGreaterThan(0);
+  });
+
+  test("control: no stated treatment and an exact deposit completes", async () => {
+    const s = await seedCashDealer("ordnotreat", MODULES);
+    const quoteId = await quoteFor(s);
+    await deposit(s, quoteId, 20_000);
+    const writes: string[] = [];
+    const saleId = await s.t.run((ctx) => completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId })));
+    expect(saleId).toBeTruthy();
+    expect(writes.length).toBeGreaterThan(0);
   });
 
   test("control: a fully deposited cash sale still completes through the same recording context (the recorder sees real writes)", async () => {

@@ -19,7 +19,7 @@ import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
 import {
   assertCashSaleCarriesNoExtras,
-  assertCashSaleDepositsCanCoverInvoice,
+  assertCashSaleDepositsPayInvoiceBeforeWrites,
   assertCashSaleInvoiceFullyPaid,
   isCashCompletion,
 } from "./cashSalePilotGate";
@@ -2217,7 +2217,7 @@ export async function createDraftSale(
 
 /**
  * SCRUM-802: the pay-first refusal, read-only and BEFORE the first write of a completion (see
- * `assertCashSaleDepositsCanCoverInvoice`). Sizes the invoice with the same `customerBilledLinesMinor` the completion
+ * `assertCashSaleDepositsPayInvoiceBeforeWrites`). Sizes the invoice with the same `customerBilledLinesMinor` the completion
  * bills with, so a consigned sale the customer is not billed for is not misjudged.
  */
 async function assertCashPayFirstBeforeWrites(
@@ -2225,7 +2225,7 @@ async function assertCashPayFirstBeforeWrites(
   args: Pick<
     SaleCompletionArgs,
     | "orgId" | "vehicleId" | "salePrice" | "taxAmount" | "dealerFees" | "warrantySold" | "gapSold"
-    | "quoteId" | "financingType" | "financedSalePlan" | "supplierSettlementRoute"
+    | "quoteId" | "financingType" | "financedSalePlan" | "supplierSettlementRoute" | "depositResolution"
   >
 ): Promise<void> {
   if (!isCashCompletion(args)) return;
@@ -2245,13 +2245,17 @@ async function assertCashPayFirstBeforeWrites(
       financedSalePlan: args.financedSalePlan,
     })
   );
-  await assertCashSaleDepositsCanCoverInvoice(ctx, {
+  await assertCashSaleDepositsPayInvoiceBeforeWrites(ctx, {
     quoteId: args.quoteId,
     vehicleId: args.vehicleId,
     currency,
     invoiceMinor,
     financingType: args.financingType,
     financedSalePlan: args.financedSalePlan,
+    treatment: args.depositResolution?.treatment,
+    treatmentReason: args.depositResolution?.reason,
+    settlesDirectToSupplierOnSourcedStock:
+      vehicle.sourceType === "SOURCED" && !dealershipCollectsGross(consignedSettlementRoute(args)),
   });
 }
 
