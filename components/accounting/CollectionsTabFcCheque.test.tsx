@@ -9,6 +9,7 @@ import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ConvexError } from "convex/values";
 import type { Doc } from "@/convex/_generated/dataModel";
+import { commonAr } from "@/lib/i18n/domains/common";
 import { salesAr } from "@/lib/i18n/domains/sales";
 
 const stubs = vi.hoisted(() => ({
@@ -285,6 +286,19 @@ describe("Collections, Cheques tab: Return", () => {
     expect(screen.getByTestId("cheque-return-pilot-disabled").textContent).toBe(
       "ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED"
     );
+  });
+
+  test("SCRUM-760 shipped state, Arabic: the pilot notice renders the Arabic dictionary text, not the key", async () => {
+    // The component reads no RTL flag, so this pins the translated text; layout direction is not asserted.
+    const arabic = (commonAr as Record<string, string>).ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED;
+    expect(arabic).toBeTruthy();
+    stubs.t = (key: string) => (key.startsWith("ServerError_") ? (commonAr as Record<string, string>)[key] ?? key : key);
+    pilot.clearedChequeReturn = true;
+    stubs.paginated.set("collections:listCheques", [
+      cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "CLEARED" }),
+    ]);
+    await openChequesTab();
+    expect(screen.getByTestId("cheque-return-pilot-disabled").textContent).toBe(arabic);
   });
 
   test("SCRUM-760 shipped state, CONTROL: a DEPOSITED customer cheque keeps an enabled Return (returnCheque is not blocked)", async () => {
