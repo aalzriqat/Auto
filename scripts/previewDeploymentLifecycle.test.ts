@@ -388,6 +388,7 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
       "hunt-preview.yml",
       "trusted-accounting-rehearsal.yml",
       "trusted-main-e2e.yml",
+      "trusted-main-replay-e2e.yml",
     ]);
   });
 

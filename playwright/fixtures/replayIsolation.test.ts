@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   decideReplayEnvironment,
   deploymentNameOf,
+  replayLaneAction,
   replayOrgRefusals,
   REPLAY_MAX_ORG_AGE_MS,
   type ReplayAttestation,
@@ -123,5 +124,34 @@ describe("replayOrgRefusals", () => {
 
   it("reports every reason at once", () => {
     expect(replayOrgRefusals({ ...fresh, periodCount: 2, journalCount: 3, currency: "XYZ" })).toHaveLength(3);
+  });
+});
+
+describe("replayLaneAction (a skipped replay is a failure only in the dedicated lane)", () => {
+  const run = { kind: "RUN", deployment: "happy-otter-123" } as const;
+  const notRun = { kind: "NOT_RUN", reason: "no attestation" } as const;
+  const refused = { kind: "REFUSED", reason: "production" } as const;
+
+  it("runs whenever the guard says RUN, in or out of the lane", () => {
+    expect(replayLaneAction(run, false)).toEqual({ action: "RUN", deployment: "happy-otter-123" });
+    expect(replayLaneAction(run, true)).toEqual({ action: "RUN", deployment: "happy-otter-123" });
+  });
+
+  it("skips outside the lane, as before", () => {
+    expect(replayLaneAction(notRun, false)).toEqual({
+      action: "SKIP",
+      reason: "GL register replay not run: no attestation",
+    });
+  });
+
+  it("fails in the lane when the replay would be skipped", () => {
+    const lane = replayLaneAction(notRun, true);
+    expect(lane.action).toBe("FAIL");
+    expect(lane.action === "FAIL" && lane.reason).toMatch(/required in this lane but was not run: no attestation/);
+  });
+
+  it("fails on a refused guard everywhere, and the flag cannot turn a refusal into a run", () => {
+    expect(replayLaneAction(refused, false).action).toBe("FAIL");
+    expect(replayLaneAction(refused, true).action).toBe("FAIL");
   });
 });

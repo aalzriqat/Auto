@@ -133,3 +133,25 @@ export function replayOrgRefusals(facts: ReplayOrgFacts): string[] {
   }
   return reasons;
 }
+
+export type ReplayLaneAction =
+  | { action: "RUN"; deployment: string }
+  /** Not run, and that is acceptable: this is not the dedicated replay lane. The test is reported as skipped. */
+  | { action: "SKIP"; reason: string }
+  /** The test must fail: a refused guard, or a skip in the lane that exists to run the replay. */
+  | { action: "FAIL"; reason: string };
+
+/**
+ * What the replay test does with the guard's decision. `replayRequired` is the dedicated replay lane's declaration
+ * (E2E_REPLAY_REQUIRED=1): there, a NOT_RUN means the attestation did not succeed, and a skipped replay would be
+ * unavailable evidence reported as a green job, so it fails. It never loosens anything: REFUSED fails everywhere,
+ * and RUN needs the same attestation. Outside the lane the behaviour is unchanged (skip).
+ */
+export function replayLaneAction(environment: ReplayEnvironment, replayRequired: boolean): ReplayLaneAction {
+  if (environment.kind === "RUN") return { action: "RUN", deployment: environment.deployment };
+  if (environment.kind === "REFUSED") return { action: "FAIL", reason: `GL register replay refused: ${environment.reason}` };
+  if (replayRequired) {
+    return { action: "FAIL", reason: `GL register replay is required in this lane but was not run: ${environment.reason}` };
+  }
+  return { action: "SKIP", reason: `GL register replay not run: ${environment.reason}` };
+}

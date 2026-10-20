@@ -221,6 +221,10 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     "da8ee3225cb7a94f92593a2f18d336eb5284446fe06cd1c81846bbec780d72d8",
   "trusted-main-e2e.yml":
     "8994750444ebe142b8e905f8426048ea6a264fe73a7bdd9674048415ff66c86a",
+  // SCRUM-800: the dedicated GL-replay lane. A new workflow with its own preview; it holds only the existing
+  // CONVEX_PREVIEW_DEPLOY_KEY, runs only on main, and runs no candidate code.
+  "trusted-main-replay-e2e.yml":
+    "f8985d66808f460f062508e2e2f29043ab5bf04d1bfd791f2ee0040666b2e101",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {

@@ -1,0 +1,153 @@
+name: Trusted Main Replay E2E (Playwright)
+
+# SCRUM-795 / SCRUM-800: the dedicated lane for the accounting GL-register replay
+# (playwright/tests/accounting.spec.ts, "accounting register: a posted journal").
+#
+# The replay writes to the books (an accounting period and a posted opening balance), so it can only run in an
+# organization nothing else reads. trusted-main-e2e.yml shares one QA organization across the whole suite, so the
+# replay never runs there. This lane gives it its OWN disposable preview, its OWN seed (and so its own freshly
+# created organization) and runs ONLY that spec. Same trust model as trusted-main-e2e.yml: it runs only on main
+# (push, or a dispatch that the ref check below confines to main), never on pull requests, with the repository's
+# existing CONVEX_PREVIEW_DEPLOY_KEY, Clerk and E2E secrets and no new ones.
+#
+# In this lane a skipped replay is a FAILURE: E2E_REPLAY_REQUIRED=1 turns the spec's skip into a thrown error, and
+# scripts/assertReplayLaneRan.mjs then fails unless the JSON report shows the replay test as a single passing
+# attempt. The backend's own attestation (e2eBootstrap.replayAttestation) and the production deny list in
+# playwright/fixtures/replayIsolation.ts still decide whether it may write; nothing here relaxes them.
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Its own group, so a push cancels only the previous replay lane and never trusted-main-e2e.yml. A cancelled run
+# still executes its always() cleanup step below, which deletes its preview.
+concurrency:
+  group: trusted-main-replay-playwright-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      # A name that differs from trusted-main-e2e.yml's. --preview-create DELETES and recreates the named
+      # deployment, so sharing the name would let the two lanes destroy each other's backend mid-run. The digest
+      # is of this exact string, which also keys this lane's concurrency group's ref.
+      - name: Name the disposable replay preview
+        run: |
+          set -euo pipefail
+          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$GITHUB_REF/replay-lane" "")"
+          echo "CONVEX_PREVIEW_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Preview deployment name: $NAME"
+
+      - name: Recreate Convex E2E backend
+        run: |
+          set -euo pipefail
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" = "5" ]; then return 1; fi
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+          retry_convex pnpm exec convex deploy \
+            --typecheck enable \
+            --preview-create "$CONVEX_PREVIEW_NAME" \
+            --preview-run e2eBootstrap:markPreviewDeployment \
+            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"; echo "CONVEX_PREVIEW_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      # SCRUM-377: record which deployment this run owns and shorten its expiry,
+      # so the deployment quota is freed even if the run dies before cleanup.
+      - name: Pin the disposable preview for cleanup
+        if: always() && env.CONVEX_PREVIEW_URL != ''
+        run: node scripts/previewDeploymentLifecycle.mjs pin
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      # The seed creates the QA organization after the marker, which is what the attestation checks. This lane
+      # does not seed any legacy draft: the replay needs an organization with no journal in any status.
+      - name: Seed the QA dealership
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      # Only the accounting spec, no retries (a retry would meet a non-empty organization and could mask a real
+      # failure), and the JSON report that the next step reads. The auth setup project runs as the chromium
+      # project's dependency.
+      - name: Run the accounting replay spec
+        run: >-
+          pnpm exec playwright test playwright/tests/accounting.spec.ts
+          --project=chromium --retries=0 --reporter=list,json
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
+          E2E_REPLAY_DEDICATED_ORG: "1"
+          E2E_REPLAY_REQUIRED: "1"
+          PLAYWRIGHT_JSON_OUTPUT_NAME: replay-lane-report.json
+          CI: true
+
+      # Fails unless the replay test itself passed as a single attempt. A skip exits 0 in Playwright, so this is
+      # the proof that the replay ran. It prints counts only: no titles, errors, URLs or organization data.
+      - name: Assert the replay ran
+        if: always()
+        run: node scripts/assertReplayLaneRan.mjs replay-lane-report.json replay-lane-summary.md
+
+      # Counts only. The Playwright report, traces and videos are NOT uploaded: this repository is public.
+      - name: Upload the replay lane summary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: trusted-main-replay-lane-summary
+          path: replay-lane-summary.md
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Delete the disposable preview
+        if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
+        run: node scripts/previewDeploymentLifecycle.mjs delete
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}

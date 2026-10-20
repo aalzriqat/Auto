@@ -5,6 +5,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
   decideReplayEnvironment,
+  replayLaneAction,
   replayOrgRefusals,
   REPLAY_CURRENCY_SCALES,
   type ReplayAttestation,
@@ -274,8 +275,11 @@ test.describe("accounting register: a posted journal", () => {
       attestation,
       process.env.E2E_REPLAY_DEDICATED_ORG === "1"
     );
-    if (environment.kind === "REFUSED") throw new Error(`GL register replay refused: ${environment.reason}`);
-    test.skip(environment.kind === "NOT_RUN", `GL register replay not run: ${environment.kind === "NOT_RUN" ? environment.reason : ""}`);
+    // E2E_REPLAY_REQUIRED=1 is set only by the dedicated replay lane (trusted-main-replay-e2e.yml): there a
+    // NOT RUN is a FAILURE, because the attestation must succeed in the lane that exists to run this test.
+    const lane = replayLaneAction(environment, process.env.E2E_REPLAY_REQUIRED === "1");
+    if (lane.action === "FAIL") throw new Error(lane.reason);
+    test.skip(lane.action === "SKIP", lane.action === "SKIP" ? lane.reason : "");
 
     // Every read happens BEFORE the first write. The organization must be freshly created: no period, no
     // journal in any status (POSTED and REVERSED included, the mutation's own refusal rule), no opening
