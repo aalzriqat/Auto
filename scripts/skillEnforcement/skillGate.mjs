@@ -56,7 +56,11 @@ const SHELL_PIPE = new RegExp(
 );
 const COMMAND_POSITION = String.raw`(?:^|[;&|(\n{!\`]|\$\(|\b(?:do|then|else|sudo|env|exec|command|xargs|time|nice|nohup)\s)\s*`;
 const EVAL_LIKE = new RegExp(`${COMMAND_POSITION}(?:eval|iex|invoke-expression)\\b`, "i");
+// An inline interpreter (node -e, python -c, deno eval, ...) whose code reaches a process API can run git.
+const INLINE_RUNNER = String.raw`\b(?:node(?:js)?|bun|deno|python[\d.]*|perl|ruby|php)\b[^\n]*?(?:\s-(?:e|c|E|pe)\b|\s--eval\b|\seval\s)`;
+const PROCESS_API = String.raw`child_process|execSync|execFileSync|execFile|spawn|subprocess|os\.system|os\.popen|Deno\.Command`;
 const UNPARSEABLE = [
+  new RegExp(`${INLINE_RUNNER}[^\\n]*?(?:${PROCESS_API})`, "i"),
   SHELL_PIPE,
   EVAL_LIKE,
   /(?<!&)&\s*\$\{?\w+/,

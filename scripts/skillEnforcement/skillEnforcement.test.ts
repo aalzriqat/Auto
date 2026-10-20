@@ -187,6 +187,26 @@ describe("gitSteps", () => {
   ])("code in quotes under a non-text command is still scanned: %s", (cmd) => {
     expect(gitSteps(cmd).length).toBeGreaterThan(0);
   });
+  test.each([
+    "node -e \"const c='gi'+'t'; require('child_process').execSync(c+' push')\"",
+    "node --eval \"require('node:child_process').spawn('sh')\"",
+    "python3 -c \"import subprocess as s; s.run(['g'+'it','push'])\"",
+    "python -c 'import os; os.popen(cmd)'",
+    "deno eval \"new Deno.Command('sh')\" # child_process",
+    "bun -e \"Bun.spawn(['sh'])\"",
+    "perl -e 'system(\"sh\")' # spawn",
+    "ruby -e 'system(cmd)' # subprocess",
+  ])("inline runner using process APIs is gated as an unknown commit and push: %s", (cmd) => {
+    const steps = gitSteps(cmd);
+    expect(steps.length).toBeGreaterThan(0);
+    expect(steps.every((st: { unknown: boolean }) => st.unknown)).toBe(true);
+  });
+  test.each([
+    'node -e "console.log(1)"',
+    "python3 -c 'print(2)'",
+    "node script.js --eval",
+    "bun -e \"console.log(Date.now())\"",
+  ])("a plain inline runner stays ungated: %s", (cmd) => expect(gitSteps(cmd)).toEqual([]));
   test.each(["ls | shasum", "echo hi | grep sh", "cat a | wc -l"])("%s is not a shell pipe", (cmd) =>
     expect(gitSteps(cmd)).toEqual([]),
   );
