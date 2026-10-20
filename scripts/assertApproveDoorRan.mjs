@@ -43,7 +43,11 @@ function collectTests(suite, found, describes = []) {
       for (const t of tests) found.push(t);
     }
   }
-  for (const child of suite.suites ?? []) collectTests(child, found, [...describes, child.title]);
+  for (const child of suite.suites ?? []) {
+    // Every suite on the path, not only the root, must carry the approve-door file.
+    if (!isApproveDoorFile(child.file)) continue;
+    collectTests(child, found, [...describes, child.title]);
+  }
 }
 
 /** Returns a list of error strings; empty means the approve door was proven. */
@@ -66,11 +70,18 @@ export function approveDoorErrors(report) {
   const [test] = found;
   const results = test.results ?? [];
   const last = results[results.length - 1];
-  // 'expected' = passed first time; 'flaky' = failed then passed on retry. Both end passed.
-  if (test.status === "skipped" || last?.status === "skipped") {
+  // 'expected' = passed first time (exactly one result); 'flaky' = earlier attempts failed,
+  // then the last one passed. The whole result sequence is checked, not only the status string.
+  if (test.status === "skipped" || results.some((r) => r?.status === "skipped")) {
     return ["approve-door test was skipped"];
   }
-  if (!["expected", "flaky"].includes(test.status) || last?.status !== "passed") {
+  const earlier = results.slice(0, -1);
+  const sequenceOk =
+    (test.status === "expected" && results.length === 1) ||
+    (test.status === "flaky" &&
+      earlier.length > 0 &&
+      earlier.every((r) => ["failed", "timedOut", "interrupted"].includes(r?.status)));
+  if (!sequenceOk || last?.status !== "passed") {
     // Fixed text only: report fields are untrusted and this reaches a public log.
     return ["approve-door test did not pass (see the uploaded Playwright report)"];
   }

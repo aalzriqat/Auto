@@ -106,6 +106,9 @@ describe("SCRUM-795 — manual journals are off in the shipped build", () => {
       orgId: w.orgId,
     });
     expect(pending).toHaveLength(1);
+    // The listed row belongs to this organization.
+    const listed = await w.t.run((ctx) => ctx.db.get(pending[0]._id));
+    expect(listed?.orgId).toBe(w.orgId);
     expect(Object.keys(pending[0]).sort()).toEqual(
       expect.arrayContaining(["_id", "memo", "lines", "createdBy", "creatorName", "accountingDate"])
     );
@@ -146,6 +149,7 @@ describe("SCRUM-795 — manual journals are off in the shipped build", () => {
   // keep working in the shipped build.
   async function openingLines(w: Awaited<ReturnType<typeof seedManualJournalWorld>>) {
     const accounts = await w.asPoster.query(api.chartOfAccounts.list, { orgId: w.orgId, activeOnly: true });
+    for (const account of accounts) expect(account.orgId).toBe(w.orgId);
     const cash = accounts.find((a) => a.systemKey === "CASH_ON_HAND")!;
     const capital = accounts.find((a) => a.systemKey === "PARTNER_CAPITAL")!;
     return [

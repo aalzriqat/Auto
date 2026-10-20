@@ -90,9 +90,11 @@ export async function seedManualJournalWorld(
     periodNumber: 1,
   });
   const period = (await asPoster.query(api.accountingPeriods.list, { orgId }))[0];
+  if (period.orgId !== orgId) throw new Error("fixture read a period of another organization");
   await asPoster.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
   const accounts = await asPoster.query(api.chartOfAccounts.list, { orgId });
+  if (accounts.some((a) => a.orgId !== orgId)) throw new Error("fixture read an account of another organization");
   const manualAccounts = accounts.filter((a) => a.allowManualPosting);
   const lines = [
     { accountId: manualAccounts[0]._id, debitMinor: 5000, creditMinor: 0 },

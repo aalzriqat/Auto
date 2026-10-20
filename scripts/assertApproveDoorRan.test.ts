@@ -40,6 +40,18 @@ describe("assertApproveDoorRan (SCRUM-795)", () => {
     const s = spec(APPROVE_DOOR_TITLE, "flaky", [{ status: "failed" }, { status: "passed" }]);
     expect(approveDoorErrors(report(s))).toEqual([]);
   });
+  it("RED: 'expected' with more than one result is not a first-time pass", () => {
+    const s = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "failed" }, { status: "passed" }]);
+    expect(approveDoorErrors(report(s))).toEqual([expect.stringContaining("did not pass")]);
+  });
+  it("RED: 'flaky' with no earlier failed attempt", () => {
+    const s = spec(APPROVE_DOOR_TITLE, "flaky", [{ status: "passed" }]);
+    expect(approveDoorErrors(report(s))).toEqual([expect.stringContaining("did not pass")]);
+  });
+  it("RED: 'flaky' whose earlier attempt was skipped", () => {
+    const s = spec(APPROVE_DOOR_TITLE, "flaky", [{ status: "skipped" }, { status: "passed" }]);
+    expect(approveDoorErrors(report(s))).toEqual(["approve-door test was skipped"]);
+  });
   it("RED: test not registered (flag dropped)", () => {
     expect(approveDoorErrors(report())).toEqual([expect.stringContaining("was not registered")]);
   });
@@ -76,6 +88,10 @@ describe("assertApproveDoorRan (SCRUM-795)", () => {
     it("spec.file differs (only the spec's file field)", () => {
       const s = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], "decoy.spec.ts");
       const suite = { title: "accounting.spec.ts", file: "accounting.spec.ts", suites: [{ title: APPROVE_DOOR_DESCRIBE, file: "accounting.spec.ts", specs: [s] }] };
+      expect(approveDoorErrors({ suites: [suite] })).toEqual([expect.stringContaining("was not registered")]);
+    });
+    it("describe suite's file differs (only that field)", () => {
+      const suite = { title: "accounting.spec.ts", file: "accounting.spec.ts", suites: [{ title: APPROVE_DOOR_DESCRIBE, file: "decoy.spec.ts", specs: [pass] }] };
       expect(approveDoorErrors({ suites: [suite] })).toEqual([expect.stringContaining("was not registered")]);
     });
     it("root file suite's file differs (only that field)", () => {
