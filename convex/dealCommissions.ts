@@ -3,7 +3,7 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { auditLog } from "./financialAudit";
@@ -36,10 +36,8 @@ async function loadSale(
   orgId: Id<"organizations">,
   saleId: Id<"sales">
 ): Promise<Doc<"sales">> {
-  const sale = await ctx.db.get(saleId);
-  if (!sale || sale.isDeleted || sale.orgId !== orgId) {
-    throw new ConvexError("Sale not found.");
-  }
+  const sale = await requireOwnedRow(ctx, orgId, "sales", saleId, "Sale not found.");
+  if (sale.isDeleted) throw new ConvexError("Sale not found.");
   return sale;
 }
 
@@ -178,10 +176,12 @@ export const addLine = mutation({
         throwAppError(AppErrorCode.VALIDATION_FAILED, "The organization currency is not supported for commissions.");
       }
       const amountMinor = toMinorUnits(args.amount, currency);
-      // More decimals than the currency holds would be silently rounded into a
-      // different amount than the one typed.
+      // Exact, not approximately exact: the typed figure must be precisely the
+      // recorded one. More decimals than the currency holds (or a float that is
+      // merely close to a valid amount) would otherwise be stored as a different
+      // number than the one the manager typed.
       const scale = scaleForCurrency(currency);
-      if (Math.abs(args.amount * Math.pow(10, scale) - amountMinor) > 1e-6) {
+      if (amountMinor / Math.pow(10, scale) !== args.amount) {
         throwAppError(AppErrorCode.VALIDATION_FAILED, `A commission amount can have at most ${scale} decimals.`);
       }
       if (amountMinor <= 0) {
@@ -288,10 +288,8 @@ export const removeLine = mutation({
           "Removing commission lines from a deal is not available during the pilot. Nothing has been changed."
         );
       }
-      const line = await ctx.db.get(args.lineId);
-      if (!line || line.orgId !== args.orgId || line.removedAt !== undefined) {
-        throw new ConvexError("Commission line not found.");
-      }
+      const line = await requireOwnedRow(ctx, args.orgId, "dealCommissionLines", args.lineId, "Commission line not found.");
+      if (line.removedAt !== undefined) throw new ConvexError("Commission line not found.");
       if (line.paidAt !== undefined) {
         throwAppError(
           AppErrorCode.VALIDATION_FAILED,

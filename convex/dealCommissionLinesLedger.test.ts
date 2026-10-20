@@ -304,6 +304,26 @@ describe("reconciliation with a line-only payment", () => {
 });
 
 describe("row cap", () => {
+  test("over the cap (101 rows, an admin raw edit) the cancel fails closed and changes nothing", async () => {
+    const d = await seedDealer("rowcap101");
+    const saleId = await completedSale(d);
+    await addLine(d, saleId, "PURCHASE", d.buyerId, 50);
+    for (let i = 0; i < 100; i++) {
+      await d.t.run((ctx) =>
+        ctx.db.insert("dealCommissionLines", {
+          orgId: d.orgId, saleId, kind: "EXECUTION", employeeId: d.executorId, amountMinor: 1000, currency: "JOD",
+          createdBy: d.userId, removedAt: Date.now(), removedBy: d.userId,
+        })
+      );
+    }
+    await expect(
+      d.asManager.mutation(api.sales.update, { orgId: d.orgId, saleId, status: "CANCELLED" } as never)
+    ).rejects.toThrow();
+    const sale = await d.t.run((ctx) => ctx.db.get(saleId));
+    expect(sale?.status).toBe("COMPLETED");
+    expect(await payable(d)).toBe(50_000);
+  });
+
   test("a sale past the row cap refuses new lines, so cancel can never miss one", async () => {
     const d = await seedDealer("rowcap");
     const saleId = await completedSale(d);

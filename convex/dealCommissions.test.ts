@@ -134,7 +134,7 @@ describe("dealCommissions: refusals", () => {
     return { orgId: s.orgId, saleId: s.saleId, kind: "PURCHASE" as const, employeeId: s.buyerAgent, amount: 10, ...over };
   }
 
-  test.each([[0], [-5], [Number.NaN], [Number.POSITIVE_INFINITY], [10.0001]])("amount %s is refused", async (amount) => {
+  test.each([[0], [-5], [Number.NaN], [Number.POSITIVE_INFINITY], [10.0001], [50.0000000001], [49.9999999999]])("amount %s is refused", async (amount) => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const s = await seed(t, `amt${String(amount).replace(/\W/g, "")}`);
     await expect(s.asAdmin.mutation(api.dealCommissions.addLine, await addArgs(s, { amount }))).rejects.toThrow();

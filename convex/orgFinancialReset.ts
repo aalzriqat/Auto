@@ -175,11 +175,14 @@ const RESET_TABLES = [
   "dashboardExpenseSummaryState",
   // Payroll. ⚠️ SCRUM-546: `payrollItems.runId` is REQUIRED, so items go BEFORE
   // their run (and `CHILD_TABLES` defers the run while any item remains).
-  // Extra deal commission lines point at sales and are paid through payslips.
-  "dealCommissionLines",
   "payrollItems",
   "payrollRuns",
   "employeeCompensation",
+  // Extra deal commission lines are listed AFTER payroll items: a payslip lists the
+  // lines it pays (`commissionLineIds`), and payroll skips a missing line, so a line
+  // must never be deleted while a surviving payslip still names it. CHILD_TABLES
+  // defers the lines until no payroll item remains (batches commit separately).
+  "dealCommissionLines",
   // Finance applications and their children. Ordering IS a safety property,
   // contrary to what this comment used to claim: the batch limit applies to
   // each table separately, so a run that clears one of two fee rows and then
@@ -348,6 +351,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   ],
   quotes: ["sales", "financeApplications", "deposits", "receivables"],
   payrollRuns: ["payrollItems"],
+  dealCommissionLines: ["payrollItems"],
 };
 
 /**
