@@ -33,14 +33,17 @@ export function gitExecutable(exists = existsSync, resolve = resolveTrustedGitEx
 }
 
 const ARG = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
-// Where a command word can start: line start, a separator, a subshell, or after
-// a wrapper (env, command, exec, xargs, sudo, time, nohup, VAR=x, sh -c '). Not
-// after echo, grep and the like, so `echo git commit` is not a commit.
-const LEAD = String.raw`(?:^|[;&|(\`{\n]|\$\(|\b(?:env|command|exec|xargs|sudo|time|nohup)\b(?:\s+-\S+|\s+\w+=\S*)*|\b(?:ba|z|da)?sh\s+-\w*c\s+['"]|\b\w+=\S*)\s*`;
 const GIT_STEP = new RegExp(
-  String.raw`${LEAD}(?:[\w./~-]*/)?git\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b([^;&|\n'")]*)`,
+  String.raw`\bgit\b((?:\s+(?:-[Cc]\s+${ARG}|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b([^;&|\n'")]*)`,
   "g",
 );
+// A match is skipped only when git is an argument to one of these, as in
+// `echo git commit` or `grep 'git push' notes`. Anything else counts: do, then,
+// else, timeout, nice, !, sudo -u x, env, command and bash -c all reach git.
+const TEXT_COMMANDS = new Set(["echo", "printf", "grep", "egrep", "fgrep", "rg"]);
+const SEGMENT_BREAK = /[;&|\n(){`]|\$\(/;
+const isTextArgument = (command, index) =>
+  TEXT_COMMANDS.has(command.slice(0, index).split(SEGMENT_BREAK).pop().trim().split(/\s+/)[0]);
 const ALL_FLAG = /(?:^|\s)(?:--all|-[a-zA-Z]*a[a-zA-Z]*)(?=\s|$)/;
 const DIR_OPTION = new RegExp(String.raw`(?:^|\s)-C\s+(${ARG})`, "g");
 const OPAQUE_REPO_OPTION = /(?:^|\s)--(?:git-dir|work-tree)\b/;
@@ -51,13 +54,14 @@ const unquote = (a) => a.replace(/^(["'])(.*)\1$/, "$2");
  * passed, the `-C <dir>` directories git runs in, and whether the repository is
  * redirected by --git-dir/--work-tree (then the files are unknown). The scan is
  * over the raw text, so it sees `bash -c 'git commit'`, `env git push` and
- * `$(git commit)`. `echo git commit` is not a step. Residual bypass: a command
+ * `$(git commit)`. `echo git commit` and `grep 'git push'` are not steps. Residual bypass: a command
  * built at run time (`g=git; $g commit`), a git alias, or a script or program
  * that runs git itself.
  */
 export function gitSteps(command) {
   const steps = [];
   for (const m of command.matchAll(GIT_STEP)) {
+    if (isTextArgument(command, m.index)) continue;
     steps.push({
       step: m[2],
       all: ALL_FLAG.test(m[3]),

@@ -100,6 +100,16 @@ describe("gitSteps", () => {
     ["git --git-dir=/x/.git commit -m y", [step("commit", false, [], true)]],
     ["git -C a -C b commit -m y", [step("commit", false, ["a", "b"])]],
     ["echo git commit", []],
+    ["for i in 1 2 3; do git push origin b && break; done", [step("push")]],
+    ["if true; then git commit -m x; fi", [step("commit")]],
+    ["false || { git push; }", [step("push")]],
+    ["timeout 60 git push", [step("push")]],
+    ["nice git push", [step("push")]],
+    ["! git push", [step("push")]],
+    ["sudo -u x git push", [step("push")]],
+    ["if false; then :; else git push; fi", [step("push")]],
+    ["echo ok | grep 'git push'", []],
+    ["echo done; git push", [step("push")]],
     ["grep 'git push' notes.txt", []],
     ["printf 'git commit'", []],
   ])("%s", (cmd, expected) => expect(gitSteps(cmd)).toEqual(expected));
@@ -253,6 +263,32 @@ describe("evaluate (PR check)", () => {
       commitText: "fix\n\nClaude-Session: https://claude.ai/code/session_SEAT1abc",
     });
     expect(viaCommit.problems.join("\n")).toContain("separate session");
+  });
+  describe("no behaviour change form", () => {
+    const noChange = (over: Record<string, string> = {}) =>
+      fill({ "Seat 1 SHA": "abc1234 no behaviour change", "Seat 2 SHA": "abc1234 no behaviour change", ...over }).replace(
+        /- Red run:\n```\n[\s\S]*?\n```\n/,
+        "- Red run: No behaviour change: comment and rename only, nothing observable differs\n",
+      );
+    test("is accepted when both seats confirm it", async () => {
+      const r = await evaluate({ body: noChange(), files: money, isPrCommit: async () => true });
+      expect(r.problems).toEqual([]);
+    });
+    test.each([
+      ["Seat 1 does not confirm", { "Seat 1 SHA": "abc1234" }],
+      ["Seat 2 does not confirm", { "Seat 2 SHA": "abc1234" }],
+    ])("is refused when %s", async (_n, over) => {
+      const r = await evaluate({ body: noChange(over), files: money, isPrCommit: async () => true });
+      expect(r.problems.join("\n")).toContain("Red run");
+    });
+    test("is refused without a reason", async () => {
+      const body = noChange().replace(/No behaviour change: .*/, "No behaviour change");
+      expect((await evaluate({ body, files: money, isPrCommit: async () => true })).problems.join("\n")).toContain("Red run");
+    });
+    test("a plain red-run line without the phrase still needs a fence", async () => {
+      const body = noChange().replace("No behaviour change: comment", "Skipped: comment");
+      expect((await evaluate({ body, files: money, isPrCommit: async () => true })).problems.join("\n")).toContain("Red run");
+    });
   });
   test("gate-only change needs no red run", async () => {
     const r = await evaluate({ body: fill().replace(/- Red run:\n```\n[\s\S]*?\n```\n/, ""), files: [".github/x.yml"] });

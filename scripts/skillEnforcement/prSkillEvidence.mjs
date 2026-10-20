@@ -72,9 +72,22 @@ function checkSkills(t, classes) {
   return [...needed].filter((s) => !claimed.has(s)).map((s) => `"Skills run" must list ${s}.`);
 }
 
+const NO_BEHAVIOUR_CHANGE = /no behaviou?r change/i;
+
+/**
+ * A change with no behaviour change (docs, comments, renames) has no failing
+ * test to show. It may replace the red run with a one-line reason, but only
+ * when both seat SHA lines confirm "no behaviour change" for that SHA.
+ */
+function noBehaviourChange(t) {
+  const reason = line(t, "Red run")?.match(/^no behaviou?r change\b\s*[:\u2013-]?\s*(.*)$/i)?.[1] ?? null;
+  if (reason === null || reason.length < 10 || isPlaceholder(reason)) return false;
+  return ["Seat 1 SHA", "Seat 2 SHA"].every((l) => NO_BEHAVIOUR_CHANGE.test(line(t, l) ?? ""));
+}
+
 function checkOutputs(t, sensitive) {
   const problems = [];
-  if (sensitive) {
+  if (sensitive && !noBehaviourChange(t)) {
     const red = fenced(t, "Red run");
     if (red === undefined || isPlaceholder(red)) {
       problems.push('"Red run" needs a fenced block with the failing test output from before the fix.');
