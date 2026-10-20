@@ -13,6 +13,13 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
+// SCRUM-760: the narrow pilot blocks collections.returnClearedCheque after tenant auth. The
+// returnClearedCheque cell needs an authorised ACCOUNTANT control call that succeeds, so the block is
+// off in this file. The SALES refusal (tenant auth runs first) is unchanged. The real shipped switch
+// refusal is pinned, unmocked, by convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
+
 /**
  * SCRUM-444 / SCRUM-795 (narrowed pilot, owner ruling R1): the DOOR side of the
  * pin in `utils/permissions.test.ts`.

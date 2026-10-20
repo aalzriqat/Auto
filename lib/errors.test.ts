@@ -578,4 +578,19 @@ describe("getCodedErrorMessage - SCRUM-724 CR-1: a coded refusal or nothing, nev
       expect(arText).not.toBe(enText);
     }
   });
+
+  it("the SCRUM-760 post-delivery containment codes have EN and AR entries that differ and match the server text", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { POST_DELIVERY_DOOR_REFUSALS } = await import("../convex/utils/postDeliveryDoorContainment");
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    for (const [code, serverText] of Object.entries(POST_DELIVERY_DOOR_REFUSALS)) {
+      const error = new ConvexError({ code, message: serverText });
+      const enText = getCodedErrorMessage(error, en);
+      const arText = getCodedErrorMessage(error, ar);
+      expect(enText, code).toBe(serverText);
+      expect(arText, code).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe(enText);
+    }
+  });
 });
