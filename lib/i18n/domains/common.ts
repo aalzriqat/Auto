@@ -324,6 +324,7 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ManualJournalsPilotOffNotice: [
     "Manual journals are turned off for the pilot, so new ones cannot be created or approved. Drafts that were already pending can still be rejected. If a pending draft blocks closing a period and no second finance user can reject it, the owner can close the period with the audited close override.",
     "القيود اليدوية متوقفة خلال فترة التجربة، لذا لا يمكن إنشاء قيود جديدة أو الموافقة عليها. ما زال بالإمكان رفض المسودات المعلّقة السابقة. وإذا كانت مسودة معلّقة تمنع إغلاق فترة ولم يتوفر مستخدم مالي ثانٍ لرفضها، يمكن للمالك إغلاق الفترة عبر تجاوز الإغلاق المدقَّق.",
+  ],
   ServerError_CASH_SALE_BALANCE_UNPAID_REFUSED: [
     "A cash sale can only be completed once the customer's full payment is recorded as a deposit. Record the remaining payment as a deposit first. Nothing has been changed.",
     "لا يمكن إتمام البيع النقدي إلا بعد تسجيل دفعة العميل كاملة كعربون. سجّل المبلغ المتبقي كعربون أولًا. لم يتم تغيير أي شيء.",
