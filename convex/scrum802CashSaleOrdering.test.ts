@@ -1,6 +1,10 @@
 /**
  * SCRUM-802 ordering (Codex Seat 2 on #526): the pay-first refusal, including the trade-in case, must come BEFORE the
- * first write on every completion path, not merely be rolled back by the transaction (the standard of #525).
+ * first sale write on every completion path, not merely be rolled back by the transaction (the standard of #525).
+ * Precisely: at the three door mutations (`sales.create`, `sales.completeDraft`, `sales.completeFromQuote`) the
+ * idempotency claim row is written first and rolled back by the transaction when the completion refuses; the extras
+ * refusal sits before `runWithIdempotency`. The recorder here wraps the shared completion functions, so it proves
+ * "no write before the refusal" from that point on.
  *
  * A write-recording db and scheduler wrap the context handed to the shared completion functions
  * (`completeSale`, `completeExistingSale`, `completeSalesForLineItems`); a refused completion must have recorded NO

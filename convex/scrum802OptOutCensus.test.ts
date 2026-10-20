@@ -7,6 +7,10 @@
  * is exactly the one below, so a new suite cannot quietly run with the containment off, and the certification and
  * rehearsal files can never be on it. Shrinking the list (re-cutting a suite to pay by deposit) is always allowed;
  * delete the entry in the same change.
+ *
+ * Strength of the check: each opt-out is verified for the shapes the self-tests cover (a real falsy assignment in the
+ * mock factory; a marker, a comment or a pass-through mock does not count). The independent `turnsSwitchOff` detector
+ * still flags any unmarked mock of the gate modules. A stronger AST parse is a follow-up.
  */
 import { describe, expect, test } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";

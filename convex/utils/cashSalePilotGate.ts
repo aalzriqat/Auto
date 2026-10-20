@@ -28,9 +28,11 @@ export function isCashCompletion(args: {
 /**
  * Owner ruling (2026-10-19, "deposit only"): does a trade-in allocation count toward "pay in full first"?
  * No. Only deposits do, so a cash sale settled by a trade-in alone, or by a part deposit plus a trade-in, is refused.
- * Trade-in settlement of a cash sale is a post-pilot activation gate: flipping this to `true` is the one-line change,
- * and it needs a new certification round and the owner's approval. It is read only through
- * `cashSaleOutstandingForPayFirst`.
+ * Trade-in settlement of a cash sale is a post-pilot activation gate. This constant is read only through
+ * `cashSaleOutstandingForPayFirst` (the exact post-allocation gate). The read-only pre-write check
+ * `assertCashSaleDepositsCanCoverInvoice` never reads it: it counts deposits only, by construction. So flipping this
+ * to `true` does NOT enable trade-in settlement; that needs a real rule change (the pre-write check as well), a new
+ * certification round and the owner's approval. A test pins the constant at `false`.
  */
 export const TRADE_IN_COUNTS_TOWARD_CASH_PAY_FIRST = false as const;
 
