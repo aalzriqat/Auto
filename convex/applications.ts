@@ -3795,6 +3795,10 @@ export const cancelApplication = mutation({
         }
 
         if (app.status === "CANCELLED") {
+          // A deal that was finalized and then reversed (unwind or closed-deal cancel) had its deposit holds
+          // deliberately reinstated by the teardown, pending a refund-or-forfeit decision (SCRUM-712). A repeated
+          // cancel must not release them: only the deposit decision does.
+          if (app.finalizedSaleId !== undefined) return;
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
           await releaseRootsForApplicationQuote(ctx, {
             orgId: args.orgId,
@@ -5720,14 +5724,14 @@ export const returnFinanceDisbursementCheque = mutation({
       async () => {
         // A missing row and another organisation's row answer identically, so the
         // refusal never discloses that a foreign row exists.
-        const app = await ctx.db.get(args.applicationId);
-        if (!app || app.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
+        const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId)
+          .catch(() => refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND"));
         await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
         if (app.disbursedAt === undefined || app.disbursedAmountMinor === undefined) {
           refuseFinanceReturn("FINANCE_RETURN_NOT_DISBURSED");
         }
-        const cheque = await ctx.db.get(args.chequeId);
-        if (!cheque || cheque.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
+        const cheque = await requireOwnedRow(ctx, args.orgId, "postDatedCheques", args.chequeId)
+          .catch(() => refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND"));
         if (cheque.status !== "CLEARED" || cheque.isDeleted === true) {
           refuseFinanceReturn("FINANCE_RETURN_CHEQUE_NOT_CLEARED");
         }

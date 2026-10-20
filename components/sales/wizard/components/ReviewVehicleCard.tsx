@@ -66,7 +66,6 @@ export default function ReviewVehicleCard({
         <VehicleCostBar
           vehicleId={vehicle._id}
           purchasePrice={vehicle.purchasePrice}
-          salePrice={effectivePrice}
         />
       )}
     </div>
