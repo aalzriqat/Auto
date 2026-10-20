@@ -70,6 +70,12 @@ import { activatePendingInvoiceReceipt, requirePostedInvoiceReceiptOrigins } fro
 import { saleCompletedKey } from "./accounting/postingRules";
 import { getReceivableOutstandingMinor } from "./subledger";
 
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
+
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
 // itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification

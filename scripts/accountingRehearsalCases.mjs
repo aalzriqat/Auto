@@ -1426,18 +1426,17 @@ export async function runRehearsalCases(ctx) {
     }
   );
 
-  // ── RV1 — a cleared cheque that BOUNCES reverses; it does not vanish ───────
+  // ── RV1 — returning a CLEARED cheque is an expected refusal for the pilot (SCRUM-760) ──
   //
-  // ACC-3: every new way to spend creates new reversal obligations, and the
-  // reversal must be SYMMETRIC — the money comes back off, and the history of
-  // it having happened stays. A return implemented as a deletion balances just
-  // as well and destroys the audit trail, so "the receivable is owed again" is
-  // only half the assertion; the other half is that the original posting is
-  // still there with a reversing entry against it.
+  // While the door is blocked the case proves the refusal and that the accounting
+  // events, the clearing entry and its lines, the receivable, the cheque status and the FAILED outbox
+  // list are unchanged (other tables are not read here). When the door is activated (post-pilot, after its own certification) this becomes the full reversal cell again:
+  // ACC-3, the reversal must be SYMMETRIC (the money comes back off and the history stays: the original
+  // posting remains with a linked, equal-and-opposite reversing entry, and the debt is owed again).
   await recordCase(
     results,
     "RV1",
-    "returning a CLEARED cheque reopens the exact debt and posts a linked, equal-and-opposite reversal",
+    "returning a CLEARED cheque is refused with the pilot containment code and the clearing, the settled debt and the ledger are untouched",
     async () => {
       const stamp = Date.now().toString(36);
       const customerId = await ownerMust("mutation", "customers:create", {
@@ -1530,8 +1529,15 @@ export async function runRehearsalCases(ctx) {
         .map((l) => `${keyOf.get(String(l.accountId))}|${l.debitMinor}|${l.creditMinor}`)
         .sort((a, b) => a.localeCompare(b));
 
+      // SCRUM-760 decision B (door-census gap 3): reversing a cheque AFTER the bank cleared it is a
+      // post-delivery money reversal that the narrow pilot blocks server-side. This is an EXPECTED-REFUSAL
+      // cell: an authorized actor with valid arguments (including a valid return fee bank) is refused with
+      // the specific containment code, and the clearing, the settled debt and the ledger are all untouched.
+      // Re-enabling the door converts this back into the full reversal cell in the same change.
+      const preReturnFailedOutbox = await ownerMust("query", "accountingOutbox:listPending", { orgId, status: "FAILED", limit: 200 });
+      const preReturnFailedIds = (preReturnFailedOutbox ?? []).map((row) => String(row._id)).sort((a, b) => a.localeCompare(b));
       const preReturnEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", { orgId, limit: 200 });
-      const preReturnEventIds = new Set((preReturnEvents ?? []).map((event) => String(event._id)));
+      const preReturnEventIds = (preReturnEvents ?? []).map((event) => String(event._id)).sort((a, b) => a.localeCompare(b));
       const returned = await ownerCall("mutation", "collections:returnClearedCheque", {
         orgId,
         chequeId,
@@ -1540,98 +1546,57 @@ export async function runRehearsalCases(ctx) {
         bankFeeBankAccountId: feeBankId,
         idempotencyKey: `rehearsal-rv1-return-${stamp}`,
       });
-      if (!returned.ok) {
-        fail(`returning the cleared cheque was refused: ${returned.error.slice(0, 200)}`);
-      }
+      if (returned.ok) fail("returning a CLEARED cheque was ACCEPTED, but the pilot blocks that door server-side");
+      expectEqual(returned.errorCode, "CLEARED_CHEQUE_RETURN_PILOT_DISABLED", "the cleared-cheque return's refusal code");
 
-      // SYMMETRY, BY IDENTITY. The clearing's event is now REVERSED and names
-      // the event that reversed it; the clearing's journal entry is still there,
-      // still POSTED-then-REVERSED with its lines intact, and names the entry
-      // that reversed it; that entry is a REVERSAL whose lines are the exact
-      // opposite of the clearing's — same accounts, same amounts, sides swapped.
-      // Org-wide counts cannot say any of this: a different balanced entry
-      // anywhere in the ledger would have satisfied "one more entry".
-      const reversedEvent = await eventAndJournal({
+      // UNCHANGED, as far as this case reads: the same events (none added, none reversed), the clearing still POSTED with its
+      // lines intact, the debt still settled, the cheque still CLEARED, the FAILED outbox list identical to its pre-refusal read.
+      const postReturnEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", { orgId, limit: 200 });
+      const postReturnEventIds = (postReturnEvents ?? []).map((event) => String(event._id)).sort((a, b) => a.localeCompare(b));
+      if (JSON.stringify(postReturnEventIds) !== JSON.stringify(preReturnEventIds)) {
+        fail("the refused cheque return changed the set of accounting events");
+      }
+      const stillPosted = await eventAndJournal({
         orgId, ownerMust, sourceType: "collectionPayments", sourceId: paymentId, eventType: "COLLECTION_PAYMENT",
-        expectStatus: "REVERSED",
       });
-      if (!reversedEvent.event.reversedByEventId) fail("the clearing's event is REVERSED but names no reversing event");
-      expectEqual(String(reversedEvent.entry._id), String(cleared.entry._id), "the clearing's journal entry is the same entry after the return");
-      expectEqual(reversedEvent.entry.status, "REVERSED", "the clearing entry's status after the return");
-      const originalAfter = reversedEvent.lines
+      expectEqual(String(stillPosted.entry._id), String(cleared.entry._id), "the clearing's journal entry after the refused return");
+      expectEqual(stillPosted.entry.status, "POSTED", "the clearing entry's status after the refused return");
+      const linesAfter = stillPosted.lines
         .map((l) => `${keyOf.get(String(l.accountId))}|${l.debitMinor}|${l.creditMinor}`)
         .sort((a, b) => a.localeCompare(b));
-      if (JSON.stringify(originalAfter) !== JSON.stringify(clearingLineShape)) {
-        fail("the clearing entry's lines CHANGED across the return — history was edited, not reversed");
+      if (JSON.stringify(linesAfter) !== JSON.stringify(clearingLineShape)) {
+        fail("the clearing entry's lines changed across the refused return");
       }
-      const reversalEntryId = reversedEvent.entry.reversedByJournalEntryId;
-      if (!reversalEntryId) fail("the clearing entry is REVERSED but names no reversing journal entry");
-      const reversal = await ownerMust("query", "accountingLedger:getJournalEntry", { orgId, journalEntryId: reversalEntryId });
-      if (!reversal?.entry) fail("the reversing journal entry could not be read back");
-      expectEqual(reversal.entry.category, "REVERSAL", "the reversing entry's category");
-      expectEqual(reversal.entry.status, "POSTED", "the reversing entry's status");
-      expectEqual(String(reversal.entry.reversalOfJournalEntryId), String(cleared.entry._id), "the reversing entry names the clearing it reverses");
-      expectEqual(String(reversal.entry.accountingEventId), String(reversedEvent.event.reversedByEventId), "the reversing entry belongs to the reversing event");
-      expectExactLines(
-        reversal.lines ?? [], keyOf,
-        [
-          { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: 1200 * scale },
-          { key: "BANK_ACCOUNT", creditMinor: 1200 * scale },
-        ],
-        { currency: denom.currency, decimals: denom.decimals, what: "the cheque-return reversal", customerId }
-      );
-      const reversedBankLine = (reversal.lines ?? []).find((line) => keyOf.get(String(line.accountId)) === "BANK_ACCOUNT");
-      expectEqual(String(reversedBankLine?.bankAccountId), String(clearingBankId), "the cheque reversal's original physical bank");
-      const fee = await eventAndJournal({
-        orgId, ownerMust, sourceType: "expenses", sourceId: "bank-return-fee", eventType: "EXPENSE_POSTED",
-        pick: (event) => event.sourceType === "expenses" && !preReturnEventIds.has(String(event._id)),
-      });
-      expectExactLines(fee.lines, keyOf, [
-        { key: "PROFESSIONAL_FEES_EXPENSE", debitMinor: 500 },
-        { key: "BANK_ACCOUNT", creditMinor: 500 },
-      ], { currency: denom.currency, decimals: denom.decimals, what: "the cheque return fee" });
-      const feeBankLine = fee.lines.find((line) => keyOf.get(String(line.accountId)) === "BANK_ACCOUNT");
-      expectEqual(String(feeBankLine?.bankAccountId), String(feeBankId), "the bank that paid the cheque return fee");
-
-      // THE DEBT IS OWED AGAIN — exactly, not approximately.
-      const reopened = await findReceivable({ orgId, ownerMust, receivableId });
-      expectEqual(reopened.outstandingAmount, 1200, "outstanding on the receivable after the cheque bounced");
-      if (reopened.status === "PAID") fail("the receivable still reads PAID after its cheque bounced");
+      const unchangedDebt = await findReceivable({ orgId, ownerMust, receivableId });
+      expectEqual(unchangedDebt.outstandingAmount, 0, "outstanding on the receivable after the refused cheque return");
+      expectEqual(unchangedDebt.status, "PAID", "receivable status after the refused cheque return");
 
       const chequePage = await ownerMust("query", "collections:listCheques", {
         orgId,
         paginationOpts: { numItems: 100, cursor: null },
       });
       const mine = (chequePage?.page ?? []).find((c) => String(c._id) === String(chequeId));
-      if (!mine) fail("the cheque is no longer listed after its return — the history was destroyed, not reversed");
-      expectEqual(mine.status, "RETURNED", "cheque status after the return");
+      if (!mine) fail("the cheque is no longer listed after the refused return");
+      expectEqual(mine.status, "CLEARED", "cheque status after the refused return");
 
       const failedOutbox = await ownerMust("query", "accountingOutbox:listPending", {
         orgId,
         status: "FAILED",
         limit: 200,
       });
-      if ((failedOutbox ?? []).length > 0) {
-        fail(`the reversal left ${failedOutbox.length} FAILED accounting event(s) behind`);
+      const postReturnFailedIds = (failedOutbox ?? []).map((row) => String(row._id)).sort((a, b) => a.localeCompare(b));
+      if (JSON.stringify(postReturnFailedIds) !== JSON.stringify(preReturnFailedIds)) {
+        fail(`the refused return changed the FAILED accounting outbox (before ${preReturnFailedIds.length}, after ${postReturnFailedIds.length})`);
       }
 
       return {
         chequeId: String(chequeId),
         paymentId: String(paymentId),
         currency: denom.currency,
-        chequeStatusAfterReturn: mine.status ?? null,
-        clearing: { entryId: String(cleared.entry._id), statusAfterReturn: reversedEvent.entry.status, linesIntact: true },
-        reversal: {
-          entryId: String(reversalEntryId),
-          category: reversal.entry.category,
-          reversalOf: String(reversal.entry.reversalOfJournalEntryId),
-          lines: (reversal.lines ?? []).map((l) => ({
-            account: keyOf.get(String(l.accountId)) ?? "?",
-            debitMinor: l.debitMinor,
-            creditMinor: l.creditMinor,
-          })),
-        },
-        receivable: { outstandingAfterClear: settled.outstandingAmount, outstandingAfterReturn: reopened.outstandingAmount, statusAfterReturn: reopened.status },
+        chequeStatusAfterRefusedReturn: mine.status ?? null,
+        refusalCode: returned.errorCode,
+        clearing: { entryId: String(cleared.entry._id), statusAfterRefusedReturn: stillPosted.entry.status, linesIntact: true },
+        receivable: { outstandingAfterClear: settled.outstandingAmount, outstandingAfterRefusedReturn: unchangedDebt.outstandingAmount, statusAfterRefusedReturn: unchangedDebt.status },
         commandsExercised: ["collections.clearCheque", "collections.returnClearedCheque"],
       };
     }

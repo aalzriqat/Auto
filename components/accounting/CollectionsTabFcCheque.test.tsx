@@ -9,6 +9,7 @@ import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ConvexError } from "convex/values";
 import type { Doc } from "@/convex/_generated/dataModel";
+import { commonAr } from "@/lib/i18n/domains/common";
 import { salesAr } from "@/lib/i18n/domains/sales";
 
 const stubs = vi.hoisted(() => ({
@@ -19,6 +20,14 @@ const stubs = vi.hoisted(() => ({
   commandKeys: new Map<string, string>(),
   nextCommand: 0,
 }));
+
+// SCRUM-760: the cleared-cheque return switch is a live handle. Tests here drive the deferred Return on a
+// CLEARED customer cheque with the pilot block OFF; the shipped-state test turns it ON.
+const pilot = vi.hoisted(() => ({
+  clearedChequeReturn: false,
+}));
+vi.mock("@/convex/utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("@/test-utils/postDeliveryDoorSwitches")).withPostDeliverySwitches(await importOriginal(), pilot));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: false, locale: "en" }),
@@ -83,6 +92,7 @@ const cheque = (over: Record<string, unknown>) =>
   }) as unknown as Doc<"postDatedCheques">;
 
 afterEach(() => {
+  pilot.clearedChequeReturn = false;
   cleanup();
   stubs.queryResults.clear();
   stubs.paginated.clear();
@@ -265,6 +275,47 @@ describe("Collections, Cheques tab: Return", () => {
       expect(ret.disabled).toBe(true);
     },
   );
+
+  test("SCRUM-760 shipped state: a CLEARED customer cheque has Return disabled with the pilot notice", async () => {
+    pilot.clearedChequeReturn = true;
+    stubs.paginated.set("collections:listCheques", [
+      cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "CLEARED" }),
+    ]);
+    await openChequesTab();
+    expect((screen.getByRole("button", { name: "Return" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("cheque-return-pilot-disabled").textContent).toBe(
+      "ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED"
+    );
+  });
+
+  test("SCRUM-760 shipped state, Arabic: the pilot notice renders the Arabic dictionary text, not the key", async () => {
+    // The component reads no RTL flag, so this pins the translated text; layout direction is not asserted.
+    const arabic = (commonAr as Record<string, string>).ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED;
+    expect(arabic).toBeTruthy();
+    stubs.t = (key: string) => (key.startsWith("ServerError_") ? (commonAr as Record<string, string>)[key] ?? key : key);
+    pilot.clearedChequeReturn = true;
+    stubs.paginated.set("collections:listCheques", [
+      cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "CLEARED" }),
+    ]);
+    await openChequesTab();
+    const rendered = screen.getByTestId("cheque-return-pilot-disabled").textContent;
+    // Hard-coded literals (copied from lib/i18n/domains/common.ts) so a missing or key-valued AR entry cannot pass.
+    const expectedArabic = "إرجاع شيك تمت تسويته بالفعل غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.";
+    expect(rendered).toBe(expectedArabic);
+    expect(rendered).not.toBe("ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED");
+    expect(rendered).not.toBe("Returning a cheque that has already cleared is not available during the pilot. Nothing has been changed.");
+    expect(arabic).toBe(expectedArabic);
+  });
+
+  test("SCRUM-760 shipped state, CONTROL: a DEPOSITED customer cheque keeps an enabled Return (returnCheque is not blocked)", async () => {
+    pilot.clearedChequeReturn = true;
+    stubs.paginated.set("collections:listCheques", [
+      cheque({ _id: "c1", isFinanceCompanyCheque: false, status: "DEPOSITED" }),
+    ]);
+    await openChequesTab();
+    expect((screen.getByRole("button", { name: "Return" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId("cheque-return-pilot-disabled")).toBeNull();
+  });
 
   test("a customer's cheque keeps Return", async () => {
     stubs.paginated.set("collections:listCheques", [

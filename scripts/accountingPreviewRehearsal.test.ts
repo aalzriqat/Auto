@@ -206,6 +206,21 @@ describe("convexCall reports failures as data, not exceptions", () => {
     expect(result).toEqual({ ok: false, error: "nothing left to refund" });
   });
 
+  test("a coded refusal also surfaces its machine code, so an expected-refusal case can assert it", async () => {
+    const result = await convexCall(
+      { convexUrl: "https://x.convex.cloud", token: "t", kind: "mutation", path: "a:b", args: {} },
+      fakeFetch({
+        status: "error",
+        errorData: { code: "CLEARED_CHEQUE_RETURN_PILOT_DISABLED", message: "not available during the pilot" },
+      }) as unknown as typeof fetch
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: "not available during the pilot",
+      errorCode: "CLEARED_CHEQUE_RETURN_PILOT_DISABLED",
+    });
+  });
+
   test("a non-JSON body is a hard failure, because it usually means the wrong URL", async () => {
     const notJson = async () => ({ status: 502, text: async () => "<html>bad gateway" }) as unknown as Response;
     await expect(
