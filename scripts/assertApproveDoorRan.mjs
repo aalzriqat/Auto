@@ -11,11 +11,30 @@ import { pathToFileURL } from "node:url";
 export const APPROVE_DOOR_TITLE =
   "approve of the seeded legacy draft is refused by the backend and the draft stays pending";
 
+// The match is bound to the spec FILE, the describe block and the project, not the
+// title alone, so a same-titled passing test elsewhere cannot satisfy the proof.
+export const APPROVE_DOOR_FILE = "playwright/tests/accounting.spec.ts";
+export const APPROVE_DOOR_DESCRIBE =
+  "accounting workspace: legacy manual-journal draft (seeded lane only)";
+export const APPROVE_DOOR_PROJECT = "chromium";
+
+// Playwright reports spec.file relative to testDir ("./playwright/tests"); accept
+// that or the repo-relative path. Nothing else (no suffix tricks like "x/accounting.spec.ts").
+function isApproveDoorFile(file) {
+  if (typeof file !== "string") return false;
+  const f = file.replaceAll("\\", "/").replace(/^\.\//, "");
+  return f === APPROVE_DOOR_FILE || f === APPROVE_DOOR_FILE.replace("playwright/tests/", "");
+}
+
 function collectTests(suite, found) {
   for (const spec of suite.specs ?? []) {
-    if (spec.title === APPROVE_DOOR_TITLE) {
-      for (const t of spec.tests ?? []) found.push(t);
-      if (!(spec.tests ?? []).length) found.push({ status: "no-tests", results: [] });
+    if (
+      spec.title === APPROVE_DOOR_TITLE &&
+      suite.title === APPROVE_DOOR_DESCRIBE &&
+      isApproveDoorFile(spec.file ?? suite.file)
+    ) {
+      const tests = (spec.tests ?? []).filter((t) => t.projectName === APPROVE_DOOR_PROJECT);
+      for (const t of tests) found.push(t);
     }
   }
   for (const child of suite.suites ?? []) collectTests(child, found);
@@ -30,7 +49,7 @@ export function approveDoorErrors(report) {
   for (const suite of report.suites) collectTests(suite, found);
   if (found.length === 0) {
     return [
-      `approve-door test "${APPROVE_DOOR_TITLE}" was not registered: E2E_SEED_LEGACY_MANUAL_JOURNAL was not "1" for the Playwright run, so the approve door went unproven`,
+      `approve-door test "${APPROVE_DOOR_TITLE}" was not registered in ${APPROVE_DOOR_FILE} (describe and ${APPROVE_DOOR_PROJECT} project bound): E2E_SEED_LEGACY_MANUAL_JOURNAL was not "1" for the Playwright run, so the approve door went unproven`,
     ];
   }
   if (found.length > 1) {
@@ -44,9 +63,8 @@ export function approveDoorErrors(report) {
     return ["approve-door test was skipped"];
   }
   if (!["expected", "flaky"].includes(test.status) || last?.status !== "passed") {
-    return [
-      `approve-door test did not pass (status=${String(test.status)}, last result=${String(last?.status)})`,
-    ];
+    // Fixed text only: report fields are untrusted and this reaches a public log.
+    return ["approve-door test did not pass (see the uploaded Playwright report)"];
   }
   return [];
 }
@@ -61,8 +79,9 @@ export function runCli(argv, log = console) {
   let report;
   try {
     report = JSON.parse(readFileSync(file, "utf8"));
-  } catch (error) {
-    log.error(`cannot read Playwright JSON report ${file}: ${error instanceof Error ? error.message : String(error)}`);
+  } catch {
+    // Fixed text only: a parse error can quote report content; the path is arg-supplied.
+    log.error("::error::cannot read or parse the Playwright JSON report");
     return 1;
   }
   const errors = approveDoorErrors(report);

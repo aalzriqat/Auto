@@ -3,15 +3,32 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { APPROVE_DOOR_TITLE, approveDoorErrors, runCli } from "./assertApproveDoorRan.mjs";
+import {
+  APPROVE_DOOR_DESCRIBE,
+  APPROVE_DOOR_FILE,
+  APPROVE_DOOR_PROJECT,
+  APPROVE_DOOR_TITLE,
+  approveDoorErrors,
+  runCli,
+} from "./assertApproveDoorRan.mjs";
 
 type R = { status: string };
-const spec = (title: string, status: string, results: R[]) => ({
+const spec = (title: string, status: string, results: R[], file = "accounting.spec.ts", projectName = "chromium") => ({
   title,
-  tests: [{ status, results }],
+  file,
+  tests: [{ status, projectName, results }],
+});
+// Mirrors the Playwright JSON shape: file suite > describe suite > spec.
+const fileSuite = (file: string, describeTitle: string, ...specs: unknown[]) => ({
+  title: file,
+  file,
+  suites: [{ title: describeTitle, file, specs }],
 });
 const report = (...specs: unknown[]) => ({
-  suites: [{ suites: [{ specs }] }, { specs: [spec("other", "expected", [{ status: "passed" }])] }],
+  suites: [
+    fileSuite("accounting.spec.ts", APPROVE_DOOR_DESCRIBE, ...specs),
+    { title: "other.spec.ts", file: "other.spec.ts", specs: [spec("other", "expected", [{ status: "passed" }], "other.spec.ts")] },
+  ],
 });
 const pass = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }]);
 
@@ -41,6 +58,42 @@ describe("assertApproveDoorRan (SCRUM-795)", () => {
   it("RED: duplicate", () => {
     expect(approveDoorErrors(report(pass, pass))).toEqual([expect.stringContaining("2 times")]);
   });
+  it("RED: a same-titled passing decoy in ANOTHER file does not satisfy the proof", () => {
+    const decoy = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], "decoy.spec.ts");
+    const r = {
+      suites: [
+        fileSuite("accounting.spec.ts", APPROVE_DOOR_DESCRIBE),
+        fileSuite("decoy.spec.ts", APPROVE_DOOR_DESCRIBE, decoy),
+      ],
+    };
+    expect(approveDoorErrors(r)).toEqual([expect.stringContaining("was not registered")]);
+  });
+  it("a decoy in another file does not turn a real pass into a duplicate", () => {
+    const decoy = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], "decoy.spec.ts");
+    const r = {
+      suites: [
+        fileSuite("accounting.spec.ts", APPROVE_DOOR_DESCRIBE, pass),
+        fileSuite("decoy.spec.ts", APPROVE_DOOR_DESCRIBE, decoy),
+      ],
+    };
+    expect(approveDoorErrors(r)).toEqual([]);
+  });
+  it("accepts the repo-relative spec path as well as the testDir-relative one", () => {
+    const s = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], APPROVE_DOOR_FILE);
+    expect(approveDoorErrors(report(s))).toEqual([]);
+  });
+  it("RED: right file but wrong describe does not satisfy the proof", () => {
+    const r = { suites: [fileSuite("accounting.spec.ts", "some other describe", pass)] };
+    expect(approveDoorErrors(r)).toEqual([expect.stringContaining("was not registered")]);
+  });
+  it("RED: right file and describe but wrong project does not satisfy the proof", () => {
+    const s = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], "accounting.spec.ts", "setup");
+    expect(approveDoorErrors(report(s))).toEqual([expect.stringContaining("was not registered")]);
+  });
+  it("binds to the file, describe and project the spec registers", () => {
+    expect(APPROVE_DOOR_FILE).toBe("playwright/tests/accounting.spec.ts");
+    expect(APPROVE_DOOR_PROJECT).toBe("chromium");
+  });
   it("RED: malformed report", () => {
     expect(approveDoorErrors({})).toEqual([expect.stringContaining("malformed")]);
     expect(approveDoorErrors(null)).toEqual([expect.stringContaining("malformed")]);
@@ -61,9 +114,34 @@ describe("assertApproveDoorRan (SCRUM-795)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
-  it("the title constant matches the spec's registered test title", () => {
-    const src = readFileSync(path.join(process.cwd(), "playwright/tests/accounting.spec.ts"), "utf8");
+  it("CLI: never prints raw report or parse-error text (public logs)", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "approve-door-"));
+    const lines: string[] = [];
+    const capture = { log: (m: string) => lines.push(m), error: (m: string) => lines.push(m) };
+    try {
+      const secret = "TENANT-SECRET-123";
+      const garbled = path.join(dir, "garbled.json");
+      writeFileSync(garbled, `{"suites": ${secret}`);
+      expect(runCli([garbled], capture)).toBe(1);
+      const hostile = path.join(dir, "hostile.json");
+      const bad = spec(APPROVE_DOOR_TITLE, `${secret}\n::error::injected`, [{ status: `${secret}::warning::x` }]);
+      writeFileSync(hostile, JSON.stringify(report(bad)));
+      expect(runCli([hostile], capture)).toBe(1);
+      const out = lines.join("\n");
+      expect(out).not.toContain(secret);
+      expect(out).not.toContain("injected");
+      expect(out).not.toMatch(/Unexpected|position|token/);
+      expect(out).not.toContain(garbled);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("the constants match the spec's registered test", () => {
+    const src = readFileSync(path.join(process.cwd(), APPROVE_DOOR_FILE), "utf8");
     expect(src).toContain(`test("${APPROVE_DOOR_TITLE}"`);
+    expect(src).toContain(`test.describe("${APPROVE_DOOR_DESCRIBE}"`);
+    const cfg = readFileSync(path.join(process.cwd(), "playwright.config.ts"), "utf8");
+    expect(cfg).toContain(`name: "${APPROVE_DOOR_PROJECT}"`);
   });
 });
 
