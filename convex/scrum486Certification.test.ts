@@ -3497,3 +3497,72 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
     }
   }, 30_000);
 });
+
+// ─── SCRUM-854: no second SALE commission for the salesperson ────────────────
+//
+// Owner-ruling derivation (oracle: "Deal commission lines"). The salesperson's own
+// sale commission is the one set on the sale row (paid by payroll). A SALE line for
+// the same person would pay one role twice, so it is refused. Expected amounts are
+// literals: 250,000 JOD minor on the sale row, 40,000 SALE line for another
+// employee, 30,000 PURCHASE and 20,000 EXECUTION lines for the salesperson.
+describe("SCRUM-854 deal commission lines: salesperson is never paid a second SALE commission (harness only)", () => {
+  test("SALE line for the sale's own salesperson is refused with nothing written; other employee SALE and the salesperson's PURCHASE/EXECUTION are allowed", async () => {
+    const d = await paidFinancedDealWithDeposit("s854dup");
+    const { s, saleId } = d;
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId));
+    const salespersonId = sale!.salespersonId;
+    const otherEmployeeId = s.actors.salesperson.userId;
+    expect(sale!.orgId).toBe(s.orgId);
+    expect(otherEmployeeId).not.toBe(salespersonId);
+    await s.t.run(async (ctx) => {
+      const m = await ctx.db.query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", s.orgId).eq("userId", otherEmployeeId)).unique();
+      expect(m).not.toBeNull();
+    });
+    const lineRows = () => s.t.run(async (ctx) => (await ctx.db.query("dealCommissionLines").collect())
+      .map((r) => ({ orgId: r.orgId, saleId: r.saleId, kind: r.kind, employeeId: r.employeeId, amountMinor: r.amountMinor, removed: r.removedAt !== undefined })));
+    const readTotal = async () => {
+      const view = await s.owner.as.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId });
+      return { totalMinor: view.totalMinor, saleCommissionMinor: view.salesperson.amountMinor, lines: view.lines.length };
+    };
+
+    // Before: only the 250,000 sale-row commission exists; no line rows at all.
+    expect(await lineRows()).toHaveLength(0);
+    expect(await readTotal()).toEqual({ totalMinor: 250_000, saleCommissionMinor: 250_000, lines: 0 });
+
+    // The duplicate SALE line is refused, whatever the amount, and every table is unchanged.
+    await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "SALE", employeeId: salespersonId, amount: 250,
+    }), { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" });
+    await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "SALE", employeeId: salespersonId, amount: 1,
+    }), { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" });
+    expect(await lineRows()).toHaveLength(0);
+    expect(await readTotal()).toEqual({ totalMinor: 250_000, saleCommissionMinor: 250_000, lines: 0 });
+
+    // Allowed: SALE for another employee, PURCHASE and EXECUTION for the salesperson.
+    await s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "SALE", employeeId: otherEmployeeId, amount: 40,
+    });
+    await s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "PURCHASE", employeeId: salespersonId, amount: 30,
+    });
+    await s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "EXECUTION", employeeId: salespersonId, amount: 20,
+    });
+    const rows = await lineRows();
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.orgId === s.orgId && r.saleId === saleId && !r.removed)).toBe(true);
+    expect(rows.map((r) => [r.kind, r.employeeId, r.amountMinor])).toEqual([
+      ["SALE", otherEmployeeId, 40_000], ["PURCHASE", salespersonId, 30_000], ["EXECUTION", salespersonId, 20_000],
+    ]);
+    // 250,000 + 40,000 + 30,000 + 20,000: the salesperson's SALE role is paid once.
+    expect(await readTotal()).toEqual({ totalMinor: 340_000, saleCommissionMinor: 250_000, lines: 3 });
+
+    // The duplicate is still refused once other lines exist, and changes nothing.
+    await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "SALE", employeeId: salespersonId, amount: 5,
+    }), { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" });
+    expect(await readTotal()).toEqual({ totalMinor: 340_000, saleCommissionMinor: 250_000, lines: 3 });
+  }, 30_000);
+});
