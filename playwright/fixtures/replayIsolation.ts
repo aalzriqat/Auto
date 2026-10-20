@@ -57,15 +57,21 @@ export function deploymentNameOf(convexUrl: string | undefined): string | null {
  * names (URL, backend, marker) must agree. Only a positive attestation that names the deployment the URL
  * addresses, and the marker names the same one, is RUN.
  */
+/** 128 bits of entropy as hex is 32 characters; a shorter nonce is refused. Must match the server's minimum. */
+export const REPLAY_NONCE_MIN_LENGTH = 32;
+
+/** What the lane gives the test process. Every field only ever NARROWS; none replaces the backend's attestation. */
+export interface ReplayLane {
+  /** E2E_REPLAY_DEDICATED_ORG=1: the org is reserved for this replay, so its writes cannot change what other specs read. */
+  dedicatedOrg?: boolean;
+  /** E2E_REPLAY_RUN_NONCE: the per-run secret the lane also set on the fresh preview. Never logged or returned. */
+  nonce?: string;
+}
+
 export function decideReplayEnvironment(
   convexUrl: string | undefined,
   attestation: ReplayAttestation | null | undefined,
-  /**
-   * The lane's explicit declaration that the org is reserved for this replay (E2E_REPLAY_DEDICATED_ORG=1), because
-   * the replay's writes (a period, an opening balance) would otherwise change what later specs in the same run
-   * read. It only ever NARROWS: it never substitutes for the backend's attestation.
-   */
-  dedicatedOrgDeclared = false
+  lane: ReplayLane = {}
 ): ReplayEnvironment {
   const names = [deploymentNameOf(convexUrl), attestation?.deploymentName, attestation?.markerDeploymentName];
   const haystack = [convexUrl ?? "", ...names.map((name) => name ?? "")].join(" ");
@@ -73,10 +79,16 @@ export function decideReplayEnvironment(
   if (production) {
     return { kind: "REFUSED", reason: `the replay refuses a production deployment (${production})` };
   }
-  if (!dedicatedOrgDeclared) {
+  if (!lane.dedicatedOrg) {
     return {
       kind: "NOT_RUN",
       reason: "the lane did not declare the org dedicated to this replay, and its writes would change what later specs in the run read",
+    };
+  }
+  if (typeof lane.nonce !== "string" || lane.nonce.length < REPLAY_NONCE_MIN_LENGTH) {
+    return {
+      kind: "NOT_RUN",
+      reason: `the lane gave no per-run nonce of at least ${REPLAY_NONCE_MIN_LENGTH} characters (E2E_REPLAY_RUN_NONCE), so this deployment was not bound to this run; a promoted preview keeps its class and marker but never has the nonce`,
     };
   }
   if (!attestation) {
@@ -135,23 +147,19 @@ export function replayOrgRefusals(facts: ReplayOrgFacts): string[] {
 }
 
 export type ReplayLaneAction =
-  | { action: "RUN"; deployment: string }
-  /** Not run, and that is acceptable: this is not the dedicated replay lane. The test is reported as skipped. */
+  | { action: "RUN" }
   | { action: "SKIP"; reason: string }
-  /** The test must fail: a refused guard, or a skip in the lane that exists to run the replay. */
   | { action: "FAIL"; reason: string };
 
 /**
- * What the replay test does with the guard's decision. `replayRequired` is the dedicated replay lane's declaration
- * (E2E_REPLAY_REQUIRED=1): there, a NOT_RUN means the attestation did not succeed, and a skipped replay would be
- * unavailable evidence reported as a green job, so it fails. It never loosens anything: REFUSED fails everywhere,
- * and RUN needs the same attestation. Outside the lane the behaviour is unchanged (skip).
+ * What the spec does with the verdict. A refusal always fails. A not-run is a skip, except in the lane's REQUIRED mode
+ * (E2E_REPLAY_REQUIRED=1), where a replay that cannot run is a failure (AGENTS.md: a scenario that cannot run is a
+ * failure, never a skip).
  */
-export function replayLaneAction(environment: ReplayEnvironment, replayRequired: boolean): ReplayLaneAction {
-  if (environment.kind === "RUN") return { action: "RUN", deployment: environment.deployment };
+export function replayLaneAction(environment: ReplayEnvironment, required: boolean): ReplayLaneAction {
+  if (environment.kind === "RUN") return { action: "RUN" };
   if (environment.kind === "REFUSED") return { action: "FAIL", reason: `GL register replay refused: ${environment.reason}` };
-  if (replayRequired) {
-    return { action: "FAIL", reason: `GL register replay is required in this lane but was not run: ${environment.reason}` };
-  }
-  return { action: "SKIP", reason: `GL register replay not run: ${environment.reason}` };
+  return required
+    ? { action: "FAIL", reason: `GL register replay could not run in a lane that requires it: ${environment.reason}` }
+    : { action: "SKIP", reason: `GL register replay not run: ${environment.reason}` };
 }

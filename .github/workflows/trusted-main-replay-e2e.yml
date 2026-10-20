@@ -95,6 +95,50 @@ jobs:
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
+      # SCRUM-795: bind this run to THIS preview. The backend's attestation also needs a per-run nonce, run id and
+      # expiry that exist only on the deployment this job just created, so a promoted preview (which keeps the
+      # class variable and the marker) can never attest. They are set with --preview-name and the preview deploy
+      # key, which cannot address production; a failure to set any of them fails the job. The nonce goes to the
+      # CLI on stdin (never argv), is masked, is written only to GITHUB_ENV and is never echoed.
+      - name: Bind the replay run to this preview
+        run: |
+          set -euo pipefail
+          case "$CONVEX_PREVIEW_NAME" in
+            e2e-main-replay-lane-*) ;;
+            *) echo "::error::Refusing to bind a replay run to a deployment that is not the replay-lane preview."; exit 1 ;;
+          esac
+          case "$CONVEX_DEPLOY_KEY" in
+            preview:*) ;;
+            *) echo "::error::The deploy key is not a preview key."; exit 1 ;;
+          esac
+          if [ -n "${CONVEX_DEPLOYMENT:-}" ]; then
+            echo "::error::CONVEX_DEPLOYMENT is set; refusing to set the replay nonce."
+            exit 1
+          fi
+          NONCE="$(openssl rand -hex 16)"
+          echo "::add-mask::$NONCE"
+          EXPIRES_AT="$(( ($(date +%s) + 10800) * 1000 ))"
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" = "5" ]; then return 1; fi
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+          printf '%s' "$NONCE" | retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_NONCE >/dev/null
+          retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_ID "$GITHUB_RUN_ID" >/dev/null
+          retry_convex pnpm exec convex env set --force --preview-name "$CONVEX_PREVIEW_NAME" E2E_REPLAY_RUN_EXPIRES_AT "$EXPIRES_AT" >/dev/null
+          {
+            echo "E2E_REPLAY_RUN_NONCE=$NONCE"
+            echo "E2E_REPLAY_RUN_ID=$GITHUB_RUN_ID"
+          } >> "$GITHUB_ENV"
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+
       # The seed creates the QA organization after the marker, which is what the attestation checks. This lane
       # does not seed any legacy draft: the replay needs an organization with no journal in any status.
       - name: Seed the QA dealership
@@ -127,6 +171,8 @@ jobs:
           E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
           E2E_REPLAY_DEDICATED_ORG: "1"
           E2E_REPLAY_REQUIRED: "1"
+          E2E_REPLAY_RUN_NONCE: ${{ env.E2E_REPLAY_RUN_NONCE }}
+          E2E_REPLAY_RUN_ID: ${{ env.E2E_REPLAY_RUN_ID }}
           PLAYWRIGHT_JSON_OUTPUT_NAME: replay-lane-report.json
           CI: true
 
