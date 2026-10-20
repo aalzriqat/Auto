@@ -26,7 +26,7 @@ describe("deploymentNameOf", () => {
 describe("decideReplayEnvironment (allow-list on the backend's attestation bound to this run's nonce)", () => {
   const url = "https://happy-otter-123.convex.cloud";
   const NONCE = "0123456789abcdef0123456789abcdef";
-  const lane: ReplayLane = { dedicatedOrg: true, nonce: NONCE };
+  const lane: ReplayLane = { dedicatedOrg: true, nonce: NONCE, runId: "run-1" };
   const good: ReplayAttestation = {
     attested: true,
     reasons: [],
@@ -43,15 +43,25 @@ describe("decideReplayEnvironment (allow-list on the backend's attestation bound
   it("is NOT RUN for the promoted-preview scenario: class and marker attest, but the lane holds no nonce", () => {
     // The backend says attested (class preview + marker + seed org) because those survive promotion.
     for (const nonce of [undefined, "", "short", "x".repeat(REPLAY_NONCE_MIN_LENGTH - 1)]) {
-      const verdict = decideReplayEnvironment(url, good, { dedicatedOrg: true, nonce });
+      const verdict = decideReplayEnvironment(url, good, { dedicatedOrg: true, nonce, runId: "run-1" });
       expect(verdict.kind).toBe("NOT_RUN");
       expect(JSON.stringify(verdict)).not.toContain(NONCE);
     }
-    expect(decideReplayEnvironment(url, good, { dedicatedOrg: true, nonce: "x".repeat(REPLAY_NONCE_MIN_LENGTH) }).kind).toBe("RUN");
+    expect(decideReplayEnvironment(url, good, { dedicatedOrg: true, nonce: "x".repeat(REPLAY_NONCE_MIN_LENGTH), runId: "run-1" }).kind).toBe("RUN");
+  });
+
+  it("is NOT RUN when the lane run id is missing or malformed", () => {
+    for (const runId of [undefined, "", "bad run", "a".repeat(65), "x/y"]) {
+      expect(decideReplayEnvironment(url, good, { ...lane, runId }).kind).toBe("NOT_RUN");
+    }
+  });
+
+  it("is NOT RUN when the nonce has characters outside the allowed alphabet", () => {
+    expect(decideReplayEnvironment(url, good, { ...lane, nonce: "0123456789abcdef0123456789abcde!" }).kind).toBe("NOT_RUN");
   });
 
   it("is NOT RUN when the backend refuses the nonce (wrong, expired, not set), whatever the lane holds", () => {
-    for (const reason of ["NONCE_MISMATCH", "EXPIRED", "NONCE_NOT_SET", "RUN_ID_MISMATCH"]) {
+    for (const reason of ["PROOF_MISMATCH", "EXPIRED", "NONCE_NOT_SET", "RUN_ID_MISMATCH"]) {
       expect(decideReplayEnvironment(url, with_({ attested: false, reasons: [reason] }), lane)).toMatchObject({
         kind: "NOT_RUN",
         reason: expect.stringContaining(reason),
@@ -74,8 +84,8 @@ describe("decideReplayEnvironment (allow-list on the backend's attestation bound
   });
 
   it("is NOT RUN unless the lane declares the org dedicated, even with a positive attestation and nonce", () => {
-    expect(decideReplayEnvironment(url, good, { nonce: NONCE }).kind).toBe("NOT_RUN");
-    expect(decideReplayEnvironment(url, good, { dedicatedOrg: false, nonce: NONCE }).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, good, { nonce: NONCE, runId: "run-1" }).kind).toBe("NOT_RUN");
+    expect(decideReplayEnvironment(url, good, { dedicatedOrg: false, nonce: NONCE, runId: "run-1" }).kind).toBe("NOT_RUN");
     expect(decideReplayEnvironment(url, good).kind).toBe("NOT_RUN");
   });
 

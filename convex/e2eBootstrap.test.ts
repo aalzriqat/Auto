@@ -9,6 +9,7 @@ import {
   E2E_PRIMARY_ROLE_NAME,
   HUNT_SEAT_ROLES,
   constantTimeEqual,
+  replayProofFor,
   replayRunBindingReasons,
 } from "./e2eBootstrap";
 
@@ -1199,6 +1200,11 @@ describe("replayAttestation — the positive attestation the GL replay requires 
     vi.stubEnv("E2E_REPLAY_RUN_EXPIRES_AT", String(over.expiresAt ?? Date.now() + 60 * 60 * 1000));
   }
 
+  /** The lane's end-of-run cleanup: `convex env remove` for each of the three. */
+  function removeRunBinding(...names: string[]) {
+    for (const name of names) vi.stubEnv(name, undefined as unknown as string);
+  }
+
   async function seededAs() {
     const t = await markedDeployment();
     const result = await bootstrap(t);
@@ -1210,12 +1216,16 @@ describe("replayAttestation — the positive attestation the GL replay requires 
     };
   }
 
-  const sent = { nonce: NONCE, runId: RUN_ID };
+  /** What the client sends: the run id and an HMAC proof over the org and run id, never the nonce. */
+  const sentFor = (orgId: string, over: { nonce?: string; runId?: string } = {}) => ({
+    runId: over.runId ?? RUN_ID,
+    proof: replayProofFor(over.nonce ?? NONCE, orgId, over.runId ?? RUN_ID),
+  });
 
-  test("attests a seeded preview whose run nonce, run id and expiry match", async () => {
+  test("attests a seeded preview whose run values and proof match", async () => {
     stubRunBinding();
     const { asPrimary, orgId } = await seededAs();
-    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent });
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) });
     expect(attestation).toMatchObject({
       attested: true,
       reasons: [],
@@ -1225,78 +1235,134 @@ describe("replayAttestation — the positive attestation the GL replay requires 
     expect(attestation.orgAgeMs).toBeGreaterThanOrEqual(0);
   });
 
-  test("never returns the nonce, the run id or the expiry", async () => {
+  test("the server does not return the nonce, the run id, the proof or the expiry", async () => {
     stubRunBinding();
     const { asPrimary, orgId } = await seededAs();
-    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent });
-    const wire = JSON.stringify(attestation);
+    const sent = sentFor(orgId);
+    const wire = JSON.stringify(await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent }));
     expect(wire).not.toContain(NONCE);
     expect(wire).not.toContain(RUN_ID);
+    expect(wire).not.toContain(sent.proof);
   });
 
-  test("the exact promoted-preview scenario: class, marker and org all attest, but no nonce was ever set", async () => {
+  test("the exact promoted-preview scenario when the lane cleaned up: class, marker and org attest, the run values are gone", async () => {
+    stubRunBinding();
     const { asPrimary, orgId } = await seededAs();
-    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent });
+    expect((await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) })).attested).toBe(true);
+    // The lane removes all three from the preview before deleting it. A preview promoted after that has no values.
+    removeRunBinding("E2E_REPLAY_RUN_NONCE", "E2E_REPLAY_RUN_ID", "E2E_REPLAY_RUN_EXPIRES_AT");
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) });
     expect(attestation.attested).toBe(false);
-    expect(attestation.reasons).toEqual(
-      expect.arrayContaining(["NONCE_NOT_SET", "EXPIRY_NOT_SET", "RUN_ID_MISMATCH"]),
-    );
-    // Everything a promoted preview keeps is fine: the refusal is only the missing run binding.
+    expect(attestation.reasons).toEqual(expect.arrayContaining(["NONCE_NOT_SET", "EXPIRY_NOT_SET", "RUN_ID_MISMATCH"]));
     expect(attestation.reasons).not.toContain("CLASS_NOT_PREVIEW");
     expect(attestation.reasons).not.toContain("NO_MARKER");
   });
 
-  test("refuses a nonce that does not match the one in the environment", async () => {
+  test.each([
+    ["the nonce", ["E2E_REPLAY_RUN_NONCE"], "NONCE_NOT_SET"],
+    ["the run id", ["E2E_REPLAY_RUN_ID"], "RUN_ID_MISMATCH"],
+    ["the expiry", ["E2E_REPLAY_RUN_EXPIRES_AT"], "EXPIRY_NOT_SET"],
+  ])("removing only %s from the environment refuses", async (_name, names, code) => {
     stubRunBinding();
     const { asPrimary, orgId } = await seededAs();
-    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, {
-      orgId,
-      nonce: "fedcba9876543210fedcba9876543210",
-      runId: RUN_ID,
+    removeRunBinding(...names);
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) });
+    expect(attestation.attested).toBe(false);
+    expect(attestation.reasons).toContain(code);
+  });
+
+  test("a promotion that keeps the values but changes the deployment's URL is refused by the marker's identity", async () => {
+    stubRunBinding();
+    const { asPrimary, orgId } = await seededAs();
+    vi.stubEnv("CONVEX_CLOUD_URL", "https://promoted-elsewhere-1.convex.cloud");
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) });
+    expect(attestation.attested).toBe(false);
+    expect(attestation.reasons).toContain("MARKER_NOT_THIS_DEPLOYMENT");
+    // The backend now names a different deployment than the marker, which the client guard also refuses.
+    expect(attestation.deploymentName).toBe("promoted-elsewhere-1");
+    expect(attestation.markerDeploymentName).toBe("the-one-preview");
+  });
+
+  test("a promotion that drops the preview class is refused", async () => {
+    stubRunBinding();
+    const { asPrimary, orgId } = await seededAs();
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "");
+    expect((await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) })).reasons).toContain(
+      "CLASS_NOT_PREVIEW",
+    );
+  });
+
+  test("refuses a proof made with another nonce, another org, or another run id (no replay across them)", async () => {
+    stubRunBinding();
+    const { t, asPrimary, orgId } = await seededAs();
+    const otherOrg = await t.run(async (ctx) => {
+      const org = await ctx.db.get(orgId);
+      return (await ctx.db.insert("organizations", { ...org!, _id: undefined, _creationTime: undefined } as never)) as typeof orgId;
     });
-    expect(attestation.attested).toBe(false);
-    expect(attestation.reasons).toContain("NONCE_MISMATCH");
+    const cases = [
+      { runId: RUN_ID, proof: replayProofFor("fedcba9876543210fedcba9876543210", orgId, RUN_ID) },
+      { runId: RUN_ID, proof: replayProofFor(NONCE, otherOrg, RUN_ID) },
+      { runId: RUN_ID, proof: replayProofFor(NONCE, orgId, "run-other") },
+    ];
+    for (const sent of cases) {
+      const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent });
+      expect(attestation.attested).toBe(false);
+      expect(attestation.reasons).toContain("PROOF_MISMATCH");
+    }
   });
 
-  test("refuses a run id that does not match", async () => {
+  test("refuses a run id that does not match, and malformed run ids and proofs", async () => {
     stubRunBinding();
     const { asPrimary, orgId } = await seededAs();
-    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, nonce: NONCE, runId: "run-other" });
-    expect(attestation.attested).toBe(false);
-    expect(attestation.reasons).toContain("RUN_ID_MISMATCH");
+    const mismatch = await asPrimary.query(api.e2eBootstrap.replayAttestation, {
+      orgId,
+      runId: "run-other",
+      proof: replayProofFor(NONCE, orgId, "run-other"),
+    });
+    expect(mismatch.attested).toBe(false);
+    expect(mismatch.reasons).toContain("RUN_ID_MISMATCH");
+
+    const badRunId = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, runId: "bad run!", proof: sentFor(orgId).proof });
+    expect(badRunId.reasons).toContain("SENT_RUN_ID_MALFORMED");
+    for (const proof of ["", "abc", "Z".repeat(64), sentFor(orgId).proof.toUpperCase(), `${sentFor(orgId).proof}0`]) {
+      const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, runId: RUN_ID, proof });
+      expect(attestation.attested).toBe(false);
+      expect(attestation.reasons).toContain("PROOF_MALFORMED");
+    }
   });
 
-  test("refuses after the expiry, and an expiry further ahead than six hours", async () => {
+  test("refuses after the expiry, and an expiry further ahead than the 2 hour cap", async () => {
     const { asPrimary, orgId } = await seededAs();
     stubRunBinding({ expiresAt: Date.now() - 1 });
-    const expired = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent });
+    const expired = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) });
     expect(expired.attested).toBe(false);
     expect(expired.reasons).toContain("EXPIRED");
 
-    stubRunBinding({ expiresAt: Date.now() + 7 * 60 * 60 * 1000 });
-    const far = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent });
+    stubRunBinding({ expiresAt: Date.now() + 2 * 60 * 60 * 1000 + 60_000 });
+    const far = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) });
     expect(far.attested).toBe(false);
     expect(far.reasons).toContain("EXPIRY_TOO_FAR");
+
+    stubRunBinding({ expiresAt: Date.now() + 60 * 60 * 1000 });
+    expect((await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) })).attested).toBe(true);
   });
 
-  test("refuses a nonce shorter than 128 bits, in the environment or sent, even when they match", async () => {
+  test("refuses a nonce shorter than 128 bits in the environment, even with a matching proof", async () => {
     const { asPrimary, orgId } = await seededAs();
     stubRunBinding({ nonce: "short" });
-    const shortEnv = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, nonce: "short", runId: RUN_ID });
-    expect(shortEnv.attested).toBe(false);
-    expect(shortEnv.reasons).toEqual(expect.arrayContaining(["NONCE_TOO_SHORT", "SENT_NONCE_TOO_SHORT"]));
-
-    stubRunBinding();
-    const shortSent = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, nonce: "", runId: RUN_ID });
-    expect(shortSent.attested).toBe(false);
-    expect(shortSent.reasons).toContain("SENT_NONCE_TOO_SHORT");
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, {
+      orgId,
+      ...sentFor(orgId, { nonce: "short" }),
+    });
+    expect(attestation.attested).toBe(false);
+    expect(attestation.reasons).toContain("NONCE_TOO_SHORT");
   });
 
   test("does not attest when the deployment declares no preview class (production answers false)", async () => {
     stubRunBinding();
     const { asPrimary, orgId } = await seededAs();
     vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "");
-    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent });
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) });
     expect(attestation.attested).toBe(false);
     expect(attestation.reasons).toContain("CLASS_NOT_PREVIEW");
   });
@@ -1304,6 +1370,7 @@ describe("replayAttestation — the positive attestation the GL replay requires 
   test("does not attest when the marker names another deployment, is not bound to the org, or is missing", async () => {
     stubRunBinding();
     const { t, asPrimary, orgId } = await seededAs();
+    const sent = sentFor(orgId);
     await t.run(async (ctx) => {
       const marker = await ctx.db.query("e2ePreviewBootstrap").first();
       await ctx.db.patch(marker!._id, { convexCloudUrl: "https://another-one.convex.cloud" });
@@ -1337,7 +1404,7 @@ describe("replayAttestation — the positive attestation the GL replay requires 
       const marker = await ctx.db.query("e2ePreviewBootstrap").first();
       await ctx.db.patch(marker!._id, { markedAt: Date.now() + 60_000 });
     });
-    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent });
+    const attestation = await asPrimary.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) });
     expect(attestation.attested).toBe(false);
     expect(attestation.reasons).toContain("ORG_PREDATES_MARKER");
   });
@@ -1348,7 +1415,7 @@ describe("replayAttestation — the positive attestation the GL replay requires 
     await expect(
       t
         .withIdentity({ subject: "user_outsider", clerkId: "user_outsider" })
-        .query(api.e2eBootstrap.replayAttestation, { orgId, ...sent }),
+        .query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) }),
     ).rejects.toThrow();
   });
 
@@ -1356,7 +1423,7 @@ describe("replayAttestation — the positive attestation the GL replay requires 
     stubRunBinding();
     const { t, orgId, asApprover } = await seededAs();
     // Positive control: the same member, holding the permission, is answered.
-    expect((await asApprover.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent })).attested).toBe(true);
+    expect((await asApprover.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) })).attested).toBe(true);
     await t.run(async (ctx) => {
       const role = await ctx.db
         .query("roles")
@@ -1367,7 +1434,7 @@ describe("replayAttestation — the positive attestation the GL replay requires 
         permissions: manager.permissions.filter((p) => p !== PERMISSIONS.VIEW_FINANCE),
       });
     });
-    await expect(asApprover.query(api.e2eBootstrap.replayAttestation, { orgId, ...sent })).rejects.toThrow();
+    await expect(asApprover.query(api.e2eBootstrap.replayAttestation, { orgId, ...sentFor(orgId) })).rejects.toThrow();
   });
 });
 
@@ -1375,9 +1442,10 @@ describe("replayRunBindingReasons — the pure run binding", () => {
   const NONCE = "0123456789abcdef0123456789abcdef";
   const now = 1_000_000;
   const env = { nonce: NONCE, runId: "r1", expiresAt: String(now + 1000) };
+  const sentOk = { orgId: "org1", runId: "r1", proof: replayProofFor(NONCE, "org1", "r1") };
 
-  test("matches only on the same nonce, run id and an unexpired, near expiry", () => {
-    expect(replayRunBindingReasons({ nonce: NONCE, runId: "r1" }, env, now)).toEqual([]);
+  test("matches only on the same proof, run id and an unexpired, near expiry", () => {
+    expect(replayRunBindingReasons(sentOk, env, now)).toEqual([]);
   });
 
   test("constantTimeEqual agrees with equality and rejects different lengths", () => {
@@ -1386,32 +1454,33 @@ describe("replayRunBindingReasons — the pure run binding", () => {
     expect(constantTimeEqual("abc", "ab")).toBe(false);
   });
 
-  test("an equal-length nonce differing only in the last or the first character is a mismatch (no prefix compare)", () => {
-    const lastDiffers = NONCE.slice(0, -1) + (NONCE.endsWith("f") ? "e" : "f");
-    const firstDiffers = (NONCE.startsWith("a") ? "b" : "a") + NONCE.slice(1);
-    expect(lastDiffers).toHaveLength(NONCE.length);
-    expect(firstDiffers).toHaveLength(NONCE.length);
-    for (const wrong of [lastDiffers, firstDiffers]) {
-      expect(replayRunBindingReasons({ nonce: wrong, runId: "r1" }, env, now)).toEqual(["NONCE_MISMATCH"]);
+  test("a proof differing only in its last or first hex character is a mismatch (no prefix compare)", () => {
+    const flip = (c: string) => (c === "0" ? "1" : "0");
+    const last = sentOk.proof.slice(0, -1) + flip(sentOk.proof.at(-1)!);
+    const first = flip(sentOk.proof[0]!) + sentOk.proof.slice(1);
+    for (const proof of [last, first]) {
+      expect(replayRunBindingReasons({ ...sentOk, proof }, env, now)).toEqual(["PROOF_MISMATCH"]);
     }
+  });
+
+  test("the proof binds the org: the same proof for another org is a mismatch", () => {
+    expect(replayRunBindingReasons({ ...sentOk, orgId: "org2" }, env, now)).toEqual(["PROOF_MISMATCH"]);
   });
 
   test.each(["0x10", "1e9", " 123", "123 ", "+123", "1_000", "-5", "12.5", ""])(
     "rejects the expiry string %j, which Number() might accept but is not a plain integer",
     (expiresAt) => {
-      expect(replayRunBindingReasons({ nonce: NONCE, runId: "r1" }, { ...env, expiresAt }, now)).toContain("EXPIRY_NOT_SET");
+      expect(replayRunBindingReasons(sentOk, { ...env, expiresAt }, now)).toContain("EXPIRY_NOT_SET");
     },
   );
 
   test("accepts a plain integer expiry", () => {
-    expect(replayRunBindingReasons({ nonce: NONCE, runId: "r1" }, { ...env, expiresAt: String(now + 5000) }, now)).toEqual([]);
+    expect(replayRunBindingReasons(sentOk, { ...env, expiresAt: String(now + 5000) }, now)).toEqual([]);
   });
 
-  test("rejects a non-numeric expiry and a nonce with characters outside the alphabet", () => {
-    expect(replayRunBindingReasons({ nonce: NONCE, runId: "r1" }, { ...env, expiresAt: "soon" }, now)).toContain("EXPIRY_NOT_SET");
+  test("fails closed on a nonce outside the alphabet or too short in the environment", () => {
     const odd = "0123456789abcdef0123456789abcde!";
-    expect(replayRunBindingReasons({ nonce: odd, runId: "r1" }, { ...env, nonce: odd }, now)).toEqual(
-      expect.arrayContaining(["NONCE_TOO_SHORT", "SENT_NONCE_TOO_SHORT"]),
-    );
+    expect(replayRunBindingReasons(sentOk, { ...env, nonce: odd }, now)).toContain("NONCE_TOO_SHORT");
+    expect(replayRunBindingReasons(sentOk, { ...env, nonce: undefined }, now)).toContain("NONCE_NOT_SET");
   });
 });
