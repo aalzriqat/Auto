@@ -1435,8 +1435,9 @@ export function replayRunBindingReasons(
  * nonce; callers must be finance members of the organization (`VIEW_FINANCE`), anyone else is refused by the tenant
  * check before an attestation is produced. Read-only. It authorizes nothing by itself; the replay's guard decides.
  *
- * Freshness is provenance plus the nonce plus a 2 hour bound, not proof that the org has not been used since it was
- * seeded: the marker is minted only on an empty deployment, names this deployment and is bound to the QA organization
+ * Freshness is provenance plus the nonce plus a 2 hour bound, which the CLIENT guard applies to the `orgAgeMs` this
+ * query returns (the server enforces only the nonce's own expiry), not proof that the org has not been used since it
+ * was seeded: the marker is minted only on an empty deployment, names this deployment and is bound to the QA organization
  * by `bootstrapE2EOrganization`, and an organization created at or after the marker's `markedAt` was created by the
  * seed here. The replay's own pre-write reads (no period, no journal in any status) are the check on use since.
  */
