@@ -3,6 +3,7 @@ import { newContainedContext } from "../containedContext";
 import { gotoOrgRoute, APPROVER_AUTH_FILE, resolveOrgId, authenticatedConvexClient } from "../utils";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { decideReplayEnvironment, replayOrgRefusals, REPLAY_CURRENCY_SCALES } from "../fixtures/replayIsolation";
 
 /**
  * SCRUM-795 (SCRUM-50): manual journals are OFF for the narrowed pilot (owner
@@ -36,12 +37,17 @@ import type { Id } from "../../convex/_generated/dataModel";
  * RETIRED (SCRUM-795 switch): the former 10-step lifecycle's steps 1-6 (browser
  * create, second-identity approve), because the pilot build cannot post a manual
  * journal. Steps 7-10 (the GL register row's accounting date, the period label
- * and the balanced debit/credit lines of a POSTED journal) are NOT retired: the
- * second test below replays them through a path that stays enabled, an owner's
- * opening balance (accountingCutover.postOpeningBalanceDirect), or, when the
- * ledger already holds a posted journal, that existing posted journal. The
- * enabled manual-journal backend behaviour stays proven with the switch mocked
- * off (convex/manualJournalAccountingDate.test.ts, accountingPhase10.test.ts).
+ * and the balanced debit/credit lines of a POSTED journal) are replayed by the
+ * second test below through an owner's opening balance
+ * (accountingCutover.postOpeningBalanceDirect), but ONLY inside an isolation
+ * boundary (playwright/fixtures/replayIsolation.ts): the replay writes to the
+ * books, so it runs only on a deployment the operator names as disposable
+ * (E2E_REPLAY_DISPOSABLE_DEPLOYMENT) and only in a freshly created organization
+ * with no period and no journal in any status. Production deployments are
+ * refused outright. No current lane sets that variable, so everywhere today the
+ * replay reports an explicit NOT RUN (never a pass) and the backend tests are
+ * the evidence: convex/manualJournalAccountingDate.test.ts and
+ * accountingPhase10.test.ts (switch mocked off).
  */
 const REFUSAL_CODE = "MANUAL_JOURNALS_DISABLED";
 const LEGACY_MEMO = "E2E legacy pending draft (SCRUM-795)";
@@ -217,8 +223,6 @@ type JournalDetail = {
 // the 2026 period 8 window (1 Aug 00:00 UTC to 31 Aug 23:59:59.999 UTC).
 const OPENING_DATE = Date.UTC(2026, 7, 15, 12);
 const OPENING_UNITS = 100;
-// Minor-unit scale per currency, hand-written: 3 for JOD/KWD/BHD/OMR, 2 otherwise.
-const scaleOf = (currency: string): number => (["JOD", "KWD", "BHD", "OMR"].includes(currency) ? 3 : 2);
 
 /** Every journal of the organization, in any status, read through the query's own cursor to the last page. */
 async function listAllJournals(
@@ -241,106 +245,79 @@ async function listAllJournals(
 
 test.describe("accounting register: a posted journal", () => {
   test("shows its accounting date, period and balanced debit/credit totals", async ({ page }) => {
+    // 1. ISOLATION BOUNDARY. This replay WRITES to the books (creating a period wakes held rows and schedules
+    //    outbox work; the opening balance is a posted journal), so it runs only against a disposable, freshly
+    //    created test organization on a deployment the operator names as disposable, and never on production.
+    //    Where a lane cannot provide that, the replay reports NOT RUN (an annotation and an early return, never
+    //    a silent pass); the backend tests stay the evidence there. See replayIsolation.ts and the unit test.
+    const environment = decideReplayEnvironment(
+      process.env.NEXT_PUBLIC_CONVEX_URL,
+      process.env.E2E_REPLAY_DISPOSABLE_DEPLOYMENT
+    );
+    if (environment.kind === "REFUSED") throw new Error(`GL register replay refused: ${environment.reason}`);
+    if (environment.kind === "NOT_RUN") {
+      test.info().annotations.push({ type: "NOT RUN", description: `GL register replay: ${environment.reason}` });
+      console.warn(`NOT RUN: GL register replay: ${environment.reason}`);
+      return;
+    }
+
     await gotoOrgRoute(page, "accounting");
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
     const client = await authenticatedConvexClient(page);
 
-    // 1. A POSTED journal to look at. A scenario that finds none FAILS; it never skips.
-    //    Every read that decides whether an opening balance can be posted happens BEFORE the first write: the
-    //    whole ledger is paged in every status (not just a first page), and the REVERSED, pending-draft, posted
-    //    and owner preconditions of postOpeningBalanceDirect are read.
-    let known: { memo: string; debitMinor: number; date: number; periodId: Id<"accountingPeriods"> } | null = null;
+    // Every read happens BEFORE the first write. The organization must be freshly created: no period, no
+    // journal in any status (POSTED and REVERSED included, the mutation's own refusal rule), no opening
+    // balance, a supported currency and two usable accounts. Anything else FAILS; it never skips.
     const allJournals = await listAllJournals(client, orgId);
-    let posted = allJournals.filter((row) => row.status === "POSTED");
-    if (posted.length === 0) {
-      // The opening-balance mutation refuses an organization with ANY POSTED or REVERSED journal
-      // (accountingCutover.hasPostedLedgerActivity). With no POSTED journal, a REVERSED one is the only way
-      // that can hold; it is checked here, before any write, so the period is never created for a posting
-      // the mutation will refuse. Such a ledger cannot run this replay: that FAILS, it never skips.
-      const reversed = allJournals.filter((row) => row.status === "REVERSED");
-      expect(
-        reversed.length,
-        "the ledger holds only REVERSED journals, so an opening balance would be refused and no posted row exists to replay"
-      ).toBe(0);
-      const status = (await client.query(api.accountingCutover.openingBalanceStatus, { orgId })) as {
-        posted: boolean;
-        pendingDraftId: string | null;
-        canPostDirectly: boolean;
-        currency: string;
-      };
-      expect(status.posted, "an opening balance is posted but no posted journal was listed").toBe(false);
-      expect(status.pendingDraftId, "an opening-balance draft is pending, so none can be posted here").toBeNull();
-      expect(status.canPostDirectly, "the owner seat must be able to post an opening balance").toBe(true);
-      const accounts = (await client.query(api.chartOfAccounts.list, { orgId })) as Array<{
-        _id: Id<"chartOfAccounts">;
-        allowManualPosting: boolean;
-        active: boolean;
-      }>;
-      const usable = accounts.filter((a) => a.allowManualPosting && a.active);
-      expect(usable.length).toBeGreaterThanOrEqual(2);
-      const periods = (await client.query(api.accountingPeriods.list, { orgId })) as Array<{
-        _id: Id<"accountingPeriods">;
-        fiscalYear: number;
-        periodNumber: number;
-        startDate: number;
-        endDate: number;
-        status: string;
-      }>;
-      // Prefer a period that is already OPEN, so nothing is written before the posting is attempted. Only
-      // when none is open is 2026-P8 created (the one write the posting itself needs), and only after every
-      // precondition above was read: any POSTED/REVERSED journal, a posted or pending opening balance, the owner
-      // right and two usable accounts. A refusal for a reason none of those reads can see (for example a bank
-      // identity rule) would still leave the created period behind, and fails the test.
-      const open = periods.find((p) => p.status === "OPEN");
-      let periodId: Id<"accountingPeriods">;
-      let asOfDate: number;
-      if (open) {
-        periodId = open._id;
-        // Noon UTC on the period's first day: hand-derivable, inside the period.
-        asOfDate = open.startDate + 12 * 60 * 60 * 1000;
-        expect(asOfDate).toBeLessThanOrEqual(open.endDate);
-      } else {
-        asOfDate = OPENING_DATE;
-        const p8 = periods.find((p) => p.fiscalYear === 2026 && p.periodNumber === 8);
-        if (!p8) {
-          periodId = (await client.mutation(api.accountingPeriods.create, {
-            orgId,
-            fiscalYear: 2026,
-            periodNumber: 8,
-            startDate: Date.UTC(2026, 7, 1, 0, 0, 0, 0),
-            endDate: Date.UTC(2026, 8, 0, 23, 59, 59, 999),
-            openImmediately: true,
-          })) as Id<"accountingPeriods">;
-        } else {
-          periodId = p8._id;
-          if (p8.status !== "OPEN") await client.mutation(api.accountingPeriods.open, { orgId, periodId: p8._id });
-        }
-      }
-      const minor = OPENING_UNITS * 10 ** scaleOf(status.currency);
-      const memo = `E2E opening balance register replay ${Date.now()}`;
-      await client.mutation(api.accountingCutover.postOpeningBalanceDirect, {
-        orgId,
-        asOfDate,
-        memo,
-        expectedCurrency: status.currency,
-        lines: [
-          { accountId: usable[0]._id, debitMinor: minor, creditMinor: 0 },
-          { accountId: usable[1]._id, debitMinor: 0, creditMinor: minor },
-        ],
-      });
-      known = { memo, debitMinor: minor, date: asOfDate, periodId };
-      posted = (await listAllJournals(client, orgId)).filter((row) => row.status === "POSTED");
-    } else {
-      // EXPLICIT, not silent: an existing posted journal is checked for internal consistency and for the screen
-      // agreeing with the backend, but NOT against hand-written literals, which only a journal this test posts has.
-      test.info().annotations.push({
-        type: "EXISTING_ROW",
-        description:
-          "ledger already held a posted journal: date/period/debit-credit checked for consistency and UI-vs-backend agreement, not against hand-written literals",
-      });
-    }
-    const target = known ? posted.find((row) => row.memo === known!.memo) : posted[0];
-    expect(target, "a posted journal must exist to replay the register assertions").toBeDefined();
+    const status = (await client.query(api.accountingCutover.openingBalanceStatus, { orgId })) as {
+      posted: boolean;
+      pendingDraftId: string | null;
+      canPostDirectly: boolean;
+      currency: string;
+    };
+    const periods = (await client.query(api.accountingPeriods.list, { orgId })) as Array<{ _id: Id<"accountingPeriods"> }>;
+    const accounts = (await client.query(api.chartOfAccounts.list, { orgId })) as Array<{
+      _id: Id<"chartOfAccounts">;
+      allowManualPosting: boolean;
+      active: boolean;
+    }>;
+    const usable = accounts.filter((a) => a.allowManualPosting && a.active);
+    const refusals = replayOrgRefusals({
+      currency: status.currency,
+      periodCount: periods.length,
+      journalCount: allJournals.length,
+      openingBalancePosted: status.posted,
+      pendingOpeningDraft: status.pendingDraftId !== null,
+      canPostDirectly: status.canPostDirectly,
+      usableAccountCount: usable.length,
+    });
+    expect(refusals, "the GL register replay needs a freshly created disposable organization").toEqual([]);
+
+    // 2. The writes: a period for the date, then an owner's opening balance with hand-written literals.
+    const periodId = (await client.mutation(api.accountingPeriods.create, {
+      orgId,
+      fiscalYear: 2026,
+      periodNumber: 8,
+      startDate: Date.UTC(2026, 7, 1, 0, 0, 0, 0),
+      endDate: Date.UTC(2026, 8, 0, 23, 59, 59, 999),
+      openImmediately: true,
+    })) as Id<"accountingPeriods">;
+    const minor = OPENING_UNITS * 10 ** REPLAY_CURRENCY_SCALES[status.currency]!;
+    const memo = `E2E opening balance register replay ${Date.now()}`;
+    await client.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId,
+      asOfDate: OPENING_DATE,
+      memo,
+      expectedCurrency: status.currency,
+      lines: [
+        { accountId: usable[0]._id, debitMinor: minor, creditMinor: 0 },
+        { accountId: usable[1]._id, debitMinor: 0, creditMinor: minor },
+      ],
+    });
+    const known = { memo, debitMinor: minor, date: OPENING_DATE, periodId };
+    const posted = (await listAllJournals(client, orgId)).filter((row) => row.status === "POSTED");
+    const target = posted.find((row) => row.memo === known.memo);
+    expect(target, "the opening balance this test posted must be listed").toBeDefined();
 
     // 2. What the backend holds for it, and the invariants that must hold whatever its source.
     const detail = (await client.query(api.accountingLedger.getJournalEntry, {
@@ -358,13 +335,13 @@ test.describe("accounting register: a posted journal", () => {
     const creditMinor = lines.reduce((sum, line) => sum + line.creditMinor, 0);
     expect(debitMinor).toBeGreaterThan(0);
     expect(debitMinor, "debits equal credits").toBe(creditMinor);
-    if (known) {
-      // The journal this test posted: every figure is a hand-written literal.
-      expect(entry.accountingDate).toBe(known.date);
-      expect(entry.periodId).toBe(known.periodId);
-      expect(debitMinor).toBe(known.debitMinor);
-      expect(creditMinor).toBe(known.debitMinor);
-    }
+    // The journal this test posted: every figure is a hand-written literal.
+    expect(entry.accountingDate).toBe(known.date);
+    expect(entry.periodId).toBe(known.periodId);
+    expect(period!.fiscalYear).toBe(2026);
+    expect(period!.periodNumber).toBe(8);
+    expect(debitMinor).toBe(known.debitMinor);
+    expect(creditMinor).toBe(known.debitMinor);
 
     // 3. The register shows the same date, period and lines.
     await page.getByRole("tab", { name: /journal/i }).first().click();
@@ -392,7 +369,7 @@ test.describe("accounting register: a posted journal", () => {
     await expect(lineRows).toHaveCount(lines.length);
 
     // Debit and credit columns, summed off the screen, equal the backend's totals in major units.
-    const scale = lines[0].scale ?? scaleOf(entry.currency ?? "JOD");
+    const scale = lines[0].scale ?? REPLAY_CURRENCY_SCALES[entry.currency ?? ""] ?? Number.NaN;
     const columnTotal = async (testId: "line-debit" | "line-credit"): Promise<number> => {
       const texts = await page.getByTestId(testId).allTextContents();
       return texts.reduce((sum, text) => {
