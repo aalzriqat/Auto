@@ -264,7 +264,7 @@ test.describe("accounting register: a posted journal", () => {
     //    run and expiring, does not. The nonce itself is never sent as a query argument: the spec sends an
     //    HMAC-SHA256 proof over the org id and run id keyed by the nonce, and the server recomputes it. The
     //    nonce is not printed by this spec and is not on any command line it runs. The lane removes the run
-    //    values from the preview at the end of every run. An operator-supplied name is not trusted.
+    //    values from the preview on every run that reaches cleanup; the expiry is the bound otherwise. An operator-supplied name is not trusted.
     //    A refused guard (production, or URL/backend/marker disagree) FAILS. Without the attestation the replay
     //    is SKIPPED (shown as skipped, never passed) unless the lane requires it (E2E_REPLAY_REQUIRED=1), where
     //    it FAILS. A skip is unavailable evidence, not certification; the backend tests stay the evidence.
