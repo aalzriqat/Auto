@@ -47,6 +47,7 @@ export type MobileApprovalRequest = {
   status: "PENDING" | "APPROVED" | "REJECTED";
   /** What the server stored: final price minus list price when it was requested. */
   requestedProfit: number;
+  /** The minimum the request was recorded against; a request without it never matches. */
   minimumProfit?: number;
 };
 
@@ -62,7 +63,8 @@ export function approvalMatchesTerms(
 ): boolean {
   if (!request) return false;
   const same = (a: number, b: number) => Math.round(a * 1000) === Math.round(b * 1000);
-  return same(request.requestedProfit, uplift) && (request.minimumProfit === undefined || same(request.minimumProfit, minimumUplift));
+  // A request that does not say which minimum it was recorded against cannot be matched.
+  return request.minimumProfit !== undefined && same(request.requestedProfit, uplift) && same(request.minimumProfit, minimumUplift);
 }
 
 /** Everything the wizard shows or blocks on for the minimum price uplift, from one place. */

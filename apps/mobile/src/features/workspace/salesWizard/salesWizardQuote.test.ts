@@ -159,6 +159,11 @@ describe("SCRUM-260 mobile approval gate follows the server's exact-terms rule",
     expect(gate).toMatchObject({ approvalValid: false, blocked: true });
   });
 
+  test("fails closed: an approval that names no minimum never matches", () => {
+    const noMinimum = { status: "APPROVED" as const, requestedProfit: 200 };
+    expect(profitApprovalGate({ ...base, uplift: 200, approval: noMinimum })).toMatchObject({ approvalValid: false, blocked: true });
+  });
+
   test("pending and rejected requests only apply to the exact uplift", () => {
     expect(profitApprovalGate({ ...base, uplift: 200, approval: { status: "PENDING", requestedProfit: 200, minimumProfit: 1000 } })).toMatchObject({ pending: true, blocked: true });
     expect(profitApprovalGate({ ...base, uplift: 300, approval: { status: "PENDING", requestedProfit: 200, minimumProfit: 1000 } })).toMatchObject({ pending: false, blocked: true });
