@@ -35,6 +35,21 @@ A skill never lowers a gate. In particular:
 | Replies, Jira comments, review notes | `unslop` |
 | The same agent mistake has shown up twice in this repo | `correct`. Manual only. Raise a normal PR; it needs its own review. |
 
+## Enforcement (owner request, 2026-10-20)
+
+The table above is no longer left to memory. Two mechanisms check it. Both read their path list and skill list from `scripts/skillEnforcement/policy.mjs`, so they cannot drift.
+
+1. **Session hook** (`.claude/settings.json`, `scripts/skillEnforcement/skillGate.mjs`). Before `git commit`, `git push`, `gh pr create` and the GitHub MCP write tools, the hook reads the session transcript and denies the step unless the required skills were invoked with the Skill tool in this session.
+   - Commit and push: `typescript-best-practices` is not gated: it loads itself when a `.ts`/`.tsx` file is read or edited (its `paths` setting), so a gate on it would deadlock sessions that never opened such a file. On money, permission, tenancy, schema, cron or webhook paths also `tdd` and `blast-radius`. On gate or production-safeguard files (`AGENTS.md`, `.github/`, `.claude/`, release scripts) also `blast-radius`.
+   - PR creation: `technical-writing` and `unslop`. On money or gate paths also `two-axis-review` and `engineering-principles`.
+   - If the changed files cannot be determined, the hook treats the change as a money change. A crash blocks the step (`onFailure: block`).
+   - It proves a skill was invoked, not that it was followed. An agent can still edit the hook, so it is a guard on mistakes, not a boundary.
+2. **`skill-evidence` PR check** (`.github/workflows/skill-evidence.yml`). A PR that touches a money, permission or gate path must carry a `## Skill evidence` section in its body: skills run, the red run output, the `/simplify` output, the Seat 1 session link, model and certified SHA, and the Seat 2 model, effort and certified SHA. The check fails when the section is missing, still a placeholder, shows a red run that does not fail, names the implementing session as Seat 1, names a model other than Opus 5.5 (Seat 1) or gpt-6-sol at medium or lower (Seat 2), or cites a SHA that is not in the PR. It runs from `main` (`pull_request_target`), so a PR cannot loosen its own check, and it never reads or writes `review-evidence/*.json`.
+   - The check validates form and consistency. It cannot prove the text is true. The session links let the owner verify.
+   - It is only a gate once it is a required status check on `main` (repository setting). Until then a red result is visible but does not block merge.
+
+The section template is `TEMPLATE` in `scripts/skillEnforcement/prSkillEvidence.mjs`; the check prints it on failure. Neither mechanism is a review seat, and neither replaces the two-seat review.
+
 The pilot bug hunters (SCRUM-760) are not skills. Scenarios they find become backend tests or browser replays through `tdd` and SCRUM-761.
 
 ## Not adopted
