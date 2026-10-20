@@ -3541,7 +3541,10 @@ describe("SCRUM-854 deal commission lines: the salesperson is refused a second S
       return { foreignSaleId, foreignUserId: foreignUser!._id };
     });
 
-    // Every scan is scoped by organization (and sale) through by_org_sale, and every returned row is asserted.
+    // Commission-line scans go through by_org_sale and assert the organization of every returned row:
+    // scopedRows(orgId, saleId) is organization-and-sale scoped, scopedRows(orgId) is organization-only.
+    // Two reads are deliberately different: the unscoped dealCommissionLines count below, and the
+    // refusal snapshots (expectRefusedAndUnchanged), which compare every schema table across organizations.
     const scopedRows = async (orgId: typeof s.orgId, scanSaleId?: typeof saleId) => {
       const rows = await s.t.run(async (ctx) => ctx.db.query("dealCommissionLines")
         .withIndex("by_org_sale", (q) => scanSaleId === undefined ? q.eq("orgId", orgId) : q.eq("orgId", orgId).eq("saleId", scanSaleId))

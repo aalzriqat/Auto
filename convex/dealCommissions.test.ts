@@ -271,7 +271,7 @@ describe("reports show the margin after commissions (display only)", () => {
 // SCRUM-854: the salesperson's own sale commission lives on the sale row, so a
 // SALE line for that same person would pay them twice for one role on the deal.
 describe("dealCommissions: a SALE line for the sale's own salesperson is refused (SCRUM-854, amount 50 case)", () => {
-  test("a SALE line for the sale's own salesperson is refused and writes no line, audit, pending or ledger row", async () => {
+  test("a SALE line for the sale's own salesperson is refused and commits no change to the tested org's line, audit, pending or event/journal tables", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const s = await seed(t, "dupsale");
     await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
@@ -294,14 +294,20 @@ describe("dealCommissions: a SALE line for the sale's own salesperson is refused
       }
       return rows;
     };
-    // Organization-scoped row counts of the tables a commission write could touch: the audit log,
+    // Organization-scoped full row sets (compared as arrays) of the tables a commission write could touch: the audit log,
     // the pending-accounting outbox, accounting events and journal entries.
-    const writeFootprint = (orgId: typeof s.orgId) => t.run(async (ctx) => ({
-      audit: await ctx.db.query("financialAuditLog").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
-      pending: await ctx.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId)).collect(),
-      events: await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
-      journal: await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
-    }));
+    const writeFootprint = (orgId: typeof s.orgId) => t.run(async (ctx) => {
+      const own = <R extends { orgId: typeof orgId }>(rows: R[]) => {
+        for (const r of rows) expect(r.orgId).toBe(orgId);
+        return rows;
+      };
+      return {
+        audit: own(await ctx.db.query("financialAuditLog").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()),
+        pending: own(await ctx.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId)).collect()),
+        events: own(await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()),
+        journal: own(await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()),
+      };
+    });
     const foreignBefore = await scoped(f.orgId, f.saleId);
     expect(foreignBefore).toHaveLength(2);
     // The unscoped table holds the foreign rows, so a scan that forgot the organization would see them.
@@ -320,7 +326,7 @@ describe("dealCommissions: a SALE line for the sale's own salesperson is refused
     // The salesperson is owed the one 50.000 JOD commission, not 100.000.
     expect(view.totalMinor).toBe(50_000);
     expect(await scoped(s.orgId, s.saleId)).toEqual([]);
-    // The refused call added no audit, pending-accounting, accounting-event or journal row in this organization.
+    // No committed change to the tested organization's audit, pending-accounting, accounting-event or journal rows.
     expect(await writeFootprint(s.orgId)).toEqual(ownFootprintBefore);
     // The other organization's rows and total did not move.
     expect(await scoped(f.orgId, f.saleId)).toEqual(foreignBefore);
