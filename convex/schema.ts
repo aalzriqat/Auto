@@ -979,6 +979,9 @@ export default defineSchema({
       v.literal("DEAL_UNWIND_REMITTANCE_REFUNDED"),
       v.literal("DEAL_UNWIND_COMPLETED"),
       v.literal("DEAL_UNWIND_ABANDONED"),
+      // Registered employee commission lines on a deal (sale / purchase / execution).
+      v.literal("ADD_DEAL_COMMISSION_LINE"),
+      v.literal("REMOVE_DEAL_COMMISSION_LINE"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -993,6 +996,41 @@ export default defineSchema({
     .index("by_org_action", ["orgId", "actionType"])
     .index("by_org_action_idempotency", ["orgId", "actionType", "idempotencyKey"])
     .index("by_org_time", ["orgId", "occurredAt"]),
+
+  /**
+   * Employee commission lines REGISTERED against a deal (owner SCRUM-783 types:
+   * sale = who sold, purchase = who brought the car in, execution = who executed
+   * the finance transaction). One deal can carry several lines, each its own
+   * type and employee.
+   *
+   * REGISTRATION ONLY. A line posts nothing to the ledger and is not paid by
+   * payroll; it exists so the deal screen can show the commissions against the
+   * deal and its net profit after them. The salesperson's own commission stays
+   * on `sales.commissionAmount` (its accrual and payment machinery is unchanged)
+   * and is added to these lines by the readers, never copied into a row here.
+   *
+   * Amounts are integer minor units of `currency`, the organization's currency
+   * when the line was written. A removed line is kept (`removedAt`) so the
+   * history survives; readers skip it.
+   */
+  dealCommissionLines: defineTable({
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+    kind: v.union(v.literal("SALE"), v.literal("PURCHASE"), v.literal("EXECUTION")),
+    employeeId: v.id("users"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    note: v.optional(v.string()),
+    createdBy: v.id("users"),
+    removedAt: v.optional(v.number()),
+    removedBy: v.optional(v.id("users")),
+    /** Set when payroll pays the line. A paid line can no longer be removed. */
+    paidAt: v.optional(v.number()),
+    paidBy: v.optional(v.id("users")),
+    payrollItemId: v.optional(v.id("payrollItems")),
+  })
+    .index("by_org_sale", ["orgId", "saleId"])
+    .index("by_org_employee", ["orgId", "employeeId"]),
 
   // ─── Phase 10: True two-person manual-journal approval ────────────────────
 
@@ -5932,6 +5970,8 @@ export default defineSchema({
     // Unpaid commission sales this payslip settles (Option A: commissions are
     // paid through payroll). Marked paid when the run is paid.
     commissionSaleIds: v.array(v.id("sales")),
+    /** Extra deal commission lines paid on this payslip (see dealCommissionLines). */
+    commissionLineIds: v.optional(v.array(v.id("dealCommissionLines"))),
     createdAt: v.number(),
   })
     .index("by_org", ["orgId"])
