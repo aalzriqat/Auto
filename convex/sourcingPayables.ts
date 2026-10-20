@@ -9,6 +9,19 @@ import { fromMinorUnits, toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { Id } from "./_generated/dataModel";
 import { getActiveDepositHolds } from "./utils/depositHelpers";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+
+const supplierMethodUsesBank = (method: string) =>
+  method === "BANK_TRANSFER" || method === "CARD" || method === "CHEQUE";
+
+export const listPaymentBankOptions = query({
+  args: { orgId: v.id("organizations"), payableId: v.id("vehicleSupplierPayables") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const payable = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierPayables", args.payableId);
+    return await listEligibleBanks(ctx, args.orgId, payable.currency);
+  },
+});
 
 export const list = query({
   args: {
@@ -213,6 +226,7 @@ export const markPaid = mutation({
     payableId: v.id("vehicleSupplierPayables"),
     paymentNotes: v.optional(v.string()),
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     /** Cheque number or transfer reference. */
     paymentReference: v.optional(v.string()),
     /** The bank or cash account the money left. */
@@ -232,12 +246,17 @@ export const markPaid = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ payableId: args.payableId, paymentMethod, taxAmount: args.taxAmount ?? null }),
+        fingerprint: JSON.stringify({ payableId: args.payableId, paymentMethod, bankAccountId: args.bankAccountId ?? null, taxAmount: args.taxAmount ?? null }),
       },
       async () => {
-        const payable = await ctx.db.get(args.payableId);
-        if (!payable || payable.orgId !== args.orgId) {
-          throw new ConvexError("Supplier payable not found.");
+        const payable = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierPayables", args.payableId, "Supplier payable not found.");
+        if (supplierMethodUsesBank(paymentMethod)) {
+          await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId, bankAccountId: args.bankAccountId, currency: payable.currency,
+            missingMessage: "Choose the bank account this supplier payment leaves.", currencySubject: "supplier payment",
+          });
+        } else if (args.bankAccountId) {
+          throw new ConvexError("A bank account is only valid for a bank-funded supplier payment.");
         }
         if (payable.status === "PAID") {
           throw new ConvexError("This payable has already been marked as paid.");
@@ -285,6 +304,7 @@ export const markPaid = mutation({
           paidAt: now,
           paidBy: user._id,
           paymentMethod,
+          bankAccountId: args.bankAccountId,
           paymentReference: args.paymentReference,
           paymentAccountId: args.paymentAccountId,
           paymentNotes: args.paymentNotes,
@@ -318,6 +338,7 @@ export const markPaid = mutation({
           taxMinor: args.taxAmount ? toMinorUnits(args.taxAmount, currency) : undefined,
           currency,
           paymentMethod,
+          bankAccountId: args.bankAccountId,
           costOrigin,
           actorId: user._id,
           occurredAt: now,
@@ -350,6 +371,7 @@ export const recordPartialPayment = mutation({
     payableId: v.id("vehicleSupplierPayables"),
     amount: v.number(),
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     paymentReference: v.optional(v.string()),
     paymentAccountId: v.optional(v.id("chartOfAccounts")),
     paymentNotes: v.optional(v.string()),
@@ -371,13 +393,19 @@ export const recordPartialPayment = mutation({
           payableId: args.payableId,
           amount: args.amount,
           paymentMethod,
+          bankAccountId: args.bankAccountId ?? null,
           paymentReference: args.paymentReference ?? null,
         }),
       },
       async () => {
-        const payable = await ctx.db.get(args.payableId);
-        if (!payable || payable.orgId !== args.orgId) {
-          throw new ConvexError("Supplier payable not found.");
+        const payable = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierPayables", args.payableId, "Supplier payable not found.");
+        if (supplierMethodUsesBank(paymentMethod)) {
+          await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId, bankAccountId: args.bankAccountId, currency: payable.currency,
+            missingMessage: "Choose the bank account this supplier payment leaves.", currencySubject: "supplier payment",
+          });
+        } else if (args.bankAccountId) {
+          throw new ConvexError("A bank account is only valid for a bank-funded supplier payment.");
         }
         if (!Number.isFinite(args.amount) || args.amount <= 0) {
           throw new ConvexError("A payment must be greater than zero.");
@@ -440,6 +468,7 @@ export const recordPartialPayment = mutation({
           status: settlesInFull ? "PAID" : "PARTIALLY_PAID",
           ...(settlesInFull ? { paidAt: now, paidBy: user._id } : {}),
           paymentMethod,
+          bankAccountId: args.bankAccountId,
           paymentReference: args.paymentReference,
           paymentAccountId: args.paymentAccountId,
           paymentNotes: args.paymentNotes,
@@ -463,6 +492,7 @@ export const recordPartialPayment = mutation({
           amountMinor: toMinorUnits(args.amount, payable.currency),
           currency: payable.currency,
           paymentMethod,
+          bankAccountId: args.bankAccountId,
           costOrigin,
           paymentSeq,
           actorId: user._id,

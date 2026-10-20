@@ -55,49 +55,50 @@ export default function DashboardPage() {
   const [filterStatus, setFilterStatus] = useState<string>("ALL");
   const itemsPerPage = 4;
 
-  const stats = useQuery(
-    api.dashboard.stats,
-    // This screen renders no period-over-period delta anywhere, so it declines
-    // the comparison window rather than having the backend measure a second
-    // full accounting period and discard it on every load. Mobile, the only
-    // consumer of `previousPeriod`, is unaffected: the argument defaults to true.
-    activeOrgId ? { orgId: activeOrgId, timeRange, includePreviousPeriod: false } : "skip"
-  );
-
-  const dataQuality = useQuery(
-    api.dashboard.dataQualityStats,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
-
-  const agingBuckets = useQuery(
-    api.vehicles.getAgingBuckets,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
-
-  const { results: leads } = usePaginatedQuery(
-    api.leads.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip",
-    { initialNumItems: 100 }
-  );
-
   const myMembership = useQuery(
     api.memberships.getMyMembership,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
+  const role = myMembership?.roleName?.toUpperCase();
+  const redirectPath = activeOrgId
+    ? role === "SALES" || role === "SALESPERSON"
+      ? `/${activeOrgId}/sales`
+      : role === "RECEPTION"
+        ? `/${activeOrgId}/leads`
+        : role === "ACCOUNTANT" || role === "SENIOR_ACCOUNTANT"
+          ? `/${activeOrgId}/accounting`
+          : null
+    : null;
+  // Membership is needed before starting live dashboard reads: these roles
+  // leave this route immediately and never use its expensive subscriptions.
+  const showDashboard = Boolean(activeOrgId && myMembership !== undefined && !redirectPath);
+
+  const stats = useQuery(
+    api.dashboard.stats,
+    showDashboard && activeOrgId
+      ? { orgId: activeOrgId, timeRange, includePreviousPeriod: false }
+      : "skip"
+  );
+
+  const dataQuality = useQuery(
+    api.dashboard.dataQualityStats,
+    showDashboard && activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+
+  const agingBuckets = useQuery(
+    api.vehicles.getAgingBuckets,
+    showDashboard && activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+
+  const { results: leads } = usePaginatedQuery(
+    api.leads.list,
+    showDashboard && activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
 
   useEffect(() => {
-    if (myMembership && activeOrgId) {
-      const role = myMembership.roleName?.toUpperCase();
-      if (role === "SALES" || role === "SALESPERSON") {
-        router.replace(`/${activeOrgId}/sales`);
-      } else if (role === "RECEPTION") {
-        router.replace(`/${activeOrgId}/leads`);
-      } else if (role === "ACCOUNTANT" || role === "SENIOR_ACCOUNTANT") {
-        router.replace(`/${activeOrgId}/accounting`);
-      }
-    }
-  }, [myMembership, activeOrgId, router]);
-
+    if (redirectPath) router.replace(redirectPath);
+  }, [redirectPath, router]);
   if (stats === undefined || leads === undefined || myMembership === undefined) {
     return (
       <RoleGuard permissions={[]}>
@@ -147,8 +148,18 @@ export default function DashboardPage() {
     avatar: lead.customerName.substring(0, 2).toUpperCase()
   }));
 
-  const lineChartData = stats?.salesTrend?.length ? stats.salesTrend.map((t: { name: string; Revenue: number }) => ({ name: t.name, value: t.Revenue })) : [];
-  const trendRange = (stats?.salesTrend?.length || 0) > 1
+  // `null` means the sale window exceeded its read cap: the figure is
+  // unavailable, so say so - no zero, no sold count, no chart of a prefix.
+  const salesUnavailable =
+    stats?.salesVolumeThisMonth === null ||
+    stats?.salesThisMonth === null ||
+    !!stats?.salesTrend?.some((t: { Revenue: number | null }) => t.Revenue === null);
+  const lineChartData = stats?.salesTrend?.length && !salesUnavailable
+    ? stats.salesTrend.map((t: { name: string; Revenue: number | null }) => ({ name: t.name, value: t.Revenue ?? 0 }))
+    : [];
+  const trendRange = salesUnavailable
+    ? t("FigureUnavailable" as any)
+    : (stats?.salesTrend?.length || 0) > 1
     ? `${stats!.salesTrend![0].name} - ${stats!.salesTrend![stats!.salesTrend!.length - 1].name}`
     : timeRange === "DAY" ? t("Today") : timeRange === "MONTH" ? t("ThisMonth") : timeRange === "YEAR" ? t("ThisYear") : t("AllTime");
   // Counted server-side across every lead, not derived from `leads` — that is
@@ -232,7 +243,9 @@ export default function DashboardPage() {
               <div className="flex items-baseline gap-6">
                 <div>
                   <div className="text-3xl md:text-5xl font-bold tracking-tight">
-                    {formatCompact(stats?.salesVolumeThisMonth || 0)}
+                    {salesUnavailable
+                      ? t("FigureUnavailable" as any)
+                      : formatCompact(stats?.salesVolumeThisMonth || 0)}
                     {/* A trailing "+" the moment the figure is known to be
                         short. Sales whose accounting basis could not be
                         established are excluded from turnover on purpose —
@@ -241,7 +254,9 @@ export default function DashboardPage() {
                         silently only trades an overstated figure for an
                         understated one presented as exact. Same idiom the
                         admin counts already use. */}
-                    {stats?.truncated?.turnover ? (
+                    {/* The server also raises `turnover` for an unavailable
+                        window; "Unavailable+" would read as a partial total. */}
+                    {stats?.truncated?.turnover && !salesUnavailable ? (
                       <span title={t("PartialTotalExplain" as any)}>+</span>
                     ) : null}
                   </div>
@@ -255,16 +270,24 @@ export default function DashboardPage() {
                     {stats?.salesVolumeBasis === "GROSS_TRANSACTION_VALUE"
                       ? (t("GrossTransactionValue" as any) || "Deal volume")
                       : (t("Revenue" as any) || "Revenue")}
-                    <span className="ms-1 text-[#4ade80] font-medium">(+0.0%)</span>
+                    {salesUnavailable ? null : (
+                      <span className="ms-1 text-[#4ade80] font-medium">(+0.0%)</span>
+                    )}
                   </p>
-                  {stats?.truncated?.turnover ? (
+                  {salesUnavailable ? (
+                    <p className="text-xs text-amber-200/90 mt-1" role="status">
+                      {t("FiguresUnavailableExplain" as any)}
+                    </p>
+                  ) : stats?.truncated?.turnover ? (
                     <p className="text-xs text-amber-200/90 mt-1">
                       {t("PartialTotalExplain" as any)}
                     </p>
                   ) : null}
                 </div>
                 <div>
-                  <div className="text-3xl md:text-5xl font-bold tracking-tight">{stats?.salesThisMonth || 0}</div>
+                  <div className="text-3xl md:text-5xl font-bold tracking-tight">
+                    {salesUnavailable ? t("FigureUnavailable" as any) : stats?.salesThisMonth || 0}
+                  </div>
                   <p className="text-sm text-white/80 mt-1">{t("VehiclesSold" as any) || "Vehicles Sold"}</p>
                 </div>
               </div>

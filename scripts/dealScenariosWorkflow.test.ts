@@ -29,7 +29,9 @@ describe("deal-scenarios-e2e runs the form explorer (SCRUM-771)", () => {
 
   it("sets JEV_FORM_EXPLORER on the one Playwright step: always on schedule, from the input on dispatch", () => {
     expect(playwright).toHaveLength(1);
-    expect(playwright[0]!.run).toBe("pnpm exec playwright test -c playwright.scenarios.config.ts");
+    expect(playwright[0]!.run).toBe(
+      'set -o pipefail\npnpm exec playwright test -c playwright.scenarios.config.ts 2>&1 | tee "$RUNNER_TEMP/deal-scenarios-output.log"\n'
+    );
     expect(playwright[0]!.env?.JEV_FORM_EXPLORER).toBe(EXPLORER_ENV);
     // Nothing may turn the step off or let its failure pass.
     expect(playwright[0]!.if).toBeUndefined();

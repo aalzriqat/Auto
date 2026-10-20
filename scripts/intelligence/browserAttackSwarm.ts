@@ -18,11 +18,24 @@ export type BrowserAttackFamily =
   | "MULTI_TAB_RACE"
   | "COMPLETENESS_BOUNDARY"
   | "RTL_PARITY"
-  | "UI_BACKEND_MISMATCH";
+  | "UI_BACKEND_MISMATCH"
+  | "ACCOUNTING_DATE_BOUNDARY";
 
 export const PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES = [
+  "DUPLICATE_SUBMIT",
+  "MULTI_TAB_RACE",
   "RTL_PARITY",
   "UI_BACKEND_MISMATCH",
+  "TENANT_ESCAPE",
+  "AUTHORIZATION_ABUSE",
+  "LIFECYCLE_REVERSAL",
+  "COMPLETENESS_BOUNDARY",
+  "NETWORK_RECOVERY",
+  "CONSIGNMENT_ECONOMICS",
+  "STALE_UI",
+  "MONEY_BOUNDARY",
+  "NAVIGATION_RACE",
+  "ACCOUNTING_DATE_BOUNDARY",
 ] as const satisfies readonly BrowserAttackFamily[];
 
 const PHASE_A_EXECUTABLE_FAMILY_SET = new Set<BrowserAttackFamily>(
@@ -38,6 +51,48 @@ export type BrowserOracleKind =
   | "ECONOMIC_AUTHORITY"
   | "LIST_COMPLETENESS"
   | "UI_BACKEND_AUTHORITY";
+
+/**
+ * A handler judges the oracles listed here and no others. A family with a
+ * handler is not "executable" for a mission whose oracle the handler does not
+ * judge: reporting it so would certify an obligation nothing checks (a forged
+ * LIFECYCLE_REVERSAL mission asking for ECONOMIC_AUTHORITY has a handler, but
+ * that handler judges only REVERSAL_RECONCILIATION and STATE_TRANSITION).
+ */
+const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
+  Record<(typeof PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES)[number], readonly BrowserOracleKind[]>
+> = {
+  DUPLICATE_SUBMIT: ["IDEMPOTENCY_SINGLE_EFFECT"],
+  MULTI_TAB_RACE: ["IDEMPOTENCY_SINGLE_EFFECT"],
+  RTL_PARITY: ["UI_BACKEND_AUTHORITY"],
+  UI_BACKEND_MISMATCH: ["UI_BACKEND_AUTHORITY"],
+  TENANT_ESCAPE: ["TENANT_ISOLATION"],
+  AUTHORIZATION_ABUSE: ["AUTHORIZATION"],
+  // ACC-2 reconciles a reversed expense; LIFE-1 judges a deposit void's state transition.
+  LIFECYCLE_REVERSAL: ["REVERSAL_RECONCILIATION", "STATE_TRANSITION"],
+  COMPLETENESS_BOUNDARY: ["LIST_COMPLETENESS"],
+  NETWORK_RECOVERY: ["IDEMPOTENCY_SINGLE_EFFECT", "STATE_TRANSITION"],
+  CONSIGNMENT_ECONOMICS: ["ECONOMIC_AUTHORITY"],
+  STALE_UI: ["UI_BACKEND_AUTHORITY"],
+  // ACC-1 (a financed sale of owned stock) judges ECONOMIC_AUTHORITY; LIFE-1 (voiding a directly paid cost) is a
+  // distinct scenario of the same family that judges STATE_TRANSITION. Only that one LIFE-1 path is covered.
+  MONEY_BOUNDARY: ["ECONOMIC_AUTHORITY", "STATE_TRANSITION"],
+  NAVIGATION_RACE: ["STATE_TRANSITION"],
+  // ACC-3: a manual journal posts to its declared date, and posting into a closed period is refused. Only that
+  // one manual-journal scenario is covered (not a LOCKED or unopened period, outbox posting or a reopen).
+  ACCOUNTING_DATE_BOUNDARY: ["STATE_TRANSITION"],
+};
+
+/** True when a handler exists for the family AND judges the mission's oracle. */
+export function isBrowserSwarmMissionExecutable(
+  family: BrowserAttackFamily,
+  oracle: BrowserOracleKind,
+): boolean {
+  if (!PHASE_A_EXECUTABLE_FAMILY_SET.has(family)) return false;
+  const judged: readonly BrowserOracleKind[] =
+    PHASE_A_EXECUTABLE_FAMILY_ORACLES[family as keyof typeof PHASE_A_EXECUTABLE_FAMILY_ORACLES];
+  return judged.includes(oracle);
+}
 
 export type MissionSource = "DETERMINISTIC" | "JEV";
 
@@ -114,6 +169,44 @@ type DeterministicMissionTemplate = Omit<
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 
+/**
+ * Economic attacks drive several real submissions, a forced websocket
+ * reconnect and bounded backend authority reads against a cold preview. A
+ * budget that cannot fit the attack turns every run into HARNESS_ERROR, which
+ * is fail-closed but proves nothing, so these families get a larger bound.
+ */
+const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
+  DUPLICATE_SUBMIT: 180_000,
+  MULTI_TAB_RACE: 180_000,
+  // Opens a second authenticated seat, creates a foreign tenant and probes it.
+  TENANT_ESCAPE: 180_000,
+  AUTHORIZATION_ABUSE: 120_000,
+  // Readiness waits alone can total 60s (20s org route, 15s Add Customer, 5s dialog, 15s reload search, 5s result) before launch, the customer submit and the backend query.
+  UI_BACKEND_MISMATCH: 120_000,
+  // Posts an expense and reverses it twice (ACC-2), or takes two deposits, voids one
+  // and reads the ledger three times (LIFE-1); the larger bound fits the deposit leg.
+  LIFECYCLE_REVERSAL: 240_000,
+  // Seeds more rows than one page holds, then walks the whole list.
+  COMPLETENESS_BOUNDARY: 240_000,
+  // Holds the connection down, waits out the recovery window, then settles.
+  NETWORK_RECOVERY: 180_000,
+  // About 25 product commands (some may wait out the write rate limit) plus up to 30s for the sale to post.
+  CONSIGNMENT_ECONOMICS: 240_000,
+  // Posts an expense, arms its reversal on the screen, reverses it server-side, then settles the ledger three times.
+  STALE_UI: 180_000,
+  // About 27 product commands (some may wait out the write rate limit) plus up to 30s for the sale to post.
+  MONEY_BOUNDARY: 240_000,
+  // Posts an expense, races its reversal against history back/forward, settles the ledger and repeats the reversal if it did not apply.
+  // Five ledger reads of up to 20s each plus one shared 60s wait for a queued posting (SCRUM-851), with screen steps on top.
+  NAVIGATION_RACE: 240_000,
+  // Establishes two periods, closes one, prepares and approves two journals, then reads the periods, the journals and the pending list.
+  ACCOUNTING_DATE_BOUNDARY: 180_000,
+};
+
+export function browserMissionTimeoutMs(family: BrowserAttackFamily): number {
+  return FAMILY_TIMEOUT_MS[family] ?? DEFAULT_TIMEOUT_MS;
+}
+
 const template = (
   family: BrowserAttackFamily,
   oracle: BrowserOracleKind,
@@ -122,7 +215,7 @@ const template = (
 ): DeterministicMissionTemplate => ({
   family,
   oracle,
-  timeoutMs: DEFAULT_TIMEOUT_MS,
+  timeoutMs: browserMissionTimeoutMs(family),
   estimatedCostUnits,
   evidence,
 });
@@ -183,8 +276,9 @@ const DETERMINISTIC_MISSIONS: Readonly<
       "BACKEND_STATE",
     ]),
   ],
+  // The posted date and the closed-period boundary of a manual journal, judged on the backend's journal and period state.
   "ACC-3": [
-    template("MONEY_BOUNDARY", "STATE_TRANSITION", 5, [
+    template("ACCOUNTING_DATE_BOUNDARY", "STATE_TRANSITION", 5, [
       "TRACE",
       "SCREENSHOT",
       "BACKEND_STATE",
@@ -209,6 +303,12 @@ const DETERMINISTIC_MISSIONS: Readonly<
       "BACKEND_STATE",
     ]),
     template("STALE_UI", "UI_BACKEND_AUTHORITY", 4, [
+      "TRACE",
+      "SCREENSHOT",
+      "BACKEND_STATE",
+    ]),
+    // Voiding a directly paid deal cost: one linked reversal, the sibling cost untouched.
+    template("MONEY_BOUNDARY", "STATE_TRANSITION", 5, [
       "TRACE",
       "SCREENSHOT",
       "BACKEND_STATE",
@@ -250,6 +350,12 @@ export const SUPPORTED_BROWSER_SWARM_INVARIANT_IDS = Object.freeze(
   Object.keys(DETERMINISTIC_MISSIONS).sort((left, right) => left.localeCompare(right)),
 );
 
+/**
+ * Active invariants no browser mission judges. Planning one throws, so a change that impacts it refuses the
+ * swarm rather than passing it. Removing an entry requires a mission whose oracle really judges the invariant.
+ */
+export const UNSUPPORTED_BROWSER_SWARM_INVARIANTS: Readonly<Record<string, string>> = Object.freeze({});
+
 const JEV_DEFAULT_ORACLE: Readonly<Record<BrowserAttackFamily, BrowserOracleKind>> = {
   TENANT_ESCAPE: "TENANT_ISOLATION",
   AUTHORIZATION_ABUSE: "AUTHORIZATION",
@@ -265,6 +371,7 @@ const JEV_DEFAULT_ORACLE: Readonly<Record<BrowserAttackFamily, BrowserOracleKind
   COMPLETENESS_BOUNDARY: "LIST_COMPLETENESS",
   RTL_PARITY: "UI_BACKEND_AUTHORITY",
   UI_BACKEND_MISMATCH: "UI_BACKEND_AUTHORITY",
+  ACCOUNTING_DATE_BOUNDARY: "STATE_TRANSITION",
 };
 
 const FAMILY_EVIDENCE: Readonly<
@@ -284,6 +391,7 @@ const FAMILY_EVIDENCE: Readonly<
   COMPLETENESS_BOUNDARY: ["TRACE", "SCREENSHOT", "BACKEND_STATE"],
   RTL_PARITY: ["TRACE", "SCREENSHOT"],
   UI_BACKEND_MISMATCH: ["TRACE", "SCREENSHOT", "BACKEND_STATE"],
+  ACCOUNTING_DATE_BOUNDARY: ["TRACE", "SCREENSHOT", "BACKEND_STATE"],
 };
 
 function stableId(parts: readonly string[]): string {
@@ -390,7 +498,7 @@ export function planBrowserAttackSwarm({
         ? "CRITICAL"
         : "HIGH",
       oracle: JEV_DEFAULT_ORACLE[suggestion.family],
-      timeoutMs: DEFAULT_TIMEOUT_MS,
+      timeoutMs: browserMissionTimeoutMs(suggestion.family),
       estimatedCostUnits: 5,
       evidence: FAMILY_EVIDENCE[suggestion.family],
       jevProbability: suggestion.probability,
@@ -449,6 +557,77 @@ export function partitionBrowserAttackMissions(
   return buckets;
 }
 
+/**
+ * SCRUM-826 planner-to-executor coverage contract. One source of truth for
+ * "can this plan actually run": the trusted plan calls it before any preview,
+ * build or E2E is paid for, and the worker manifest calls it again. A plan
+ * with ANY unexecutable mission is refused whole — running the executable
+ * half would let the missing obligations look satisfied.
+ */
+export function assertBrowserSwarmMissionsExecutable(
+  missions: readonly BrowserAttackMission[],
+): void {
+  const unsupported = new Map<string, Set<string>>();
+  for (const mission of missions) {
+    if (isBrowserSwarmMissionExecutable(mission.family, mission.oracle)) continue;
+    const label = PHASE_A_EXECUTABLE_FAMILY_SET.has(mission.family)
+      ? `${mission.family} with oracle ${mission.oracle}`
+      : mission.family;
+    const invariants = unsupported.get(label) ?? new Set<string>();
+    for (const id of mission.invariantIds) invariants.add(id);
+    unsupported.set(label, invariants);
+  }
+  if (unsupported.size === 0) return;
+  const described = [...unsupported.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(
+      ([label, invariants]) =>
+        `${label} (${[...invariants].sort((l, r) => l.localeCompare(r)).join(", ")})`,
+    );
+  throw new Error(
+    "Browser swarm Phase A has no executable handler for mission family/families: " +
+      described.join(", "),
+  );
+}
+
+/**
+ * Plans ONLY the mandatory deterministic obligations of a trusted impact set
+ * and refuses it if any cannot execute. Jev is excluded on purpose: this is
+ * the pre-provisioning check of what the change obliges, which exploration
+ * can add to but never subtract from.
+ */
+export function assertMandatoryBrowserSwarmCoverage(
+  impactedInvariants: readonly { id: string; severity: InvariantSeverity }[],
+): BrowserMissionPlan {
+  if (impactedInvariants.length === 0) {
+    throw new Error(
+      "Browser swarm coverage requires at least one impacted invariant; an empty set has no obligations to certify",
+    );
+  }
+  const plan = planBrowserAttackSwarm({ impactedInvariants });
+  assertBrowserSwarmMissionsExecutable(plan.missions);
+  return plan;
+}
+
+export interface BrowserSwarmCoverageRow {
+  invariantId: string;
+  family: BrowserAttackFamily;
+  oracle: BrowserOracleKind;
+  executable: boolean;
+}
+
+/** The complete mandatory-mission coverage matrix, one row per mapping. */
+export function browserSwarmCoverageMatrix(): readonly BrowserSwarmCoverageRow[] {
+  return SUPPORTED_BROWSER_SWARM_INVARIANT_IDS.flatMap((invariantId) =>
+    (DETERMINISTIC_MISSIONS[invariantId] ?? []).map((missionTemplate) => ({
+      invariantId,
+      family: missionTemplate.family,
+      oracle: missionTemplate.oracle,
+      executable: isBrowserSwarmMissionExecutable(missionTemplate.family, missionTemplate.oracle),
+    })),
+  );
+}
+
 function assertSafeRunId(runId: string): void {
   if (!/^[a-z0-9][a-z0-9._-]{0,80}$/.test(runId)) {
     throw new Error(
@@ -503,20 +682,9 @@ export function buildBrowserSwarmRunManifest({
 }): BrowserSwarmRunManifest {
   assertSafeRunId(runId);
   assertSwarmPreviewIdentity(previewName, expectedCloudUrl);
-
-  const unsupportedFamilies = [
-    ...new Set(
-      plan.missions
-        .map((mission) => mission.family)
-        .filter((family) => !PHASE_A_EXECUTABLE_FAMILY_SET.has(family)),
-    ),
-  ].sort((left, right) => left.localeCompare(right));
-  if (unsupportedFamilies.length > 0) {
-    throw new Error(
-      "Browser swarm Phase A has no executable handler for mission family/families: " +
-        unsupportedFamilies.join(", "),
-    );
-  }
+  // Second, independent enforcement point: the trusted plan already refused
+  // this before provisioning, but the worker never trusts that it did.
+  assertBrowserSwarmMissionsExecutable(plan.missions);
 
   const partitions = partitionBrowserAttackMissions(plan.missions, workerCount);
 

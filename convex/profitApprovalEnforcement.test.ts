@@ -13,6 +13,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -317,6 +318,8 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     });
     await ids.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: ids.orgId, feeId, notes: "Nothing to match.",
+      expectedActualAmountMinor: 0,
+      expectedActualEvidenceRevision: 0,
     });
     // SCRUM-407: no manual classification step - finalization checks readiness itself.
     return { quoteId, applicationId };
@@ -345,6 +348,9 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "clears", 1000);
     const { applicationId } = await readyToFinalize(t, ids, 1500);
+    // SCRUM-411 P2-01: this 100%-LTV, deposit-free deal owes the company nothing onward,
+    // so no payment is recorded before finalize.
+    expect(await payForwardBeforeFinalize({ t, orgId: ids.orgId }, ids.asOwner, applicationId)).toBeNull();
 
     const saleId = await ids.asOwner.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: ids.orgId,

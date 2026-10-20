@@ -1,7 +1,8 @@
 import { convexTestWithComponents } from "../../test-utils/convexTest";
 import { expect, test, describe, vi, beforeEach, afterEach } from "vitest";
 import schema from "../schema";
-import { notifyUser, notifyManagers, notifyAllMembers, notifyOwner, notifyByPermission, notifyFinanceManagers, getActorName } from "./notifications";
+import { notifyUser, notifyManagers, notifyAllMembers, notifyOwner, notifyByPermission, notifyFinanceManagers, getActorName, dispatch, resolveManagerRecipients, resolveManagerRecipientsPage, DISPATCH_MAX_SCHEDULED } from "./notifications";
+import type { Id } from "../_generated/dataModel";
 import { PERMISSIONS } from "./permissions";
 
 vi.mock("../rateLimit", () => ({
@@ -444,6 +445,202 @@ describe("dispatch helpers", () => {
     expect(salesRows).toHaveLength(0);
     expect(managerRows).toHaveLength(0);
     expect(ghostRows).toHaveLength(0);
+  });
+});
+
+// SCRUM-807 — notifyManagers used to re-read every membership and one role per
+// membership on every call, so a cron fanning out to T tasks in one org paid
+// T x (1 + M) reads for the same answer.
+describe("manager recipient resolution (SCRUM-807)", () => {
+  type T = ReturnType<typeof convexTestWithComponents<typeof schema>>;
+
+  /** Counts db.get / db.query calls made through the returned ctx. */
+  function counting<C extends { db: object }>(ctx: C) {
+    const calls = { get: 0, query: 0 };
+    const db = new Proxy(ctx.db, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop, target) as unknown;
+        if (typeof value !== "function") return value;
+        if (prop === "get" || prop === "query") {
+          return (...args: unknown[]) => {
+            calls[prop] += 1;
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return (value as (...a: unknown[]) => unknown).bind(target);
+      },
+    });
+    return { ctx: { ...ctx, db } as C, calls };
+  }
+
+  /** `count` extra members, all sharing one existing role. */
+  async function addMembers(t: T, orgId: Id<"organizations">, roleId: Id<"roles">, count: number, tag: string) {
+    const ids: Id<"users">[] = [];
+    for (let i = 0; i < count; i++) {
+      const userId = await t.run((ctx) =>
+        ctx.db.insert("users", { clerkId: `${tag}_${i}`, email: `${tag}${i}@test.com` })
+      );
+      await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      ids.push(userId);
+    }
+    return ids;
+  }
+
+  async function roleIdByName(t: T, orgId: Id<"organizations">, name: string) {
+    const roles = await t.run((ctx) =>
+      ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    return roles.find((r) => r.name === name)!._id;
+  }
+
+  test("looks each distinct role up once, however many memberships share it", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId } = await seedOrg(t);
+    // 3 seeded members (OWNER, MANAGER, SALES) + 9 more MANAGERs + 6 more SALES.
+    await addMembers(t, orgId, await roleIdByName(t, orgId, "MANAGER"), 9, "mgr");
+    await addMembers(t, orgId, await roleIdByName(t, orgId, "SALES"), 6, "sls");
+
+    const resolved = await t.run(async (ctx) => {
+      const probe = counting(ctx);
+      const result = await resolveManagerRecipients(probe.ctx, orgId);
+      return { result, calls: probe.calls };
+    });
+
+    // 18 memberships, 3 distinct roles: one memberships query + 3 role reads.
+    expect(resolved.calls).toEqual({ query: 1, get: 3 });
+    expect(resolved.result).toHaveLength(11); // owner + 10 managers
+  });
+
+  test("notifyManagers pays one role read per distinct role, not one per membership", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId } = await seedOrg(t);
+    await addMembers(t, orgId, await roleIdByName(t, orgId, "MANAGER"), 9, "mgr");
+    await addMembers(t, orgId, await roleIdByName(t, orgId, "SALES"), 6, "sls");
+
+    const calls = await t.run(async (ctx) => {
+      const probe = counting(ctx);
+      await notifyManagers(probe.ctx, orgId, "vehicle.created", { actorName: "Bob" });
+      return probe.calls;
+    });
+
+    // 11 recipients. Each dispatch reads its user (get), preference and mobile
+    // token (queries); the membership query + 3 role gets are the resolution.
+    expect(calls.get).toBe(3 + 11);
+    expect(calls.query).toBe(1 + 11 * 2);
+  });
+
+  test("recipients keep membership order, honour excludeUserId, and match what notifyManagers sends", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, ownerId, managerId } = await seedOrg(t);
+    const extra = await addMembers(t, orgId, await roleIdByName(t, orgId, "MANAGER"), 3, "mgr");
+
+    const all = await t.run((ctx) => resolveManagerRecipients(ctx, orgId));
+    expect(all).toEqual([ownerId, managerId, ...extra]);
+
+    const excluding = await t.run((ctx) => resolveManagerRecipients(ctx, orgId, ownerId));
+    expect(excluding).toEqual([managerId, ...extra]);
+
+    await t.run((ctx) => notifyManagers(ctx, orgId, "vehicle.created", { actorName: "Bob" }, { excludeUserId: ownerId }));
+    const sent = await t.run((ctx) => ctx.db.query("notifications").collect());
+    expect(sent.map((n) => n.userId)).toEqual(excluding);
+  });
+
+  test("keeps today's behaviour for deleted roles, soft-deleted roles, offboarding members and duplicate memberships", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, managerId } = await seedOrg(t);
+
+    // A membership whose role row is gone: skipped.
+    const ghostUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "ghost_1", email: "g@test.com" }));
+    const ghostRoleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "GHOST", permissions: ["manage:users"] }));
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: ghostUserId, roleId: ghostRoleId }));
+    await t.run((ctx) => ctx.db.delete(ghostRoleId));
+
+    // A soft-deleted role is still a row with MANAGE_USERS: still counted.
+    const softUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "soft_1", email: "s@test.com" }));
+    const softRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "SOFT", permissions: ["manage:users"], isDeleted: true })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: softUserId, roleId: softRoleId }));
+
+    // An offboarding member is NOT filtered by notifyManagers (unlike notifyByPermission).
+    await t.run(async (ctx) => {
+      const m = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", managerId))
+        .unique();
+      await ctx.db.patch(m!._id, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
+    });
+
+    // A duplicate membership for the same user yields two recipients (two notifications).
+    const managerRoleId = await roleIdByName(t, orgId, "MANAGER");
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: managerId, roleId: managerRoleId }));
+
+    const recipients = await t.run((ctx) => resolveManagerRecipients(ctx, orgId));
+    expect(recipients.filter((id) => id === ghostUserId)).toHaveLength(0);
+    expect(recipients.filter((id) => id === softUserId)).toHaveLength(1);
+    expect(recipients.filter((id) => id === managerId)).toHaveLength(2);
+
+    await t.run((ctx) => notifyManagers(ctx, orgId, "vehicle.created", { actorName: "Eve" }));
+    const rows = await t.run((ctx) => ctx.db.query("notifications").collect());
+    expect(rows).toHaveLength(recipients.length);
+  });
+
+  test("DISPATCH_MAX_* match the real worst case: every channel on, WhatsApp plan gate open", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId } = await seedOrg(t);
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "allchan_1", email: "all@test.com", whatsappPhone: "+962790000000" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("notificationPreferences", {
+        orgId, userId, category: "operations", emailEnabled: true, whatsappEnabled: true, pushEnabled: true,
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("mobilePushTokens", {
+        userId, token: "ExponentPushToken[allchan]", platform: "IOS", createdAt: Date.now(), lastSeenAt: Date.now(),
+      })
+    );
+
+    await t.run((ctx) => dispatch(ctx, orgId, userId, "task.overdue_warning", { taskTitle: "T", assigneeName: "A" }));
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+
+    // Pinned equal, not just bounded: if dispatch gains a channel, the page and
+    // hop sizes derived from it (convex/crons.ts) are under-counting until this moves.
+    expect(scheduled).toHaveLength(DISPATCH_MAX_SCHEDULED);
+  });
+
+  test("walking the pages yields the same recipients, in the same order, as the unpaged resolver", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId } = await seedOrg(t);
+    await addMembers(t, orgId, await roleIdByName(t, orgId, "MANAGER"), 9, "mgr");
+    await addMembers(t, orgId, await roleIdByName(t, orgId, "SALES"), 6, "sls");
+    await addMembers(t, orgId, await roleIdByName(t, orgId, "MANAGER"), 2, "late");
+    // A duplicate membership, so that quirk can fall on a page edge too.
+    const managerRoleId = await roleIdByName(t, orgId, "MANAGER");
+    const dupUser = (await t.run((ctx) => resolveManagerRecipients(ctx, orgId)))[1];
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: dupUser, roleId: managerRoleId }));
+
+    const unpaged = await t.run((ctx) => resolveManagerRecipients(ctx, orgId));
+
+    const paged: Id<"users">[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    for (;;) {
+      const page: Awaited<ReturnType<typeof resolveManagerRecipientsPage>> = await t.run((ctx) =>
+        resolveManagerRecipientsPage(ctx, orgId, cursor, 4)
+      );
+      paged.push(...page.recipients);
+      pages++;
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
+
+    expect(pages).toBeGreaterThan(3);
+    expect(paged).toEqual(unpaged);
   });
 });
 

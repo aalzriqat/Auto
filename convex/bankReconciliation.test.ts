@@ -9,8 +9,11 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+let seedSeq = 0;
 
 async function seedDealerWithBankAccount() {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
@@ -37,6 +40,15 @@ async function seedDealerWithBankAccount() {
 
   const asOwner = t.withIdentity({ subject: "p41r_owner", clerkId: "p41r_owner" });
   await asOwner.mutation(api.chartOfAccounts.initialize, { orgId });
+  const fiscalYear = new Date().getUTCFullYear();
+  await asOwner.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear, periodNumber: 1,
+  });
+  const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
+  await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
   const bankAccountId = await asOwner.mutation(api.bankAccounts.create, {
     orgId, name: "Operating Account", currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: Date.now() - 60 * 24 * 60 * 60 * 1000,
@@ -56,25 +68,42 @@ async function seedDealerWithBankAccount() {
       .unique()
   );
 
-  async function seedLedgerLine(amountMinor: number, accountingDate: number) {
+  // SCRUM-54: a ledger line belongs to a physical bank only through its own
+  // bankAccountId. Lines default to the fixture's bank; pass `null` for a
+  // legacy line with no identity.
+  async function seedLedgerLine(
+    amountMinor: number,
+    accountingDate: number,
+    opts: {
+      bankAccountId?: Id<"bankAccounts"> | null;
+      status?: "DRAFT" | "VALIDATED" | "POSTED" | "REVERSED";
+      currency?: string;
+      rawHistorical?: boolean;
+    } = {}
+  ) {
     const now = Date.now();
+    const stampedBank = opts.bankAccountId === undefined ? bankAccountId : opts.bankAccountId;
+    const currency = opts.currency ?? "JOD";
+    // Monotonic, so equal-date lines never share a journal number or source id.
+    const tag = `${++seedSeq}`;
     const journalId = await t.run((ctx) =>
       ctx.db.insert("journalEntries", {
-        orgId, journalNumber: `TEST-${accountingDate}`, accountingDate, sourceType: "test", sourceId: `test-${accountingDate}`,
-        category: "SYSTEM", memo: "Test ledger line", status: "POSTED", currency: "JOD",
+        orgId, periodId: period._id, journalNumber: `TEST-${tag}`, accountingDate, sourceType: "test", sourceId: `test-${tag}`,
+        category: "SYSTEM", memo: "Test ledger line", status: opts.status ?? "POSTED", currency,
         postedBy: userId, postedAt: now, createdAt: now,
       })
     );
-    await t.run((ctx) =>
+    await (opts.rawHistorical ? t.runUnwrapped : t.run)((ctx) =>
       ctx.db.insert("journalLines", {
         orgId, journalEntryId: journalId, lineNumber: 1, accountId: bankChartAccount!._id,
-        debitMinor: amountMinor, creditMinor: 0, currency: "JOD", scale: 3, accountingDate,
+        debitMinor: amountMinor, creditMinor: 0, currency, scale: 3, accountingDate,
+        ...(stampedBank ? { bankAccountId: stampedBank } : {}),
       })
     );
     await t.run((ctx) =>
       ctx.db.insert("journalLines", {
         orgId, journalEntryId: journalId, lineNumber: 2, accountId: retainedEarnings!._id,
-        debitMinor: 0, creditMinor: amountMinor, currency: "JOD", scale: 3, accountingDate,
+        debitMinor: 0, creditMinor: amountMinor, currency, scale: 3, accountingDate,
       })
     );
     return await t.run((ctx) =>
@@ -82,7 +111,13 @@ async function seedDealerWithBankAccount() {
     ).then((lines) => lines.find((l) => l.accountId === bankChartAccount!._id)!);
   }
 
-  return { t, orgId, asOwner, bankAccountId, seedLedgerLine };
+  async function createSecondBank() {
+    return await asOwner.mutation(api.bankAccounts.create, {
+      orgId, name: "Second Account", currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: Date.now() - 60 * 24 * 60 * 60 * 1000,
+    });
+  }
+
+  return { t, orgId, asOwner, bankAccountId, seedLedgerLine, createSecondBank };
 }
 
 describe("bankReconciliation.uploadStatementLines", () => {
@@ -158,6 +193,121 @@ describe("bankReconciliation.suggestMatches", () => {
     const suggestions = await asOwner.query(api.bankReconciliation.suggestMatches, { orgId, bankAccountId });
     expect(suggestions[0].candidates.length).toBeGreaterThanOrEqual(2);
     expect(suggestions[0].suggestedJournalLineId).toBeUndefined();
+  });
+});
+
+describe("bankReconciliation physical-bank attribution (SCRUM-54)", () => {
+  async function seedStatement(amountMinor: number, statementDate: number) {
+    const fx = await seedDealerWithBankAccount();
+    await fx.asOwner.mutation(api.bankReconciliation.uploadStatementLines, {
+      orgId: fx.orgId, bankAccountId: fx.bankAccountId, rows: [{ statementDate, description: "Statement", amountMinor }],
+    });
+    const [line] = await fx.asOwner.query(api.bankReconciliation.listStatementLines, {
+      orgId: fx.orgId, bankAccountId: fx.bankAccountId,
+    });
+    return { ...fx, statementLineId: line._id };
+  }
+
+  test("Bank A statement suggests only Bank A's line even when Bank B has the same amount/date/currency", async () => {
+    const statementDate = Date.now();
+    const fx = await seedStatement(55_000, statementDate);
+    const bankB = await fx.createSecondBank();
+    const lineA = await fx.seedLedgerLine(55_000, statementDate);
+    await fx.seedLedgerLine(55_000, statementDate, { bankAccountId: bankB });
+
+    const [suggestion] = await fx.asOwner.query(api.bankReconciliation.suggestMatches, {
+      orgId: fx.orgId, bankAccountId: fx.bankAccountId,
+    });
+    expect(suggestion.candidates.map((c) => c.journalLineId)).toEqual([lineA._id]);
+    expect(suggestion.suggestedJournalLineId).toBe(lineA._id);
+  });
+
+  test("a line stamped to Bank B is never a candidate for Bank A", async () => {
+    const statementDate = Date.now();
+    const fx = await seedStatement(55_000, statementDate);
+    const bankB = await fx.createSecondBank();
+    await fx.seedLedgerLine(55_000, statementDate, { bankAccountId: bankB });
+
+    const [suggestion] = await fx.asOwner.query(api.bankReconciliation.suggestMatches, {
+      orgId: fx.orgId, bankAccountId: fx.bankAccountId,
+    });
+    expect(suggestion.candidates).toHaveLength(0);
+    expect(suggestion.suggestedJournalLineId).toBeUndefined();
+  });
+
+  test("a legacy line with no bank identity matches no physical bank", async () => {
+    const statementDate = Date.now();
+    const fx = await seedStatement(55_000, statementDate);
+    await fx.seedLedgerLine(55_000, statementDate, { bankAccountId: null, rawHistorical: true });
+
+    const [suggestion] = await fx.asOwner.query(api.bankReconciliation.suggestMatches, {
+      orgId: fx.orgId, bankAccountId: fx.bankAccountId,
+    });
+    expect(suggestion.candidates).toHaveLength(0);
+  });
+
+  test("confirmMatch refuses a line stamped to another bank, even with matching amount/date/currency", async () => {
+    const statementDate = Date.now();
+    const fx = await seedStatement(55_000, statementDate);
+    const bankB = await fx.createSecondBank();
+    const lineB = await fx.seedLedgerLine(55_000, statementDate, { bankAccountId: bankB });
+
+    await expect(
+      fx.asOwner.mutation(api.bankReconciliation.confirmMatch, {
+        orgId: fx.orgId, statementLineId: fx.statementLineId, journalLineId: lineB._id,
+      })
+    ).rejects.toThrow(/different bank account/i);
+  });
+
+  test("confirmMatch refuses a legacy line with no bank identity", async () => {
+    const statementDate = Date.now();
+    const fx = await seedStatement(55_000, statementDate);
+    const legacy = await fx.seedLedgerLine(55_000, statementDate, { bankAccountId: null, rawHistorical: true });
+
+    await expect(
+      fx.asOwner.mutation(api.bankReconciliation.confirmMatch, {
+        orgId: fx.orgId, statementLineId: fx.statementLineId, journalLineId: legacy._id,
+      })
+    ).rejects.toThrow(/no bank account recorded/i);
+  });
+
+  test("a stamped line in another currency is never a candidate, even for the same bank", async () => {
+    const statementDate = Date.now();
+    const fx = await seedStatement(55_000, statementDate);
+    await fx.seedLedgerLine(55_000, statementDate, { currency: "USD", rawHistorical: true }); // legacy USD line stamped to Bank A (JOD)
+
+    const [suggestion] = await fx.asOwner.query(api.bankReconciliation.suggestMatches, {
+      orgId: fx.orgId, bankAccountId: fx.bankAccountId,
+    });
+    expect(suggestion.candidates).toHaveLength(0);
+    expect(suggestion.suggestedJournalLineId).toBeUndefined();
+  });
+
+  test("a REVERSED original with the right bank identity can be confirmed (the reversal is a separate entry)", async () => {
+    const statementDate = Date.now();
+    const fx = await seedStatement(55_000, statementDate);
+    const reversedOriginal = await fx.seedLedgerLine(55_000, statementDate, { status: "REVERSED" });
+
+    await fx.asOwner.mutation(api.bankReconciliation.confirmMatch, {
+      orgId: fx.orgId, statementLineId: fx.statementLineId, journalLineId: reversedOriginal._id,
+    });
+
+    const [updated] = await fx.asOwner.query(api.bankReconciliation.listStatementLines, {
+      orgId: fx.orgId, bankAccountId: fx.bankAccountId,
+    });
+    expect(updated).toMatchObject({ status: "MATCHED", matchedJournalLineId: reversedOriginal._id });
+  });
+
+  test.each(["DRAFT", "VALIDATED"] as const)("confirmMatch refuses a %s entry supplied directly", async (status) => {
+    const statementDate = Date.now();
+    const fx = await seedStatement(55_000, statementDate);
+    const unposted = await fx.seedLedgerLine(55_000, statementDate, { status });
+
+    await expect(
+      fx.asOwner.mutation(api.bankReconciliation.confirmMatch, {
+        orgId: fx.orgId, statementLineId: fx.statementLineId, journalLineId: unposted._id,
+      })
+    ).rejects.toThrow(/not posted/i);
   });
 });
 

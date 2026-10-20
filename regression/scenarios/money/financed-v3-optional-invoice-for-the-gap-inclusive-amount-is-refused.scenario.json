@@ -1,0 +1,47 @@
+{
+  "id": "financed-v3-optional-invoice-for-the-gap-inclusive-amount-is-refused",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "financeDealCosts.recordLegalInvoice",
+      "input": {
+        "approvedMinor": 12500000,
+        "legalInvoiceAmountMinor": 12900000,
+        "issuedTo": "FINANCE_COMPANY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "recordLegalInvoice.refusal",
+      "value": "amountDiffersFromApproved"
+    },
+    {
+      "observable": "application.legalInvoiceAmountMinor",
+      "value": "unset"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum411ServerSaleEconomics.test.ts",
+    "testName": "a dealer-owned deal refuses an invoice for the approved amount plus the customer's gap"
+  },
+  "matrixRow": "pilot-financed-v3-invoice",
+  "fingerprint": "20efcf4cfcd9cf933411135c17c30d1515c8f74bd28f44aff354cfec913eee46",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum411-server-economics",
+    "firstSeen": "2026-10-14"
+  }
+}

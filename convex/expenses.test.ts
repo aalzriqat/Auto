@@ -30,6 +30,94 @@ async function setup() {
 }
 
 describe("expenses.create", () => {
+  test.each(["foreign", "inactive", "deleted", "wrong currency"] as const)(
+    "refuses a %s physical bank without saving a paid expense",
+    async (condition) => {
+      const { t, orgId, userId, asUser } = await setup();
+      const bankOrgId = condition === "foreign"
+        ? await t.run((ctx) => ctx.db.insert("organizations", { name: "Other bank owner", createdAt: Date.now() }))
+        : orgId;
+      const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+        orgId: bankOrgId, name: "Invalid expense bank",
+        currency: condition === "wrong currency" ? "USD" : "JOD",
+        openingBalanceMinor: 0, openingBalanceDate: Date.now(),
+        isActive: condition !== "inactive", isDeleted: condition === "deleted",
+        isReconciliationTarget: false, createdBy: userId,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      }));
+      await expect(asUser.mutation(api.expenses.create, {
+        idempotencyKey: crypto.randomUUID(), orgId, title: "Invalid bank rent", amount: 25,
+        date: Date.now(), category: "RENT", paymentMethod: "BANK_TRANSFER", bankAccountId,
+      })).rejects.toThrow();
+      await t.run(async (ctx) => {
+        expect(await ctx.db.query("expenses").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+        expect(await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+      });
+    }
+  );
+
+  test("refuses a paid bank expense without a physical bank before writing", async () => {
+    const { t, orgId, asUser } = await setup();
+    await expect(asUser.mutation(api.expenses.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, title: "Bank rent", amount: 25,
+      date: Date.now(), category: "RENT", paymentMethod: "BANK_TRANSFER",
+    })).rejects.toThrow();
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("expenses").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+      expect(await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+    });
+  });
+
+  test.each(["BANK_TRANSFER", "CARD"] as const)(
+    "carries the chosen physical bank into a %s expense and queued posting", async (paymentMethod) => {
+    const { t, orgId, userId, asUser } = await setup();
+    const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId, name: "Expense bank", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, title: "Bank rent", amount: 25,
+      date: Date.now(), category: "RENT", paymentMethod, bankAccountId,
+    });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(expenseId))?.bankAccountId).toBe(bankAccountId);
+      const queued = await ctx.db.query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", `expense_posted_${expenseId}`))
+        .first();
+      expect(queued?.payload).toMatchObject({ bankAccountId: bankAccountId.toString() });
+    });
+    }
+  );
+
+  test("retries the same bank expense once and rejects a changed bank under the same key", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+    const [firstBankId, secondBankId] = await t.run(async (ctx) => {
+      const fields = {
+        orgId, currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: Date.now(),
+        isActive: true, isReconciliationTarget: false, createdBy: userId,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      };
+      return [
+        await ctx.db.insert("bankAccounts", { ...fields, name: "First expense bank" }),
+        await ctx.db.insert("bankAccounts", { ...fields, name: "Second expense bank" }),
+      ];
+    });
+    const idempotencyKey = crypto.randomUUID();
+    const args = {
+      idempotencyKey, orgId, title: "One bank rent", amount: 25,
+      date: Date.now(), category: "RENT" as const,
+      paymentMethod: "BANK_TRANSFER" as const, bankAccountId: firstBankId,
+    };
+    const firstId = await asUser.mutation(api.expenses.create, args);
+    expect(await asUser.mutation(api.expenses.create, args)).toBe(firstId);
+    await expect(asUser.mutation(api.expenses.create, {
+      ...args, bankAccountId: secondBankId,
+    })).rejects.toThrow();
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("expenses").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(1);
+    });
+  });
   test("creates an expense and posts a ledger transaction", async () => {
     const { t, orgId, asUser } = await setup();
     const expenseDate = Date.now();
@@ -186,6 +274,34 @@ describe("expenses.create", () => {
 });
 
 describe("expenses.update", () => {
+  test("PENDING to PAID refuses a missing bank, then retains the chosen bank in the queued event", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, title: "Pending bank rent", amount: 35,
+      date: Date.now(), category: "RENT", status: "PENDING", paymentMethod: "BANK_TRANSFER",
+    });
+    await expect(asUser.mutation(api.expenses.update, {
+      orgId, expenseId, status: "PAID",
+    })).rejects.toThrow();
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(expenseId))?.status).toBe("PENDING");
+      expect(await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+    });
+    const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId, name: "Expense bank", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    await asUser.mutation(api.expenses.update, { orgId, expenseId, status: "PAID", bankAccountId });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(expenseId))?.bankAccountId).toBe(bankAccountId);
+      const queued = await ctx.db.query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", `expense_posted_${expenseId}`))
+        .first();
+      expect(queued?.payload).toMatchObject({ bankAccountId: bankAccountId.toString() });
+    });
+  });
+
   test("marking a PENDING expense PAID records the cash transaction and accounting event", async () => {
     const { t, orgId, asUser } = await setup();
 
@@ -422,13 +538,13 @@ describe("expenses.reverseExpense", () => {
     );
     await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
     const asUser = t.withIdentity({ subject: "rev_user" });
-    return { t, orgId, asUser };
+    return { t, orgId, userId, asUser };
   }
 
   // Full chart of accounts + open period — a "PAID" expense actually posts
   // a real journal entry.
   async function setupFullyPosted() {
-    const { t, orgId, asUser } = await setupPendingOnly();
+    const { t, orgId, userId, asUser } = await setupPendingOnly();
     await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
     const now = Date.now();
     const monthStart = new Date(new Date(now).getFullYear(), new Date(now).getMonth(), 1).getTime();
@@ -441,8 +557,41 @@ describe("expenses.reverseExpense", () => {
       endDate: monthEnd,
       openImmediately: true,
     });
-    return { t, orgId, asUser };
+    return { t, orgId, userId, asUser };
   }
+
+  test("a posted bank expense and its reversal keep the same physical bank", async () => {
+    const { t, orgId, userId, asUser } = await setupFullyPosted();
+    const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId, name: "Disbursement bank", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, title: "Bank-paid rent", amount: 75,
+      date: Date.now(), category: "RENT", paymentMethod: "BANK_TRANSFER", bankAccountId,
+    });
+    await asUser.mutation(api.expenses.reverseExpense, { orgId, expenseId, reason: "Correct payment" });
+    await t.run(async (ctx) => {
+      const events = await ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString()))
+        .collect();
+      const original = events.find((event) => event.eventType === "EXPENSE_POSTED");
+      const reversal = events.find((event) => event.eventType === "JOURNAL_REVERSAL");
+      expect(original?.journalEntryId).toBeDefined();
+      expect(reversal?.journalEntryId).toBeDefined();
+      const originalLines = await ctx.db.query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", original!.journalEntryId!)).collect();
+      const reversalLines = await ctx.db.query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", reversal!.journalEntryId!)).collect();
+      expect(originalLines.filter((line) => line.bankAccountId === bankAccountId)).toEqual([
+        expect.objectContaining({ creditMinor: 75_000 }),
+      ]);
+      expect(reversalLines.filter((line) => line.bankAccountId === bankAccountId)).toEqual([
+        expect.objectContaining({ debitMinor: 75_000 }),
+      ]);
+    });
+  });
 
   test("cancels a queued (not yet actually posted) expense post and removes the expense", async () => {
     const { t, orgId, asUser } = await setupPendingOnly();

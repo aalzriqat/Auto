@@ -1,5 +1,5 @@
 import { MutationCtx } from "../_generated/server";
-import { Id } from "../_generated/dataModel";
+import { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { Permission, PERMISSIONS, isSystemOwnerRole } from "./permissions";
 import { NotificationType, NOTIFICATION_TYPES } from "../../lib/notifications/types";
@@ -131,6 +131,89 @@ export async function notifyUser(
   await dispatch(ctx, orgId, userId, type, data, opts);
 }
 
+/**
+ * The most functions ONE `dispatch` can schedule: email, WhatsApp, web push,
+ * mobile push. convex/crons.ts sizes its transactions from it (how many
+ * recipients a delivery page covers, how many tasks a hop alarms).
+ *
+ * ⚠️ Pinned EQUAL to a recipient with every channel on by notifications.test.ts.
+ * If `dispatch` gains a channel, that test fails and the sizes derived from this
+ * are under-counting until the constant moves.
+ */
+export const DISPATCH_MAX_SCHEDULED = 4;
+
+/**
+ * The managers among `memberships`, in order: members whose role row exists and
+ * holds MANAGE_USERS, minus `excludeUserId`.
+ *
+ * Behaviour is deliberately exactly the predicate `notifyManagers` always had,
+ * including what it does NOT do: it does not skip offboarding members (unlike
+ * `notifyByPermission`), it does not skip a soft-deleted role (only a missing
+ * row), and a user with two qualifying memberships appears twice and so is
+ * notified twice.
+ *
+ * Each distinct role is read once per call however many memberships share it; a
+ * role `get` per membership re-read the same few roles M times.
+ */
+async function selectManagerRecipients(
+  ctx: MutationCtx,
+  memberships: Doc<"memberships">[],
+  excludeUserId?: Id<"users">
+): Promise<Id<"users">[]> {
+  const rolesById = new Map<Id<"roles">, Doc<"roles"> | null>();
+  const recipients: Id<"users">[] = [];
+  for (const membership of memberships) {
+    if (excludeUserId && membership.userId === excludeUserId) continue;
+    if (!rolesById.has(membership.roleId)) {
+      rolesById.set(membership.roleId, await ctx.db.get(membership.roleId));
+    }
+    const role = rolesById.get(membership.roleId);
+    if (!role) continue;
+    if (role.permissions.includes(PERMISSIONS.MANAGE_USERS)) {
+      recipients.push(membership.userId);
+    }
+  }
+  return recipients;
+}
+
+/** Who `notifyManagers` notifies: the managers among ALL the org's memberships. */
+export async function resolveManagerRecipients(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  excludeUserId?: Id<"users">
+): Promise<Id<"users">[]> {
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  return await selectManagerRecipients(ctx, memberships, excludeUserId);
+}
+
+/**
+ * One bounded page of `resolveManagerRecipients`, for a caller that cannot hold a
+ * whole cohort in one transaction. Walking the pages with each page's
+ * `continueCursor` visits every membership exactly once and yields the same
+ * recipients, in the same order, as the unpaged resolver would on an unchanged
+ * org. Unlike one unpaged read it is not a single snapshot: a membership or role
+ * changed between pages is seen as of its own page.
+ */
+export async function resolveManagerRecipientsPage(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  cursor: string | null,
+  numItems: number
+) {
+  const page = await ctx.db
+    .query("memberships")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .paginate({ cursor, numItems });
+  return {
+    recipients: await selectManagerRecipients(ctx, page.page),
+    continueCursor: page.continueCursor,
+    isDone: page.isDone,
+  };
+}
+
 /** Notifies every member holding MANAGE_USERS in the org (managers/owners). */
 export async function notifyManagers(
   ctx: MutationCtx,
@@ -139,18 +222,9 @@ export async function notifyManagers(
   data?: NotificationData,
   opts?: DispatchOpts & { excludeUserId?: Id<"users"> }
 ) {
-  const memberships = await ctx.db
-    .query("memberships")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .collect();
-
-  for (const membership of memberships) {
-    if (opts?.excludeUserId && membership.userId === opts.excludeUserId) continue;
-    const role = await ctx.db.get(membership.roleId);
-    if (!role) continue;
-    if (role.permissions.includes(PERMISSIONS.MANAGE_USERS)) {
-      await dispatch(ctx, orgId, membership.userId, type, data, opts);
-    }
+  const recipients = await resolveManagerRecipients(ctx, orgId, opts?.excludeUserId);
+  for (const userId of recipients) {
+    await dispatch(ctx, orgId, userId, type, data, opts);
   }
 }
 

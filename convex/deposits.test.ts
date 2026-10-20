@@ -80,6 +80,14 @@ async function setup() {
   return { t, orgId, userId, approverId, customerId, vehicleId, asUser, asApprover };
 }
 
+async function makeRefundBank(t: Awaited<ReturnType<typeof setup>>["t"], orgId: Id<"organizations">, userId: Id<"users">) {
+  return t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Deposit refund bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+}
+
 async function makeQuote(t: any, asUser: any, orgId: any, customerId: any, vehicleId: any, leadId?: any) {
   return await asUser.mutation(api.quotes.saveQuote, {
     orgId,
@@ -107,6 +115,44 @@ async function openAccountingPeriod(asUser: any, orgId: any) {
 }
 
 describe("deposits.create", () => {
+  test("a bank-funded deposit requires a physical bank before any receipt is recorded", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+
+    await expect(asUser.mutation(api.deposits.create, {
+      orgId, quoteId, amount: 1500, method: "BANK_TRANSFER", idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(/physical bank/i);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("deposits").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+      expect(await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+      expect(await ctx.db.query("collectionPayments").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+    });
+  });
+
+  test("a bank-funded deposit posts its physical bank on the journal debit", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+    await openAccountingPeriod(asUser, orgId);
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+    const bankAccountId = await makeRefundBank(t, orgId, userId);
+
+    const depositId = await asUser.mutation(api.deposits.create, {
+      orgId, quoteId, amount: 1500, method: "BANK_TRANSFER", bankAccountId, idempotencyKey: crypto.randomUUID(),
+    });
+
+    const events = await asUser.query(api.accountingLedger.listAccountingEvents, {
+      orgId, sourceType: "deposits", sourceId: depositId.toString(),
+    });
+    const received = events.find((event) => event.eventType === "DEPOSIT_RECEIVED");
+    expect(received?.status).toBe("POSTED");
+    await t.run(async (ctx) => {
+      const bankLines = await ctx.db.query("journalLines")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      expect(bankLines.filter((line) => line.bankAccountId === bankAccountId &&
+        line.debitMinor === 1_500_000)).toHaveLength(1);
+    });
+  });
+
   test("rejects OTHER as a deposit method", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
@@ -308,13 +354,14 @@ describe("deposits.release", () => {
   });
 
   test("a BANK_TRANSFER refund credits Bank Account, not Cash on Hand", async () => {
-    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const { t, orgId, userId, customerId, vehicleId, asUser, asApprover } = await setup();
     await openAccountingPeriod(asUser, orgId);
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
+    const bankAccountId = await makeRefundBank(t, orgId, userId);
     await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
-      orgId, depositId, resolution: "REFUNDED", refundMethod: "BANK_TRANSFER",
+      orgId, depositId, resolution: "REFUNDED", refundMethod: "BANK_TRANSFER", bankAccountId,
     });
 
     const bankAccount = await t.run((ctx) =>
@@ -336,17 +383,37 @@ describe("deposits.release", () => {
       ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!)).collect()
     );
     expect(lines.find((l) => l.accountId === bankAccount!._id)?.creditMinor).toBe(1_500_000);
+    expect(lines.find((l) => l.accountId === bankAccount!._id)?.bankAccountId).toBe(bankAccountId);
     expect(lines.some((l) => l.accountId === cashOnHand!._id)).toBe(false);
   });
 
-  test("a PAYMENT_LINK refund credits Bank Account, not Cash on Hand", async () => {
+  test("a bank deposit refund with no physical bank leaves the deposit held and posts nothing", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    await openAccountingPeriod(asUser, orgId);
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, {
+      method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500,
+    });
+    await expect(asApprover.mutation(api.deposits.release, {
+      idempotencyKey: crypto.randomUUID(), orgId, depositId,
+      resolution: "REFUNDED", refundMethod: "BANK_TRANSFER",
+    })).rejects.toThrow(/Select the bank account/i);
+    expect((await t.run((ctx) => ctx.db.get(depositId)))?.status).toBe("HELD");
+    const refundEvents = await t.run((ctx) => ctx.db.query("accountingEvents")
+      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "deposits").eq("sourceId", String(depositId)))
+      .collect());
+    expect(refundEvents.filter((event) => event.eventType === "DEPOSIT_REFUNDED")).toHaveLength(0);
+  });
+
+  test("a PAYMENT_LINK refund credits Bank Account, not Cash on Hand", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser, asApprover } = await setup();
     await openAccountingPeriod(asUser, orgId);
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: 1500 });
 
+    const bankAccountId = await makeRefundBank(t, orgId, userId);
     await asApprover.mutation(api.deposits.release, { idempotencyKey: crypto.randomUUID(),
-      orgId, depositId, resolution: "REFUNDED", refundMethod: "PAYMENT_LINK",
+      orgId, depositId, resolution: "REFUNDED", refundMethod: "PAYMENT_LINK", bankAccountId,
     });
 
     const bankAccount = await t.run((ctx) =>
@@ -367,6 +434,7 @@ describe("deposits.release", () => {
       ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!)).collect()
     );
     expect(lines.find((l) => l.accountId === bankAccount!._id)?.creditMinor).toBe(1_500_000);
+    expect(lines.find((l) => l.accountId === bankAccount!._id)?.bankAccountId).toBe(bankAccountId);
     expect(lines.some((l) => l.accountId === cashOnHand!._id)).toBe(false);
   });
 

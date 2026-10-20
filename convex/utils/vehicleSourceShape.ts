@@ -217,5 +217,6 @@ export const VEHICLE_OWNERSHIP_FIELD_KEYS = [
   "sourceCost",
   "purchasePrice",
   "purchasePaymentMethod",
+  "bankAccountId",
   "purchaseSupplierName",
 ] as const;

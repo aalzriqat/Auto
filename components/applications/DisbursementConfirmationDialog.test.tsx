@@ -202,3 +202,102 @@ describe("opening the dialog after the prefill changed", () => {
     expect((amount as HTMLInputElement).value).toBe("29000");
   });
 });
+
+/**
+ * SCRUM-54: a receipt that reached a bank cannot be confirmed until the
+ * operator names which one; a CASH receipt (no `bank` prop) is unchanged.
+ */
+describe("naming the receiving bank", () => {
+  const base = {
+    open: true,
+    disabled: false,
+    submitting: false,
+    amountLabel: "JD 28,000",
+    t: (key: string) => key,
+    onOpenChange: () => {},
+  };
+  const confirmButton = () => screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement;
+
+  test("the confirm stays disabled until a bank is chosen, even with a single bank on offer", () => {
+    const onConfirm = vi.fn();
+    render(
+      <DisbursementConfirmationDialog
+        {...base}
+        onConfirm={onConfirm}
+        bank={{ options: [{ _id: "bank1", name: "Operating bank", currency: "JOD" }], value: "", onChange: () => {} }}
+      />
+    );
+    expect(screen.getByRole("combobox", { name: "DisbursementBank" })).toBeTruthy();
+    expect(confirmButton().disabled).toBe(true);
+    fireEvent.click(confirmButton());
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  test("a chosen bank enables the confirm", () => {
+    const onConfirm = vi.fn();
+    render(
+      <DisbursementConfirmationDialog
+        {...base}
+        onConfirm={onConfirm}
+        bank={{ options: [{ _id: "bank1", name: "Operating bank", currency: "JOD" }], value: "bank1", onChange: () => {} }}
+      />
+    );
+    expect(confirmButton().disabled).toBe(false);
+    fireEvent.click(confirmButton());
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  test("no eligible bank explains why and keeps the confirm disabled; loading keeps it disabled", () => {
+    const { rerender } = render(
+      <DisbursementConfirmationDialog {...base} onConfirm={() => {}} bank={{ options: [], value: "", onChange: () => {} }} />
+    );
+    expect(screen.getByRole("alert").textContent).toBe("DisbursementNoBank");
+    expect(confirmButton().disabled).toBe(true);
+
+    rerender(
+      <DisbursementConfirmationDialog {...base} onConfirm={() => {}} bank={{ options: undefined, value: "", onChange: () => {} }} />
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(confirmButton().disabled).toBe(true);
+  });
+
+  test("a truncated bank list says so, never 'no bank', and keeps the picker and confirm disabled", () => {
+    const onConfirm = vi.fn();
+    render(
+      <DisbursementConfirmationDialog
+        {...base}
+        onConfirm={onConfirm}
+        bank={{ options: [], value: "", onChange: () => {}, truncated: true }}
+      />
+    );
+    expect(screen.getByRole("alert").textContent).toBe("DisbursementTooManyBanks");
+    expect(screen.queryByText("DisbursementNoBank")).toBeNull();
+    expect((screen.getByRole("combobox", { name: "DisbursementBank" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(confirmButton().disabled).toBe(true);
+    fireEvent.click(confirmButton());
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  test("a missing receivable says so, never 'no bank', and keeps the picker and confirm disabled", () => {
+    const onConfirm = vi.fn();
+    render(
+      <DisbursementConfirmationDialog
+        {...base}
+        onConfirm={onConfirm}
+        bank={{ options: [], value: "", onChange: () => {}, receivableMissing: true }}
+      />
+    );
+    expect(screen.getByRole("alert").textContent).toBe("DisbursementReceivableMissing");
+    expect(screen.queryByText("DisbursementNoBank")).toBeNull();
+    expect((screen.getByRole("combobox", { name: "DisbursementBank" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(confirmButton().disabled).toBe(true);
+    fireEvent.click(confirmButton());
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  test("a CASH receipt shows no bank selector and confirms as before", () => {
+    render(<DisbursementConfirmationDialog {...base} onConfirm={() => {}} />);
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(confirmButton().disabled).toBe(false);
+  });
+});

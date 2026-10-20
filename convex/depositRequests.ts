@@ -220,6 +220,7 @@ export const confirm = mutation({
     amount: v.number(),
     /** Required, no default: it picks the account the money is debited to. */
     method: v.optional(depositMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -240,6 +241,7 @@ export const confirm = mutation({
           requestId: args.requestId,
           amount: args.amount,
           method,
+          bankAccountId: args.bankAccountId ?? null,
         }),
       },
       // ⚠️ THE IDEMPOTENCY WRAP IS OUTSIDE EVERY STATE CHECK BELOW. A retry
@@ -314,6 +316,7 @@ export const confirm = mutation({
           amountMinor: row.amountMinor,
           currency,
           method,
+          bankAccountId: args.bankAccountId,
           notes: row.note,
           idempotencyKey: args.idempotencyKey,
           actorId: user._id,

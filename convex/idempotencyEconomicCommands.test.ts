@@ -430,9 +430,12 @@ const REQUIRED_FINGERPRINT_FIELDS: Array<[string, string, string[]]> = [
   ["convex/payroll.ts", "payroll.recordAdvance", ["method"]],
   // Selects the credit account (cash on hand vs bank) a direct handover payment leaves.
   // …and the amount the approver SAW: the same key for another figure is another intent.
-  ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor"]],
+  // SCRUM-54: …and the physical bank a bank-method payment left.
+  ["convex/financeDealCosts.ts", "financeDealCosts.recordDirectFeePayment", ["method", "expectedAmountMinor", "bankAccountId"]],
   // SCRUM-435: how the forward was paid selects the account it leaves, and the amount the payer saw is pinned.
-  ["convex/financeCompanyForward.ts", "financeCompanyForward.recordFinanceCompanyForward", ["method", "expectedAmountMinor"]],
+  ["convex/financeCompanyForward.ts", "financeCompanyForward.recordFinanceCompanyForward", ["method", "bankAccountId", "expectedAmountMinor"]],
+  ["convex/partnerEquity.ts", "partnerEquity.add", ["paymentMethod", "bankAccountId"]],
+  ["convex/partnerEquity.ts", "partnerEquity.recordEquityMovement", ["paymentMethod", "bankAccountId"]],
 ];
 
 describe("SCRUM-57 — fields whose omission was a reproduced defect stay hashed", () => {
@@ -535,6 +538,9 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   // SCRUM-444: `request` writes no money but carries an identity and a canonical
   // fingerprint like every deposit door; `confirm` is the money-moving one.
   "./depositRequests": ["request", "confirm"],
+  // SCRUM-724: standalone refund of customer credit left by a cheque that cleared
+  // after its sale was cancelled. Both doors carry a fingerprinted identity.
+  "./retainedCreditRefunds": ["respondToRetainedCreditRefund", "executeRetainedCreditRefund"],
   // ADDED by the SCRUM-313 CENSUS (owner ruling: scope A, mechanism C). These six
   // were outside the SCRUM-57 manifest because that manifest reasoned about
   // `runWithIdempotency` callers, which was only ever a SUBSET of the commands
@@ -547,6 +553,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   "./workOrders": ["create"],
   "./expenses": ["create"],
   "./financeCompanyForward": ["recordFinanceCompanyForward", "reverseFinanceCompanyForward", "reportFinanceCompanyForwardReturned"],
+  "./customerFinanceCompanyPayments": ["confirmPayment"],
   "./dealUnwind": ["startDealUnwind", "recordDealUnwindForwardReturn", "finishDealUnwind", "abandonDealUnwind"],
   "./financeDealCosts": [
     "recordDealFee",
@@ -641,7 +648,9 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 45 -> 48 by SCRUM-435: the three finance-company forward commands.
     // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
     // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
-    expect(checked).toBe(54);
+    // 54 -> 56: SCRUM-724's retainedCreditRefunds respond + execute.
+    // 56 -> 57: SCRUM-766 PR-B's `customerFinanceCompanyPayments.confirmPayment`.
+    expect(checked).toBe(57);
   });
 
   /**
@@ -707,9 +716,10 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 44 -> 45 / 45 -> 46: SCRUM-443's `financeDealCosts.recordDirectFeePayment`.
     // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
     // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
-    expect(economicInSource.size).toBe(54);
+    // 56 -> 57: SCRUM-766 PR-B's `customerFinanceCompanyPayments.confirmPayment`.
+    expect(economicInSource.size).toBe(57);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(55);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(58);
   });
 
   /**

@@ -5,10 +5,21 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { fromMinorUnits } from "./utils/money";
-import { isCashOutExpense, isShowroomBorne } from "./utils/costBearer";
+import {
+  DAY_MS,
+  ExactSum,
+  expenseFlags,
+  latestSummaryState,
+  readSummaryDays,
+  utcMidnight,
+  type ExpenseDayBucket,
+  type SummaryState,
+} from "./utils/dashboardExpenseSummary";
 import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
 import {
   recordedConsignedMargin,
+  recordedFinancedConsideration,
+  recordedFinancedNetRevenue,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
   saleEconomics,
@@ -94,6 +105,149 @@ function exactCustomerKey(hasPhone: number, hasEmail: number) {
     lower: { key, inclusive: true as const },
     upper: { key, inclusive: true as const },
   };
+}
+
+/**
+ * Hard-bounded, index-only reads for the rows `stats` totals.
+ *
+ * A `.filter()` after `.withIndex()` does not bound a read: `.take(n)` stops
+ * after n rows that PASS the filter, but every document the filter rejects is
+ * still scanned and billed, and a range holding many deleted, reversed or
+ * non-sale rows scans past the platform's read limit before it ever reaches n.
+ * So every exclusion below is part of the index and none is a filter.
+ *
+ * For expenses and transactions `isDeleted` is an optional boolean, and a live
+ * row holds `undefined` or `false` (legacy or restored rows). An index range
+ * names one value, so each of those reads is two ranges: the `undefined` range
+ * up to `limit`, then the `false` range for only what is left of `limit`. The
+ * result is min(live count, limit) rows - complete when the live count is
+ * within `limit`, and exactly `limit` rows (which the caller treats as over its
+ * cap) otherwise. At most `limit` documents are ever read.
+ */
+async function takeLiveRows<T extends { date: number }>(
+  limit: number,
+  read: (deleted: boolean | undefined, limit: number) => Promise<T[]>
+): Promise<T[]> {
+  const unflagged = await read(undefined, limit);
+  if (unflagged.length >= limit) return unflagged;
+  const restored = await read(false, limit - unflagged.length);
+  if (restored.length === 0) return unflagged;
+  return [...unflagged, ...restored].sort((a, b) => a.date - b.date);
+}
+
+async function readLiveCompletedSales(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  from: number | undefined,
+  until: number | undefined,
+  limit: number
+): Promise<Doc<"sales">[]> {
+  // Sales are the exception: their schema only allows `isDeleted: true` (a
+  // live sale never holds `false`), so one `undefined` range is the whole set.
+  return await ctx.db
+    .query("sales")
+    .withIndex("by_org_status_live_saleDate", (q) => {
+      const live = q.eq("orgId", orgId).eq("status", "COMPLETED").eq("isDeleted", undefined);
+      if (from === undefined) return live;
+      const lower = live.gte("saleDate", from);
+      return until === undefined ? lower : lower.lt("saleDate", until);
+    })
+    .take(limit);
+}
+
+/** Live, unreversed expenses; `from` undefined means the org's whole history. */
+async function readLiveExpenses(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  from: number | undefined,
+  until: number | undefined,
+  limit: number
+): Promise<Doc<"expenses">[]> {
+  return await takeLiveRows(limit, (deleted, take) =>
+    ctx.db
+      .query("expenses")
+      .withIndex("by_org_deleted_reversedAt_date", (q) => {
+        const live = q.eq("orgId", orgId).eq("isDeleted", deleted).eq("reversedAt", undefined);
+        if (from === undefined) return live;
+        const lower = live.gte("date", from);
+        return until === undefined ? lower : lower.lt("date", until);
+      })
+      .take(take)
+  );
+}
+
+type ExpenseWindow = {
+  /** A raw part of the window exceeded its cap: every expense figure is withheld. */
+  overCap: boolean;
+  /** Raw rows: the partial UTC days at the window's edges, or the whole window. */
+  rows: Doc<"expenses">[];
+  /** Whole UTC days from the month summary. */
+  days: ExpenseDayBucket[];
+};
+
+/**
+ * SCRUM-807: live expenses in [from, until), as raw rows and summary days.
+ *
+ * With a READY summary (and `useSummary`), whole UTC days come from the month
+ * rows and only the partial day at each rolling edge is read raw, each part
+ * capped at `limit` — so the window has no row cap beyond a single day. The
+ * cutoff is never rounded. Without one, or when the summary refuses a month
+ * (an amount it cannot hold exactly), this is today's capped raw read.
+ */
+async function readExpenseWindow(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  summary: SummaryState | null,
+  useSummary: boolean,
+  from: number | undefined,
+  until: number | undefined,
+  limit: number
+): Promise<ExpenseWindow> {
+  const raw = async (lo: number | undefined, hi: number | undefined) => {
+    const rows = await readLiveExpenses(ctx, orgId, lo, hi, limit + 1);
+    return { overCap: rows.length > limit, rows: rows.length > limit ? [] : rows };
+  };
+  const whole = async (): Promise<ExpenseWindow> => ({ ...(await raw(from, until)), days: [] });
+  if (!useSummary || summary?.phase !== "READY") return await whole();
+
+  // Whole days are [fromDay, untilDay); the edges outside them are read raw.
+  const fromDay = from === undefined ? undefined : from % DAY_MS === 0 ? from : utcMidnight(from) + DAY_MS;
+  const untilDay = until === undefined ? undefined : utcMidnight(until);
+  if (fromDay !== undefined && untilDay !== undefined && untilDay <= fromDay) return await whole();
+
+  const days = await readSummaryDays(ctx, summary, fromDay, untilDay);
+  if (days === null) return await whole();
+  const head = from !== undefined && fromDay !== from ? await raw(from, fromDay) : null;
+  const tail = until !== undefined && untilDay !== until ? await raw(untilDay, until) : null;
+  const overCap = (head?.overCap ?? false) || (tail?.overCap ?? false);
+  return overCap
+    ? { overCap, rows: [], days: [] }
+    : { overCap, rows: [...(head?.rows ?? []), ...(tail?.rows ?? [])], days };
+}
+
+/** Live VEHICLE_SALE inflows; `from` undefined means the org's whole history. */
+async function readLiveSaleTransactions(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  from: number | undefined,
+  until: number | undefined,
+  limit: number
+): Promise<Doc<"transactions">[]> {
+  return await takeLiveRows(limit, (deleted, take) =>
+    ctx.db
+      .query("transactions")
+      .withIndex("by_org_category_type_deleted_date", (q) => {
+        const live = q
+          .eq("orgId", orgId)
+          .eq("category", "VEHICLE_SALE")
+          .eq("type", "IN")
+          .eq("isDeleted", deleted);
+        if (from === undefined) return live;
+        const lower = live.gte("date", from);
+        return until === undefined ? lower : lower.lt("date", until);
+      })
+      .take(take)
+  );
 }
 
 /**
@@ -242,39 +396,18 @@ export const stats = query({
     ) as Record<(typeof activeStages)[number], number>;
 
     // 4. Sales this period
-    //
-    // `periodSalesWasCapped` records what the read actually DID, rather than
-    // re-deriving it from the branch predicate further down. Those are not the
-    // same thing: a later change that caps the dated branch, or that moves the
-    // `filterStart > 0` boundary, would leave a derived flag still claiming the
-    // read was complete and `truncated.sales` reporting a false negative.
     const SALES_CAP = 5000;
-    let periodSales: Doc<"sales">[] = [];
-    let periodSalesWasCapped = false;
-    if (canViewSalesMetrics) {
-      if (filterStart > 0) {
-        periodSales = await ctx.db
-          .query("sales")
-          .withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId).gte("saleDate", filterStart))
-          .filter(q => q.and(
-            q.eq(q.field("status"), "COMPLETED"),
-            q.neq(q.field("isDeleted"), true)
-          ))
-          .collect();
-      } else {
-        periodSales = await ctx.db
-          .query("sales")
-          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-          .filter(q => q.and(
-            q.eq(q.field("status"), "COMPLETED"),
-            q.neq(q.field("isDeleted"), true)
-          ))
-          .take(SALES_CAP);
-        periodSalesWasCapped = true;
-      }
-    }
-
-    const activeSales = periodSales;
+    // ALL_TIME has no lower bound.
+    const windowFrom = filterStart > 0 ? filterStart : undefined;
+    // Every window, ALL_TIME included, is hard-bounded at SALES_CAP + 1 rows. The extra row is
+    // the proof that more exist: a window holding exactly SALES_CAP rows is
+    // complete and is published, one holding more is UNAVAILABLE - every
+    // figure that sums sale rows is withheld below rather than totalled from a
+    // prefix, because an index range returns its oldest rows first and a
+    // prefix of the window is not the window.
+    const windowSales = canViewSalesMetrics
+      ? await readLiveCompletedSales(ctx, args.orgId, windowFrom, undefined, SALES_CAP + 1)
+      : [];
 
     // The `VEHICLE_SALE` ledger is a fallback for a period that recorded no
     // sale rows at all: every consumer below (`grossTransactionValue`,
@@ -282,38 +415,22 @@ export const stats = query({
     // path whenever `activeSales` is non-empty and ignores this result
     // entirely. Issuing the range query regardless bought an index range plus
     // the documents behind it on every dashboard load of every org that has
-    // ever recorded a sale, and then threw the answer away.
+    // ever recorded a sale, and then threw the answer away. It also means a
+    // ledger past the cap cannot flag sales figures that never read it.
     //
-    // One behavioural consequence, and it is a correction rather than a
-    // regression: `salesTruncated` below ORs the two lengths, so a period that
-    // had sales AND a ledger that happened to hit the 5,000 cap used to report
-    // the sales figures as truncated. Those figures came from `activeSales`,
-    // which was not truncated — the flag was a false positive about a dataset
-    // that contributed nothing. With the query skipped, the OR collapses to
-    // the `activeSales` term, which is the only one that was ever load-bearing
-    // on that path.
-    const transactionCandidates: Doc<"transactions">[] = canViewSalesMetrics && activeSales.length === 0
-      ? filterStart > 0
-          ? await ctx.db
-            .query("transactions")
-            .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
-            .filter(q => q.and(
-              q.eq(q.field("category"), "VEHICLE_SALE"),
-              q.eq(q.field("type"), "IN"),
-              q.neq(q.field("isDeleted"), true)
-            ))
-            .take(5000)
-          : await ctx.db
-            .query("transactions")
-            .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
-            .filter(q => q.and(
-              q.eq(q.field("category"), "VEHICLE_SALE"),
-              q.eq(q.field("type"), "IN"),
-              q.neq(q.field("isDeleted"), true)
-            ))
-            .take(5000)
+    // Bounded the same way as the sale rows: SALES_CAP + 1 proves overflow. A
+    // ledger that is the authoritative source (no sale rows) and exceeds the
+    // cap is UNAVAILABLE exactly like an over-cap sale window - it sets
+    // `periodSalesOverCap`, so every figure built from it is withheld below
+    // rather than published from a prefix. Read once, here, and only when the
+    // sale rows did not already settle the window.
+    const fallbackRead = canViewSalesMetrics && windowSales.length === 0
+      ? await readLiveSaleTransactions(ctx, args.orgId, windowFrom, undefined, SALES_CAP + 1)
       : [];
-    const saleTransactions = transactionCandidates;
+    const periodSalesOverCap = windowSales.length > SALES_CAP || fallbackRead.length > SALES_CAP;
+    // Nothing downstream may total or cost rows from an unavailable window.
+    const activeSales = periodSalesOverCap ? [] : windowSales;
+    const saleTransactions = periodSalesOverCap ? [] : fallbackRead;
 
     // Gross transaction value: what the dealership handled, agent deals at full
     // ticket. Turnover is computed further down, once the consigned vehicles are
@@ -329,18 +446,10 @@ export const stats = query({
         );
     const salesCount = activeSales.length > 0 ? activeSales.length : saleTransactions.length;
     // Truncation is a property of the READ that produced the figures, not of a
-    // row count. DAY/MONTH/YEAR read `periodSales` with `.collect()`, which
-    // returns the complete range - exactly SALES_CAP rows there means the
-    // period genuinely had that many, not that anything was dropped, and the
-    // old OR declared a truncation that had not happened. Only the ALL_TIME
-    // branch reads `.take(SALES_CAP)` and can stop silently at the cap.
-    //
-    // The fallback ledger always reads `.take(SALES_CAP)`, so it is truncated
-    // at the cap - but only while it is the authoritative source, which is
-    // exactly when `activeSales` is empty.
-    const salesTruncated = activeSales.length > 0
-      ? periodSalesWasCapped && activeSales.length === SALES_CAP
-      : saleTransactions.length === SALES_CAP;
+    // row count. Both the sale rows and the fallback ledger prove overflow with
+    // their extra row (`periodSalesOverCap`): exactly SALES_CAP rows is a
+    // complete window, and nothing is ever published from a prefix.
+    const salesTruncated = periodSalesOverCap;
 
     const getChartKey = (dateTs: number) => {
       const d = new Date(dateTs);
@@ -364,55 +473,68 @@ export const stats = query({
     // Without it, deleting an expense left it inflating this org's costs and
     // deflating its profit on the dashboard forever, while the reports it is
     // meant to summarize showed the corrected figure.
-    let allExpenses: Doc<"expenses">[] = [];
-    if (canViewCostMetrics) {
-      if (filterStart > 0) {
-        allExpenses = await ctx.db
-          .query("expenses")
-          .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
-          .filter((q) => q.and(q.neq(q.field("isDeleted"), true), q.eq(q.field("reversedAt"), undefined)))
-          .collect();
-      } else {
-        allExpenses = await ctx.db
-          .query("expenses")
-          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-          .filter((q) => q.and(q.neq(q.field("isDeleted"), true), q.eq(q.field("reversedAt"), undefined)))
-          .take(5000);
-      }
-    }
+    //
+    // Hard-bounded at EXPENSES_CAP + 1 in every window. Exactly EXPENSES_CAP
+    // live rows is a complete read; one more is UNAVAILABLE, and every figure
+    // that sums expenses (Expenses, CashOut and the expense term of Profit on
+    // the trend, plus the comparison deltas) is withheld rather than totalled
+    // from a prefix. Deleted and reversed rows never count towards the cap.
+    //
+    // SCRUM-807: MONTH, YEAR and ALL_TIME read whole UTC days from the expense
+    // month summary when the org's summary is READY, so only the partial day
+    // at the cutoff counts towards the cap. DAY stays a raw read: its labels
+    // are hours. Sums are exact thousandths (`ExactSum`) on both paths.
+    const EXPENSES_CAP = 5000;
+    const expenseSummary = canViewCostMetrics ? await latestSummaryState(ctx, args.orgId) : null;
+    const expenseWindow = canViewCostMetrics
+      ? await readExpenseWindow(
+        ctx, args.orgId, expenseSummary, args.timeRange !== "DAY", windowFrom, undefined, EXPENSES_CAP
+      )
+      : { overCap: false, rows: [], days: [] };
+    const expensesOverCap = expenseWindow.overCap;
 
-    const generalExpensesByMonth: Record<string, number> = {};
-    const totalExpensesByMonth: Record<string, number> = {};
+    const generalSums: Record<string, ExactSum> = {};
+    const totalSums: Record<string, ExactSum> = {};
     // SCRUM-389: what left the till, whoever bears it. A supplier-borne cost is
     // cash out but a receivable, not a showroom expense, so it is shown here and
     // kept out of `Expenses` and of profit below.
-    const cashOutByMonth: Record<string, number> = {};
+    const cashOutSums: Record<string, ExactSum> = {};
+    const sumAt = (sums: Record<string, ExactSum>, key: string) => (sums[key] ??= new ExactSum());
 
-    for (const exp of allExpenses) {
+    for (const exp of expenseWindow.rows) {
 
       const key = getChartKey(exp.date);
-
-      if (canViewCostMetrics && isCashOutExpense(exp)) {
-        cashOutByMonth[key] = (cashOutByMonth[key] || 0) + exp.amount;
-      }
-
-      if (!isShowroomBorne(exp)) continue;
-
-      if (canViewCostMetrics) {
-        totalExpensesByMonth[key] = (totalExpensesByMonth[key] || 0) + exp.amount;
-      }
-
-      if (!canViewProfitMetrics) continue;
-
+      // The same three predicates the summary stores, so the paths agree.
       // A reconditioning expense that was capitalized into Vehicle Inventory is
       // already inside the vehicle's cost basis below. Deducting it here as well
       // would charge it to profit twice. Everything else — operating costs, and
       // vehicle-linked costs that were expensed rather than capitalized, such as
       // marketing on a specific car — is a period expense and belongs here.
-      if (exp.vehicleId && exp.accountingTreatment === "CAPITALIZED_INVENTORY") continue;
+      const flags = expenseFlags(exp);
 
-      generalExpensesByMonth[key] = (generalExpensesByMonth[key] || 0) + exp.amount;
+      if (canViewCostMetrics && flags.cashOut) sumAt(cashOutSums, key).addAmount(exp.amount);
+      if (!flags.showroom) continue;
+      if (canViewCostMetrics) sumAt(totalSums, key).addAmount(exp.amount);
+      if (!canViewProfitMetrics || !flags.general) continue;
+      sumAt(generalSums, key).addAmount(exp.amount);
     }
+    for (const day of expenseWindow.days) {
+      // A UTC midnight labels exactly as every row of that UTC day would.
+      const key = getChartKey(day.day);
+      if (canViewCostMetrics && (day.cashOut !== 0 || day.showroomCount > 0)) {
+        sumAt(cashOutSums, key).addThousandths(day.cashOut);
+      }
+      // A label exists when a showroom-borne row maps to it, even at zero.
+      // General rows are a subset of showroom rows, so they add no label.
+      if (day.showroomCount === 0) continue;
+      if (canViewCostMetrics) sumAt(totalSums, key).addThousandths(day.showroom);
+      if (canViewProfitMetrics) sumAt(generalSums, key).addThousandths(day.general);
+    }
+    const settle = (sums: Record<string, ExactSum>) =>
+      Object.fromEntries(Object.entries(sums).map(([key, sum]) => [key, sum.value()])) as Record<string, number>;
+    const generalExpensesByMonth = settle(generalSums);
+    const totalExpensesByMonth = settle(totalSums);
+    const cashOutByMonth = settle(cashOutSums);
 
     // Cost basis for the profit line. This used to be
     // `vehicle.purchasePrice + <every expense logged against the vehicle>`,
@@ -487,9 +609,8 @@ export const stats = query({
     const TURNOVER_BASIS_CAP = 2_000;
     type UncostedBasis = { consigned: false } | { consigned: true; supplierCost: number };
     const uncostedBasisByVehicle = new Map<string, UncostedBasis>();
-    // Explicitly bounded. `periodSales` uses `.collect()` on every dated
-    // window, so `soldVehicleIds` has no ceiling of its own, and an unbounded
-    // fan-out of whole vehicle documents on a live subscription does not
+    // Explicitly bounded. `soldVehicleIds` can hold up to SALES_CAP vehicles,
+    // and an unbounded fan-out of whole vehicle documents on a live subscription does not
     // shorten a number — it exceeds the read limit and the dashboard goes
     // blank. Past this cap the sales stay excluded and `turnoverTruncated`
     // says so.
@@ -591,6 +712,9 @@ export const stats = query({
      * query already knows whether the row was consigned. Re-reading the document
      * would double the query's cost for a value it is already holding.
      */
+    // The currency a frozen sale figure must be in to be published; a frozen net
+    // revenue in any other currency is withheld, not converted.
+    const { currency: orgCurrency } = await getOrgTimezoneAndCurrency(ctx, args.orgId);
     const economicsGiven =
       (
         basisOf: (sale: Doc<"sales">) => WindowVehicleBasis,
@@ -612,8 +736,10 @@ export const stats = query({
           capitalizedCost: basis.known && basis.cost !== null ? basis.cost : 0,
           supplierSettlementRoute: sale.supplierSettlementRoute,
           recordedMargin: recordedConsignedMargin(sale),
+          recordedNetRevenue: recordedFinancedNetRevenue(sale, orgCurrency),
           recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
           recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+          recordedConsideration: recordedFinancedConsideration(sale),
           hasFinancingApplication: verifiedFinancing.has(sale._id),
           externallyFinanced:
             sale.financingType === "FINANCED" || sale.financingType === "LEASE",
@@ -790,12 +916,24 @@ export const stats = query({
       ...Object.keys(totalExpensesByMonth)
     ]));
 
-    const salesTrend = allMonths.map(key => ({
+    // A figure whose source window exceeded its cap is `null` - unavailable -
+    // never a zero or a prefix total. Only the viewer's own permitted figures
+    // can be unavailable: the overflow flags are false when the caller cannot
+    // read that source at all, so everything else keeps its existing value.
+    // Profit needs BOTH sources (sales economics less expenses).
+    const profitUnavailable = canViewProfitMetrics && (periodSalesOverCap || expensesOverCap);
+    const salesTrend = allMonths.map((key): {
+      name: string;
+      Revenue: number | null;
+      Profit: number | null;
+      Expenses: number | null;
+      CashOut: number | null;
+    } => ({
       name: key,
-      Revenue: monthlySales[key] || 0,
-      Profit: monthlyProfits[key] || 0,
-      Expenses: totalExpensesByMonth[key] || 0,
-      CashOut: cashOutByMonth[key] || 0,
+      Revenue: periodSalesOverCap ? null : monthlySales[key] || 0,
+      Profit: profitUnavailable ? null : monthlyProfits[key] || 0,
+      Expenses: expensesOverCap ? null : totalExpensesByMonth[key] || 0,
+      CashOut: expensesOverCap ? null : cashOutByMonth[key] || 0,
     })).sort((a, b) => {
       // Very basic sort by trying to parse date. In production, we'd use ISO strings for sorting.
       return new Date(a.name).getTime() - new Date(b.name).getTime();
@@ -967,41 +1105,45 @@ export const stats = query({
     // permission passes in that state, so the client renders the delta as
     // confidently as a correct one. A dealer coming off a quiet month is the
     // case this comparison exists for.
-    const previousSales = comparesPeriods && canViewSalesMetrics
-      ? await ctx.db
-        .query("sales")
-        .withIndex("by_org_saleDate", (q) =>
-          q.eq("orgId", args.orgId).gte("saleDate", previousStart).lt("saleDate", filterStart))
-        .filter(q => q.and(
-          q.eq(q.field("status"), "COMPLETED"),
-          q.neq(q.field("isDeleted"), true)
-        ))
-        .take(PREVIOUS_PERIOD_CAP)
+    //
+    // Each previous-window read is hard-bounded at PREVIOUS_PERIOD_CAP + 1. The
+    // extra row separates a window holding exactly the cap (complete) from one
+    // holding more (unavailable). Over the cap, every row of that read is
+    // discarded, never cut back to a prefix: sale rows are costed and feed
+    // published flags, and ledger and expense rows feed deltas that are
+    // withheld.
+    //
+    // A previous read is skipped when the current window it would be compared
+    // against is itself unavailable: every figure it feeds is then withheld,
+    // and every flag it could raise is already raised.
+    const previousSalesRead = comparesPeriods && canViewSalesMetrics && !periodSalesOverCap
+      ? await readLiveCompletedSales(ctx, args.orgId, previousStart, filterStart, PREVIOUS_PERIOD_CAP + 1)
       : [];
+    //
+    // An over-cap previous read FAILS CLOSED before anything is derived from
+    // it: its rows are discarded, so no vehicle costing, financing lookup,
+    // reduction or ledger fallback runs for a figure that is withheld anyway.
+    // The over-cap flag, taken from the raw read, is what withholds it.
+    const previousSalesOverCap = previousSalesRead.length > PREVIOUS_PERIOD_CAP;
+    const previousSales = previousSalesOverCap ? [] : previousSalesRead;
 
+    // The ledger fallback is for a window with NO sale rows. An over-cap sale
+    // window has plenty - it is unavailable, not empty - so it never falls back.
     const previousUsesSaleRows = previousSales.length > 0;
 
-    const previousSaleTransactions = comparesPeriods && canViewSalesMetrics && !previousUsesSaleRows
-      ? await ctx.db
-        .query("transactions")
-        .withIndex("by_org_date", (q) =>
-          q.eq("orgId", args.orgId).gte("date", previousStart).lt("date", filterStart))
-        .filter(q => q.and(
-          q.eq(q.field("category"), "VEHICLE_SALE"),
-          q.eq(q.field("type"), "IN"),
-          q.neq(q.field("isDeleted"), true)
-        ))
-        .take(PREVIOUS_PERIOD_CAP)
-      : [];
+    const previousSaleTransactionsRead =
+      comparesPeriods && canViewSalesMetrics && !periodSalesOverCap && !previousUsesSaleRows && !previousSalesOverCap
+        ? await readLiveSaleTransactions(ctx, args.orgId, previousStart, filterStart, PREVIOUS_PERIOD_CAP + 1)
+        : [];
+    const previousTransactionsOverCap = previousSaleTransactionsRead.length > PREVIOUS_PERIOD_CAP;
+    const previousSaleTransactions = previousTransactionsOverCap ? [] : previousSaleTransactionsRead;
 
-    const previousExpenses = comparesPeriods && canViewCostMetrics
-      ? await ctx.db
-        .query("expenses")
-        .withIndex("by_org_date", (q) =>
-          q.eq("orgId", args.orgId).gte("date", previousStart).lt("date", filterStart))
-        .filter((q) => q.and(q.neq(q.field("isDeleted"), true), q.eq(q.field("reversedAt"), undefined)))
-        .take(PREVIOUS_PERIOD_CAP)
-      : [];
+    const previousExpenseWindow = comparesPeriods && canViewCostMetrics && !expensesOverCap
+      ? await readExpenseWindow(
+        ctx, args.orgId, expenseSummary, args.timeRange !== "DAY", previousStart, filterStart, PREVIOUS_PERIOD_CAP
+      )
+      : { overCap: false, rows: [], days: [] };
+    const previousExpensesTruncated = previousExpenseWindow.overCap;
 
     // Turnover for the comparison window needs the same consigned split, so the
     // previous window's vehicles are costed here rather than inside the
@@ -1106,17 +1248,22 @@ export const stats = query({
 
     // SCRUM-389: the same showroom-borne predicate as the current window, so
     // the delta is never taken across two different bases.
-    const previousShowroomExpenses = previousExpenses.filter(isShowroomBorne);
-    const previousTotalExpenses = previousShowroomExpenses.reduce((acc, exp) => acc + exp.amount, 0);
-
     // Same split the current period makes: a reconditioning expense already
     // capitalized into a vehicle's cost basis is not a period expense, and
     // deducting it here too would charge it to profit twice.
-    const previousGeneralExpenses = previousShowroomExpenses.reduce(
-      (acc, exp) =>
-        exp.vehicleId && exp.accountingTreatment === "CAPITALIZED_INVENTORY" ? acc : acc + exp.amount,
-      0,
-    );
+    const previousTotalSum = new ExactSum();
+    const previousGeneralSum = new ExactSum();
+    for (const exp of previousExpenseWindow.rows) {
+      const flags = expenseFlags(exp);
+      if (flags.showroom) previousTotalSum.addAmount(exp.amount);
+      if (flags.general) previousGeneralSum.addAmount(exp.amount);
+    }
+    for (const day of previousExpenseWindow.days) {
+      previousTotalSum.addThousandths(day.showroom);
+      previousGeneralSum.addThousandths(day.general);
+    }
+    const previousTotalExpenses = previousTotalSum.value();
+    const previousGeneralExpenses = previousGeneralSum.value();
 
     // Still counted, because `previousProfitTruncated` is a statement about how
     // many DISTINCT vehicles this window sold — not about anything that gets
@@ -1164,10 +1311,7 @@ export const stats = query({
       }
     }
 
-    const previousSalesTruncated =
-      previousSales.length === PREVIOUS_PERIOD_CAP ||
-      previousSaleTransactions.length === PREVIOUS_PERIOD_CAP;
-    const previousExpensesTruncated = previousExpenses.length === PREVIOUS_PERIOD_CAP;
+    const previousSalesTruncated = previousSalesOverCap || previousTransactionsOverCap;
 
     // A truncated total on EITHER side of the division yields a confidently
     // wrong percentage, and a dealer has no way to tell that from a real one.
@@ -1191,13 +1335,16 @@ export const stats = query({
             ? previousSalesVolume
             : undefined,
         expenses:
-          canViewCostMetrics && !previousExpensesTruncated ? previousTotalExpenses : undefined,
+          canViewCostMetrics && !previousExpensesTruncated && !expensesOverCap
+            ? previousTotalExpenses
+            : undefined,
         netProfit:
           canViewProfitMetrics &&
             // The value this response actually publishes as `truncated.profit`,
             // not the raw cap flag. Gating on the raw flag divided a numerator
             // that excluded unknown rows by a denominator that did not.
             !profitIncomplete &&
+            !profitUnavailable &&
             !previousProfitTruncated &&
             !marginUnknownEitherSide &&
             !previousSalesTruncated &&
@@ -1215,17 +1362,18 @@ export const stats = query({
       activeLeads,
       totalLeads: liveLeads,
       leadsByStage,
-      salesThisMonth: salesCount,
+      // `null` = unavailable (the dated sale window exceeded its cap), never 0.
+      salesThisMonth: periodSalesOverCap ? null : salesCount,
       // Accounting turnover: agent-sale gross is excluded, so this agrees with
       // getSalesAndProfitReport and getProfitAndLoss on the same period —
       // unless `salesVolumeBasis` says GROSS_TRANSACTION_VALUE, which is what a
       // viewer without profit permission gets, because the agent basis would
       // disclose the margin they are not permitted to see.
-      salesVolumeThisMonth: salesVolume,
+      salesVolumeThisMonth: periodSalesOverCap ? null : salesVolume,
       salesVolumeBasis,
       // The deal volume actually handled, agent sales at full ticket. An
       // operational KPI, explicitly separate from turnover.
-      grossTransactionValueThisMonth: grossTransactionValue,
+      grossTransactionValueThisMonth: periodSalesOverCap ? null : grossTransactionValue,
       teamMembers,
       salesTrend,
       previousPeriod,
@@ -1242,7 +1390,12 @@ export const stats = query({
         // established. The comparison window counts — when its earnings cannot
         // be established the delta is withheld, and a consumer shown no delta
         // and no flag has no way to tell that from a period that did not move.
-        profit: profitIncomplete || previousUnknownMarginExcluded,
+        profit: profitIncomplete || previousUnknownMarginExcluded || profitUnavailable,
+        // The current window's expense read exceeded its cap: Expenses, CashOut
+        // and Profit on the trend are `null` (unavailable) and the expense and
+        // net-profit deltas are withheld. The web and mobile dashboards read
+        // this to show an explicit "unavailable" marker instead of a zero.
+        expenses: expensesOverCap,
         // Sales whose vehicle fell past the costing cap are left OUT of
         // turnover rather than folded in at gross, so the figure is short
         // rather than on two bases at once.
@@ -1259,12 +1412,13 @@ export const stats = query({
           turnoverTruncated ||
           previousTurnoverTruncated ||
           unknownMarginExcluded ||
-          previousUnknownMarginExcluded,
+          previousUnknownMarginExcluded ||
+          periodSalesOverCap,
         // Salespeople left out of the ranking because their earnings are not
         // fully known. The winner shown is the best COMPLETE record, which is a
         // true statement — but only if the consumer can tell it was drawn from
         // a shortened field.
-        topPerformer: topPerformerIncomplete,
+        topPerformer: topPerformerIncomplete || periodSalesOverCap,
       },
       taskStats: {
         total: totalTasks,

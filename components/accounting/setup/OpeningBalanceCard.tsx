@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "@/convex/utils/money";
-import { errorMessage } from "../AccountingTabShared";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { accountDisplayName } from "../reports/FinancialReportShared";
 
 /**
@@ -49,6 +49,8 @@ type DraftLine = {
   /** Stable across reorders and removals, unlike an array index. */
   id: string;
   accountId: string;
+  /** Only meaningful on the bank control account's line (SCRUM-54). */
+  bankAccountId: string;
   debit: string;
   credit: string;
 };
@@ -56,7 +58,7 @@ type DraftLine = {
 let lineSeq = 0;
 function emptyLine(): DraftLine {
   lineSeq += 1;
-  return { id: `line-${lineSeq}`, accountId: "", debit: "", credit: "" };
+  return { id: `line-${lineSeq}`, accountId: "", bankAccountId: "", debit: "", credit: "" };
 }
 
 /** `YYYY-MM-DD` for a date input, from a timestamp. */
@@ -100,6 +102,11 @@ export function OpeningBalanceCard() {
     activeOrgId ? { orgId: activeOrgId, activeOnly: true } : "skip"
   );
 
+  const bankAccounts = useQuery(
+    api.bankAccounts.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+
   const postDirect = useMutation(api.accountingCutover.postOpeningBalanceDirect);
   const draftForApproval = useMutation(api.accountingCutover.draftOpeningBalance);
 
@@ -108,6 +115,18 @@ export function OpeningBalanceCard() {
   // amounts off by a factor of ten on any org that is not on a 3-decimal
   // currency.
   const currency = status?.currency ?? "JOD";
+
+  // The bank control account is the one chart account whose line must name a
+  // physical bank; the server refuses it otherwise. Only banks the server would
+  // accept are offered: active, and in the currency the amounts are entered in.
+  const bankControlIds = useMemo(
+    () => new Set((accounts ?? []).filter((acc) => acc.systemKey === "BANK_ACCOUNT").map((acc) => acc._id as string)),
+    [accounts]
+  );
+  const selectableBanks = useMemo(
+    () => (bankAccounts ?? []).filter((bank) => bank.isActive && bank.currency === currency),
+    [bankAccounts, currency]
+  );
 
   // Summed in minor units, so the balance check matches exactly what the
   // server validates rather than accumulating float error across lines.
@@ -124,10 +143,17 @@ export function OpeningBalanceCard() {
   const filledLines = lines.filter(
     (line) => line.accountId && (Number(line.debit) > 0 || Number(line.credit) > 0)
   );
+  // A chosen bank counts only while it is still offered: a bank deactivated, or a currency
+  // changed, after the choice leaves a stale id that the server would refuse.
+  const selectableBankIds = new Set(selectableBanks.map((bank) => bank._id as string));
+  const bankChosenForEveryBankLine = filledLines.every(
+    (line) => !bankControlIds.has(line.accountId) || selectableBankIds.has(line.bankAccountId)
+  );
   const canSubmit =
     Boolean(activeOrgId) &&
     totals.balanced &&
     filledLines.length >= 2 &&
+    bankChosenForEveryBankLine &&
     dateInputToUtcMs(asOfDate) !== null &&
     !submitting;
 
@@ -156,6 +182,9 @@ export function OpeningBalanceCard() {
           accountId: line.accountId as Id<"chartOfAccounts">,
           debitMinor: toMinorUnits(Number(line.debit) || 0, currency),
           creditMinor: toMinorUnits(Number(line.credit) || 0, currency),
+          ...(bankControlIds.has(line.accountId)
+            ? { bankAccountId: line.bankAccountId as Id<"bankAccounts"> }
+            : {}),
         })),
         // The denomination these integers were converted UNDER, sent so the
         // server can refuse if the org's currency moved while this form was
@@ -175,7 +204,7 @@ export function OpeningBalanceCard() {
       setOpen(false);
       resetForm();
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setSubmitting(false);
     }
@@ -256,10 +285,15 @@ export function OpeningBalanceCard() {
 
                 <div className="space-y-2">
                   {lines.map((line, index) => (
-                    <div key={line.id} className="grid gap-2 sm:grid-cols-[1fr_130px_130px_40px]">
+                    <div key={line.id} className="space-y-2">
+                    <div className="grid gap-2 sm:grid-cols-[1fr_130px_130px_40px]">
                       <Select
                         value={line.accountId}
-                        onValueChange={(value) => updateLine(index, { accountId: value })}
+                        onValueChange={(value) =>
+                          // A bank identity belongs to the bank control line
+                          // only; switching the account drops a stale choice.
+                          updateLine(index, { accountId: value, bankAccountId: "" })
+                        }
                       >
                         <SelectTrigger aria-label={t("OpeningBalanceAccount")}>
                           <SelectValue placeholder={t("OpeningBalanceSelectAccount")} />
@@ -324,6 +358,34 @@ export function OpeningBalanceCard() {
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
+                    </div>
+                    {bankControlIds.has(line.accountId) && (
+                      <div className="space-y-1">
+                        <Select
+                          value={line.bankAccountId}
+                          onValueChange={(value) => updateLine(index, { bankAccountId: value })}
+                          disabled={bankAccounts !== undefined && selectableBanks.length === 0}
+                        >
+                          <SelectTrigger aria-label={t("OpeningBalanceBankAccount")}>
+                            <SelectValue placeholder={t("OpeningBalanceSelectBank")} />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-72">
+                            {selectableBanks.map((bank) => (
+                              <SelectItem key={bank._id} value={bank._id}>
+                                <bdi>{bank.name}</bdi>
+                                {" · "}
+                                <span className="text-xs text-muted-foreground">{bank.currency}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {bankAccounts !== undefined && selectableBanks.length === 0 && (
+                          <p className="text-xs text-amber-700 dark:text-amber-300">
+                            {t("OpeningBalanceNoBankAccounts")}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     </div>
                   ))}
 

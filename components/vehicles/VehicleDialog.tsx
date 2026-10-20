@@ -142,6 +142,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       transmission: "Automatic",
       purchasePrice: 0,
       purchasePaymentMethod: undefined,
+      bankAccountId: undefined,
       purchaseSupplierName: "",
       minimumProfit: 0,
       sellingPrice: 0,
@@ -174,6 +175,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         transmission: vehicle.transmission,
         purchasePrice: vehicle.purchasePrice,
         purchasePaymentMethod: undefined,
+        bankAccountId: undefined,
         purchaseSupplierName: "",
         minimumProfit: vehicle.minimumProfit,
         sellingPrice: vehicle.sellingPrice,
@@ -203,6 +205,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         transmission: "Automatic",
         purchasePrice: 0,
         purchasePaymentMethod: undefined,
+        bankAccountId: undefined,
         purchaseSupplierName: "",
         minimumProfit: 0,
         sellingPrice: 0,
@@ -229,12 +232,20 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   const isSourced = watchedSourceType === "SOURCED";
   const isOwned = watchedSourceType === "STOCK";
   const watchedPaymentMethod = form.watch("purchasePaymentMethod");
+  const watchedBankAccountId = form.watch("bankAccountId");
   // SCRUM-717 (D-45): the type a saved vehicle already has. An absent type is legacy owned stock.
   const storedSourceType: "STOCK" | "SOURCED" | undefined = vehicle ? vehicle.sourceType ?? "STOCK" : undefined;
   // SOURCED -> STOCK on a saved car is a buy-out: it needs the agreed price and how it was paid.
   const isBuyout = storedSourceType === "SOURCED" && isOwned;
   // Settlement fields are asked at creation and for a buy-out, never for an ordinary edit.
   const asksSettlement = isOwned && (!vehicle || isBuyout);
+  const needsAcquisitionBank = asksSettlement && Number(form.watch("purchasePrice") ?? 0) > 0 &&
+    (watchedPaymentMethod === "BANK_TRANSFER" || watchedPaymentMethod === "CARD" || watchedPaymentMethod === "CHEQUE");
+  const acquisitionBanks = useQuery(
+    api.vehicles.listAcquisitionBankOptions,
+    open && needsAcquisitionBank && activeOrgId ? { orgId: activeOrgId, purpose: vehicle ? "EDIT" : "CREATE" } : "skip"
+  );
+  const selectedAcquisitionBank = acquisitionBanks?.banks?.find((bank) => bank._id === watchedBankAccountId);
   const ownershipChangeBlocked = getOwnershipChangeBlock({ hasVehicle: !!vehicle, canEdit, storedSourceType, costLocked });
   const showVinChecksumWarning = (watchedVin?.length ?? 0) === 17 && !validateVinChecksum(watchedVin ?? "");
 
@@ -375,6 +386,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         imageIds: _formImageIds,
         inspectionStatus,
         purchasePaymentMethod,
+        bankAccountId: _bankAccountId,
         purchaseSupplierName,
         purchasePrice,
         sourcedFromName,
@@ -402,6 +414,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         values.sourceType === "STOCK" && asksSettlement
           ? {
               purchasePaymentMethod,
+              ...(needsAcquisitionBank ? { bankAccountId: selectedAcquisitionBank?._id } : {}),
               ...(purchasePaymentMethod === "ON_ACCOUNT"
                 ? { purchaseSupplierName: purchaseSupplierName?.trim() }
                 : {}),
@@ -555,6 +568,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                           disabled={!!vehicle && type !== storedSourceType && !!ownershipChangeBlocked}
                           onClick={() => {
                             field.onChange(type);
+                            form.setValue("bankAccountId", undefined);
                             // A saved SOURCED car's stored purchasePrice is its
                             // consignment-cost mirror, not a purchase. Buying it out
                             // starts from no price, so the agreed amount must be typed;
@@ -861,7 +875,10 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                         <PaymentMethodSelect<AcquisitionPaymentMethod>
                           t={t as any}
                           value={field.value as AcquisitionPaymentMethod | undefined}
-                          onValueChange={field.onChange}
+                          onValueChange={(method) => {
+                            field.onChange(method);
+                            form.setValue("bankAccountId", undefined);
+                          }}
                           methods={ACQUISITION_PAYMENT_METHODS}
                         />
                       </FormControl>
@@ -872,6 +889,34 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               )}
               {/* An OWNED purchase bought on account owes someone. The creditor is its own field:
                   it is never the consignment supplier and never lands on the vehicle row. */}
+              {needsAcquisitionBank && (
+                <FormField
+                  control={form.control}
+                  name="bankAccountId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("DirectPaymentBankLabel" as any)} *</FormLabel>
+                      <FormControl>
+                        <select
+                          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                          value={selectedAcquisitionBank?._id ?? ""}
+                          onChange={(event) => field.onChange(event.target.value || undefined)}
+                          disabled={acquisitionBanks === undefined || acquisitionBanks.truncated || !acquisitionBanks.banks?.length}
+                          required
+                        >
+                          <option value="">{t((acquisitionBanks === undefined ? "CashDrawerLoadingBanks" : "DirectPaymentBankChoose") as any)}</option>
+                          {(acquisitionBanks?.banks ?? []).map((bank) => (
+                            <option key={bank._id} value={bank._id}>{bank.name} · {bank.currency}</option>
+                          ))}
+                        </select>
+                      </FormControl>
+                      {acquisitionBanks?.truncated && <p role="status" className="text-xs text-muted-foreground">{t("DirectPaymentTooManyBanks" as any)}</p>}
+                      {acquisitionBanks && !acquisitionBanks.truncated && !acquisitionBanks.banks?.length && <p role="status" className="text-xs text-muted-foreground">{t("DirectPaymentNoBank" as any)}</p>}
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
               {asksSettlement && watchedPaymentMethod === "ON_ACCOUNT" && (
                 <FormField
                   control={form.control}
@@ -1115,7 +1160,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                     {t("WizardContinue")}<ArrowRight className="h-4 w-4 ms-2 rtl:rotate-180" />
                   </Button>
                 ) : (
-                  <Button type="submit" disabled={isSubmitting || costLockLoading}>
+                  <Button type="submit" disabled={isSubmitting || costLockLoading || (needsAcquisitionBank && (!selectedAcquisitionBank || acquisitionBanks?.truncated))}>
                     {submitLabel}
                   </Button>
                 )}
