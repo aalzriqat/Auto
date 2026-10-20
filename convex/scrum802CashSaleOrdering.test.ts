@@ -258,6 +258,8 @@ describe("the pay-first refusal is raised before the first write on every comple
         orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 20_000, saleDate: Date.now(),
         financingType: "CASH", idempotencyKey: crypto.randomUUID(),
       } as never);
+      // The draft door takes no quote; completing a draft that is bound to one is the shape under test. `sales.createDraft`
+      // takes no `quoteId` (SCRUM-425), so this is a legacy / defence-in-depth shape, not a path a user can reach.
       await s.t.run((ctx) => ctx.db.patch(draftId, { quoteId }));
       const writes: string[] = [];
       const refusal = await refusalDataOf(
