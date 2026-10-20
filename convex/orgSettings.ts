@@ -339,7 +339,8 @@ export const getCommissionMode = query({
 /**
  * SCRUM-778: the only door that changes the commission mode. Owner-only, and
  * called solely from the deliberate mode choice on the Commission settings
- * screens — an automatic mode is an explicit opt-in (owner ruling c22406).
+ * screens. An org that never chose a mode stays AUTO_MEMBER; MANUAL is reachable
+ * only through this audited owner action (project ruling #506).
  */
 export const setCommissionMode = mutation({
   args: {

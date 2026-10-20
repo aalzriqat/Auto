@@ -1,14 +1,15 @@
 /**
- * SCRUM-778 — an organization that never chose a commission mode is MANUAL.
+ * SCRUM-778 — an organization that never chose a commission mode keeps running AUTO_MEMBER.
  *
- * Owner ruling (SCRUM-778 c22406): "default it to manual but keep the auto
- * option available". Commission is a manager's decision per deal; an automatic
- * mode accrues only for a dealership that explicitly opted into one.
+ * Project ruling (#506): unset stays AUTO_MEMBER, so deploying changes nothing
+ * for an existing dealership. MANUAL is reachable only through the audited,
+ * owner-only `orgSettings.setCommissionMode` action. This replaces the earlier
+ * "default it to manual" premise.
  *
- * Before this, every reader fell back to AUTO_MEMBER, so a fresh organization
- * with a member commission rate had commission expense posted on every sale
- * with nobody entering an amount — and the manager could not then enter one,
- * because a completed AUTO sale's amount is locked.
+ * Every reader resolves the mode through `effectiveCommissionMode`, so an
+ * unset org accrues the member-rate commission at completion, keeps a
+ * completed commission locked, and is shown the automatic-mode commissions
+ * screen rather than the manual work queue.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
@@ -325,5 +326,48 @@ describe("SCRUM-778: an automatic mode needs a deliberate choice", () => {
 
     expect(await asReviewer.query(api.orgSettings.get, { orgId: d.orgId })).toBeNull();
     expect(await asReviewer.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBe("AUTO_MEMBER");
+  });
+});
+
+/**
+ * The two commission listing reads must resolve an unset mode as AUTO_MEMBER.
+ * A completed sale with no computed commission is the discriminator: an
+ * automatic mode flags it for recalculation, MANUAL lists it as undecided work.
+ */
+describe("SCRUM-778: the commission listings read an unset mode as AUTO_MEMBER", () => {
+  async function uncomputedSale(suffix: string, mode?: "MANUAL") {
+    const d = await seedDealer(suffix, mode);
+    const saleId = await d.completeSale();
+    // Strip any computed commission: a COMPLETED sale whose commission was never computed.
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: undefined }));
+    return { d, saleId };
+  }
+
+  test("commissionPage (listCommissionsPaginated): an unset org gets the automatic-mode view", async () => {
+    const { d, saleId } = await uncomputedSale("list_pg_unset");
+    const res = await d.as.query(api.sales.listCommissionsPaginated, {
+      orgId: d.orgId, paginationOpts: { numItems: 20, cursor: null },
+    });
+    const row = res.page.find((r) => r._id === saleId);
+    expect(row?.needsRecalculation).toBe(true);
+    expect(row?.canSetAmount).toBe(false);
+
+    const { d: m, saleId: mSale } = await uncomputedSale("list_pg_manual", "MANUAL");
+    const mRes = await m.as.query(api.sales.listCommissionsPaginated, {
+      orgId: m.orgId, paginationOpts: { numItems: 20, cursor: null },
+    });
+    const mRow = mRes.page.find((r) => r._id === mSale);
+    expect(mRow?.needsRecalculation).toBe(false);
+    expect(mRow?.canSetAmount).toBe(true);
+  });
+
+  test("listCommissions (deprecated unpaginated read): an unset org gets the automatic-mode view", async () => {
+    const { d, saleId } = await uncomputedSale("list_legacy_unset");
+    const rows = await d.as.query(api.sales.listCommissions, { orgId: d.orgId });
+    expect(rows.find((r) => r._id === saleId)?.needsRecalculation).toBe(true);
+
+    const { d: m, saleId: mSale } = await uncomputedSale("list_legacy_manual", "MANUAL");
+    const mRows = await m.as.query(api.sales.listCommissions, { orgId: m.orgId });
+    expect(mRows.find((r) => r._id === mSale)).toBeUndefined();
   });
 });
