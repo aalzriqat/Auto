@@ -26,6 +26,9 @@ function isApproveDoorFile(file) {
   return f === APPROVE_DOOR_FILE || f === APPROVE_DOOR_FILE.replace("playwright/tests/", "");
 }
 
+// The ROOT file suite (Playwright makes one per spec file, titled and keyed by the
+// file) must itself be the approve-door file, so the matching spec cannot sit under a
+// different root file suite while only its own `file` field says accounting.spec.ts.
 // `describes` is the chain of describe titles BELOW the root file suite. It must be
 // exactly [APPROVE_DOOR_DESCRIBE]: no extra ancestors, no nesting of the same name.
 function collectTests(suite, found, describes = []) {
@@ -34,7 +37,7 @@ function collectTests(suite, found, describes = []) {
       spec.title === APPROVE_DOOR_TITLE &&
       describes.length === 1 &&
       describes[0] === APPROVE_DOOR_DESCRIBE &&
-      isApproveDoorFile(spec.file ?? suite.file)
+      isApproveDoorFile(spec.file)
     ) {
       const tests = (spec.tests ?? []).filter((t) => t.projectName === APPROVE_DOOR_PROJECT);
       for (const t of tests) found.push(t);
@@ -49,7 +52,9 @@ export function approveDoorErrors(report) {
     return ["Playwright JSON report is missing or malformed (no suites array)"];
   }
   const found = [];
-  for (const suite of report.suites) collectTests(suite, found);
+  for (const suite of report.suites) {
+    if (isApproveDoorFile(suite.file) && isApproveDoorFile(suite.title)) collectTests(suite, found);
+  }
   if (found.length === 0) {
     return [
       `approve-door test "${APPROVE_DOOR_TITLE}" was not registered in ${APPROVE_DOOR_FILE} (describe and ${APPROVE_DOOR_PROJECT} project bound): E2E_SEED_LEGACY_MANUAL_JOURNAL was not "1" for the Playwright run, so the approve door went unproven`,

@@ -58,16 +58,6 @@ describe("assertApproveDoorRan (SCRUM-795)", () => {
   it("RED: duplicate", () => {
     expect(approveDoorErrors(report(pass, pass))).toEqual([expect.stringContaining("2 times")]);
   });
-  it("RED: a same-titled passing decoy in ANOTHER file does not satisfy the proof", () => {
-    const decoy = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], "decoy.spec.ts");
-    const r = {
-      suites: [
-        fileSuite("accounting.spec.ts", APPROVE_DOOR_DESCRIBE),
-        fileSuite("decoy.spec.ts", APPROVE_DOOR_DESCRIBE, decoy),
-      ],
-    };
-    expect(approveDoorErrors(r)).toEqual([expect.stringContaining("was not registered")]);
-  });
   it("a decoy in another file does not turn a real pass into a duplicate", () => {
     const decoy = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], "decoy.spec.ts");
     const r = {
@@ -83,9 +73,17 @@ describe("assertApproveDoorRan (SCRUM-795)", () => {
     it("control: the unmodified entry passes", () => {
       expect(approveDoorErrors({ suites: [real()] })).toEqual([]);
     });
-    it("file differs (only the file)", () => {
+    it("spec.file differs (only the spec's file field)", () => {
       const s = spec(APPROVE_DOOR_TITLE, "expected", [{ status: "passed" }], "decoy.spec.ts");
       const suite = { title: "accounting.spec.ts", file: "accounting.spec.ts", suites: [{ title: APPROVE_DOOR_DESCRIBE, file: "accounting.spec.ts", specs: [s] }] };
+      expect(approveDoorErrors({ suites: [suite] })).toEqual([expect.stringContaining("was not registered")]);
+    });
+    it("root file suite's file differs (only that field)", () => {
+      const suite = { title: "accounting.spec.ts", file: "decoy.spec.ts", suites: [{ title: APPROVE_DOOR_DESCRIBE, file: "accounting.spec.ts", specs: [pass] }] };
+      expect(approveDoorErrors({ suites: [suite] })).toEqual([expect.stringContaining("was not registered")]);
+    });
+    it("root file suite's title differs (only that field)", () => {
+      const suite = { title: "decoy.spec.ts", file: "accounting.spec.ts", suites: [{ title: APPROVE_DOOR_DESCRIBE, file: "accounting.spec.ts", specs: [pass] }] };
       expect(approveDoorErrors({ suites: [suite] })).toEqual([expect.stringContaining("was not registered")]);
     });
     it("suffix path x/accounting.spec.ts (only the file)", () => {

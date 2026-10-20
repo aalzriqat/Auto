@@ -49,6 +49,7 @@ describe("SCRUM-795 — manual journals are off in the shipped build", () => {
     // Resend the seeded draft's EXACT content, read back from the database.
     const seeded = await w.t.run((ctx) => ctx.db.get(w.legacyDraftId));
     expect(seeded).not.toBeNull();
+    expect(seeded!.orgId).toBe(w.orgId);
     const before = await dbSnapshot(w.t, ALL_TABLES);
     await expectAppError(
       w.asPoster.mutation(api.financialAudit.createManualJournal, {
@@ -77,6 +78,7 @@ describe("SCRUM-795 — manual journals are off in the shipped build", () => {
     );
     expect(await dbSnapshot(w.t, ALL_TABLES)).toEqual(before);
     const draft = await w.t.run((ctx) => ctx.db.get(w.legacyDraftId));
+    expect(draft?.orgId).toBe(w.orgId);
     expect(draft?.status).toBe("PENDING_APPROVAL");
     expect(draft?.journalEntryId).toBeUndefined();
   });
@@ -89,6 +91,7 @@ describe("SCRUM-795 — manual journals are off in the shipped build", () => {
       rejectionReason: "Pilot: manual journals are off",
     });
     const draft = await w.t.run((ctx) => ctx.db.get(w.legacyDraftId));
+    expect(draft?.orgId).toBe(w.orgId);
     expect(draft?.status).toBe("REJECTED");
     // Reading the pending list is unchanged and now empty.
     const pending = await w.asReviewer.query(api.financialAudit.listPendingManualJournals, {
@@ -164,6 +167,7 @@ describe("SCRUM-795 — manual journals are off in the shipped build", () => {
       draftId: draft.draftId as Id<"openingBalanceDrafts">,
     });
     const journal = await w.t.run((ctx) => ctx.db.get(result.journalId as Id<"journalEntries">));
+    expect(journal?.orgId).toBe(w.orgId);
     expect(journal?.category).toBe("OPENING_BALANCE");
     expect(journal?.status).toBe("POSTED");
   });
@@ -178,6 +182,7 @@ describe("SCRUM-795 — manual journals are off in the shipped build", () => {
       lines: await openingLines(w),
     });
     const journal = await w.t.run((ctx) => ctx.db.get(result.journalId as Id<"journalEntries">));
+    expect(journal?.orgId).toBe(w.orgId);
     expect(journal?.category).toBe("OPENING_BALANCE");
     expect(journal?.status).toBe("POSTED");
   });

@@ -102,7 +102,8 @@ async function proveLegacyApproveRefused(browser: Browser, orgId: Id<"organizati
     expect(approveError, "approve must be refused").toBeDefined();
     expect(refusalCode(approveError)).toBe(REFUSAL_CODE);
 
-    // Nothing posted: the draft is still pending.
+    // The refusal code is asserted above; this read-back proves only that the seeded
+    // draft is still pending in this org (it does not inspect the journal tables).
     const after = (await approverClient.query(api.financialAudit.listPendingManualJournals, {
       orgId,
     })) as Pending;
