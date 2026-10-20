@@ -1,5 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -97,6 +97,15 @@ describe("dealCommissions: several lines on one deal", () => {
   // hookDealCommissionLineAccrued, convex/accounting/workflowHooks.ts). The
   // readiness fixture is the one convex/dealCommissionLinesLedger.test.ts uses.
   type Harness = ReturnType<typeof convexTestWithComponents>;
+  // chartOfAccounts.initialize and accountingPeriods.open schedule
+  // drainPendingAccountingEvents with runAfter(0), which posts the queued
+  // SALE_COMPLETED / sale-commission events. Without waiting for it those
+  // postings land between or before the snapshots. Fake timers plus
+  // finishAllScheduledFunctions is the documented way to let it finish.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const settle = (t: Harness) => t.finishAllScheduledFunctions(vi.runAllTimers);
   async function openChartAndPeriod(t: Harness, s: Awaited<ReturnType<typeof seed>>) {
     await t.run((ctx) =>
       ctx.db.insert("subscriptions", { orgId: s.orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
@@ -120,20 +129,24 @@ describe("dealCommissions: several lines on one deal", () => {
     }));
 
   test("with a chart ready, a line posts exactly one accrual: Dr Commission Expense / Cr Commission Payable, exact fils", async () => {
+    vi.useFakeTimers();
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const s = await seed(t, "ledger", [...ADMIN, "view:finance", "manage:finance"]);
     await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
     await openChartAndPeriod(t, s);
+    await settle(t);
     const before = await snapshot(t, s.saleId);
     const lineId = await s.asAdmin.mutation(api.dealCommissions.addLine, {
       orgId: s.orgId, saleId: s.saleId, kind: "EXECUTION", employeeId: s.executor, amount: 25.125,
     });
+    await settle(t);
     const after = await snapshot(t, s.saleId);
 
     const newEvents = after.events.filter((e) => !before.events.some((b) => b._id === e._id));
     expect(newEvents.map((e) => [e.eventType, e.sourceType, e.sourceId, e.orgId])).toEqual([
       ["COMMISSION_ACCRUED", "dealCommissionLines", lineId, s.orgId],
     ]);
+    expect(after.events.filter((e) => e.sourceType === "dealCommissionLines")).toHaveLength(1);
     expect(after.pending).toEqual(before.pending);
 
     // The accrual is a POSTED event, and both journal lines belong to the entry it points at.
@@ -168,11 +181,14 @@ describe("dealCommissions: several lines on one deal", () => {
 
   test("with no chart yet, a line posts nothing now: the accrual is queued once and the sale commission is untouched", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    vi.useFakeTimers();
     const s = await seed(t, "nochart");
+    await settle(t);
     const before = await snapshot(t, s.saleId);
     const lineId = await s.asAdmin.mutation(api.dealCommissions.addLine, {
       orgId: s.orgId, saleId: s.saleId, kind: "EXECUTION", employeeId: s.executor, amount: 25,
     });
+    await settle(t);
     const after = await snapshot(t, s.saleId);
     expect(after.events).toEqual(before.events);
     expect(after.journalLines).toEqual(before.journalLines);
