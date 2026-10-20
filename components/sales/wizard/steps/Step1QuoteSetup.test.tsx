@@ -139,24 +139,24 @@ describe("SCRUM-656: profit-approval alerts follow the language", () => {
     en: {
       requiredTitle: "Approval Required",
       requiredBody:
-        "At this price the profit over the list price (100 JOD) is below the minimum required profit for this vehicle (5,000 JOD).",
+        "At this price the uplift over the list price (100 JOD) is below this vehicle's Minimum Price Uplift (5,000 JOD). This check does not prevent a loss-making sale.",
       pending: "Approval request is currently pending. Please wait for a manager.",
-      rejected: "Your request for this profit amount was rejected. Please increase the profit or request again.",
-      request: "Request Profit Approval",
+      rejected: "Your request for this price was rejected. Please raise the price or request again.",
+      request: "Request Price Uplift Approval",
       requesting: "Requesting...",
-      approvedTitle: "Profit Approved",
-      approvedBody: "Management approved this sale price (profit over the list price: 100 JOD). You may proceed.",
+      approvedTitle: "Price Uplift Approved",
+      approvedBody: "Management approved this sale price (uplift over the list price: 100 JOD). You may proceed.",
     },
     ar: {
       requiredTitle: "مطلوب اعتماد",
       requiredBody:
-        "عند هذا السعر، الربح فوق سعر القائمة (100 د.أ) أقل من الحد الأدنى المطلوب لربح هذه المركبة (5,000 د.أ).",
+        "عند هذا السعر، الزيادة فوق سعر القائمة (100 د.أ) أقل من الحد الأدنى للزيادة فوق سعر القائمة لهذه المركبة (5,000 د.أ). هذا الفحص لا يمنع بيعاً بخسارة.",
       pending: "طلب الاعتماد قيد الانتظار. يرجى انتظار قرار المدير.",
-      rejected: "رُفض طلبك لمبلغ الربح هذا. يرجى زيادة الربح أو إعادة الطلب.",
-      request: "طلب اعتماد الربح",
+      rejected: "رُفض طلبك لهذا السعر. يرجى رفع السعر أو إعادة الطلب.",
+      request: "طلب اعتماد الزيادة فوق سعر القائمة",
       requesting: "جارٍ الإرسال…",
-      approvedTitle: "تم اعتماد الربح",
-      approvedBody: "اعتمدت الإدارة سعر البيع هذا (الربح فوق سعر القائمة: 100 د.أ). يمكنك المتابعة.",
+      approvedTitle: "تم اعتماد الزيادة فوق سعر القائمة",
+      approvedBody: "اعتمدت الإدارة سعر البيع هذا (الزيادة فوق سعر القائمة: 100 د.أ). يمكنك المتابعة.",
     },
   } as const;
   const verdict = (status: string) => ({ status, margin: 100, minimumProfit: 5000 });

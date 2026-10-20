@@ -18,10 +18,10 @@ import { defineBilingualMessages } from "../defineBilingualMessages";
  * message names the price rather than a profit figure.
  */
 const profitApprovalMessages = defineBilingualMessages({
-  ProfitApprovalRequiredTitle: ["Below the vehicle's minimum profit", "أقل من الحد الأدنى لربح المركبة"],
+  ProfitApprovalRequiredTitle: ["Below the Minimum Price Uplift", "أقل من الحد الأدنى للزيادة فوق سعر القائمة"],
   ProfitApprovalRequiredBody: [
-    "At this price the profit over the list price is {margin}; this vehicle requires {minimum}. A manager must approve this exact price before the sale can be completed.",
-    "الربح عند هذا السعر فوق سعر القائمة هو {margin}، والحد الأدنى لهذه المركبة {minimum}. يجب أن يعتمد مدير هذا السعر بعينه قبل إتمام البيع.",
+    "At this price the uplift over the list price is {margin}; this vehicle's Minimum Price Uplift is {minimum}. A manager must approve this exact price before the sale can be completed. This check does not prevent a loss-making sale.",
+    "الزيادة عند هذا السعر فوق سعر القائمة هي {margin}، والحد الأدنى للزيادة فوق سعر القائمة لهذه المركبة {minimum}. يجب أن يعتمد مدير هذا السعر بعينه قبل إتمام البيع. هذا الفحص لا يمنع بيعاً بخسارة.",
   ],
   ProfitApprovalRequestAction: ["Request approval for this price", "طلب اعتماد هذا السعر"],
   ProfitApprovalRequesting: ["Requesting…", "جارٍ الإرسال…"],
@@ -31,6 +31,8 @@ const profitApprovalMessages = defineBilingualMessages({
     "رفض المدير هذا السعر. عدّل السعر أو اطلب الاعتماد من جديد.",
   ],
   ProfitApprovalApproved: ["A manager approved this price.", "اعتمد المدير هذا السعر."],
+  MinimumPriceUplift: ["Minimum Price Uplift", "الحد الأدنى للزيادة فوق سعر القائمة"],
+  MinimumPriceUpliftHelp: ["The price uplift is the final sale price minus the vehicle's list price. A financed sale needs a manager's approval when its price uplift is less than this amount, including when the price is below the list price. It is not a loss check: it does not stop a sale below cost, and cash quotes are not covered. A minimum of 0 turns it off.", "الزيادة فوق سعر القائمة هي سعر البيع النهائي مطروحاً منه سعر قائمة المركبة. يحتاج البيع بالتمويل إلى موافقة المدير عندما تكون هذه الزيادة أقل من هذا المبلغ، بما في ذلك حين يكون السعر أقل من سعر القائمة. هذا ليس فحصاً للخسارة: لا يمنع بيعاً بأقل من التكلفة، ولا يشمل عروض الأسعار النقدية. الحد الأدنى 0 يعطّل الفحص."],
   ApprovalSalePrice: ["Sale price", "سعر البيع"],
   ApprovalListPrice: ["List price", "سعر القائمة"],
 });
@@ -2440,27 +2442,27 @@ const quoteWizardQaMessages = defineBilingualMessages({
   // bound by playwright/tests/profit-approval.spec.ts — keep it.
   WizardProfitApprovalRequiredTitle: ["Approval Required", "مطلوب اعتماد"],
   WizardProfitApprovalRequiredBody: [
-    "At this price the profit over the list price ({margin}) is below the minimum required profit for this vehicle ({minimum}).",
-    "عند هذا السعر، الربح فوق سعر القائمة ({margin}) أقل من الحد الأدنى المطلوب لربح هذه المركبة ({minimum}).",
+    "At this price the uplift over the list price ({margin}) is below this vehicle's Minimum Price Uplift ({minimum}). This check does not prevent a loss-making sale.",
+    "عند هذا السعر، الزيادة فوق سعر القائمة ({margin}) أقل من الحد الأدنى للزيادة فوق سعر القائمة لهذه المركبة ({minimum}). هذا الفحص لا يمنع بيعاً بخسارة.",
   ],
   WizardProfitApprovalPending: [
     "Approval request is currently pending. Please wait for a manager.",
     "طلب الاعتماد قيد الانتظار. يرجى انتظار قرار المدير.",
   ],
   WizardProfitApprovalRejected: [
-    "Your request for this profit amount was rejected. Please increase the profit or request again.",
-    "رُفض طلبك لمبلغ الربح هذا. يرجى زيادة الربح أو إعادة الطلب.",
+    "Your request for this price was rejected. Please raise the price or request again.",
+    "رُفض طلبك لهذا السعر. يرجى رفع السعر أو إعادة الطلب.",
   ],
-  WizardProfitApprovalRequestAction: ["Request Profit Approval", "طلب اعتماد الربح"],
+  WizardProfitApprovalRequestAction: ["Request Price Uplift Approval", "طلب اعتماد الزيادة فوق سعر القائمة"],
   WizardProfitApprovalRequesting: ["Requesting...", "جارٍ الإرسال…"],
   WizardProfitApprovalRequestFailed: [
     "Could not send the approval request. Please try again.",
     "تعذّر إرسال طلب الاعتماد. يرجى المحاولة مرة أخرى.",
   ],
-  WizardProfitApprovedTitle: ["Profit Approved", "تم اعتماد الربح"],
+  WizardProfitApprovedTitle: ["Price Uplift Approved", "تم اعتماد الزيادة فوق سعر القائمة"],
   WizardProfitApprovedBody: [
-    "Management approved this sale price (profit over the list price: {margin}). You may proceed.",
-    "اعتمدت الإدارة سعر البيع هذا (الربح فوق سعر القائمة: {margin}). يمكنك المتابعة.",
+    "Management approved this sale price (uplift over the list price: {margin}). You may proceed.",
+    "اعتمدت الإدارة سعر البيع هذا (الزيادة فوق سعر القائمة: {margin}). يمكنك المتابعة.",
   ],
 });
 /**
@@ -2514,6 +2516,73 @@ const customerMoneyMountMessages = defineBilingualMessages({
 });
 
 /**
+ * Employee commissions on a deal (SCRUM-783 types, SCRUM-434 net profit). Shown
+ * on the deal screen and managed from the Commissions page.
+ */
+const dealCommissionMessages = defineBilingualMessages({
+  DealCommissionsLabel: ["Commissions", "العمولات"],
+  DealCommissionsTotal: ["Total commissions", "إجمالي العمولات"],
+  DealCommissionsShow: ["Show breakdown", "عرض التفاصيل"],
+  DealCommissionsHide: ["Hide breakdown", "إخفاء التفاصيل"],
+  DealCommissionsNone: ["No commissions registered", "لا توجد عمولات مسجلة"],
+  DealCommissionsLoading: ["Loading commissions…", "جارٍ تحميل العمولات…"],
+  DealCommissionsNetAfter: ["Net profit after commissions", "صافي الربح بعد العمولات"],
+  DealCommissionsNetUnavailable: [
+    "Net profit after commissions is not available until the profit is known.",
+    "صافي الربح بعد العمولات غير متاح قبل معرفة الربح.",
+  ],
+  DealCommissionsNetPending: [
+    "Set the salesperson's commission (0 if none) to see the net profit after commissions.",
+    "حدّد عمولة البائع (صفر إن لم تكن هناك عمولة) لعرض صافي الربح بعد العمولات.",
+  ],
+  ReportNetAfterCommissions: ["Net after commissions", "الصافي بعد العمولات"],
+  ReportCommissionsColumn: ["Commissions", "العمولات"],
+  ReportCommissionsIncomplete: [
+    "sales are left out of the commission totals because their margin or the salesperson's commission is not known.",
+    "عمليات بيع مستثناة من إجماليات العمولات لأن هامشها أو عمولة البائع فيها غير معروفة.",
+  ],
+  DealCommissionsPendingSale: [
+    "The salesperson's commission is not decided yet, so this total is incomplete.",
+    "عمولة البائع لم تُحدد بعد، لذلك هذا الإجمالي غير مكتمل.",
+  ],
+  DealCommissionsUnreadable: [
+    "A commission amount cannot be read, so the total is not shown.",
+    "تعذّرت قراءة مبلغ عمولة، لذلك لا يظهر الإجمالي.",
+  ],
+  DealCommissionsRegisteredNote: [
+    "Registered amounts. Each is recorded in the books when added and paid with the employee's salary.",
+    "مبالغ مسجلة. يُسجَّل كل مبلغ في الدفاتر عند إضافته ويُدفع مع راتب الموظف.",
+  ],
+  DealCommissionsOpenPage: ["Manage on the Commissions page", "إدارة العمولات من صفحة العمولات"],
+  DealCommissionKindSALE: ["Sale commission", "عمولة بيع"],
+  DealCommissionKindPURCHASE: ["Purchase commission", "عمولة شراء"],
+  DealCommissionKindEXECUTION: ["Execution commission", "عمولة تنفيذ"],
+  DealCommissionKindHintSALE: ["The employee who sold the car", "الموظف الذي باع السيارة"],
+  DealCommissionKindHintPURCHASE: ["The employee who brought the car in", "الموظف الذي جلب السيارة"],
+  DealCommissionKindHintEXECUTION: ["The employee who executed the financing", "الموظف الذي نفّذ معاملة التمويل"],
+  DealCommissionSalespersonLine: ["Salesperson's commission", "عمولة البائع"],
+  DealCommissionLinesAction: ["Lines", "البنود"],
+  DealCommissionLinesTitle: ["Commission lines", "بنود العمولات"],
+  DealCommissionLinesAdd: ["Add commission line", "إضافة بند عمولة"],
+  DealCommissionLinesType: ["Type", "النوع"],
+  DealCommissionLinesEmployee: ["Employee", "الموظف"],
+  DealCommissionLinesAmount: ["Amount", "المبلغ"],
+  DealCommissionLinesNote: ["Note (optional)", "ملاحظة (اختياري)"],
+  DealCommissionLinesRemove: ["Remove", "إزالة"],
+  DealCommissionLinesSave: ["Add line", "إضافة البند"],
+  DealCommissionLinesSalesPersonHint: [
+    "The salesperson's own commission is set with the amount on the main row. Add other people's commissions here.",
+    "عمولة البائع نفسه تُحدد بالمبلغ في الصف الرئيسي. أضف هنا عمولات الآخرين.",
+  ],
+  DealCommissionLinesPilotPaused: [
+    "Adding commission lines is not available during the pilot. The salesperson's commission still counts.",
+    "إضافة بنود العمولات غير متاحة خلال المرحلة التجريبية. عمولة البائع ما زالت محتسبة.",
+  ],
+  DealCommissionLinesAdded: ["Commission line added", "تمت إضافة بند العمولة"],
+  DealCommissionLinesRemoved: ["Commission line removed", "تمت إزالة بند العمولة"],
+});
+
+/**
  * SCRUM-831: the approver's own queue of customer-credit refund requests on the
  * Approvals page. A manager decides here without the finance ledger; recording the
  * payout stays in Accounting, so no payout wording belongs to this surface.
@@ -2551,6 +2620,7 @@ const refundApprovalQueueMessages = defineBilingualMessages({
 
 export const salesEn = {
   ...refundApprovalQueueMessages.en,
+  ...dealCommissionMessages.en,
   ...customerMoneyMountMessages.en,
   ...quoteWizardQaMessages.en,
   ...quotationUnavailableMessages.en,
@@ -3079,7 +3149,7 @@ export const salesEn = {
   ProfitRate: "Profit Rate",
   FinanceCompanyProfit: "Financing Company Profit",
   YourProfit: "Your Profit",
-  DealerProfit: "Profit",
+  DealerProfit: "Markup added to base price",
   TotalToCollect: "Total to Collect",
   Vehicle: "Vehicle",
   Customer: "Customer",
@@ -3750,6 +3820,7 @@ export const salesEn = {
 
 export const salesAr = {
   ...refundApprovalQueueMessages.ar,
+  ...dealCommissionMessages.ar,
   ...customerMoneyMountMessages.ar,
   ...quoteWizardQaMessages.ar,
   ...quotationUnavailableMessages.ar,
@@ -4261,7 +4332,7 @@ export const salesAr = {
   ProfitRate: "نسبة الربح",
   FinanceCompanyProfit: "ربح شركة التمويل",
   YourProfit: "ربح المعرض",
-  DealerProfit: "الربح",
+  DealerProfit: "الإضافة على السعر الأساسي",
   TotalToCollect: "الإجمالي للتحصيل",
   Vehicle: "المركبة",
   Customer: "العميل",
