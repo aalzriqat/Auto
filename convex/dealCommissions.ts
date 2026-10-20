@@ -209,6 +209,17 @@ export const addLine = mutation({
         );
       }
 
+      // SCRUM-854: the salesperson's own sale commission is held on the sale row
+      // (setCommissionAmount, paid by payroll). A SALE line for the same person
+      // would pay that one role on the deal twice. Other employees may still
+      // hold a SALE line, and the salesperson may hold a PURCHASE or EXECUTION line.
+      if (args.kind === "SALE" && args.employeeId === sale.salespersonId) {
+        throwAppError(
+          AppErrorCode.DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON,
+          "The salesperson's sale commission is already set on the sale itself. Change it there instead of adding a second sale commission. Nothing has been changed."
+        );
+      }
+
       const membership = await ctx.db
         .query("memberships")
         .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", args.employeeId))

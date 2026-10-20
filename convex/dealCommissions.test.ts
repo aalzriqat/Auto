@@ -267,3 +267,86 @@ describe("reports show the margin after commissions (display only)", () => {
     expect(perf[0].totalCommissions).toBeNull();
   });
 });
+
+// SCRUM-854: the salesperson's own sale commission lives on the sale row, so a
+// SALE line for that same person would pay them twice for one role on the deal.
+describe("dealCommissions: a SALE line for the sale's own salesperson is refused (SCRUM-854, amount 50 case)", () => {
+  test("a SALE line for the sale's own salesperson is refused and commits no change to the tested org's line, audit, pending or event/journal tables", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const s = await seed(t, "dupsale");
+    await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
+
+    // A second organization with its own sale and lines, including a SALE line for its own salesperson
+    // (inserted directly: the guard would refuse it), so an unscoped scan would see foreign rows.
+    const f = await seed(t, "dupsaleforeign");
+    await f.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: f.orgId, saleId: f.saleId, commissionAmount: 70 });
+    await f.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: f.orgId, saleId: f.saleId, kind: "PURCHASE", employeeId: f.buyerAgent, amount: 3,
+    });
+    await t.run((ctx) => ctx.db.insert("dealCommissionLines", {
+      orgId: f.orgId, saleId: f.saleId, kind: "SALE", employeeId: f.userId, amountMinor: 4_000, currency: "JOD", createdBy: f.userId,
+    }));
+    const scoped = async (orgId: typeof s.orgId, saleId: typeof s.saleId) => {
+      const rows = await t.run((ctx) => ctx.db.query("dealCommissionLines").withIndex("by_org_sale", (q) => q.eq("orgId", orgId)).collect());
+      for (const r of rows) {
+        expect(r.orgId).toBe(orgId);
+        expect(r.saleId).toBe(saleId);
+      }
+      return rows;
+    };
+    // Organization-scoped full row sets (compared as arrays) of the tables a commission write could touch: the audit log,
+    // the pending-accounting outbox, accounting events and journal entries.
+    const writeFootprint = (orgId: typeof s.orgId) => t.run(async (ctx) => {
+      const own = <R extends { orgId: typeof orgId }>(rows: R[]) => {
+        for (const r of rows) expect(r.orgId).toBe(orgId);
+        return rows;
+      };
+      return {
+        audit: own(await ctx.db.query("financialAuditLog").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()),
+        pending: own(await ctx.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId)).collect()),
+        events: own(await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()),
+        journal: own(await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()),
+      };
+    });
+    const foreignBefore = await scoped(f.orgId, f.saleId);
+    expect(foreignBefore).toHaveLength(2);
+    // The unscoped table holds the foreign rows, so a scan that forgot the organization would see them.
+    expect(await t.run((ctx) => ctx.db.query("dealCommissionLines").collect())).toHaveLength(2);
+    const ownFootprintBefore = await writeFootprint(s.orgId);
+
+    const attempt = s.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId: s.saleId, kind: "SALE", employeeId: s.userId, amount: 50,
+    });
+    await expect(attempt).rejects.toMatchObject({
+      data: { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" },
+    });
+
+    const view = await s.asAdmin.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId: s.saleId });
+    expect(view.lines).toEqual([]);
+    // The salesperson is owed the one 50.000 JOD commission, not 100.000.
+    expect(view.totalMinor).toBe(50_000);
+    expect(await scoped(s.orgId, s.saleId)).toEqual([]);
+    // No committed change to the tested organization's audit, pending-accounting, accounting-event or journal rows.
+    expect(await writeFootprint(s.orgId)).toEqual(ownFootprintBefore);
+    // The other organization's rows and total did not move.
+    expect(await scoped(f.orgId, f.saleId)).toEqual(foreignBefore);
+    const foreignView = await f.asAdmin.query(api.dealCommissions.forSale, { orgId: f.orgId, saleId: f.saleId });
+    expect(foreignView.totalMinor).toBe(70_000 + 3_000 + 4_000);
+  });
+
+  test("the salesperson can still earn a different type, and another employee a SALE line", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const s = await seed(t, "othertypes");
+    await s.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId: s.saleId, kind: "PURCHASE", employeeId: s.userId, amount: 10,
+    });
+    await s.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId: s.saleId, kind: "SALE", employeeId: s.buyerAgent, amount: 20,
+    });
+    const view = await s.asAdmin.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId: s.saleId });
+    expect(view.lines.map((l) => [l.kind, l.amountMinor])).toEqual([
+      ["PURCHASE", 10_000],
+      ["SALE", 20_000],
+    ]);
+  });
+});
