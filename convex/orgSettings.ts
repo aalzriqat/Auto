@@ -6,7 +6,7 @@ import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { writeAuditLog } from "./utils/auditLog";
-import { AppErrorCode } from "./utils/errors";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 import { effectiveCommissionMode } from "./utils/commissionMode";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 
@@ -358,6 +358,31 @@ export const setCommissionMode = mutation({
     // Already stored as this mode: nothing to patch and nothing to audit. An
     // unset org choosing a mode still writes, because that pins the choice.
     if (settings && settings.commissionMode === args.commissionMode) return settings._id;
+    if (before !== "MANUAL" && args.commissionMode === "MANUAL") {
+      // No immutable accrual mode exists on historical sales. Protect every
+      // completed unpaid commission, even a zero or not-yet-computed amount.
+      // Inspect a bounded, unfiltered index range; an incomplete range cannot
+      // prove there are no remaining unpaid sales, so it must refuse too.
+      const scanLimit = 1000;
+      const completedSales = await ctx.db
+        .query("sales")
+        .withIndex("by_org_status_live_saleDate", (q) =>
+          q.eq("orgId", args.orgId).eq("status", "COMPLETED").eq("isDeleted", undefined)
+        )
+        .take(scanLimit + 1);
+      if (completedSales.some((sale) => sale.commissionPaidAt == null)) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "Settle completed sale commissions before switching to manual mode."
+        );
+      }
+      if (completedSales.length > scanLimit) {
+        throwAppError(
+          AppErrorCode.VALIDATION_FAILED,
+          "The completed sale history needs an accounting review before switching to manual mode."
+        );
+      }
+    }
     let settingsId: Id<"orgSettings">;
     if (settings) {
       await ctx.db.patch(settings._id, { commissionMode: args.commissionMode });

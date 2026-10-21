@@ -39,7 +39,7 @@ const PERMISSIONS = [
  * A dealership whose salesperson carries a 10% member rate, so an automatic
  * mode WOULD produce a commission. `commissionMode` omitted = never chosen.
  */
-async function seedDealer(suffix: string, commissionMode?: "MANUAL" | "AUTO_MEMBER") {
+async function seedDealer(suffix: string, commissionMode?: "MANUAL" | "AUTO_MEMBER" | "AUTO_TIERS") {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S778 ${suffix}`, createdAt: Date.now() }));
   await t.run((ctx) =>
@@ -177,8 +177,74 @@ describe("SCRUM-778: an unset commission mode keeps behaving as AUTO_MEMBER", ()
  * mode choice may, through `setCommissionMode`.
  */
 describe("SCRUM-853: commission policy changes preserve existing accrual locks", () => {
-  test.each([undefined, "AUTO_MEMBER"] as const)(
-    "a commission accrued under %s stays locked after the owner chooses MANUAL",
+  test.each([0, undefined])("a legacy unpaid amount of %s still prevents the policy change", async (amount) => {
+    const d = await seedDealer(`853_legacy_${amount}`, "AUTO_MEMBER");
+    const saleId = await d.completeSale();
+    await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: amount }));
+    const before = await dbSnapshot(d.t, Object.keys(schema.tables));
+    await expectAppError(d.as.mutation(api.orgSettings.setCommissionMode, {
+      orgId: d.orgId, commissionMode: "MANUAL",
+    }), "VALIDATION_FAILED", "Settle completed sale commissions before switching to manual mode.");
+    expect(await dbSnapshot(d.t, Object.keys(schema.tables))).toEqual(before);
+  });
+
+  test.each(["paid", "cancelled", "deleted"] as const)("%s sales do not block a deliberate mode choice", async (state) => {
+    const d = await seedDealer(`853_${state}`, "AUTO_MEMBER");
+    const saleId = await d.completeSale();
+    // Historical lifecycle shapes isolate policy eligibility; payment and
+    // cancellation accounting have their own public-door regression suites.
+    await d.t.run((ctx) => ctx.db.patch(saleId, state === "paid"
+      ? { commissionPaidAt: 0 }
+      : state === "cancelled" ? { status: "CANCELLED" } : { isDeleted: true }));
+    const ledgerBefore = await d.commissionPayableMinor();
+    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "MANUAL" });
+    expect(await d.as.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBe("MANUAL");
+    expect(await d.commissionPayableMinor()).toBe(ledgerBefore);
+    expect(await d.t.run((ctx) => ctx.db.query("adminAuditLog").collect())).toHaveLength(1);
+  });
+
+  test("another tenant's unpaid sale does not block the owner and grants no access to that tenant", async () => {
+    const d = await seedDealer("853_tenant", "AUTO_MEMBER");
+    const otherOrgId = await d.t.run(async (ctx) => {
+      const id = await ctx.db.insert("organizations", { name: "Other dealer", createdAt: Date.now() });
+      return id;
+    });
+    const saleId = await d.completeSale();
+    await d.t.run((ctx) => ctx.db.patch(saleId, { orgId: otherOrgId }));
+    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "MANUAL" });
+    expect(await d.as.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBe("MANUAL");
+    const before = await dbSnapshot(d.t, Object.keys(schema.tables));
+    await expectAppError(d.as.mutation(api.orgSettings.setCommissionMode, {
+      orgId: otherOrgId, commissionMode: "MANUAL",
+    }), "UNAUTHORIZED", "Unauthorized: You are not a member of this organization.");
+    expect(await dbSnapshot(d.t, Object.keys(schema.tables))).toEqual(before);
+  });
+
+  test("complete paid history at the scan boundary permits switching, but overflow refuses without writes", async () => {
+    const d = await seedDealer("853_limit", "AUTO_MEMBER");
+    const saleId = await d.completeSale();
+    const historicalSale = await d.t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      if (!sale) throw new Error("fixture sale missing");
+      const { _id, _creationTime, ...fields } = sale;
+      await ctx.db.patch(_id, { commissionPaidAt: 1 });
+      return { ...fields, commissionPaidAt: 1 };
+    });
+    await d.t.run(async (ctx) => {
+      for (let index = 1; index < 1000; index++) await ctx.db.insert("sales", historicalSale);
+    });
+    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "MANUAL" });
+    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" });
+    await d.t.run((ctx) => ctx.db.insert("sales", historicalSale));
+    const before = await dbSnapshot(d.t, Object.keys(schema.tables));
+    await expectAppError(d.as.mutation(api.orgSettings.setCommissionMode, {
+      orgId: d.orgId, commissionMode: "MANUAL",
+    }), "VALIDATION_FAILED", "The completed sale history needs an accounting review before switching to manual mode.");
+    expect(await dbSnapshot(d.t, Object.keys(schema.tables))).toEqual(before);
+  });
+
+  test.each([undefined, "AUTO_MEMBER", "AUTO_TIERS"] as const)(
+    "an unpaid completed sale under %s prevents a switch to MANUAL",
     async (initialMode) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
@@ -187,8 +253,10 @@ describe("SCRUM-853: commission policy changes preserve existing accrual locks",
         const sale = await d.t.run((ctx) => ctx.db.get(saleId));
         expect(sale?.status).toBe("COMPLETED");
         expect(sale?.commissionPaidAt).toBeUndefined();
-        expect(sale?.commissionAmount).toBeGreaterThan(1);
-        expect(await d.commissionPayableMinor()).toBeGreaterThan(0);
+        if (initialMode !== "AUTO_TIERS") {
+          expect(sale?.commissionAmount).toBeGreaterThan(1);
+          expect(await d.commissionPayableMinor()).toBeGreaterThan(0);
+        }
 
         const edit = () => d.as.mutation(api.sales.setCommissionAmount, {
           orgId: d.orgId, saleId, commissionAmount: 1,
@@ -196,12 +264,12 @@ describe("SCRUM-853: commission policy changes preserve existing accrual locks",
         const lockedMessage = "Completed sale commission amounts are locked. Use a correction workflow.";
         // Control: the same edit is refused before the policy changes.
         await expectAppError(edit(), "SALE_ALREADY_COMPLETED", lockedMessage);
-        await d.as.mutation(api.orgSettings.setCommissionMode, {
-          orgId: d.orgId, commissionMode: "MANUAL",
-        });
-        expect(await d.as.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBe("MANUAL");
-
         const before = await dbSnapshot(d.t, Object.keys(schema.tables));
+        await expectAppError(d.as.mutation(api.orgSettings.setCommissionMode, {
+          orgId: d.orgId, commissionMode: "MANUAL",
+        }), "VALIDATION_FAILED", "Settle completed sale commissions before switching to manual mode.");
+        expect(await dbSnapshot(d.t, Object.keys(schema.tables))).toEqual(before);
+        expect(await d.as.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBe(initialMode ?? "AUTO_MEMBER");
         await expectAppError(edit(), "SALE_ALREADY_COMPLETED", lockedMessage);
         expect(await dbSnapshot(d.t, Object.keys(schema.tables))).toEqual(before);
       } finally {
