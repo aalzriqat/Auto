@@ -109,6 +109,29 @@ An incorrectly targeted dispatch still fails visibly, but its job uses a
 different check name so it cannot permanently poison the current main tip.
 SCRUM-759's FD1 failure currently prevents this cloud gate from passing.
 
+### Release order at the tip (learned 2026-10-21)
+
+The release guard refuses a commit when a required check has no result, or when
+more than one result shares the same producer and name. So, in this order:
+
+1. Merge. The push to `main` runs `Trusted Main E2E (Playwright)`, which produces
+   the required `playwright` check. **Never dispatch `playwright.yml` by hand**:
+   its second result at the same SHA makes the guard refuse that commit for good.
+2. Wait for `Trusted Main E2E` to be green at the exact tip.
+3. Dispatch `accounting-rehearsal.yml` and the `autoflow-release-accounting-rehearsal`
+   repository event for the full tip SHA, and confirm both are green.
+4. Wait for SonarCloud to report on the tip. The push already runs `Sonar Main`
+   (it can take 30 to 50 minutes). Dispatch `sonar-main.yml` only if that run is
+   missing or cancelled; a second manual run can leave two results and refuse the
+   release, so cancel the extra one.
+5. Dispatch **Deploy production** for the full tip SHA. Its `authorize` job runs
+   the release guard; the `deploy` job then waits for the human approval.
+6. Merge nothing to `main` while the approval waits: any new commit moves the tip
+   and invalidates it.
+
+`Contract skew` shows red on `main` between a merge and the next deploy because
+the client is newer than the deployed backend. That is expected, not a blocker.
+
 ## Deploying the Convex backend to production
 
 Production is deployed by running the **Deploy production** workflow from the
@@ -451,7 +474,8 @@ every push to `main`, with a timeout sized for coverage plus the scan (SCRUM-384
 Two separate problems:
 
 - **Missing or cancelled at the tip:** the release refuses. Dispatch Sonar Main
-  on `main`, then confirm the producer-bound result at that exact SHA before
+  on `main` (only when the push-triggered run did not report, see the release
+  order above), then confirm the producer-bound result at that exact SHA before
   re-running the release:
 
   ```bash
