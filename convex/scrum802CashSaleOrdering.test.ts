@@ -195,6 +195,11 @@ const completionArgs = (s: SeededCashDealer, over: Record<string, unknown> = {})
 });
 
 describe("the pay-first refusal is raised before the first write on every completion path", () => {
+  // SCRUM-801: while the pilot refuses OTHER, completeSale and completeExistingSale refuse it (still with zero writes)
+  // before they reach the unpaid-balance check. Every other treatment keeps the pay-first refusal.
+  const refusalCodeFor = (resolution: { treatment: string }) =>
+    resolution.treatment === "OTHER" ? "DEPOSIT_OTHER_TREATMENT_DISABLED" : "CASH_SALE_BALANCE_UNPAID_REFUSED";
+
   test("completeSale: a part deposit plus a trade-in is refused with zero writes", async () => {
     const s = await seedCashDealer("ordpart", MODULES);
     const trade = await s.mkVehicle("VINORD_PART");
@@ -288,7 +293,7 @@ describe("the pay-first refusal is raised before the first write on every comple
       const refusal = await refusalDataOf(
         s.t.run((ctx) => completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution })))
       );
-      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
     });
 
@@ -308,7 +313,7 @@ describe("the pay-first refusal is raised before the first write on every comple
           completeExistingSale(recordingCtx(asMutationCtx(ctx), writes), { orgId: s.orgId, saleId: draftId, actorId: s.userId, depositResolution })
         )
       );
-      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
     });
 
@@ -361,7 +366,7 @@ describe("the pay-first refusal is raised before the first write on every comple
       const refusal = await refusalDataOf(
         s.t.run((ctx) => completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution })))
       );
-      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
     });
 
@@ -380,7 +385,7 @@ describe("the pay-first refusal is raised before the first write on every comple
           completeExistingSale(recordingCtx(asMutationCtx(ctx), writes), { orgId: s.orgId, saleId: draftId, actorId: s.userId, depositResolution })
         )
       );
-      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
     });
 
