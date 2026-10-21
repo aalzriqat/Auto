@@ -16,6 +16,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { effectiveCommissionMode } from "./utils/commissionMode";
+import { payFullPriceByDeposit } from "../test-utils/cashDealerFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -30,6 +31,7 @@ const MODULE_GLOB = import.meta.glob("./**/*.*s");
 const PERMISSIONS = [
   "create:sales", "view:sales", "edit:sales", "view:vehicles",
   "view:commissions", "manage:commissions", "view:finance", "manage:finance",
+  "confirm:finance_disbursement",
 ];
 
 /**
@@ -74,8 +76,10 @@ async function seedDealer(suffix: string, commissionMode?: "MANUAL" | "AUTO_MEMB
   const period = (await as.query(api.accountingPeriods.list, { orgId }))[0];
   await as.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
-  const completeSale = () =>
+  // SCRUM-802 (#526): a cash sale completes only once the deposit holds the full price, so the fixture pays first.
+  const completeSale = async () =>
     as.mutation(api.sales.create, {
+      quoteId: await payFullPriceByDeposit(as, { orgId, customerId, vehicleId, price: 15000 }),
       idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 15000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
     });
