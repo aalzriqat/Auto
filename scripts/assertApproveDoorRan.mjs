@@ -6,8 +6,9 @@ import { pathToFileURL } from "node:url";
 // is registered only when E2E_SEED_LEGACY_MANUAL_JOURNAL === "1". A lane that is
 // EXPECTED to prove it (trusted-main E2E) must not go green if the flag is dropped,
 // because then the test is simply never registered. This reads the Playwright JSON
-// report and fails unless exactly one test with the approve-door title exists and it
-// passed (not skipped, not failed, not interrupted, not duplicated).
+// report and fails unless exactly one test matching the approve-door file, describe
+// block, project and title exists and it passed (not skipped, not failed, not
+// interrupted, not duplicated).
 export const APPROVE_DOOR_TITLE =
   "approve of the seeded legacy draft is refused by the backend and the draft stays pending";
 
@@ -65,7 +66,7 @@ export function approveDoorErrors(report) {
     ];
   }
   if (found.length > 1) {
-    return [`approve-door test appears ${found.length} times; expected exactly one`];
+    return [`approve-door test appears ${found.length} times; expected exactly one matching test (file, describe block, project and title bound)`];
   }
   const [test] = found;
   const results = test.results ?? [];
@@ -105,7 +106,7 @@ export function runCli(argv, log = console) {
   }
   const errors = approveDoorErrors(report);
   for (const e of errors) log.error(`::error::${e}`);
-  if (errors.length === 0) log.log("approve-door proof ran and passed (exactly one test)");
+  if (errors.length === 0) log.log("approve-door proof ran and passed (exactly one matching test)");
   return errors.length === 0 ? 0 : 1;
 }
 
