@@ -89,6 +89,48 @@ jobs:
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
+      # The disposable preview starts without the backend variables the public lead
+      # form needs: websites:submitPublicLead threw "Backend Environment Variables
+      # Missing/Invalid: NEXT_PUBLIC_APP_URL", so the dealer-site spec never saw its
+      # thank-you. Set the two values browser-attack-swarm.yml sets, on this run's own
+      # preview only, through the same trusted control-plane claim.
+      - name: Give the disposable preview the public-form backend variables
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CONVEX_PREVIEW_CREATED_AT: ${{ env.CONVEX_PREVIEW_CREATED_AT }}
+        run: |
+          set -euo pipefail
+          # The pin step only warns when it fails. Without its recorded identity the
+          # always() cleanup step skips, so do not change a preview nothing will retire.
+          if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]; then
+            echo "Disposable preview has no pinned cleanup identity." >&2
+            exit 1
+          fi
+          ADMIN_KEY="$(
+            node --input-type=module <<'NODE'
+          import { resolveConvexPreviewCredentials } from "./scripts/intelligence/convexPreviewAuthority.mjs";
+          const resolved = await resolveConvexPreviewCredentials({
+            deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
+            previewName: process.env.CONVEX_PREVIEW_NAME,
+            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
+          });
+          process.stdout.write(resolved.adminKey);
+          NODE
+          )"
+          if [ -z "$ADMIN_KEY" ]; then
+            echo "Trusted control plane returned an empty preview deployment credential." >&2
+            exit 1
+          fi
+          echo "::add-mask::$ADMIN_KEY"
+          pnpm exec convex env set TURNSTILE_SECRET_KEY \
+            '1x0000000000000000000000000000000AA' --force \
+            --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$ADMIN_KEY"
+          pnpm exec convex env set NEXT_PUBLIC_APP_URL \
+            'http://127.0.0.1:3000' --force \
+            --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$ADMIN_KEY"
+
       - name: Seed the QA dealership
         run: node scripts/e2ePreviewBootstrap.mjs
         env:
