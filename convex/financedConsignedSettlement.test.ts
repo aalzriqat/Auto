@@ -7532,9 +7532,10 @@ describe("the closing matrix c16216 requires", () => {
     expect(claimsBefore).toBeDefined();
     expect(idempotency.calls).toBe(claimsBefore);
 
-    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    const sales = (await s.t.run((ctx) => ctx.db.query("sales").collect())).filter((r) => r.orgId === s.orgId);
     expect(sales).toHaveLength(0);
-    const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+    const deposits = (await s.t.run((ctx) => ctx.db.query("deposits").collect())).filter((r) => r.orgId === s.orgId);
+    expect(deposits).toHaveLength(1);
     expect(deposits[0].status).toBe("HELD");
     expect(deposits[0].holdActive).toBe(true);
     // Every row of every table is unchanged, not only the three read above.
@@ -7542,6 +7543,32 @@ describe("the closing matrix c16216 requires", () => {
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
     const after = await ledgerBySystemKey(s);
     expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(-3_000 * SCALE);
+  });
+
+  test("SCRUM-801: finalizing with the OTHER treatment is refused even when the deal holds no deposit", async () => {
+    const s = await seedDealership("p801finalizeNoDep");
+    let before: Awaited<ReturnType<typeof dbSnapshot>> | undefined;
+    let claimsBefore: number | undefined;
+
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        downPayment: 0,
+        depositResolution: { treatment: "OTHER", reason: "Nothing held" },
+        beforeFinalize: async () => {
+          before = await dbSnapshot(s.t, Object.keys(schema.tables));
+          claimsBefore = idempotency.calls;
+        },
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(claimsBefore).toBeDefined();
+    expect(idempotency.calls).toBe(claimsBefore);
+    const deposits = (await s.t.run((ctx) => ctx.db.query("deposits").collect())).filter((r) => r.orgId === s.orgId);
+    expect(deposits).toHaveLength(0);
+    const sales = (await s.t.run((ctx) => ctx.db.query("sales").collect())).filter((r) => r.orgId === s.orgId);
+    expect(sales).toHaveLength(0);
+    expect(before).toBeDefined();
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
   });
 });
 

@@ -1244,7 +1244,8 @@ async function resolveReservationDeposits(
     }
 
     case "OTHER":
-      // SCRUM-801: the one choke point for every completion door. Ahead of the
+      // SCRUM-801: a backstop. completeSale and completeExistingSale already refuse OTHER on entry, so nothing
+      // reaches this today; it stays so a new caller of the side effects cannot record OTHER. Ahead of the
       // shared-deposit and missing-reason refusals so the pilot reason wins.
       if (DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) refuseDepositOtherTreatment();
       return await recordOtherTreatment(ctx, {
@@ -2287,7 +2288,7 @@ export async function completeSale(
   // before the insert, so a refusal leaves no sale row, no vehicle status
   // change, no receivable and no queued accounting event behind.
   // SCRUM-801: OTHER is refused before the first read of the completion, so no door can write ahead of it.
-  // The shared choke point in resolveReservationDeposits still backs this up.
+  // The guard in resolveReservationDeposits is a backstop behind this one (pinned by consignedDepositResolution.test.ts).
   if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
     refuseDepositOtherTreatment();
   }
@@ -2405,7 +2406,7 @@ export async function completeExistingSale(
   }
 ): Promise<Id<"sales">> {
   // SCRUM-801: OTHER is refused before the first read of the completion, so no door can write ahead of it.
-  // The shared choke point in resolveReservationDeposits still backs this up.
+  // The guard in resolveReservationDeposits is a backstop behind this one (pinned by consignedDepositResolution.test.ts).
   if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
     refuseDepositOtherTreatment();
   }

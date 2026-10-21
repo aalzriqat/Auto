@@ -42,12 +42,15 @@ vi.mock("./rateLimit", () => ({
 // the real constant (true) unless a block below turns it off to pin what OTHER
 // does once the pilot ends. The callers read it at the call site, so this
 // getter reaches every door.
-const pilot = vi.hoisted(() => ({ otherDisabled: true }));
+const pilot = vi.hoisted(() => ({ otherDisabled: true, onlyAtChokePoint: false }));
 vi.mock("./utils/depositOtherContainment", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./utils/depositOtherContainment")>();
   return {
     ...actual,
     get DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED() {
+      // onlyAtChokePoint: the switch reads on only when read from resolveReservationDeposits, so every outer door guard
+      // passes and the guard inside that function is the only thing between OTHER and a recorded treatment.
+      if (pilot.onlyAtChokePoint) return /resolveReservationDeposits/.test(new Error().stack ?? "");
       return pilot.otherDisabled;
     },
   };
@@ -1254,6 +1257,36 @@ describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on
     });
   });
 
+  test("the guard inside resolveReservationDeposits refuses OTHER on its own when every outer door guard is bypassed", async () => {
+    const s = await seed("p801chokePoint");
+    pilot.onlyAtChokePoint = true;
+    try {
+      const before = await snapshotAllTables(s.t);
+      await expect(
+        completeWith(s, "THROUGH_DEALERSHIP", { treatment: "OTHER", reason: "Transferred to a replacement deal" })
+      ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+      expect(await snapshotAllTables(s.t)).toEqual(before);
+    } finally {
+      pilot.onlyAtChokePoint = false;
+    }
+  });
+
+  test("a legacy deposit already recorded as OTHER can still be refunded by a second approver", async () => {
+    // Rows written before the switch: hold released, status still HELD, the liability still on the books.
+    const s = await seed("p801legacy", { instalments: [DEPOSIT] });
+    await s.t.run((ctx) =>
+      ctx.db.patch(s.depositId, { holdActive: false, resolutionTreatment: "OTHER", resolutionReason: "Legacy approval", resolvedBy: s.userId, resolvedAt: Date.now() })
+    );
+    expect((await postedBySystemKey(s.t, s.orgId))[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(-DEPOSIT * SCALE);
+    await s.asManager.mutation(api.deposits.release, {
+      orgId: s.orgId, depositId: s.depositId, resolution: "REFUNDED", refundMethod: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.orgId).toBe(s.orgId);
+    expect(deposit?.status).toBe("REFUNDED");
+    expect((await postedBySystemKey(s.t, s.orgId))[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+  });
+
   test("the pilot refusal comes ahead of the missing-reason refusal", async () => {
     const s = await seed("p801noReason");
     await expect(
@@ -1262,7 +1295,9 @@ describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on
   });
 
   test("after OTHER is refused, a second approver can still refund the deposit", async () => {
-    const s = await seed("p801thenRefund");
+    // Recorded through deposits.create, so the receipt posts the customer-deposit liability this test then watches clear.
+    const s = await seed("p801thenRefund", { instalments: [DEPOSIT] });
+    expect((await postedBySystemKey(s.t, s.orgId))[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(-DEPOSIT * SCALE);
     await expect(
       completeAs(s.asManager, s, "THROUGH_DEALERSHIP", {
         treatment: "OTHER",
@@ -1275,9 +1310,10 @@ describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on
       refundMethod: "CASH",
     });
     const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.orgId).toBe(s.orgId);
     expect(deposit?.status).toBe("REFUNDED");
     const posted = await postedBySystemKey(s.t, s.orgId);
-    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(DEPOSIT * SCALE);
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
   });
 
   test("a deal with no deposit that states OTHER is refused too: the refusal sits ahead of every read, so it does not depend on a deposit existing", async () => {
