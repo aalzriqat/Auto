@@ -9,6 +9,7 @@ import {
 import { EGRESS_EVIDENCE_PATH } from "./browserEgressProofVerify.mjs";
 
 type WorkflowStep = {
+  id?: string;
   name?: string;
   if?: string;
   uses?: string;
