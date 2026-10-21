@@ -1003,11 +1003,23 @@ export default defineSchema({
    * the finance transaction). One deal can carry several lines, each its own
    * type and employee.
    *
-   * REGISTRATION ONLY. A line posts nothing to the ledger and is not paid by
-   * payroll; it exists so the deal screen can show the commissions against the
-   * deal and its net profit after them. The salesperson's own commission stays
-   * on `sales.commissionAmount` (its accrual and payment machinery is unchanged)
-   * and is added to these lines by the readers, never copied into a row here.
+   * LEDGER AND PAYROLL (owner approval 2026-10-19, SCRUM-783, PR #633):
+   * - Adding a line (convex/dealCommissions.ts addLine, hookDealCommissionLineAccrued
+   *   call) accrues one COMMISSION_ACCRUED event keyed on the line, dated at the
+   *   sale (Dr Commission Expense / Cr Commission Payable, convex/accounting/
+   *   workflowHooks.ts hookDealCommissionLineAccrued). With no chart of accounts
+   *   or open period yet, the accrual is queued in `pendingAccountingEvents`
+   *   and posts under its idempotency key once the chart or period is ready.
+   * - Removing an unpaid line, or cancelling its sale, reverses that accrual and
+   *   sets `removedAt` (hookDealCommissionLineReversed). A paid line refuses both.
+   * - A paid line (`paidAt` set, not removed) also blocks deal unwind: start and
+   *   finish refuse with DEAL_UNWIND_COMMISSION_PAID (convex/dealUnwind.ts
+   *   assertDealUnwindable).
+   * - Payroll pays an unpaid line on the employee's payslip (`payrollItems.
+   *   commissionLineIds`, convex/payroll.ts isDealLineOwed), then sets `paidAt`.
+   * The salesperson's own commission stays on `sales.commissionAmount` with its
+   * own accrual key; it is added to these lines by the readers, never copied
+   * into a row here. The deal screen shows the total and net profit after it.
    *
    * Amounts are integer minor units of `currency`, the organization's currency
    * when the line was written. A removed line is kept (`removedAt`) so the

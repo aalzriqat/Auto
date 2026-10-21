@@ -779,7 +779,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "convex/financialAudit.ts",
       "convex/accountingPeriods.ts",
       "components/accounting/**",
-      // SCRUM-849: the manual-journal date and closed-period swarm mission (attack, oracle and their tests) judges STATE_TRANSITION.
+      // SCRUM-849 / SCRUM-795: the accounting-date swarm mission (attack, oracle and their tests) judges STATE_TRANSITION. It now covers only the refused create door while manual journals are off; the date and closed-period rules are proven by the backend tests below.
       "scripts/intelligence/browserSwarmAccountingDate*",
     ],
     profile: profile({ economicImpact: "INDIRECT" }),
@@ -817,7 +817,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       ),
     ]),
     evidenceBoundary:
-      "This exact manual-journal and ordinary-posting period contract is executed. Specialized reopen, migration, and opening-balance policies have separate rules and are not implied by this invariant.",
+      "This exact manual-journal and ordinary-posting period contract is executed. The manual-journal proof (convex/manualJournalAccountingDate.test.ts) runs with the SCRUM-795 pilot switch MOCKED OFF: the shipped pilot build refuses createManualJournal and approveManualJournal (MANUAL_JOURNALS_DISABLED, owner ruling SCRUM-760 c22474/c22479), so this proves the contract that returns when the switch is flipped, not behaviour reachable in the pilot build. Specialized reopen, migration, and opening-balance policies have separate rules and are not implied by this invariant.",
   },
   {
     id: "CONS-1",

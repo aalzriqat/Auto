@@ -34,11 +34,21 @@
  * NOT claimed here.
  */
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+
+// SCRUM-795: manual journals are OFF in the shipped pilot build. This suite proves
+// the ENABLED behaviour (the switch is reversible), so it runs with the leaf off.
+vi.mock("./utils/pilotSwitches", async (importOriginal) => ({ ...(await importOriginal<typeof import("./utils/pilotSwitches")>()), MANUAL_JOURNALS_PILOT_DISABLED: false }));
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
 
 // SCRUM-802: a rehearsal drives the production path, so it runs with the real pilot containment ON (nothing in
 // this file or vitest.setup.ts turns it off; convex/scrum802OptOutCensus.test.ts pins that). A CASH sale here is

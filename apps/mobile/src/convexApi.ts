@@ -1813,10 +1813,12 @@ type OrgSettingsUpsertArgs = OrgScopedArgs & {
     minProfitAmount: number;
     commissionPct: number;
   }>;
-  commissionMode?: MobileCommissionMode;
   generatedLeadAutoAssignmentEnabled?: boolean;
   reservationHoldDays?: number;
 };
+
+// SCRUM-778: the commission mode changes only through orgSettings:setCommissionMode.
+type OrgSettingsSetCommissionModeArgs = OrgScopedArgs & { commissionMode: MobileCommissionMode };
 
 type PipelineStageUpdateArgs = OrgScopedArgs & {
   stageId: string;
@@ -2301,6 +2303,7 @@ export const api = {
   orgSettings: {
     get: makeFunctionReference<"query", OrgScopedArgs, MobileOrgSettings | null>("orgSettings:get"),
     upsert: makeFunctionReference<"mutation", OrgSettingsUpsertArgs, string>("orgSettings:upsert"),
+    setCommissionMode: makeFunctionReference<"mutation", OrgSettingsSetCommissionModeArgs, string>("orgSettings:setCommissionMode"),
   },
   orgPipelineStages: {
     list: makeFunctionReference<"query", OrgScopedArgs, MobilePipelineStage[]>(
@@ -3100,6 +3103,7 @@ export const api = {
   orgSettings: {
     get: FunctionReference<"query", "public", OrgScopedArgs, MobileOrgSettings | null>;
     upsert: FunctionReference<"mutation", "public", OrgSettingsUpsertArgs, string>;
+    setCommissionMode: FunctionReference<"mutation", "public", OrgSettingsSetCommissionModeArgs, string>;
   };
   orgPipelineStages: {
     list: FunctionReference<"query", "public", OrgScopedArgs, MobilePipelineStage[]>;

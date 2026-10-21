@@ -16,10 +16,16 @@
  *        receivable; other statuses and other orgs' rows never block.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
 
 const MODULES = import.meta.glob("./**/*.*s");
 

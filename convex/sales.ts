@@ -38,6 +38,7 @@ import {
 import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
+import { effectiveCommissionMode, isAutoCommissionMode } from "./utils/commissionMode";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
@@ -1426,8 +1427,8 @@ async function commissionPage(
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-    const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
+    const mode = effectiveCommissionMode(orgSettings);
+    const isAutoMode = isAutoCommissionMode(mode);
     // MANUAL mode has no calculator: an amount only ever exists because somebody
     // typed it on this page. Listing only sales that already carry one is a
     // closed loop — the first amount can never be entered. So in MANUAL mode
@@ -1652,8 +1653,8 @@ export const listCommissions = query({
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-    const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
+    const mode = effectiveCommissionMode(orgSettings);
+    const isAutoMode = isAutoCommissionMode(mode);
 
     // The pre-pagination predicate, unchanged: a positive commission, or an
     // AUTO completed sale whose commission was never computed.
@@ -2072,7 +2073,7 @@ export const setCommissionAmount = mutation({
         .query("orgSettings")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .unique();
-      const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+      const mode = effectiveCommissionMode(orgSettings);
 
       // AUTO-mode commissions are derived from the org's rules, so a completed
       // sale's amount is not hand-editable — changing it would silently diverge
@@ -2313,8 +2314,8 @@ export const recalculateCommission = mutation({
         .query("orgSettings")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .unique();
-      const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-      if (mode !== "AUTO_MEMBER" && mode !== "AUTO_TIERS") {
+      const mode = effectiveCommissionMode(orgSettings);
+      if (!isAutoCommissionMode(mode)) {
         throwAppError(
           AppErrorCode.VALIDATION_FAILED,
           "Recalculation only applies to automatic commission modes. Set the amount directly in manual mode."

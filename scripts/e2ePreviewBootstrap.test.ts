@@ -514,6 +514,31 @@ describe("main", () => {
     expect(seeded.expectedCloudUrl).toBe(ENV.NEXT_PUBLIC_CONVEX_URL);
   });
 
+  test("SCRUM-795: the seed key is OMITTED unless E2E_SEED_LEGACY_MANUAL_JOURNAL is exactly \"1\"", async () => {
+    const baseline = deps();
+    await main(ENV, baseline);
+    const baselineArgs = baseline.calls[0]!.args[4]!;
+    expect(Object.keys(JSON.parse(baselineArgs))).toEqual(["primary", "approver", "expectedCloudUrl"]);
+    expect(baselineArgs).not.toContain("seedLegacyManualJournalDraft");
+
+    for (const off of ["", "0", "true", "yes", " 1"]) {
+      const d = deps();
+      await main({ ...ENV, E2E_SEED_LEGACY_MANUAL_JOURNAL: off }, d);
+      expect(d.calls[0]!.args[4]).toBe(baselineArgs);
+    }
+
+    const on = deps();
+    await main({ ...ENV, E2E_SEED_LEGACY_MANUAL_JOURNAL: "1" }, on);
+    const seeded = JSON.parse(on.calls[0]!.args[4]!);
+    expect(seeded.seedLegacyManualJournalDraft).toBe(true);
+    expect({ ...seeded, seedLegacyManualJournalDraft: undefined }).toEqual({
+      ...JSON.parse(baselineArgs),
+      seedLegacyManualJournalDraft: undefined,
+    });
+    // The assert call never carries the seed flag.
+    expect(on.calls[1]!.args[4]).toBe(baseline.calls[1]!.args[4]);
+  });
+
   test("masks both addresses in the progress line", async () => {
     const d = deps();
 

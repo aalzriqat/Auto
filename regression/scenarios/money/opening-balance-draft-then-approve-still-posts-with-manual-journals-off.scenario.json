@@ -1,0 +1,56 @@
+{
+  "id": "opening-balance-draft-then-approve-still-posts-with-manual-journals-off",
+  "fingerprint": "eaba395a990e53ab7d99295c23b1c0bdb14bb06f8b912f91b888ed41f4543416",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum795-pilot-off",
+    "firstSeen": "2026-10-19"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "debitMinor": 1000000,
+        "creditMinor": 1000000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-reviewer",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "draft": "step1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journal.category",
+      "value": "OPENING_BALANCE"
+    },
+    {
+      "observable": "journal.status",
+      "value": "POSTED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22474",
+      "digest": "c2b86f2c093eb218d5181792a470347245bce150bcdb3fa778edda0c7ea64565"
+    }
+  ],
+  "impl": {
+    "file": "convex/manualJournalsPilotOff.scrum795.test.ts",
+    "testName": "draftOpeningBalance then approveOpeningBalance still succeeds with the switch ON"
+  },
+  "matrixRow": "SCRUM-50-opening-balance-paths"
+}

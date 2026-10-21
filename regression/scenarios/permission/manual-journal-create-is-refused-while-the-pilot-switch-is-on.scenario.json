@@ -1,0 +1,45 @@
+{
+  "id": "manual-journal-create-is-refused-while-the-pilot-switch-is-on",
+  "fingerprint": "f6d2bf4240176670223721beceed52c81520e00d9b3bc4d3d76abd86090e683b",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum795-pilot-off",
+    "firstSeen": "2026-10-19"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "financialAudit.createManualJournal",
+      "input": {
+        "balanced": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "MANUAL_JOURNALS_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22474",
+      "digest": "c2b86f2c093eb218d5181792a470347245bce150bcdb3fa778edda0c7ea64565"
+    }
+  ],
+  "impl": {
+    "file": "convex/manualJournalsPilotOff.scrum795.test.ts",
+    "testName": "createManualJournal is refused with the coded reason and changes nothing"
+  },
+  "matrixRow": "SCRUM-50-manual-journal-off"
+}

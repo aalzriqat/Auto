@@ -42,6 +42,7 @@ import { assertValidAccountingDate } from "./accountingPeriods";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP, FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertClearedChequeReturnAllowed } from "./utils/postDeliveryDoorContainment";
 import { RETAINED_CREDIT_MESSAGES } from "./utils/retainedCreditMessages";
 import {
   areSaleInvoiceReceiptDoorsDisabled,
@@ -2778,6 +2779,11 @@ export const returnClearedCheque = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-760 decision B: reversing a cheque after the bank cleared it is a post-delivery money
+    // reversal excluded from the narrow pilot. Refused right after tenant auth, before any read or
+    // write and before the idempotency wrapper (a stored replay is refused too).
+    // See utils/postDeliveryDoorContainment.ts.
+    assertClearedChequeReturnAllowed();
     if (
       args.bankFeeMinor !== undefined &&
       (!Number.isSafeInteger(args.bankFeeMinor) || args.bankFeeMinor < 0)

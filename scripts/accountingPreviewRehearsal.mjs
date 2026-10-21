@@ -155,6 +155,8 @@ export async function convexCall(
     ok: false,
     // ConvexError payloads arrive under errorData; plain throws under errorMessage.
     error: String(body.errorData?.message ?? body.errorData ?? body.errorMessage ?? "unknown error"),
+    // Additive: the machine code of a coded refusal, so an expected-refusal case can assert the specific code.
+    ...(typeof body.errorData?.code === "string" ? { errorCode: body.errorData.code } : {}),
   };
 }
 
