@@ -80,6 +80,7 @@ test.describe("pilot: cash pay-first and deal commissions", () => {
     const { model } = await createVehicle(page);
     await cashQuote(page, model);
     await payAndOpenDeal(page);
+    const dealUrl = page.url();
 
     const row = page.getByTestId("deal-commissions-row");
     await expect(row).toBeVisible();
@@ -112,8 +113,7 @@ test.describe("pilot: cash pay-first and deal commissions", () => {
     await page.keyboard.press("Escape");
 
     // The new line is part of the deal page's total.
-    await page.goBack();
-    await page.reload();
+    await page.goto(dealUrl);
     const rowAfter = page.getByTestId("deal-commissions-row");
     await expect(rowAfter).toBeVisible();
     const totalAfter = await rowAfter.getByRole("button").first().innerText();
