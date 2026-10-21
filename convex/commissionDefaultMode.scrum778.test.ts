@@ -17,6 +17,8 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { effectiveCommissionMode } from "./utils/commissionMode";
 import { payFullPriceByDeposit } from "../test-utils/cashDealerFixture";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
+import { expectAppError } from "../test-utils/expectAppError";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -174,6 +176,41 @@ describe("SCRUM-778: an unset commission mode keeps behaving as AUTO_MEMBER", ()
  * be able to switch a dealership into automatic commission — only a deliberate
  * mode choice may, through `setCommissionMode`.
  */
+describe("SCRUM-853: commission policy changes preserve existing accrual locks", () => {
+  test.each([undefined, "AUTO_MEMBER"] as const)(
+    "a commission accrued under %s stays locked after the owner chooses MANUAL",
+    async (initialMode) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const d = await seedDealer(`853_${initialMode ?? "unset"}`, initialMode);
+        const saleId = await d.completeSale();
+        const sale = await d.t.run((ctx) => ctx.db.get(saleId));
+        expect(sale?.status).toBe("COMPLETED");
+        expect(sale?.commissionPaidAt).toBeUndefined();
+        expect(sale?.commissionAmount).toBeGreaterThan(1);
+        expect(await d.commissionPayableMinor()).toBeGreaterThan(0);
+
+        const edit = () => d.as.mutation(api.sales.setCommissionAmount, {
+          orgId: d.orgId, saleId, commissionAmount: 1,
+        });
+        const lockedMessage = "Completed sale commission amounts are locked. Use a correction workflow.";
+        // Control: the same edit is refused before the policy changes.
+        await expectAppError(edit(), "SALE_ALREADY_COMPLETED", lockedMessage);
+        await d.as.mutation(api.orgSettings.setCommissionMode, {
+          orgId: d.orgId, commissionMode: "MANUAL",
+        });
+        expect(await d.as.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBe("MANUAL");
+
+        const before = await dbSnapshot(d.t, Object.keys(schema.tables));
+        await expectAppError(edit(), "SALE_ALREADY_COMPLETED", lockedMessage);
+        expect(await dbSnapshot(d.t, Object.keys(schema.tables))).toEqual(before);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+});
+
 describe("SCRUM-778: an automatic mode needs a deliberate choice", () => {
   const storedMode = (d: Awaited<ReturnType<typeof seedDealer>>) =>
     d.t.run(async (ctx) => {
