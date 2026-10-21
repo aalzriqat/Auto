@@ -475,6 +475,16 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
     expect(workflows.some((workflow) => workflow.on?.issue_comment?.types?.includes("edited") &&
       workflow.on.issue_comment.types.includes("deleted"))).toBe(true);
   });
+  test("an unrelated comment cannot cancel a pending revocation check", () => {
+    const workflow = parse(readFileSync(path.join(__dirname, "../../.github/workflows/skill-evidence-refresh.yml"), "utf8"));
+    const group = (commentId: number) => workflow.concurrency.group
+      .replaceAll("${{ github.event.issue.number }}", "7")
+      .replaceAll("${{ github.event.comment.id }}", String(commentId));
+    // Actions cancels before our script can decide whether a comment matters.
+    // A revocation followed by an unrelated comment must remain in separate groups.
+    expect(group(123)).not.toBe(group(124));
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(true);
+  });
   const sha = "a".repeat(40);
   const session = "df7e4a61-cb22-4774-9ed8-3c191d397ed2";
   const implementer = "01a15fef-a4fe-79e2-a9a5-d91bff56cd10";
