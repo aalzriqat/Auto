@@ -88,7 +88,7 @@ test.describe("pilot: cash pay-first and deal commissions", () => {
     console.log(`[pilot-commissions] deal row: ${(await row.innerText()).replace(/\s+/g, " ")}`);
     await shot(page, testInfo, "3-deal-commissions-collapsed");
     await row.getByRole("button", { name: /Total commissions/ }).click();
-    await expect(row.getByText("Salesperson's commission")).toBeVisible();
+    await expect(row.getByText("Salesperson's commission", { exact: true })).toBeVisible();
     await shot(page, testInfo, "4-deal-commissions-expanded");
     const totalBefore = await row.getByRole("button").first().innerText();
 
