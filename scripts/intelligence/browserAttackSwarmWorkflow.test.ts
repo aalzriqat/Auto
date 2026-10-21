@@ -280,6 +280,10 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const run = String(setter?.run ?? "");
     const guard = run.indexOf('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
     expect(guard, "a CONVEX_PREVIEW_CREATED_AT guard in the setter").toBeGreaterThanOrEqual(0);
+    // The guard comes before the admin-key claim too, so a failed pin touches the control plane not at all.
+    const claim = run.indexOf("resolveConvexPreviewCredentials");
+    expect(claim).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeLessThan(claim);
     expect(guard).toBeLessThan(run.indexOf("convex env set"));
     expect(run.slice(guard, run.indexOf("convex env set"))).toContain("exit 1");
     const pinIndex = steps.findIndex((entry) => String(entry.run ?? "").includes("previewDeploymentLifecycle.mjs pin"));
