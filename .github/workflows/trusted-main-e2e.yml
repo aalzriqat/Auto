@@ -98,10 +98,13 @@ jobs:
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1"
 
       - name: Run full Playwright suite
+        id: playwright
         run: pnpm exec playwright test
         env:
+          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1"
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
@@ -114,12 +117,21 @@ jobs:
           E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
           CI: true
 
+      # SCRUM-795: the approve-door test is registered only when the seed flag is
+      # "1". Fail the lane if it did not run and pass, so dropping the flag from the
+      # run step cannot go green. Skipped only if the suite step never started.
+      - name: Assert the approve-door proof ran
+        if: always() && steps.playwright.conclusion != 'skipped'
+        run: node scripts/assertApproveDoorRan.mjs playwright-json/results.json
+
       - name: Upload Playwright report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: trusted-main-playwright-report
-          path: playwright-report/
+          path: |
+            playwright-report/
+            playwright-json/
           retention-days: 14
 
       - name: Delete the disposable preview

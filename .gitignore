@@ -19,6 +19,7 @@ coverage-contract-skew/
 
 # Playwright — .auth/ holds a real signed-in storageState (session cookies)
 playwright-report/
+playwright-json/
 test-results/
 playwright/.auth/
 

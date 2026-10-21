@@ -1,0 +1,46 @@
+{
+  "id": "opening-balance-direct-post-still-works-for-the-owner-with-manual-journals-off",
+  "fingerprint": "9a9d06351ae1ef6a3c463d2c49b95a9ed8c07cbd638182c8918a1e0191ba7826",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum795-pilot-off",
+    "firstSeen": "2026-10-19"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "debitMinor": 1000000,
+        "creditMinor": 1000000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journal.category",
+      "value": "OPENING_BALANCE"
+    },
+    {
+      "observable": "journal.status",
+      "value": "POSTED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22474",
+      "digest": "c2b86f2c093eb218d5181792a470347245bce150bcdb3fa778edda0c7ea64565"
+    }
+  ],
+  "impl": {
+    "file": "convex/manualJournalsPilotOff.scrum795.test.ts",
+    "testName": "postOpeningBalanceDirect still succeeds for the owner with the switch ON"
+  },
+  "matrixRow": "SCRUM-50-opening-balance-paths"
+}
