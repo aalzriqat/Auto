@@ -1,0 +1,61 @@
+{
+  "id": "released-share-other-refused-during-pilot",
+  "fingerprint": "1d3fa0182066c1cfbbbe6cadd20fdd20614ee3f9b07477ef8f71f1e82244041f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum801-pilot-other",
+    "firstSeen": "2026-10-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "deposits.resolveReleasedAllocation",
+      "input": {
+        "treatment": "OTHER",
+        "reason": "present"
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "deposits.resolveReleasedAllocation",
+      "input": {
+        "treatment": "REFUND_TO_CUSTOMER",
+        "method": "CASH"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "DEPOSIT_OTHER_TREATMENT_DISABLED"
+    },
+    {
+      "observable": "step1.moneyRows",
+      "value": 0
+    },
+    {
+      "observable": "step2.refundCashOut",
+      "value": 3000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-795#c22485",
+      "digest": "bd755080a878c8ff3d11c74259c7d36a7395cf1d926274131ca7927f65135378"
+    }
+  ],
+  "impl": {
+    "file": "convex/multiVehicleDepositAllocation.test.ts",
+    "testName": "an approver is refused with the pilot code and nothing is written"
+  },
+  "matrixRow": "SCRUM-801-deposit-other"
+}

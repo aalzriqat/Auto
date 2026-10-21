@@ -320,6 +320,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Payment links are not available yet. Nothing has been changed.",
     "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",
   ],
+  // SCRUM-801 (owner, SCRUM-795 c22485): convex/utils/depositOtherContainment.ts.
+  ServerError_DEPOSIT_OTHER_TREATMENT_DISABLED: [
+    "The 'other' deposit treatment is not available yet. Refund or forfeit the deposit instead. Nothing has been changed.",
+    "معالجة العربون «أخرى» غير متاحة حاليًا. يمكنك إعادة العربون إلى العميل أو مصادرته بدلًا من ذلك. لم يتم تغيير أي شيء.",
+  ],
   // SCRUM-795 (SCRUM-50): manual journals are off for the pilot.
   ServerError_MANUAL_JOURNALS_DISABLED: [
     "Manual journal entries are turned off during the pilot. Nothing has been changed.",

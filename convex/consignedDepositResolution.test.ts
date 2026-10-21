@@ -16,7 +16,8 @@
  * it can be nothing at all. So the treatment has to be stated.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test, vi } from "vitest";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { SYSTEM_KEYS, DEFAULT_CHART } from "./utils/defaultChart";
@@ -36,6 +37,53 @@ vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
+
+// SCRUM-801: the OTHER treatment is switched off for the pilot. The switch reads
+// the real constant (true) unless a block below turns it off to pin what OTHER
+// does once the pilot ends. The callers read it at the call site, so this
+// getter reaches every door.
+const pilot = vi.hoisted(() => ({ otherDisabled: true, onlyAfterSaleInsert: false, saleInserted: false, readsAfterInsert: 0 }));
+vi.mock("./utils/depositOtherContainment", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/depositOtherContainment")>();
+  return {
+    ...actual,
+    get DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED() {
+      // onlyAfterSaleInsert: the switch reads on only once the sale row exists. Every door guard runs before the insert,
+      // so the single read that can fire is the one inside resolveReservationDeposits. `readsAfterInsert` proves it ran.
+      if (pilot.onlyAfterSaleInsert) {
+        if (pilot.saleInserted) pilot.readsAfterInsert += 1;
+        return pilot.saleInserted;
+      }
+      return pilot.otherDisabled;
+    },
+  };
+});
+
+// SCRUM-801: consumeRootForSale is the first call of applySaleCompletionSideEffects, which runs after the sale insert.
+vi.mock("./commitments", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./commitments")>();
+  return {
+    ...actual,
+    consumeRootForSale: ((...args: Parameters<typeof actual.consumeRootForSale>) => {
+      pilot.saleInserted = true;
+      return actual.consumeRootForSale(...args);
+    }) as typeof actual.consumeRootForSale,
+  };
+});
+
+// SCRUM-801: records every runWithIdempotency call, which is the first write
+// (the idempotency claim) of each completion door. Passthrough otherwise.
+const idempotency = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("./utils/idempotency", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/idempotency")>();
+  return {
+    ...actual,
+    runWithIdempotency: ((...args: Parameters<typeof actual.runWithIdempotency>) => {
+      idempotency.calls += 1;
+      return actual.runWithIdempotency(...args);
+    }) as typeof actual.runWithIdempotency,
+  };
+});
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -287,6 +335,31 @@ async function postedBySystemKey(
     }
     return totals;
   });
+}
+
+/**
+ * What a refund must leave behind: a POSTED debit on the customer-deposit liability for the full amount, and a net of
+ * zero over every entry that was not voided (reversed entries counted). POSTED-only zero would also pass if the receipt
+ * were merely marked REVERSED, so the debit is asserted by itself.
+ */
+async function expectDepositRefundedInLedger(
+  t: ReturnType<typeof convexTestWithComponents>,
+  orgId: string,
+  amountMinor: number
+) {
+  const debits = await t.run(async (ctx) => {
+    const account = (await ctx.db.query("chartOfAccounts").collect()).find(
+      (a) => a.orgId === orgId && a.systemKey === SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY
+    );
+    const entries = (await ctx.db.query("journalEntries").collect()).filter((e) => e.orgId === orgId && e.status === "POSTED");
+    const lines = (await ctx.db.query("journalLines").collect()).filter(
+      (l) => l.accountId === account?._id && entries.some((e) => e._id === l.journalEntryId) && l.debitMinor > 0
+    );
+    return lines.map((l) => l.debitMinor);
+  });
+  expect(debits).toEqual([amountMinor]);
+  const net = await postedBySystemKey(t, orgId, { includeReversed: true });
+  expect(net[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
 }
 
 type RefundMethod = "CASH" | "BANK_TRANSFER" | "PAYMENT_LINK" | "CARD" | "CHEQUE" | "OTHER";
@@ -1061,7 +1134,272 @@ describe("REFUND_TO_CUSTOMER and FORFEITED keep every control they carry elsewhe
   });
 });
 
-describe("OTHER", () => {
+/** Every row of every schema table, so a refusal can be shown to have written nothing. */
+const snapshotAllTables = (t: ReturnType<typeof convexTestWithComponents>) =>
+  dbSnapshot(t, Object.keys(schema.tables));
+
+describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on", () => {
+  test("the shipped switch is on", async () => {
+    const actual = await vi.importActual<typeof import("./utils/depositOtherContainment")>(
+      "./utils/depositOtherContainment"
+    );
+    expect(actual.DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED).toBe(true);
+  });
+
+  test("sales.create refuses OTHER with the pilot code and writes nothing", async () => {
+    const s = await seed("p801create");
+    const before = await snapshotAllTables(s.t);
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", {
+        treatment: "OTHER",
+        reason: "Transferred to a replacement deal per manager approval #114",
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(await snapshotAllTables(s.t)).toEqual(before);
+  });
+
+  test("sales.completeFromQuote refuses OTHER with the pilot code and writes nothing", async () => {
+    const s = await seed("p801quote");
+    const before = await snapshotAllTables(s.t);
+    await expect(
+      s.asUser.mutation(api.sales.completeFromQuote, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: s.orgId,
+        quoteId: s.quoteId,
+        supplierSettlementRoute: "THROUGH_DEALERSHIP",
+        depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(await snapshotAllTables(s.t)).toEqual(before);
+  });
+
+  test("sales.completeDraft refuses OTHER with the pilot code and writes nothing", async () => {
+    const s = await seed("p801draft");
+    // `createDraft` never names a quote (SCRUM-425), so a quote-linked draft is
+    // legacy data: link one directly, which is the only way a draft reaches
+    // the deposit resolution at completion.
+    const saleId = await s.asUser.mutation(api.sales.createDraft, {
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      customerId: s.customerId,
+      salespersonId: s.userId,
+      salePrice: SALE_PRICE,
+      saleDate: Date.now(),
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+    });
+    await s.t.run((ctx) => ctx.db.patch(saleId, { quoteId: s.quoteId }));
+    const before = await snapshotAllTables(s.t);
+    await expect(
+      s.asUser.mutation(api.sales.completeDraft, {
+        orgId: s.orgId,
+        saleId,
+        idempotencyKey: crypto.randomUUID(),
+        depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(await snapshotAllTables(s.t)).toEqual(before);
+  });
+
+  // convex-test rolls a throwing mutation back, so a snapshot alone cannot see a write that happened
+  // BEFORE the refusal. These cells record the writes themselves: the refusal must precede the first one.
+  describe("the refusal precedes the first write on every door", () => {
+    const WRITES = new Set(["insert", "patch", "replace", "delete"]);
+
+    test.each([
+      ["sales.create", "p801wCreate"],
+      ["sales.completeFromQuote", "p801wQuote"],
+      ["sales.completeDraft", "p801wDraft"],
+    ] as const)("%s refuses before its idempotency claim is written", async (door, tag) => {
+      const s = await seed(tag);
+      const depositResolution = { treatment: "OTHER" as const, reason: "Transferred to a replacement deal" };
+      let attempt: () => Promise<unknown>;
+      if (door === "sales.create") {
+        attempt = () => completeWith(s, "THROUGH_DEALERSHIP", depositResolution);
+      } else if (door === "sales.completeFromQuote") {
+        attempt = () =>
+          s.asUser.mutation(api.sales.completeFromQuote, {
+            idempotencyKey: crypto.randomUUID(), orgId: s.orgId, quoteId: s.quoteId,
+            supplierSettlementRoute: "THROUGH_DEALERSHIP", depositResolution,
+          });
+      } else {
+        const saleId = await s.asUser.mutation(api.sales.createDraft, {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId,
+          salePrice: SALE_PRICE, saleDate: Date.now(), supplierSettlementRoute: "THROUGH_DEALERSHIP",
+        });
+        await s.t.run((ctx) => ctx.db.patch(saleId, { quoteId: s.quoteId }));
+        attempt = () =>
+          s.asUser.mutation(api.sales.completeDraft, {
+            orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID(), depositResolution,
+          });
+      }
+      const before = await snapshotAllTables(s.t);
+      const claimsBefore = idempotency.calls;
+      await expect(attempt()).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+      expect(idempotency.calls).toBe(claimsBefore);
+      expect(await snapshotAllTables(s.t)).toEqual(before);
+    });
+
+    // The shared completion entry points, called directly: a recording db shows no write ran before the refusal.
+    const recordingCtx = (ctx: { db: object }, writes: string[]) =>
+      new Proxy(ctx, {
+        get(target, prop, receiver) {
+          if (prop !== "db") return Reflect.get(target, prop, receiver);
+          return new Proxy(target.db, {
+            get(db, method) {
+              const value = Reflect.get(db, method) as unknown;
+              if (typeof method === "string" && WRITES.has(method)) {
+                return (...args: unknown[]) => {
+                  writes.push(method);
+                  return (value as (...a: unknown[]) => unknown).apply(db, args);
+                };
+              }
+              return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(db) : value;
+            },
+          });
+        },
+      }) as never;
+
+    test("completeSale refuses OTHER before any db write", async () => {
+      const s = await seed("p801wUtilSale");
+      const { completeSale } = await import("./utils/saleCompletion");
+      const writes: string[] = [];
+      await expect(
+        s.t.run((ctx) =>
+          completeSale(recordingCtx(ctx, writes), {
+            orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId,
+            salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED", quoteId: s.quoteId,
+            supplierSettlementRoute: "THROUGH_DEALERSHIP", actorId: s.userId,
+            depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
+          })
+        )
+      ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+      expect(writes).toEqual([]);
+    });
+
+    test("completeExistingSale refuses OTHER before any db write", async () => {
+      const s = await seed("p801wUtilDraft");
+      const saleId = await s.asUser.mutation(api.sales.createDraft, {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId,
+        salePrice: SALE_PRICE, saleDate: Date.now(), supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      });
+      await s.t.run((ctx) => ctx.db.patch(saleId, { quoteId: s.quoteId }));
+      const { completeExistingSale } = await import("./utils/saleCompletion");
+      const writes: string[] = [];
+      await expect(
+        s.t.run((ctx) =>
+          completeExistingSale(recordingCtx(ctx, writes), {
+            orgId: s.orgId, saleId, actorId: s.userId,
+            depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
+          })
+        )
+      ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+      expect(writes).toEqual([]);
+    });
+  });
+
+  test("the guard inside resolveReservationDeposits refuses OTHER on its own when every outer door guard is bypassed", async () => {
+    const s = await seed("p801chokePoint");
+    pilot.onlyAfterSaleInsert = true;
+    pilot.saleInserted = false;
+    pilot.readsAfterInsert = 0;
+    try {
+      const before = await snapshotAllTables(s.t);
+      await expect(
+        completeWith(s, "THROUGH_DEALERSHIP", { treatment: "OTHER", reason: "Transferred to a replacement deal" })
+      ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+      // The refusal came from a read made after the insert, i.e. from the guard inside resolveReservationDeposits.
+      expect(pilot.readsAfterInsert).toBeGreaterThanOrEqual(1);
+      expect(await snapshotAllTables(s.t)).toEqual(before);
+    } finally {
+      pilot.onlyAfterSaleInsert = false;
+      pilot.saleInserted = false;
+    }
+  });
+
+  test("a legacy deposit already recorded as OTHER can still be refunded by a second approver", async () => {
+    // Rows written before the switch: hold released, status still HELD, the liability still on the books.
+    const s = await seed("p801legacy", { instalments: [DEPOSIT] });
+    await s.t.run((ctx) =>
+      ctx.db.patch(s.depositId, { holdActive: false, resolutionTreatment: "OTHER", resolutionReason: "Legacy approval", resolvedBy: s.userId, resolvedAt: Date.now() })
+    );
+    expect((await postedBySystemKey(s.t, s.orgId))[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(-DEPOSIT * SCALE);
+    await s.asManager.mutation(api.deposits.release, {
+      orgId: s.orgId, depositId: s.depositId, resolution: "REFUNDED", refundMethod: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.orgId).toBe(s.orgId);
+    expect(deposit?.status).toBe("REFUNDED");
+    expect((await postedBySystemKey(s.t, s.orgId))[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+    await expectDepositRefundedInLedger(s.t, s.orgId, DEPOSIT * SCALE);
+  });
+
+  test("the pilot refusal comes ahead of the missing-reason refusal", async () => {
+    const s = await seed("p801noReason");
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", { treatment: "OTHER" })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+  });
+
+  test("after OTHER is refused, a second approver can still refund the deposit", async () => {
+    // Recorded through deposits.create, so the receipt posts the customer-deposit liability this test then watches clear.
+    const s = await seed("p801thenRefund", { instalments: [DEPOSIT] });
+    expect((await postedBySystemKey(s.t, s.orgId))[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(-DEPOSIT * SCALE);
+    await expect(
+      completeAs(s.asManager, s, "THROUGH_DEALERSHIP", {
+        treatment: "OTHER",
+        reason: "Transferred to a replacement deal",
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+
+    await completeAs(s.asManager, s, "THROUGH_DEALERSHIP", {
+      treatment: "REFUND_TO_CUSTOMER",
+      refundMethod: "CASH",
+    });
+    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.orgId).toBe(s.orgId);
+    expect(deposit?.status).toBe("REFUNDED");
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+    await expectDepositRefundedInLedger(s.t, s.orgId, DEPOSIT * SCALE);
+  });
+
+  test("a deal with no deposit that states OTHER is refused too: the refusal sits ahead of every read, so it does not depend on a deposit existing", async () => {
+    // Behaviour change from the first SCRUM-801 cut, which only refused once a deposit was resolved
+    // (and so completed this deal). The refusal now precedes the first write on every door, so it
+    // cannot wait to learn whether a deposit exists. finalizeDeal already refused the same way.
+    const s = await seed("p801noDeposit", { instalments: [] });
+    const before = await snapshotAllTables(s.t);
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", { treatment: "OTHER", reason: "Nothing held" })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(await snapshotAllTables(s.t)).toEqual(before);
+    expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(0);
+  });
+
+  test("an unapplied deposit's message no longer offers the other treatment", async () => {
+    const s = await seed("p801message");
+    const attempt = completeWith(s, "THROUGH_DEALERSHIP", undefined, { salePriceOverride: BELOW_DEPOSIT });
+    await expect(attempt).rejects.toThrow(/larger than what the dealership billed the customer/i);
+    await expect(attempt).rejects.not.toThrow(/other treatment/i);
+  });
+});
+
+// The behaviour OTHER keeps for when the pilot switch is turned off.
+describe("OTHER, with the SCRUM-801 pilot switch off", () => {
+  beforeEach(() => {
+    pilot.otherDisabled = false;
+  });
+  afterEach(() => {
+    pilot.otherDisabled = true;
+  });
+
+  test("an unapplied deposit's message offers the other treatment", async () => {
+    const s = await seed("p801messageOff");
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", undefined, { salePriceOverride: BELOW_DEPOSIT })
+    ).rejects.toThrow(/an approved other treatment with a reason/i);
+  });
+
   test("requires a reason", async () => {
     const s = await seed("otherNoReason");
     await expect(

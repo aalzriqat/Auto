@@ -21,6 +21,8 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { refusalDataOf } from "../test-utils/financedDealFixture";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
+import schema from "./schema";
 import { seedCashDealer, type SeededCashDealer } from "../test-utils/cashDealerFixture";
 import { completeExistingSale, completeSale, completeSalesForLineItems } from "./utils/saleCompletion";
 
@@ -30,6 +32,16 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const MODULES = import.meta.glob("./**/*.*s");
+
+/**
+ * Every row of every table, so a refusal can be shown to have written nothing in ANY tenant (a write to another org
+ * would change this too). The dealer's own deposits must exist, so the comparison cannot be over an empty world.
+ */
+async function tableSnapshot(s: SeededCashDealer) {
+  const all = await dbSnapshot(s.t, Object.keys(schema.tables));
+  expect((all.deposits ?? []).some((row) => (row as { orgId?: string }).orgId === s.orgId)).toBe(true);
+  return all;
+}
 
 function recordingCtx(ctx: MutationCtx, writes: string[]): MutationCtx {
   const WRITES = new Set(["insert", "patch", "replace", "delete"]);
@@ -195,6 +207,11 @@ const completionArgs = (s: SeededCashDealer, over: Record<string, unknown> = {})
 });
 
 describe("the pay-first refusal is raised before the first write on every completion path", () => {
+  // SCRUM-801: while the pilot refuses OTHER, completeSale and completeExistingSale refuse it (still with zero writes)
+  // before they reach the unpaid-balance check. Every other treatment keeps the pay-first refusal.
+  const refusalCodeFor = (resolution: { treatment: string }) =>
+    resolution.treatment === "OTHER" ? "DEPOSIT_OTHER_TREATMENT_DISABLED" : "CASH_SALE_BALANCE_UNPAID_REFUSED";
+
   test("completeSale: a part deposit plus a trade-in is refused with zero writes", async () => {
     const s = await seedCashDealer("ordpart", MODULES);
     const trade = await s.mkVehicle("VINORD_PART");
@@ -280,16 +297,18 @@ describe("the pay-first refusal is raised before the first write on every comple
     ["FORFEITED", { treatment: "FORFEITED" }],
     ["OTHER (with a reason)", { treatment: "OTHER", reason: "manager-approved arrangement" }],
   ] as const)("a fully deposited cash sale whose deposit is stated as %s", (_label, depositResolution) => {
-    test("completeSale is refused on the unpaid balance with zero writes", async () => {
+    test("completeSale is refused with zero writes", async () => {
       const s = await seedCashDealer(`ordt${_label.length}${_label[0]}`, MODULES);
       const quoteId = await quoteFor(s);
       await deposit(s, quoteId, 20_000);
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) => completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution })))
       );
-      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
 
     test("completeExistingSale (a draft) is refused with zero writes", async () => {
@@ -302,20 +321,23 @@ describe("the pay-first refusal is raised before the first write on every comple
       } as never);
       // The draft door takes no quote; completing a draft that is bound to one is the shape under test.
       await s.t.run((ctx) => ctx.db.patch(draftId, { quoteId }));
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) =>
           completeExistingSale(recordingCtx(asMutationCtx(ctx), writes), { orgId: s.orgId, saleId: draftId, actorId: s.userId, depositResolution })
         )
       );
-      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
 
     test("completeSalesForLineItems refuses a single funded car with zero writes", async () => {
       const s = await seedCashDealer(`ordl${_label.length}${_label[0]}`, MODULES);
       const quoteId = await quoteFor(s);
       await deposit(s, quoteId, 20_000);
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) =>
@@ -328,6 +350,7 @@ describe("the pay-first refusal is raised before the first write on every comple
       );
       expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
       expect(writes).toEqual([]);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
   });
 
@@ -355,14 +378,16 @@ describe("the pay-first refusal is raised before the first write on every comple
     }
     const tag = label.replace(/[^A-Za-z]/g, "").slice(0, 12);
 
-    test("completeSale is refused on the unpaid balance with zero writes", async () => {
+    test("completeSale is refused with zero writes", async () => {
       const { s, quoteId } = await twoCarQuote(`a${tag}`);
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) => completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution })))
       );
-      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
 
     test("completeExistingSale (a draft bound to the shared quote) is refused with zero writes", async () => {
@@ -374,18 +399,21 @@ describe("the pay-first refusal is raised before the first write on every comple
       // The draft door takes no quote; completing a draft that is bound to one is the shape under test. `sales.createDraft`
       // takes no `quoteId` (SCRUM-425), so this is a legacy / defence-in-depth shape, not a path a user can reach.
       await s.t.run((ctx) => ctx.db.patch(draftId, { quoteId }));
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) =>
           completeExistingSale(recordingCtx(asMutationCtx(ctx), writes), { orgId: s.orgId, saleId: draftId, actorId: s.userId, depositResolution })
         )
       );
-      expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
+      expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
 
     test("completeSalesForLineItems is refused for BOTH cars with zero writes", async () => {
       const { s, quoteId, items } = await twoCarQuote(`b${tag}`);
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) =>
@@ -397,6 +425,7 @@ describe("the pay-first refusal is raised before the first write on every comple
       );
       expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
       expect(writes).toEqual([]);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
   });
 

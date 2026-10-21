@@ -16,6 +16,10 @@ import {
   type DepositTreatment,
 } from "./depositHelpers";
 import type { DepositMethod } from "./depositRecording";
+import {
+  DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED,
+  refuseDepositOtherTreatment,
+} from "./depositOtherContainment";
 import { throwAppError, AppErrorCode } from "./errors";
 import {
   assertCashSaleCarriesNoExtras,
@@ -1091,7 +1095,9 @@ async function resolveReservationDeposits(
       );
     }
     throw new ConvexError(
-      "The reservation deposit held on this vehicle is larger than what the dealership billed the customer for it, so part of it would be left unapplied. Record what happens to that money: applied to what they owe the dealership, applied to the supplier settlement, refunded, forfeited, or an approved other treatment with a reason."
+      DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED
+        ? "The reservation deposit held on this vehicle is larger than what the dealership billed the customer for it, so part of it would be left unapplied. Record what happens to that money: applied to what they owe the dealership, applied to the supplier settlement, refunded, or forfeited."
+        : "The reservation deposit held on this vehicle is larger than what the dealership billed the customer for it, so part of it would be left unapplied. Record what happens to that money: applied to what they owe the dealership, applied to the supplier settlement, refunded, forfeited, or an approved other treatment with a reason."
     );
   }
 
@@ -1238,6 +1244,10 @@ async function resolveReservationDeposits(
     }
 
     case "OTHER":
+      // SCRUM-801: a backstop. completeSale and completeExistingSale already refuse OTHER on entry, so nothing
+      // reaches this today; it stays so a new caller of the side effects cannot record OTHER. Ahead of the
+      // shared-deposit and missing-reason refusals so the pilot reason wins.
+      if (DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) refuseDepositOtherTreatment();
       return await recordOtherTreatment(ctx, {
         ...opts,
         isSharedDeposit: allocationHoldId !== undefined,
@@ -2277,6 +2287,11 @@ export async function completeSale(
   // Amounts and the canonical commitment check both run inside this call,
   // before the insert, so a refusal leaves no sale row, no vehicle status
   // change, no receivable and no queued accounting event behind.
+  // SCRUM-801: OTHER is refused before the first read of the completion, so no door can write ahead of it.
+  // The guard in resolveReservationDeposits is a backstop behind this one (pinned by consignedDepositResolution.test.ts).
+  if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+    refuseDepositOtherTreatment();
+  }
   const prepared = await prepareSaleCompletion(ctx, args, "COMPLETION", door);
   // SCRUM-802: still no write has happened; refuse an unpayable cash sale here (trade-in does not count).
   await assertCashPayFirstBeforeWrites(ctx, args);
@@ -2390,6 +2405,11 @@ export async function completeExistingSale(
     idempotencyKey?: string;
   }
 ): Promise<Id<"sales">> {
+  // SCRUM-801: OTHER is refused before the first read of the completion, so no door can write ahead of it.
+  // The guard in resolveReservationDeposits is a backstop behind this one (pinned by consignedDepositResolution.test.ts).
+  if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+    refuseDepositOtherTreatment();
+  }
   const sale = await ctx.db.get(args.saleId);
   if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
     throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");

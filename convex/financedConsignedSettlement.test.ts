@@ -19,6 +19,7 @@
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
 import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { payInvoice, seedSaleCompletedPosting } from "../test-utils/saleInvoiceFixtures";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
@@ -53,6 +54,19 @@ vi.mock("./rateLimit", () => ({
   },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
+
+// SCRUM-801: counts runWithIdempotency calls (the idempotency claim is a door's first write). Passthrough otherwise.
+const idempotency = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("./utils/idempotency", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/idempotency")>();
+  return {
+    ...actual,
+    runWithIdempotency: ((...args: Parameters<typeof actual.runWithIdempotency>) => {
+      idempotency.calls += 1;
+      return actual.runWithIdempotency(...args);
+    }) as typeof actual.runWithIdempotency,
+  };
+});
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -7490,6 +7504,71 @@ describe("the closing matrix c16216 requires", () => {
     // Still a liability, because no disposition has executed.
     const after = await ledgerBySystemKey(s);
     expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(-3_000 * SCALE);
+  });
+
+  test("SCRUM-801: finalizing with the OTHER treatment is refused during the pilot", async () => {
+    const s = await seedDealership("p801finalize");
+    // Taken immediately before finalizeDeal, after the deal has been built.
+    let before: Awaited<ReturnType<typeof dbSnapshot>> | undefined;
+    let claimsBefore: number | undefined;
+
+    // finalizeDeal is the third completion door. OTHER posts nothing and leaves
+    // the liability for a manual journal, which the pilot has switched off.
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        deposit: 3_000,
+        downPayment: 3_000,
+        depositTakenBy: "approver",
+        depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
+        beforeFinalize: async () => {
+          before = await dbSnapshot(s.t, Object.keys(schema.tables));
+          claimsBefore = idempotency.calls;
+        },
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    // The refusal precedes the idempotency claim, which is finalizeDeal's first write. convex-test rolls a
+    // throwing mutation back, so the snapshot below cannot see a claim written ahead of the refusal; this can.
+    expect(claimsBefore).toBeDefined();
+    expect(idempotency.calls).toBe(claimsBefore);
+
+    const sales = (await s.t.run((ctx) => ctx.db.query("sales").collect())).filter((r) => r.orgId === s.orgId);
+    expect(sales).toHaveLength(0);
+    const deposits = (await s.t.run((ctx) => ctx.db.query("deposits").collect())).filter((r) => r.orgId === s.orgId);
+    expect(deposits).toHaveLength(1);
+    expect(deposits[0].status).toBe("HELD");
+    expect(deposits[0].holdActive).toBe(true);
+    // Every row of every table is unchanged, not only the three read above.
+    expect(before).toBeDefined();
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+    const after = await ledgerBySystemKey(s);
+    expect(after[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(-3_000 * SCALE);
+  });
+
+  test("SCRUM-801: finalizing with the OTHER treatment is refused even when the deal holds no deposit", async () => {
+    const s = await seedDealership("p801finalizeNoDep");
+    let before: Awaited<ReturnType<typeof dbSnapshot>> | undefined;
+    let claimsBefore: number | undefined;
+
+    await expect(
+      runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        downPayment: 0,
+        depositResolution: { treatment: "OTHER", reason: "Nothing held" },
+        beforeFinalize: async () => {
+          before = await dbSnapshot(s.t, Object.keys(schema.tables));
+          claimsBefore = idempotency.calls;
+        },
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(claimsBefore).toBeDefined();
+    expect(idempotency.calls).toBe(claimsBefore);
+    const deposits = (await s.t.run((ctx) => ctx.db.query("deposits").collect())).filter((r) => r.orgId === s.orgId);
+    expect(deposits).toHaveLength(0);
+    const sales = (await s.t.run((ctx) => ctx.db.query("sales").collect())).filter((r) => r.orgId === s.orgId);
+    expect(sales).toHaveLength(0);
+    expect(before).toBeDefined();
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
   });
 });
 

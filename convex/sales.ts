@@ -45,6 +45,7 @@ import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment"
 import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
+import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED, refuseDepositOtherTreatment } from "./utils/depositOtherContainment";
 import { assertCashDraftCarriesNoExtras, assertCashSaleCarriesNoExtras } from "./utils/cashSalePilotGate";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
@@ -657,6 +658,12 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
+    // Refused after auth and ahead of the rate limiter, validation and the idempotency claim.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
+
     // SCRUM-802 (owner ruling 2026-10-19): a CASH sale carrying tax, fees, a warranty or GAP is not offered in the
     // pilot. After tenant auth, before the rate limit, any write and `runWithIdempotency`.
     assertCashSaleCarriesNoExtras(args);
@@ -753,6 +760,12 @@ export const completeFromQuote = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
+    // Refused after auth and ahead of the rate limiter and the idempotency claim, so it precedes the first write.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
 
     // SCRUM-802: no early extras check here by construction. A quote carries no tax, fee, warranty or GAP and this door
     // passes none to `completeSalesForLineItems`; if that ever changes, `completeSale` (the choke point) refuses it, and
@@ -894,6 +907,12 @@ export const completeDraft = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
+    // Refused after auth and ahead of the rate limiter and the idempotency claim, so it precedes the first write.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
 
     // SCRUM-802 (owner ruling 2026-10-19): as `create`. The draft carries the money terms, so it is read here (no
     // write) and a CASH draft carrying tax, fees, a warranty or GAP is refused before `runWithIdempotency`.
