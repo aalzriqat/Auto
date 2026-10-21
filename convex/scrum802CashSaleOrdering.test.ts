@@ -34,16 +34,13 @@ vi.mock("./rateLimit", () => ({
 const MODULES = import.meta.glob("./**/*.*s");
 
 /**
- * Every row of every table that belongs to this dealer, so a refusal can be shown to have written nothing in the
- * tenant under test. The deposits table must be non-empty, so the filter cannot make the comparison vacuous.
+ * Every row of every table, so a refusal can be shown to have written nothing in ANY tenant (a write to another org
+ * would change this too). The dealer's own deposits must exist, so the comparison cannot be over an empty world.
  */
-async function orgSnapshot(s: SeededCashDealer) {
+async function tableSnapshot(s: SeededCashDealer) {
   const all = await dbSnapshot(s.t, Object.keys(schema.tables));
-  const scoped = Object.fromEntries(
-    Object.entries(all).map(([table, rows]) => [table, rows.filter((row) => (row as { orgId?: string }).orgId === s.orgId)])
-  );
-  expect(scoped.deposits!.length).toBeGreaterThan(0);
-  return scoped;
+  expect((all.deposits ?? []).some((row) => (row as { orgId?: string }).orgId === s.orgId)).toBe(true);
+  return all;
 }
 
 function recordingCtx(ctx: MutationCtx, writes: string[]): MutationCtx {
@@ -304,14 +301,14 @@ describe("the pay-first refusal is raised before the first write on every comple
       const s = await seedCashDealer(`ordt${_label.length}${_label[0]}`, MODULES);
       const quoteId = await quoteFor(s);
       await deposit(s, quoteId, 20_000);
-      const before = await orgSnapshot(s);
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) => completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution })))
       );
       expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
-      expect(await orgSnapshot(s)).toEqual(before);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
 
     test("completeExistingSale (a draft) is refused with zero writes", async () => {
@@ -324,7 +321,7 @@ describe("the pay-first refusal is raised before the first write on every comple
       } as never);
       // The draft door takes no quote; completing a draft that is bound to one is the shape under test.
       await s.t.run((ctx) => ctx.db.patch(draftId, { quoteId }));
-      const before = await orgSnapshot(s);
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) =>
@@ -333,14 +330,14 @@ describe("the pay-first refusal is raised before the first write on every comple
       );
       expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
-      expect(await orgSnapshot(s)).toEqual(before);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
 
     test("completeSalesForLineItems refuses a single funded car with zero writes", async () => {
       const s = await seedCashDealer(`ordl${_label.length}${_label[0]}`, MODULES);
       const quoteId = await quoteFor(s);
       await deposit(s, quoteId, 20_000);
-      const before = await orgSnapshot(s);
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) =>
@@ -353,7 +350,7 @@ describe("the pay-first refusal is raised before the first write on every comple
       );
       expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
       expect(writes).toEqual([]);
-      expect(await orgSnapshot(s)).toEqual(before);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
   });
 
@@ -383,14 +380,14 @@ describe("the pay-first refusal is raised before the first write on every comple
 
     test("completeSale is refused with zero writes", async () => {
       const { s, quoteId } = await twoCarQuote(`a${tag}`);
-      const before = await orgSnapshot(s);
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) => completeSale(recordingCtx(asMutationCtx(ctx), writes), completionArgs(s, { quoteId, depositResolution })))
       );
       expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
-      expect(await orgSnapshot(s)).toEqual(before);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
 
     test("completeExistingSale (a draft bound to the shared quote) is refused with zero writes", async () => {
@@ -402,7 +399,7 @@ describe("the pay-first refusal is raised before the first write on every comple
       // The draft door takes no quote; completing a draft that is bound to one is the shape under test. `sales.createDraft`
       // takes no `quoteId` (SCRUM-425), so this is a legacy / defence-in-depth shape, not a path a user can reach.
       await s.t.run((ctx) => ctx.db.patch(draftId, { quoteId }));
-      const before = await orgSnapshot(s);
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) =>
@@ -411,12 +408,12 @@ describe("the pay-first refusal is raised before the first write on every comple
       );
       expect(refusal?.code).toBe(refusalCodeFor(depositResolution));
       expect(writes).toEqual([]);
-      expect(await orgSnapshot(s)).toEqual(before);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
 
     test("completeSalesForLineItems is refused for BOTH cars with zero writes", async () => {
       const { s, quoteId, items } = await twoCarQuote(`b${tag}`);
-      const before = await orgSnapshot(s);
+      const before = await tableSnapshot(s);
       const writes: string[] = [];
       const refusal = await refusalDataOf(
         s.t.run((ctx) =>
@@ -428,7 +425,7 @@ describe("the pay-first refusal is raised before the first write on every comple
       );
       expect(refusal?.code).toBe("CASH_SALE_BALANCE_UNPAID_REFUSED");
       expect(writes).toEqual([]);
-      expect(await orgSnapshot(s)).toEqual(before);
+      expect(await tableSnapshot(s)).toEqual(before);
     });
   });
 

@@ -42,17 +42,32 @@ vi.mock("./rateLimit", () => ({
 // the real constant (true) unless a block below turns it off to pin what OTHER
 // does once the pilot ends. The callers read it at the call site, so this
 // getter reaches every door.
-const pilot = vi.hoisted(() => ({ otherDisabled: true, onlyAtChokePoint: false }));
+const pilot = vi.hoisted(() => ({ otherDisabled: true, onlyAfterSaleInsert: false, saleInserted: false, readsAfterInsert: 0 }));
 vi.mock("./utils/depositOtherContainment", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./utils/depositOtherContainment")>();
   return {
     ...actual,
     get DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED() {
-      // onlyAtChokePoint: the switch reads on only when read from resolveReservationDeposits, so every outer door guard
-      // passes and the guard inside that function is the only thing between OTHER and a recorded treatment.
-      if (pilot.onlyAtChokePoint) return /resolveReservationDeposits/.test(new Error().stack ?? "");
+      // onlyAfterSaleInsert: the switch reads on only once the sale row exists. Every door guard runs before the insert,
+      // so the single read that can fire is the one inside resolveReservationDeposits. `readsAfterInsert` proves it ran.
+      if (pilot.onlyAfterSaleInsert) {
+        if (pilot.saleInserted) pilot.readsAfterInsert += 1;
+        return pilot.saleInserted;
+      }
       return pilot.otherDisabled;
     },
+  };
+});
+
+// SCRUM-801: consumeRootForSale is the first call of applySaleCompletionSideEffects, which runs after the sale insert.
+vi.mock("./commitments", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./commitments")>();
+  return {
+    ...actual,
+    consumeRootForSale: ((...args: Parameters<typeof actual.consumeRootForSale>) => {
+      pilot.saleInserted = true;
+      return actual.consumeRootForSale(...args);
+    }) as typeof actual.consumeRootForSale,
   };
 });
 
@@ -320,6 +335,31 @@ async function postedBySystemKey(
     }
     return totals;
   });
+}
+
+/**
+ * What a refund must leave behind: a POSTED debit on the customer-deposit liability for the full amount, and a net of
+ * zero over every entry that was not voided (reversed entries counted). POSTED-only zero would also pass if the receipt
+ * were merely marked REVERSED, so the debit is asserted by itself.
+ */
+async function expectDepositRefundedInLedger(
+  t: ReturnType<typeof convexTestWithComponents>,
+  orgId: string,
+  amountMinor: number
+) {
+  const debits = await t.run(async (ctx) => {
+    const account = (await ctx.db.query("chartOfAccounts").collect()).find(
+      (a) => a.orgId === orgId && a.systemKey === SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY
+    );
+    const entries = (await ctx.db.query("journalEntries").collect()).filter((e) => e.orgId === orgId && e.status === "POSTED");
+    const lines = (await ctx.db.query("journalLines").collect()).filter(
+      (l) => l.accountId === account?._id && entries.some((e) => e._id === l.journalEntryId) && l.debitMinor > 0
+    );
+    return lines.map((l) => l.debitMinor);
+  });
+  expect(debits).toEqual([amountMinor]);
+  const net = await postedBySystemKey(t, orgId, { includeReversed: true });
+  expect(net[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
 }
 
 type RefundMethod = "CASH" | "BANK_TRANSFER" | "PAYMENT_LINK" | "CARD" | "CHEQUE" | "OTHER";
@@ -1259,15 +1299,20 @@ describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on
 
   test("the guard inside resolveReservationDeposits refuses OTHER on its own when every outer door guard is bypassed", async () => {
     const s = await seed("p801chokePoint");
-    pilot.onlyAtChokePoint = true;
+    pilot.onlyAfterSaleInsert = true;
+    pilot.saleInserted = false;
+    pilot.readsAfterInsert = 0;
     try {
       const before = await snapshotAllTables(s.t);
       await expect(
         completeWith(s, "THROUGH_DEALERSHIP", { treatment: "OTHER", reason: "Transferred to a replacement deal" })
       ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+      // The refusal came from a read made after the insert, i.e. from the guard inside resolveReservationDeposits.
+      expect(pilot.readsAfterInsert).toBeGreaterThanOrEqual(1);
       expect(await snapshotAllTables(s.t)).toEqual(before);
     } finally {
-      pilot.onlyAtChokePoint = false;
+      pilot.onlyAfterSaleInsert = false;
+      pilot.saleInserted = false;
     }
   });
 
@@ -1285,6 +1330,7 @@ describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on
     expect(deposit?.orgId).toBe(s.orgId);
     expect(deposit?.status).toBe("REFUNDED");
     expect((await postedBySystemKey(s.t, s.orgId))[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+    await expectDepositRefundedInLedger(s.t, s.orgId, DEPOSIT * SCALE);
   });
 
   test("the pilot refusal comes ahead of the missing-reason refusal", async () => {
@@ -1314,6 +1360,7 @@ describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on
     expect(deposit?.status).toBe("REFUNDED");
     const posted = await postedBySystemKey(s.t, s.orgId);
     expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
+    await expectDepositRefundedInLedger(s.t, s.orgId, DEPOSIT * SCALE);
   });
 
   test("a deal with no deposit that states OTHER is refused too: the refusal sits ahead of every read, so it does not depend on a deposit existing", async () => {
