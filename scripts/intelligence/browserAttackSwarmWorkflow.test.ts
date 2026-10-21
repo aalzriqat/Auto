@@ -572,13 +572,15 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const run = String(scrub.run ?? "");
     const guard = run.indexOf('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
     expect(guard, "a CONVEX_PREVIEW_CREATED_AT guard in the scrub step").toBeGreaterThanOrEqual(0);
-    expect(run.slice(guard, run.indexOf("fi", guard))).toContain("exit 1");
     const claim = run.indexOf("resolveConvexPreviewCredentials");
-    const firstChange = run.indexOf("convex env remove");
     expect(claim).toBeGreaterThanOrEqual(0);
-    expect(firstChange).toBeGreaterThanOrEqual(0);
+    expect(run.slice(guard, claim)).toContain("exit 1");
     expect(guard).toBeLessThan(claim);
-    expect(guard).toBeLessThan(firstChange);
+    // Every change to the preview, removals and sets alike, comes after the guard.
+    const changes = [...run.matchAll(/convex env (remove|set)/g)].map((m) => m.index ?? -1);
+    expect(changes.length).toBeGreaterThan(0);
+    for (const at of changes) expect(guard).toBeLessThan(at);
+    expect([job("trusted-e2e").needs].flat()).toContain("prepare");
 
     // The guard is only as good as its source: the output must come from the pin
     // step, and that step must be the one that publishes `preview_created_at`.
@@ -593,6 +595,28 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(readFileSync(path.resolve(process.cwd(), "scripts/previewDeploymentLifecycle.mjs"), "utf8")).toContain(
       '[env.GITHUB_OUTPUT, "preview_created_at"]',
     );
+  });
+
+  it("stops the prepare job before it claims the preview when the cleanup pin was not recorded", () => {
+    const steps = job("prepare").steps ?? [];
+    const at = (name: string) => steps.findIndex((entry) => entry.name === name);
+    const pin = at("Pin the disposable preview for cleanup");
+    const guard = at("Refuse to continue without a recorded cleanup pin");
+    const claim = at("Resolve named Convex preview from trusted control plane");
+    expect(pin).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeGreaterThan(pin);
+    expect(claim).toBeGreaterThan(guard);
+    const refuse = steps[guard];
+    // No `if:`, so the guard runs on every path that reaches it.
+    expect(refuse?.if).toBeUndefined();
+    expect(refuse?.env?.CONVEX_PREVIEW_CREATED_AT).toBe("${{ steps.pin.outputs.preview_created_at }}");
+    const run = String(refuse?.run ?? "");
+    expect(run).toContain('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
+    expect(run).toContain("exit 1");
+    // Nothing between the pin and the guard may claim the preview.
+    for (const entry of steps.slice(pin + 1, guard)) {
+      expect(JSON.stringify(entry)).not.toContain("CONVEX_PREVIEW_DEPLOY_KEY");
+    }
   });
 
   it("scrubs the disposable preview to an explicit non-sensitive environment allowlist before candidate backend execution", () => {
