@@ -1,7 +1,7 @@
 ---
 name: correct
-description: "Find the mistakes agents keep repeating in this repo and make each one impossible. Try architecture first, then types, then a lint whose error names the fix, then a test, and write docs last. Prove each check fails on a real past mistake. Repeat this each time the operator corrects you. Use for /correct."
-disable-model-invocation: true
+description: "Automatically invoke when evidence shows the same agent mistake has occurred twice in this repo, including across sessions. Do not wait for the operator to request /correct. Find the recurring mistake class and prevent it with architecture, types, lint, or tests before adding docs. Also use for /correct."
+disable-model-invocation: false
 ---
 
 # Correct
@@ -13,6 +13,8 @@ The operator keeps correcting agents in this repo for the same mistakes. Change 
 Assume every contributor is an agent that sees only the files it opened, copies the nearest example, and takes the shortest path that compiles. Design the repo so a change that looks right from one file is right for the whole repo.
 
 ## Find the mistake classes
+
+Invoke this skill as soon as you identify a second occurrence of the same agent mistake in this repo. Do not wait for another user correction or an explicit `/correct` command. Record evidence for both occurrences from the current session, commits, reverts, reviews, Jira, or repository memory. Two mentions of one incident are not two occurrences. If recurrence is not established, investigate before calling it a repeated mistake.
 
 First, read recent commits, reverts, review comments, agent instruction files, and comments that explain workarounds. Group the mistakes into classes. A class counts once it has happened twice.
 
@@ -35,6 +37,7 @@ Last, keep a table in the agent instruction file that pairs each rule with what 
 
 ## AutoFlow constraints
 
+- Automatic invocation starts diagnosis and prevention work. It does not authorize unrelated changes, pin renewals, flag writes, merges, or deployments. Keep the prevention change within the authorized scope, or record a scoped follow-up in Jira. Apply the normal review gates to any resulting PR.
 - A new lint, test or CI check goes through a normal PR with its own review. It never weakens, skips or waives an existing check, and never touches `.github/release-waivers.json` or the review policy to get a change through.
 - Money, permission and tenancy rules belong in backend code and tests, not in agent rule text.
 - Agent rule text goes in `AGENTS.md` or `.claude/skills/README.md`, and only for judgment calls nothing can enforce.
