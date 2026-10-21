@@ -3,7 +3,18 @@
   "steps": [
     {
       "actor": {
-        "role": "sales",
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "deposits.create",
+      "input": {
+        "amount": 23200,
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
         "org": "A"
       },
       "action": "sales.create",
@@ -17,8 +28,12 @@
   ],
   "expected": [
     {
-      "observable": "gl.customerReceivableNetMinor",
+      "observable": "gl.customerReceivableDebitMinor",
       "value": 23200000
+    },
+    {
+      "observable": "gl.customerReceivableNetMinor",
+      "value": 0
     },
     {
       "observable": "subledger.receivableOriginalMinor",
@@ -36,13 +51,15 @@
     "testName": "the GL receivable, the subledger document and the invoice all agree"
   },
   "matrixRow": "pilot-cash-books-agree",
-  "fingerprint": "2745bfb8ee26a16f47482ef271f4cbccee83c6533b73b09b4eea8b6afb4c4c02",
+  "fingerprint": "35a1890b7958a9b68c24440fb38b1e3e7c4ec093b3d9b96fa98cd694ef5669d4",
   "domain": "money",
   "level": "backend",
-  "status": "active",
+  "status": "retired",
   "source": {
     "hunter": "scripted",
     "runId": "scrum761-pilot-path",
     "firstSeen": "2026-10-08"
-  }
+  },
+  "retiredByRuling": "SCRUM-802#c23551",
+  "retiredReason": "The pilot does not offer a taxed cash sale and the server refuses it; the cell needed a quote inflated to price plus tax, which no user can reach. Replaced by the refusal record."
 }

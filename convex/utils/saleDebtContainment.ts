@@ -22,6 +22,28 @@ import { PAYMENT_LINKS_PILOT_DISABLED } from "../../lib/pilotCapabilities";
  */
 export { PAYMENT_LINKS_PILOT_DISABLED };
 
+/**
+ * SCRUM-802 (owner ruling 2026-10-08, «إجراء + منع»): until the invoice receipt
+ * resolver (SCRUM-722) exists no door applies a customer's payment to a cash
+ * sale's invoice, so the pilot procedure is "record the FULL payment as a
+ * deposit, then complete the sale". While this is on, a CASH completion that
+ * would leave its invoice outstanding refuses, and an unlinked customer receipt
+ * refuses while that customer owes a sale invoice. Reverse by flipping this to
+ * `false` when SCRUM-722 ships; a code change reviewed on its own, never an env var.
+ */
+export const CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED = true as const;
+
+/**
+ * SCRUM-802 (owner rulings 2026-10-19): the pilot does not offer a CASH sale that carries tax, dealer fees, a warranty
+ * or GAP. A deposit is capped at the quote's `vehiclePrice`, so such an invoice (price plus extras) can never be held
+ * in full as a deposit and "pay in full first" cannot be satisfied. While this is on, every CASH completion door refuses
+ * such a sale with `CASH_SALE_TAX_FEES_WARRANTY_REFUSED`, after tenant auth and before any write or idempotency record.
+ * It is part of the pilot containment above: it takes effect only while `CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED` is on.
+ * A post-pilot activation gate: turning it off needs a deposit-cap change, a new certification round and the owner's
+ * approval; a code change reviewed on its own, never an env var.
+ */
+export const CASH_SALE_EXTRAS_PILOT_REFUSED = true as const;
+
 // English text equals `ServerError_<code>` in lib/i18n/domains/common.ts.
 export const SALE_DEBT_CONTAINMENT_REFUSALS = {
   SALE_DEBT_COMPETING_RECEIVABLE_REFUSED:
@@ -31,6 +53,12 @@ export const SALE_DEBT_CONTAINMENT_REFUSALS = {
   SALE_DEBT_RECEIPT_REFUSED:
     "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
   PAYMENT_LINKS_DISABLED: "Payment links are not available yet. Nothing has been changed.",
+  CASH_SALE_BALANCE_UNPAID_REFUSED:
+    "A cash sale can only be completed once the customer's full payment is recorded as a deposit. Record the remaining payment as a deposit first. Nothing has been changed.",
+  CASH_SALE_TAX_FEES_WARRANTY_REFUSED:
+    "A cash sale that includes tax, fees, a warranty or GAP cannot be completed yet, because its full amount cannot be recorded as a deposit. Complete it without them. Nothing has been changed.",
+  UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED:
+    "This customer has a sale invoice that is not fully paid. A payment cannot be recorded without linking it to a sale yet. Record the payment as a deposit instead. Nothing has been changed.",
 } as const satisfies Record<string, string>;
 
 export function refuseSaleDebt(code: keyof typeof SALE_DEBT_CONTAINMENT_REFUSALS): never {

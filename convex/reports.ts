@@ -29,7 +29,10 @@ import {
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { isShowroomBorne } from "./utils/costBearer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { fromMinorUnits } from "./utils/money";
+import { fromMinorUnits, toMinorSameCurrencyOrUndefined } from "./utils/money";
+import { dealCommissionTotalsBySale } from "./dealCommissions";
+import { netProfitAfterCommissionsMinor } from "./utils/dealCommissionLines";
+import { isSystemOwnerRole } from "./utils/permissions";
 import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
 
 /*
@@ -41,6 +44,36 @@ import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance
  * value the write path cannot produce, and why `NaN` is the dangerous case —
  * travelled with them.
  */
+
+/**
+ * A sale's employee commissions and the margin after them, for the reports
+ * (SCRUM-434). DISPLAY ONLY: `netProfit` / `totalProfit` keep their meaning and
+ * these are additional fields. All major units, like the rest of the report.
+ *
+ * `netProfitAfterCommissions` is null while the margin is unknown OR the
+ * salesperson's commission is undecided: unknown is never zero.
+ */
+type CommissionView = {
+  commissionsTotal: number | null;
+  commissionPending: boolean;
+  netProfitAfterCommissions: number | null;
+};
+
+function commissionViewFor(
+  totals: { totalMinor: number | null; salePending: boolean } | undefined,
+  marginMajor: number | null,
+  currency: string
+): CommissionView {
+  if (!totals) return { commissionsTotal: null, commissionPending: false, netProfitAfterCommissions: null };
+  const marginMinor =
+    marginMajor === null ? null : (toMinorSameCurrencyOrUndefined(marginMajor, currency, currency) ?? null);
+  const netMinor = totals.salePending ? null : netProfitAfterCommissionsMinor(marginMinor, totals.totalMinor);
+  return {
+    commissionsTotal: totals.totalMinor === null ? null : fromMinorUnits(totals.totalMinor, currency),
+    commissionPending: totals.salePending,
+    netProfitAfterCommissions: netMinor === null ? null : fromMinorUnits(netMinor, currency),
+  };
+}
 
 /** Longest span an interactive report may request. */
 const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
@@ -70,7 +103,10 @@ export const getSalesAndProfitReport = query({
     endDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    // Employees' pay is not part of view:reports.
+    const canSeeCommissions =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
 
     const rateStatus = await rateLimiter.check(ctx, "heavyRead");
     if (!rateStatus.ok) {
@@ -158,6 +194,15 @@ export const getSalesAndProfitReport = query({
     // net revenue in any other currency is withheld, not converted).
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
+    const commissionTotals = canSeeCommissions
+      ? await dealCommissionTotalsBySale(ctx, args.orgId, salesInDateRange, orgCurrency)
+      : new Map();
+    let totalCommissions = 0;
+    let totalNetProfitAfterCommissions = 0;
+    // Sales left out of the two totals above because their margin or their
+    // salesperson's commission is not known: those totals are then a floor.
+    let commissionIncompleteSaleCount = 0;
+
     const enrichedSales = salesInDateRange.map((sale) => {
       const vehicle = vehicleMap.get(sale.vehicleId);
       // SCRUM-389: a supplier-borne cost is the supplier's, owed back — not
@@ -217,8 +262,19 @@ export const getSalesAndProfitReport = query({
       totalSupplierSettlement += economics.supplierSettlement ?? 0;
       if (economics.isAgentSale) agentSaleCount += 1;
 
+      const commissionView = commissionViewFor(commissionTotals.get(sale._id), economics.dealershipMargin, orgCurrency);
+      if (canSeeCommissions) {
+        if (commissionView.netProfitAfterCommissions === null || commissionView.commissionsTotal === null) {
+          commissionIncompleteSaleCount += 1;
+        } else {
+          totalCommissions += commissionView.commissionsTotal;
+          totalNetProfitAfterCommissions += commissionView.netProfitAfterCommissions;
+        }
+      }
+
       return {
         ...sale,
+        ...commissionView,
         vehicleMake: vehicle?.make,
         vehicleModel: vehicle?.model,
         vehicleYear: vehicle?.year,
@@ -263,6 +319,15 @@ export const getSalesAndProfitReport = query({
        * the two made the counter above claim exclusions it had not made.
        */
       unknownSupplierSettlementSaleCount,
+      /**
+       * Employee commissions (SCRUM-434), display only; `totalProfit` is
+       * unchanged. Null when the caller lacks view:commissions. The two totals
+       * cover only the sales whose margin and commission are both known, and
+       * `commissionIncompleteSaleCount` says how many were left out.
+       */
+      totalCommissions: canSeeCommissions ? totalCommissions : null,
+      totalNetProfitAfterCommissions: canSeeCommissions ? totalNetProfitAfterCommissions : null,
+      commissionIncompleteSaleCount: canSeeCommissions ? commissionIncompleteSaleCount : null,
       sales: enrichedSales,
     };
   },
@@ -732,7 +797,9 @@ export const getSalespersonPerformance = query({
     endDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    const canSeeCommissions =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
 
     const rateStatus = await rateLimiter.check(ctx, "heavyRead");
     if (!rateStatus.ok) {
@@ -796,6 +863,10 @@ export const getSalespersonPerformance = query({
     const verifiedFinancing = await verifiedFinancingApplicationSaleIds(ctx, salesInDateRange);
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
+    const commissionTotals = canSeeCommissions
+      ? await dealCommissionTotalsBySale(ctx, args.orgId, salesInDateRange, orgCurrency)
+      : new Map();
+
     const result = Object.entries(salesBySalesperson).map(([userId, userSales]) => {
       let totalRevenue = 0;
       let totalProfit = 0;
@@ -803,6 +874,11 @@ export const getSalespersonPerformance = query({
       // Same rule as getSalesAndProfitReport: a rep is never ranked on an
       // earning nobody can substantiate, and never on an implicit zero either.
       let unknownMarginSaleCount = 0;
+      // Employee commissions on the rep's deals (display only). Sales whose
+      // margin or salesperson commission is unknown are counted, not zeroed.
+      let totalCommissions = 0;
+      let totalNetProfitAfterCommissions = 0;
+      let commissionIncompleteSaleCount = 0;
 
       const user = userMap.get(userId as Id<"users">);
       const userName = (user && "name" in user ? user.name : null) ?? "Unknown";
@@ -834,6 +910,15 @@ export const getSalespersonPerformance = query({
         totalRevenue += economics.recognizedRevenue ?? 0;
         totalProfit += economics.dealershipMargin ?? 0;
         totalGrossTransactionValue += economics.grossTransactionValue;
+        if (canSeeCommissions) {
+          const view = commissionViewFor(commissionTotals.get(sale._id), economics.dealershipMargin, orgCurrency);
+          if (view.netProfitAfterCommissions === null || view.commissionsTotal === null) {
+            commissionIncompleteSaleCount += 1;
+          } else {
+            totalCommissions += view.commissionsTotal;
+            totalNetProfitAfterCommissions += view.netProfitAfterCommissions;
+          }
+        }
       }
 
       return {
@@ -855,6 +940,9 @@ export const getSalespersonPerformance = query({
          * table shows them side by side as one complete statement.
          */
         marginComplete: unknownMarginSaleCount === 0,
+        totalCommissions: canSeeCommissions ? totalCommissions : null,
+        totalNetProfitAfterCommissions: canSeeCommissions ? totalNetProfitAfterCommissions : null,
+        commissionIncompleteSaleCount: canSeeCommissions ? commissionIncompleteSaleCount : null,
       };
     });
 

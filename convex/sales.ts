@@ -38,6 +38,7 @@ import {
 import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
+import { effectiveCommissionMode, isAutoCommissionMode } from "./utils/commissionMode";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
@@ -45,6 +46,7 @@ import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePosting
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
 import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED, refuseDepositOtherTreatment } from "./utils/depositOtherContainment";
+import { assertCashDraftCarriesNoExtras, assertCashSaleCarriesNoExtras } from "./utils/cashSalePilotGate";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertCustomerCreditPayoutAllowed } from "./utils/customerCreditPayoutContainment";
@@ -662,6 +664,10 @@ export const create = mutation({
       refuseDepositOtherTreatment();
     }
 
+    // SCRUM-802 (owner ruling 2026-10-19): a CASH sale carrying tax, fees, a warranty or GAP is not offered in the
+    // pilot. After tenant auth, before the rate limit, any write and `runWithIdempotency`.
+    assertCashSaleCarriesNoExtras(args);
+
     const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
@@ -761,6 +767,9 @@ export const completeFromQuote = mutation({
       refuseDepositOtherTreatment();
     }
 
+    // SCRUM-802: no early extras check here by construction. A quote carries no tax, fee, warranty or GAP and this door
+    // passes none to `completeSalesForLineItems`; if that ever changes, `completeSale` (the choke point) refuses it, and
+    // convex/scrum802CashSaleExtras.test.ts pins both facts.
     const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
@@ -904,6 +913,10 @@ export const completeDraft = mutation({
     if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
       refuseDepositOtherTreatment();
     }
+
+    // SCRUM-802 (owner ruling 2026-10-19): as `create`. The draft carries the money terms, so it is read here (no
+    // write) and a CASH draft carrying tax, fees, a warranty or GAP is refused before `runWithIdempotency`.
+    await assertCashDraftCarriesNoExtras(ctx, args.orgId, args.saleId);
 
     const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
@@ -1433,8 +1446,8 @@ async function commissionPage(
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-    const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
+    const mode = effectiveCommissionMode(orgSettings);
+    const isAutoMode = isAutoCommissionMode(mode);
     // MANUAL mode has no calculator: an amount only ever exists because somebody
     // typed it on this page. Listing only sales that already carry one is a
     // closed loop — the first amount can never be entered. So in MANUAL mode
@@ -1659,8 +1672,8 @@ export const listCommissions = query({
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-    const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
+    const mode = effectiveCommissionMode(orgSettings);
+    const isAutoMode = isAutoCommissionMode(mode);
 
     // The pre-pagination predicate, unchanged: a positive commission, or an
     // AUTO completed sale whose commission was never computed.
@@ -2079,7 +2092,7 @@ export const setCommissionAmount = mutation({
         .query("orgSettings")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .unique();
-      const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+      const mode = effectiveCommissionMode(orgSettings);
 
       // AUTO-mode commissions are derived from the org's rules, so a completed
       // sale's amount is not hand-editable — changing it would silently diverge
@@ -2320,8 +2333,8 @@ export const recalculateCommission = mutation({
         .query("orgSettings")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .unique();
-      const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-      if (mode !== "AUTO_MEMBER" && mode !== "AUTO_TIERS") {
+      const mode = effectiveCommissionMode(orgSettings);
+      if (!isAutoCommissionMode(mode)) {
         throwAppError(
           AppErrorCode.VALIDATION_FAILED,
           "Recalculation only applies to automatic commission modes. Set the amount directly in manual mode."

@@ -19,7 +19,7 @@ import { createVehicle, gotoOrgRoute, testDataSuffix } from "../utils";
  * navigating the wizard away would discard the in-progress quote.
  *
  * Locale note: every string asserted here comes from t() and would be Arabic
- * under an ar locale ("Approval Required", "Profit Approved", "Request Profit
+ * under an ar locale ("Approval Required", "Price Uplift Approved", "Request Price Uplift
  * Approval" and the two status sentences are the English halves of the
  * Wizard* keys added by SCRUM-656). auth.setup.ts pins the locale to English
  * via storageState, which every page in the context inherits.
@@ -69,7 +69,7 @@ async function openBlockedInstallmentQuote(page: Page) {
   await page.getByPlaceholder(/^Search by make, model/).fill(model);
   await page.getByRole("button", { name: model }).click();
 
-  await page.getByLabel("Profit", { exact: true }).fill(String(REQUESTED_PROFIT));
+  await page.getByLabel("Markup added to base price", { exact: true }).fill(String(REQUESTED_PROFIT));
 
   // The gate is live before anything is submitted: the alert appears and Next
   // is disabled, so the deal cannot progress past step 1 at all.
@@ -102,7 +102,7 @@ test.describe("profit approval gate", () => {
   test("a rejected below-minimum deal stays blocked in the wizard", async ({ page, context }) => {
     const { model } = await openBlockedInstallmentQuote(page);
 
-    await page.getByRole("button", { name: "Request Profit Approval" }).click();
+    await page.getByRole("button", { name: "Request Price Uplift Approval" }).click();
     await expect(
       page.getByText("Approval request is currently pending. Please wait for a manager.")
     ).toBeVisible();
@@ -114,17 +114,17 @@ test.describe("profit approval gate", () => {
     // The wizard is subscribed to checkPendingApproval, so the verdict lands
     // without a reload. The deal must remain un-sellable.
     await expect(
-      page.getByText("Your request for this profit amount was rejected.")
+      page.getByText("Your request for this price was rejected.")
     ).toBeVisible();
     await expect(page.getByText("Approval Required")).toBeVisible();
     await expect(page.getByRole("button", { name: "Next" })).toBeDisabled();
-    await expect(page.getByText("Profit Approved")).toHaveCount(0);
+    await expect(page.getByText("Price Uplift Approved")).toHaveCount(0);
   });
 
   test("an approved below-minimum deal unblocks the wizard", async ({ page, context }) => {
     const { model } = await openBlockedInstallmentQuote(page);
 
-    await page.getByRole("button", { name: "Request Profit Approval" }).click();
+    await page.getByRole("button", { name: "Request Price Uplift Approval" }).click();
     await expect(
       page.getByText("Approval request is currently pending. Please wait for a manager.")
     ).toBeVisible();
@@ -133,7 +133,7 @@ test.describe("profit approval gate", () => {
     await respondOnApprovalsPage(managerPage, model, "Approve");
     await managerPage.close();
 
-    await expect(page.getByText("Profit Approved")).toBeVisible();
+    await expect(page.getByText("Price Uplift Approved")).toBeVisible();
     await expect(page.getByText("Approval Required")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Next" })).toBeEnabled();
   });
@@ -144,7 +144,7 @@ test.describe("profit approval gate", () => {
   }) => {
     const { model } = await openBlockedInstallmentQuote(page);
 
-    await page.getByRole("button", { name: "Request Profit Approval" }).click();
+    await page.getByRole("button", { name: "Request Price Uplift Approval" }).click();
     const managerPage = await context.newPage();
     await respondOnApprovalsPage(managerPage, model, "Approve");
     await managerPage.close();
@@ -153,7 +153,7 @@ test.describe("profit approval gate", () => {
 
     // An approval is for a specific figure. Dropping the profit below it
     // afterwards must not ride on the earlier verdict.
-    await page.getByLabel("Profit", { exact: true }).fill(String(REQUESTED_PROFIT - 50));
+    await page.getByLabel("Markup added to base price", { exact: true }).fill(String(REQUESTED_PROFIT - 50));
 
     await expect(page.getByText("Approval Required")).toBeVisible();
     await expect(page.getByRole("button", { name: "Next" })).toBeDisabled();

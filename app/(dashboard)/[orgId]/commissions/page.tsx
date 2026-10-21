@@ -5,7 +5,6 @@ import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +30,8 @@ import { toast } from "@/components/ui/sonner";
 import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X, AlertTriangle, CircleDashed, MinusCircle, ClipboardList, Ban, UserMinus } from "lucide-react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaymentDialog";
+import { DealCommissionLinesDialog } from "@/components/commissions/DealCommissionLinesDialog";
+import { scaleForCurrency } from "@/convex/utils/money";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { useTableControls } from "@/hooks/useTableControls";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
@@ -71,6 +72,12 @@ const STATUS_SORT_RANK: Record<CommissionStatus, number> = {
   VOID: 5,
 };
 
+/** Minor units of a known currency, with that currency's own decimals (fils are not rounded away). */
+function formatMinor(minor: number, currency: string) {
+  const scale = scaleForCurrency(currency);
+  return (minor / Math.pow(10, scale)).toLocaleString("en-US", { minimumFractionDigits: scale, maximumFractionDigits: scale });
+}
+
 function formatCurrency(amount: number) {
   return amount.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
@@ -90,8 +97,13 @@ function errorToast(error: unknown, fallback: string, t?: (key: string) => strin
 export default function CommissionsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const orgSettings = useOrgSettings();
-  const isManualMode = orgSettings?.commissionMode === "MANUAL";
+  // SCRUM-778: the mode in force, resolved on the server (an unset mode is
+  // AUTO_MEMBER) and readable by commission reviewers who cannot view settings.
+  // `undefined` is loading and `null` is no access — no queue banner for either.
+  // A null read is deliberately treated as "not MANUAL": a caller who cannot read the mode
+  // must not be shown a manual work queue that may not match the org's real mode.
+  const commissionMode = useQuery(api.orgSettings.getCommissionMode, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const isManualMode = commissionMode === "MANUAL";
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const canManage = myMembership?.permissions.includes("manage:commissions") ?? false;
@@ -100,6 +112,7 @@ export default function CommissionsPage() {
 
   const [filterSalesperson, setFilterSalesperson] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<StatusFilter>("all");
+  const [linesSaleId, setLinesSaleId] = useState<Id<"sales"> | null>(null);
 
   const {
     results: loadedCommissions,
@@ -665,6 +678,12 @@ export default function CommissionsPage() {
                     </TableCell>
                     {canManage && (
                       <TableCell className="text-end">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                        {c.commissionStatus !== "VOID" && (
+                          <Button variant="ghost" size="sm" onClick={() => setLinesSaleId(c._id)}>
+                            <ClipboardList className="h-3.5 w-3.5 me-1" /> {t("DealCommissionLinesAction" as any)}
+                          </Button>
+                        )}
                         {c.commissionPaidAt ? (
                           // Paid commissions are locked server-side (reversing a
                           // paid commission needs an accounting reversal, not a
@@ -712,6 +731,7 @@ export default function CommissionsPage() {
                             <Check className="h-3.5 w-3.5 me-1" /> {t("MarkPaid" as any)}
                           </Button>
                         )}
+                        </div>
                       </TableCell>
                     )}
                   </TableRow>
@@ -720,6 +740,16 @@ export default function CommissionsPage() {
             </TableBody>
           </Table>
         </div>
+        {activeOrgId && canManage && (
+          <DealCommissionLinesDialog
+            orgId={activeOrgId}
+            saleId={linesSaleId}
+            members={(members?.page ?? []).map((m: { userId: Id<"users">; userName: string }) => ({ userId: m.userId, name: m.userName }))}
+            money={formatMinor}
+            t={t as any}
+            onOpenChange={(open) => { if (!open) setLinesSaleId(null); }}
+          />
+        )}
         <CommissionPaymentDialog
           commission={commissionToPay ? {
             salespersonName: commissionToPay.salespersonName,

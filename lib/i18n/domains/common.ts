@@ -2,6 +2,7 @@ import { defineBilingualMessages } from "../defineBilingualMessages";
 
 const workspaceMessages = defineBilingualMessages({
   Call: ["Call", "اتصال"],
+  RecordedCostInputs: ["Recorded purchase price and expenses", "سعر الشراء والمصاريف المسجلة"],
   NewLead: ["New lead", "عميل محتمل جديد"],
   NewQuote: ["New quote", "عرض سعر جديد"],
   ResultsCount: ["{count} results", "{count} نتيجة"],
@@ -291,6 +292,14 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
     "لا يمكن تسجيل الدفعات أو الأرصدة الدائنة أو الشيكات الخاصة بعملية بيع على ذمة مدينة منفصلة. لم يتم تغيير أي شيء.",
   ],
+  ServerError_DEAL_COMMISSION_LINES_DISABLED: [
+    "Adding commission lines to a deal is not available during the pilot. Nothing has been changed.",
+    "إضافة بنود العمولات إلى الصفقة غير متاحة خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON: [
+    "The salesperson's sale commission is already set on the sale itself. Change it there instead of adding a second sale commission. Nothing has been changed.",
+    "عمولة البيع الخاصة بالبائع محددة مسبقًا على عملية البيع نفسها. عدّلها هناك بدل إضافة عمولة بيع ثانية. لم يتم تغيير أي شيء.",
+  ],
   ServerError_CUSTOMER_CREDIT_PAYOUT_DISABLED: [
     "Paying customer credit out is not available during the pilot. Keep it as customer credit instead. Nothing has been changed.",
     "صرف رصيد العميل غير متاح خلال المرحلة التجريبية. احتفظ به كرصيد دائن للعميل بدلًا من ذلك. لم يتم تغيير أي شيء.",
@@ -303,6 +312,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Recording or applying customer credit against a sale invoice is not available during the pilot. Nothing has been changed.",
     "تسجيل رصيد العميل أو تطبيقه على فاتورة البيع غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
   ],
+  ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED: [
+    "Returning a cheque that has already cleared is not available during the pilot. Nothing has been changed.",
+    "إرجاع شيك تمت تسويته بالفعل غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
   ServerError_PAYMENT_LINKS_DISABLED: [
     "Payment links are not available yet. Nothing has been changed.",
     "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",
@@ -311,6 +324,27 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_DEPOSIT_OTHER_TREATMENT_DISABLED: [
     "The 'other' deposit treatment is not available yet. Refund or forfeit the deposit instead. Nothing has been changed.",
     "معالجة العربون «أخرى» غير متاحة حاليًا. يمكنك إعادة العربون إلى العميل أو مصادرته بدلًا من ذلك. لم يتم تغيير أي شيء.",
+  ],
+  // SCRUM-795 (SCRUM-50): manual journals are off for the pilot.
+  ServerError_MANUAL_JOURNALS_DISABLED: [
+    "Manual journal entries are turned off during the pilot. Nothing has been changed.",
+    "القيود اليدوية متوقفة خلال فترة التجربة. لم يتم تغيير أي شيء.",
+  ],
+  ManualJournalsPilotOffNotice: [
+    "Manual journals are turned off for the pilot, so new ones cannot be created or approved. Drafts that were already pending can still be rejected. If a pending draft blocks closing a period and no second finance user can reject it, the owner can close the period with the audited close override.",
+    "القيود اليدوية متوقفة خلال فترة التجربة، لذا لا يمكن إنشاء قيود جديدة أو الموافقة عليها. ما زال بالإمكان رفض المسودات المعلّقة السابقة. وإذا كانت مسودة معلّقة تمنع إغلاق فترة ولم يتوفر مستخدم مالي ثانٍ لرفضها، يمكن للمالك إغلاق الفترة عبر تجاوز الإغلاق المدقَّق.",
+  ],
+  ServerError_CASH_SALE_BALANCE_UNPAID_REFUSED: [
+    "A cash sale can only be completed once the customer's full payment is recorded as a deposit. Record the remaining payment as a deposit first. Nothing has been changed.",
+    "لا يمكن إتمام البيع النقدي إلا بعد تسجيل دفعة العميل كاملة كعربون. سجّل المبلغ المتبقي كعربون أولًا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CASH_SALE_TAX_FEES_WARRANTY_REFUSED: [
+    "A cash sale that includes tax, fees, a warranty or GAP cannot be completed yet, because its full amount cannot be recorded as a deposit. Complete it without them. Nothing has been changed.",
+    "لا يمكن إتمام بيع نقدي يتضمن ضريبة أو رسومًا أو ضمانًا أو تأمين GAP حاليًا، لأن مبلغه الكامل لا يمكن تسجيله كعربون. أتمّه بدونها. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED: [
+    "This customer has a sale invoice that is not fully paid. A payment cannot be recorded without linking it to a sale yet. Record the payment as a deposit instead. Nothing has been changed.",
+    "لدى هذا العميل فاتورة بيع غير مسددة بالكامل، ولا يمكن تسجيل دفعة غير مرتبطة ببيع حاليًا. سجّل الدفعة كعربون بدلًا من ذلك. لم يتم تغيير أي شيء.",
   ],
   ServerError_ORG_FINANCIAL_RESET_IN_PROGRESS: [
     "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
@@ -795,7 +829,7 @@ export const commonEn = {
   PendingDeals: "Pending Deals",
   AwaitingApproval: "Awaiting Approval",
   ResumeDeal: "Resume Deal",
-  RequestedProfit: "Requested profit",
+  RequestedProfit: "Requested price uplift",
   ApprovalCancelled: "Deal request cancelled",
   FailedToCancelApproval: "Failed to cancel request",
 
@@ -1569,7 +1603,7 @@ export const commonEn = {
 
   // Profit approval requests
   NoPendingApprovals: "No pending approvals",
-  AllCaughtUp: "All caught up! There are no profit approval requests waiting.",
+  AllCaughtUp: "All caught up! There are no price approval requests waiting.",
   MinimumAllowed: "Minimum Allowed",
   ShortBy: "Short by",
   ApprovalApprovedMsg: "Request approved successfully",
@@ -1835,7 +1869,7 @@ export const commonAr = {
   PendingDeals: "الصفقات المعلقة",
   AwaitingApproval: "في انتظار الموافقة",
   ResumeDeal: "استئناف الصفقة",
-  RequestedProfit: "الربح المطلوب",
+  RequestedProfit: "الزيادة المطلوبة فوق سعر القائمة",
   ApprovalCancelled: "تم إلغاء طلب الصفقة",
   FailedToCancelApproval: "فشل إلغاء الطلب",
 
@@ -2605,7 +2639,7 @@ export const commonAr = {
 
   // Profit approval requests
   NoPendingApprovals: "لا توجد موافقات معلقة",
-  AllCaughtUp: "أنت في الموعد! لا توجد طلبات موافقة ربح في الانتظار.",
+  AllCaughtUp: "أنت في الموعد! لا توجد طلبات موافقة على السعر في الانتظار.",
   MinimumAllowed: "الحد الأدنى المسموح",
   ShortBy: "ينقصه",
   ApprovalApprovedMsg: "تمت الموافقة على الطلب بنجاح",

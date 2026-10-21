@@ -60,6 +60,10 @@ import { interpolate } from "@/lib/i18n/interpolate";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { RetainedCreditRefundsSection } from "./RetainedCreditRefundsSection";
 import { MoneySurfaceErrorBoundary } from "./MoneySurfaceErrorBoundary";
+import { isClearedChequeReturnDisabled } from "@/convex/utils/postDeliveryDoorContainment";
+
+/** SCRUM-760: returning a cheque the bank already CLEARED is blocked server-side for the pilot. */
+const returnBlockedByPilot = (cheque: { status: string }) => cheque.status === "CLEARED" && isClearedChequeReturnDisabled();
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -445,11 +449,16 @@ export function CollectionsTab() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                disabled={["RETURNED", "REPLACED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
+                                disabled={["RETURNED", "REPLACED", "CANCELLED"].includes(cheque.status) || isChequeBusy || returnBlockedByPilot(cheque)}
                                 onClick={() => setReturnTarget(cheque)}
                               >
                                 {t("Return" as any)}
                               </Button>
+                              )}
+                              {returnBlockedByPilot(cheque) && !cheque.isFinanceCompanyCheque && (
+                              <span className="text-xs text-muted-foreground" data-testid="cheque-return-pilot-disabled">
+                                {t("ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED" as any)}
+                              </span>
                               )}
                               {!cheque.isFinanceCompanyCheque && (
                               <Button

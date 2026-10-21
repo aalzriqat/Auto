@@ -35,6 +35,15 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -528,12 +537,14 @@ describe("SCRUM-704 (i) replaying a cancellation after it succeeded", () => {
     expect(await snapshot(d.s)).toEqual(before);
   });
 
-  test("FINDING: door (a), a DIFFERENT key on the already-CANCELLED deal is not a no-op - it releases the customer's deposit hold and frees the car; door (b) never does", async () => {
+  test("door (a), a DIFFERENT key on the already-CANCELLED deal changes nothing but its idempotency record (SCRUM-760 fix of the former finding); door (b) never did", async () => {
     // First cancel of a CLOSED deal leaves the reinstated deposit holding the car
-    // (RESERVED, hold active). `cancelApplication`'s already-CANCELLED branch then
-    // runs `releaseHoldForApplicationQuote`, so the number of cancel CALLS - not
-    // the deal - decides whether the car is on sale. A cash sale cancelled twice
-    // never leaves that state (see the previous test and the cross-check below).
+    // (RESERVED, hold active) pending a refund-or-forfeit decision. A repeated cancel
+    // with a different key must not release that hold: `cancelApplication`'s
+    // already-CANCELLED branch returns early for a deal that was finalized, so the
+    // number of cancel CALLS never decides whether the car is on sale; only the
+    // deposit decision does. A cash sale cancelled twice behaves the same (see the
+    // previous test and the cross-check below).
     const a = await financedDeal("a_newkey");
     await a.cancel("first");
     const afterFirst = await outcome(a);
@@ -545,17 +556,17 @@ describe("SCRUM-704 (i) replaying a cancellation after it succeeded", () => {
     await a.cancel("second");
     const after = await snapshot(a.s);
 
-    // SCRUM-712: the second call still drops the deposit hold, but the PENDING
-    // share keeps the car locked, so the vehicle row no longer changes.
-    expect(changedTables(before, after).sort()).toEqual(["commandIdempotency", "deposits"]);
+    // SCRUM-760: the already-cancelled branch no longer releases the hold the teardown reinstated;
+    // only the deposit decision does. Nothing but the idempotency record changes.
+    expect(changedTables(before, after).sort()).toEqual(["commandIdempotency"]);
     const afterSecond = await outcome(a);
     expect(afterSecond.vehicle.status).toBe("RESERVED");
-    expect(afterSecond.deposits).toEqual([expect.objectContaining({ status: "HELD", holdActive: false })]);
-    // The books and the sale did not move; only the hold did.
+    expect(afterSecond.deposits).toEqual([expect.objectContaining({ status: "HELD", holdActive: true })]);
+    // The books and the sale did not move.
     expect(await netByAccount(a.s)).toEqual(books);
     expect(afterSecond.sale).toEqual(afterFirst.sale);
 
-    // Door (b) has no such second state: the same second call leaves the hold in place.
+    // Door (b) behaves the same: the second call leaves the hold in place.
     const b = await cashDeal("b_newkey");
     await b.cancel();
     await b.cancel();

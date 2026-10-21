@@ -239,14 +239,24 @@ overrides:
   #
   # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
   shell-quote: 1.11.0
-  # @modelcontextprotocol/sdk: GHSA-6qxp-vccf-f47h (HIGH). Vulnerable
-  # >=1.12.0 <1.31.0, patched floor 1.31.0, published 2026-09-28. Resolved
-  # 1.29.0. Reached via shadcn. Pinned to the lowest patched release rather
-  # than 1.32.x (published 2026-10-02/05) to stay the smallest step off the
-  # resolved 1.29 line and well clear of the age gate.
+  # @modelcontextprotocol/sdk: GHSA-6qxp-vccf-f47h (HIGH, vulnerable
+  # >=1.12.0 <1.31.0) and GHSA-22jm-h49p-29qw (HIGH, experimental tasks not
+  # tied to the creating session; vulnerable >=1.24.0 <1.32.0, patched
+  # >=1.32.0). Reached only via the dev CLI shadcn, never by app or backend
+  # code. The second advisory appeared after main's last green audit, so it is
+  # advisory-database drift, not a repository change. Pinned exact at 1.32.1
+  # (published 2026-10-05, well clear of the age gate).
   #
   # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
-  "@modelcontextprotocol/sdk": 1.31.0
+  "@modelcontextprotocol/sdk": 1.32.1
+  # vite: GHSA-587h-7wmj-h5pm (HIGH, launch-editor `fs.existsSync()` existence
+  # check bypass on Windows; vulnerable >=8.0.0 <=8.1.5, patched >=8.1.6).
+  # Reached only via vitest (a dev dependency) through @vitest/mocker and
+  # @vitest/coverage-v8, never by the app or the backend. Pinned exact:
+  # 8.1.6 was published 2026-10-06, well clear of the age gate.
+  #
+  # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
+  vite: 8.1.6
 # GHSA-mh99 (brace-expansion unbounded-expansion DoS) is patched by the pins
 # above. Separate per-major overrides remain necessary because minimatch@3's
 # old-API CommonJS consumers are incompatible with the 5.x export shape.

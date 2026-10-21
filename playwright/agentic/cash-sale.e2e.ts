@@ -59,7 +59,11 @@ test('a salesperson completes a cash sale and lands on the deal', { session: 'sa
   await agent.act(
     `Start a new cash sale. Pick the available vehicle whose model is "${model}". ` +
       `Create a new customer with first name "Agentic" and last name "${lastName}" and select them. ` +
-      'Generate the quote, then tap Submit Sale once. Stop after the tap; the test will wait for the save to finish.',
+      // SCRUM-802 (owner ruling, Option A): a cash sale completes only when its full price is already held
+      // as a deposit, so the full 10000 is recorded as a deposit before the sale is submitted.
+      'Generate the quote. Then tap Record Deposit, enter the full vehicle price 10000 as the amount, ' +
+      'choose Cash as the payment method and record it, and wait until the button reads Deposit Recorded. ' +
+      'Only then tap Submit Sale once. Stop after the tap; the test will wait for the save to finish.',
   );
 
   // Submission leaves the wizard open. The completed sale replaces Submit Sale with a

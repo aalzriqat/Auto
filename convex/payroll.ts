@@ -598,6 +598,55 @@ async function collectUnpaidCommissions(
 }
 
 /**
+ * Whether an extra deal commission line is still owed through payroll: not
+ * removed, not paid, on a live COMPLETED sale that is not being unwound, in the
+ * run's currency. The same rule drives the sweep, approval and payment, so the
+ * three cannot disagree about what a payslip carries.
+ */
+async function isDealLineOwed(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  line: Doc<"dealCommissionLines">,
+  currency: string
+): Promise<boolean> {
+  if (line.orgId !== orgId || line.removedAt !== undefined || line.paidAt !== undefined) return false;
+  if (line.currency !== currency || !(line.amountMinor > 0)) return false;
+  const sale = await ctx.db.get(line.saleId);
+  if (!sale || sale.orgId !== orgId || sale.isDeleted === true || sale.status !== "COMPLETED") return false;
+  return !(await saleHasActiveDealUnwind(ctx, orgId, sale._id));
+}
+
+/**
+ * Unpaid extra deal commission lines grouped by employee (active members only),
+ * with the same `saleDate <= periodEnd` cutoff as the sale commissions.
+ */
+async function collectUnpaidCommissionLines(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  currency: string,
+  activeMemberIds: Set<string>,
+  periodEndMs: number
+): Promise<Map<string, { minor: number; lineIds: Id<"dealCommissionLines">[] }>> {
+  const byUser = new Map<string, { minor: number; lineIds: Id<"dealCommissionLines">[] }>();
+  for (const memberId of activeMemberIds) {
+    const lines = await ctx.db
+      .query("dealCommissionLines")
+      .withIndex("by_org_employee", (q) => q.eq("orgId", orgId).eq("employeeId", memberId as Id<"users">))
+      .collect();
+    for (const line of lines) {
+      if (!(await isDealLineOwed(ctx, orgId, line, currency))) continue;
+      const sale = await ctx.db.get(line.saleId);
+      if (!sale || sale.saleDate > periodEndMs) continue;
+      const entry = byUser.get(memberId) ?? { minor: 0, lineIds: [] };
+      entry.minor += line.amountMinor;
+      entry.lineIds.push(line._id);
+      byUser.set(memberId, entry);
+    }
+  }
+  return byUser;
+}
+
+/**
  * Every stored minor-unit amount is meaningful only in its own currency, and
  * payroll performs no conversion — mixing currencies would silently misvalue
  * pay. Reject rather than guess.
@@ -696,10 +745,30 @@ async function assertAccrualsPosted(
     _id: Id<"payrollItems">;
     baseSalaryMinor: number;
     commissionSaleIds: Id<"sales">[];
+    commissionLineIds?: Id<"dealCommissionLines">[];
     currency: string;
   }[]
 ): Promise<void> {
   for (const item of items) {
+    for (const lineId of item.commissionLineIds ?? []) {
+      const failed = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_line_accrued_${lineId}`)
+        )
+        .filter((q) => q.eq(q.field("status"), "FAILED"))
+        .first();
+      if (failed) {
+        throw new ConvexError(
+          "A ledger entry for a commission line in this run has failed and needs to be retried before you can pay. Ask an administrator to retry it from Accounting → Setup."
+        );
+      }
+      if (await accrualStillQueued(ctx, orgId, `commission_line_accrued_${lineId}`)) {
+        throw new ConvexError(
+          "A commission line in this run hasn't posted to the ledger yet (its accounting period may be closed). Open the period so it posts, then pay."
+        );
+      }
+    }
     if (item.baseSalaryMinor > 0 && (await accrualStillQueued(ctx, orgId, `payroll_accrued_${item._id}`))) {
       throw new ConvexError(
         "This run's salary accrual hasn't posted to the ledger yet (its accounting period may be closed). Open the period so the accrual posts, then pay."
@@ -807,9 +876,16 @@ async function assertAccrualsPosted(
 async function settleItemCommissions(
   ctx: MutationCtx,
   item: Doc<"payrollItems">
-): Promise<{ commissionMinor: number; saleIdsToSettle: Id<"sales">[] }> {
+): Promise<{ commissionMinor: number; saleIdsToSettle: Id<"sales">[]; lineIdsToSettle: Id<"dealCommissionLines">[] }> {
   let commissionMinor = 0;
   const saleIdsToSettle: Id<"sales">[] = [];
+  const lineIdsToSettle: Id<"dealCommissionLines">[] = [];
+  for (const lineId of item.commissionLineIds ?? []) {
+    const line = await ctx.db.get(lineId);
+    if (!line || line.employeeId !== item.userId || !(await isDealLineOwed(ctx, item.orgId, line, item.currency))) continue;
+    commissionMinor += line.amountMinor;
+    lineIdsToSettle.push(lineId);
+  }
   for (const saleId of item.commissionSaleIds) {
     const sale = await ctx.db.get(saleId);
     // The same shared rule the sweep uses. These two paths decide what is
@@ -824,7 +900,7 @@ async function settleItemCommissions(
     commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);
     saleIdsToSettle.push(saleId);
   }
-  return { commissionMinor, saleIdsToSettle };
+  return { commissionMinor, saleIdsToSettle, lineIdsToSettle };
 }
 
 /**
@@ -918,7 +994,7 @@ async function payItem(
   actorId: Id<"users">,
   now: number
 ): Promise<{ grossMinor: number; netMinor: number }> {
-  const { commissionMinor, saleIdsToSettle } = await settleItemCommissions(ctx, item);
+  const { commissionMinor, saleIdsToSettle, lineIdsToSettle } = await settleItemCommissions(ctx, item);
   const salaryMinor = item.baseSalaryMinor;
   const grossMinor = salaryMinor + commissionMinor;
   const advanceRecoveredMinor = await recoverItemAdvances(ctx, orgId, item.userId, item.currency, grossMinor, item._id, actorId, now);
@@ -953,12 +1029,17 @@ async function payItem(
     });
   }
 
+  for (const lineId of lineIdsToSettle) {
+    await ctx.db.patch(lineId, { paidAt: now, paidBy: actorId, payrollItemId: item._id });
+  }
+
   await ctx.db.patch(item._id, {
     commissionMinor,
     advanceDeductionMinor: advanceRecoveredMinor,
     grossMinor,
     netMinor,
     commissionSaleIds: saleIdsToSettle,
+    commissionLineIds: lineIdsToSettle,
   });
   return { grossMinor, netMinor };
 }
@@ -1031,7 +1112,15 @@ export const createRun = mutation({
       const salaryByUser = await resolveSalariesForPeriod(ctx, args.orgId, periodEndMs, currency, activeMemberIds);
       const commissionByUser = await collectUnpaidCommissions(ctx, args.orgId, currency, activeMemberIds, periodEndMs);
 
-      const userIds = new Set<string>([...salaryByUser.keys(), ...commissionByUser.keys()]);
+      const lineCommissionByUser = await collectUnpaidCommissionLines(
+        ctx, args.orgId, currency, activeMemberIds, periodEndMs
+      );
+
+      const userIds = new Set<string>([
+        ...salaryByUser.keys(),
+        ...commissionByUser.keys(),
+        ...lineCommissionByUser.keys(),
+      ]);
 
       // Build every payslip BEFORE inserting the run, so an empty period (no
       // salaries, no commissions) is rejected instead of leaving a zero-item
@@ -1046,12 +1135,15 @@ export const createRun = mutation({
         grossMinor: number;
         netMinor: number;
         commissionSaleIds: Id<"sales">[];
+        commissionLineIds: Id<"dealCommissionLines">[];
       }[] = [];
       for (const uid of userIds) {
         const userId = uid as Id<"users">;
         const baseSalaryMinor = salaryByUser.get(uid) ?? 0;
         const commission = commissionByUser.get(uid) ?? { minor: 0, saleIds: [] };
-        const grossMinor = baseSalaryMinor + commission.minor;
+        const lineCommission = lineCommissionByUser.get(uid) ?? { minor: 0, lineIds: [] };
+        const commissionTotalMinor = commission.minor + lineCommission.minor;
+        const grossMinor = baseSalaryMinor + commissionTotalMinor;
         if (grossMinor <= 0) continue;
 
         const outstanding = await outstandingAdvanceMinor(ctx, args.orgId, userId, currency);
@@ -1060,11 +1152,12 @@ export const createRun = mutation({
         itemPayloads.push({
           userId,
           baseSalaryMinor,
-          commissionMinor: commission.minor,
+          commissionMinor: commissionTotalMinor,
           advanceDeductionMinor,
           grossMinor,
           netMinor,
           commissionSaleIds: commission.saleIds,
+          commissionLineIds: lineCommission.lineIds,
         });
         totalGross += grossMinor;
         totalNet += netMinor;
@@ -1102,6 +1195,7 @@ export const createRun = mutation({
           netMinor: p.netMinor,
           currency,
           commissionSaleIds: p.commissionSaleIds,
+          commissionLineIds: p.commissionLineIds,
           createdAt: now,
         });
       }
@@ -1306,6 +1400,16 @@ export const approveRun = mutation({
           liveSaleIds.push(saleId);
         }
 
+        // Extra deal commission lines were accrued when they were registered;
+        // approval only keeps the ones that are still owed.
+        const liveLineIds: Id<"dealCommissionLines">[] = [];
+        for (const lineId of item.commissionLineIds ?? []) {
+          const line = await ctx.db.get(lineId);
+          if (!line || line.employeeId !== item.userId || !(await isDealLineOwed(ctx, args.orgId, line, item.currency))) continue;
+          commissionMinor += line.amountMinor;
+          liveLineIds.push(lineId);
+        }
+
         const grossMinor = baseSalaryMinor + commissionMinor;
         const advanceDeductionMinor = Math.min(
           await outstandingAdvanceMinor(ctx, args.orgId, item.userId, item.currency),
@@ -1316,6 +1420,7 @@ export const approveRun = mutation({
           baseSalaryMinor,
           commissionMinor,
           commissionSaleIds: liveSaleIds,
+          commissionLineIds: liveLineIds,
           advanceDeductionMinor,
           grossMinor,
           netMinor,

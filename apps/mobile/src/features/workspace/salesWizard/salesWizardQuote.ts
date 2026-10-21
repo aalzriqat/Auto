@@ -24,6 +24,70 @@ export function effectiveMobileQuoteVehiclePrice(
 }
 
 /**
+ * The figure the backend compares with the vehicle's Minimum Price Uplift
+ * (convex/utils/profitApproval.ts): the final sale price minus the list price.
+ * It is NOT the "markup added to base price" input, because the base price is
+ * editable and need not equal the list price. Rounded so float noise cannot
+ * flip a comparison.
+ */
+export function priceUpliftOverList(
+  vehiclePrice: number,
+  desiredProfit: number,
+  listPrice: number
+): number {
+  return Math.round((effectiveMobileQuoteVehiclePrice(vehiclePrice, desiredProfit) - listPrice) * 1000) / 1000;
+}
+
+/** The backend rule: approval is required when the minimum is above 0 and the uplift is below it. */
+export function priceUpliftNeedsApproval(uplift: number, minimumUplift: number): boolean {
+  return minimumUplift > 0 && uplift < minimumUplift;
+}
+
+export type MobileApprovalRequest = {
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  /** What the server stored: final price minus list price when it was requested. */
+  requestedProfit: number;
+  /** The minimum the request was recorded against; a request without it never matches. */
+  minimumProfit?: number;
+};
+
+/**
+ * The server honours an approval only for EXACTLY the terms it was recorded for
+ * (requestMatchesTerms in convex/utils/profitApproval.ts): a later, higher or
+ * lower price needs a new approval. This is the one matcher the wizard uses.
+ */
+export function approvalMatchesTerms(
+  request: MobileApprovalRequest | null | undefined,
+  uplift: number,
+  minimumUplift: number
+): boolean {
+  if (!request) return false;
+  const same = (a: number, b: number) => Math.round(a * 1000) === Math.round(b * 1000);
+  // A request that does not say which minimum it was recorded against cannot be matched.
+  return request.minimumProfit !== undefined && same(request.requestedProfit, uplift) && same(request.minimumProfit, minimumUplift);
+}
+
+/** Everything the wizard shows or blocks on for the minimum price uplift, from one place. */
+export function profitApprovalGate(args: {
+  isCash: boolean;
+  hasVehicle: boolean;
+  uplift: number;
+  minimum: number;
+  approval: MobileApprovalRequest | null | undefined;
+}) {
+  const needsApproval = !args.isCash && args.hasVehicle && priceUpliftNeedsApproval(args.uplift, args.minimum);
+  const exact = approvalMatchesTerms(args.approval, args.uplift, args.minimum);
+  const approvalValid = needsApproval && exact && args.approval?.status === "APPROVED";
+  return {
+    needsApproval,
+    approvalValid,
+    pending: needsApproval && exact && args.approval?.status === "PENDING",
+    rejected: needsApproval && exact && args.approval?.status === "REJECTED",
+    blocked: needsApproval && !approvalValid,
+  };
+}
+
+/**
  * Mirrors the backend financing-term authority before the mobile wizard allows
  * a financed quote to advance or submit.
  */
