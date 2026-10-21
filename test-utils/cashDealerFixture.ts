@@ -46,7 +46,7 @@ export type SeededCashDealer = Awaited<ReturnType<typeof seedCashDealer>>;
 /**
  * SCRUM-802 (pilot): a suite that completes a CASH sale only as a fixture for something else pays the full price by
  * deposit first (the pilot procedure) and completes the sale against the returned quote. `asUser` needs
- * `view:sales` and `confirm:finance_disbursement`.
+ * `view:sales`; the `confirm:finance_disbursement` check is met by the system-owner bypass in convex/utils/tenancy.ts, not by a grant.
  */
 export async function payFullPriceByDeposit(
   asUser: ReturnType<ReturnType<typeof convexTestWithComponents>["withIdentity"]>,

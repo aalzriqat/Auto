@@ -31,7 +31,6 @@ const MODULE_GLOB = import.meta.glob("./**/*.*s");
 const PERMISSIONS = [
   "create:sales", "view:sales", "edit:sales", "view:vehicles",
   "view:commissions", "manage:commissions", "view:finance", "manage:finance",
-  "confirm:finance_disbursement",
 ];
 
 /**
