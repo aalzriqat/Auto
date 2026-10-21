@@ -83,7 +83,9 @@ test.describe("pilot: cash pay-first and deal commissions", () => {
 
     const row = page.getByTestId("deal-commissions-row");
     await expect(row).toBeVisible();
-    await expect(row.getByText("Net profit after commissions")).toBeVisible();
+    await expect(row.getByText("Net profit after commissions", { exact: true })).toBeVisible();
+    // The net figure stays pending until the salesperson's commission is decided; log what the screen says.
+    console.log(`[pilot-commissions] deal row: ${(await row.innerText()).replace(/\s+/g, " ")}`);
     await shot(page, testInfo, "3-deal-commissions-collapsed");
     await row.getByRole("button", { name: /Total commissions/ }).click();
     await expect(row.getByText("Salesperson's commission")).toBeVisible();
@@ -121,11 +123,9 @@ test.describe("pilot: cash pay-first and deal commissions", () => {
     await shot(page, testInfo, "7-deal-after-line");
   });
 
-  // SCRUM-854 (#638) is not on main yet. Until it is, this only records what the
-  // backend does with a SALE line for the sale's own salesperson, so the report
-  // shows the before/after. When #638 merges, turn the annotation into
-  // expect(refused).toBe(true).
-  test("records what a SALE line for the sale's own salesperson does (SCRUM-854)", async ({
+  // SCRUM-854 (#638): a SALE line for the sale's own salesperson would be paid on
+  // top of the commission already on the sale row, so the backend refuses it.
+  test("a SALE line for the sale's own salesperson is refused (SCRUM-854)", async ({
     page,
   }, testInfo) => {
     const { model } = await createVehicle(page);
@@ -151,10 +151,12 @@ test.describe("pilot: cash pay-first and deal commissions", () => {
     await expect(toast).toBeVisible();
     const text = (await toast.innerText()).trim();
     const refused = (await toast.getAttribute("data-type")) === "error";
+    console.log(`[pilot-commissions] SCRUM-854 SALE line for the salesperson ${refused ? "REFUSED" : "ACCEPTED"}: ${text}`);
     testInfo.annotations.push({
       type: "scrum-854",
       description: `SALE line for the salesperson ${refused ? "REFUSED" : "ACCEPTED"}: ${text}`,
     });
     await shot(page, testInfo, "8-sale-line-for-salesperson");
+    expect(refused, `SALE line for the salesperson was accepted: ${text}`).toBe(true);
   });
 });
