@@ -269,6 +269,24 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     );
   });
 
+  it("sets backend variables on the main E2E preview only after its cleanup pin is recorded", () => {
+    const steps = trustedMainE2EWorkflow.jobs?.playwright?.steps ?? [];
+    const setter = steps.find((entry) => String(entry.run ?? "").includes("convex env set"));
+    expect(setter, "a step that sets the preview's backend variables").toBeDefined();
+    // The pin step only warns on failure, so a failed pin must stop the setter
+    // here: otherwise the preview is changed while the always() delete step,
+    // which needs CONVEX_PREVIEW_CREATED_AT, would skip its cleanup.
+    expect(setter?.env).toHaveProperty("CONVEX_PREVIEW_CREATED_AT");
+    const run = String(setter?.run ?? "");
+    const guard = run.indexOf('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
+    expect(guard, "a CONVEX_PREVIEW_CREATED_AT guard in the setter").toBeGreaterThanOrEqual(0);
+    expect(guard).toBeLessThan(run.indexOf("convex env set"));
+    expect(run.slice(guard, run.indexOf("convex env set"))).toContain("exit 1");
+    const pinIndex = steps.findIndex((entry) => String(entry.run ?? "").includes("previewDeploymentLifecycle.mjs pin"));
+    expect(pinIndex).toBeGreaterThanOrEqual(0);
+    expect(steps.indexOf(setter!)).toBeGreaterThan(pinIndex);
+  });
+
   it("runs only as a successful Playwright workflow_run follow-up", () => {
     expect(workflow.on?.workflow_run?.workflows).toEqual([
       "E2E Tests (Playwright)",

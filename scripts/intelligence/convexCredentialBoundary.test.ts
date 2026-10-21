@@ -224,7 +224,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // and control-plane claim the swarm uses), so the dealer-site spec can submit
   // its public lead form. No candidate path, no production deployment.
   "trusted-main-e2e.yml":
-    "b2ea42fcc9d6f5b989ad8c644d9e7fed3d6567168daeffa5d3680904bf055fe4",
+    "c8d8cee8d7aea6275252635de0de51a865cdd66cdd1c65e1cd7fd0c5ea179541",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {

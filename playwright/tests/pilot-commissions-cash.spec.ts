@@ -114,10 +114,13 @@ test.describe("pilot: cash pay-first and deal commissions", () => {
 
     // The new line is part of the deal page's total.
     await page.goto(dealUrl);
+    await expect(page).toHaveURL(dealUrl);
+    await expect(page.getByText(model).first()).toBeVisible(); // the same org's deal, not a blank page
     const rowAfter = page.getByTestId("deal-commissions-row");
     await expect(rowAfter).toBeVisible();
     const totalAfter = await rowAfter.getByRole("button").first().innerText();
     expect(totalAfter).not.toBe(totalBefore);
+    expect(totalAfter).toMatch(/Total commissions\s*100(\.0+)?\s*JOD/);
     await rowAfter.getByRole("button").first().click();
     await expect(rowAfter.getByText("QA TEST purchase commission")).toBeVisible();
     await shot(page, testInfo, "7-deal-after-line");
