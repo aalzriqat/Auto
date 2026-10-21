@@ -692,12 +692,16 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // recordWeeklySendOutcome and cancelWeeklyRun. Measured from the analyser: +6 total and skippedNoOrgId.
   // SCRUM-807: + dashboardExpenseSummary.{begin,blockForImport,buildPage} (+3). All three take `orgId` and
   // write only that org's summary rows, found by index - 545 total, 365 analysed.
+  // SCRUM-778: + orgSettings.setCommissionMode (+1). Takes `orgId`, owner-only via `requireOwner`, and patches only
+  // the settings row it looked up by that org's `by_org` index (or inserts one for that org); the unguarded-write
+  // audit stays empty.
   // Deal commission lines: + dealCommissions.{addLine,removeLine} (+2 total, +2 analysed). Both take `orgId`;
   // addLine checks the sale and employee membership in that org, removeLine loads the line and refuses another org's.
+  // Combined: 545 -> 548 total, 365 -> 368 analysed (re-measured FROM THE ANALYSER).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 547,
-      analysed: 367,
+      totalMutations: 548,
+      analysed: 368,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 165,
     });

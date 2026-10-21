@@ -5,7 +5,6 @@ import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -98,8 +97,13 @@ function errorToast(error: unknown, fallback: string, t?: (key: string) => strin
 export default function CommissionsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const orgSettings = useOrgSettings();
-  const isManualMode = orgSettings?.commissionMode === "MANUAL";
+  // SCRUM-778: the mode in force, resolved on the server (an unset mode is
+  // AUTO_MEMBER) and readable by commission reviewers who cannot view settings.
+  // `undefined` is loading and `null` is no access — no queue banner for either.
+  // A null read is deliberately treated as "not MANUAL": a caller who cannot read the mode
+  // must not be shown a manual work queue that may not match the org's real mode.
+  const commissionMode = useQuery(api.orgSettings.getCommissionMode, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const isManualMode = commissionMode === "MANUAL";
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const canManage = myMembership?.permissions.includes("manage:commissions") ?? false;
