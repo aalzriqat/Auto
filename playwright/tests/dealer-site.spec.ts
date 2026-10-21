@@ -43,6 +43,11 @@ test.describe("public dealer website", () => {
       await page.goto(
         `/dealer-site${submission.path}?host=${encodeURIComponent(site.host)}`,
       );
+      const consoleErrors: string[] = [];
+      const onConsole = (message: { type(): string; text(): string }) => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+      };
+      page.on("console", onConsole);
       const form = page.locator("form").first();
       await expect(form.getByPlaceholder("First name")).toBeVisible();
 
@@ -61,7 +66,9 @@ test.describe("public dealer website", () => {
       } catch (error) {
         // Name the cause in the job log: what the form said instead of the thank-you.
         const shown = (await page.locator("main, body").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+        const toasts = (await page.locator("[data-sonner-toast]").allInnerTexts().catch(() => [])).join(" | ");
         console.log(`[dealer-site] ${submission.path} showed no thank-you. Page text: ${shown.slice(0, 600)}`);
+        console.log(`[dealer-site] ${submission.path} toasts: ${toasts || "(none)"}; console errors: ${consoleErrors.join(" || ").slice(0, 800) || "(none)"}`);
         throw error;
       }
     }
