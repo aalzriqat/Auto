@@ -35,7 +35,7 @@ A skill never lowers a gate. In particular:
 | Before asking for review seats on your own change | `two-axis-review`: advisory Standards and Spec check against AGENTS.md and the Jira issue. It is never a seat and is never labelled as an independent review. |
 | PR bodies, commit messages, docs, runbooks, RFCs | `technical-writing`, then `unslop` on the text. The PR template and attribution block still apply. |
 | Replies, Jira comments, review notes | `unslop` |
-| The same agent mistake has shown up twice in this repo | `correct`. Manual only. Raise a normal PR; it needs its own review. |
+| The same agent mistake has shown up twice in this repo, including across sessions | `correct`. Invoke automatically on the second occurrence without waiting for a user request. Record evidence for both occurrences. Raise a normal PR; it needs its own review. |
 
 ## Enforcement (owner request, 2026-10-20)
 
