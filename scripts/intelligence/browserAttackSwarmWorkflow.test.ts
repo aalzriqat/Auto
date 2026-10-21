@@ -578,6 +578,20 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(firstChange).toBeGreaterThanOrEqual(0);
     expect(guard).toBeLessThan(claim);
     expect(guard).toBeLessThan(firstChange);
+
+    // The guard is only as good as its source: the output must come from the pin
+    // step, and that step must be the one that publishes `preview_created_at`.
+    const pinStep = (job("prepare").steps ?? []).find(
+      (entry) => entry.name === "Pin the disposable preview for cleanup",
+    );
+    expect(pinStep?.id).toBe("pin");
+    expect(String(pinStep?.run ?? "")).toContain("previewDeploymentLifecycle.mjs pin");
+    expect(job("prepare").outputs?.cleanup_preview_created_at).toBe(
+      "${{ steps.pin.outputs.preview_created_at }}",
+    );
+    expect(readFileSync(path.resolve(process.cwd(), "scripts/previewDeploymentLifecycle.mjs"), "utf8")).toContain(
+      '[env.GITHUB_OUTPUT, "preview_created_at"]',
+    );
   });
 
   it("scrubs the disposable preview to an explicit non-sensitive environment allowlist before candidate backend execution", () => {
