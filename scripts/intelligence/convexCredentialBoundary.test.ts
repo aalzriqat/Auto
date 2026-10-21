@@ -219,8 +219,12 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     "61789e5b96d2a5e5e9b41be44fcf2afccf9bd372865e3c39a1154cb3788edde2",
   "trusted-accounting-rehearsal.yml":
     "da8ee3225cb7a94f92593a2f18d336eb5284446fe06cd1c81846bbec780d72d8",
+  // Re-pinned for one step only: it sets the public Turnstile test secret and
+  // NEXT_PUBLIC_APP_URL on this run's own disposable preview (the same two values
+  // and control-plane claim the swarm uses), so the dealer-site spec can submit
+  // its public lead form. No candidate path, no production deployment.
   "trusted-main-e2e.yml":
-    "27e920139bc7e68d929028cdeb4c786d9045bc9b7da1e17dcb46387be1e9d3bc",
+    "b2ea42fcc9d6f5b989ad8c644d9e7fed3d6567168daeffa5d3680904bf055fe4",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {
