@@ -107,7 +107,8 @@ same-SHA attempts refuse the release. Inspect the run's uploaded evidence and
 cleanup step; a green unit harness or PR rehearsal does not replace them.
 An incorrectly targeted dispatch still fails visibly, but its job uses a
 different check name so it cannot permanently poison the current main tip.
-SCRUM-759's FD1 failure currently prevents this cloud gate from passing.
+The cloud gate passed at the 2026-10-21 releases (SCRUM-759's FD1 failure no
+longer blocks it); any red result is a blocker again.
 
 ### Release order at the tip (learned 2026-10-21)
 
@@ -117,9 +118,13 @@ more than one result shares the same producer and name. So, in this order:
 1. Merge. The push to `main` runs `Trusted Main E2E (Playwright)`, which produces
    the required `playwright` check. **Never dispatch `playwright.yml` by hand**:
    its second result at the same SHA makes the guard refuse that commit for good.
+   Likewise never dispatch `trusted-main-e2e.yml` by hand at the same SHA: on
+   `main` its job is also `github-actions/playwright`, so a hand dispatch makes a
+   duplicate result. To retry a failed run, use Re-run on the push run.
 2. Wait for `Trusted Main E2E` to be green at the exact tip.
 3. Dispatch `accounting-rehearsal.yml` and the `autoflow-release-accounting-rehearsal`
-   repository event for the full tip SHA, and confirm both are green.
+   repository event for the full tip SHA, and confirm both are green (a red
+   rehearsal refuses the release; see above).
 4. Wait for SonarCloud to report on the tip. The push already runs `Sonar Main`
    (it can take 30 to 50 minutes). Dispatch `sonar-main.yml` only if that run is
    missing or cancelled; a second manual run can leave two results and refuse the
@@ -129,8 +134,10 @@ more than one result shares the same producer and name. So, in this order:
 6. Merge nothing to `main` while the approval waits: any new commit moves the tip
    and invalidates it.
 
-`Contract skew` shows red on `main` between a merge and the next deploy because
-the client is newer than the deployed backend. That is expected, not a blocker.
+`Contract skew` may show red on `main` between a merge and the next deploy only
+for PRODUCTION SKEW (exit 7), and only when its summary says a deploy is proven
+to fix it. Every other red verdict is a blocker: RELEASE BREAK (8), STANDING
+DEFECT (5), CONTROL FAILED (1) and COVERAGE INCOMPLETE (9).
 
 ## Deploying the Convex backend to production
 
