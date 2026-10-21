@@ -557,6 +557,29 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(source).not.toContain("Build exact candidate frontend in isolated container");
   });
 
+  it("refuses to scrub the swarm preview unless its cleanup pin was recorded", () => {
+    const scrub = step(
+      "trusted-e2e",
+      "Scrub disposable preview environment before candidate execution",
+    );
+    // The pin step only warns when it fails, and preview-cleanup runs only for a
+    // recorded cleanup_preview_created_at. Without it, changing the preview would
+    // leave one nothing retires.
+    expect(scrub.env?.CONVEX_PREVIEW_CREATED_AT).toBe(
+      "${{ needs.prepare.outputs.cleanup_preview_created_at }}",
+    );
+    const run = String(scrub.run ?? "");
+    const guard = run.indexOf('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
+    expect(guard, "a CONVEX_PREVIEW_CREATED_AT guard in the scrub step").toBeGreaterThanOrEqual(0);
+    expect(run.slice(guard, run.indexOf("fi", guard))).toContain("exit 1");
+    const claim = run.indexOf("resolveConvexPreviewCredentials");
+    const firstChange = run.indexOf("convex env remove");
+    expect(claim).toBeGreaterThanOrEqual(0);
+    expect(firstChange).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeLessThan(claim);
+    expect(guard).toBeLessThan(firstChange);
+  });
+
   it("scrubs the disposable preview to an explicit non-sensitive environment allowlist before candidate backend execution", () => {
     const trustedSteps = job("trusted-e2e").steps ?? [];
     const scrubIndex = trustedSteps.findIndex(

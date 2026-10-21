@@ -542,8 +542,16 @@ jobs:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
           CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          CONVEX_PREVIEW_CREATED_AT: ${{ needs.prepare.outputs.cleanup_preview_created_at }}
         run: |
           set -euo pipefail
+
+          # The pin step only warns when it fails, and preview-cleanup runs only for a
+          # recorded cleanup identity. Do not change a preview nothing will retire.
+          if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]; then
+            echo "Disposable preview has no pinned cleanup identity." >&2
+            exit 1
+          fi
 
           ADMIN_KEY="$(
             node --input-type=module <<'NODE'

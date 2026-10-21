@@ -203,8 +203,11 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // in the E2E report upload. The steps are named for what they measure (open
   // the period, drain the pending outbox); they do not claim a later posting
   // will settle.
+  // #650: re-pinned for one guard only — the scrub step now fails closed when the
+  // preview's cleanup pin was not recorded, before it claims the admin key or
+  // changes the preview. No new secret, trigger or candidate path.
   "browser-attack-swarm.yml":
-    "35a418ab548a709adcf2bb859a15dcf72864a7573e039ef74e0c51454367673a",
+    "a04ba74f5766dd4c6e05bb91a6f04dd45eef0f0806cb50831b33e28654d9a3e0",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
