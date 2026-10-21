@@ -33,6 +33,9 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
   } catch {
     result = { exitCode: 1, lines: ["Local review evidence is unavailable; refusing approval."] };
   }
+  if (result.headSha !== head) {
+    result = { exitCode: 1, lines: ["PR head changed or could not be measured during revalidation; refusing approval."] };
+  }
   const conclusion = result.exitCode === 0 ? "success" : "failure";
   await writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${started.id}`, {
     status: "completed", conclusion,

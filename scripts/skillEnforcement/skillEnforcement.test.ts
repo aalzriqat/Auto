@@ -495,7 +495,7 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
     `Local Claude session: ${session}\nLocal Claude model: claude-opus-5-5\n` +
     `Local Claude effort: high\nLocal Claude SHA: ${sha}\n` +
     `Local Claude verdict: CERTIFY\nSigned: Claude Seat 1\n`;
-  const api = (options: { body?: string; report?: string; association?: string; issue?: string; status?: number } = {}) =>
+  const api = (options: { body?: string; report?: string; association?: string; issue?: string; status?: number; head?: string } = {}) =>
     (async (url: string) => {
       const u = String(url);
       if (u.endsWith("/issues/comments/123")) return {
@@ -505,7 +505,7 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
       } as Response;
       const json = u.includes("/files") ? money.map((filename) => ({ filename })) :
         u.includes("/commits") ? [{ sha }, { sha: "b".repeat(40) }, { sha: "abc1234ffff" }] :
-          { state: "open", body: options.body ?? body(), head: { sha } };
+          { state: "open", body: options.body ?? body(), head: { sha: options.head ?? sha } };
       return { ok: true, status: 200, json: async () => json } as Response;
     }) as typeof fetch;
   const env = { REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "test" };
@@ -574,6 +574,25 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
   });
   test("an unrelated comment does not replace the head's evidence result", async () => {
     expect(await refresh({ ...env, COMMENT_ID: "124" }, api())).toEqual({ refreshed: false });
+  });
+  test("a successful check of a newer head cannot approve the earlier head", async () => {
+    const newer = "b".repeat(40);
+    const readNewer = api({ head: newer, body: body().replace(`Seat 1 SHA: ${sha}`, `Seat 1 SHA: ${newer}`),
+      report: report().replace(sha, newer) });
+    let prReads = 0;
+    const writes: Array<Record<string, unknown>> = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (init?.method) {
+        writes.push(JSON.parse(String(init.body)));
+        return { ok: true, json: async () => ({ id: 100 }) } as Response;
+      }
+      if (String(url).endsWith("/pulls/7") && ++prReads === 1) return api()(url);
+      return readNewer(url);
+    }) as typeof fetch;
+    expect(await refresh({ ...env, COMMENT_ID: "123" }, fetchImpl))
+      .toEqual({ refreshed: true, head: sha, conclusion: "failure" });
+    expect(writes[0]).toMatchObject({ head_sha: sha });
+    expect(writes[1]).toMatchObject({ conclusion: "failure" });
   });
 });
 

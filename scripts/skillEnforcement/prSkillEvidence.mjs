@@ -1,7 +1,7 @@
 /**
  * Evaluation of a PR's "Skill evidence" section. I/O is supplied through
- * callbacks, so the same rules judge every PR. The workflow runs it from the base branch
- * (pull_request_target), so a PR cannot edit its own judge.
+ * callbacks, so the same rules judge every PR. Both workflows use the base
+ * branch's code, so a PR cannot edit its own judge.
  *
  * It verifies form only. The seats' own signed PR comments, not this check,
  * are the authoritative evidence that a review happened. It checks that the

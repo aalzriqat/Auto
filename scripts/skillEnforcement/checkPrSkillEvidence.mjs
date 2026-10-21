@@ -86,11 +86,12 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
     }),
   });
   if (!result.required) {
-    return { exitCode: 0, lines: ["skill-evidence: no money, permission or gate paths touched; not required."] };
+    return { exitCode: 0, headSha: pr.head.sha, lines: ["skill-evidence: no money, permission or gate paths touched; not required."] };
   }
-  if (result.ok) return { exitCode: 0, lines: ["skill-evidence: section present and consistent.", FORM_ONLY] };
+  if (result.ok) return { exitCode: 0, headSha: pr.head.sha, lines: ["skill-evidence: section present and consistent.", FORM_ONLY] };
   return {
     exitCode: 1,
+    headSha: pr.head.sha,
     lines: [
       "skill-evidence: FAILED",
       ...result.problems.map((p) => `- ${p}`),

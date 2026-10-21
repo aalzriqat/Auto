@@ -3,7 +3,7 @@ name: Refresh Local Skill Evidence
 # Comments run on the default branch. Never execute the PR's code.
 on:
   issue_comment:
-    types: [created, edited, deleted]
+    types: [edited, deleted]
 
 permissions: {}
 
