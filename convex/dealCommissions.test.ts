@@ -71,7 +71,7 @@ describe("dealCommissions: several lines on one deal", () => {
     vi.useRealTimers();
   });
 
-  test("the kill switch is off in this build: lines are enabled (production runs the same constant)", () => {
+  test("the kill switch is off in this build: lines are enabled (pins the source constant that the production build ships)", () => {
     expect(DEAL_COMMISSION_LINES_PILOT_DISABLED).toBe(false);
   });
 
