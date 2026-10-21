@@ -123,11 +123,9 @@ test.describe("pilot: cash pay-first and deal commissions", () => {
     await shot(page, testInfo, "7-deal-after-line");
   });
 
-  // SCRUM-854 (#638) is not on main yet. Until it is, this only records what the
-  // backend does with a SALE line for the sale's own salesperson, so the report
-  // shows the before/after. When #638 merges, turn the annotation into
-  // expect(refused).toBe(true).
-  test("records what a SALE line for the sale's own salesperson does (SCRUM-854)", async ({
+  // SCRUM-854 (#638): a SALE line for the sale's own salesperson would be paid on
+  // top of the commission already on the sale row, so the backend refuses it.
+  test("a SALE line for the sale's own salesperson is refused (SCRUM-854)", async ({
     page,
   }, testInfo) => {
     const { model } = await createVehicle(page);
@@ -159,5 +157,6 @@ test.describe("pilot: cash pay-first and deal commissions", () => {
       description: `SALE line for the salesperson ${refused ? "REFUSED" : "ACCEPTED"}: ${text}`,
     });
     await shot(page, testInfo, "8-sale-line-for-salesperson");
+    expect(refused, `SALE line for the salesperson was accepted: ${text}`).toBe(true);
   });
 });
