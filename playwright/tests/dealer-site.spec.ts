@@ -55,9 +55,15 @@ test.describe("public dealer website", () => {
       await ensureTurnstileToken(form);
 
       await form.getByRole("button", { name: submission.buttonName }).click();
-      await expect(
-        page.getByRole("heading", { name: "Thank you!" }),
-      ).toBeVisible();
+      const thanks = page.getByRole("heading", { name: "Thank you!" });
+      try {
+        await expect(thanks).toBeVisible();
+      } catch (error) {
+        // Name the cause in the job log: what the form said instead of the thank-you.
+        const shown = (await page.locator("main, body").first().innerText().catch(() => "")).replace(/\s+/g, " ");
+        console.log(`[dealer-site] ${submission.path} showed no thank-you. Page text: ${shown.slice(0, 600)}`);
+        throw error;
+      }
     }
 
     await gotoOrgRoute(page, "leads");
