@@ -39,7 +39,7 @@ const PERMISSIONS = [
  * A dealership whose salesperson carries a 10% member rate, so an automatic
  * mode WOULD produce a commission. `commissionMode` omitted = never chosen.
  */
-async function seedDealer(suffix: string, commissionMode?: "MANUAL" | "AUTO_MEMBER" | "AUTO_TIERS") {
+async function seedDealer(suffix: string, commissionMode?: "MANUAL" | "AUTO_MEMBER" | "AUTO_TIERS", commissionRate = 10) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S778 ${suffix}`, createdAt: Date.now() }));
   await t.run((ctx) =>
@@ -51,11 +51,12 @@ async function seedDealer(suffix: string, commissionMode?: "MANUAL" | "AUTO_MEMB
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", { orgId, name: "OWNER", permissions: PERMISSIONS, isSystemOwnerRole: true })
   );
-  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId, commissionRate: 10 }));
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId, commissionRate }));
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "USD", currencySymbol: "$", enabledPaymentTypes: ["CASH"],
       ...(commissionMode ? { commissionMode } : {}),
+      ...(commissionMode === "AUTO_TIERS" ? { commissionTiers: [{ minProfitAmount: 0, commissionPct: 10 }] } : {}),
     })
   );
   const vehicleId = await t.run((ctx) =>
@@ -169,23 +170,69 @@ describe("SCRUM-778: an unset commission mode keeps behaving as AUTO_MEMBER", ()
   });
 });
 
-/**
- * SCRUM-778 seat finding F1 (Codex HIGH / Opus MEDIUM): a mobile bundle built
- * before this change defaults an unset mode to AUTO_MEMBER inside its general
- * settings form and sends it on every save. A generic settings save must not
- * be able to switch a dealership into automatic commission — only a deliberate
- * mode choice may, through `setCommissionMode`.
- */
 describe("SCRUM-853: commission policy changes preserve existing accrual locks", () => {
-  test.each([0, undefined])("a legacy unpaid amount of %s still prevents the policy change", async (amount) => {
-    const d = await seedDealer(`853_legacy_${amount}`, "AUTO_MEMBER");
+  test("unexpected settings faults return a generic error and leave all rows unchanged", async () => {
+    const d = await seedDealer("853_settings_fault", "AUTO_MEMBER");
+    await d.t.run((ctx) => ctx.db.insert("orgSettings", {
+      orgId: d.orgId, currency: "USD", currencySymbol: "$", enabledPaymentTypes: ["CASH"],
+    }));
+    const before = await dbSnapshot(d.t, Object.keys(schema.tables));
+    await expect(d.as.mutation(api.orgSettings.setCommissionMode, {
+      orgId: d.orgId, commissionMode: "MANUAL",
+    })).rejects.toMatchObject({ data: "An unexpected error occurred. Please try again later." });
+    expect(await dbSnapshot(d.t, Object.keys(schema.tables))).toEqual(before);
+  });
+
+  test.each([0, undefined])("a genuine no-accrual amount of %s does not strand the owner in AUTO", async (amount) => {
+    const d = await seedDealer(`853_legacy_${amount}`, "AUTO_MEMBER", 0);
     const saleId = await d.completeSale();
+    expect(await d.commissionPayableMinor()).toBe(0);
     await d.t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: amount }));
+    await expectAppError(d.as.mutation(api.sales.markCommissionPaid, {
+      orgId: d.orgId, saleId, idempotencyKey: crypto.randomUUID(),
+    }), "VALIDATION_FAILED", "This sale has no commission amount to pay.");
+    await d.as.mutation(api.orgSettings.setCommissionMode, {
+      orgId: d.orgId, commissionMode: "MANUAL",
+    });
+    expect(await d.as.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBe("MANUAL");
+    expect(await d.commissionPayableMinor()).toBe(0);
+    await d.as.mutation(api.sales.setCommissionAmount, { orgId: d.orgId, saleId, commissionAmount: 250 });
+    expect(await d.commissionPayableMinor()).toBe(25_000);
+  });
+
+  test.each([
+    ["NaN", NaN], ["negative NaN", -NaN], ["infinity", Infinity],
+    ["negative infinity", -Infinity], ["negative", -1],
+  ] as const)("a corrupt unpaid %s amount requires accounting review, without writes", async (label, amount) => {
+    const d = await seedDealer(`853_corrupt_${label}`, "AUTO_MEMBER");
+    const saleId = await d.completeSale();
+    // Historical amount shapes around finite rows exercise both index extrema.
+    // These inserts are index/validation fixtures, not accounting-flow proof.
+    await d.t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      if (!sale) throw new Error("fixture sale missing");
+      const { _id, _creationTime, ...fields } = sale;
+      await ctx.db.patch(_id, { commissionAmount: amount });
+      await ctx.db.insert("sales", { ...fields, commissionAmount: 0 });
+      await ctx.db.insert("sales", { ...fields, commissionAmount: 1 });
+    });
     const before = await dbSnapshot(d.t, Object.keys(schema.tables));
     await expectAppError(d.as.mutation(api.orgSettings.setCommissionMode, {
       orgId: d.orgId, commissionMode: "MANUAL",
-    }), "VALIDATION_FAILED", "Settle completed sale commissions before switching to manual mode.");
+    }), "VALIDATION_FAILED", "Completed sale commission amounts need accounting review before changing the commission mode.");
     expect(await dbSnapshot(d.t, Object.keys(schema.tables))).toEqual(before);
+  });
+
+  test("an unpaid AUTO commission does not prevent switching between automatic policies", async () => {
+    const d = await seedDealer("853_auto_auto", "AUTO_MEMBER");
+    const saleId = await d.completeSale();
+    const before = await d.commissionPayableMinor();
+    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_TIERS" });
+    expect(await d.as.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBe("AUTO_TIERS");
+    expect(await d.commissionPayableMinor()).toBe(before);
+    await expectAppError(d.as.mutation(api.sales.setCommissionAmount, {
+      orgId: d.orgId, saleId, commissionAmount: 1,
+    }), "SALE_ALREADY_COMPLETED", "Completed sale commission amounts are locked. Use a correction workflow.");
   });
 
   test.each(["paid", "cancelled", "deleted"] as const)("%s sales do not block a deliberate mode choice", async (state) => {
@@ -205,10 +252,7 @@ describe("SCRUM-853: commission policy changes preserve existing accrual locks",
 
   test("another tenant's unpaid sale does not block the owner and grants no access to that tenant", async () => {
     const d = await seedDealer("853_tenant", "AUTO_MEMBER");
-    const otherOrgId = await d.t.run(async (ctx) => {
-      const id = await ctx.db.insert("organizations", { name: "Other dealer", createdAt: Date.now() });
-      return id;
-    });
+    const otherOrgId = await d.t.run((ctx) => ctx.db.insert("organizations", { name: "Other dealer", createdAt: Date.now() }));
     const saleId = await d.completeSale();
     await d.t.run((ctx) => ctx.db.patch(saleId, { orgId: otherOrgId }));
     await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "MANUAL" });
@@ -220,7 +264,7 @@ describe("SCRUM-853: commission policy changes preserve existing accrual locks",
     expect(await dbSnapshot(d.t, Object.keys(schema.tables))).toEqual(before);
   });
 
-  test("complete paid history at the scan boundary permits switching, but overflow refuses without writes", async () => {
+  test("a large paid history permits switching and does not hide a later unpaid obligation", async () => {
     const d = await seedDealer("853_limit", "AUTO_MEMBER");
     const saleId = await d.completeSale();
     const historicalSale = await d.t.run(async (ctx) => {
@@ -231,15 +275,17 @@ describe("SCRUM-853: commission policy changes preserve existing accrual locks",
       return { ...fields, commissionPaidAt: 1 };
     });
     await d.t.run(async (ctx) => {
-      for (let index = 1; index < 1000; index++) await ctx.db.insert("sales", historicalSale);
+      for (let index = 1; index < 1001; index++) await ctx.db.insert("sales", historicalSale);
     });
     await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "MANUAL" });
     await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" });
-    await d.t.run((ctx) => ctx.db.insert("sales", historicalSale));
+    await d.t.run((ctx) => ctx.db.insert("sales", {
+      ...historicalSale, saleDate: historicalSale.saleDate + 1, commissionPaidAt: undefined,
+    }));
     const before = await dbSnapshot(d.t, Object.keys(schema.tables));
     await expectAppError(d.as.mutation(api.orgSettings.setCommissionMode, {
       orgId: d.orgId, commissionMode: "MANUAL",
-    }), "VALIDATION_FAILED", "The completed sale history needs an accounting review before switching to manual mode.");
+    }), "VALIDATION_FAILED", "Settle completed sale commissions before switching to manual mode.");
     expect(await dbSnapshot(d.t, Object.keys(schema.tables))).toEqual(before);
   });
 
@@ -253,10 +299,8 @@ describe("SCRUM-853: commission policy changes preserve existing accrual locks",
         const sale = await d.t.run((ctx) => ctx.db.get(saleId));
         expect(sale?.status).toBe("COMPLETED");
         expect(sale?.commissionPaidAt).toBeUndefined();
-        if (initialMode !== "AUTO_TIERS") {
-          expect(sale?.commissionAmount).toBeGreaterThan(1);
-          expect(await d.commissionPayableMinor()).toBeGreaterThan(0);
-        }
+        expect(sale?.commissionAmount).toBeGreaterThan(1);
+        expect(await d.commissionPayableMinor()).toBeGreaterThan(0);
 
         const edit = () => d.as.mutation(api.sales.setCommissionAmount, {
           orgId: d.orgId, saleId, commissionAmount: 1,
@@ -279,6 +323,13 @@ describe("SCRUM-853: commission policy changes preserve existing accrual locks",
   );
 });
 
+/**
+ * SCRUM-778 seat finding F1 (Codex HIGH / Opus MEDIUM): a mobile bundle built
+ * before this change defaults an unset mode to AUTO_MEMBER inside its general
+ * settings form and sends it on every save. A generic settings save must not
+ * be able to switch a dealership into automatic commission — only a deliberate
+ * mode choice may, through `setCommissionMode`.
+ */
 describe("SCRUM-778: an automatic mode needs a deliberate choice", () => {
   const storedMode = (d: Awaited<ReturnType<typeof seedDealer>>) =>
     d.t.run(async (ctx) => {
