@@ -464,6 +464,57 @@ Reviewed abc1234 for reuse, simplification and efficiency: no changes needed
 const money = ["convex/sales.ts", "convex/sales.test.ts"];
 const testsOnly = ["convex/sales.test.ts", "docs/notes.md"];
 
+describe("verified local Claude evidence (SCRUM-760)", () => {
+  const sha = "a".repeat(40);
+  const session = "df7e4a61-cb22-4774-9ed8-3c191d397ed2";
+  const implementer = "01a15fef-a4fe-79e2-a9a5-d91bff56cd10";
+  const reviewUrl = "https://github.com/o/r/pull/7#issuecomment-123";
+  const body = () => fill({ "Seat 1 session": `local:${session}`, "Seat 1 SHA": sha }) +
+    `- Implementer session: ${implementer}\n- Seat 1 review: ${reviewUrl}\n`;
+  const report = () => `Independent review of the complete change: no blocking findings.\n` +
+    `Local Claude session: ${session}\nLocal Claude model: claude-opus-5-5\n` +
+    `Local Claude effort: high\nLocal Claude SHA: ${sha}\n` +
+    `Local Claude verdict: CERTIFY\nSigned: Claude Seat 1\n`;
+  const api = (options: { body?: string; report?: string; association?: string; issue?: string; status?: number } = {}) =>
+    (async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/issues/comments/123")) return {
+        ok: !options.status, status: options.status ?? 200,
+        json: async () => ({ html_url: reviewUrl, issue_url: options.issue ?? "https://api.github.com/repos/o/r/issues/7",
+          author_association: options.association ?? "OWNER", body: options.report ?? report() }),
+      } as Response;
+      const json = u.includes("/files") ? money.map((filename) => ({ filename })) :
+        u.includes("/commits") ? [{ sha }, { sha: "abc1234ffff" }] :
+          { body: options.body ?? body(), head: { sha } };
+      return { ok: true, status: 200, json: async () => json } as Response;
+    }) as typeof fetch;
+  const env = { REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "test" };
+
+  test("accepts a separate local session whose trusted same-PR signed report certifies the head", async () => {
+    expect((await check(env, api())).exitCode).toBe(0);
+  });
+  test.each([
+    ["implementer session", () => ({ body: body().replace(`local:${session}`, `local:${implementer}`) })],
+    ["missing implementer", () => ({ body: body().replace(`- Implementer session: ${implementer}\n`, "") })],
+    ["wrong PR link", () => ({ body: body().replace("/pull/7#", "/pull/8#") })],
+    ["redirected comment", () => ({ issue: "https://api.github.com/repos/o/r/issues/8" })],
+    ["untrusted author", () => ({ association: "NONE" })],
+    ["wrong model", () => ({ report: report().replace("claude-opus-5-5", "claude-sonnet-5-5") })],
+    ["wrong session", () => ({ report: report().replace(session, implementer) })],
+    ["stale SHA", () => ({ report: report().replace(sha, "b".repeat(40)) })],
+    ["older PR commit", () => ({ body: body().replace(`Seat 1 SHA: ${sha}`, "Seat 1 SHA: abc1234ffff000000000000000000000000000000") })],
+    ["BLOCK verdict", () => ({ report: report().replace("CERTIFY", "BLOCK") })],
+    ["unsigned report", () => ({ report: report().replace("Signed: Claude Seat 1", "") })],
+    ["duplicate verdict", () => ({ report: report() + "Local Claude verdict: BLOCK\n" })],
+    ["partial SHA", () => ({ body: body().replace(`Seat 1 SHA: ${sha}`, "Seat 1 SHA: aaaaaaa") })],
+  ])("refuses %s", async (_name, options) => {
+    expect((await check(env, api(options()))).exitCode).toBe(1);
+  });
+  test("an unreadable review is unavailable, not accepted", async () => {
+    await expect(check(env, api({ status: 403 }))).rejects.toThrow("403");
+  });
+});
+
 describe("evaluate (PR check)", () => {
   test("not required when no sensitive path is touched", async () => {
     expect(await evaluate({ body: "", files: ["docs/a.md"] })).toEqual({ required: false, ok: true, problems: [] });
