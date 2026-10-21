@@ -108,7 +108,9 @@ cleanup step; a green unit harness or PR rehearsal does not replace them.
 An incorrectly targeted dispatch still fails visibly, but its job uses a
 different check name so it cannot permanently poison the current main tip.
 The cloud gate passed at the 2026-10-21 releases (SCRUM-759's FD1 failure no
-longer blocks it); any red result is a blocker again.
+longer blocks it): Accounting Cloud Rehearsal run 39628786851 and trusted
+verdict run 39628833593 at a6086d11, released by Deploy production runs
+39608097817 (3a31e4b8) and 39634067343 (a6086d11). Any red result is a blocker.
 
 ### Release order at the tip (learned 2026-10-21)
 
@@ -135,8 +137,10 @@ more than one result shares the same producer and name. So, in this order:
    and invalidates it.
 
 `Contract skew` may show red on `main` between a merge and the next deploy only
-for PRODUCTION SKEW (exit 7), and only when its summary says a deploy is proven
-to fix it. Every other red verdict is a blocker: RELEASE BREAK (8), STANDING
+for PRODUCTION SKEW (exit 7), and only when its summary lists no "ALSO PRESENT"
+causes (or you inspected and resolved each one) and its deploy-fixes-it line
+covers every skew call. The CLI picks one primary exit and ranks skew ahead of
+the other causes, so an exit 7 can hide a standing defect or incomplete coverage. Every other red verdict is a blocker: RELEASE BREAK (8), STANDING
 DEFECT (5), CONTROL FAILED (1) and COVERAGE INCOMPLETE (9).
 
 ## Deploying the Convex backend to production
