@@ -69,7 +69,7 @@ async function openBlockedInstallmentQuote(page: Page) {
   await page.getByPlaceholder(/^Search by make, model/).fill(model);
   await page.getByRole("button", { name: model }).click();
 
-  await page.getByLabel("Profit", { exact: true }).fill(String(REQUESTED_PROFIT));
+  await page.getByLabel("Markup added to base price", { exact: true }).fill(String(REQUESTED_PROFIT));
 
   // The gate is live before anything is submitted: the alert appears and Next
   // is disabled, so the deal cannot progress past step 1 at all.
@@ -153,7 +153,7 @@ test.describe("profit approval gate", () => {
 
     // An approval is for a specific figure. Dropping the profit below it
     // afterwards must not ride on the earlier verdict.
-    await page.getByLabel("Profit", { exact: true }).fill(String(REQUESTED_PROFIT - 50));
+    await page.getByLabel("Markup added to base price", { exact: true }).fill(String(REQUESTED_PROFIT - 50));
 
     await expect(page.getByText("Approval Required")).toBeVisible();
     await expect(page.getByRole("button", { name: "Next" })).toBeDisabled();
