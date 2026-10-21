@@ -9,8 +9,11 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { parse } from "yaml";
 import { decide, gitExecutable, gitSteps, run, stepsFor } from "./skillGate.mjs";
 import { check } from "./checkPrSkillEvidence.mjs";
+import { refresh } from "./refreshPrSkillEvidence.mjs";
 import { evaluate, isPlaceholder, TEMPLATE } from "./prSkillEvidence.mjs";
 
 let n = 0;
@@ -465,6 +468,13 @@ const money = ["convex/sales.ts", "convex/sales.test.ts"];
 const testsOnly = ["convex/sales.test.ts", "docs/notes.md"];
 
 describe("verified local Claude evidence (SCRUM-760)", () => {
+  test("local review revocation is an explicit workflow event", () => {
+    const directory = path.join(__dirname, "../../.github/workflows");
+    const workflows = readdirSync(directory).filter((name) => /\.ya?ml$/.test(name))
+      .map((name) => parse(readFileSync(path.join(directory, name), "utf8")));
+    expect(workflows.some((workflow) => workflow.on?.issue_comment?.types?.includes("edited") &&
+      workflow.on.issue_comment.types.includes("deleted"))).toBe(true);
+  });
   const sha = "a".repeat(40);
   const session = "df7e4a61-cb22-4774-9ed8-3c191d397ed2";
   const implementer = "01a15fef-a4fe-79e2-a9a5-d91bff56cd10";
@@ -484,8 +494,8 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
           author_association: options.association ?? "OWNER", body: options.report ?? report() }),
       } as Response;
       const json = u.includes("/files") ? money.map((filename) => ({ filename })) :
-        u.includes("/commits") ? [{ sha }, { sha: "abc1234ffff" }] :
-          { body: options.body ?? body(), head: { sha } };
+        u.includes("/commits") ? [{ sha }, { sha: "b".repeat(40) }, { sha: "abc1234ffff" }] :
+          { state: "open", body: options.body ?? body(), head: { sha } };
       return { ok: true, status: 200, json: async () => json } as Response;
     }) as typeof fetch;
   const env = { REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "test" };
@@ -502,16 +512,58 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
     ["wrong model", () => ({ report: report().replace("claude-opus-5-5", "claude-sonnet-5-5") })],
     ["wrong session", () => ({ report: report().replace(session, implementer) })],
     ["stale SHA", () => ({ report: report().replace(sha, "b".repeat(40)) })],
-    ["older PR commit", () => ({ body: body().replace(`Seat 1 SHA: ${sha}`, "Seat 1 SHA: abc1234ffff000000000000000000000000000000") })],
+    ["older PR commit", () => ({ body: body().replace(`Seat 1 SHA: ${sha}`, `Seat 1 SHA: ${"b".repeat(40)}`), report: report().replace(sha, "b".repeat(40)) })],
     ["BLOCK verdict", () => ({ report: report().replace("CERTIFY", "BLOCK") })],
     ["unsigned report", () => ({ report: report().replace("Signed: Claude Seat 1", "") })],
     ["duplicate verdict", () => ({ report: report() + "Local Claude verdict: BLOCK\n" })],
+    ["hidden attestation", () => ({ report: "BLOCK\n<!--\n" + report() + "-->" })],
     ["partial SHA", () => ({ body: body().replace(`Seat 1 SHA: ${sha}`, "Seat 1 SHA: aaaaaaa") })],
   ])("refuses %s", async (_name, options) => {
     expect((await check(env, api(options()))).exitCode).toBe(1);
   });
   test("an unreadable review is unavailable, not accepted", async () => {
     await expect(check(env, api({ status: 403 }))).rejects.toThrow("403");
+  });
+  test("a consistent self-review fails only the separate-session rule", async () => {
+    const result = await check(env, api({ body: body().replace(`local:${session}`, `local:${implementer}`),
+      report: report().replace(session, implementer) }));
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.filter((text) => text.startsWith("- "))).toEqual([
+      "- Seat 1 session is the implementing session. Seat 1 must be a separate session.",
+    ]);
+  });
+  test("a consistent older own-PR review fails only the current-head rule", async () => {
+    const prior = "b".repeat(40);
+    const result = await check(env, api({ body: body().replace(`Seat 1 SHA: ${sha}`, `Seat 1 SHA: ${prior}`),
+      report: report().replace(sha, prior) }));
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.filter((text) => text.startsWith("- "))).toEqual([
+      "- Local review must certify the full current PR head SHA.",
+    ]);
+  });
+  test.each(["BLOCK", "deleted"])("revoking a green report to %s publishes a failing check on that PR head", async (revocation) => {
+    const options: { report?: string; status?: number } = {};
+    const writes: Array<Record<string, unknown>> = [];
+    const read = api(options);
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (init?.method) {
+        const payload = JSON.parse(String(init.body));
+        writes.push(payload);
+        return { ok: true, json: async () => ({ id: 100 + writes.length }) } as Response;
+      }
+      return read(url);
+    }) as typeof fetch;
+    const refreshEnv = { ...env, COMMENT_ID: "123" };
+    expect(await refresh(refreshEnv, fetchImpl)).toEqual({ refreshed: true, head: sha, conclusion: "success" });
+    if (revocation === "deleted") options.status = 404;
+    else options.report = report().replace("CERTIFY", "BLOCK");
+    expect(await refresh(refreshEnv, fetchImpl)).toEqual({ refreshed: true, head: sha, conclusion: "failure" });
+    expect(writes[0]).toMatchObject({ name: "skill-evidence", head_sha: sha, status: "in_progress" });
+    expect(writes[2]).toMatchObject({ name: "skill-evidence", head_sha: sha, status: "in_progress" });
+    expect(writes[3]).toMatchObject({ status: "completed", conclusion: "failure" });
+  });
+  test("an unrelated comment does not replace the head's evidence result", async () => {
+    expect(await refresh({ ...env, COMMENT_ID: "124" }, api())).toEqual({ refreshed: false });
   });
 });
 

@@ -1,6 +1,6 @@
 /**
- * Pure evaluation of a PR's "Skill evidence" section. No I/O, so it is testable
- * and the same code judges every PR. The workflow runs it from the base branch
+ * Evaluation of a PR's "Skill evidence" section. I/O is supplied through
+ * callbacks, so the same rules judge every PR. The workflow runs it from the base branch
  * (pull_request_target), so a PR cannot edit its own judge.
  *
  * It verifies form only. The seats' own signed PR comments, not this check,
@@ -51,6 +51,11 @@ const withoutSeat1Line = (body) =>
 
 const line = (text, label) =>
   text.match(new RegExp(String.raw`^[ \t]*[-*]?[ \t]*${label}[ \t]*:[ \t]*(.+)$`, "im"))?.[1].trim();
+
+export function localReviewUrl(body) {
+  const text = section(body ?? "")?.text;
+  return text && LOCAL_SESSION.test(line(text, "Seat 1 session") ?? "") ? line(text, "Seat 1 review") : undefined;
+}
 
 /**
  * The fenced block that belongs to this item: it must open on the label's line
@@ -164,7 +169,8 @@ async function checkShas(t, isPrCommit) {
 }
 
 /**
- * @param {{body:string, files:string[], isPrCommit?:(sha:string)=>Promise<boolean>, commitText?:string}} p
+ * @param {{body:string, files:string[], isPrCommit?:(sha:string)=>Promise<boolean>, commitText?:string,
+ * localReview?:(evidence:{url:string|undefined,session:string,sha:string|undefined})=>Promise<string[]>}} p
  * `commitText` is the PR commit messages, which carry the implementing session link.
  * @returns {Promise<{required:boolean, ok:boolean, problems:string[]}>}
  */

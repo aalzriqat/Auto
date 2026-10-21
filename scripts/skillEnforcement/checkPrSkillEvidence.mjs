@@ -31,6 +31,9 @@ async function verifyLocalReview({ url, session, sha }, { repo, pr, head, fetchI
     return ["Local review must be published by a repository owner, member or collaborator."];
   }
   const body = comment.body;
+  if (typeof body !== "string" || body.includes("<!--")) {
+    return ["Local Claude report fields must be visible, not inside HTML comments."];
+  }
   const valid = reportLine(body, "Local Claude session")?.toLowerCase() === session &&
     reportLine(body, "Local Claude model") === "claude-opus-5-5" &&
     reportLine(body, "Local Claude effort") === "high" &&
@@ -40,7 +43,7 @@ async function verifyLocalReview({ url, session, sha }, { repo, pr, head, fetchI
   return valid ? [] : ["Local Claude signed report must match the session, Opus 5.5 high, current head SHA and CERTIFY verdict."];
 }
 
-async function getJson(fetchImpl, token, path) {
+export async function getJson(fetchImpl, token, path) {
   const res = await fetchImpl(`${API}${path}`, {
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "skill-evidence" },
   });
