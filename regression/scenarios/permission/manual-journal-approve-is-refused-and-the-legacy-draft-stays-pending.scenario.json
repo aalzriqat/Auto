@@ -1,0 +1,49 @@
+{
+  "id": "manual-journal-approve-is-refused-and-the-legacy-draft-stays-pending",
+  "fingerprint": "ca977628609fa2536999b8683a911e380fa4e6e36a1bf39c2b390b9d8101347a",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum795-pilot-off",
+    "firstSeen": "2026-10-19"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-reviewer",
+        "org": "A"
+      },
+      "action": "financialAudit.approveManualJournal",
+      "input": {
+        "draft": "legacy-pending"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "MANUAL_JOURNALS_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "step1.draftStatus",
+      "value": "PENDING_APPROVAL"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22474",
+      "digest": "c2b86f2c093eb218d5181792a470347245bce150bcdb3fa778edda0c7ea64565"
+    }
+  ],
+  "impl": {
+    "file": "convex/manualJournalsPilotOff.scrum795.test.ts",
+    "testName": "approving an otherwise-approvable legacy pending draft is refused and posts nothing"
+  },
+  "matrixRow": "SCRUM-50-manual-journal-off"
+}

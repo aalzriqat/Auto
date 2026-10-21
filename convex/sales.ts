@@ -45,6 +45,7 @@ import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment"
 import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
+import { assertCashDraftCarriesNoExtras, assertCashSaleCarriesNoExtras } from "./utils/cashSalePilotGate";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertCustomerCreditPayoutAllowed } from "./utils/customerCreditPayoutContainment";
@@ -656,6 +657,10 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
+    // SCRUM-802 (owner ruling 2026-10-19): a CASH sale carrying tax, fees, a warranty or GAP is not offered in the
+    // pilot. After tenant auth, before the rate limit, any write and `runWithIdempotency`.
+    assertCashSaleCarriesNoExtras(args);
+
     const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
@@ -749,6 +754,9 @@ export const completeFromQuote = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
+    // SCRUM-802: no early extras check here by construction. A quote carries no tax, fee, warranty or GAP and this door
+    // passes none to `completeSalesForLineItems`; if that ever changes, `completeSale` (the choke point) refuses it, and
+    // convex/scrum802CashSaleExtras.test.ts pins both facts.
     const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
@@ -886,6 +894,10 @@ export const completeDraft = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    // SCRUM-802 (owner ruling 2026-10-19): as `create`. The draft carries the money terms, so it is read here (no
+    // write) and a CASH draft carrying tax, fees, a warranty or GAP is refused before `runWithIdempotency`.
+    await assertCashDraftCarriesNoExtras(ctx, args.orgId, args.saleId);
 
     const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {

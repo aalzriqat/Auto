@@ -133,6 +133,16 @@ async function completeCashSale(s: CashSeed, quoteId: Id<"quotes">, suffix: stri
   })) as Id<"sales">;
 }
 
+/** SCRUM-802 (owner ruling, Option A): a cash sale completes only once its full price is held as deposit. */
+const CASH_PRICE_MINOR = 12_500_000;
+
+/** Pays the quote's full price (12,500) by deposit, the pilot procedure; returns the held deposit. */
+async function payFullByDeposit(s: CashSeed, quoteId: Id<"quotes">, suffix: string) {
+  return await s.owner.as.mutation(api.deposits.create, {
+    orgId: s.orgId, quoteId, amount: 12_500, method: "CASH", idempotencyKey: `scrum486-full-deposit-${suffix}`,
+  });
+}
+
 async function authorizedOtherTenant(s: CashSeed, tag: string) {
   const clerkId = `${tag}_other_owner`;
   const orgId = await s.t.run(async (ctx) => {
@@ -207,6 +217,16 @@ function expectLiteralRows(actual: JournalRow[], expected: JournalRow[]) {
   ].join("|");
   const order = (a: JournalRow, b: JournalRow) => key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0;
   expect([...actual].sort(order)).toEqual([...expected].sort(order));
+}
+
+/** The full-price deposit receipt and its application to the invoice, as completion leaves them. */
+function fullDepositRows(applicationStatus: "POSTED" | "REVERSED" = "POSTED"): JournalRow[] {
+  return [
+    { account: "1100", currency: "JOD", debit: CASH_PRICE_MINOR, credit: 0, entryStatus: "POSTED" },
+    { account: "2100", currency: "JOD", debit: 0, credit: CASH_PRICE_MINOR, entryStatus: "POSTED" },
+    { account: "2100", currency: "JOD", debit: CASH_PRICE_MINOR, credit: 0, entryStatus: applicationStatus },
+    { account: "1200", currency: "JOD", debit: 0, credit: CASH_PRICE_MINOR, entryStatus: applicationStatus },
+  ];
 }
 
 function expectAdditionalRows(before: JournalRow[], after: JournalRow[], expected: JournalRow[]) {
@@ -823,15 +843,35 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(await d.bankBalance()).toBe(12_500_000);
   }, 30_000);
 
+  /** Stored snapshots after the receipt and before the return: sale (1210 Dr, 4100 Cr, 5100 Dr, 1400 Cr) and receipt (1110 Dr, 1210 Cr). */
+  const SNAPSHOT_BEFORE_RETURN = {
+    "1110|JOD": { debit: 12_500_000, credit: 0 },
+    "1210|JOD": { debit: 12_500_000, credit: 12_500_000 },
+    "1400|JOD": { debit: 0, credit: 10_000_000 },
+    "4100|JOD": { debit: 0, credit: 12_500_000 },
+    "5100|JOD": { debit: 10_000_000, credit: 0 },
+  };
+  /** After the inverse posts: 1110 gains a 12,500,000 credit and 1210 a 12,500,000 debit; nothing else moves. */
+  const SNAPSHOT_AFTER_REVERSAL = {
+    ...SNAPSHOT_BEFORE_RETURN,
+    "1110|JOD": { debit: 12_500_000, credit: 12_500_000 },
+    "1210|JOD": { debit: 25_000_000, credit: 12_500_000 },
+  };
+
   test("owned configured financier × CHEQUE tender × cleared cheque return with no open period: the return succeeds, the reversal is DEFERRED, then posts exactly once a period opens", async () => {
     const d = await clearedFinanceChequeDeal("s486fcperiod");
     const { s, applicationId, cleared } = d;
-    const setPeriods = (status: "OPEN" | "CLOSED") => s.t.run(async (ctx) => {
-      for (const period of await ctx.db.query("accountingPeriods").collect()) {
-        if (period.orgId === s.orgId) await ctx.db.patch(period._id, { status });
-      }
-    });
-    await setPeriods("CLOSED");
+    // Periods move only through the public accounting-period mutations (oracle gate contract item 1).
+    const ownPeriodIds = async () => (await s.owner.as.query(api.accountingPeriods.list, { orgId: s.orgId })).map((p) => p._id);
+    const [periodId] = await ownPeriodIds();
+    expect(await ownPeriodIds()).toHaveLength(1);
+    // Stored account snapshots, summed over shards as the trial balance reads them, are asserted at each stage.
+    expect(await storedPeriodSnapshot(s, periodId)).toEqual(SNAPSHOT_BEFORE_RETURN);
+    for (const periodId of await ownPeriodIds()) {
+      const checklist = await s.owner.as.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId });
+      await s.owner.as.mutation(api.accountingPeriods.close, { orgId: s.orgId, periodId, acknowledgedWarnings: checklist.warnings });
+    }
+    expect(await s.owner.as.query(api.accountingPeriods.currentOpenPeriod, { orgId: s.orgId })).toBeNull();
     const rowsBefore = await journalRows(s);
     // With every period closed a role without the authority is still refused FORBIDDEN, writing nothing.
     await expectRefusedAndUnchanged(
@@ -849,6 +889,8 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
 
     // Deferred state: the closed period is not written into (the ledger still shows the receipt), but the
     // business state moves now: payment VOIDED, debt reopened, deal expecting the next receipt, cheque RETURNED.
+    // The deferred reversal wrote nothing into the account snapshots.
+    expect(await storedPeriodSnapshot(s, periodId)).toEqual(SNAPSHOT_BEFORE_RETURN);
     expect(await journalRows(s)).toEqual(rowsBefore);
     expect(netByAccount(await journalRows(s))).toEqual({
       "1110|JOD": 12_500_000, "1400|JOD": -10_000_000, "4100|JOD": -12_500_000, "5100|JOD": 10_000_000,
@@ -878,17 +920,48 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     }));
     expect(stale?.code).toBe("FINANCE_CONFIRM_STALE_REQUEST");
 
-    // Once a period opens the outbox drains the queued reversal: the exact inverse posts once.
-    await setPeriods("OPEN");
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-    try {
-      await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+    // Reopening a period through the public mutation wakes the outbox: the exact inverse posts once, and a
+    // second drain finds nothing left to post (exactly once, not at-least-once).
+    const settle = async () => {
       for (let pass = 0; pass < 10; pass += 1) {
         await s.t.finishAllScheduledFunctions(vi.runAllTimers);
         const inFlight = (await s.t.run(async (ctx) => await ctx.db.system.query("_scheduled_functions").collect()))
           .filter((f) => f.state.kind === "pending" || f.state.kind === "inProgress").length;
         if (inFlight === 0) break;
       }
+    };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      for (const periodId of await ownPeriodIds()) {
+        await s.owner.as.mutation(api.accountingPeriods.reopen, {
+          orgId: s.orgId, periodId, reason: "Certification: the deferred cheque-return reversal must post",
+        });
+      }
+      await settle();
+      await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+      await settle();
+      const afterFirstDrains = await journalRows(s);
+      const eventsOf = () => s.t.run(async (ctx) => (await ctx.db.query("accountingEvents").collect())
+        .filter((row) => row.orgId === s.orgId));
+      const outboxOf = () => s.t.run(async (ctx) => (await ctx.db.query("pendingAccountingEvents").collect())
+        .filter((row) => row.orgId === s.orgId));
+      const eventsAfterFirst = await eventsOf();
+      const outboxAfterFirst = await outboxOf();
+      const snapshotAfterFirst = await storedPeriodSnapshot(s, periodId);
+      expect(snapshotAfterFirst).toEqual(SNAPSHOT_AFTER_REVERSAL);
+      // Whole stored documents (ids, shards, timestamps, running totals), not a projection.
+      const snapshotRowsOf = () => s.t.run(async (ctx) => (await ctx.db.query("accountBalanceSnapshots").collect())
+        .filter((row) => row.orgId === s.orgId && row.periodId === periodId));
+      const snapshotRowsAfterFirst = await snapshotRowsOf();
+      expect(snapshotRowsAfterFirst.length).toBeGreaterThan(0);
+      await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+      await settle();
+      // Replay: nothing is posted again, so journal, events, the whole outbox rows and the snapshots are identical.
+      expect(await journalRows(s)).toEqual(afterFirstDrains);
+      expect(await eventsOf()).toEqual(eventsAfterFirst);
+      expect(await outboxOf()).toEqual(outboxAfterFirst);
+      expect(await storedPeriodSnapshot(s, periodId)).toEqual(SNAPSHOT_AFTER_REVERSAL);
+      expect(await snapshotRowsOf()).toEqual(snapshotRowsAfterFirst);
     } finally {
       vi.useRealTimers();
     }
@@ -1309,22 +1382,25 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
   });
 
-  test("owned CASH × no deposit: sale recognizes literal receivable, revenue, COGS and inventory", async () => {
+  test("owned CASH × full price held as deposit: sale recognizes literal receivable, revenue, COGS and inventory, and the deposit settles the receivable", async () => {
     const { s, quoteId } = await cashQuote("s486cashnone");
+    await payFullByDeposit(s, quoteId, "owned-full");
     const saleId = await completeCashSale(s, quoteId, "no-deposit");
 
     const saleStatus = await s.t.run(async (ctx) => (await ctx.db.get(saleId))?.status);
     const rows = await journalRows(s);
     expect(saleStatus).toBe("COMPLETED");
     expectLiteralRows(rows, [
+      ...fullDepositRows(),
       { account: "1200", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
       { account: "4100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
       { account: "5100", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
       { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
     ]);
     expectBalanced(rows);
+    // The receivable the sale opened is settled to zero by the deposit; the cash is the customer's payment.
     expect(await trialBalanceNormalBalance(s)).toEqual({
-      "1200|JOD": 12_500_000,
+      "1100|JOD": 12_500_000,
       "1400|JOD": -10_000_000,
       "4100|JOD": 12_500_000,
       "5100|JOD": 10_000_000,
@@ -1341,12 +1417,13 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(income.cogsRows.map((row) => [row.code, row.netMinor])).toEqual([["5100", 10_000_000]]);
   });
 
-  test("owned CASH × no deposit × cancellation: sale journals reverse without a customer credit", async () => {
+  test("owned CASH × full deposit × cancellation: sale journals reverse and the customer's deposit returns to held", async () => {
     const { s, quoteId } = await cashQuote("s486ownedcancel");
+    const depositId = await payFullByDeposit(s, quoteId, "owned-cancel");
     const saleId = await completeCashSale(s, quoteId, "owned-no-deposit-cancel");
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
     expect(netByAccount(await journalRows(s))).toEqual({
-      "1200|JOD": 12_500_000,
+      "1100|JOD": 12_500_000,
       "1400|JOD": -10_000_000,
       "4100|JOD": -12_500_000,
       "5100|JOD": 10_000_000,
@@ -1414,17 +1491,24 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expectLiteralRows(originalBinding?.rows ?? [], originalRows);
     expectLiteralRows(reversalBinding?.rows ?? [], reversalRows);
     const rows = await journalRows(s);
-    expectLiteralRows(rows, [...originalRows, ...reversalRows]);
+    // The deposit application is reversed with the sale; the receipt itself stays posted and the deposit is held again.
+    const depositReversalRows: JournalRow[] = [
+      { account: "2100", currency: "JOD", debit: 0, credit: CASH_PRICE_MINOR, entryStatus: "POSTED" },
+      { account: "1200", currency: "JOD", debit: CASH_PRICE_MINOR, credit: 0, entryStatus: "POSTED" },
+    ];
+    expectLiteralRows(rows, [...originalRows, ...reversalRows, ...fullDepositRows("REVERSED"), ...depositReversalRows]);
     expectBalanced(rows);
-    expect(netByAccount(rows)).toEqual({});
-    expect(await trialBalanceNormalBalance(s)).toEqual({});
+    expect(await s.t.run((ctx) => ctx.db.get(depositId))).toMatchObject({ status: "HELD", holdActive: true, amountMinor: CASH_PRICE_MINOR });
+    expect(netByAccount(rows)).toEqual({ "1100|JOD": CASH_PRICE_MINOR, "2100|JOD": -CASH_PRICE_MINOR });
+    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": CASH_PRICE_MINOR, "2100|JOD": CASH_PRICE_MINOR });
     expect(await publicIncomeStatement(s)).toMatchObject({
       totalRevenue: 0, totalCogs: 0, grossProfit: 0, netIncome: 0,
     });
   });
 
-  test("SOURCED CASH × no deposit: agent margin only, full customer AR and supplier liability", async () => {
+  test("SOURCED CASH × full price held as deposit: agent margin only, deposit-settled customer AR and supplier liability", async () => {
     const { s, quoteId } = await sourcedCashQuote("s486sourcedcash");
+    await payFullByDeposit(s, quoteId, "sourced-full");
     const saleId = await completeCashSale(s, quoteId, "sourced-no-deposit");
 
     expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
@@ -1444,13 +1528,14 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
     const rows = await journalRows(s);
     expectLiteralRows(rows, [
+      ...fullDepositRows(),
       { account: "1200", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
       { account: "2400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
       { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
     ]);
     expectBalanced(rows);
     expect(await trialBalanceNormalBalance(s)).toEqual({
-      "1200|JOD": 12_500_000,
+      "1100|JOD": 12_500_000,
       "2400|JOD": 10_000_000,
       "4170|JOD": 2_500_000,
     });
@@ -1466,12 +1551,13 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(income.cogsRows).toEqual([]);
   });
 
-  test("SOURCED CASH × no deposit × cancellation: agency sale and supplier claim reverse", async () => {
+  test("SOURCED CASH × full deposit × cancellation: agency sale and supplier claim reverse and the deposit returns to held", async () => {
     const { s, quoteId } = await sourcedCashQuote("s486sourcedcancel");
+    const depositId = await payFullByDeposit(s, quoteId, "sourced-cancel");
     const saleId = await completeCashSale(s, quoteId, "sourced-cancel");
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
     expect(netByAccount(await journalRows(s))).toEqual({
-      "1200|JOD": 12_500_000,
+      "1100|JOD": 12_500_000,
       "2400|JOD": -10_000_000,
       "4170|JOD": -2_500_000,
     });
@@ -1504,10 +1590,14 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       { account: "1200", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
       { account: "2400", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
       { account: "4170", currency: "JOD", debit: 2_500_000, credit: 0, entryStatus: "POSTED" },
+      ...fullDepositRows("REVERSED"),
+      { account: "2100", currency: "JOD", debit: 0, credit: CASH_PRICE_MINOR, entryStatus: "POSTED" },
+      { account: "1200", currency: "JOD", debit: CASH_PRICE_MINOR, credit: 0, entryStatus: "POSTED" },
     ]);
-    expect(netByAccount(rows)).toEqual({});
+    expect(await s.t.run((ctx) => ctx.db.get(depositId))).toMatchObject({ status: "HELD", holdActive: true, amountMinor: CASH_PRICE_MINOR });
+    expect(netByAccount(rows)).toEqual({ "1100|JOD": CASH_PRICE_MINOR, "2100|JOD": -CASH_PRICE_MINOR });
     expectBalanced(rows);
-    expect(await trialBalanceNormalBalance(s)).toEqual({});
+    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": CASH_PRICE_MINOR, "2100|JOD": CASH_PRICE_MINOR });
     expect(await publicIncomeStatement(s)).toMatchObject({
       totalRevenue: 0, totalCogs: 0, grossProfit: 0, netIncome: 0,
     });
@@ -1518,7 +1608,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       route: "owned",
       quote: cashQuote,
       expectedNet: {
-        "1200|JOD": 12_500_000,
+        "1100|JOD": 12_500_000,
         "1400|JOD": -10_000_000,
         "4100|JOD": -12_500_000,
         "5100|JOD": 10_000_000,
@@ -1528,13 +1618,14 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       route: "sourced",
       quote: sourcedCashQuote,
       expectedNet: {
-        "1200|JOD": 12_500_000,
+        "1100|JOD": 12_500_000,
         "2400|JOD": -10_000_000,
         "4170|JOD": -2_500_000,
       },
     },
   ])("$route CASH × completed sale: salesperson with edit:sales cannot reverse money", async ({ route, quote, expectedNet }) => {
     const { s, quoteId } = await quote(`s486${route}sellerdeny`);
+    await payFullByDeposit(s, quoteId, `${route}-seller-deny`);
     const saleId = await completeCashSale(s, quoteId, `${route}-seller-deny`);
     const clerkId = `s486${route}sellerdeny_salesperson`;
     await s.t.run(async (ctx) => {
@@ -1562,12 +1653,12 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(netByAccount(await journalRows(s))).toEqual(expectedNet);
   });
 
-  test("SOURCED CASH × applied deposit: customer AR falls, supplier entitlement stays whole", async () => {
-    const { s, quoteId } = await sourcedCashQuote("s486sourcedapplied", 200);
+  test("SOURCED CASH × full price applied from deposit: customer AR is settled, supplier entitlement stays whole", async () => {
+    const { s, quoteId } = await sourcedCashQuote("s486sourcedapplied", 12_500);
     const depositId = await s.owner.as.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
-      amount: 200,
+      amount: 12_500,
       method: "CASH",
       idempotencyKey: "scrum486-sourced-applied-deposit",
     });
@@ -1591,39 +1682,42 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       status: "PENDING",
     });
     expect(applications).toHaveLength(1);
-    expect(applications[0]).toMatchObject({ treatment: "CUSTOMER_RECEIVABLE", amountMinor: 200_000 });
+    expect(applications[0]).toMatchObject({ treatment: "CUSTOMER_RECEIVABLE", amountMinor: 12_500_000 });
     const rows = await journalRows(s);
+    // Reading the rows, in order: (1) deposit received, Dr 1100 cash / Cr 2100 customer deposits; (2) completion applies
+    // the deposit, Dr 2100 / Cr 1200 customer receivable (the 1200 credit is the deposit settling the invoice);
+    // (3) the sale posts the invoice, Dr 1200 / Cr 2400 supplier payable 10,000,000 + Cr 4170 commission 2,500,000.
+    // The 1200 debit and credit net to zero: customer AR is settled by the deposit, not by a receipt, which is why
+    // SCRUM-802 can require the full price as a deposit before a cash sale completes.
     expectLiteralRows(rows, [
-      { account: "1100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
-      { account: "2100", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
-      { account: "2100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
-      { account: "1200", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+      { account: "1100", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1200", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
       { account: "1200", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
       { account: "2400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
       { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
     ]);
     expectBalanced(rows);
     expect(await trialBalanceNormalBalance(s)).toEqual({
-      "1100|JOD": 200_000,
-      "1200|JOD": 12_300_000,
+      "1100|JOD": 12_500_000,
       "2400|JOD": 10_000_000,
       "4170|JOD": 2_500_000,
     });
   });
 
   test("SOURCED CASH × applied deposit × cancellation × refund: customer money returns without supplier debt", async () => {
-    const { s, quoteId } = await sourcedCashQuote("s486sourcedrefund", 200);
+    const { s, quoteId } = await sourcedCashQuote("s486sourcedrefund", 12_500);
     const depositId = await s.owner.as.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
-      amount: 200,
+      amount: 12_500,
       method: "CASH",
       idempotencyKey: "scrum486-sourced-refund-hold",
     });
     const saleId = await completeCashSale(s, quoteId, "sourced-refund");
     expect(netByAccount(await journalRows(s))).toEqual({
-      "1100|JOD": 200_000,
-      "1200|JOD": 12_300_000,
+      "1100|JOD": 12_500_000,
       "2400|JOD": -10_000_000,
       "4170|JOD": -2_500_000,
     });
@@ -1643,14 +1737,14 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     }));
     expect(cancelled.sale?.status).toBe("CANCELLED");
     expect(cancelled.payable?.status).toBe("CANCELLED");
-    expect(cancelled.deposit).toMatchObject({ status: "HELD", holdActive: true, amountMinor: 200_000 });
+    expect(cancelled.deposit).toMatchObject({ status: "HELD", holdActive: true, amountMinor: 12_500_000 });
     expect(cancelled.applications.map((application) => application.status)).toEqual(["REVERSED"]);
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["REVERSED"]);
     expect(await eventStatuses(s, "DEPOSIT_RECEIVED", depositId)).toEqual(["POSTED"]);
     const cancellationRows = await journalRows(s);
-    expect(netByAccount(cancellationRows)).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
+    expect(netByAccount(cancellationRows)).toEqual({ "1100|JOD": 12_500_000, "2100|JOD": -12_500_000 });
     expectBalanced(cancellationRows);
-    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": 200_000, "2100|JOD": 200_000 });
+    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": 12_500_000, "2100|JOD": 12_500_000 });
 
     await s.approver.as.mutation(api.deposits.release, {
       orgId: s.orgId,
@@ -1667,12 +1761,12 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(await trialBalanceNormalBalance(s)).toEqual({});
   });
 
-  test("owned CASH × held/applied deposit: 200,000 liability reduces the invoice receivable, not revenue", async () => {
+  test("owned CASH × held/applied deposit: 12,500,000 liability reduces the invoice receivable, not revenue", async () => {
     const { s, quoteId } = await cashQuote("s486cashapplied");
     const depositId = await s.owner.as.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
-      amount: 200,
+      amount: 12_500,
       method: "CASH",
       idempotencyKey: "scrum486-applied-deposit",
     });
@@ -1685,10 +1779,10 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(deposit?.status).toBe("APPLIED");
     expect(sale?.status).toBe("COMPLETED");
     expectLiteralRows(rows, [
-      { account: "1100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
-      { account: "2100", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
-      { account: "2100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
-      { account: "1200", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+      { account: "1100", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1200", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
       { account: "1200", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
       { account: "4100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
       { account: "5100", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
@@ -1702,7 +1796,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const depositId = await s.owner.as.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
-      amount: 200,
+      amount: 12_500,
       method: "CASH",
       idempotencyKey: "scrum486-cancel-refund-hold",
     });
@@ -1710,8 +1804,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
     expect(await eventStatuses(s, "DEPOSIT_RECEIVED", depositId)).toEqual(["POSTED"]);
     expect(netByAccount(await journalRows(s))).toEqual({
-      "1100|JOD": 200_000,
-      "1200|JOD": 12_300_000,
+      "1100|JOD": 12_500_000,
       "1400|JOD": -10_000_000,
       "4100|JOD": -12_500_000,
       "5100|JOD": 10_000_000,
@@ -1730,12 +1823,12 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(cancelled.sale?.status).toBe("CANCELLED");
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["REVERSED"]);
     expect(await eventStatuses(s, "DEPOSIT_RECEIVED", depositId)).toEqual(["POSTED"]);
-    expect(cancelled.deposit).toMatchObject({ status: "HELD", holdActive: true, amountMinor: 200_000 });
+    expect(cancelled.deposit).toMatchObject({ status: "HELD", holdActive: true, amountMinor: 12_500_000 });
     expect(cancelled.applications.map((application) => application.status)).toEqual(["REVERSED"]);
     const cancellationRows = await journalRows(s);
-    expect(netByAccount(cancellationRows)).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
+    expect(netByAccount(cancellationRows)).toEqual({ "1100|JOD": 12_500_000, "2100|JOD": -12_500_000 });
     expectBalanced(cancellationRows);
-    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": 200_000, "2100|JOD": 200_000 });
+    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": 12_500_000, "2100|JOD": 12_500_000 });
 
     await s.approver.as.mutation(api.deposits.release, {
       orgId: s.orgId,
@@ -2186,14 +2279,14 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
   test("owned CASH × foreign quote/deposit IDs: authorized second tenant cannot move either tenant's money", async () => {
     const { s, quoteId } = await cashQuote("s486foreignids");
     const depositId = await s.owner.as.mutation(api.deposits.create, {
-      orgId: s.orgId, quoteId, amount: 200, method: "CASH",
+      orgId: s.orgId, quoteId, amount: 12_500, method: "CASH",
       idempotencyKey: "s486-foreign-source-deposit",
     });
     const other = await authorizedOtherTenant(s, "s486foreignids");
     const before = await dbSnapshot(s.t, Object.keys(schema.tables));
 
     await expect(other.owner.mutation(api.deposits.create, {
-      orgId: other.orgId, quoteId, amount: 200, method: "CASH",
+      orgId: other.orgId, quoteId, amount: 12_500, method: "CASH",
       idempotencyKey: "s486-foreign-quote-denied",
     })).rejects.toThrow(/Quote not found in this organization/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
@@ -2203,7 +2296,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       idempotencyKey: "s486-foreign-deposit-denied",
     })).rejects.toThrow(/Deposit not found in this organization/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
-    expect(netByAccount(await journalRows(s))).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
+    expect(netByAccount(await journalRows(s))).toEqual({ "1100|JOD": 12_500_000, "2100|JOD": -12_500_000 });
 
     const saleId = await completeCashSale(s, quoteId, "foreign-sale-denial");
     const completedSale = await dbSnapshot(s.t, Object.keys(schema.tables));
@@ -3158,12 +3251,18 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
     const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
       orgId: s.orgId, customerId: s.customerId, vehicleId, mode: "CASH", vehiclePrice: 12_500, downPayment: 0, termMonths: 0,
     });
+    // SCRUM-802 (pilot): a cash sale completes only once its full price is held as a deposit.
+    await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 12_500, method: "CASH", idempotencyKey: "s760cccash-full-deposit",
+    });
     await s.owner.as.mutation(api.sales.create, {
       orgId: s.orgId, idempotencyKey: "s760cccash-sale", quoteId, vehicleId, customerId: s.customerId,
       salespersonId: s.owner.userId, salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED",
     });
     expect(await trialBalanceNormalBalance(s)).toEqual({
-      "1100|JOD": -9_800_000, "1200|JOD": 12_500_000, "4100|JOD": 12_500_000, "5100|JOD": 9_800_000,
+      // Cash: -9,800,000 (the corrected purchase) + 12,500,000 (the full-price deposit) = +2,700,000, the margin; the
+      // deposit settled the invoice, so no receivable remains.
+      "1100|JOD": 2_700_000, "4100|JOD": 12_500_000, "5100|JOD": 9_800_000,
     });
     expect(await publicIncomeStatement(s)).toMatchObject({
       totalRevenue: 12_500_000, totalCogs: 9_800_000, grossProfit: 2_700_000, netIncome: 2_700_000,
@@ -3396,5 +3495,133 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
         code: "COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE",
       });
     }
+  }, 30_000);
+});
+
+// ─── SCRUM-854: no second SALE commission for the salesperson ────────────────
+//
+// Owner-ruling derivation (oracle: "Deal commission lines"). The salesperson's own
+// sale commission is the one set on the sale row (paid by payroll). A SALE line for
+// the same person would pay one role twice, so it is refused. Expected amounts are
+// literals: 250,000 JOD minor on the sale row, 40,000 SALE line for another
+// employee, 30,000 PURCHASE and 20,000 EXECUTION lines for the salesperson.
+describe("SCRUM-854 deal commission lines: the salesperson is refused a second SALE line in the cases run (250, 1 and 5 against a 250 sale commission) (harness only)", () => {
+  test("SALE line for the sale's own salesperson is refused with nothing written; other employee SALE and the salesperson's PURCHASE/EXECUTION are allowed; a second organization's rows never move", async () => {
+    const d = await paidFinancedDealWithDeposit("s854dup");
+    const { s, saleId } = d;
+    const sale = await s.t.run((ctx) => ctx.db.get(saleId));
+    const salespersonId = sale!.salespersonId;
+    const otherEmployeeId = s.actors.salesperson.userId;
+    expect(sale!.orgId).toBe(s.orgId);
+    expect(otherEmployeeId).not.toBe(salespersonId);
+    await s.t.run(async (ctx) => {
+      const m = await ctx.db.query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", s.orgId).eq("userId", otherEmployeeId)).unique();
+      expect(m).not.toBeNull();
+    });
+
+    // A second organization with its own sale (copied from this one, different commission and
+    // salesperson) and its own commission lines, so an unscoped scan or total would see foreign rows.
+    const other = await authorizedOtherTenant(s, "s854dup");
+    const foreign = await s.t.run(async (ctx) => {
+      const foreignUser = await ctx.db.query("users").withIndex("by_clerkId", (q) => q.eq("clerkId", "s854dup_other_owner")).unique();
+      const { _id: _i, _creationTime: _c, ...saleRow } = (await ctx.db.get(saleId))!;
+      const foreignSaleId = await ctx.db.insert("sales", {
+        ...saleRow, orgId: other.orgId, salespersonId: foreignUser!._id, commissionAmount: 999,
+      });
+      const line = (kind: "SALE" | "PURCHASE", employeeId: typeof salespersonId, amountMinor: number) =>
+        ctx.db.insert("dealCommissionLines", {
+          orgId: other.orgId, saleId: foreignSaleId, kind, employeeId, amountMinor, currency: "JOD", createdBy: foreignUser!._id,
+        });
+      // A SALE line for the foreign sale's own (different) salesperson, one for THIS org's salesperson
+      // id, and a PURCHASE line.
+      await line("SALE", foreignUser!._id, 7_000);
+      await line("SALE", salespersonId, 8_000);
+      await line("PURCHASE", foreignUser!._id, 9_000);
+      return { foreignSaleId, foreignUserId: foreignUser!._id };
+    });
+
+    // Commission-line scans go through by_org_sale and assert the organization of every returned row:
+    // scopedRows(orgId, saleId) is organization-and-sale scoped, scopedRows(orgId) is organization-only.
+    // Two reads are deliberately different: the unscoped dealCommissionLines count below, and the
+    // refusal snapshots (expectRefusedAndUnchanged), which compare every schema table across organizations.
+    const scopedRows = async (orgId: typeof s.orgId, scanSaleId?: typeof saleId) => {
+      const rows = await s.t.run(async (ctx) => ctx.db.query("dealCommissionLines")
+        .withIndex("by_org_sale", (q) => scanSaleId === undefined ? q.eq("orgId", orgId) : q.eq("orgId", orgId).eq("saleId", scanSaleId))
+        .collect());
+      for (const r of rows) expect(r.orgId).toBe(orgId);
+      return rows.map((r) => ({ orgId: r.orgId, saleId: r.saleId, kind: r.kind, employeeId: r.employeeId, amountMinor: r.amountMinor, removed: r.removedAt !== undefined }));
+    };
+    const foreignRows = () => scopedRows(other.orgId);
+    const foreignBefore = await foreignRows();
+    expect(foreignBefore).toHaveLength(3);
+    expect(foreignBefore.map((r) => [r.kind, r.employeeId, r.amountMinor])).toEqual([
+      ["SALE", foreign.foreignUserId, 7_000], ["SALE", salespersonId, 8_000], ["PURCHASE", foreign.foreignUserId, 9_000],
+    ]);
+    // The unscoped table does hold the foreign rows, so a scan that forgot the organization would be wrong.
+    expect(await s.t.run(async (ctx) => (await ctx.db.query("dealCommissionLines").collect()).length)).toBe(3);
+
+    // The payable total read through forSale, proved against an organization-and-sale-scoped recomputation.
+    const readTotal = async () => {
+      const view = await s.owner.as.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId });
+      const saleNow = await s.t.run((ctx) => ctx.db.get(saleId));
+      expect(saleNow!.orgId).toBe(s.orgId);
+      const recomputed = Math.round(saleNow!.commissionAmount! * 1000)
+        + (await scopedRows(s.orgId, saleId)).filter((r) => !r.removed).reduce((sum, r) => sum + r.amountMinor, 0);
+      expect(view.totalMinor).toBe(recomputed);
+      return { totalMinor: view.totalMinor, saleCommissionMinor: view.salesperson.amountMinor, lines: view.lines.length };
+    };
+    const expectForeignUntouched = async () => {
+      expect(await foreignRows()).toEqual(foreignBefore);
+      // Foreign total literal: 999 sale-row commission plus 7,000 + 8,000 + 9,000.
+      const view = await other.owner.query(api.dealCommissions.forSale, { orgId: other.orgId, saleId: foreign.foreignSaleId });
+      expect(view.totalMinor).toBe(999_000 + 24_000);
+    };
+
+    // Before: only the 250,000 sale-row commission exists in this org; no line rows at all.
+    expect(await scopedRows(s.orgId)).toHaveLength(0);
+    expect(await scopedRows(s.orgId, saleId)).toHaveLength(0);
+    expect(await readTotal()).toEqual({ totalMinor: 250_000, saleCommissionMinor: 250_000, lines: 0 });
+
+    // The duplicate SALE line is refused (amounts 250 and 1 run here), and every table is unchanged.
+    await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "SALE", employeeId: salespersonId, amount: 250,
+    }), { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" });
+    await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "SALE", employeeId: salespersonId, amount: 1,
+    }), { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" });
+    expect(await scopedRows(s.orgId)).toHaveLength(0);
+    expect(await scopedRows(s.orgId, saleId)).toHaveLength(0);
+    expect(await readTotal()).toEqual({ totalMinor: 250_000, saleCommissionMinor: 250_000, lines: 0 });
+    await expectForeignUntouched();
+
+    // Allowed: SALE for another employee, PURCHASE and EXECUTION for the salesperson.
+    await s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "SALE", employeeId: otherEmployeeId, amount: 40,
+    });
+    await s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "PURCHASE", employeeId: salespersonId, amount: 30,
+    });
+    await s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "EXECUTION", employeeId: salespersonId, amount: 20,
+    });
+    const rows = await scopedRows(s.orgId, saleId);
+    expect(rows).toHaveLength(3);
+    expect(await scopedRows(s.orgId)).toHaveLength(3);
+    expect(rows.every((r) => r.orgId === s.orgId && r.saleId === saleId && !r.removed)).toBe(true);
+    expect(rows.map((r) => [r.kind, r.employeeId, r.amountMinor])).toEqual([
+      ["SALE", otherEmployeeId, 40_000], ["PURCHASE", salespersonId, 30_000], ["EXECUTION", salespersonId, 20_000],
+    ]);
+    // 250,000 + 40,000 + 30,000 + 20,000: the salesperson's SALE role is paid once.
+    expect(await readTotal()).toEqual({ totalMinor: 340_000, saleCommissionMinor: 250_000, lines: 3 });
+    await expectForeignUntouched();
+
+    // The duplicate (amount 5 here) is still refused once other lines exist, and changes nothing.
+    await expectRefusedAndUnchanged(s, () => s.owner.as.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId, kind: "SALE", employeeId: salespersonId, amount: 5,
+    }), { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" });
+    expect(await scopedRows(s.orgId, saleId)).toEqual(rows);
+    expect(await readTotal()).toEqual({ totalMinor: 340_000, saleCommissionMinor: 250_000, lines: 3 });
+    await expectForeignUntouched();
   }, 30_000);
 });

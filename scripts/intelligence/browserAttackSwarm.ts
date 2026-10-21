@@ -78,8 +78,10 @@ const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   // distinct scenario of the same family that judges STATE_TRANSITION. Only that one LIFE-1 path is covered.
   MONEY_BOUNDARY: ["ECONOMIC_AUTHORITY", "STATE_TRANSITION"],
   NAVIGATION_RACE: ["STATE_TRANSITION"],
-  // ACC-3: a manual journal posts to its declared date, and posting into a closed period is refused. Only that
-  // one manual-journal scenario is covered (not a LOCKED or unopened period, outbox posting or a reopen).
+  // ACC-3 (SCRUM-795): manual journals are off for the pilot, so this mission covers ONLY the create door being
+  // refused with the pilot code and leaving journals and drafts unchanged. It does not cover the approve door, the
+  // posted date or the closed-period rule (proven in backend tests with the switch mocked off), a LOCKED or
+  // unopened period, outbox posting or a reopen.
   ACCOUNTING_DATE_BOUNDARY: ["STATE_TRANSITION"],
 };
 
@@ -276,7 +278,7 @@ const DETERMINISTIC_MISSIONS: Readonly<
       "BACKEND_STATE",
     ]),
   ],
-  // The posted date and the closed-period boundary of a manual journal, judged on the backend's journal and period state.
+  // The create door refused while manual journals are off for the pilot (SCRUM-795), judged on the backend's journal and draft state.
   "ACC-3": [
     template("ACCOUNTING_DATE_BOUNDARY", "STATE_TRANSITION", 5, [
       "TRACE",

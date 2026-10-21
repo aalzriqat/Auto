@@ -10,12 +10,31 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
+
+// SCRUM-795: manual journals are OFF in the shipped pilot build. This suite proves
+// the ENABLED behaviour (the switch is reversible), so it runs with the leaf off.
+vi.mock("./utils/pilotSwitches", async (importOriginal) => ({ ...(await importOriginal<typeof import("./utils/pilotSwitches")>()), MANUAL_JOURNALS_PILOT_DISABLED: false }));
 import schema from "./schema";
 import {
   settleOutbox, makeDue, outboxRows, quiesceScheduler, settleScheduledOnly, withFrozenScheduler,
 } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 import { insertReceiptBank } from "../test-utils/financedDealFixture";
+
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
+
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },

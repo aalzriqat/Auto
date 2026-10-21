@@ -281,6 +281,19 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     }
   });
 
+  it("SCRUM-795 MANUAL_JOURNALS_DISABLED resolves to Arabic in ar and the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { MANUAL_JOURNALS_DISABLED_MESSAGE } = await import("../convex/utils/manualJournalContainment");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "MANUAL_JOURNALS_DISABLED", message: MANUAL_JOURNALS_DISABLED_MESSAGE });
+    const arText = getLocalizedErrorMessage(error, ar);
+    expect(arText).toMatch(/[؀-ۿ]/);
+    expect(arText).not.toBe(MANUAL_JOURNALS_DISABLED_MESSAGE);
+    expect(arText).toBe((dictionaries.ar as Record<string, string>)["ServerError_MANUAL_JOURNALS_DISABLED"]);
+    expect(getLocalizedErrorMessage(error, en)).toBe(MANUAL_JOURNALS_DISABLED_MESSAGE);
+  });
+
   it("SCRUM-850 opening-balance-after-ledger-activity refusal resolves to Arabic in ar and keeps the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
@@ -568,11 +581,27 @@ describe("getCodedErrorMessage - SCRUM-724 CR-1: a coded refusal or nothing, nev
     const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
     const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
     for (const code of ["RETAINED_CREDIT_UNAVAILABLE", "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
-      "CHEQUE_INVOICE_UNCOVERED_HELD", "CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER", "CUSTOMER_CREDIT_PAYOUT_DISABLED"]) {
+      "CHEQUE_INVOICE_UNCOVERED_HELD", "CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER", "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+      "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON"]) {
       const error = new ConvexError({ code, message: "server text" });
       const enText = getCodedErrorMessage(error, en);
       const arText = getCodedErrorMessage(error, ar);
       expect(enText, code).toBeTruthy();
+      expect(arText, code).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe(enText);
+    }
+  });
+
+  it("the SCRUM-760 post-delivery containment codes have EN and AR entries that differ and match the server text", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { POST_DELIVERY_DOOR_REFUSALS } = await import("../convex/utils/postDeliveryDoorContainment");
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    for (const [code, serverText] of Object.entries(POST_DELIVERY_DOOR_REFUSALS)) {
+      const error = new ConvexError({ code, message: serverText });
+      const enText = getCodedErrorMessage(error, en);
+      const arText = getCodedErrorMessage(error, ar);
+      expect(enText, code).toBe(serverText);
       expect(arText, code).toMatch(/[؀-ۿ]/);
       expect(arText).not.toBe(enText);
     }

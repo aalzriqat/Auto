@@ -118,6 +118,9 @@ export const AppErrorCode = {
   RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED: "RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED",
   CHEQUE_INVOICE_UNCOVERED_HELD: "CHEQUE_INVOICE_UNCOVERED_HELD",
   SALE_INVOICE_RECEIPT_DOORS_DISABLED: "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+  // SCRUM-760 decision B: the cleared-cheque return is blocked for the narrow pilot
+  // (utils/postDeliveryDoorContainment.ts). Translated under ServerError_<code>.
+  CLEARED_CHEQUE_RETURN_PILOT_DISABLED: "CLEARED_CHEQUE_RETURN_PILOT_DISABLED",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",
@@ -186,9 +189,17 @@ export const AppErrorCode = {
   SALE_HAS_LEGACY_RECEIVABLE: "SALE_HAS_LEGACY_RECEIVABLE",
   SALE_DEBT_RECEIPT_REFUSED: "SALE_DEBT_RECEIPT_REFUSED",
   PAYMENT_LINKS_DISABLED: "PAYMENT_LINKS_DISABLED",
+  // SCRUM-795 (SCRUM-50): manual journals are off for the pilot (owner ruling SCRUM-760 c22474).
+  MANUAL_JOURNALS_DISABLED: "MANUAL_JOURNALS_DISABLED",
+  // SCRUM-802 (pilot cash-sale containment).
+  CASH_SALE_BALANCE_UNPAID_REFUSED: "CASH_SALE_BALANCE_UNPAID_REFUSED",
+  CASH_SALE_TAX_FEES_WARRANTY_REFUSED: "CASH_SALE_TAX_FEES_WARRANTY_REFUSED",
+  UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED: "UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED",
   // SCRUM-724/SCRUM-795 c22479 + Sol Q7: pilot containment of customer-credit payouts. Translated under ServerError_<code>.
   CUSTOMER_CREDIT_PAYOUT_DISABLED: "CUSTOMER_CREDIT_PAYOUT_DISABLED",
   DEAL_COMMISSION_LINES_DISABLED: "DEAL_COMMISSION_LINES_DISABLED",
+  // SCRUM-854. A SALE line for the sale's own salesperson would pay the same role twice. Translated under ServerError_<code>.
+  DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON",
   CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED: "CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED",
   // SCRUM-113. `approvals.respondToApproval` refuses APPROVED when the request's vehicle is
   // missing, in another organisation or soft-deleted; REJECTED stays allowed. Translated under

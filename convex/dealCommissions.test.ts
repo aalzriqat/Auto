@@ -1,7 +1,12 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { DEAL_COMMISSION_LINES_PILOT_DISABLED } from "./utils/dealCommissionLines";
+import type { Id } from "./_generated/dataModel";
+import { makeFunctionReference } from "convex/server";
+import { getPostedLines } from "./accountingReports";
+import { payFullPriceByDeposit } from "../test-utils/cashDealerFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -11,8 +16,10 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
-// The pilot switch is ON in the build (convex/dealCommissionsPilot.test.ts pins
-// that). These tests exercise the certified-by-test behaviour with it off.
+// The kill switch DEAL_COMMISSION_LINES_PILOT_DISABLED is false in the build (lines are on), pinned below
+// and mocked ON only in convex/dealCommissionsPilot.test.ts. These tests run with it as built.
+
+const beginEligibility = makeFunctionReference<"mutation", { orgId: Id<"organizations"> }>("journalReportEligibility:begin");
 
 const ADMIN = ["view:commissions", "manage:commissions", "view:sales", "create:sales", "view:vehicles", "edit:sales"];
 
@@ -32,7 +39,7 @@ async function seed(
   const buyerAgent = await mkUser("buyer");
   const executor = await mkUser("exec");
   const outsider = await mkUser("outsider");
-  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Admin", permissions }));
+  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Admin", permissions: [...permissions, "confirm:finance_disbursement"] }));
   for (const member of [userId, buyerAgent, executor]) {
     await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: member, roleId }));
   }
@@ -49,15 +56,26 @@ async function seed(
     ctx.db.insert("customers", { orgId, firstName: "A", lastName: "B", email: `${suffix}@example.com` })
   );
   const asAdmin = t.withIdentity({ subject: `admin_${suffix}`, clerkId: `admin_${suffix}` });
+  // SCRUM-802 (pilot): the cash sale is only a fixture here, so it is completed the pilot way, paid in full by deposit.
+  const quoteId = await payFullPriceByDeposit(asAdmin, { orgId, customerId, vehicleId, price: 15000 });
   const saleId = await asAdmin.mutation(api.sales.create, {
-    idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId,
+    idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId, quoteId,
     salePrice: 15000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
   });
   return { orgId, userId, buyerAgent, executor, outsider, saleId, asAdmin };
 }
 
 describe("dealCommissions: several lines on one deal", () => {
-  test("the owner's example: purchase 50 + sale 50 + execution 25 JOD totals 125 JOD", async () => {
+  // Fake timers are installed per test that settles the ledger; always restore them.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("the kill switch is off in this build: lines are enabled (production runs the same constant)", () => {
+    expect(DEAL_COMMISSION_LINES_PILOT_DISABLED).toBe(false);
+  });
+
+  test("the owner example of purchase 50 and sale 50 and execution 25 JOD totals 125 JOD", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const s = await seed(t, "example");
     // The salesperson's sale commission lives on the sale row (existing path).
@@ -92,21 +110,225 @@ describe("dealCommissions: several lines on one deal", () => {
     expect(view.totalMinor).toBe(10_000);
   });
 
-  test("a line posts nothing to the ledger and leaves the sale commission untouched", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
-    const s = await seed(t, "noledger");
-    const before = await t.run(async (ctx) => ({
-      events: (await ctx.db.query("accountingEvents").collect()).length,
-      sale: (await ctx.db.get(s.saleId))?.commissionAmount ?? null,
+  // What a line does to the books (convex/dealCommissions.ts addLine ->
+  // hookDealCommissionLineAccrued, convex/accounting/workflowHooks.ts). The
+  // readiness fixture is the one convex/dealCommissionLinesLedger.test.ts uses.
+  type Harness = ReturnType<typeof convexTestWithComponents<typeof schema>>;
+  // chartOfAccounts.initialize and accountingPeriods.open schedule
+  // drainPendingAccountingEvents with runAfter(0), which posts the queued
+  // SALE_COMPLETED / sale-commission events. Without waiting for it those
+  // postings land between or before the snapshots. Fake timers plus
+  // finishAllScheduledFunctions is the documented way to let it finish.
+  const settle = (t: Harness) => t.finishAllScheduledFunctions(vi.runAllTimers);
+  async function openChartAndPeriod(t: Harness, s: Awaited<ReturnType<typeof seed>>) {
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", { orgId: s.orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+    );
+    await s.asAdmin.mutation(api.chartOfAccounts.initialize, { orgId: s.orgId });
+    const fiscalYear = new Date().getUTCFullYear();
+    await s.asAdmin.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId, startDate: Date.UTC(fiscalYear, 0, 1), endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999), fiscalYear, periodNumber: 1,
+    });
+    for (const period of await s.asAdmin.query(api.accountingPeriods.list, { orgId: s.orgId })) {
+      await s.asAdmin.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: period._id });
+    }
+  }
+  // Scoped to one organization by index, and every returned row is asserted to
+  // carry that orgId, so a snapshot that leaked another tenant's rows (or a
+  // query that lost its org filter) fails here instead of passing silently.
+  // pendingAccountingEvents is read through by_org_status, using the orgId prefix only (every status).
+  const snapshot = async (t: Harness, orgId: Id<"organizations">, saleId: Id<"sales">) => {
+    const snap = await t.run(async (ctx) => ({
+      events: await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      pending: await ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", orgId)).collect(),
+      journalLines: await ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
+      sale: (await ctx.db.get(saleId))?.commissionAmount ?? null,
+      saleOrgId: (await ctx.db.get(saleId))?.orgId ?? null,
     }));
-    await s.asAdmin.mutation(api.dealCommissions.addLine, {
+    for (const row of [...snap.events, ...snap.pending, ...snap.journalLines]) expect(row.orgId).toBe(orgId);
+    expect(snap.saleOrgId).toBe(orgId);
+    return snap;
+  };
+  // Rows of every tenant, to prove the fixture really holds another org's data.
+  const allTenantRowCounts = (t: Harness) =>
+    t.run(async (ctx) => ({
+      events: (await ctx.db.query("accountingEvents").collect()).length,
+      pending: (await ctx.db.query("pendingAccountingEvents").collect()).length,
+      journalLines: (await ctx.db.query("journalLines").collect()).length,
+    }));
+
+  test("with a chart ready a line posts exactly one accrual debiting Commission Expense and crediting Commission Payable in exact fils", async () => {
+    vi.useFakeTimers();
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const s = await seed(t, "ledger", [...ADMIN, "view:finance", "manage:finance"]);
+    await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
+    await openChartAndPeriod(t, s);
+    // A second organization with its own books and its own commission activity,
+    // including a line posted between the two snapshots.
+    const other = await seed(t, "ledgerother", [...ADMIN, "view:finance", "manage:finance"]);
+    await other.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: other.orgId, saleId: other.saleId, commissionAmount: 70 });
+    await openChartAndPeriod(t, other);
+    await settle(t);
+    // READY through the real operator door: begin schedules the backfill that flags every posted line.
+    await t.mutation(beginEligibility, { orgId: s.orgId });
+    await t.mutation(beginEligibility, { orgId: other.orgId });
+    await settle(t);
+    const tbBefore = await s.asAdmin.query(api.accountingReports.trialBalance, { orgId: s.orgId, fromDate: 0 });
+    const otherTbBefore = await other.asAdmin.query(api.accountingReports.trialBalance, { orgId: other.orgId, fromDate: 0 });
+    const before = await snapshot(t, s.orgId, s.saleId);
+    const otherBefore = await snapshot(t, other.orgId, other.saleId);
+    const otherLineId = await other.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: other.orgId, saleId: other.saleId, kind: "EXECUTION", employeeId: other.executor, amount: 11,
+    });
+    const lineId = await s.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId: s.saleId, kind: "EXECUTION", employeeId: s.executor, amount: 25.125,
+    });
+    await settle(t);
+    const after = await snapshot(t, s.orgId, s.saleId);
+    const otherAfter = await snapshot(t, other.orgId, other.saleId);
+    // The other org really did post an accrual of its own in the same window,
+    // and it is visible to an unscoped read but not to this org's snapshot.
+    expect(otherAfter.events.filter((e) => e.sourceId === otherLineId && e.eventType === "COMMISSION_ACCRUED")).toHaveLength(1);
+    expect(otherAfter.events).toHaveLength(otherBefore.events.length + 1);
+    const everyone = await allTenantRowCounts(t);
+    expect(everyone.events).toBe(after.events.length + otherAfter.events.length);
+    expect(everyone.journalLines).toBe(after.journalLines.length + otherAfter.journalLines.length);
+    expect(everyone.pending).toBe(after.pending.length + otherAfter.pending.length);
+
+    const newEvents = after.events.filter((e) => !before.events.some((b) => b._id === e._id));
+    expect(newEvents.map((e) => [e.eventType, e.sourceType, e.sourceId, e.orgId])).toEqual([
+      ["COMMISSION_ACCRUED", "dealCommissionLines", lineId, s.orgId],
+    ]);
+    expect(after.events.filter((e) => e.sourceType === "dealCommissionLines")).toHaveLength(1);
+    expect(after.pending).toEqual(before.pending);
+
+    // The accrual is a POSTED event, and both journal lines belong to the entry it points at.
+    expect(newEvents[0].status).toBe("POSTED");
+    const entryId: Id<"journalEntries"> | undefined = newEvents[0].journalEntryId;
+    expect(entryId).toBeTruthy();
+
+    const commissionAccounts = async (orgId: Id<"organizations">) => {
+      const rows = await t.run(async (ctx) => {
+        const byKey = async (key: string) =>
+          (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", key)).unique())!;
+        return { expense: await byKey("COMMISSION_EXPENSE"), payable: await byKey("COMMISSION_PAYABLE") };
+      });
+      expect(rows.expense.orgId).toBe(orgId);
+      expect(rows.payable.orgId).toBe(orgId);
+      return { expense: rows.expense._id, payable: rows.payable._id };
+    };
+    const accounts = await commissionAccounts(s.orgId);
+    const otherAccounts = await commissionAccounts(other.orgId);
+    const newLines = after.journalLines.filter((l) => !before.journalLines.some((b) => b._id === l._id));
+    expect(newLines).toHaveLength(2);
+    for (const line of newLines) {
+      expect(line.orgId).toBe(s.orgId);
+      expect(line.journalEntryId).toBe(entryId);
+    }
+    const entry = await t.run((ctx) => ctx.db.get(entryId!));
+    expect(entry?.orgId).toBe(s.orgId);
+    expect(entry?.status).toBe("POSTED");
+    for (const line of newLines) expect(line.reportPosted).toBe(true);
+    // Reader-visible state, through the public trial balance. With fromDate set it
+    // reads journal lines via getPostedLines, whose fast path (reportPosted lines)
+    // is taken only when journalReportEligibility.phase is READY; READY was reached
+    // before the line was added by the operator door (begin, then its backfill), and
+    // is re-asserted here, so the accrual below was read by the reader, not by the test.
+    const phaseOf = (orgId: Id<"organizations">) =>
+      t.run(async (ctx) => (await ctx.db.query("journalReportEligibility").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique())?.phase);
+    expect(await phaseOf(s.orgId)).toBe("READY");
+    expect(await phaseOf(other.orgId)).toBe("READY");
+    // trialBalance silently skips a line whose account is not in this organization's chart, so a
+    // foreign line could enter the reader and leave the totals unchanged. Read the reader's own
+    // lines and assert, per row, the organization and that the account belongs to this chart.
+    const readerLines = async (orgId: Id<"organizations">) =>
+      t.run(async (ctx) => {
+        const lines = await getPostedLines(ctx, orgId);
+        const chart = await ctx.db.query("chartOfAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+        return { lines, chartIds: chart.map((a) => a._id as string) };
+      });
+    for (const org of [s.orgId, other.orgId]) {
+      const { lines, chartIds: chartIdList } = await readerLines(org);
+      const chartIds = new Set(chartIdList);
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line.orgId).toBe(org);
+        expect(chartIds.has(line.accountId as string)).toBe(true);
+      }
+    }
+    const tbAfter = await s.asAdmin.query(api.accountingReports.trialBalance, { orgId: s.orgId, fromDate: 0 });
+    const otherTbAfter = await other.asAdmin.query(api.accountingReports.trialBalance, { orgId: other.orgId, fromDate: 0 });
+    const amountsOn = (tb: typeof tbAfter, accountId: Id<"chartOfAccounts">) => {
+      const row = tb.rows.find((r) => r.accountId === accountId);
+      return { debitMinor: row?.debitMinor ?? 0, creditMinor: row?.creditMinor ?? 0 };
+    };
+    expect(amountsOn(tbAfter, accounts.expense).debitMinor - amountsOn(tbBefore, accounts.expense).debitMinor).toBe(25_125);
+    expect(amountsOn(tbAfter, accounts.payable).creditMinor - amountsOn(tbBefore, accounts.payable).creditMinor).toBe(25_125);
+    expect(tbAfter.isBalanced).toBe(true);
+    expect(tbAfter.totalDebits - tbBefore.totalDebits).toBe(25_125);
+    // The other organization's 11 JOD accrual is in its own report only: its own
+    // Commission Expense debit and Commission Payable credit move by 11,000, and it is balanced.
+    expect(amountsOn(otherTbAfter, otherAccounts.expense).debitMinor - amountsOn(otherTbBefore, otherAccounts.expense).debitMinor).toBe(11_000);
+    expect(amountsOn(otherTbAfter, otherAccounts.payable).creditMinor - amountsOn(otherTbBefore, otherAccounts.payable).creditMinor).toBe(11_000);
+    expect(otherTbAfter.isBalanced).toBe(true);
+    expect(otherTbAfter.totalDebits - otherTbBefore.totalDebits).toBe(11_000);
+    // Neither report carries the other organization's accounts.
+    expect(tbAfter.rows.some((r) => r.accountId === otherAccounts.expense || r.accountId === otherAccounts.payable)).toBe(false);
+    expect(otherTbAfter.rows.some((r) => r.accountId === accounts.expense || r.accountId === accounts.payable)).toBe(false);
+    // The salesperson's own commission is untouched, on the same org's sale.
+    expect(before.saleOrgId).toBe(s.orgId);
+    expect(after.saleOrgId).toBe(s.orgId);
+    expect(before.sale).toBe(50);
+    expect(after.sale).toBe(50);
+  });
+
+  test("with no chart yet a line posts nothing now and the accrual is queued once and the sale commission is untouched", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    vi.useFakeTimers();
+    const s = await seed(t, "nochart");
+    // Another organization, also without a chart, queues its own accrual between the snapshots.
+    const other = await seed(t, "nochartother");
+    await settle(t);
+    const before = await snapshot(t, s.orgId, s.saleId);
+    const otherBefore = await snapshot(t, other.orgId, other.saleId);
+    // The before-snapshot must hold the seeded state, or every "unchanged" comparison below is vacuous:
+    // each org already has its cash pay-first postings queued (deposit received, deposit applied, sale
+    // completed; all PENDING) and nothing posted, and no commission accrual yet.
+    const seededKeys = (rows: typeof before.pending, orgId: typeof s.orgId, saleId: typeof s.saleId) => {
+      for (const row of rows) {
+        expect([row.kind, row.status, row.orgId]).toEqual(["POST", "PENDING", orgId]);
+      }
+      const keys = rows.map((p) => p.idempotencyKey);
+      expect(keys.filter((k) => k?.startsWith("deposit_received_"))).toHaveLength(1);
+      expect(keys.filter((k) => k?.startsWith("deposit_applied_"))).toHaveLength(1);
+      expect(keys.filter((k) => k === `sale_completed_${saleId}`)).toHaveLength(1);
+      expect(keys).toHaveLength(3);
+    };
+    seededKeys(before.pending, s.orgId, s.saleId);
+    seededKeys(otherBefore.pending, other.orgId, other.saleId);
+    expect(before.events).toEqual([]);
+    expect(before.journalLines).toEqual([]);
+    const otherLineId = await other.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: other.orgId, saleId: other.saleId, kind: "EXECUTION", employeeId: other.executor, amount: 9,
+    });
+    const lineId = await s.asAdmin.mutation(api.dealCommissions.addLine, {
       orgId: s.orgId, saleId: s.saleId, kind: "EXECUTION", employeeId: s.executor, amount: 25,
     });
-    const after = await t.run(async (ctx) => ({
-      events: (await ctx.db.query("accountingEvents").collect()).length,
-      sale: (await ctx.db.get(s.saleId))?.commissionAmount ?? null,
-    }));
-    expect(after).toEqual(before);
+    await settle(t);
+    const after = await snapshot(t, s.orgId, s.saleId);
+    const otherAfter = await snapshot(t, other.orgId, other.saleId);
+    expect(
+      otherAfter.pending.filter((p) => !otherBefore.pending.some((b) => b._id === p._id)).map((p) => p.idempotencyKey)
+    ).toEqual([`commission_line_accrued_${otherLineId}`]);
+    const everyone = await allTenantRowCounts(t);
+    expect(everyone.pending).toBe(after.pending.length + otherAfter.pending.length);
+    expect(after.events).toEqual(before.events);
+    expect(after.journalLines).toEqual(before.journalLines);
+    expect(after.sale).toBe(before.sale);
+    const queued = after.pending.filter((p) => !before.pending.some((b) => b._id === p._id));
+    expect(queued.map((p) => [p.kind, p.status, p.idempotencyKey, p.orgId])).toEqual([
+      ["POST", "PENDING", `commission_line_accrued_${lineId}`, s.orgId],
+    ]);
   });
 
   test("removing a line keeps the row for history and drops it from the total", async () => {
@@ -224,7 +446,7 @@ describe("reports show the margin after commissions (display only)", () => {
     return { t, s };
   }
 
-  test("net after commissions = margin - (sale commission + lines); the margin itself is unchanged", async () => {
+  test("net after commissions is margin minus sale commission and lines and the margin itself is unchanged", async () => {
     const { s } = await costedSale("rep1", [...ADMIN, "view:reports"]);
     await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
     await s.asAdmin.mutation(api.dealCommissions.addLine, { orgId: s.orgId, saleId: s.saleId, kind: "PURCHASE", employeeId: s.buyerAgent, amount: 50 });
@@ -262,5 +484,88 @@ describe("reports show the margin after commissions (display only)", () => {
     expect(report.totalCommissions).toBeNull();
     const perf = await s.asAdmin.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, ...range() });
     expect(perf[0].totalCommissions).toBeNull();
+  });
+});
+
+// SCRUM-854: the salesperson's own sale commission lives on the sale row, so a
+// SALE line for that same person would pay them twice for one role on the deal.
+describe("dealCommissions: a SALE line for the sale's own salesperson is refused (SCRUM-854, amount 50 case)", () => {
+  test("a SALE line for the sale's own salesperson is refused and commits no change to the tested org's line, audit, pending or event/journal tables", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const s = await seed(t, "dupsale");
+    await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
+
+    // A second organization with its own sale and lines, including a SALE line for its own salesperson
+    // (inserted directly: the guard would refuse it), so an unscoped scan would see foreign rows.
+    const f = await seed(t, "dupsaleforeign");
+    await f.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: f.orgId, saleId: f.saleId, commissionAmount: 70 });
+    await f.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: f.orgId, saleId: f.saleId, kind: "PURCHASE", employeeId: f.buyerAgent, amount: 3,
+    });
+    await t.run((ctx) => ctx.db.insert("dealCommissionLines", {
+      orgId: f.orgId, saleId: f.saleId, kind: "SALE", employeeId: f.userId, amountMinor: 4_000, currency: "JOD", createdBy: f.userId,
+    }));
+    const scoped = async (orgId: typeof s.orgId, saleId: typeof s.saleId) => {
+      const rows = await t.run((ctx) => ctx.db.query("dealCommissionLines").withIndex("by_org_sale", (q) => q.eq("orgId", orgId)).collect());
+      for (const r of rows) {
+        expect(r.orgId).toBe(orgId);
+        expect(r.saleId).toBe(saleId);
+      }
+      return rows;
+    };
+    // Organization-scoped full row sets (compared as arrays) of the tables a commission write could touch: the audit log,
+    // the pending-accounting outbox, accounting events and journal entries.
+    const writeFootprint = (orgId: typeof s.orgId) => t.run(async (ctx) => {
+      const own = <R extends { orgId: typeof orgId }>(rows: R[]) => {
+        for (const r of rows) expect(r.orgId).toBe(orgId);
+        return rows;
+      };
+      return {
+        audit: own(await ctx.db.query("financialAuditLog").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()),
+        pending: own(await ctx.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId)).collect()),
+        events: own(await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()),
+        journal: own(await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()),
+      };
+    });
+    const foreignBefore = await scoped(f.orgId, f.saleId);
+    expect(foreignBefore).toHaveLength(2);
+    // The unscoped table holds the foreign rows, so a scan that forgot the organization would see them.
+    expect(await t.run((ctx) => ctx.db.query("dealCommissionLines").collect())).toHaveLength(2);
+    const ownFootprintBefore = await writeFootprint(s.orgId);
+
+    const attempt = s.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId: s.saleId, kind: "SALE", employeeId: s.userId, amount: 50,
+    });
+    await expect(attempt).rejects.toMatchObject({
+      data: { code: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON" },
+    });
+
+    const view = await s.asAdmin.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId: s.saleId });
+    expect(view.lines).toEqual([]);
+    // The salesperson is owed the one 50.000 JOD commission, not 100.000.
+    expect(view.totalMinor).toBe(50_000);
+    expect(await scoped(s.orgId, s.saleId)).toEqual([]);
+    // No committed change to the tested organization's audit, pending-accounting, accounting-event or journal rows.
+    expect(await writeFootprint(s.orgId)).toEqual(ownFootprintBefore);
+    // The other organization's rows and total did not move.
+    expect(await scoped(f.orgId, f.saleId)).toEqual(foreignBefore);
+    const foreignView = await f.asAdmin.query(api.dealCommissions.forSale, { orgId: f.orgId, saleId: f.saleId });
+    expect(foreignView.totalMinor).toBe(70_000 + 3_000 + 4_000);
+  });
+
+  test("the salesperson can still earn a different type, and another employee a SALE line", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const s = await seed(t, "othertypes");
+    await s.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId: s.saleId, kind: "PURCHASE", employeeId: s.userId, amount: 10,
+    });
+    await s.asAdmin.mutation(api.dealCommissions.addLine, {
+      orgId: s.orgId, saleId: s.saleId, kind: "SALE", employeeId: s.buyerAgent, amount: 20,
+    });
+    const view = await s.asAdmin.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId: s.saleId });
+    expect(view.lines.map((l) => [l.kind, l.amountMinor])).toEqual([
+      ["PURCHASE", 10_000],
+      ["SALE", 20_000],
+    ]);
   });
 });

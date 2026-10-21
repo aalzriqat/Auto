@@ -12,6 +12,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { payFullPriceByDeposit } from "../test-utils/cashDealerFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -24,7 +25,7 @@ vi.mock("./rateLimit", () => ({
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 const PERMISSIONS = [
   "create:sales", "view:sales", "edit:sales", "view:vehicles", "view:commissions", "manage:commissions",
-  "view:finance", "manage:finance", "view:payroll", "manage:payroll", "view:reports",
+  "view:finance", "manage:finance", "view:payroll", "manage:payroll", "view:reports", "confirm:finance_disbursement",
 ];
 
 async function seedDealer(suffix: string) {
@@ -89,8 +90,12 @@ const payable = (d: Dealer) => netMinor(d, "COMMISSION_PAYABLE", "credit");
 const expense = (d: Dealer) => netMinor(d, "COMMISSION_EXPENSE", "debit");
 
 async function completedSale(d: Dealer, saleDate = Date.UTC(d.fiscalYear, 0, 15)) {
+  // SCRUM-802 (pilot): the cash sale is only a fixture here, so it is completed the pilot way, paid in full by deposit.
+  const quoteId = await payFullPriceByDeposit(d.asAdmin, {
+    orgId: d.orgId, customerId: d.customerId, vehicleId: d.vehicleId, price: 15000,
+  });
   return await d.asAdmin.mutation(api.sales.create, {
-    idempotencyKey: crypto.randomUUID(), orgId: d.orgId, vehicleId: d.vehicleId, customerId: d.customerId,
+    idempotencyKey: crypto.randomUUID(), orgId: d.orgId, vehicleId: d.vehicleId, customerId: d.customerId, quoteId,
     salespersonId: d.userId, salePrice: 15000, saleDate, status: "COMPLETED", financingType: "CASH",
   });
 }
