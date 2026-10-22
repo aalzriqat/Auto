@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test, vi } from "vitest";
+import fs from "node:fs/promises";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -158,10 +159,66 @@ test("actual image and private observations survive native encryption/decryption
   rmSync(damagedOutput, { force: true });
 }, 30_000);
 
+test.each([false, true])("summary write failure publishes neither completed file (partial write=%s)", async (partial) => {
+  const args = options(`public-summary-failure-${partial}`);
+  const original = fs.writeFile;
+  let reached = false;
+  const write = vi.spyOn(fs, "writeFile").mockImplementation(async (file, ...rest) => {
+    if (path.basename(String(file)) === "results.json") {
+      reached = true;
+      if (partial) await original(file, "{", { mode: 0o600 });
+      throw new Error("SYNTHETIC_SUMMARY_WRITE_FAILURE");
+    }
+    return original(file, ...rest);
+  });
+  try {
+    await expect(packageAuditEvidence(args)).rejects.toThrow("EVIDENCE_UNAVAILABLE");
+    expect(reached).toBe(true);
+    expect(existsSync(args.publicRoot) ? readdirSync(args.publicRoot) : []).toEqual([]);
+  } finally { write.mockRestore(); }
+});
+
 test("a wrong pinned recipient refuses without a completed artifact", async () => {
   const args = { ...options("public-wrong-key"), fingerprint: "0".repeat(40) };
   await expect(packageAuditEvidence(args)).rejects.toThrow("RECIPIENT_UNAVAILABLE");
-  expect(readdirSync(args.publicRoot)).toEqual([]);
+  expect(existsSync(args.publicRoot)).toBe(false);
+});
+
+test("a native directory rename failure cannot publish either completed file", async () => {
+  const args = options("public-rename-failure");
+  const original = fs.rename;
+  let reached = false;
+  const rename = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (String(to) === args.publicRoot) {
+      reached = true;
+      expect(readdirSync(String(from)).sort()).toEqual(["results.json", "role-evidence.tar.gpg"]);
+      throw new Error("SYNTHETIC_DIRECTORY_RENAME_FAILURE");
+    }
+    return original(from, to);
+  });
+  try {
+    await expect(packageAuditEvidence(args)).rejects.toThrow("EVIDENCE_UNAVAILABLE");
+    expect(reached).toBe(true);
+    expect(existsSync(args.publicRoot)).toBe(false);
+    expect(readdirSync(root).filter((name) => name.startsWith(".role-evidence-private-"))).toEqual([]);
+  } finally { rename.mockRestore(); }
+});
+
+test.each(["empty", "populated", "symlink"] as const)("pre-existing %s publication is refused unchanged", async (kind) => {
+  const args = options(`public-existing-${kind}`);
+  const target = path.join(root, `existing-target-${kind}`);
+  if (kind === "symlink") {
+    mkdirSync(target);
+    writeFileSync(path.join(target, "sentinel"), "UNCHANGED");
+    symlinkSync(target, args.publicRoot, process.platform === "win32" ? "junction" : "dir");
+  } else {
+    mkdirSync(args.publicRoot);
+    if (kind === "populated") writeFileSync(path.join(args.publicRoot, "sentinel"), "UNCHANGED");
+  }
+  const before = readdirSync(args.publicRoot);
+  await expect(packageAuditEvidence(args)).rejects.toThrow("PUBLICATION_EXISTS");
+  expect(readdirSync(args.publicRoot)).toEqual(before);
+  if (kind !== "empty") expect(readFileSync(path.join(args.publicRoot, "sentinel"), "utf8")).toBe("UNCHANGED");
 });
 
 test("invalid publication context cannot enter the public fallback summary", async () => {
@@ -193,7 +250,7 @@ test("isolation image presence cannot accept non-PNG bytes as a valid image", as
 test("packaging failure refuses without a plaintext or completed cipher artifact", async () => {
   const args = { ...options("public-package-failure"), tarBinary: process.execPath };
   await expect(packageAuditEvidence(args)).rejects.toThrow("ENCRYPTION_FAILED");
-  expect(readdirSync(args.publicRoot)).toEqual([]);
+  expect(existsSync(args.publicRoot)).toBe(false);
 });
 
 test("a missing screenshot cannot be published as a matched cell", async () => {

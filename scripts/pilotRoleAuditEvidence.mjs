@@ -58,6 +58,16 @@ async function removePrivateDirectory(directory, parent, prefix) {
   await fs.rm(resolved, { recursive: true, force: true });
 }
 
+/** @param {string} directory */
+async function assertFreshPublication(directory) {
+  try { await fs.lstat(directory); }
+  catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+    throw error;
+  }
+  throw new AuditEvidenceError("PUBLICATION_EXISTS");
+}
+
 /** Git-for-Windows ships an MSYS GPG; native argv needs its POSIX path form.
  * @param {string} binary @param {string} file
  */
@@ -240,11 +250,12 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
   if (!path.isAbsolute(gpgBinary) || !path.isAbsolute(tarBinary)) throw new AuditEvidenceError("NATIVE_BINARY_UNAVAILABLE");
   const output = path.resolve(publicRoot);
   // A caller must supply a fresh publication directory. Never reuse stale evidence.
-  await fs.mkdir(output, { recursive: false, mode: 0o700 });
+  await assertFreshPublication(output);
   const staging = await fs.mkdtemp(path.join(path.dirname(output), ".role-evidence-private-"));
   const archiveRoot = path.join(staging, "archive");
   const keyHome = path.join(staging, "public-keyring");
-  const partial = path.join(output, "role-evidence.tar.gpg.partial");
+  const publication = path.join(staging, "publication");
+  const ciphertext = path.join(publication, "role-evidence.tar.gpg");
   let keyHomeArgument = "";
   return withEvidenceCleanup(async () => {
    try {
@@ -314,11 +325,12 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
     await fs.writeFile(path.join(archiveRoot, "manifest.json"), JSON.stringify({ schemaVersion: 1, sha, role, files: manifest,
       runContext: runContext ?? "UNAVAILABLE", measurement: summary,
       diagnostic: { logTruncated, captureInventoryAccepted: !validationError, refusal: validationError?.message ?? null } }), { mode: 0o600 });
+    await fs.mkdir(publication, { mode: 0o700 });
     const diagnostics = createWriteStream(path.join(staging, "encryption.log"), { mode: 0o600 });
     const tar = spawn(tarBinary, ["-cf", "-", "-C", archiveRoot, "captures", "browser.log", "manifest.json"],
       { stdio: ["ignore", "pipe", "pipe"], timeout: 120_000, windowsHide: true });
     const gpg = spawn(gpgBinary, ["--homedir", keyHomeArgument, "--batch", "--no-tty", "--trust-model", "always",
-      "--recipient", `${recipient.encryptionFingerprint}!`, "--cipher-algo", "AES256", "--output", gpgArgumentPath(gpgBinary, partial), "--encrypt"],
+      "--recipient", `${recipient.encryptionFingerprint}!`, "--cipher-algo", "AES256", "--output", gpgArgumentPath(gpgBinary, ciphertext), "--encrypt"],
     { stdio: ["pipe", "ignore", "pipe"], timeout: 120_000, windowsHide: true });
     tar.stderr?.pipe(diagnostics, { end: false });
     gpg.stderr?.pipe(diagnostics, { end: false });
@@ -331,25 +343,34 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
       throw new AuditEvidenceError("ENCRYPTION_FAILED");
      }
     }, async () => { diagnostics.end(); await finished(diagnostics); });
-    if ((await regularFile(partial)).size === 0) throw new AuditEvidenceError("ENCRYPTION_FAILED");
-    await fs.rename(partial, path.join(output, "role-evidence.tar.gpg"));
+    if ((await regularFile(ciphertext)).size === 0) throw new AuditEvidenceError("ENCRYPTION_FAILED");
     const cipherHash = createHash("sha256");
-    for await (const chunk of createReadStream(path.join(output, "role-evidence.tar.gpg"))) cipherHash.update(chunk);
+    for await (const chunk of createReadStream(ciphertext)) cipherHash.update(chunk);
     summary = { ...summary, ciphertextSha256: cipherHash.digest("hex") };
-    await fs.writeFile(path.join(output, "results.json"), JSON.stringify(summary, null, 2), { mode: 0o600 });
+    await fs.writeFile(path.join(publication, "results.json"), JSON.stringify(summary, null, 2), { mode: 0o600 });
+    const publicFiles = await fs.readdir(publication);
+    if (publicFiles.length !== 2 || !publicFiles.includes("results.json") || !publicFiles.includes("role-evidence.tar.gpg")) {
+      throw new AuditEvidenceError("EVIDENCE_UNAVAILABLE");
+    }
+    await regularFile(path.join(publication, "results.json"));
+    await regularFile(ciphertext);
+    // Both files become visible together on this runner's filesystem. Never
+    // copy individual files to the final paths, including on rename failure.
+    await assertFreshPublication(output);
+    await fs.rename(publication, output);
     if (validationError) throw validationError;
     return summary;
    } catch (error) {
     throw error instanceof AuditEvidenceError ? error : new AuditEvidenceError("EVIDENCE_UNAVAILABLE");
    }
-  }, async () => withEvidenceCleanup(async () => { await fs.rm(partial, { force: true }); }, async () => {
+  }, async () => {
     if (keyHomeArgument) {
       const gpgconf = path.join(path.dirname(gpgBinary), process.platform === "win32" ? "gpgconf.exe" : "gpgconf");
       spawnSync(gpgconf, ["--homedir", keyHomeArgument, "--kill", "all"], { timeout: 10_000, windowsHide: true, stdio: "ignore" });
     }
     // This is the private staging directory this function itself just created.
     await removePrivateDirectory(staging, path.dirname(output), ".role-evidence-private-");
-  }));
+  });
 }
 
 /** Capture from process start. Neither a child error nor stderr reaches a public
