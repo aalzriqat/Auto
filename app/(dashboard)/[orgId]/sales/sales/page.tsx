@@ -275,16 +275,16 @@ function SalesContent() {
           )}
         </div>
 
-        <SaleDialog
+        {isSaleDialogOpen && <SaleDialog
           open={isSaleDialogOpen}
           onOpenChange={setIsSaleDialogOpen}
           sale={editingSale}
-        />
+        />}
 
-        <QuoteDialog
+        {isQuoteDialogOpen && <QuoteDialog
           open={isQuoteDialogOpen}
           onOpenChange={setIsQuoteDialogOpen}
-        />
+        />}
 
         <SaleTrailDialog
           saleId={trailSaleId}

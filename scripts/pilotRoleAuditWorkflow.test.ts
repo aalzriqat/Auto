@@ -34,6 +34,18 @@ function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
 }
 
 describe("SCRUM-616 role audit trust and coverage contract", () => {
+  test("bound role regressions run before the matrix can isolate its audited seat", () => {
+    const project = roleConfig.projects?.find(item => item.name === "role-regressions");
+    expect(project?.testDir).toBe("./playwright/tests");
+    expect(project?.testMatch).toBe("audit-role-access.spec.ts");
+    expect(project?.testIgnore).toEqual([]);
+    expect(project?.dependencies).toEqual(["setup"]);
+    expect(project?.use?.storageState).toBe("playwright/.auth/approver.json");
+    const matrix = roleConfig.projects?.find(item => item.name === "chromium");
+    expect(matrix?.dependencies).toContain("role-regressions");
+    expect(roleConfig.workers).toBe(1);
+    expect(roleConfig.retries).toBe(0);
+  });
   test("publishes only explicit post-login evidence and never records auth traces or video", () => {
     const upload = stepNamed(workflow.jobs.roles.steps, "Upload encrypted role audit evidence");
     expect(upload.with?.path?.trim().split(/\r?\n/).map((line) => line.trim())).toEqual([

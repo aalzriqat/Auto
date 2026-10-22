@@ -60,8 +60,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
   const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const documentRules = useQuery(api.documents.listRules, activeOrgId ? { orgId: activeOrgId } : "skip");
   const customerStatusOptions =
-    useQuery(api.orgCustomerStatuses.list, activeOrgId ? { orgId: activeOrgId } : "skip")
-      ?.filter((status: Doc<"orgCustomerStatuses">) => status.isActive) ?? [];
+    useQuery(api.orgCustomerStatuses.listForQuotes, activeOrgId ? { orgId: activeOrgId } : "skip") ?? [];
 
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -375,7 +374,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                 </p>
               ) : (
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
-                  {customerStatusOptions.map((status: Doc<"orgCustomerStatuses">) => (
+                  {customerStatusOptions.map((status) => (
                     <label
                       key={status._id}
                       className="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm"

@@ -14,8 +14,17 @@ export default defineConfig({
   use: { ...base.use, trace: "off", video: "off", screenshot: "off" },
   projects: [
     { ...base.projects![0], testDir: "./playwright/tests" },
+    {
+      name: "role-regressions",
+      testDir: "./playwright/tests",
+      testMatch: "audit-role-access.spec.ts",
+      testIgnore: [],
+      dependencies: ["setup"],
+      use: { ...base.projects![1].use, storageState: "playwright/.auth/approver.json", trace: "off", video: "off", screenshot: "off" },
+    },
     ...base.projects!.slice(1).map((project) => ({
-      ...project, use: { ...project.use, storageState: "playwright/.auth/approver.json" },
+      ...project, dependencies: [...(project.dependencies ?? []), "role-regressions"],
+      use: { ...project.use, storageState: "playwright/.auth/approver.json" },
     })),
   ],
 });

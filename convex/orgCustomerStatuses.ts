@@ -63,6 +63,19 @@ export const list = query({
   },
 });
 
+/** Quote creation already requires view:sales; expose only its active picker choices. */
+export const listForQuotes = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.array(v.object({ _id: v.id("orgCustomerStatuses"), label: v.string() })),
+  handler: async (ctx, { orgId }) => {
+    await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_SALES]);
+    const statuses = await ctx.db.query("orgCustomerStatuses")
+      .withIndex("by_org", q => q.eq("orgId", orgId)).collect();
+    return statuses.filter(status => status.isActive).sort((a, b) => a.order - b.order)
+      .map(status => ({ _id: status._id, label: status.label }));
+  },
+});
+
 // ─── Mutations ────────────────────────────────────────────────────────────────
 
 /**

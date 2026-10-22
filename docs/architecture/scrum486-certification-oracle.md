@@ -1,5 +1,9 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## Quote status read authority, SCRUM-760
+
+Matrix row `SCRUM760-quote-status` binds `convex/quoteStatusAuthority.test.ts`, test `an accountant can read only active tenant quote choices without settings authority`. Existing quote creation requires `view:sales`; its picker returns only active tenant IDs and labels under that same authority. The settings query still refuses the accountant, and separate controls refuse non-sales users, foreign tenants, unauthenticated users and revoked authority. No settings permission, quote economic rule or write door changes. The screen replay opens the actual quote dialog for every allowed audited role and compares the checkbox count to the public picker query. These are source and harness controls until the real-role browser execution passes; neither the new read nor passing component controls certify a sale, financial posting or production data.
+
 ## Sourcing read authority, SCRUM-760
 
 Matrix row `SCRUM760-sourcing-finance` binds `convex/sourcingPayables.test.ts` test `a non-finance manager cannot read sourcing financial queues`. The actual MANAGER template lacks `view:finance`: payable, pipeline and supplier-recovery queries must each return the structured `FORBIDDEN` refusal. The same fixture's finance owner reads one known payable and empty pipeline/recovery queues, proving the refusal is authorization rather than a broken transport or query. The separate `SourcingPageAuthority.test.tsx` controls exercise safe page refusal before subscribing. This row is harness evidence only; the four actual language/viewport sourcing cells in the role audit must pass on the repaired real backend before runtime acceptance. No ledger, payout or production-data certification is implied.

@@ -89,9 +89,9 @@ beforeEach(() => {
 
   stubs.queryResults.set("documents:listRules", []);
   stubs.queryResults.set("finance:listValuations", []);
-  stubs.queryResults.set("orgCustomerStatuses:list", [{
-    _id: STATUS, orgId: ORG, label: "Salary Slip", isActive: true, order: 1,
-  }] as unknown as Doc<"orgCustomerStatuses">[]);
+  stubs.queryResults.set("orgCustomerStatuses:listForQuotes", [{
+    _id: STATUS, label: "Salary Slip",
+  }]);
 });
 
 describe("QuoteDialog execution-fee fail-closed rendering", () => {

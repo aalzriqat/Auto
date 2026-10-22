@@ -1,0 +1,87 @@
+import { test, expect, type Page } from "@playwright/test";
+import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
+import { authenticatedConvexClient } from "../utils";
+import { openHuntPage, readHuntAttestation, type Attestation } from "../role-audit/runtime";
+import { requireReadyScreen } from "../role-audit/readiness";
+import { ROLE_ROUTE_GUARDS, ROLE_ROUTE_ANY_GUARDS, SCREEN_AUDIT_ROUTES } from "../fixtures/screenAuditRoutes";
+
+let attestation: Attestation;
+test.beforeAll(() => {
+  attestation = readHuntAttestation();
+  expect(attestation.primary.roleName).toBe("OWNER");
+  expect(attestation.approver.roleName).toBe(process.env.HUNT_AUDIT_ROLE);
+});
+
+async function visit(page: Page, baseURL: string | undefined, route: typeof SCREEN_AUDIT_ROUTES[number]) {
+  const orgId = attestation.orgId as Id<"organizations">;
+  const path = `/${orgId}/${route}`;
+  await openHuntPage(page, baseURL, path);
+  const client = await authenticatedConvexClient(page);
+  const membership = await client.query(api.memberships.getMyMembership, { orgId });
+  expect(membership._id).toBe(attestation.approver.membershipId);
+  expect([...membership.permissions].sort()).toEqual([...attestation.approver.permissions].sort());
+  const allowed = (ROLE_ROUTE_GUARDS[route] ?? []).every(p => membership.permissions.includes(p)) &&
+    (ROLE_ROUTE_ANY_GUARDS[route] === undefined || ROLE_ROUTE_ANY_GUARDS[route].some(p => membership.permissions.includes(p)));
+  const denied = page.getByRole("heading", { name: /^(Access Not Allowed|الوصول غير مسموح)$/ });
+  if (allowed) {
+    await requireReadyScreen(page, 15_000, path);
+    await expect(denied).toHaveCount(0);
+  } else await expect(denied).toBeVisible();
+  await expect(page.locator("main")).not.toHaveText(/^\s*$/);
+  await expect(page.locator("main")).not.toContainText(/Something went wrong|Application error|حدث خطأ ما/);
+  return { allowed, client, orgId, permissions: membership.permissions };
+}
+
+test("protected role routes render actual authority without premature subscriptions", async ({ page, baseURL }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  for (const route of ["expenses", "payroll", "reports", "commissions", "sales", "sales/sales", "tasks", "marketplace/requests", "leads", "social-inbox", "sourcing"] as const) {
+    await visit(page, baseURL, route);
+  }
+  expect(errors).toEqual([]);
+});
+
+test("lead screen and create dialog respect actual audited role authority", async ({ page, baseURL }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const { allowed, permissions } = await visit(page, baseURL, "leads");
+  const add = page.getByRole("button", { name: /^(Add Lead|إضافة عميل محتمل)$/ });
+  if (allowed && permissions.includes("create:leads")) {
+    await add.click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("dialog")).not.toContainText(/Something went wrong|Application error/);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  } else await expect(add).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("approval screen renders authorized queue or explicit role refusal", async ({ page, baseURL }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const { allowed, permissions, client, orgId } = await visit(page, baseURL, "approvals");
+  if (allowed && permissions.includes("confirm:finance_disbursement")) {
+    const pending = await client.query(api.depositRequests.listPending, { orgId });
+    await expect(page.getByTestId("pending-deposit-loading")).toHaveCount(0);
+    if (pending.length === 0) await expect(page.getByTestId("pending-deposit-empty")).toBeVisible();
+    else await expect(page.getByTestId("pending-deposit-requests").locator("li")).toHaveCount(pending.length);
+  }
+  expect(errors).toEqual([]);
+});
+
+test("sales quote picker respects audited role and tenant choice authority", async ({ page, baseURL }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const { allowed, client, orgId } = await visit(page, baseURL, "sales/sales");
+  const create = page.getByRole("button", { name: /^(Create Quote|إنشاء عرض سعر)$/ });
+  if (allowed) {
+    const choices = await client.query(api.orgCustomerStatuses.listForQuotes, { orgId });
+    await create.click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("dialog").getByRole("checkbox")).toHaveCount(choices.length);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  } else await expect(create).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

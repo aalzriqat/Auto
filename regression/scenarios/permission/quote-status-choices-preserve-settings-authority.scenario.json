@@ -1,0 +1,55 @@
+{
+  "id": "quote-status-choices-preserve-settings-authority",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "orgCustomerStatuses.list",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "orgCustomerStatuses.listForQuotes",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "settings.refusalCode",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "quoteChoices.count",
+      "value": 2
+    },
+    {
+      "observable": "quoteChoices.fields",
+      "value": "ID_LABEL_ONLY"
+    }
+  ],
+  "impl": {
+    "file": "convex/quoteStatusAuthority.test.ts",
+    "testName": "an accountant can read only active tenant quote choices without settings authority"
+  },
+  "matrixRow": "SCRUM760-quote-status",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "39818759069",
+    "firstSeen": "2026-10-22"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "1570d598c1230a3793c3a64a6016f3e00a69ea2f96d380c753f8429676701286"
+}
