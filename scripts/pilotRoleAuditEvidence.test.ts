@@ -188,10 +188,11 @@ test("a native directory rename failure cannot publish either completed file", a
   const args = options("public-rename-failure");
   const original = fs.rename;
   let reached = false;
+  let staged: string[] = [];
   const rename = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
     if (String(to) === args.publicRoot) {
       reached = true;
-      expect(readdirSync(String(from)).sort()).toEqual(["results.json", "role-evidence.tar.gpg"]);
+      staged = readdirSync(String(from)).sort();
       throw new Error("SYNTHETIC_DIRECTORY_RENAME_FAILURE");
     }
     return original(from, to);
@@ -199,6 +200,7 @@ test("a native directory rename failure cannot publish either completed file", a
   try {
     await expect(packageAuditEvidence(args)).rejects.toThrow("EVIDENCE_UNAVAILABLE");
     expect(reached).toBe(true);
+    expect(staged).toEqual(["results.json", "role-evidence.tar.gpg"]);
     expect(existsSync(args.publicRoot)).toBe(false);
     expect(readdirSync(root).filter((name) => name.startsWith(".role-evidence-private-"))).toEqual([]);
   } finally { rename.mockRestore(); }
