@@ -20,7 +20,7 @@ export const marketplaceEn = {
   // Phase 58 — dealer requests inbox.
   MarketplaceRequests: "Marketplace Requests",
   MarketplaceRequestsTitle: "Marketplace Requests",
-  MarketplaceRequestsDesc: "Buyer car requests matched to your dealership. Reply to turn one into a lead.",
+  MarketplaceRequestsDesc: "Buyer car requests matched to your dealership. Reply to a request.",
   MarketplaceRequestsEmpty: "No buyer requests matched to your dealership yet.",
   MarketplaceRequestVehicle: "Vehicle",
   MarketplaceRequestAnyVehicle: "Any vehicle",
@@ -37,7 +37,7 @@ export const marketplaceEn = {
   MarketplaceResponseVehicleLabel: "Link one of your vehicles (optional)",
   MarketplaceResponseVehicleNone: "No specific vehicle",
   MarketplaceResponseOfferPriceLabel: "Offer price in JOD (optional)",
-  MarketplaceResponseNoteLabel: "Note to add to the lead (optional)",
+  MarketplaceResponseNoteLabel: "Note to send with your reply (optional)",
   MarketplaceResponseSubmit: "Send reply",
   MarketplaceResponseSaved: "Reply sent.",
 
@@ -82,7 +82,7 @@ export const marketplaceAr = {
   // Phase 58 — dealer requests inbox.
   MarketplaceRequests: "طلبات السوق",
   MarketplaceRequestsTitle: "طلبات السوق",
-  MarketplaceRequestsDesc: "طلبات سيارات من زبائن تم توجيهها لمعرضك. رد على أي طلب لتحويله إلى عميل محتمل.",
+  MarketplaceRequestsDesc: "طلبات سيارات من زبائن تم توجيهها لمعرضك. رد على أي طلب من الزبائن.",
   MarketplaceRequestsEmpty: "لا يوجد طلبات زبائن موجهة لمعرضك حتى الآن.",
   MarketplaceRequestVehicle: "السيارة",
   MarketplaceRequestAnyVehicle: "أي سيارة",
@@ -99,7 +99,7 @@ export const marketplaceAr = {
   MarketplaceResponseVehicleLabel: "اربط إحدى سياراتك (اختياري)",
   MarketplaceResponseVehicleNone: "بدون سيارة محددة",
   MarketplaceResponseOfferPriceLabel: "سعر العرض بالدينار (اختياري)",
-  MarketplaceResponseNoteLabel: "ملاحظة تُضاف للعميل المحتمل (اختياري)",
+  MarketplaceResponseNoteLabel: "ملاحظة ترسل مع ردك (اختياري)",
   MarketplaceResponseSubmit: "إرسال الرد",
   MarketplaceResponseSaved: "تم إرسال الرد.",
 

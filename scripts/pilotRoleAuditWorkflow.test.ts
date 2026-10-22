@@ -46,8 +46,20 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     for (const name of ["playwright.yml", "trusted-main-e2e.yml"]) {
       const text = readFileSync(path.resolve(".github/workflows", name), "utf8");
       expect(text).toMatch(/^\s+pnpm run test:visual:deal-cockpit\s*$/m);
-      expect(text).toContain("node scripts/assertRoleAccessVisualFrames.mjs test-results/deal-cockpit-visual");
-      expect(text).toContain("node scripts/assertDealCockpitVisualFrames.mjs test-results/deal-cockpit-visual");
+      const candidate = z.object({ jobs: z.object({ playwright: z.object({ steps: z.array(stepSchema) }) }) }).parse(parse(text));
+      const steps = candidate.jobs.playwright.steps;
+      const gateIndex = steps.findIndex((step) => step.name?.startsWith("Deal cockpit visual gate"));
+      expect(gateIndex).toBeGreaterThanOrEqual(0);
+      const gate = steps[gateIndex];
+      const commands = (gate.run ?? "").split(/\r?\n/).map((line) => line.trim());
+      expect(commands).toContain("pnpm run test:visual:deal-cockpit");
+      expect(commands).toContain("node scripts/assertRoleAccessVisualFrames.mjs test-results/deal-cockpit-visual");
+      expect(commands).toContain("node scripts/assertDealCockpitVisualFrames.mjs test-results/deal-cockpit-visual");
+      expect(JSON.stringify(gate.env ?? {})).not.toContain("secrets.");
+      const previewIndex = steps.findIndex((step) => /preview/i.test(step.name ?? ""));
+      expect(previewIndex).toBeGreaterThan(gateIndex);
+      const deployIndex = steps.findIndex((step) => step.run?.includes("convex deploy"));
+      if (deployIndex !== -1) expect(deployIndex).toBeGreaterThan(gateIndex);
     }
   });
   test("bound role regressions run before the matrix can isolate its audited seat", () => {

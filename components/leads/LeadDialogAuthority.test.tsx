@@ -4,7 +4,7 @@ import { LeadDialog } from "./LeadDialog";
 import { OrgProvider } from "@/components/providers/OrgProvider";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
 import { DEFAULT_ROLE_TEMPLATES } from "@/convex/utils/permissions";
-const sources = vi.hoisted(() => ({ value: null as { _id: string; label: string }[] | null }));
+const sources = vi.hoisted(() => ({ value: null as { _id: string; label: string }[] | null | undefined }));
 
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
@@ -66,4 +66,12 @@ test("An unconfigured dealer retains built-in lead source choices", () => {
   render(<OrgProvider><LanguageProvider><LeadDialog open onOpenChange={vi.fn()} /></LanguageProvider></OrgProvider>);
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Lead Source" }), { key: "ArrowDown" });
   expect(screen.getByRole("option", { name: "Facebook" })).toBeTruthy();
+});
+
+test("Loading configured lead sources does not expose built-in choices", () => {
+  sources.value = undefined;
+  render(<OrgProvider><LanguageProvider><LeadDialog open onOpenChange={vi.fn()} /></LanguageProvider></OrgProvider>);
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Lead Source" }), { key: "ArrowDown" });
+  expect(screen.queryByRole("option", { name: "Facebook" })).toBeNull();
+  expect(screen.queryAllByRole("option")).toHaveLength(0);
 });

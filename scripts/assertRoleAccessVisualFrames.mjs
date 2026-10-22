@@ -1,8 +1,8 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { lstatSync, realpathSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const states = ["denied-expenses", "deposit-loading", "deposit-empty", "lead-source", "sales-empty", "quote-choice", "lead-reader", "marketplace-reply"];
+const states = ["denied-expenses", "deposit-loading", "deposit-empty", "lead-source", "sales-empty", "quote-choice", "lead-reader", "marketplace-reply", "lead-source-loading", "quote-status-loading", "marketplace-default"];
 export const EXPECTED_ROLE_FRAMES = states.flatMap(state => ["en", "ar"].flatMap(locale =>
   [375, 1440].map(width => `role-access-${state}-${locale}-${width}.png`)));
 const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -28,12 +28,26 @@ function filesWithin(directory, depth = 0) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     const file = path.join(directory, entry.name);
     if (entry.isSymbolicLink()) throw new Error("Symlink is not an owned visual artifact");
-    return entry.isDirectory() ? filesWithin(file, depth + 1) : entry.isFile() ? [file] : [];
+    if (entry.isDirectory()) return filesWithin(file, depth + 1);
+    return entry.isFile() ? [file] : [];
   });
 }
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    const errors = roleFrameErrors(filesWithin(path.resolve(process.argv[2] ?? "test-results/deal-cockpit-visual")));
+    const relativeRoot = "test-results/deal-cockpit-visual";
+    if (process.argv.length > 3 || (process.argv[2] !== undefined && process.argv[2] !== relativeRoot)) {
+      throw new Error("Only the repository visual artifact directory is allowed");
+    }
+    const repository = realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
+    const parent = path.join(repository, "test-results");
+    const root = path.join(parent, "deal-cockpit-visual");
+    for (const directory of [parent, root]) {
+      if (lstatSync(directory).isSymbolicLink()) throw new Error("Symlink is not an owned visual artifact");
+    }
+    if (path.relative(repository, realpathSync(root)) !== path.join("test-results", "deal-cockpit-visual")) {
+      throw new Error("Visual artifacts must remain inside the repository");
+    }
+    const errors = roleFrameErrors(filesWithin(root));
     for (const error of errors) console.error(error);
     console.log(`role screen frame inventory: expected ${EXPECTED_ROLE_FRAMES.length}; ${errors.length ? "FAIL" : "PASS"}. Inventory only; no authenticated or pixel certification.`);
     process.exitCode = errors.length ? 1 : 0;

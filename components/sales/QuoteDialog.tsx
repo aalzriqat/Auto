@@ -59,8 +59,9 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
   );
   const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const documentRules = useQuery(api.documents.listRules, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const customerStatusOptions =
-    useQuery(api.orgCustomerStatuses.listForQuotes, activeOrgId ? { orgId: activeOrgId } : "skip") ?? [];
+  const customerStatusRows =
+    useQuery(api.orgCustomerStatuses.listForQuotes, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const customerStatusOptions = customerStatusRows ?? [];
 
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -368,7 +369,11 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
 
             <div className="space-y-2 rounded-lg border p-3">
               <p className="text-sm font-medium">{t("CustomerStatusReqs" as any)}</p>
-              {customerStatusOptions.length === 0 ? (
+              {customerStatusRows === undefined ? (
+                <p className="text-sm text-muted-foreground">
+                  {t("CustomerStatusesLoading")}
+                </p>
+              ) : customerStatusOptions.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   {t("NoCustomerStatusesConfigured" as any)}
                 </p>

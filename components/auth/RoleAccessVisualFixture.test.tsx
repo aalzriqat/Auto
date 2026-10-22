@@ -13,6 +13,7 @@ import SalesPage from "@/app/(dashboard)/[orgId]/sales/sales/page";
 import LeadsPage from "@/app/(dashboard)/[orgId]/leads/page";
 import { MarketplaceRequestsClient } from "@/app/(dashboard)/[orgId]/marketplace/requests/client";
 import { LeadDialog } from "@/components/leads/LeadDialog";
+import { QuoteDialog } from "@/components/sales/QuoteDialog";
 import Step1QuoteSetup from "@/components/sales/wizard/steps/Step1QuoteSetup";
 
 const state = vi.hoisted(() => ({ role: "SALES", locale: "en", overridePermissions: undefined as string[] | undefined,
@@ -103,6 +104,12 @@ test.each(["en", "ar"])("real role-access screen fixtures %s", locale => {
   expect(screen.queryByRole("listbox")).toBeNull();
   capture("lead-source");
 
+  state.values.set("orgLeadSources:listForLeads", undefined);
+  mount(<LeadDialog open onOpenChange={vi.fn()} />);
+  fireEvent.keyDown(screen.getByRole("combobox", { name: locale === "en" ? "Lead Source" : "مصدر العميل المحتمل" }), { key: "ArrowDown" });
+  expect(screen.queryAllByRole("option")).toHaveLength(0);
+  capture("lead-source-loading");
+
   state.role = "ACCOUNTANT";
   for (const name of ["finance:listCompanies", "documents:listRules", "sales:list"]) state.values.set(name, []);
   state.values.set("orgCustomerStatuses:listForQuotes", [{ _id: "status-a", label: "Synthetic eligibility" }]);
@@ -116,8 +123,19 @@ test.each(["en", "ar"])("real role-access screen fixtures %s", locale => {
   expect(screen.getByText("Synthetic eligibility")).toBeTruthy();
   capture("quote-choice");
 
+  state.values.set("orgCustomerStatuses:listForQuotes", undefined);
+  state.values.set("customers:list", []);
+  mount(<QuoteDialog open onOpenChange={vi.fn()} />);
+  expect(screen.getByText(locale === "en" ? "Loading customer statuses…" : "جارٍ تحميل حالات العميل…")).toBeTruthy();
+  expect(screen.queryByText(locale === "en" ? "No customer statuses configured yet — set them up in Finance Settings." : "لم يتم تكوين حالات العميل بعد — قم بإعدادها في إعدادات التمويل.")).toBeNull();
+  capture("quote-status-loading");
+
   state.overridePermissions = ["marketplace:respond", "view:org"];
   state.values.set("marketplaceResponses:listForOrg", [{ requestId: "request-a", buyerFirstName: "Synthetic Buyer", buyerCity: "Synthetic City", paymentType: "CASH", buyerIntent: "HOT", make: "Synthetic Make", model: "Synthetic Model", latestResponse: null }]);
+  mount(<MarketplaceRequestsClient />);
+  fireEvent.click(screen.getByRole("button", { name: locale === "en" ? "Reply" : "رد" }));
+  expect(screen.getAllByRole("combobox")[0].textContent).toContain(locale === "en" ? "I have something similar" : "عندي سيارة مشابهة");
+  capture("marketplace-default");
   mount(<MarketplaceRequestsClient />);
   fireEvent.click(screen.getByRole("button", { name: locale === "en" ? "Reply" : "رد" }));
   fireEvent.keyDown(screen.getAllByRole("combobox")[0], { key: "ArrowDown" });

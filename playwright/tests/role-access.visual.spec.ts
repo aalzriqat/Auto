@@ -9,10 +9,13 @@ import { newContainedContext } from "../containedContext";
 // Actual component markup and compiled app CSS. No authentication, app shell,
 // hydration or backend is claimed. Live role replays remain separate tests.
 const ROOT = resolve(__dirname, "../..");
-const STATES = ["denied-expenses", "deposit-loading", "deposit-empty", "lead-source", "sales-empty", "quote-choice", "lead-reader", "marketplace-reply"] as const;
+const STATES = ["denied-expenses", "deposit-loading", "deposit-empty", "lead-source", "sales-empty", "quote-choice", "lead-reader", "marketplace-reply", "lead-source-loading", "quote-status-loading", "marketplace-default"] as const;
 type State = typeof STATES[number];
 let fixtures = "", css = "";
 test.beforeAll(async () => {
+  // The fixture child has its own 120s deadline; allow CSS compilation and
+  // inventory checks to finish within a separate, bounded hook deadline.
+  test.setTimeout(180_000);
   fixtures = mkdtempSync(resolve(tmpdir(), "autoflow-role-paint-"));
   execFileSync(process.execPath, [resolve(ROOT, "node_modules/vitest/vitest.mjs"), "run", "--maxWorkers=1",
     "components/auth/RoleAccessVisualFixture.test.tsx"], {
@@ -37,6 +40,9 @@ const COPY = {
   "quote-choice": { en: "Synthetic eligibility", ar: "Synthetic eligibility" },
   "lead-reader": { en: "No leads found.", ar: "لم يتم العثور على عملاء محتملين." },
   "marketplace-reply": { en: "Not available", ar: "غير متوفرة" },
+  "lead-source-loading": { en: "Lead Source", ar: "مصدر العميل المحتمل" },
+  "quote-status-loading": { en: "Loading customer statuses…", ar: "جارٍ تحميل حالات العميل…" },
+  "marketplace-default": { en: "I have something similar", ar: "عندي سيارة مشابهة" },
 } as const;
 
 async function paint(browser: Parameters<typeof newContainedContext>[0], info: TestInfo, states: readonly State[]) {
@@ -66,6 +72,19 @@ async function paint(browser: Parameters<typeof newContainedContext>[0], info: T
           if (state === "marketplace-reply") {
             await expect(page.getByRole("button", { name: locale === "en" ? "Send reply" : "إرسال الرد", exact: true })).toBeEnabled();
             await expect(page.getByRole("combobox")).toHaveCount(1);
+          }
+          if (state === "lead-source-loading") {
+            await expect(page.getByRole("listbox")).toBeVisible();
+            await expect(page.getByRole("option")).toHaveCount(0);
+            // Radix hides the surrounding dialog from assistive technology
+            // while its select portal owns focus; the dialog is still painted.
+            await expect(page.getByRole("dialog", { includeHidden: true })).toBeVisible();
+          }
+          if (state === "quote-status-loading") {
+            await expect(page.getByText(locale === "en" ? "No customer statuses configured yet — set them up in Finance Settings." : "لم يتم تكوين حالات العميل بعد — قم بإعدادها في إعدادات التمويل.", { exact: true })).toHaveCount(0);
+          }
+          if (state === "marketplace-default") {
+            await expect(page.getByRole("combobox").first()).toHaveText(COPY[state][locale]);
           }
           if (state === "lead-source") {
             await expect(page.getByRole("dialog")).toHaveCSS("opacity", "1");
@@ -97,4 +116,13 @@ test("PR screen paint keeps lead readers out of create actions", async ({ browse
 });
 test("PR screen paint opens a marketplace-only non-vehicle reply", async ({ browser }, info) => {
   await paint(browser, info, ["marketplace-reply"]);
+});
+test("PR screen paint does not invent lead choices while loading", async ({ browser }, info) => {
+  await paint(browser, info, ["lead-source-loading"]);
+});
+test("PR screen paint distinguishes quote status loading from empty", async ({ browser }, info) => {
+  await paint(browser, info, ["quote-status-loading"]);
+});
+test("PR screen paint gives inventory-free responders a non-vehicle default", async ({ browser }, info) => {
+  await paint(browser, info, ["marketplace-default"]);
 });

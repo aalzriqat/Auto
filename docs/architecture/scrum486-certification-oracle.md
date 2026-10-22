@@ -1,5 +1,9 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## Configuration choice read budgets, SCRUM-760
+
+Matrix rows `SCRUM760-lead-choice-read-budget` and `SCRUM760-quote-choice-read-budget` bind the two literal tests in `convex/configChoiceReadBudget.test.ts`: `lead choices retain boundary values and refuse an oversized configuration` and `quote choices retain boundary values and refuse an oversized configuration`. Each authorized reader receives the final active row among 8,192 configured rows; adding one inactive row makes the query explicitly refuse with `CONFIG_CHOICE_LIMIT`. Inactive rows count toward the read budget. These controls distinguish refusal from silent truncation; they establish harness behavior, not Convex platform I/O, concurrency or capacity. Settings write authority and write quotas do not change.
+
 ## Marketplace reply authority, SCRUM-760
 
 Matrix row `SCRUM760-marketplace-reply` binds `convex/marketplaceResponses.test.ts`, test `a marketplace-only member can reply without gaining inventory visibility`. The same member is refused by `vehicles.list` and persists a matched request's `NOT_AVAILABLE` response under existing `marketplace:respond` authority. The actual form skips the protected catalog query when visibility is absent; a separate control preserves catalog choices for authorized members. A non-vehicle reply does not promise lead creation, and the success message now states only that the reply was sent. These are source/harness and anonymous paint controls, not authenticated platform acceptance. No reply-kind requirements, inventory permission or write authority change.

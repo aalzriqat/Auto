@@ -1,9 +1,10 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { query, type MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import type { Id } from "./_generated/dataModel";
+import { CONFIG_CHOICE_MAX_ROWS } from "./utils/configChoiceLimits";
 
 // ─── Seed data ────────────────────────────────────────────────────────────────
 
@@ -70,7 +71,10 @@ export const listForQuotes = query({
   handler: async (ctx, { orgId }) => {
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_SALES]);
     const statuses = await ctx.db.query("orgCustomerStatuses")
-      .withIndex("by_org", q => q.eq("orgId", orgId)).collect();
+      .withIndex("by_org", q => q.eq("orgId", orgId)).take(CONFIG_CHOICE_MAX_ROWS + 1);
+    if (statuses.length > CONFIG_CHOICE_MAX_ROWS) {
+      throw new ConvexError({ code: "CONFIG_CHOICE_LIMIT", message: "Too many configured choices. Ask the owner to review these settings." });
+    }
     return statuses.filter(status => status.isActive).sort((a, b) => a.order - b.order)
       .map(status => ({ _id: status._id, label: status.label }));
   },

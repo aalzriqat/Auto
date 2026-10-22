@@ -71,6 +71,25 @@ const NEXT_ACTION_TRANSLATION_KEYS: Record<LeadStage, TranslationKey> = {
   LOST: "NextActionRecordLoss",
 };
 
+const LEAD_STAGE_STYLES: ReadonlyMap<string, { badge: string; border: string }> = new Map([
+  ["NEW", { badge: "bg-blue-500/10 text-blue-500", border: "border-t-blue-400" }],
+  ["CONTACTED", { badge: "bg-purple-500/10 text-purple-500", border: "border-t-purple-400" }],
+  ["INTERESTED", { badge: "bg-indigo-500/10 text-indigo-500", border: "border-t-indigo-400" }],
+  ["TEST_DRIVE", { badge: "bg-orange-500/10 text-orange-500", border: "border-t-orange-400" }],
+  ["NEGOTIATION", { badge: "bg-yellow-500/10 text-yellow-500", border: "border-t-yellow-400" }],
+  ["RESERVED", { badge: "bg-teal-500/10 text-teal-500", border: "border-t-teal-400" }],
+  ["WON", { badge: "bg-green-500/10 text-green-500", border: "border-t-green-400" }],
+  ["LOST", { badge: "bg-red-500/10 text-red-500", border: "border-t-red-400" }],
+]);
+
+function getStageColor(stage: string) {
+  return LEAD_STAGE_STYLES.get(stage)?.badge ?? "bg-gray-500/10 text-gray-500";
+}
+
+function getStageBorderColor(stage: string) {
+  return LEAD_STAGE_STYLES.get(stage)?.border ?? "border-t-gray-400";
+}
+
 export default function LeadsPage() {
   return <RoleGuard permissions={["view:leads"]}><LeadsContent /></RoleGuard>;
 }
@@ -291,34 +310,6 @@ function LeadsContent() {
     acc[stage] = filteredLeads?.filter((lead) => lead.stage === stage) || [];
     return acc;
   }, {} as Record<LeadStage, LeadListItem[]>);
-
-  const getStageColor = (stage: string) => {
-    switch (stage) {
-      case "NEW": return "bg-blue-500/10 text-blue-500";
-      case "CONTACTED": return "bg-purple-500/10 text-purple-500";
-      case "INTERESTED": return "bg-indigo-500/10 text-indigo-500";
-      case "TEST_DRIVE": return "bg-orange-500/10 text-orange-500";
-      case "NEGOTIATION": return "bg-yellow-500/10 text-yellow-500";
-      case "RESERVED": return "bg-teal-500/10 text-teal-500";
-      case "WON": return "bg-green-500/10 text-green-500";
-      case "LOST": return "bg-red-500/10 text-red-500";
-      default: return "bg-gray-500/10 text-gray-500";
-    }
-  };
-
-  const getStageBorderColor = (stage: string) => {
-    switch (stage) {
-      case "NEW": return "border-t-blue-400";
-      case "CONTACTED": return "border-t-purple-400";
-      case "INTERESTED": return "border-t-indigo-400";
-      case "TEST_DRIVE": return "border-t-orange-400";
-      case "NEGOTIATION": return "border-t-yellow-400";
-      case "RESERVED": return "border-t-teal-400";
-      case "WON": return "border-t-green-400";
-      case "LOST": return "border-t-red-400";
-      default: return "border-t-gray-400";
-    }
-  };
 
   const translateStage = (stage: LeadStage) => translateLeadStage(stage, t);
   const nextAction = (stage: LeadStage) => t(NEXT_ACTION_TRANSLATION_KEYS[stage]);

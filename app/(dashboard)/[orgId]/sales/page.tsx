@@ -16,7 +16,8 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Doc, Id } from "@/convex/_generated/dataModel";
+import { Id } from "@/convex/_generated/dataModel";
+import type { FunctionReturnType } from "convex/server";
 import { SaleTrailDialog } from "@/components/sales/SaleTrailDialog";
 import { buildInitialDraftFromApproval } from "@/components/sales/wizard/approvalResume";
 
@@ -331,67 +332,7 @@ function SalesHomeContent() {
                 )}
 
                 {/* ─── Pending Deals (awaiting approval) ───────────────────── */}
-                {myPendingApprovals && myPendingApprovals.length > 0 && (
-                    <div>
-                        <h2 className="text-sm font-semibold mb-3 text-amber-400 uppercase tracking-wider flex items-center gap-2">
-                            <Clock className="w-4 h-4" />
-                            {t("PendingDeals" as any) ?? "Pending Deals"}
-                        </h2>
-                        <div className="space-y-2">
-                            {myPendingApprovals.map((approval: Doc<"profitApprovalRequests"> & { vehicleSummary: string }) => (
-                                <div
-                                    key={approval._id}
-                                    className="flex items-center justify-between rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3"
-                                >
-                                    <div>
-                                        <p className="text-sm font-medium text-foreground">{approval.vehicleSummary}</p>
-                                        <p className="text-xs text-muted-foreground mt-0.5">
-                                            {t("RequestedProfit" as any)}: {format(approval.requestedProfit)}
-                                        </p>
-                                    </div>
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        {approval.status === "PENDING" ? (
-                                            <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">
-                                                <Clock className="w-3 h-3 me-1" />
-                                                {t("AwaitingApproval" as any) ?? "Awaiting Approval"}
-                                            </Badge>
-                                        ) : (
-                                            <Badge variant="outline" className="text-green-600 border-green-400 text-xs">
-                                                <CheckCircle2 className="w-3 h-3 me-1" />
-                                                {t("Approved" as any) ?? "Approved"}
-                                            </Badge>
-                                        )}
-                                        {approval.status === "PENDING" && (
-                                            <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                className="text-xs text-red-400 hover:text-red-500 hover:bg-red-500/10"
-                                                onClick={() => handleCancelApproval(approval._id)}
-                                            >
-                                                <X className="w-3 h-3 me-1.5" />
-                                                {t("Cancel" as any) ?? "Cancel"}
-                                            </Button>
-                                        )}
-                                        {approval.wizardSnapshot && (
-                                            <Button
-                                                size="sm"
-                                                variant={approval.status === "APPROVED" ? "default" : "outline"}
-                                                className={cn(
-                                                    "text-xs",
-                                                    approval.status === "APPROVED" && "bg-green-600 hover:bg-green-700 text-white"
-                                                )}
-                                                onClick={() => resumeFromApproval(approval)}
-                                            >
-                                                <RotateCcw className="w-3 h-3 me-1.5" />
-                                                {t("ResumeDeal" as any) ?? "Resume Deal"}
-                                            </Button>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
+                <PendingDealRequests approvals={myPendingApprovals} format={format} onCancel={handleCancelApproval} onResume={resumeFromApproval} />
 
                 {/* ─── Recent Sales ──────────────────────────────────────────── */}
                 {recentSales && recentSales.length > 0 && (
@@ -439,4 +380,84 @@ function SalesHomeContent() {
             />
         </>
     );
+}
+
+type PendingApproval = NonNullable<
+  FunctionReturnType<typeof api.approvals.listMyPendingApprovals>
+>[number];
+
+function PendingDealRequests({
+  approvals,
+  format,
+  onCancel,
+  onResume,
+}: Readonly<{
+  approvals: readonly PendingApproval[] | undefined;
+  format: ReturnType<typeof useCurrency>["format"];
+  onCancel: (id: Id<"profitApprovalRequests">) => Promise<void>;
+  onResume: (approval: PendingApproval) => void;
+}>) {
+  const { t } = useLanguage();
+  if (!approvals?.length) return null;
+  return (
+    <div>
+      <h2 className="text-sm font-semibold mb-3 text-amber-400 uppercase tracking-wider flex items-center gap-2">
+        <Clock className="w-4 h-4" />
+        {t("PendingDeals") ?? "Pending Deals"}
+      </h2>
+      <div className="space-y-2">
+        {approvals.map((approval: PendingApproval) => (
+          <div
+            key={approval._id}
+            className="flex items-center justify-between rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3"
+          >
+            <div>
+              <p className="text-sm font-medium text-foreground">{approval.vehicleSummary}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {t("RequestedProfit")}: {format(approval.requestedProfit)}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {approval.status === "PENDING" ? (
+                <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">
+                  <Clock className="w-3 h-3 me-1" />
+                  {t("AwaitingApproval") ?? "Awaiting Approval"}
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-green-600 border-green-400 text-xs">
+                  <CheckCircle2 className="w-3 h-3 me-1" />
+                  {t("Approved") ?? "Approved"}
+                </Badge>
+              )}
+              {approval.status === "PENDING" && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-xs text-red-400 hover:text-red-500 hover:bg-red-500/10"
+                  onClick={() => onCancel(approval._id)}
+                >
+                  <X className="w-3 h-3 me-1.5" />
+                  {t("Cancel") ?? "Cancel"}
+                </Button>
+              )}
+              {approval.wizardSnapshot && (
+                <Button
+                  size="sm"
+                  variant={approval.status === "APPROVED" ? "default" : "outline"}
+                  className={cn(
+                    "text-xs",
+                    approval.status === "APPROVED" && "bg-green-600 hover:bg-green-700 text-white",
+                  )}
+                  onClick={() => onResume(approval)}
+                >
+                  <RotateCcw className="w-3 h-3 me-1.5" />
+                  {t("ResumeDeal") ?? "Resume Deal"}
+                </Button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

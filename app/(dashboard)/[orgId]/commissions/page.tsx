@@ -328,6 +328,13 @@ function CommissionsContent() {
     setEditingAmount(current == null ? "" : String(current));
   }
 
+  function startPayment(c: CommissionSale) {
+    const retry = uncertainPayment?.saleId === c._id ? uncertainPayment : null;
+    setCommissionToPay(c);
+    setPaymentMethod(retry?.paymentMethod ?? "CASH");
+    setBankAccountId(retry?.bankAccountId ?? "");
+  }
+
   return (
       <div className="space-y-6">
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
@@ -563,122 +570,8 @@ function CommissionsContent() {
                       {new Date(c.saleDate).toLocaleDateString()}
                     </TableCell>
                     <TableCell className="text-end tabular-nums">{formatCurrency(c.salePrice)}</TableCell>
-                    <TableCell className="text-end tabular-nums font-semibold">
-                      {c.missingPurchaseCost ? (
-                        <span
-                          className="inline-flex items-center gap-1.5 rounded-md bg-amber-100 dark:bg-amber-900/40 px-2 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
-                          title={t("MissingPurchaseCostHint" as any)}
-                        >
-                          <AlertTriangle className="h-3.5 w-3.5" />
-                          {t("MissingPurchaseCost" as any)}
-                        </span>
-                      ) : c.canSetAmount && canManage && editingId === c._id ? (
-                        <div className="flex items-center justify-end gap-1">
-                          <Input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={editingAmount}
-                            onChange={(e) => setEditingAmount(e.target.value)}
-                            className="h-7 w-24 text-sm text-end"
-                            aria-label={t("CommissionAmount" as any)}
-                            autoFocus
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleSaveCommission(c._id);
-                              if (e.key === "Escape") { setEditingId(null); setEditingAmount(""); }
-                            }}
-                          />
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleSaveCommission(c._id)} aria-label={t("Save" as any)}>
-                            <Check className="h-3.5 w-3.5 text-green-600" />
-                          </Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditingId(null); setEditingAmount(""); }} aria-label={t("Cancel" as any)}>
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* An undecided commission is not zero. Showing "0"
-                              here reads as a real decision that was never made. */}
-                          {c.commissionAmount == null ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : (
-                            formatCurrency(c.commissionAmount)
-                          )}
-                          {/* An undecided row already carries a full "Set
-                              commission" button in Actions; a pencil beside the
-                              dash would be a second control for the same thing. */}
-                          {c.canSetAmount && canManage && c.commissionAmount != null && (
-                            <button
-                              onClick={() => startEditing(c._id, c.commissionAmount)}
-                              className="text-muted-foreground hover:text-foreground transition-colors"
-                              title={t("EditCommission" as any)}
-                              aria-label={t("EditCommission" as any)}
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {/* Orange is reserved for money actually owed. An
-                          undecided or deliberately-zero row owes nothing yet, so
-                          both stay neutral — otherwise the page reads as a
-                          backlog of debt that does not exist. */}
-                      {c.commissionStatus === "PAID" && c.commissionPaidAt ? (
-                        <Badge variant="outline" className="text-green-600 border-green-600 text-xs whitespace-nowrap">
-                          <CheckCircle2 className="h-3 w-3 me-1" />
-                          {t("Paid" as any)} {new Date(c.commissionPaidAt).toLocaleDateString()}
-                          <span className="ms-1 text-muted-foreground">
-                            {t(`PaymentMethod_${c.commissionPaymentMethod ?? "CASH"}` as any)}
-                          </span>
-                        </Badge>
-                      ) : c.commissionStatus === "NOT_SET" ? (
-                        <Badge
-                          variant="outline"
-                          className="text-muted-foreground text-xs whitespace-nowrap"
-                          title={t("CommissionNotSetHint" as any)}
-                        >
-                          <CircleDashed className="h-3 w-3 me-1" />
-                          {t("CommissionNotSet" as any)}
-                        </Badge>
-                      ) : c.commissionStatus === "NO_COMMISSION" ? (
-                        <Badge
-                          variant="outline"
-                          className="text-muted-foreground text-xs whitespace-nowrap"
-                          title={t("NoCommissionOwedHint" as any)}
-                        >
-                          <MinusCircle className="h-3 w-3 me-1" />
-                          {t("NoCommissionOwed" as any)}
-                        </Badge>
-                      ) : c.commissionStatus === "PENDING_SALE" ? (
-                        // Not reachable from the current listing rules, but the
-                        // default arm below is the orange "money owed" badge —
-                        // the worst place for an unhandled status to land.
-                        <Badge
-                          variant="outline"
-                          className="text-muted-foreground text-xs whitespace-nowrap"
-                          title={t("CommissionPendingSaleHint" as any)}
-                        >
-                          <Clock className="h-3 w-3 me-1" />
-                          {t("CommissionPendingSale" as any)}
-                        </Badge>
-                      ) : c.commissionStatus === "VOID" ? (
-                        <Badge
-                          variant="outline"
-                          className="text-muted-foreground text-xs whitespace-nowrap line-through decoration-1"
-                          title={t("CommissionVoidHint" as any)}
-                        >
-                          <Ban className="h-3 w-3 me-1" />
-                          {t("CommissionVoid" as any)}
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-orange-600 border-orange-300 text-xs whitespace-nowrap">
-                          <Clock className="h-3 w-3 me-1" />
-                          {t("Unpaid" as any)}
-                        </Badge>
-                      )}
-                    </TableCell>
+                    <CommissionAmountCell c={c} canManage={canManage} editingId={editingId} editingAmount={editingAmount} onAmountChange={setEditingAmount} onSave={handleSaveCommission} onStartEditing={startEditing} onCancel={() => { setEditingId(null); setEditingAmount(""); }} />
+                    <CommissionStatusCell c={c} />
                     {canManage && (
                       <TableCell className="text-end">
                         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -687,53 +580,7 @@ function CommissionsContent() {
                             <ClipboardList className="h-3.5 w-3.5 me-1" /> {t("DealCommissionLinesAction" as any)}
                           </Button>
                         )}
-                        {c.commissionPaidAt ? (
-                          // Paid commissions are locked server-side (reversing a
-                          // paid commission needs an accounting reversal, not a
-                          // flag flip) — so no Revert action is offered here.
-                          null
-                        ) : c.commissionStatus === "VOID" ? (
-                          // Nothing to settle on a cancelled sale — its accrual
-                          // is already reversed and every mutation refuses it.
-                          null
-                        ) : c.missingPurchaseCost ? null : c.needsRecalculation ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-blue-600 border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950/30"
-                            title={t("RecalculateCommissionHint" as any)}
-                            onClick={() => handleRecalculate(c._id)}
-                          >
-                            <Undo2 className="h-3.5 w-3.5 me-1" /> {t("RecalculateCommission" as any)}
-                          </Button>
-                        ) : (c.commissionAmount ?? 0) <= 0 ? (
-                          // Nothing to pay yet. Offering "Mark paid" here would
-                          // only produce a server rejection, so the action that
-                          // is actually available is the one that's shown.
-                          c.canSetAmount && editingId !== c._id ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => startEditing(c._id, c.commissionAmount)}
-                            >
-                              <Pencil className="h-3.5 w-3.5 me-1" /> {t("SetCommission" as any)}
-                            </Button>
-                          ) : null
-                        ) : (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-green-600 border-green-600 hover:bg-green-50"
-                            onClick={() => {
-                              const retry = uncertainPayment?.saleId === c._id ? uncertainPayment : null;
-                              setCommissionToPay(c);
-                              setPaymentMethod(retry?.paymentMethod ?? "CASH");
-                              setBankAccountId(retry?.bankAccountId ?? "");
-                            }}
-                          >
-                            <Check className="h-3.5 w-3.5 me-1" /> {t("MarkPaid" as any)}
-                          </Button>
-                        )}
+                        <CommissionPaymentAction c={c} editingId={editingId} onRecalculate={handleRecalculate} onStartEditing={startEditing} onMarkPaid={startPayment} />
                         </div>
                       </TableCell>
                     )}
@@ -779,5 +626,227 @@ function CommissionsContent() {
           }}
         />
       </div>
+  );
+}
+
+interface CommissionAmountCellProps {
+  c: CommissionSale;
+  canManage: boolean;
+  editingId: Id<"sales"> | null;
+  editingAmount: string;
+  onAmountChange: (value: string) => void;
+  onCancel: () => void;
+  onSave: (saleId: Id<"sales">) => Promise<void>;
+  onStartEditing: (saleId: Id<"sales">, current: number | undefined) => void;
+}
+
+function CommissionAmountCell({
+  c,
+  canManage,
+  editingId,
+  editingAmount,
+  onAmountChange,
+  onCancel,
+  onSave,
+  onStartEditing,
+}: Readonly<CommissionAmountCellProps>) {
+  const { t } = useLanguage();
+  return (
+    <TableCell className="text-end tabular-nums font-semibold">
+      {c.missingPurchaseCost ? (
+        <span
+          className="inline-flex items-center gap-1.5 rounded-md bg-amber-100 dark:bg-amber-900/40 px-2 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
+          title={t("MissingPurchaseCostHint")}
+        >
+          <AlertTriangle className="h-3.5 w-3.5" />
+          {t("MissingPurchaseCost")}
+        </span>
+      ) : c.canSetAmount && canManage && editingId === c._id ? (
+        <div className="flex items-center justify-end gap-1">
+          <Input
+            type="number"
+            min="0"
+            step="1"
+            value={editingAmount}
+            onChange={(e) => onAmountChange(e.target.value)}
+            className="h-7 w-24 text-sm text-end"
+            aria-label={t("CommissionAmount")}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSave(c._id);
+              if (e.key === "Escape") {
+                onCancel();
+              }
+            }}
+          />
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7"
+            onClick={() => onSave(c._id)}
+            aria-label={t("Save")}
+          >
+            <Check className="h-3.5 w-3.5 text-green-600" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7"
+            onClick={() => {
+              onCancel();
+            }}
+            aria-label={t("Cancel")}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center justify-end gap-1.5">
+          {/* An undecided commission is not zero. Showing "0"
+                              here reads as a real decision that was never made. */}
+          {c.commissionAmount == null ? (
+            <span className="text-muted-foreground">—</span>
+          ) : (
+            formatCurrency(c.commissionAmount)
+          )}
+          {/* An undecided row already carries a full "Set
+                              commission" button in Actions; a pencil beside the
+                              dash would be a second control for the same thing. */}
+          {c.canSetAmount && canManage && c.commissionAmount != null && (
+            <button
+              onClick={() => onStartEditing(c._id, c.commissionAmount)}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              title={t("EditCommission")}
+              aria-label={t("EditCommission")}
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      )}
+    </TableCell>
+  );
+}
+
+function CommissionStatusCell({ c }: Readonly<{ c: CommissionSale }>) {
+  const { t } = useLanguage();
+  return (
+    <TableCell>
+      {/* Orange is reserved for money actually owed. An
+                          undecided or deliberately-zero row owes nothing yet, so
+                          both stay neutral — otherwise the page reads as a
+                          backlog of debt that does not exist. */}
+      {c.commissionStatus === "PAID" && c.commissionPaidAt ? (
+        <Badge
+          variant="outline"
+          className="text-green-600 border-green-600 text-xs whitespace-nowrap"
+        >
+          <CheckCircle2 className="h-3 w-3 me-1" />
+          {t("Paid")} {new Date(c.commissionPaidAt).toLocaleDateString()}
+          <span className="ms-1 text-muted-foreground">
+            {t(`PaymentMethod_${c.commissionPaymentMethod ?? "CASH"}`)}
+          </span>
+        </Badge>
+      ) : c.commissionStatus === "NOT_SET" ? (
+        <Badge
+          variant="outline"
+          className="text-muted-foreground text-xs whitespace-nowrap"
+          title={t("CommissionNotSetHint")}
+        >
+          <CircleDashed className="h-3 w-3 me-1" />
+          {t("CommissionNotSet")}
+        </Badge>
+      ) : c.commissionStatus === "NO_COMMISSION" ? (
+        <Badge
+          variant="outline"
+          className="text-muted-foreground text-xs whitespace-nowrap"
+          title={t("NoCommissionOwedHint")}
+        >
+          <MinusCircle className="h-3 w-3 me-1" />
+          {t("NoCommissionOwed")}
+        </Badge>
+      ) : c.commissionStatus === "PENDING_SALE" ? (
+        // Not reachable from the current listing rules, but the
+        // default arm below is the orange "money owed" badge —
+        // the worst place for an unhandled status to land.
+        <Badge
+          variant="outline"
+          className="text-muted-foreground text-xs whitespace-nowrap"
+          title={t("CommissionPendingSaleHint")}
+        >
+          <Clock className="h-3 w-3 me-1" />
+          {t("CommissionPendingSale")}
+        </Badge>
+      ) : c.commissionStatus === "VOID" ? (
+        <Badge
+          variant="outline"
+          className="text-muted-foreground text-xs whitespace-nowrap line-through decoration-1"
+          title={t("CommissionVoidHint")}
+        >
+          <Ban className="h-3 w-3 me-1" />
+          {t("CommissionVoid")}
+        </Badge>
+      ) : (
+        <Badge
+          variant="outline"
+          className="text-orange-600 border-orange-300 text-xs whitespace-nowrap"
+        >
+          <Clock className="h-3 w-3 me-1" />
+          {t("Unpaid")}
+        </Badge>
+      )}
+    </TableCell>
+  );
+}
+
+interface CommissionPaymentActionProps {
+  c: CommissionSale;
+  editingId: Id<"sales"> | null;
+  onRecalculate: (saleId: Id<"sales">) => Promise<void>;
+  onStartEditing: (saleId: Id<"sales">, current: number | undefined) => void;
+  onMarkPaid: (sale: CommissionSale) => void;
+}
+
+function CommissionPaymentAction({
+  c,
+  editingId,
+  onRecalculate,
+  onStartEditing,
+  onMarkPaid,
+}: Readonly<CommissionPaymentActionProps>) {
+  const { t } = useLanguage();
+  // Paid, cancelled and cost-incomplete rows have no settlement action.
+  // The mutation remains the authority for all write decisions.
+  if (c.commissionPaidAt || c.commissionStatus === "VOID" || c.missingPurchaseCost) return null;
+  if (c.needsRecalculation) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className="text-blue-600 border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+        title={t("RecalculateCommissionHint")}
+        onClick={() => onRecalculate(c._id)}
+      >
+        <Undo2 className="h-3.5 w-3.5 me-1" /> {t("RecalculateCommission")}
+      </Button>
+    );
+  }
+  if ((c.commissionAmount ?? 0) <= 0) {
+    if (!c.canSetAmount || editingId === c._id) return null;
+    return (
+      <Button variant="outline" size="sm" onClick={() => onStartEditing(c._id, c.commissionAmount)}>
+        <Pencil className="h-3.5 w-3.5 me-1" /> {t("SetCommission")}
+      </Button>
+    );
+  }
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="text-green-600 border-green-600 hover:bg-green-50"
+      onClick={() => onMarkPaid(c)}
+    >
+      <Check className="h-3.5 w-3.5 me-1" /> {t("MarkPaid")}
+    </Button>
   );
 }

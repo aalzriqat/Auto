@@ -45,6 +45,15 @@ test("an inventory-authorized marketplace responder still sees available vehicle
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+test("a responder without inventory access is not offered an exact-vehicle reply", () => {
+  render(<OrgProvider><LanguageProvider><MarketplaceRequestsClient /></LanguageProvider></OrgProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  fireEvent.keyDown(screen.getAllByRole("combobox")[0], { key: "ArrowDown" });
+  expect(screen.queryByRole("option", { name: "I have this exact car" })).toBeNull();
+  expect(screen.getByRole("option", { name: "I have something similar" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "Not available" })).toBeTruthy();
+});
+
 test("a marketplace responder without inventory visibility can send a non-vehicle reply", async () => {
   render(<OrgProvider><LanguageProvider><MarketplaceRequestsClient /></LanguageProvider></OrgProvider>);
   expect(() => fireEvent.click(screen.getByRole("button", { name: "Reply" }))).not.toThrow();

@@ -61,7 +61,7 @@ function ResponseForm({
     paginationOpts: { numItems: 100, cursor: null },
   } : "skip");
 
-  const [kind, setKind] = useState<ResponseKind>("HAVE_MATCH");
+  const [kind, setKind] = useState<ResponseKind>(canViewVehicles ? "HAVE_MATCH" : "HAVE_SIMILAR");
   const [vehicleId, setVehicleId] = useState<string>("");
   const [offerPriceJod, setOfferPriceJod] = useState("");
   const [note, setNote] = useState("");
@@ -93,7 +93,7 @@ function ResponseForm({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="HAVE_MATCH">{t("MarketplaceKindHaveMatch" as any)}</SelectItem>
+            {canViewVehicles && <SelectItem value="HAVE_MATCH">{t("MarketplaceKindHaveMatch")}</SelectItem>}
             <SelectItem value="HAVE_SIMILAR">{t("MarketplaceKindHaveSimilar" as any)}</SelectItem>
             <SelectItem value="CAN_SOURCE">{t("MarketplaceKindCanSource" as any)}</SelectItem>
             <SelectItem value="NOT_AVAILABLE">{t("MarketplaceKindNotAvailable" as any)}</SelectItem>

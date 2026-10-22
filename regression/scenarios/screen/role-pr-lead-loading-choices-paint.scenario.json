@@ -1,0 +1,44 @@
+{
+  "id": "role-pr-lead-loading-choices-paint",
+  "domain": "screen",
+  "level": "browser",
+  "steps": [
+    {
+      "actor": {
+        "role": "RECEPTION",
+        "org": "A"
+      },
+      "action": "fixture.paint",
+      "input": {
+        "route": "leads",
+        "boundary": "SYNTHETIC_SDK_REAL_COMPONENTS",
+        "locales": "EN_AR",
+        "viewports": "375_1440",
+        "sourceQuery": "UNRESOLVED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "source.optionCount",
+      "value": 0
+    }
+  ],
+  "impl": {
+    "file": "playwright/tests/role-access.visual.spec.ts",
+    "testName": "PR screen paint does not invent lead choices while loading"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "coderabbit-da707-loading-default",
+    "firstSeen": "2026-10-22"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "bd4f5df3b8f2bc2ca40c01ccdf32677f85becbfcdf5f6a2728a3f6c8011a507b"
+}

@@ -278,7 +278,7 @@ export function PendingDepositRequestsQueue({ orgId }: { orgId: Id<"organization
   }
   const rows = pending ?? [];
   if (rows.length === 0) {
-    return <p role="status" data-testid="pending-deposit-empty" className="text-sm text-muted-foreground">{t("DepositRequestsQueueEmpty")}</p>;
+    return <output data-testid="pending-deposit-empty" className="block text-sm text-muted-foreground">{t("DepositRequestsQueueEmpty")}</output>;
   }
 
   const money = (amount: number) =>
