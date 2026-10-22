@@ -160,6 +160,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "fixedAssets.impair": { bucket: "STATE_GUARDED", mechanism: "hookAssetImpaired keys on `asset_impaired_${assetId}` — pre-existing asset id, stable across a retry" },
   "fixedAssets.remove": { bucket: "STATE_GUARDED", mechanism: "refuses removal of a capitalized, undisposed asset (callers must dispose instead); soft-deletes only legacy or already-DISPOSED assets, which carry no ledger effect" },
   "fixedAssets.update": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "orgSettings.setCommissionMode": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-853: reads completed unpaid sales to guard the policy transition, then writes only orgSettings and the audit log; no commission, journal, outbox or payment writer is reachable" },
   "orgSettings.upsert": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "partnerEquity.add": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "partnerEquity.recordEquityMovement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -681,7 +682,9 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // schedules `accountingOutbox.wakePeriodHeldRows`, which schedules `claimOutboxRow` and so reaches posting
     // by function reference. It is the same wake `open` performs; `accountingPeriods.lock` is still excluded.
     // 150 -> 152: `dealCommissions.addLine` and `.removeLine` (extra deal commission lines), both classified above.
-    expect(population).toHaveLength(152);
+    // 152 -> 153: `orgSettings.setCommissionMode` (SCRUM-853) reads sales to guard
+    // the policy change; its settings patch is over-included and posts nothing.
+    expect(population).toHaveLength(153);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

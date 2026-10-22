@@ -6,8 +6,9 @@ import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { writeAuditLog } from "./utils/auditLog";
-import { AppErrorCode } from "./utils/errors";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 import { effectiveCommissionMode } from "./utils/commissionMode";
+import { isCommissionOwed } from "./utils/commission";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 
 const commissionModeValidator = v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"));
@@ -349,37 +350,75 @@ export const setCommissionMode = mutation({
   },
   returns: v.id("orgSettings"),
   handler: async (ctx, args) => {
-    const { user } = await requireOwner(ctx, args.orgId);
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .unique();
-    const before = effectiveCommissionMode(settings);
-    // Already stored as this mode: nothing to patch and nothing to audit. An
-    // unset org choosing a mode still writes, because that pins the choice.
-    if (settings && settings.commissionMode === args.commissionMode) return settings._id;
-    let settingsId: Id<"orgSettings">;
-    if (settings) {
-      await ctx.db.patch(settings._id, { commissionMode: args.commissionMode });
-      settingsId = settings._id;
-    } else {
-      settingsId = await ctx.db.insert("orgSettings", {
+    try {
+      const { user } = await requireOwner(ctx, args.orgId);
+      const settings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .unique();
+      const before = effectiveCommissionMode(settings);
+      // Already stored as this mode: nothing to patch and nothing to audit. An
+      // unset org choosing a mode still writes, because that pins the choice.
+      if (settings && settings.commissionMode === args.commissionMode) return settings._id;
+      if (before !== "MANUAL" && args.commissionMode === "MANUAL") {
+        // Missing and zero amounts do not establish an owed commission. Read the two
+        // extrema of stored unpaid amounts instead of scanning paid history or
+        // making a zero-commission sale impossible to settle. Both reads share
+        // this mutation's transaction with the policy write and audit.
+        const unpaidWithAmount = () => ctx.db
+          .query("sales")
+          .withIndex("by_org_status_live_commissionPaidAt_commissionAmount", (q) =>
+            q.eq("orgId", args.orgId).eq("status", "COMPLETED")
+              .eq("isDeleted", undefined).eq("commissionPaidAt", undefined)
+              .gt("commissionAmount", undefined)
+          );
+        const [lowest, highest] = await Promise.all([
+          unpaidWithAmount().first(),
+          unpaidWithAmount().order("desc").first(),
+        ]);
+        if ([lowest, highest].some((sale) => sale !== null && (
+          typeof sale.commissionAmount !== "number" ||
+          !Number.isFinite(sale.commissionAmount) || sale.commissionAmount < 0
+        ))) {
+          throwAppError(
+            AppErrorCode.VALIDATION_FAILED,
+            "Completed sale commission amounts need accounting review before changing the commission mode."
+          );
+        }
+        if (highest && isCommissionOwed(highest)) {
+          throwAppError(
+            AppErrorCode.VALIDATION_FAILED,
+            "Settle completed sale commissions before switching to manual mode."
+          );
+        }
+      }
+      let settingsId: Id<"orgSettings">;
+      if (settings) {
+        await ctx.db.patch(settings._id, { commissionMode: args.commissionMode });
+        settingsId = settings._id;
+      } else {
+        settingsId = await ctx.db.insert("orgSettings", {
+          orgId: args.orgId,
+          currency: DEFAULT_SETTINGS.currency,
+          currencySymbol: DEFAULT_SETTINGS.currencySymbol,
+          enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
+          commissionMode: args.commissionMode,
+        });
+      }
+      await writeAuditLog(ctx, user, {
+        action: "commission mode changed",
+        targetTable: "orgSettings",
+        targetId: settingsId,
         orgId: args.orgId,
-        currency: DEFAULT_SETTINGS.currency,
-        currencySymbol: DEFAULT_SETTINGS.currencySymbol,
-        enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
-        commissionMode: args.commissionMode,
+        before: { commissionMode: before },
+        after: { commissionMode: args.commissionMode },
       });
+      return settingsId;
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("Failed to change commission mode", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
-    await writeAuditLog(ctx, user, {
-      action: "commission mode changed",
-      targetTable: "orgSettings",
-      targetId: settingsId,
-      orgId: args.orgId,
-      before: { commissionMode: before },
-      after: { commissionMode: args.commissionMode },
-    });
-    return settingsId;
   },
 });
 

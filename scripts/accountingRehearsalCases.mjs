@@ -24,7 +24,7 @@
 // executed IDs, and the real-preview validator uses the same list.
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
-  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "P1", "SETUP",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "S853", "P1", "SETUP",
 ]);
 
 function fail(message) {
@@ -33,6 +33,11 @@ function fail(message) {
 
 function expectEqual(actual, expected, what) {
   if (actual !== expected) fail(`${what}: expected ${expected}, got ${actual}`);
+}
+
+function expectRefusal(result, code, what, message) {
+  if (result?.ok !== false || result.errorCode !== code ||
+      (message !== undefined && !String(result.error).includes(message))) fail(what);
 }
 
 const uuid = () => globalThis.crypto.randomUUID();
@@ -3365,6 +3370,72 @@ export async function runRehearsalCases(ctx) {
       };
     }
   );
+
+  // SCRUM-853: execute the native index and policy refusal on a real backend.
+  // Last money fixture before P1 closes the period; no production data is used.
+  await recordCase(results, "S853", "SCRUM-853: an owed automatic commission cannot be unlocked by switching to MANUAL", async () => {
+    const me = await ownerMust("query", "users:getMe", {});
+    const members = await ownerMust("query", "memberships:list", {
+      orgId, paginationOpts: { numItems: 100, cursor: null },
+    });
+    if (!Array.isArray(members?.page) || members.isDone !== true) fail("S853 membership enumeration is unavailable or incomplete");
+    const membership = members.page.find((row) => row.userId === me?._id);
+    if (!me?._id || !membership?._id || !Number.isFinite(membership.commissionRate)) fail("S853 owner membership/rate is unavailable");
+    const originalRate = membership.commissionRate;
+    expectEqual(await ownerMust("query", "orgSettings:getCommissionMode", { orgId }), "AUTO_MEMBER", "S853 initial effective policy");
+    const denom = await orgDenomination({ orgId, ownerMust });
+    expectEqual(denom.currency, "JOD", "S853 certified denomination");
+    const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
+    const payable = chart.find((account) => account.systemKey === "COMMISSION_PAYABLE");
+    if (!payable?._id) fail("S853 Commission Payable account is missing");
+    const readPayable = async () => {
+      const activity = await allAccountActivityLines({ orgId, ownerMust, accountId: payable._id });
+      if (activity.account?._id !== payable._id) fail("S853 payable account read is unavailable");
+      return activity;
+    };
+    const net = ({ lines }) => lines.reduce((sum, line) => {
+      if (line.currency !== "JOD" || line.scale !== 3) fail("S853 payable line denomination is unavailable or incorrect");
+      if (!Number.isFinite(line.creditMinor) || !Number.isFinite(line.debitMinor)) fail("S853 payable line amount is unavailable");
+      return sum + line.creditMinor - line.debitMinor;
+    }, 0);
+    const before = await readPayable();
+    await ownerMust("mutation", "memberships:updateCommissionRate", { orgId, membershipId: membership._id, commissionRate: 10 });
+    try {
+      const fx = await createOwnedCashCertificationQuote("s853", "commission-policy");
+      await ownerMust("mutation", "deposits:create", {
+        orgId, quoteId: fx.quoteId, amount: 12_500, method: "CASH", idempotencyKey: `rehearsal-s853-deposit-${fx.stamp}`,
+      });
+      const saleId = await ownerMust("mutation", "sales:create", {
+        orgId, quoteId: fx.quoteId, vehicleId: fx.vehicleId, customerId: fx.customerId, salespersonId: me._id,
+        salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
+        idempotencyKey: `rehearsal-s853-sale-${fx.stamp}`,
+      });
+      const sale = await ownerMust("query", "sales:get", { orgId, saleId });
+      expectEqual(sale?.status, "COMPLETED", "S853 completed sale");
+      expectEqual(sale?.commissionAmount, 250, "S853 10% of the literal 2,500 JOD profit");
+      if (sale.commissionPaidAt != null) fail("S853 commission was already paid");
+      const accrued = await readPayable();
+      expectEqual(net(accrued) - net(before), 250_000, "S853 posted Commission Payable increment");
+      const edit = () => ownerCall("mutation", "sales:setCommissionAmount", { orgId, saleId, commissionAmount: 300 });
+      const locked = await edit();
+      expectRefusal(locked, "SALE_ALREADY_COMPLETED", "S853 automatic amount edit did not give the completed-sale lock");
+      const transition = await ownerCall("mutation", "orgSettings:setCommissionMode", { orgId, commissionMode: "MANUAL" });
+      expectRefusal(transition, "VALIDATION_FAILED", "S853 MANUAL transition did not give the outstanding-commission refusal",
+        "Settle completed sale commissions before switching to manual mode.");
+      expectEqual(await ownerMust("query", "orgSettings:getCommissionMode", { orgId }), "AUTO_MEMBER", "S853 refused policy stays automatic");
+      const stillLocked = await edit();
+      expectRefusal(stillLocked, "SALE_ALREADY_COMPLETED", "S853 amount unlocked after the refused policy change");
+      const after = await ownerMust("query", "sales:get", { orgId, saleId });
+      expectEqual(after?.commissionAmount, 250, "S853 original commission amount retained");
+      if (after?.commissionPaidAt != null) fail("S853 refused operations marked commission paid");
+      expectEqual(JSON.stringify((await readPayable()).lines), JSON.stringify(accrued.lines), "S853 refusal leaves payable journal lines unchanged");
+      return { saleId: String(saleId), currency: "JOD", commissionAmount: 250, accruedMinor: 250_000,
+        mode: "AUTO_MEMBER", transitionRefusal: transition.errorCode, amountRefusal: stillLocked.errorCode,
+        commandsExercised: ["memberships.updateCommissionRate", "sales.create", "orgSettings.setCommissionMode", "sales.setCommissionAmount"] };
+    } finally {
+      await ownerMust("mutation", "memberships:updateCommissionRate", { orgId, membershipId: membership._id, commissionRate: originalRate });
+    }
+  });
 
   // ── P1 — a CLOSED period holds the posting; it does not half-post it ───────
   //

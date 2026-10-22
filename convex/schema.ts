@@ -2250,6 +2250,7 @@ export default defineSchema({
     // Dashboard totals (dated windows and ALL_TIME) need completed, non-deleted
     // rows in sale-date order.
     .index("by_org_status_live_saleDate", ["orgId", "status", "isDeleted", "saleDate"])
+    .index("by_org_status_live_commissionPaidAt_commissionAmount", ["orgId", "status", "isDeleted", "commissionPaidAt", "commissionAmount"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_quote", ["quoteId"])
     .index("by_lead", ["leadId"]),
