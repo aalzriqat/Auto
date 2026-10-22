@@ -27,7 +27,7 @@ export function auditDestination(route: ScreenAuditRoute, roleName: string): Scr
  * Source-enumerated route-level RoleGuard requirements. Navigation has its own
  * permission metadata in lib/navigation.ts; neither proves backend dominance.
  * Settings inherit settings/layout.tsx's ownerOnly guard. Applications redirects
- * to Deals. Unguarded shells (e.g. Approvals) gate each data queue separately.
+ * to Deals. Approvals requires either queue authority, then gates each queue.
  */
 export const ROLE_ROUTE_GUARDS: Partial<Record<ScreenAuditRoute, readonly string[]>> = {
   accounting: ["view:finance"], applications: ["view:sales"], commissions: ["view:commissions"],
