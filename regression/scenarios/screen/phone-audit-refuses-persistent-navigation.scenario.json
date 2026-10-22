@@ -1,0 +1,69 @@
+{
+  "id": "phone-audit-refuses-persistent-navigation",
+  "fingerprint": "095f721f83f80b202c974c31ce5eb4c2f6903af7d5990f09525c368801eab685",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "39818759069",
+    "firstSeen": "2026-10-22"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "navigation.open",
+      "input": {
+        "viewport": "phone"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "navigation.dismiss",
+      "input": {
+        "key": "Escape",
+        "exitDelayMs": "PERSISTENT"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "audit.capture",
+      "input": {
+        "requireNavigationGone": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "capture.navigationOverlayCount",
+      "value": 1
+    },
+    {
+      "observable": "capture.accepted",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "08384ec40d4f1a4b54825f8cc7b7a32552b5b8e1a2161e47bc37e0d0a2c8e863"
+    }
+  ],
+  "impl": {
+    "file": "playwright/tests/audit-navigation-dismissal.spec.ts",
+    "testName": "phone capture refuses navigation that remains open after Escape"
+  },
+  "bugRef": {
+    "key": "SCRUM-760",
+    "failingFirst": "5e066200ad3c9819c9a410c809cdf36810c47a7a"
+  }
+}
