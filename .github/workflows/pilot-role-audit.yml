@@ -1,0 +1,156 @@
+name: Pilot Role Audit (roles, EN-AR, phone-desktop)
+
+# SCRUM-616: main-only, real product roles on independent disposable previews.
+on:
+  schedule:
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pilot-role-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  roles:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        role: [OWNER, MANAGER, SALES, RECEPTION, ACCOUNTANT, SENIOR_ACCOUNTANT]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Setup and all route cells use one browser worker; every role has its own preview.
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      # A distinct ref string so this preview never collides with the one
+      # trusted-main-e2e creates for refs/heads/main.
+      - name: Name the disposable scenarios preview
+        run: |
+          set -euo pipefail
+          NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "${GITHUB_REF}-role-${AUDIT_ROLE}" "")"
+          echo "CONVEX_PREVIEW_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "Preview deployment name: $NAME"
+
+        env:
+          AUDIT_ROLE: ${{ matrix.role }}
+
+      - name: Recreate Convex E2E backend
+        run: |
+          set -euo pipefail
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" = "5" ]; then return 1; fi
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+          retry_convex pnpm exec convex deploy \
+            --typecheck enable \
+            --preview-create "$CONVEX_PREVIEW_NAME" \
+            --preview-run e2eBootstrap:markPreviewDeployment \
+            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"; echo "CONVEX_PREVIEW_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      - name: Pin the disposable preview for cleanup
+        if: always() && env.CONVEX_PREVIEW_URL != ''
+        run: node scripts/previewDeploymentLifecycle.mjs pin
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      - name: Seed the QA dealership
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - name: Set exact product role templates
+        run: |
+          set -euo pipefail
+          node scripts/e2ePreviewBootstrap.mjs --set-role approver MANAGER
+          node scripts/e2ePreviewBootstrap.mjs --set-role approver "$AUDIT_ROLE"
+        env:
+          AUDIT_ROLE: ${{ matrix.role }}
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - name: Run the attested role, locale and viewport matrix
+        run: |
+          set -o pipefail
+          pnpm exec playwright test -c playwright.role-audit.config.ts 2>&1 | tee "$RUNNER_TEMP/deal-scenarios-output.log"
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          HUNT_AUDIT_ROLE: ${{ matrix.role }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
+          CI: true
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: pilot-role-audit-${{ matrix.role }}
+          path: playwright-report/
+          retention-days: 14
+
+      # SCRUM-799: capture only a request ID, error class and public source
+      # location while the failed run's disposable backend still exists.
+      # Raw Convex logs can contain tenant data and must never enter public CI logs.
+      - name: Diagnose preview attestation before cleanup
+        if: failure() && env.CONVEX_PREVIEW_CREATED_AT != ''
+        run: node scripts/previewAttestationDiagnostic.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          CONVEX_PREVIEW_URL: ${{ env.CONVEX_PREVIEW_URL }}
+          CONVEX_PREVIEW_CREATED_AT: ${{ env.CONVEX_PREVIEW_CREATED_AT }}
+
+      - name: Delete the disposable preview
+        if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
+        run: node scripts/previewDeploymentLifecycle.mjs delete
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}

@@ -13,6 +13,8 @@ import { describe, expect, test, vi } from "vitest";
 import {
   PreviewTargetingError,
   assertExistingE2EPreview,
+  assertHuntPreview,
+  isolateHuntApprover,
   assertPreviewTargeting,
   buildConvexRunArgs,
   isPreviewDeployKey,
@@ -449,6 +451,38 @@ describe("assertExistingE2EPreview", () => {
       approverClerkUserId: "user_approver",
       expectedCloudUrl: ENV.NEXT_PUBLIC_CONVEX_URL,
     });
+  });
+
+  test("hunt attestation uses its own exact-role readback and preview selector", async () => {
+    const d = deps();
+    await assertHuntPreview("SALES", "MANAGER", ENV, d);
+    expect(d.calls).toHaveLength(1);
+    expect(d.calls[0]!.fn).toBe("e2eBootstrap:assertHuntSeats");
+    expect(d.calls[0]!.args.slice(-2)).toEqual(["--preview-name", ENV.CONVEX_PREVIEW_NAME]);
+    expect(JSON.parse(d.calls[0]!.args[4]!)).toEqual({
+      primaryClerkUserId: "user_primary", approverClerkUserId: "user_approver",
+      primaryRole: "SALES", approverRole: "MANAGER", expectedCloudUrl: ENV.NEXT_PUBLIC_CONVEX_URL,
+    });
+    await expect(assertHuntPreview("OWNER", "MANAGER", { ...ENV, CONVEX_DEPLOY_KEY: PROD_KEY }, d))
+      .rejects.toThrow(/not a PREVIEW deploy key/);
+    await expect(assertHuntPreview("SUPER_ADMIN", "MANAGER", ENV, d)).rejects.toThrow(/Unknown expected/);
+    expect(d.calls).toHaveLength(1);
+  });
+
+  test("tenant isolation binds the expected audited role and refuses non-preview or missing-role calls", async () => {
+    const d = deps();
+    await isolateHuntApprover({ ...ENV, HUNT_AUDIT_ROLE: "SALES" }, d);
+    expect(d.calls).toHaveLength(1);
+    expect(d.calls[0]!.fn).toBe("e2eBootstrap:isolateHuntApprover");
+    expect(d.calls[0]!.args.slice(-2)).toEqual(["--preview-name", ENV.CONVEX_PREVIEW_NAME]);
+    expect(JSON.parse(d.calls[0]!.args[4]!)).toEqual({
+      primaryClerkUserId: "user_primary", approverClerkUserId: "user_approver",
+      expectedApproverRole: "SALES", expectedCloudUrl: ENV.NEXT_PUBLIC_CONVEX_URL,
+    });
+    await expect(isolateHuntApprover(ENV, d)).rejects.toThrow(/explicit expected hunt role/);
+    await expect(isolateHuntApprover({ ...ENV, HUNT_AUDIT_ROLE: "SALES", CONVEX_DEPLOY_KEY: PROD_KEY }, d))
+      .rejects.toThrow(/not a PREVIEW deploy key/);
+    expect(d.calls).toHaveLength(1);
   });
 
   test("fails closed before Clerk lookup when the deploy key is not preview-only", async () => {
