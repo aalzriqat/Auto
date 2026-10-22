@@ -48,7 +48,7 @@ type Job = {
   steps?: Step[];
 };
 
-type Workflow = { env?: Record<string, unknown>; jobs?: Record<string, Job> };
+type Workflow = { on?: Record<string, unknown>; env?: Record<string, unknown>; jobs?: Record<string, Job> };
 
 const workflowsDir = path.resolve(process.cwd(), ".github/workflows");
 
@@ -212,6 +212,8 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
     "f5c1c675661c7f2a16184475a333f9380036cac809190247c945ce823e20f572",
+  "preview-attestation-fault-probe.yml":
+    "2e2a54be74bbf3f7ef1f46fdf4bb9b38a534185f68a9c95775f4b722c7867432",
   "hunt-preview.yml":
     "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":
@@ -357,6 +359,13 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       expect(localUses(workflow), name).toEqual([]);
     }
     expect(actual).toEqual(CREDENTIAL_WORKFLOW_PINS);
+  });
+
+  it("runs the SCRUM-799 fault probe only from default-branch dispatch", () => {
+    const probe = workflows.find(({ name }) => name === "preview-attestation-fault-probe.yml")?.workflow;
+    expect(probe?.on).toEqual({
+      repository_dispatch: { types: ["scrum799-preview-attestation-fault-probe"] },
+    });
   });
 
   it("changes the pin for every execution-affecting edit Sol demonstrated, and detects every credential route (Sol R3 on PR #341)", () => {
