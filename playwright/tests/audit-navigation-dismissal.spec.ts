@@ -3,7 +3,10 @@ import { dismissAuditNavigation } from "../role-audit/readiness";
 
 // SCRUM-760: run39818759069 had green phone cells whose screenshots were still
 // covered by navigation. Synthetic browser controls need no identity or backend.
-test.use({ storageState: { cookies: [], origins: [] } });
+test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 375, height: 812 } });
+test.beforeEach(({ page }) => {
+  expect(page.viewportSize()).toEqual({ width: 375, height: 812 });
+});
 
 test("phone capture waits until the closing navigation overlay is gone", async ({ page }) => {
   await page.setContent(`<main><button>Ready page action</button></main><div role="dialog" aria-modal="true">Navigation</div>

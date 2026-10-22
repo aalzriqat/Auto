@@ -1,6 +1,6 @@
 {
   "id": "phone-audit-refuses-persistent-navigation",
-  "fingerprint": "bcf3dcdbd0e867b948f1898c00d11c29c13e1379d8f4c2dc420f07e292157321",
+  "fingerprint": "be0dd9fa4db71b92cbb9a4f05370545dc41652ca2e99cfe85a2eb793c4bdc76e",
   "domain": "screen",
   "level": "browser",
   "status": "active",
@@ -12,18 +12,21 @@
   "steps": [
     {
       "actor": {
-        "role": "OWNER",
-        "org": "A"
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
       },
       "action": "navigation.open",
       "input": {
-        "viewport": "phone"
+        "viewport": "phone",
+        "boundary": "SYNTHETIC_DOM",
+        "width": 375,
+        "height": 812
       }
     },
     {
       "actor": {
-        "role": "OWNER",
-        "org": "A"
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
       },
       "action": "navigation.dismiss",
       "input": {
@@ -33,8 +36,8 @@
     },
     {
       "actor": {
-        "role": "OWNER",
-        "org": "A"
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
       },
       "action": "audit.capture",
       "input": {

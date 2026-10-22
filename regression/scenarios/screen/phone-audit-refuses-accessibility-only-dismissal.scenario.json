@@ -11,18 +11,21 @@
   "steps": [
     {
       "actor": {
-        "role": "OWNER",
-        "org": "A"
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
       },
       "action": "navigation.open",
       "input": {
-        "viewport": "phone"
+        "viewport": "phone",
+        "boundary": "SYNTHETIC_DOM",
+        "width": 375,
+        "height": 812
       }
     },
     {
       "actor": {
-        "role": "OWNER",
-        "org": "A"
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
       },
       "action": "navigation.dismiss",
       "input": {
@@ -32,8 +35,8 @@
     },
     {
       "actor": {
-        "role": "OWNER",
-        "org": "A"
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
       },
       "action": "audit.capture",
       "input": {
@@ -65,5 +68,5 @@
     "file": "playwright/tests/audit-navigation-dismissal.spec.ts",
     "testName": "phone capture refuses navigation hidden only from accessibility"
   },
-  "fingerprint": "cfe0684e1124af73e1f280e88ffcf69a0efdb7d295bcde56a410bb762d566eb6"
+  "fingerprint": "fe8ce5e5c12fab5dc23d1fea4788393859ffbcf9c544b19ab664dcd19f083a59"
 }
