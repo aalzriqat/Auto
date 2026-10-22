@@ -3,11 +3,14 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "vitest";
+import { withEvidenceCleanup } from "./pilotRoleAuditEvidence.mjs";
 
-test("CI role reporter keeps synthetic private failures out of caller-owned report paths", () => {
+test("CI role reporter keeps synthetic private failures out of caller-owned report paths", async () => {
   const parent = path.resolve("..");
   const root = mkdtempSync(path.join(parent, "pilot-role-reporter-"));
-  try {
+  const owned = path.dirname(root) === parent && path.basename(root).startsWith("pilot-role-reporter-");
+  await withEvidenceCleanup(async () => {
+    if (!owned) throw new Error("Synthetic test cleanup escaped its parent.");
     const require = createRequire(import.meta.url);
     const canary = "QA-PRIVATE-REPORTER-CANARY";
     const sentinels = ["playwright-report", "playwright-json"];
@@ -42,8 +45,8 @@ export default {...base, webServer: undefined, globalSetup: undefined, globalTea
       expect(readdirSync(path.join(root, directory))).toEqual(["caller-owned.txt"]);
       expect(readFileSync(path.join(root, directory, "caller-owned.txt"), "utf8")).toBe("caller-owned");
     }
-  } finally {
-    if (!root.startsWith(parent + path.sep)) throw new Error("Synthetic test cleanup escaped its parent.");
+  }, async () => {
+    if (!owned) throw new Error("Refusing cleanup outside the synthetic test parent.");
     rmSync(root, { recursive: true, force: true });
-  }
+  });
 }, 60_000);
