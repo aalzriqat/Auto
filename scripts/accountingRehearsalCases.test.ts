@@ -484,6 +484,11 @@ type Defects = {
   feeIdentityIgnoresDescription?: boolean;
   /** The org currency lock does not cover deals and their costs — the original SCRUM-319 gap. */
   currencyLockOmitsDeals?: boolean;
+  /** SCRUM-853 release-assertion negative controls, not a model of Convex OCC. */
+  commissionPolicyUnlocked?: boolean;
+  commissionPolicyWrongRefusal?: boolean;
+  commissionPolicyWritesBeforeRefusing?: boolean;
+  commissionNotAccrued?: boolean;
 };
 
 function makeBackend(defects: Defects = {}) {
@@ -526,6 +531,8 @@ function makeBackend(defects: Defects = {}) {
   const LINE_SCALE = defects.linesAtWrongScale ? 2 : 3;
   const vehicles = new Map<string, Record<string, any>>();
   const sales = new Map<string, Record<string, any>>();
+  let commissionRate = 0;
+  let commissionMode = "AUTO_MEMBER";
   let certifiedCashSalePosted = false;
   let m486c5ReportStarted = false;
   let certifiedCashDepositId: string | undefined;
@@ -543,6 +550,8 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_2110", code: "2110", type: "LIABILITY", name: "Unapplied Customer Receipts", systemKey: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", normalBalance: "CREDIT" },
     { _id: "acct_depl", code: "2100", type: "LIABILITY", name: "Customer Deposits", systemKey: "CUSTOMER_DEPOSITS_LIABILITY", normalBalance: "CREDIT" },
     { _id: "acct_comm", code: "4200", type: "REVENUE", name: "Consignment Commission", systemKey: "CONSIGNMENT_COMMISSION_REVENUE", normalBalance: "CREDIT" },
+    { _id: "acct_comm_pay", code: "2500", type: "LIABILITY", name: "Commission Payable", systemKey: "COMMISSION_PAYABLE", normalBalance: "CREDIT" },
+    { _id: "acct_comm_exp", code: "6100", type: "EXPENSE", name: "Commission Expense", systemKey: "COMMISSION_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_misc", code: "4400", type: "OTHER_INCOME", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
     { _id: "acct_forfeit", code: "4410", type: "OTHER_INCOME", name: "Deposit Forfeiture", systemKey: "DEPOSIT_FORFEITURE_INCOME", normalBalance: "CREDIT" },
     { _id: "acct_ap", code: "2400", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
@@ -1330,6 +1339,25 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: { page: [...cheques.values()], isDone: true, continueCursor: null } };
       case "users:getMe":
         return { ok: true as const, value: { _id: "user_owner" } };
+      case "memberships:list":
+        return { ok: true as const, value: { page: [{ _id: "membership_owner", userId: "user_owner", commissionRate }], isDone: true } };
+      case "memberships:updateCommissionRate":
+        commissionRate = args.commissionRate;
+        return { ok: true as const, value: null };
+      case "orgSettings:getCommissionMode":
+        return { ok: true as const, value: commissionMode };
+      case "orgSettings:setCommissionMode":
+        if (args.commissionMode === "MANUAL" && !defects.commissionPolicyUnlocked) {
+          if (defects.commissionPolicyWritesBeforeRefusing) post("COMMISSION_ADJUSTED", "commission", "sale-corruption", [
+            { key: "COMMISSION_EXPENSE", debitMinor: 1_000 }, { key: "COMMISSION_PAYABLE", creditMinor: 1_000 },
+          ]);
+          return { ok: false as const, errorCode: defects.commissionPolicyWrongRefusal ? "UNAUTHORIZED" : "VALIDATION_FAILED",
+            error: "Settle completed sale commissions before switching to manual mode." };
+        }
+        commissionMode = args.commissionMode;
+        return { ok: true as const, value: null };
+      case "sales:setCommissionAmount":
+        return { ok: false as const, errorCode: "SALE_ALREADY_COMPLETED", error: "Completed sale commission amounts are locked. Use a correction workflow." };
       case "sales:create": {
         const made = replayableCreate("sale", args, true);
         if (made) return made;
@@ -1353,6 +1381,13 @@ function makeBackend(defects: Defects = {}) {
         const invoiceId = cashInvoice && !defects.cashSaleMissingInvoice ? id("rdoc") : undefined;
         sales.set(saleId, { _id: saleId, orgId: args.orgId, status: args.status,
           canonicalReceivableDocumentId: invoiceId });
+        if (commissionRate > 0) {
+          // Literal S853 fixture: 12,500 sale less 10,000 acquisition, at 10%.
+          sales.get(saleId)!.commissionAmount = 250;
+          if (!defects.commissionNotAccrued) post("COMMISSION_ACCRUED", "commission", saleId, [
+            { key: "COMMISSION_EXPENSE", debitMinor: 250_000 }, { key: "COMMISSION_PAYABLE", creditMinor: 250_000 },
+          ]);
+        }
         if (invoiceId) {
           financeReceivables.set(invoiceId, {
             _id: invoiceId, orgId: args.orgId, documentType: "INVOICE",
@@ -2446,6 +2481,19 @@ const statusOf = (results: Array<Record<string, unknown>>, id: string) =>
   results.find((r) => r.id === id)?.status;
 
 describe("the rehearsal passes against a backend that behaves", () => {
+  test("SCRUM-853 positive automatic commission policy refusal actually executes", async () => {
+    expect(statusOf(await runAgainst(), "S853")).toBe("PASS");
+  });
+  test.each([
+    ["commissionPolicyUnlocked", "S853 MANUAL transition did not give the outstanding-commission refusal"],
+    ["commissionPolicyWrongRefusal", "S853 MANUAL transition did not give the outstanding-commission refusal"],
+    ["commissionPolicyWritesBeforeRefusing", "S853 refusal leaves payable journal lines unchanged"],
+    ["commissionNotAccrued", "S853 posted Commission Payable increment"],
+  ] as const)("SCRUM-853 release case catches %s", async (defect, reason) => {
+    const result = (await runAgainst({ [defect]: true })).find((row) => row.id === "S853");
+    expect(result?.status).toBe("FAIL");
+    expect(result?.detail).toContain(reason);
+  });
   test("every case is green when nothing is broken", async () => {
     const results = await runAgainst();
     const failures = results.filter((r) => r.status === "FAIL");
