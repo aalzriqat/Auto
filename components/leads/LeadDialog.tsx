@@ -43,6 +43,7 @@ import { LeadActivityTrail } from "./LeadActivityTrail";
 import { LeadCustomerMessages } from "./LeadCustomerMessages";
 import { translateLeadSourceLabel, translatePipelineStageLabel } from "@/lib/i18n/defaultLabels";
 import { getErrorMessage } from "@/lib/errors";
+import { usePermissions } from "@/hooks/use-permissions";
 
 /**
  * Pins a lead's stored value into a dropdown's option list when it isn't
@@ -182,6 +183,8 @@ function useLeadDropdownOptions({
   defaultCustomerId,
 }: Readonly<LeadDropdownOptions>) {
   const { t, locale } = useLanguage();
+  const { hasPermission } = usePermissions();
+  const canViewSettings = hasPermission("view:settings");
   const localeCode = locale === "ar" ? "ar-JO" : "en-US";
   const [customerSearch, setCustomerSearch] = useState("");
   const customerSelectorOptions = useQuery(
@@ -197,7 +200,7 @@ function useLeadDropdownOptions({
   const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip");
   const dynamicLeadSources = useQuery(
     api.orgLeadSources.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
+    activeOrgId && canViewSettings ? { orgId: activeOrgId } : "skip"
   );
   const pipelineStages = useQuery(
     api.orgPipelineStages.list,

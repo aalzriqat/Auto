@@ -19,6 +19,7 @@ import { MoneySurfaceErrorBoundary } from "@/components/accounting/MoneySurfaceE
 import { RetainedCreditRefundApprovalQueue } from "@/components/accounting/RetainedCreditRefundApprovalQueue";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { RoleGuard } from "@/components/auth/RoleGuard";
 
 type ApprovalRequest = Doc<"profitApprovalRequests"> & {
   salespersonName: string;
@@ -29,6 +30,10 @@ type ApprovalRequest = Doc<"profitApprovalRequests"> & {
 };
 
 export default function ApprovalsPage() {
+  return <RoleGuard anyPermissions={[PERMISSIONS.APPROVE_REQUESTS, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]}><ApprovalsContent /></RoleGuard>;
+}
+
+function ApprovalsContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format, code: orgCurrency } = useCurrency();

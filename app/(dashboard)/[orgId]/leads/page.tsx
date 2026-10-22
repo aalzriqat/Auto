@@ -72,6 +72,10 @@ const NEXT_ACTION_TRANSLATION_KEYS: Record<LeadStage, TranslationKey> = {
 };
 
 export default function LeadsPage() {
+  return <RoleGuard permissions={["view:leads"]}><LeadsContent /></RoleGuard>;
+}
+
+function LeadsContent() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const router = useRouter();
@@ -317,7 +321,6 @@ export default function LeadsPage() {
   const nextAction = (stage: LeadStage) => t(NEXT_ACTION_TRANSLATION_KEYS[stage]);
 
   return (
-    <RoleGuard permissions={["view:leads"]}>
       <div className="space-y-6 flex flex-col md:h-full md:overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           {/* View toggle */}
@@ -722,6 +725,5 @@ export default function LeadsPage() {
           />
         )}
       </div>
-    </RoleGuard>
   );
 }

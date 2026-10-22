@@ -31,6 +31,10 @@ type PayrollMethod = (typeof METHODS)[number];
 const recoveryUsesBank = (method: PayrollMethod) => method === "BANK_TRANSFER" || method === "CARD";
 
 export default function PayrollPage() {
+  return <RoleGuard permissions={["view:payroll"]}><PayrollContent /></RoleGuard>;
+}
+
+function PayrollContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format } = useCurrency();
@@ -244,7 +248,6 @@ export default function PayrollPage() {
   );
 
   return (
-    <RoleGuard permissions={["view:payroll"]}>
       <div className="space-y-6">
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <Wallet className="h-6 w-6" /> {t("Payroll" as any)}
@@ -530,6 +533,5 @@ export default function PayrollPage() {
           </CardContent>
         </Card>
       </div>
-    </RoleGuard>
   );
 }

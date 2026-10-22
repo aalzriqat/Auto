@@ -47,6 +47,10 @@ import { usePermissions } from "@/hooks/use-permissions";
 const PRIORITY_RANK: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 
 export default function TasksPage() {
+  return <RoleGuard permissions={["view:tasks"]}><TasksContent /></RoleGuard>;
+}
+
+function TasksContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { results: tasks, status: tasksStatus, loadMore: loadMoreTasks } = usePaginatedQuery(api.tasks.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
@@ -202,7 +206,6 @@ export default function TasksPage() {
   };
 
   return (
-    <RoleGuard permissions={["view:tasks"]}>
       <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
@@ -453,6 +456,5 @@ export default function TasksPage() {
         />
       </RoleGuard>
     </div>
-    </RoleGuard>
   );
 }

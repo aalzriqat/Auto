@@ -10,7 +10,7 @@ import { USER_AUTH_FILE, authenticatedConvexClient, testDataSuffix } from "../ut
 import { newContainedContext } from "../containedContext";
 import { probe, TENANT_REFUSAL } from "../../scripts/intelligence/browserSwarmBoundaryOracle";
 import { requireReadyScreen } from "./readiness";
-import { SCREEN_AUDIT_ROUTES as routes, ROLE_ROUTE_GUARDS as routePermissions, auditDestination } from "../fixtures/screenAuditRoutes";
+import { SCREEN_AUDIT_ROUTES as routes, ROLE_ROUTE_GUARDS as routePermissions, ROLE_ROUTE_ANY_GUARDS as routeAnyPermissions, auditDestination } from "../fixtures/screenAuditRoutes";
 import { convexDeploymentOf, servedDeployments } from "../scenarios/formExplorer/attestedPreview";
 
 const seatSchema = z.object({
@@ -20,6 +20,7 @@ const seatSchema = z.object({
 const attestationSchema = z.object({
   orgId: z.string().min(1), deploymentIdentity: z.string().startsWith("VERIFIED"),
   primary: seatSchema, approver: seatSchema,
+  settingsState: z.string().min(2),
 });
 type Attestation = z.infer<typeof attestationSchema>;
 
@@ -70,10 +71,7 @@ const viewports = [
 ];
 let attestation: Attestation;
 
-test.beforeAll(() => {
-  for (const item of navigation) {
-    expect(routes as readonly string[], `navigation route ${item.href} must have an audit cell`).toContain(item.href.slice(1));
-  }
+function readHuntAttestation(): Attestation {
   expect(process.env.CONVEX_PREVIEW_NAME, "role audit requires an explicitly named disposable preview").toBeTruthy();
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", READ_HUNT], {
     env: process.env, encoding: "utf8", timeout: 180_000,
@@ -87,7 +85,14 @@ test.beforeAll(() => {
     for (const requestId of requestIds) process.stderr.write(`Preview attestation failed: [Request ID: ${requestId}]\n`);
   }
   expect(result.status, "exact-role backend attestation must execute successfully").toBe(0);
-  attestation = attestationSchema.parse(JSON.parse(result.stdout.trim()));
+  return attestationSchema.parse(JSON.parse(result.stdout.trim()));
+}
+
+test.beforeAll(() => {
+  for (const item of navigation) {
+    expect(routes as readonly string[], `navigation route ${item.href} must have an audit cell`).toContain(item.href.slice(1));
+  }
+  attestation = readHuntAttestation();
   expect(attestation.primary.roleName).toBe("OWNER");
   expect(attestation.approver.roleName).toBe(process.env.HUNT_AUDIT_ROLE);
 });
@@ -96,10 +101,13 @@ test("public owner-only mutation respects actual role and preserves refused stat
   const orgId = attestation.orgId as Id<"organizations">;
   await openHuntPage(page, baseURL, `/${orgId}/notifications`);
   const client = await authenticatedConvexClient(page);
+  const beforeProof = readHuntAttestation();
+  expect(beforeProof.orgId).toBe(orgId);
+  expect(beforeProof.approver.membershipId).toBe(attestation.approver.membershipId);
   const before = await client.query(api.orgSettings.get, { orgId });
-  expect(before).not.toBeNull();
   const originalName = before?.dealershipName;
   if (attestation.approver.isSystemOwnerRole) {
+    expect(before).not.toBeNull();
     // A positive control prevents network failures from masquerading as denials.
     const name = "QA TEST owner authority positive control";
     try {
@@ -121,6 +129,12 @@ test("public owner-only mutation respects actual role and preserves refused stat
     const after = await client.query(api.orgSettings.get, { orgId });
     expect(after).toEqual(before);
   }
+  // A null restricted read cannot prove stored state. This independent,
+  // marker/deployment/seat-guarded preview read observes the full public projection.
+  const afterProof = readHuntAttestation();
+  expect(afterProof.orgId).toBe(orgId);
+  expect(afterProof.approver.membershipId).toBe(attestation.approver.membershipId);
+  expect(afterProof.settingsState).toBe(beforeProof.settingsState);
 });
 
 for (const locale of ["en", "ar"] as const) {
@@ -147,7 +161,8 @@ for (const locale of ["en", "ar"] as const) {
         const requestedPath = `/${orgId}/${route}`;
         const expectedPath = `/${orgId}/${destination}`;
         const allowed = destination.startsWith("settings/") ? attestation.approver.isSystemOwnerRole
-          : (routePermissions[destination] ?? []).every((permission) => membership.permissions.includes(permission));
+          : (routePermissions[destination] ?? []).every((permission) => membership.permissions.includes(permission)) &&
+            (routeAnyPermissions[destination] === undefined || routeAnyPermissions[destination].some((permission) => membership.permissions.includes(permission)));
         const denied = page.getByRole("heading", { name: locale === "ar" ? "الوصول غير مسموح" : "Access Not Allowed", exact: true });
         if (allowed) {
           await requireReadyScreen(page, 15_000, expectedPath);

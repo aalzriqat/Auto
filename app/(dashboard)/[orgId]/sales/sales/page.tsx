@@ -45,6 +45,10 @@ import { SaleTrailDialog } from "@/components/sales/SaleTrailDialog";
 import { getErrorMessage } from "@/lib/errors";
 
 export default function SalesPage() {
+  return <RoleGuard permissions={["view:sales"]}><SalesContent /></RoleGuard>;
+}
+
+function SalesContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format } = useCurrency();
@@ -112,7 +116,6 @@ export default function SalesPage() {
   };
 
   return (
-    <RoleGuard permissions={["view:sales"]}>
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
           <div className="flex flex-wrap gap-2">
@@ -305,6 +308,5 @@ export default function SalesPage() {
           </DialogContent>
         </Dialog>
       </div>
-    </RoleGuard>
   );
 }

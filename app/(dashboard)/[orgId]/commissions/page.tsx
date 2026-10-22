@@ -95,6 +95,10 @@ function errorToast(error: unknown, fallback: string, t?: (key: string) => strin
 }
 
 export default function CommissionsPage() {
+  return <RoleGuard permissions={["view:commissions"]}><CommissionsContent /></RoleGuard>;
+}
+
+function CommissionsContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   // SCRUM-778: the mode in force, resolved on the server (an unset mode is
@@ -325,7 +329,6 @@ export default function CommissionsPage() {
   }
 
   return (
-    <RoleGuard permissions={["view:commissions"]}>
       <div className="space-y-6">
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <TrendingUp className="h-6 w-6" /> {t("Commissions" as any)}
@@ -776,6 +779,5 @@ export default function CommissionsPage() {
           }}
         />
       </div>
-    </RoleGuard>
   );
 }

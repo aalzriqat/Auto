@@ -8,10 +8,13 @@ import { AccessDenied } from "@/components/ui/access-denied";
 export function RoleGuard({
   children,
   permissions = [],
+  anyPermissions,
   ownerOnly = false,
 }: {
   children: React.ReactNode;
   permissions?: string[];
+  /** At least one queue permission is required, in addition to permissions. */
+  anyPermissions?: string[];
   /** When true, only a server-qualified system owner may pass. */
   ownerOnly?: boolean;
 }) {
@@ -33,7 +36,8 @@ export function RoleGuard({
 
   const hasAccess = ownerOnly
     ? membership?.isSystemOwnerRole === true
-    : permissions.every((p) => membership?.permissions.includes(p) ?? false);
+    : permissions.every((p) => membership?.permissions.includes(p) ?? false) &&
+      (anyPermissions === undefined || anyPermissions.some((p) => membership?.permissions.includes(p) ?? false));
 
   // Instead of silently bouncing the user to the dashboard, show a calm,
   // branded "Access Not Allowed" panel so the restriction is clear and

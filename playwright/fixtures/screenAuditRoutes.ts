@@ -35,4 +35,11 @@ export const ROLE_ROUTE_GUARDS: Partial<Record<ScreenAuditRoute, readonly string
   leads: ["view:leads"], payroll: ["view:payroll"], reports: ["view:reports"],
   sales: ["view:sales"], "sales/sales": ["view:sales"], "social-inbox": ["view:leads"],
   tasks: ["view:tasks"], team: ["view:users"], vehicles: ["view:vehicles"],
+  sourcing: ["view:finance"],
+  "marketplace/requests": ["marketplace:respond"],
+};
+
+/** Approvals contains independent profit and deposit confirmation queues. */
+export const ROLE_ROUTE_ANY_GUARDS: Partial<Record<ScreenAuditRoute, readonly string[]>> = {
+  approvals: ["approve:requests", "confirm:finance_disbursement"],
 };

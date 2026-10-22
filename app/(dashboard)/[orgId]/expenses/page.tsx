@@ -44,6 +44,10 @@ import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { getErrorMessage } from "@/lib/errors";
 
 export default function ExpensesPage() {
+  return <RoleGuard permissions={["view:expenses"]}><ExpensesContent /></RoleGuard>;
+}
+
+function ExpensesContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format } = useCurrency();
@@ -155,7 +159,6 @@ export default function ExpensesPage() {
   };
 
   return (
-    <RoleGuard permissions={["view:expenses"]}>
       <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
@@ -315,6 +318,5 @@ export default function ExpensesPage() {
         </DialogContent>
       </Dialog>
     </div>
-    </RoleGuard>
   );
 }

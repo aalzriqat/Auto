@@ -21,6 +21,10 @@ import { SaleTrailDialog } from "@/components/sales/SaleTrailDialog";
 import { buildInitialDraftFromApproval } from "@/components/sales/wizard/approvalResume";
 
 export default function SalesHomePage() {
+    return <RoleGuard permissions={["view:sales"]}><SalesHomeContent /></RoleGuard>;
+}
+
+function SalesHomeContent() {
     const { activeOrgId } = useOrg();
     const { t } = useLanguage();
     const { format } = useCurrency();
@@ -174,7 +178,6 @@ export default function SalesHomePage() {
     // If wizard is active, render it full-width instead of the hero
     if (activeWizard) {
         return (
-            <RoleGuard permissions={["view:sales"]}>
                 <SalesWizard
                     paymentType={activeWizard}
                     onClose={() => { setActiveWizard(null); setWizardInitialDraft(undefined); setWizardResumeDraft(undefined); }}
@@ -182,12 +185,11 @@ export default function SalesHomePage() {
                     resumeDraft={wizardResumeDraft}
                     initialCustomer={wizardInitialDraft ? prefillCustomer : undefined}
                 />
-            </RoleGuard>
         );
     }
 
     return (
-        <RoleGuard permissions={["view:sales"]}>
+        <>
             <div className="space-y-10 pb-10">
 
                 {hasPrefill && (
@@ -435,6 +437,6 @@ export default function SalesHomePage() {
                 open={!!trailSaleId}
                 onOpenChange={(open) => !open && setTrailSaleId(null)}
             />
-        </RoleGuard>
+        </>
     );
 }

@@ -49,7 +49,9 @@ vi.mock("convex/react", async () => {
   return {
     useQuery: (reference: never, args: unknown) => {
       if (args === "skip") return undefined;
-      const value = stubs.queryResults.get(getFunctionName(reference));
+      const name = getFunctionName(reference);
+      if (name === "memberships:getMyMembership") return { permissions: [...stubs.permissions], isSystemOwnerRole: false };
+      const value = stubs.queryResults.get(name);
       if (typeof value === "function") return (value as () => unknown)();
       return value;
     },

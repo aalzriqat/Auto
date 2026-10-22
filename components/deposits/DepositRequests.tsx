@@ -264,15 +264,22 @@ export function QuoteDepositRequests({
 export function PendingDepositRequestsQueue({ orgId }: { orgId: Id<"organizations"> }) {
   const { t, isRtl } = useLanguage();
   const { hasPermission } = usePermissions();
+  const canConfirm = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   // The server refuses this query to anyone without the authority, and a refused
   // query throws into render, so it is not asked unless it will be answered.
   const pending = useQuery(
     api.depositRequests.listPending,
-    hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) ? { orgId } : "skip"
+    canConfirm ? { orgId } : "skip"
   );
 
+  if (!canConfirm) return null;
+  if (pending === undefined) {
+    return <p aria-busy="true" data-testid="pending-deposit-loading" className="text-sm text-muted-foreground">{t("Loading")}</p>;
+  }
   const rows = pending ?? [];
-  if (rows.length === 0) return null;
+  if (rows.length === 0) {
+    return <p role="status" data-testid="pending-deposit-empty" className="text-sm text-muted-foreground">{t("DepositRequestsQueueEmpty")}</p>;
+  }
 
   const money = (amount: number) =>
     amount.toLocaleString(isRtl ? "ar-JO" : "en-JO", { maximumFractionDigits: 3 });
