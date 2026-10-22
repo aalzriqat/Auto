@@ -72,7 +72,7 @@ describe("SCRUM-616 hunt attestation is separate from scripted finance preflight
     },
   );
 
-  test("refuses widened authority, owner-name impersonation and foreign deployment", async () => {
+  test("refuses narrowed authority, owner-name impersonation and foreign deployment", async () => {
     const t = await markedDeployment();
     await bootstrap(t);
     await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
@@ -100,6 +100,25 @@ describe("SCRUM-616 hunt attestation is separate from scripted finance preflight
     expect(await caller.query(api.orgSettings.get, { orgId: ownerRole!.orgId })).toEqual(before);
     await t.run((ctx) => ctx.db.patch(ownerRole!._id, { isSystemOwnerRole: true, permissions: [] }));
     await expect(t.query(internal.e2eBootstrap.assertHuntSeats, args)).rejects.toThrow(/expected role template/);
+  });
+
+  test.each(["extra", "replacement"] as const)("refuses a template permission change: %s", async (change) => {
+    const t = await markedDeployment();
+    await bootstrap(t);
+    await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+      seat: "approver", clerkUserId: APPROVER.clerkUserId, role: "MANAGER", expectedCloudUrl: CLOUD_URL,
+    });
+    const args = { primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId,
+      primaryRole: "OWNER", approverRole: "MANAGER", expectedCloudUrl: CLOUD_URL };
+    const before = await t.query(internal.e2eBootstrap.assertHuntSeats, args);
+    const template = new Set(before.approver.permissions);
+    const foreignPermission = Object.values(PERMISSIONS).find((permission) => !template.has(permission));
+    if (!foreignPermission || before.approver.permissions.length === 0) throw new Error("Missing permission substitution fixture");
+    const permissions = change === "extra" ? [...before.approver.permissions, foreignPermission]
+      : [foreignPermission, ...before.approver.permissions.slice(1)];
+    await t.run((ctx) => ctx.db.patch(before.approver.roleId, { permissions }));
+    await expect(t.query(internal.e2eBootstrap.assertHuntSeats, args)).rejects.toThrow(/exact expected role template/);
+    expect(await t.run((ctx) => ctx.db.get(before.approver.roleId))).toMatchObject({ permissions });
   });
 
   test.each(DEFAULT_ROLE_TEMPLATES.map((role) => role.name))(
