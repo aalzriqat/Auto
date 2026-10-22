@@ -24,7 +24,7 @@
 // executed IDs, and the real-preview validator uses the same list.
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
-  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "S853", "P1", "SETUP",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "S853", "S811", "P1", "SETUP",
 ]);
 
 function fail(message) {
@@ -3435,6 +3435,54 @@ export async function runRehearsalCases(ctx) {
     } finally {
       await ownerMust("mutation", "memberships:updateCommissionRate", { orgId, membershipId: membership._id, commissionRate: originalRate });
     }
+  });
+
+  await recordCase(results, "S811", "SCRUM-811: a pending sale cannot store another tenant's trade-in reference", async () => {
+    const stamp = uuid();
+    const foreignOrgId = await ownerMust("mutation", "organizations:create", { name: `QA TEST S811 ${stamp}` });
+    const me = await ownerMust("query", "users:getMe", {});
+    if (!me?._id) fail("S811 owner identity is unavailable");
+    const customerId = await ownerMust("mutation", "customers:create", { orgId, firstName: "QA TEST", lastName: `S811-${stamp}` });
+    const vehicle = async (tenant, tag, acquired = false) => createVehicleForRehearsal(ownerMust, {
+      orgId: tenant, vin: `S811${uuid().replace(/-/g, "").slice(0, 13)}`.toUpperCase(),
+      make: "Toyota", model: "Corolla", year: 2024, mileage: 10, color: "White",
+      fuelType: "Gasoline", transmission: "Automatic", sourceType: "STOCK", status: "AVAILABLE", sellingPrice: 12_500,
+      ...(acquired ? { purchasePrice: 10_000, purchasePaymentMethod: "CASH" } : {}),
+      idempotencyKey: `rehearsal-s811-${tag}-${stamp}`,
+    });
+    const vehicleId = await vehicle(orgId, "sale", true);
+    const ownTradeInId = await vehicle(orgId, "own");
+    const foreignTradeInId = await vehicle(foreignOrgId, "foreign");
+    const saleId = await ownerMust("mutation", "sales:createDraft", {
+      orgId, vehicleId, customerId, salespersonId: me._id, salePrice: 12_500,
+      saleDate: Date.now(), financingType: "CASH", idempotencyKey: `rehearsal-s811-draft-${stamp}`,
+    });
+    const read = async () => ({
+      sale: await ownerMust("query", "sales:get", { orgId, saleId }),
+      ownVehicle: await ownerMust("query", "vehicles:get", { orgId, vehicleId: ownTradeInId }),
+      foreignVehicle: await ownerMust("query", "vehicles:get", { orgId: foreignOrgId, vehicleId: foreignTradeInId }),
+      journals: await allJournalEntries({ orgId, ownerMust }),
+    });
+    const before = await read();
+    expectEqual(before.sale?.status, "PENDING", "S811 constructed draft state");
+    if (!before.ownVehicle || !before.foreignVehicle) fail("S811 trade-in fixtures are unreadable");
+    const refused = await ownerCall("mutation", "sales:update", { orgId, saleId, tradeInVehicleId: foreignTradeInId, tradeInValue: 0 });
+    const after = await read();
+    expectEqual(JSON.stringify(after), JSON.stringify(before), "S811 refused update leaves public sale, vehicles and journals unchanged");
+    if (refused?.ok !== false || !String(refused.error).includes("Trade-in vehicle not found in this organization.")) {
+      fail("S811 foreign trade-in did not give the expected ownership refusal");
+    }
+    await ownerMust("mutation", "sales:update", { orgId, saleId, tradeInVehicleId: ownTradeInId, tradeInValue: 0 });
+    const valid = await read();
+    expectEqual(valid.sale?.status, "PENDING", "S811 valid update retains draft state");
+    expectEqual(valid.sale?.tradeInVehicleId, ownTradeInId, "S811 valid same-org reference persisted");
+    expectEqual(valid.sale?.tradeInValue, 0, "S811 zero-value metadata persisted");
+    for (const field of ["ownVehicle", "foreignVehicle", "journals"]) {
+      expectEqual(JSON.stringify(valid[field]), JSON.stringify(before[field]), `S811 valid metadata update leaves ${field} unchanged`);
+    }
+    return { saleId: String(saleId), foreignOrgId: String(foreignOrgId), refused: true, sameOrgAccepted: true,
+      scope: "pending zero-value metadata; caller owns both organizations; public sale/vehicle/journal readbacks; no completion or historical repair",
+      commandsExercised: ["organizations.create", "vehicles.create", "sales.createDraft", "sales.update", "sales.get", "vehicles.get"] };
   });
 
   // ── P1 — a CLOSED period holds the posting; it does not half-post it ───────
