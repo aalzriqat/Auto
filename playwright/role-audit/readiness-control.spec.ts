@@ -13,7 +13,7 @@ test("screen readiness refuses permanent English, Arabic and spinner loading sta
   ]) {
     // Stale rows plus a heading must not hide the ongoing loading state.
     await page.setContent(`<main><h2>Customers</h2><table><tbody><tr><td>Old row</td></tr></tbody></table>${loading}</main>`);
-    await expect(requireReadyScreen(page, 200)).rejects.toThrow();
+    await expect(requireReadyScreen(page, 200), loading).rejects.toThrow();
   }
   await page.setContent("<main><h2>Customers</h2></main>");
   await expect(requireReadyScreen(page, 200)).rejects.toThrow();
@@ -24,4 +24,13 @@ test("screen readiness accepts resolved rows and a recognized empty table", asyn
     await page.setContent(`<main><h2>Customers</h2><table><tbody>${content}</tbody></table></main>`);
     await requireReadyScreen(page, 200);
   }
+});
+
+test("ready content on an unexpected route cannot certify the requested screen", async ({ page }) => {
+  await page.route("https://audit.invalid/**", (route) => route.fulfill({
+    contentType: "text/html", body: "<main><table><tbody><tr><td>Loaded customer</td></tr></tbody></table></main>",
+  }));
+  await page.goto("https://audit.invalid/org/customers");
+  await expect(requireReadyScreen(page, 200, "/org/deals")).rejects.toThrow();
+  await requireReadyScreen(page, 200, "/org/customers");
 });

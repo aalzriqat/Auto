@@ -132,7 +132,7 @@ for (const locale of ["en", "ar"] as const) {
           : (routePermissions[route] ?? []).every((permission) => membership.permissions.includes(permission));
         const denied = page.getByRole("heading", { name: locale === "ar" ? "الوصول غير مسموح" : "Access Not Allowed", exact: true });
         if (allowed) {
-          await requireReadyScreen(page);
+          await requireReadyScreen(page, 15_000, `/${orgId}/${route === "applications" ? "deals" : route}`);
           await expect(denied).toHaveCount(0);
           await expect(page.locator("main")).toBeVisible();
         } else {
