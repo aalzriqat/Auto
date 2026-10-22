@@ -142,3 +142,23 @@ test("missing scenario output cannot claim the backend was healthy", () => {
     if (resolve(dir).startsWith(resolve(tmpdir()) + sep)) rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("role audit correlates only its own query and explicit private log", () => {
+  const dir = mkdtempSync(join(tmpdir(), "attestation-role-"));
+  try {
+    const logFile = join(dir, "browser.log");
+    writeFileSync(logFile, "Preview attestation failed: Error [Request ID: 42e39a239aecaeb1] Server Error");
+    const env = { NODE_ENV: "test" as const, CONVEX_PREVIEW_NAME: "e2e-role-test",
+      CONVEX_DEPLOY_KEY: "preview:test:key|synthetic", CONVEX_PREVIEW_URL: "https://tame-mouse-328.convex.cloud",
+      CONVEX_PREVIEW_CREATED_AT: "1234567", RUNNER_TEMP: dir };
+    const result = diagnosePreviewAttestation(env, () => ({ status: 0, stdout: [
+      { kind: "Completion", identifier: "e2eBootstrap:assertE2EBootstrap", requestId: "42e39a239aecaeb1", error: "TypeError: wrong query" },
+      { kind: "Completion", identifier: "e2eBootstrap:assertHuntSeats", requestId: "deadbeef", error: "TypeError: wrong ID" },
+      { kind: "Completion", identifier: "e2eBootstrap:assertHuntSeats", requestId: "42e39a239aecaeb1", error: "RangeError: private-canary" },
+    ].map((event) => JSON.stringify(event)).join("\n") }), { logFile, query: "e2eBootstrap:assertHuntSeats" });
+    assert.equal(result, "Attestation backend failures: request=42e39a239aecaeb1 class=RangeError category=unclassified location=unavailable");
+    assert.doesNotMatch(result, /private-canary|wrong query|deadbeef/);
+  } finally {
+    if (resolve(dir).startsWith(resolve(tmpdir()) + sep)) rmSync(dir, { recursive: true, force: true });
+  }
+});

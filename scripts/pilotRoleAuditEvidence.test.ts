@@ -339,10 +339,14 @@ test.each([
 
 test.each([0, 17])("native orchestration preserves a full synthetic matrix and measures browser exit %s", async (exitCode) => {
   const repo = path.join(root, `native-orchestration-${exitCode}`);
-  const captures = path.join(repo, "test-results");
+  const captures = path.join(repo, "synthetic-inputs");
   const runnerTemp = path.join(root, `native-orchestration-temp-${exitCode}`);
   mkdirSync(path.join(repo, ".github"), { recursive: true });
   mkdirSync(captures); mkdirSync(runnerTemp);
+  const sharedResults = path.join(repo, "test-results");
+  mkdirSync(sharedResults);
+  writeFileSync(path.join(sharedResults, "caller-owned.txt"), "caller-owned results");
+  writeFileSync(path.join(runnerTemp, "deal-scenarios-output.log"), "caller-owned scenario log");
   writeFileSync(path.join(repo, ".github/pilot-role-evidence-recipient.json"), JSON.stringify({ fingerprint,
     publicKey: readFileSync(publicKey, "utf8") }));
   for (const route of SCREEN_AUDIT_ROUTES) for (const locale of ["en", "ar"]) for (const viewport of ["desktop", "phone"]) {
@@ -361,9 +365,19 @@ test.each([0, 17])("native orchestration preserves a full synthetic matrix and m
     writeFileSync(path.join(isolation, `${direction}-${locale}-${viewport}.png`), image);
   }
   const stub = path.join(repo, "synthetic-browser.cjs");
-  writeFileSync(stub, `process.stdout.write(process.env.AUDIT_CANARY);process.stderr.write(process.env.AUDIT_CANARY.toLowerCase());process.exit(${exitCode});`);
+  const failureMarker = "\nPreview attestation failed: [Request ID: 42e39a239aecaeb1]\n";
+  writeFileSync(stub, `const fs=require("node:fs"),path=require("node:path");const output=process.argv.find(arg=>arg.startsWith("--output="));fs.cpSync(path.join(process.cwd(),"synthetic-inputs"),output?output.slice(9):path.join(process.cwd(),"test-results"),{recursive:true});process.stdout.write(process.env.AUDIT_CANARY);process.stderr.write(process.env.AUDIT_CANARY.toLowerCase());if(${exitCode}!==0)process.stderr.write(${JSON.stringify(failureMarker)});process.exit(${exitCode});`);
+  let diagnosticCalls = 0;
   const outcome = await runRoleAudit({ cwd: repo, browserCli: stub,
-    env: auditTestEnvironment("trustedRoleCI", { RUNNER_TEMP: runnerTemp, AUDIT_CANARY: canary }) });
+    diagnosticSpawn: () => {
+      diagnosticCalls++;
+      return { status: 0, stdout: JSON.stringify({ kind: "Completion", identifier: "e2eBootstrap:assertHuntSeats",
+        requestId: "42e39a239aecaeb1", error: `RangeError: ${canary}` }) };
+    },
+    env: auditTestEnvironment("trustedRoleCI", { RUNNER_TEMP: runnerTemp, AUDIT_CANARY: canary,
+      CONVEX_PREVIEW_NAME: "e2e-role-test", CONVEX_DEPLOY_KEY: "preview:test:key|synthetic",
+      CONVEX_PREVIEW_URL: "https://tame-mouse-328.convex.cloud", CONVEX_PREVIEW_CREATED_AT: "1234567" }) });
+  expect(diagnosticCalls).toBe(exitCode === 0 ? 0 : 1);
   expect(outcome).toMatchObject({ cellsComplete: true, observedCells: 136, isolationVerified: true,
     complete: exitCode === 0, execution: exitCode === 0 ? "SUCCEEDED" : "FAILED",
     visualReview: "UNAVAILABLE_UNTIL_LOCAL_DECRYPT_AND_INSPECTION" });
@@ -374,8 +388,13 @@ test.each([0, 17])("native orchestration preserves a full synthetic matrix and m
   const manifest = JSON.parse(execFileSync(tar, ["-xOf", decoded, "manifest.json"], { encoding: "utf8" }));
   expect(manifest.runContext).toEqual(outcome.runContext);
   expect(manifest.measurement).toMatchObject({ complete: exitCode === 0, execution: outcome.execution, sha, role: "OWNER" });
-  expect(execFileSync(tar, ["-xOf", decoded, "browser.log"], { encoding: "utf8" })).toBe(canary + canary.toLowerCase());
+  expect(execFileSync(tar, ["-xOf", decoded, "browser.log"], { encoding: "utf8" })).toBe(canary + canary.toLowerCase() +
+    (exitCode === 0 ? "" : failureMarker + "\nAttestation backend failures: request=42e39a239aecaeb1 class=RangeError category=unclassified location=unavailable\n"));
+  expect(readFileSync(path.join(publication, "results.json"), "utf8")).not.toMatch(/42e39a239aecaeb1|Synthetic.QA|EXAMPLE.INVALID/);
   expect(readdirSync(runnerTemp).sort()).toEqual(["deal-scenarios-output.log", "pilot-role-audit-public"]);
+  expect(readFileSync(path.join(sharedResults, "caller-owned.txt"), "utf8")).toBe("caller-owned results");
+  expect(readFileSync(path.join(runnerTemp, "deal-scenarios-output.log"), "utf8")).toBe("caller-owned scenario log");
+  expect(existsSync(captures)).toBe(true); // Caller-owned fixture inputs are not audit-owned cleanup.
 }, 45_000);
 
 test.each([
@@ -421,4 +440,6 @@ test.each(["HOST_PATH", "EMPTY_PATH"] as const)("%s native Playwright CLI failur
   runGpg(["--output", decoded, "--decrypt", path.join(publication, "role-evidence.tar.gpg")]);
   expect(execFileSync(tar, ["-xOf", decoded, "browser.log"], { encoding: "utf8" }))
     .toContain("playwright.role-audit.config.ts");
+  expect(readdirSync(runnerTemp)).toEqual(["pilot-role-audit-public"]);
+  expect(existsSync(path.join(repo, "test-results"))).toBe(false);
 }, 45_000);

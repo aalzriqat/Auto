@@ -78,6 +78,14 @@ test.beforeAll(() => {
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", READ_HUNT], {
     env: process.env, encoding: "utf8", timeout: 180_000,
   });
+  if (result.status !== 0) {
+    // The orchestrator captures this stream into the encrypted private log.
+    // The CLI inherits its child's streams; correlate only bounded IDs from
+    // this failed attestation, never its raw errors or successful seat data.
+    const output = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.slice(-64 * 1024);
+    const requestIds = [...new Set([...output.matchAll(/\[Request ID: ([a-f0-9]{8,64})\]/gi)].map((match) => match[1]))].slice(-3);
+    for (const requestId of requestIds) process.stderr.write(`Preview attestation failed: [Request ID: ${requestId}]\n`);
+  }
   expect(result.status, "exact-role backend attestation must execute successfully").toBe(0);
   attestation = attestationSchema.parse(JSON.parse(result.stdout.trim()));
   expect(attestation.primary.roleName).toBe("OWNER");

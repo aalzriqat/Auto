@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { SCREEN_AUDIT_ROUTES } from "../playwright/fixtures/screenAuditRoutes.ts";
+import { diagnosePreviewAttestation } from "./previewAttestationDiagnostic.mjs";
 
 const ROLES = ["OWNER", "MANAGER", "SALES", "RECEPTION", "ACCOUNTANT", "SENIOR_ACCOUNTANT"];
 const LOCALES = ["en", "ar"];
@@ -393,9 +394,10 @@ const recipientSchema = z.object({ fingerprint: z.string().regex(FINGERPRINT),
 
 /** Native orchestration. The browser entry point is injectable only by direct
  * module callers for synthetic controls; the CLI always resolves Playwright.
- * @param {{cwd?: string, env?: NodeJS.ProcessEnv, browserCli?: string}} options
+ * @param {{cwd?: string, env?: NodeJS.ProcessEnv, browserCli?: string,
+ * diagnosticSpawn?: Parameters<typeof diagnosePreviewAttestation>[1]}} options
  */
-export async function runRoleAudit({ cwd = process.cwd(), env = process.env, browserCli } = {}) {
+export async function runRoleAudit({ cwd = process.cwd(), env = process.env, browserCli, diagnosticSpawn } = {}) {
   const role = env.HUNT_AUDIT_ROLE ?? "";
   const sha = env.GITHUB_SHA ?? "";
   if (!member(role, ROLES) || !SHA.test(sha) || !env.RUNNER_TEMP) throw new AuditEvidenceError("INVALID_CONTEXT");
@@ -404,25 +406,32 @@ export async function runRoleAudit({ cwd = process.cwd(), env = process.env, bro
   const gpgBinary = env.PILOT_ROLE_GPG_BINARY ?? DEFAULT_GPG;
   if (!path.isAbsolute(gpgBinary)) throw new AuditEvidenceError("NATIVE_BINARY_UNAVAILABLE");
   const runnerTemp = await fs.realpath(env.RUNNER_TEMP);
-  const preflight = await fs.mkdtemp(path.join(runnerTemp, ".role-evidence-preflight-"));
-  const privateLog = path.join(runnerTemp, "deal-scenarios-output.log");
+  const invocationRoot = await fs.mkdtemp(path.join(runnerTemp, ".role-evidence-invocation-"));
+  const captures = path.join(invocationRoot, "captures");
+  const privateLog = path.join(invocationRoot, "browser.log");
   const publicRoot = path.join(runnerTemp, "pilot-role-audit-public");
   let homeArgument = "";
   return withEvidenceCleanup(async () => {
     const recipient = recipientSchema.safeParse(JSON.parse(await fs.readFile(path.join(cwd, ".github/pilot-role-evidence-recipient.json"), "utf8")));
     if (!recipient.success) throw new AuditEvidenceError("RECIPIENT_UNAVAILABLE");
-    const publicKey = path.join(preflight, "recipient.asc");
+    const publicKey = path.join(invocationRoot, "recipient.asc");
     await fs.writeFile(publicKey, recipient.data.publicKey, { mode: 0o600 });
-    homeArgument = (await importAuditRecipient({ gpgBinary, keyHome: path.join(preflight, "keyring"), publicKey,
+    homeArgument = (await importAuditRecipient({ gpgBinary, keyHome: path.join(invocationRoot, "keyring"), publicKey,
       fingerprint: recipient.data.fingerprint })).homeArgument;
     const require = createRequire(import.meta.url);
     const playwright = browserCli ?? require.resolve("@playwright/test/cli");
     const result = captureAuditProcess({ command: process.execPath,
-      args: [playwright, "test", "-c", "playwright.role-audit.config.ts", "--workers=1"], cwd, logFile: privateLog, env });
-    // Playwright may fail before creating test-results; an empty directory keeps
+      args: [playwright, "test", "-c", "playwright.role-audit.config.ts", "--workers=1", `--output=${captures}`], cwd, logFile: privateLog, env });
+    if (result.execution === "FAILED") {
+      // Correlate while the private source log and disposable backend still
+      // exist. This bounded diagnostic is encrypted, never printed publicly.
+      const diagnostic = diagnosePreviewAttestation(env, diagnosticSpawn, { logFile: privateLog, query: "e2eBootstrap:assertHuntSeats" });
+      await fs.appendFile(privateLog, `\n${diagnostic}\n`, "utf8");
+    }
+    // Playwright may fail before creating captures; an empty directory keeps
     // the encrypted failure log available but cannot become complete evidence.
-    await fs.mkdir(path.join(cwd, "test-results"), { recursive: true });
-    const summary = await packageAuditEvidence({ resultsRoot: path.join(cwd, "test-results"), privateLog, publicRoot, role, sha,
+    await fs.mkdir(captures, { recursive: true, mode: 0o700 });
+    const summary = await packageAuditEvidence({ resultsRoot: captures, privateLog, publicRoot, role, sha,
       publicKey, fingerprint: recipient.data.fingerprint, gpgBinary, execution: result.execution === "SUCCEEDED" ? "SUCCEEDED" : "FAILED",
       runContext: reportedRun.success ? reportedRun.data : undefined });
     return summary;
@@ -431,7 +440,7 @@ export async function runRoleAudit({ cwd = process.cwd(), env = process.env, bro
       const gpgconf = path.join(path.dirname(gpgBinary), process.platform === "win32" ? "gpgconf.exe" : "gpgconf");
       spawnSync(gpgconf, ["--homedir", homeArgument, "--kill", "all"], { timeout: 10_000, windowsHide: true, stdio: "ignore" });
     }
-    await removePrivateDirectory(preflight, runnerTemp, ".role-evidence-preflight-");
+    await removePrivateDirectory(invocationRoot, runnerTemp, ".role-evidence-invocation-");
   });
 }
 

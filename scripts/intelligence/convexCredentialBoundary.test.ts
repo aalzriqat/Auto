@@ -218,7 +218,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "pilot-role-audit.yml":
     // PR #661: preserve screenshots in public-key encrypted evidence; publish
     // only ciphertext and a fixed-field summary, with private browser logs.
-    "199c83f02732304a03e4f45b5e1cc8713651d8f8a514997a861448a8c3c92be1",
+    "899ae8c3a2d8e3cadb774c315be92f893a38df47973ced0e870c0f017373cc73",
   "hunt-preview.yml":
     "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":
