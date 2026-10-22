@@ -26,6 +26,7 @@ import { getLocalizedErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { DepositAllocationPanel } from "@/components/sales/wizard/components/DepositAllocationPanel";
 import { DepositSettlementDecision } from "@/components/deposits/DepositSettlementDecision";
+import { DepositRefundBankSelect, useDepositRefundBanks } from "@/components/deposits/DepositRefundBankSelect";
 import { AlertTriangle, Undo2 } from "lucide-react";
 
 /**
@@ -132,6 +133,9 @@ export function QuoteDepositManager({
   const [treatmentByHold, setTreatmentByHold] = useState<Record<string, Treatment>>({});
   const [targetByHold, setTargetByHold] = useState<Record<string, string>>({});
   const [methodByHold, setMethodByHold] = useState<Record<string, RefundMethod>>({});
+  const [bankByHold, setBankByHold] = useState<Record<string, string>>({});
+  const refundBanks = useDepositRefundBanks(orgId, allocation?.currency,
+    Object.values(treatmentByHold).some((treatment) => treatment === "REFUND_TO_CUSTOMER"), "");
   const [reasonByHold, setReasonByHold] = useState<Record<string, string>>({});
 
   const scale = allocation ? 10 ** allocation.scale : 1000;
@@ -170,6 +174,9 @@ export function QuoteDepositManager({
     // disabled without one; this is the second line, so none is ever sent.
     const refundMethod = methodByHold[holdId];
     if (treatment === "REFUND_TO_CUSTOMER" && !isChosenMethod(refundMethod)) return;
+    const refundNeedsBank = treatment === "REFUND_TO_CUSTOMER" && refundMethod !== "CASH";
+    const selectedBank = bankByHold[holdId];
+    if (refundNeedsBank && !refundBanks.banks?.some((bank) => bank._id === selectedBank)) return;
     setBusyHoldId(holdId);
     try {
       await resolveReleased({
@@ -180,6 +187,7 @@ export function QuoteDepositManager({
           ? { toVehicleId: targetByHold[holdId] as Id<"vehicles"> | undefined }
           : {}),
         ...(treatment === "REFUND_TO_CUSTOMER" && isChosenMethod(refundMethod) ? { refundMethod } : {}),
+        ...(refundNeedsBank ? { bankAccountId: selectedBank as Id<"bankAccounts"> } : {}),
         ...(reasonByHold[holdId]?.trim() ? { reason: reasonByHold[holdId].trim() } : {}),
       });
       toast.success(t("DepositShareResolved" as any));
@@ -326,9 +334,11 @@ export function QuoteDepositManager({
                 <div className="flex flex-wrap items-center gap-2">
                   <Select
                     value={treatment}
-                    onValueChange={(value) =>
-                      setTreatmentByHold((prev) => ({ ...prev, [holdId]: value as Treatment }))
-                    }
+                    onValueChange={(value) => {
+                      setTreatmentByHold((prev) => ({ ...prev, [holdId]: value as Treatment }));
+                      setMethodByHold((prev) => { const next = { ...prev }; delete next[holdId]; return next; });
+                      setBankByHold((prev) => ({ ...prev, [holdId]: "" }));
+                    }}
                   >
                     <SelectTrigger className="h-8 w-full text-xs sm:w-56">
                       <SelectValue />
@@ -388,17 +398,29 @@ export function QuoteDepositManager({
                       <PaymentMethodSelect
                         t={t}
                         value={methodByHold[holdId]}
-                        onValueChange={(method) =>
+                        onValueChange={(method) => {
+                          setBankByHold((previous) => ({ ...previous, [holdId]: "" }));
                           setMethodByHold((prev) => ({
                             ...prev,
                             [holdId]: method as RefundMethod,
-                          }))
-                        }
+                          }));
+                        }}
                         ariaLabel={t("PaymentMethodLabel" as any)}
                         placeholder={t("RefundChooseMethod" as any)}
                       />
                     </div>
                   )}
+
+                  {treatment === "REFUND_TO_CUSTOMER" && isChosenMethod(methodByHold[holdId]) &&
+                    methodByHold[holdId] !== "CASH" && (
+                      <div className="w-full sm:w-64">
+                        <DepositRefundBankSelect value={bankByHold[holdId] ?? ""}
+                          onChange={(bankAccountId) => setBankByHold((previous) => ({ ...previous, [holdId]: bankAccountId }))}
+                          bankOptions={{ ...refundBanks,
+                            chosenOffered: refundBanks.banks?.some((bank) => bank._id === bankByHold[holdId]) === true }}
+                          disabled={busyHoldId === holdId} />
+                      </div>
+                    )}
 
                   <Input
                     className="h-8 w-full text-xs sm:w-64"
@@ -416,6 +438,8 @@ export function QuoteDepositManager({
                       busyHoldId === holdId ||
                       (treatment === "REALLOCATE_TO_VEHICLE" && !targetByHold[holdId]) ||
                       (treatment === "REFUND_TO_CUSTOMER" && !isChosenMethod(methodByHold[holdId])) ||
+                      (treatment === "REFUND_TO_CUSTOMER" && methodByHold[holdId] !== "CASH" &&
+                        !refundBanks.banks?.some((bank) => bank._id === bankByHold[holdId])) ||
                       (movesMoney(treatment) ? !canApprove : !canConfirm)
                     }
                     onClick={() => {

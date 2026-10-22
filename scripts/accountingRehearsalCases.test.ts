@@ -22,6 +22,8 @@ import {
   CURRENCY_SCALES,
   DEFAULT_ORG_CURRENCY,
   assertBothAttemptsExecuted,
+  candidateCommandNamesBank,
+  candidateNamesReceiptBank,
   createVehicleForRehearsal,
   REQUIRED_REHEARSAL_CASE_IDS,
   fd1DirectPaymentTime,
@@ -385,10 +387,6 @@ type Defects = {
   cashForfeitDeletesPriorCollection?: boolean;
   /** Unrelated three-decimal profit must not perturb the forfeiture delta. */
   cashForfeitUnrelatedFractionalProfit?: boolean;
-  /** A returned cheque ERASES its clearing instead of reversing it. */
-  eraseOnChequeReturn?: boolean;
-  /** A returned cheque posts nothing at all — the books still say money arrived. */
-  silentChequeReturn?: boolean;
   // ── the owner-proxy's evidence-floor closure (2026-09-11): the false-pass shapes it named ──
   /** The org's currency is one the product does not denominate — expectations cannot be derived. */
   orgCurrencyUnknown?: boolean;
@@ -410,12 +408,6 @@ type Defects = {
   retainedPositionDriftsFromGl?: boolean;
   /** Applying a retained credit reduces the position but posts nothing to the GL. */
   applicationPostsNothing?: boolean;
-  /** The reversal entry exists but nothing links it to the clearing it reverses. */
-  reversalUnlinked?: boolean;
-  /** The reversal is for HALF the clearing — linked, and wrong. */
-  reversalWrongAmount?: boolean;
-  /** The cheque bounces, the GL reverses, and the receivable still reads PAID. */
-  receivableNotReopened?: boolean;
   /** A replayed create hands back the SAME id and posts its footprint AGAIN. */
   doubleFootprintOnReplay?: boolean;
   /** The same, for createReceivable / createInstallmentPlan ONLY — the six other steps stay healthy (Sonnet MAX R4-A1). */
@@ -445,6 +437,38 @@ type Defects = {
   financeDeductedCloseMutatesThenRefuses?: boolean;
   /** A short finance-company receipt is refused for an unrelated reason. */
   financeReceiptWrongRefusalReason?: boolean;
+  /** A BANK_TRANSFER finance-company receipt that names no bank is accepted instead of refused (SCRUM-54). */
+  acceptsReceiptWithoutBank?: boolean;
+  /** SCRUM-54: a pre-bank backend - confirmDisbursement does not take a physical bank at all. */
+  legacyBackend?: boolean;
+  /** Bank contract: a receipt that names no bank is accepted and silently defaulted. */
+  bankDefaultedWhenMissing?: boolean;
+  /** Bank contract: the bank-less receipt is refused only AFTER it marked the application disbursed. */
+  bankMissingWritesBeforeRefusing?: boolean;
+  /** Bank contract: the receipt posts, but its BANK_ACCOUNT line loses the named bank. */
+  bankIdentityDroppedFromJournal?: boolean;
+  /** RV1: the refused return still posts a stray accounting event. */
+  chequeReturnAddsEvent?: boolean;
+  /** RV1: the refused return still changes an amount on the clearing entry's lines. */
+  chequeReturnAltersClearingLines?: boolean;
+  /** RV1: a cleared customer cheque loses its named destination bank. */
+  chequeClearingBankDropped?: boolean;
+  /** RV1: the blocked cleared-cheque return is ACCEPTED and reverses the clearing. */
+  chequeReturnAccepted?: boolean;
+  /** RV1: the return is refused, but only after it already marked the cheque RETURNED. */
+  chequeReturnWritesThenRefuses?: boolean;
+  /** RV1: the return is refused with a generic code instead of the pilot containment code. */
+  chequeReturnWrongRefusal?: boolean;
+  /** Bank contract: a short receipt that names a valid bank is accepted. */
+  bankShortReceiptAccepted?: boolean;
+  /** Bank contract: the malformed-id contract probe is accepted. */
+  bankProbeAccepted?: boolean;
+  /** Bank contract: the probe is refused, but in a way that names neither contract. */
+  bankProbeUnrecognisedRefusal?: boolean;
+  /** Bank contract: the probe marks the application disbursed before it is refused. */
+  bankProbeWritesBeforeRefusing?: boolean;
+  /** Bank contract: the bank-less correct-amount receipt is refused for an unrelated reason. */
+  bankMissingWrongReason?: boolean;
   /** The clock crosses UTC month-end after the accounting period opens. */
   clockRolloverAfterBookOpen?: boolean;
   /** Observe the external direct-payment request without claiming every later posting succeeded. */
@@ -460,6 +484,13 @@ type Defects = {
   feeIdentityIgnoresDescription?: boolean;
   /** The org currency lock does not cover deals and their costs — the original SCRUM-319 gap. */
   currencyLockOmitsDeals?: boolean;
+  /** SCRUM-853 release-assertion negative controls, not a model of Convex OCC. */
+  commissionPolicyUnlocked?: boolean;
+  commissionPolicyWrongRefusal?: boolean;
+  commissionPolicyWritesBeforeRefusing?: boolean;
+  commissionNotAccrued?: boolean;
+  commissionWrongCurrency?: boolean;
+  commissionPayableInitiallyUnavailable?: boolean;
 };
 
 function makeBackend(defects: Defects = {}) {
@@ -502,9 +533,15 @@ function makeBackend(defects: Defects = {}) {
   const LINE_SCALE = defects.linesAtWrongScale ? 2 : 3;
   const vehicles = new Map<string, Record<string, any>>();
   const sales = new Map<string, Record<string, any>>();
+  let commissionRate = 0;
+  let commissionMode = "AUTO_MEMBER";
+  let commissionPayableReads = 0;
   let certifiedCashSalePosted = false;
   let m486c5ReportStarted = false;
   let certifiedCashDepositId: string | undefined;
+  // Every certified-case deposit (SCRUM-802: M486C1 now pays by deposit too), so a report defect that omits receipts
+  // omits them consistently instead of only the latest case's deposit.
+  const certifiedDepositIds = new Set<string>();
   let certifiedCashRefundDepositId: string | undefined;
   let certifiedCashForfeitDepositId: string | undefined;
   let cashRefundCreatorRefused = false;
@@ -516,6 +553,8 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_2110", code: "2110", type: "LIABILITY", name: "Unapplied Customer Receipts", systemKey: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", normalBalance: "CREDIT" },
     { _id: "acct_depl", code: "2100", type: "LIABILITY", name: "Customer Deposits", systemKey: "CUSTOMER_DEPOSITS_LIABILITY", normalBalance: "CREDIT" },
     { _id: "acct_comm", code: "4200", type: "REVENUE", name: "Consignment Commission", systemKey: "CONSIGNMENT_COMMISSION_REVENUE", normalBalance: "CREDIT" },
+    { _id: "acct_comm_pay", code: "2500", type: "LIABILITY", name: "Commission Payable", systemKey: "COMMISSION_PAYABLE", normalBalance: "CREDIT" },
+    { _id: "acct_comm_exp", code: "6100", type: "EXPENSE", name: "Commission Expense", systemKey: "COMMISSION_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_misc", code: "4400", type: "OTHER_INCOME", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
     { _id: "acct_forfeit", code: "4410", type: "OTHER_INCOME", name: "Deposit Forfeiture", systemKey: "DEPOSIT_FORFEITURE_INCOME", normalBalance: "CREDIT" },
     { _id: "acct_ap", code: "2400", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
@@ -526,6 +565,7 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_cap", code: "3000", type: "EQUITY", name: "Partner Capital", systemKey: "PARTNER_CAPITAL", normalBalance: "CREDIT" },
     { _id: "acct_draw", code: "3100", type: "EQUITY", name: "Partner Drawings", systemKey: "PARTNER_DRAWINGS", normalBalance: "DEBIT" },
     { _id: "acct_exp", code: "6000", type: "EXPENSE", name: "General Expense", systemKey: "GENERAL_EXPENSE", normalBalance: "DEBIT" },
+    { _id: "acct_prof_fees", code: "6850", type: "EXPENSE", name: "Professional Fees", systemKey: "PROFESSIONAL_FEES_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_arfc", code: "1210", type: "ASSET", name: "AR Finance Companies", systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", normalBalance: "DEBIT" },
     { _id: "acct_fc_comm", code: "6860", type: "EXPENSE", name: "Finance Company Commission", systemKey: "FINANCE_COMPANY_COMMISSION_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_transfer", code: "6820", type: "EXPENSE", name: "Ownership Transfer", systemKey: "OWNERSHIP_TRANSFER_EXPENSE", normalBalance: "DEBIT" },
@@ -550,6 +590,8 @@ function makeBackend(defects: Defects = {}) {
   /** Mirrors orgCustomerStatuses.seed/list closely enough for FD1/FD2 to exercise the real eligibility precondition. */
   const customerStatusesByOrg = new Map<string, Array<Record<string, any>>>();
   const disbursementByKey = new Map<string, string>();
+  /** SCRUM-54: the physical banks created through bankAccounts:create. */
+  const bankAccounts = new Map<string, { orgId: string; currency: string; isActive: boolean }>();
   const accountIdOf = (key: string) => {
     const hit = CHART.find((a) => a.systemKey === key);
     if (!hit) throw new Error(`fake chart has no ${key}`);
@@ -563,7 +605,7 @@ function makeBackend(defects: Defects = {}) {
   let seq = 0;
   const id = (p: string) => `${p}_${++seq}`;
 
-  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string; vehicleId?: string; financeCompanyId?: string; salespersonId?: string };
+  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string; vehicleId?: string; financeCompanyId?: string; salespersonId?: string; bankAccountId?: string };
   /** One economic occurrence: an event, its entry, its lines — all linked. */
   function post(
     eventType: string,
@@ -603,12 +645,13 @@ function makeBackend(defects: Defects = {}) {
         accountingDate: Date.now(),
         debitMinor: l.debitMinor ?? 0,
         creditMinor: l.creditMinor ?? 0,
-        currency: ORG_CURRENCY,
+        currency: eventType === "COMMISSION_ACCRUED" && defects.commissionWrongCurrency ? "USD" : ORG_CURRENCY,
         scale: LINE_SCALE,
         customerId: l.customerId,
         vehicleId: l.vehicleId,
         financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
+        bankAccountId: l.bankAccountId,
       }))
     );
     return { eventId, entryId };
@@ -618,19 +661,19 @@ function makeBackend(defects: Defects = {}) {
     const original = events.find((e) => e._id === eventId)!;
     const entry = journalEntries.find((j) => j._id === original.journalEntryId)!;
     const lines = journalLines.get(entry._id) ?? [];
-    const factor = defects.reversalWrongAmount ? 0.5 : 1;
     const reversal = post(
       original.eventType,
       original.sourceType,
       original.sourceId,
       lines.map((l) => ({
         key: CHART.find((a) => a._id === l.accountId)!.systemKey,
-        debitMinor: Math.round(l.creditMinor * factor),
-        creditMinor: Math.round(l.debitMinor * factor),
+        debitMinor: l.creditMinor,
+        creditMinor: l.debitMinor,
         customerId: l.customerId,
         vehicleId: l.vehicleId,
         financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
+        bankAccountId: l.bankAccountId,
       })),
       { category: "REVERSAL" }
     );
@@ -642,11 +685,9 @@ function makeBackend(defects: Defects = {}) {
     reversalEvent.reversalOfEventId = eventId;
     original.status = "REVERSED";
     entry.status = "REVERSED";
-    if (!defects.reversalUnlinked) {
-      original.reversedByEventId = reversal.eventId;
-      entry.reversedByJournalEntryId = reversal.entryId;
-      journalEntries.find((j) => j._id === reversal.entryId)!.reversalOfJournalEntryId = entry._id;
-    }
+    original.reversedByEventId = reversal.eventId;
+    entry.reversedByJournalEntryId = reversal.entryId;
+    journalEntries.find((j) => j._id === reversal.entryId)!.reversalOfJournalEntryId = entry._id;
     return reversal;
   }
 
@@ -929,8 +970,8 @@ function makeBackend(defects: Defects = {}) {
   }
 
   /** A customer receipt: cash in, against AR (allocated) or 2110 (on account). */
-  function postReceipt(paymentId: string, customerId: string, amountMinor: number, allocatedMinor: number, cashKey: string) {
-    const lines: Line[] = [{ key: cashKey, debitMinor: amountMinor, customerId }];
+  function postReceipt(paymentId: string, customerId: string, amountMinor: number, allocatedMinor: number, cashKey: string, bankAccountId?: string) {
+    const lines: Line[] = [{ key: cashKey, debitMinor: amountMinor, customerId, bankAccountId }];
     if (allocatedMinor > 0) lines.push({ key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: allocatedMinor, customerId });
     const unapplied = amountMinor - allocatedMinor;
     if (unapplied > 0) {
@@ -1028,7 +1069,7 @@ function makeBackend(defects: Defects = {}) {
           const lines = [...journalLines.entries()]
             .filter(([entryId]) => !defects.cashDepositReportOmitsReceipt || !certifiedCashDepositId ||
               !journalEntries.some((entry) => entry._id === entryId &&
-                entry.sourceType === "deposits" && entry.sourceId === certifiedCashDepositId))
+                entry.sourceType === "deposits" && certifiedDepositIds.has(String(entry.sourceId))))
             .flatMap(([, entryLines]) => entryLines).filter((line) =>
             line.accountId === account._id && line.accountingDate <= Number(args.toDate ?? Infinity));
           if (lines.length === 0) return [];
@@ -1246,16 +1287,21 @@ function makeBackend(defects: Defects = {}) {
         if (!canManageFinance) {
           return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
         }
+        const clearingBank = bankAccounts.get(String(args.bankAccountId ?? ""));
+        if (!clearingBank || clearingBank.orgId !== String(args.orgId) || !clearingBank.isActive || clearingBank.currency !== ORG_CURRENCY) {
+          return { ok: false as const, error: "Select an active bank account in this organization and currency." };
+        }
         const made = replayableCreate("clr", args, true);
         if (made) return made;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("clr"));
         const cheque = cheques.get(String(args.chequeId));
         if (!cheque) return { ok: false as const, error: "Cheque not found" };
         cheque.status = "CLEARED";
+        cheque.clearingBankAccountId = String(args.bankAccountId);
         const paymentId = id("pay");
         collectionPayments.push({ _id: paymentId, direction: "IN", method: "CHEQUE", amount: cheque.amount, chequeId: cheque._id, receivableId: cheque.receivableId });
         settle(cheque.receivableId, cheque.amount);
-        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT");
+        const { eventId } = postReceipt(paymentId, cheque.customerId, Math.round(cheque.amount * MINOR_SCALE), Math.round(cheque.amount * MINOR_SCALE), "BANK_ACCOUNT", defects.chequeClearingBankDropped ? undefined : String(args.bankAccountId));
         cheque.clearingEventId = eventId;
         return { ok: true as const, value: null };
       }
@@ -1263,42 +1309,88 @@ function makeBackend(defects: Defects = {}) {
         if (!canManageFinance) {
           return { ok: false as const, error: "Forbidden: Missing required permissions: manage:finance" };
         }
-        const made = replayableCreate("ret", args, true);
-        if (made) return made;
-        if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, id("ret"));
-        const cheque = cheques.get(String(args.chequeId));
-        if (!cheque) return { ok: false as const, error: "Cheque not found" };
-        if (defects.eraseOnChequeReturn) {
-          // Balances perfectly, and destroys the record that it ever happened.
-          const original = events.find((e) => e._id === cheque.clearingEventId)!;
-          journalEntries.splice(journalEntries.findIndex((j) => j._id === original.journalEntryId), 1);
-          events.splice(events.indexOf(original), 1);
-          cheques.delete(String(args.chequeId));
-          return { ok: true as const, value: null };
-        }
-        cheque.status = "RETURNED";
-        if (!defects.silentChequeReturn) reverse(cheque.clearingEventId);
-        if (!defects.receivableNotReopened) {
-          const r = receivables.get(cheque.receivableId);
-          if (r) {
-            r.outstandingAmount += cheque.amount;
-            r.status = r.outstandingAmount >= r.originalAmount ? "OPEN" : "PARTIALLY_PAID";
+        if (Number(args.bankFeeMinor ?? 0) > 0) {
+          const feeBank = bankAccounts.get(String(args.bankFeeBankAccountId ?? ""));
+          if (!feeBank || feeBank.orgId !== String(args.orgId) || !feeBank.isActive || feeBank.currency !== ORG_CURRENCY) {
+            return { ok: false as const, error: "Select an active bank account to pay the return fee." };
           }
         }
-        return { ok: true as const, value: null };
+        const cheque = cheques.get(String(args.chequeId));
+        if (!cheque) return { ok: false as const, error: "Cheque not found" };
+        if (defects.chequeReturnAccepted) {
+          cheque.status = "RETURNED";
+          reverse(cheque.clearingEventId);
+          return { ok: true as const, value: null };
+        }
+        if (defects.chequeReturnWritesThenRefuses) cheque.status = "RETURNED";
+        if (defects.chequeReturnAddsEvent) {
+          const stray = events.find((e) => e._id === cheque.clearingEventId)!;
+          events.push({ ...stray, _id: id("evt"), eventType: "STRAY" });
+        }
+        if (defects.chequeReturnAltersClearingLines) {
+          const clearing = events.find((e) => e._id === cheque.clearingEventId)!;
+          const first = (journalLines.get(clearing.journalEntryId) ?? [])[0];
+          if (first) first.debitMinor += 1;
+        }
+        return {
+          ok: false as const,
+          error: "Returning a cheque that has already cleared is not available during the pilot. Nothing has been changed.",
+          errorCode: defects.chequeReturnWrongRefusal ? "CHEQUE_NOT_CLEARED" : "CLEARED_CHEQUE_RETURN_PILOT_DISABLED",
+        };
       }
       case "collections:listCheques":
         return { ok: true as const, value: { page: [...cheques.values()], isDone: true, continueCursor: null } };
       case "users:getMe":
         return { ok: true as const, value: { _id: "user_owner" } };
+      case "memberships:list":
+        return { ok: true as const, value: { page: [{ _id: "membership_owner", userId: "user_owner", commissionRate }], isDone: true } };
+      case "memberships:updateCommissionRate":
+        commissionRate = args.commissionRate;
+        return { ok: true as const, value: null };
+      case "orgSettings:getCommissionMode":
+        return { ok: true as const, value: commissionMode };
+      case "orgSettings:setCommissionMode":
+        if (args.commissionMode === "MANUAL" && !defects.commissionPolicyUnlocked) {
+          if (defects.commissionPolicyWritesBeforeRefusing) post("COMMISSION_ADJUSTED", "commission", "sale-corruption", [
+            { key: "COMMISSION_EXPENSE", debitMinor: 1_000 }, { key: "COMMISSION_PAYABLE", creditMinor: 1_000 },
+          ]);
+          return { ok: false as const, errorCode: defects.commissionPolicyWrongRefusal ? "UNAUTHORIZED" : "VALIDATION_FAILED",
+            error: "Settle completed sale commissions before switching to manual mode." };
+        }
+        commissionMode = args.commissionMode;
+        return { ok: true as const, value: null };
+      case "sales:setCommissionAmount":
+        return { ok: false as const, errorCode: "SALE_ALREADY_COMPLETED", error: "Completed sale commission amounts are locked. Use a correction workflow." };
       case "sales:create": {
         const made = replayableCreate("sale", args, true);
         if (made) return made;
+        // SCRUM-802 (owner ruling, Option A): a cash sale completes only when its full price is held as a deposit.
+        // The real backend refuses otherwise, so the rehearsal fake must too: a case that completes an unpaid cash
+        // sale is red here exactly as it would be against the real backend.
+        if (args.status === "COMPLETED" && args.financingType !== "FINANCED" && args.financingType !== "LEASE") {
+          const requiredMinor = Math.round(Number(args.salePrice) * MINOR_SCALE);
+          const heldMinor = [...deposits.values()]
+            .filter((row) => row.vehicleId === String(args.vehicleId) && row.customerId === String(args.customerId) && row.status === "HELD")
+            .reduce((sum, row) => sum + (row.amountMinor ?? 0), 0);
+          if (heldMinor < requiredMinor) {
+            return {
+              ok: false as const,
+              error: "A cash sale can only be completed once the customer's full payment is recorded as a deposit. Record the remaining payment as a deposit first. Nothing has been changed.",
+            };
+          }
+        }
         const saleId = id("sale");
         const cashInvoice = Boolean(args.quoteId && Number(args.salePrice) === 12_500);
         const invoiceId = cashInvoice && !defects.cashSaleMissingInvoice ? id("rdoc") : undefined;
         sales.set(saleId, { _id: saleId, orgId: args.orgId, status: args.status,
           canonicalReceivableDocumentId: invoiceId });
+        if (commissionRate > 0) {
+          // Literal S853 fixture: 12,500 sale less 10,000 acquisition, at 10%.
+          sales.get(saleId)!.commissionAmount = 250;
+          if (!defects.commissionNotAccrued) post("COMMISSION_ACCRUED", "commission", saleId, [
+            { key: "COMMISSION_EXPENSE", debitMinor: 250_000 }, { key: "COMMISSION_PAYABLE", creditMinor: 250_000 },
+          ]);
+        }
         if (invoiceId) {
           financeReceivables.set(invoiceId, {
             _id: invoiceId, orgId: args.orgId, documentType: "INVOICE",
@@ -1366,16 +1458,16 @@ function makeBackend(defects: Defects = {}) {
               ],
           { payload: { saleAmountMinor: priceMinor } }
         );
-        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-sale-")) {
+        if (/^rehearsal-(m486c1|m486c2|sr1)-sale-/.test(String(args.idempotencyKey ?? ""))) {
           const deposit = [...deposits.values()].find((row) => row.vehicleId === String(args.vehicleId) &&
-            row.customerId === String(args.customerId) && row.status === "HELD" && row.amountMinor === 200_000);
+            row.customerId === String(args.customerId) && row.status === "HELD" && row.amountMinor === priceMinor);
           if (deposit && !defects.cashDepositNotApplied) {
             deposit.status = "APPLIED";
             deposit.freeMinor = 0;
             if (!defects.cashDepositApplicationMissingPosting) {
               post("DEPOSIT_APPLIED", "depositApplications", `${deposit._id}:${args.vehicleId}`, [
-                { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 200_000, customerId: String(args.customerId) },
-                { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: 200_000, customerId: String(args.customerId) },
+                { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: priceMinor, customerId: String(args.customerId) },
+                { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: priceMinor, customerId: String(args.customerId) },
               ]);
             }
             if (invoiceId && !defects.cashDepositInvoiceNotReduced) {
@@ -1389,14 +1481,14 @@ function makeBackend(defects: Defects = {}) {
                 }
               }
               allocations.push({ orgId: String(args.orgId), paymentId: allocationPaymentId, receivableDocumentId: invoiceId,
-                amountMinor: 200_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
+                amountMinor: priceMinor, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
               if (defects.cashDepositSaleOverallocatesPayment) allocations.push({
                 orgId: String(args.orgId), paymentId: deposit.canonicalPaymentId,
                 receivableDocumentId: "other-invoice", amountMinor: 1_000,
                 currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
               });
               const invoice = financeReceivables.get(invoiceId);
-              if (invoice) invoice.status = "PARTIALLY_PAID";
+              if (invoice) invoice.status = priceMinor >= Number(invoice.originalAmountMinor) ? "PAID" : "PARTIALLY_PAID";
             }
           }
         }
@@ -1473,8 +1565,9 @@ function makeBackend(defects: Defects = {}) {
         const replayed = replayableCreate("dep", args, true);
         if (replayed) return replayed;
         const depositId = id("dep");
-        if (/^rehearsal-m486c[234]-deposit-/.test(String(args.idempotencyKey ?? ""))) {
+        if (/^rehearsal-m486c[1234]-deposit-/.test(String(args.idempotencyKey ?? ""))) {
           certifiedCashDepositId = depositId;
+          certifiedDepositIds.add(depositId);
         }
         if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c3-deposit-")) {
           certifiedCashRefundDepositId = depositId;
@@ -1547,8 +1640,8 @@ function makeBackend(defects: Defects = {}) {
           releasedAmountMinor: 0,
           refundedAmountMinor: 0,
           releaseCount: 0,
-          freeMinor: /^rehearsal-m486c[234]-deposit-/.test(String(args.idempotencyKey ?? "")) ? amountMinor : 2_000_000,
-          committedMinor: /^rehearsal-m486c[234]-deposit-/.test(String(args.idempotencyKey ?? "")) ? 0 : 1_000_000,
+          freeMinor: /^rehearsal-m486c[1234]-deposit-/.test(String(args.idempotencyKey ?? "")) ? amountMinor : 2_000_000,
+          committedMinor: /^rehearsal-m486c[1234]-deposit-/.test(String(args.idempotencyKey ?? "")) ? 0 : 1_000_000,
           vehicleId: quoteVehicle.get(String(args.quoteId)) ?? String(args.vehicleId ?? ""),
           customerId: depositCustomerId,
           status: "HELD",
@@ -1730,6 +1823,8 @@ function makeBackend(defects: Defects = {}) {
         // discipline as listJournalEntries above.
         const account = CHART.find((a) => a._id === String(args.accountId));
         if (!account) return { ok: true as const, value: null };
+        if (account.systemKey === "COMMISSION_PAYABLE" && ++commissionPayableReads === 1 &&
+            defects.commissionPayableInitiallyUnavailable) return { ok: true as const, value: null };
         let allLines = [...journalLines.values()].flat().filter((l) => l.accountId === account._id);
         if (args.fromDate !== undefined) allLines = allLines.filter((l) => l.accountingDate >= args.fromDate);
         if (args.toDate !== undefined) allLines = allLines.filter((l) => l.accountingDate <= args.toDate);
@@ -1952,13 +2047,24 @@ function makeBackend(defects: Defects = {}) {
             fee.actualAmountMinor !== args.expectedAmountMinor) {
           return { ok: false as const, error: "This cost cannot be paid directly." };
         }
+        // SCRUM-54: a bank method names an active same-org bank in the cost's currency,
+        // validated before any write. `legacyBackend` models the pre-bank CONFIRM-
+        // DISBURSEMENT contract the FD1 probe must report, so it ignores the field here.
+        const paidBankId = args.bankAccountId ? String(args.bankAccountId) : undefined;
+        if (!defects.legacyBackend) {
+          if (!paidBankId) return { ok: false as const, error: "Select the bank account this payment was made from. Nothing has been recorded." };
+          const paidBank = bankAccounts.get(paidBankId);
+          if (!paidBank || paidBank.orgId !== String(args.orgId) || !paidBank.isActive || paidBank.currency !== fee.currency) {
+            return { ok: false as const, error: "The selected bank account is not an active account in this cost's currency." };
+          }
+        }
         if (!defects.financeDirectPaymentSkipped) {
           fee.directPayment = { amountMinor: args.expectedAmountMinor, method: args.method, paidAt: args.paidAt };
         }
         if (!defects.financeDirectPaymentPostingSkipped) {
           post("HANDOVER_COST_PAID_DIRECT", "financeDealFees", String(args.feeId), [
             { key: "OWNERSHIP_TRANSFER_EXPENSE", debitMinor: args.expectedAmountMinor },
-            { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor },
+            { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor, bankAccountId: paidBankId },
           ]);
         }
         return { ok: true as const, value: fee._id };
@@ -2146,7 +2252,33 @@ function makeBackend(defects: Defects = {}) {
         }
         return { ok: true as const, value: [] };
       }
+      case "bankAccounts:create": {
+        const bankId = id("bank");
+        bankAccounts.set(bankId, { orgId: String(args.orgId), currency: String(args.currency), isActive: true });
+        return { ok: true as const, value: bankId };
+      }
       case "applications:confirmDisbursement": {
+        // Argument validation runs before any handler. A pre-SCRUM-54 validator has no
+        // bankAccountId and refuses the unknown field; a SCRUM-54 validator refuses a
+        // value that is not a bankAccounts id.
+        if (args.bankAccountId !== undefined) {
+          if (defects.legacyBackend) {
+            return { ok: false as const, error: "ArgumentValidationError: Object contains extra field `bankAccountId` that is not in the validator." };
+          }
+          if (!bankAccounts.has(String(args.bankAccountId))) {
+            if (defects.bankProbeAccepted) return { ok: true as const, value: null };
+            if (defects.bankProbeWritesBeforeRefusing) {
+              const probed = financeApps.get(String(args.applicationId));
+              if (probed) probed.disbursedAt = Date.now();
+            }
+            return {
+              ok: false as const,
+              error: defects.bankProbeUnrecognisedRefusal
+                ? "Server Error: something unrelated went wrong."
+                : "ArgumentValidationError: Value does not match validator. Path: .bankAccountId Validator: v.id(\"bankAccounts\")",
+            };
+          }
+        }
         const app = financeApps.get(String(args.applicationId));
         if (!app) return { ok: false as const, error: "Application not found." };
         if (app.status !== "CLOSED") return { ok: false as const, error: "Disbursement can only be confirmed on a closed application." };
@@ -2165,13 +2297,31 @@ function makeBackend(defects: Defects = {}) {
           if (defects.financeReceiptWrongRefusalReason) {
             return { ok: false as const, error: "A receipt was refused for an unrelated reason." };
           }
-          if (!defects.financeReceiptClipsToOutstanding) {
+          if (!defects.financeReceiptClipsToOutstanding && !defects.bankShortReceiptAccepted) {
             return {
               ok: false as const,
               error: `The amount received (${amount}) is not what this financing company owes the dealership on this deal (${net}).`,
             };
           }
           amount = Math.min(amount, net);
+        }
+        // Mirrors the real order: the amount is proven first, then the named bank is validated
+        // (present, same org, active, in the receivable's currency) before any write.
+        let receiptBankId: string | undefined = args.bankAccountId ? String(args.bankAccountId) : undefined;
+        if (!receiptBankId) {
+          if (defects.bankDefaultedWhenMissing) receiptBankId = [...bankAccounts.keys()][0];
+          else if (!defects.acceptsReceiptWithoutBank && !defects.legacyBackend) {
+            if (defects.bankMissingWritesBeforeRefusing) app.disbursedAt = Date.now();
+            return {
+              ok: false as const,
+              error: defects.bankMissingWrongReason ? "The receipt could not be recorded." : "Select the bank account the finance company's payment was received into.",
+            };
+          }
+        } else {
+          const bank = bankAccounts.get(receiptBankId);
+          if (!bank || bank.orgId !== String(args.orgId) || !bank.isActive || bank.currency !== receivable.currency) {
+            return { ok: false as const, error: "The selected bank account is not an active account in this deal's currency." };
+          }
         }
         const currency = defects.financeReceiptInDifferentCurrency ? "USD" : receivable.currency;
         disbursementByKey.set(key, app._id);
@@ -2180,7 +2330,7 @@ function makeBackend(defects: Defects = {}) {
         app.settlementStatus = "FULLY_SETTLED";
         const posted = defects.financeReceiptPostsWrongAmount ? amount + 1 : amount;
         post("FINANCE_CASH_RECEIVED", "financeApplications", `disbursement_${app._id}`, [
-          { key: "BANK_ACCOUNT", debitMinor: posted },
+          { key: "BANK_ACCOUNT", debitMinor: posted, bankAccountId: defects.bankIdentityDroppedFromJournal ? undefined : receiptBankId },
           { key: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", creditMinor: posted },
         ]);
         const paymentId = id("cpay");
@@ -2244,11 +2394,12 @@ const recordCase = (
       });
     });
 
-async function runAgainst(defects: Defects = {}) {
+async function runAgainst(defects: Defects = {}, source: { declaresBank?: boolean } = { declaresBank: !defects.legacyBackend }) {
   const backend = makeBackend(defects);
   const results: Array<Record<string, unknown>> = [];
   await runRehearsalCases({
     results,
+    candidateFinanceReceiptNamesBank: source.declaresBank,
     orgId: "org_1",
     config: { convexUrl: "https://x.convex.cloud" },
     tokens: { sales: "t-sales", approver: "t-approver" },
@@ -2335,6 +2486,21 @@ const statusOf = (results: Array<Record<string, unknown>>, id: string) =>
   results.find((r) => r.id === id)?.status;
 
 describe("the rehearsal passes against a backend that behaves", () => {
+  test("SCRUM-853 positive automatic commission policy refusal actually executes", async () => {
+    expect(statusOf(await runAgainst(), "S853")).toBe("PASS");
+  });
+  test.each([
+    ["commissionPolicyUnlocked", "S853 MANUAL transition did not give the outstanding-commission refusal"],
+    ["commissionPolicyWrongRefusal", "S853 MANUAL transition did not give the outstanding-commission refusal"],
+    ["commissionPolicyWritesBeforeRefusing", "S853 refusal leaves payable journal lines unchanged"],
+    ["commissionNotAccrued", "S853 posted Commission Payable increment"],
+    ["commissionWrongCurrency", "S853 payable line denomination is unavailable or incorrect"],
+    ["commissionPayableInitiallyUnavailable", "S853 payable account read is unavailable"],
+  ] as const)("SCRUM-853 release case catches %s", async (defect, reason) => {
+    const result = (await runAgainst({ [defect]: true })).find((row) => row.id === "S853");
+    expect(result?.status).toBe("FAIL");
+    expect(result?.detail).toContain(reason);
+  });
   test("every case is green when nothing is broken", async () => {
     const results = await runAgainst();
     const failures = results.filter((r) => r.status === "FAIL");
@@ -2553,16 +2719,39 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     expect(String(results.find((r) => r.id === "RC1")?.detail)).toMatch(/expected 500000, got 300000/);
   });
 
-  test("RV1 catches a cheque return that ERASES its clearing", async () => {
-    // Balances perfectly and destroys the history. ACC-3: a reversal ADDS.
-    const results = await runAgainst({ eraseOnChequeReturn: true });
+  test("RV1 catches a cleared-cheque return that the pilot should have refused but ACCEPTED", async () => {
+    const results = await runAgainst({ chequeReturnAccepted: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/ACCEPTED/);
+  });
+
+  test("RV1 catches a refused return that already wrote before refusing", async () => {
+    const results = await runAgainst({ chequeReturnWritesThenRefuses: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/cheque status after the refused return: expected CLEARED, got RETURNED/);
+  });
+
+  test("RV1 catches a refused return that added an accounting event", async () => {
+    const results = await runAgainst({ chequeReturnAddsEvent: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/changed the set of accounting events/);
+  });
+
+  test("RV1 catches a refused return that altered the clearing entry's lines", async () => {
+    const results = await runAgainst({ chequeReturnAltersClearingLines: true });
+    expect(statusOf(results, "RV1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/clearing entry's lines changed/);
+  });
+
+  test("RV1 catches a cleared cheque whose clearing lost its named bank", async () => {
+    const results = await runAgainst({ chequeClearingBankDropped: true });
     expect(statusOf(results, "RV1")).toBe("FAIL");
   });
 
-  test("RV1 catches a cheque that bounces with no accounting effect at all", async () => {
-    const results = await runAgainst({ silentChequeReturn: true });
+  test("RV1 catches a refusal that carries a generic code instead of the pilot containment code", async () => {
+    const results = await runAgainst({ chequeReturnWrongRefusal: true });
     expect(statusOf(results, "RV1")).toBe("FAIL");
-    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/expected REVERSED, got POSTED/);
+    expect(String(results.find((r) => r.id === "RV1")?.detail)).toMatch(/refusal code: expected CLEARED_CHEQUE_RETURN_PILOT_DISABLED, got CHEQUE_NOT_CLEARED/);
   });
 
   test("SR1 catches a consigned car posted as dealership stock", async () => {
@@ -2946,23 +3135,6 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     expect(detail(results, "RC1")).toMatch(/RECEIPT_CREDIT_APPLIED events .* expected 1, got 0/);
   });
 
-  // ── RV1: exact reopening, linked and opposite ──
-  test("RV1 catches a reversal that nothing links to the clearing it reverses", async () => {
-    const results = await runAgainst({ reversalUnlinked: true });
-    expect(statusOf(results, "RV1")).toBe("FAIL");
-    expect(detail(results, "RV1")).toMatch(/names no reversing/);
-  });
-  test("RV1 catches a linked reversal for the wrong amount", async () => {
-    const results = await runAgainst({ reversalWrongAmount: true });
-    expect(statusOf(results, "RV1")).toBe("FAIL");
-    expect(detail(results, "RV1")).toMatch(/the cheque-return reversal: journal lines are not exactly/);
-  });
-  test("RV1 catches a bounced cheque whose receivable still reads PAID", async () => {
-    const results = await runAgainst({ receivableNotReopened: true });
-    expect(statusOf(results, "RV1")).toBe("FAIL");
-    expect(detail(results, "RV1")).toMatch(/outstanding on the receivable after the cheque bounced: expected 1200, got 0/);
-  });
-
   // ── RT2: the eight named commands ──
   test("RT2 catches a replay that mints a second identity on any of the eight", async () => {
     const results = await runAgainst({ duplicateOnCreateReplay: true });
@@ -3008,6 +3180,121 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
     expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
+  });
+
+  test("FD1 catches a bank receipt accepted with no bank named", async () => {
+    const results = await runAgainst({ acceptsReceiptWithoutBank: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/named no bank was accepted/);
+  });
+
+  describe("FD1 bank contract (SCRUM-54) — the trusted controller holds main and the candidate to their own contracts", () => {
+    const fd1Detail = (results: Array<Record<string, unknown>>) =>
+      (results.find((r) => r.id === "FD1")?.detail ?? {}) as { bankContract?: string; receiptBankAccountId?: string | null };
+
+    test.each([
+      ["a contract probe that is accepted", { bankProbeAccepted: true }, /probe .* was accepted/],
+      ["a probe refused in a way that names neither contract", { bankProbeUnrecognisedRefusal: true }, /identifies neither contract/],
+      ["a probe that writes before refusing", { bankProbeWritesBeforeRefusing: true }, /contract probe still marked the application disbursed/],
+      ["a bank-less correct-amount receipt refused for the wrong reason", { bankMissingWrongReason: true }, /bank-less receipt was refused for the wrong reason/],
+    ] as Array<[string, Defects, RegExp]>)("%s fails FD1 rather than passing", async (_name, defect, expected) => {
+      const results = await runAgainst({ ...defect });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(expected);
+    });
+
+    test("a SCRUM-54 candidate passes with a named same-org bank carried onto the BANK_ACCOUNT line", async () => {
+      const results = await runAgainst({});
+      expect(statusOf(results, "FD1")).toBe("PASS");
+      expect(fd1Detail(results).bankContract).toBe("named-bank");
+      expect(fd1Detail(results).receiptBankAccountId).toMatch(/^bank/);
+    });
+
+    test("economics stay strict: a short receipt accepted fails", async () => {
+      const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
+    });
+
+    test("source declares a bank but the deployed backend is legacy: FAIL, never a quiet legacy pass", async () => {
+      const results = await runAgainst({ legacyBackend: true }, { declaresBank: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/absent or not deployed/);
+    });
+
+    test("deployed backend takes a bank but the source does not declare one: FAIL", async () => {
+      const results = await runAgainst({}, { declaresBank: false });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/does not declare one/);
+    });
+
+    test("source AND backend both legacy is FAIL, not a legacy PASS: the bank contract is unconditional", async () => {
+      const results = await runAgainst({ legacyBackend: true }, { declaresBank: false });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/both lack the SCRUM-54 bank contract/);
+    });
+
+    test("an unreadable candidate source leaves FD1 UNPROVEN, not PASS", async () => {
+      expect(statusOf(await runAgainst({}, { declaresBank: undefined }), "FD1")).toBe("UNPROVEN");
+      expect(statusOf(await runAgainst({ legacyBackend: true }, { declaresBank: undefined }), "FD1")).toBe("UNPROVEN");
+    });
+
+    test("a bank-less receipt that is accepted and defaulted to the only bank fails", async () => {
+      const results = await runAgainst({ bankDefaultedWhenMissing: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/named no bank was accepted/);
+    });
+
+    test("a bank-less receipt refused only after writing fails", async () => {
+      const results = await runAgainst({ bankMissingWritesBeforeRefusing: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/still marked the application disbursed/);
+    });
+
+    test("a short receipt that names a valid bank and is accepted fails", async () => {
+      const results = await runAgainst({ bankShortReceiptAccepted: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
+    });
+
+    test("a journal whose BANK_ACCOUNT line loses the named bank fails", async () => {
+      const results = await runAgainst({ bankIdentityDroppedFromJournal: true });
+      expect(statusOf(results, "FD1")).toBe("FAIL");
+      expect(detail(results, "FD1")).toMatch(/bank identity on the BANK_ACCOUNT journal line/);
+    });
+
+    test("candidateNamesReceiptBank reads the command's own args block only", () => {
+      const withBank = "export const confirmDisbursement = mutation({\n  args: {\n    orgId: v.id(\"organizations\"),\n    bankAccountId: v.optional(v.id(\"bankAccounts\")),\n  },\n  handler: async () => {},\n});";
+      const withoutBank = "export const other = mutation({ args: { bankAccountId: v.id(\"bankAccounts\") }, handler: async () => {} });\nexport const confirmDisbursement = mutation({\n  args: {\n    // bankAccountId: not yet\n    orgId: v.id(\"organizations\"),\n  },\n  handler: async () => {},\n});";
+      expect(candidateNamesReceiptBank(withBank)).toBe(true);
+      expect(candidateNamesReceiptBank(withoutBank)).toBe(false);
+      // Shared args (no inline block) cannot be read, and a LATER export's bankAccountId
+      // must never be attributed to the target: unknown, not true.
+      const sharedArgs = "export const confirmDisbursement = mutation({\n  args: sharedArgs,\n  handler: async () => {},\n});\nexport const later = mutation({\n  args: {\n    bankAccountId: v.id(\"bankAccounts\"),\n  },\n  handler: async () => {},\n});";
+      expect(candidateNamesReceiptBank(sharedArgs)).toBeUndefined();
+      // ...including a later NON-exported top-level declaration, which `^export` would not stop at.
+      const sharedArgsThenHelper = "export const confirmDisbursement = mutation({\n  args: sharedArgs,\n  handler: async () => {},\n});\n\nconst helper = internalMutation({\n  args: {\n    bankAccountId: v.id(\"bankAccounts\"),\n  },\n  handler: async () => {},\n});";
+      expect(candidateNamesReceiptBank(sharedArgsThenHelper)).toBeUndefined();
+      expect(candidateNamesReceiptBank("export const nothing = 1;")).toBeUndefined();
+      expect(candidateNamesReceiptBank(undefined)).toBeUndefined();
+    });
+
+    test("every name the preview runner imports from this module is an exported function", async () => {
+      // The runner loads this module with a dynamic import, so a renamed or dropped
+      // export type-checks and only fails inside the cloud rehearsal itself.
+      const runner = fs.readFileSync(path.join(__dirname, "accountingPreviewRehearsal.mjs"), "utf8");
+      const match = /const \{([^}]+)\} = await import\("\.\/accountingRehearsalCases\.mjs"\)/.exec(runner);
+      expect(match).not.toBeNull();
+      const names = match![1].split(",").map((name) => name.trim()).filter(Boolean);
+      expect(names).toContain("candidateCommandNamesBank");
+      const casesModule = await import("./accountingRehearsalCases.mjs");
+      for (const name of names) {
+        expect(typeof (casesModule as Record<string, unknown>)[name], name).toBe("function");
+      }
+      const clearCheque = "export const clearCheque = mutation({\n  args: {\n    bankAccountId: v.id(\"bankAccounts\"),\n  },\n  handler: async () => {},\n});";
+      expect(candidateCommandNamesBank(clearCheque, "clearCheque")).toBe(true);
+      expect(candidateCommandNamesBank(clearCheque, "recordDirectFeePayment")).toBeUndefined();
+    });
   });
 
   test("FD1 catches a short receipt refused for the wrong reason", async () => {

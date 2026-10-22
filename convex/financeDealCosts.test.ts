@@ -696,7 +696,6 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
       expectedActualAmountMinor: jod(120),
       expectedActualEvidenceRevision: 0,
     });
-    await invoiceIt(seed, "INV-10");
     expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
 
     await addFee(seed);
@@ -710,7 +709,6 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
 
   test("a deal with nothing itemized is not closable", async () => {
     const seed = await withCompany(await seedDeal());
-    await invoiceIt(seed, "INV-12");
 
     // Both awaiting-counts are zero for an empty list, so reading only those
     // let "nobody itemized anything" through as complete — the exact state the
@@ -1179,24 +1177,14 @@ describe("reconciled work is not destroyable from below", () => {
 });
 
 describe("the legal invoice and automatic closing readiness", () => {
-  test("readiness is blocked until the legal invoice is recorded", async () => {
+  test("readiness never waits for a legal invoice: absent, the check is not applicable (SCRUM-411)", async () => {
     const seed = await withCompany(await seedDeal());
 
-    expect(await closingCheck(seed, "LEGAL_INVOICE_RECORDED")).toMatchObject({
-      status: "BLOCKED", reason: expect.stringMatching(/legal invoice/i),
-    });
+    expect(await closingCheck(seed, "LEGAL_INVOICE_RECORDED")).toMatchObject({ status: "NOT_APPLICABLE", reason: null });
   });
 
   test("estimates run the deal but cannot close it", async () => {
     const seed = await withCompany(await seedDeal());
-    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: seed.orgId,
-      applicationId: seed.applicationId,
-      legalInvoiceAmountMinor: jod(10_500),
-      legalInvoiceNumber: "INV-2026-0042",
-      legalInvoiceDate: Date.now(),
-      issuedTo: "FINANCE_COMPANY",
-    });
     const feeId = await addFee(seed, { estimatedAmountMinor: jod(120) });
 
     expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
@@ -1219,7 +1207,7 @@ describe("the legal invoice and automatic closing readiness", () => {
       expectedActualEvidenceRevision: 1,
     });
     expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
-    expect(await closingCheck(seed, "LEGAL_INVOICE_RECORDED")).toMatchObject({ status: "READY", reason: null });
+    expect(await closingCheck(seed, "LEGAL_INVOICE_RECORDED")).toMatchObject({ status: "NOT_APPLICABLE", reason: null });
   });
 
   test("voided custody-cost history cannot strand reconciliation or closing readiness", async () => {

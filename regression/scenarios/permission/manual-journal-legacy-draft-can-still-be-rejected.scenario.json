@@ -1,0 +1,45 @@
+{
+  "id": "manual-journal-legacy-draft-can-still-be-rejected",
+  "fingerprint": "fead4b29beb5d0dae63f6e9a399f83d0eb703549c2cf2283c9c737efa0cb9d37",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum795-pilot-off",
+    "firstSeen": "2026-10-19"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-reviewer",
+        "org": "A"
+      },
+      "action": "financialAudit.rejectManualJournal",
+      "input": {
+        "draft": "legacy-pending"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.draftStatus",
+      "value": "REJECTED"
+    },
+    {
+      "observable": "pendingList.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22474",
+      "digest": "c2b86f2c093eb218d5181792a470347245bce150bcdb3fa778edda0c7ea64565"
+    }
+  ],
+  "impl": {
+    "file": "convex/manualJournalsPilotOff.scrum795.test.ts",
+    "testName": "a second finance user can still reject the legacy draft"
+  },
+  "matrixRow": "SCRUM-50-manual-journal-off"
+}

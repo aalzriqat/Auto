@@ -281,6 +281,34 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     }
   });
 
+  it("SCRUM-795 MANUAL_JOURNALS_DISABLED resolves to Arabic in ar and the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { MANUAL_JOURNALS_DISABLED_MESSAGE } = await import("../convex/utils/manualJournalContainment");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "MANUAL_JOURNALS_DISABLED", message: MANUAL_JOURNALS_DISABLED_MESSAGE });
+    const arText = getLocalizedErrorMessage(error, ar);
+    expect(arText).toMatch(/[؀-ۿ]/);
+    expect(arText).not.toBe(MANUAL_JOURNALS_DISABLED_MESSAGE);
+    expect(arText).toBe((dictionaries.ar as Record<string, string>)["ServerError_MANUAL_JOURNALS_DISABLED"]);
+    expect(getLocalizedErrorMessage(error, en)).toBe(MANUAL_JOURNALS_DISABLED_MESSAGE);
+  });
+
+  it("SCRUM-850 opening-balance-after-ledger-activity refusal resolves to Arabic in ar and keeps the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const { POSTED_LEDGER_ACTIVITY_MESSAGE: serverText } = await import("../convex/accountingCutover");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const error = new ConvexError({ code: AppErrorCode.OPENING_BALANCE_AFTER_LEDGER_ACTIVITY, message: serverText });
+    const arText = getLocalizedErrorMessage(error, ar);
+    expect(arText).toMatch(/[؀-ۿ]/);
+    expect(arText).not.toBe(serverText);
+    expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
+    // Must not point at the Manual Journal flow, which cannot correct system cash/bank accounts.
+    expect(arText).not.toMatch(/قيد يدوي|يومية يدوية/);
+  });
+
   it("SCRUM-650 purchase-cost correction refusals resolve to Arabic in ar and the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const { AppErrorCode } = await import("../convex/utils/errors");
@@ -423,6 +451,12 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(enEntry).toContain((dictionaries.en as Record<string, string>).CancelClosedDeal);
   });
 
+  it("SCRUM-801 DEPOSIT_OTHER_TREATMENT_DISABLED resolves in ar and en, and EN equals the backend message", async () => {
+    const { enEntry } = await expectCodedEntry("DEPOSIT_OTHER_TREATMENT_DISABLED");
+    const { DEPOSIT_OTHER_TREATMENT_DISABLED_MESSAGE } = await import("../convex/utils/depositOtherContainment");
+    expect(enEntry).toBe(DEPOSIT_OTHER_TREATMENT_DISABLED_MESSAGE);
+  });
+
   it("SCRUM-413 OWNER_NAMED_ROLE_LOCKED resolves to its dictionary entry in ar and en, and EN equals the roles.ts message", async () => {
     const { enEntry } = await expectCodedEntry("OWNER_NAMED_ROLE_LOCKED");
     expect((await roleMessageConst("OWNER_NAMED_ROLE_LOCKED_MESSAGE")).message).toBe(enEntry);
@@ -465,6 +499,60 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(forwardCancelRefusal(proofOf([], "SETTLED"))).toBeNull();
   });
 
+  it("SCRUM-411 P2-01 every forward finalize/transfer refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { forwardGateRefusal } = await import("../convex/utils/financeCompanyForward");
+    const ar = dictionaries.ar as Record<string, string>;
+    const en = dictionaries.en as Record<string, string>;
+    const finalizeBlocks = ["UNPAID", "STALE", "POSTING_PENDING", "POSTING_FAILED", "REVERSAL_PENDING", "NEEDS_REPAIR"] as const;
+    const seen = new Set<string>();
+    for (const [gate, blocks] of [
+      ["FINALIZE", finalizeBlocks],
+      ["TRANSFER", finalizeBlocks.filter((block) => block !== "STALE")],
+    ] as const) {
+      for (const block of blocks) {
+        const refusal = forwardGateRefusal(block, gate);
+        expect(refusal.code).toBe(`FORWARD_${gate}_${block}`);
+        expect(seen.has(refusal.code)).toBe(false);
+        seen.add(refusal.code);
+        expect(en[`ServerError_${refusal.code}`]).toBe(refusal.message);
+        expect(ar[`ServerError_${refusal.code}`]).toMatch(/[؀-ۿ]/);
+        const error = new ConvexError({ code: refusal.code, message: refusal.message });
+        expect(getLocalizedErrorMessage(error, (k: string) => ar[k] ?? k)).toBe(ar[`ServerError_${refusal.code}`]);
+      }
+    }
+    // The transfer gate has no plan to compare, so a stale judgment there is the books-mismatch refusal.
+    expect(forwardGateRefusal("STALE", "TRANSFER").code).toBe("FORWARD_TRANSFER_NEEDS_REPAIR");
+    expect(seen.size).toBe(11);
+  });
+
+  it("SCRUM-411 P2-03 the unfunded first payment refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { FIRST_PAYMENT_UNFUNDED_MESSAGE } = await import("../convex/utils/financedSaleRecognition");
+    const ar = dictionaries.ar as Record<string, string>;
+    expect((dictionaries.en as Record<string, string>).ServerError_FIRST_PAYMENT_UNFUNDED).toBe(FIRST_PAYMENT_UNFUNDED_MESSAGE);
+    expect(ar.ServerError_FIRST_PAYMENT_UNFUNDED).toMatch(/[؀-ۿ]/);
+  });
+
+  it.each([
+    ["SCRUM-411 P2-02 deposit-already-paid-onward", "DEPOSIT_PAID_ONWARD_REFUSAL", "DEPOSIT_PAID_ONWARD_TO_FINANCE_COMPANY"],
+    ["SCRUM-411 P2-02 forward-deposit-provenance", "FORWARD_DEPOSIT_PROVENANCE_REFUSAL", "FORWARD_DEPOSIT_PROVENANCE_UNCLEAR"],
+    ["SCRUM-411 P2-01 customer-payment-while-forward-live", "CUSTOMER_PAYMENT_FORWARD_LIVE_REFUSAL", "CUSTOMER_PAYMENT_FORWARD_LIVE"],
+    ["SCRUM-411 P2-01 economics-change-while-forward-live", "DEAL_ECONOMICS_FORWARD_LIVE_REFUSAL", "DEAL_ECONOMICS_FORWARD_LIVE"],
+  ] as const)("%s: the refusal has an AR entry, its EN equals the server message, and it carries no amount", async (_label, constant, code) => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const refusal = (await import("../convex/utils/financeCompanyForward"))[constant];
+    const ar = dictionaries.ar as Record<string, string>;
+    expect(refusal.code).toBe(code);
+    expect((dictionaries.en as Record<string, string>)[`ServerError_${code}`]).toBe(refusal.message);
+    expect(ar[`ServerError_${code}`]).toMatch(/[؀-ۿ]/);
+    const error = new ConvexError({ code, message: refusal.message });
+    expect(getLocalizedErrorMessage(error, (k: string) => ar[k] ?? k)).toBe(ar[`ServerError_${code}`]);
+    // The finance tier's figures are never echoed: no digit at all in either language's text.
+    expect(refusal.message).not.toMatch(/\d/);
+    expect(ar[`ServerError_${code}`]).not.toMatch(/[\d٠-٩]/);
+  });
+
   it("the English dictionary text equals the server's message for both codes", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");
@@ -499,11 +587,27 @@ describe("getCodedErrorMessage - SCRUM-724 CR-1: a coded refusal or nothing, nev
     const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
     const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
     for (const code of ["RETAINED_CREDIT_UNAVAILABLE", "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
-      "CHEQUE_INVOICE_UNCOVERED_HELD", "CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER", "CUSTOMER_CREDIT_PAYOUT_DISABLED"]) {
+      "CHEQUE_INVOICE_UNCOVERED_HELD", "CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER", "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+      "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON"]) {
       const error = new ConvexError({ code, message: "server text" });
       const enText = getCodedErrorMessage(error, en);
       const arText = getCodedErrorMessage(error, ar);
       expect(enText, code).toBeTruthy();
+      expect(arText, code).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe(enText);
+    }
+  });
+
+  it("the SCRUM-760 post-delivery containment codes have EN and AR entries that differ and match the server text", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { POST_DELIVERY_DOOR_REFUSALS } = await import("../convex/utils/postDeliveryDoorContainment");
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    for (const [code, serverText] of Object.entries(POST_DELIVERY_DOOR_REFUSALS)) {
+      const error = new ConvexError({ code, message: serverText });
+      const enText = getCodedErrorMessage(error, en);
+      const arText = getCodedErrorMessage(error, ar);
+      expect(enText, code).toBe(serverText);
       expect(arText, code).toMatch(/[؀-ۿ]/);
       expect(arText).not.toBe(enText);
     }

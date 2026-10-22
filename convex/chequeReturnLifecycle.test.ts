@@ -48,6 +48,12 @@ import { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { MAX_REVOCABLE_APPLICATIONS } from "./accounting/receiptMovement";
 
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
+
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 /**
@@ -156,8 +162,264 @@ async function seedOrg(suffix: string) {
   const customerId = (await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Cust", lastName: suffix, createdAt: Date.now() })
   )) as Id<"customers">;
-  return { t, asAdmin, asApprover, orgId, userId, customerId };
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Receipt bank", currency: "USD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  return { t, asAdmin, asApprover, orgId, userId, customerId, bankAccountId };
 }
+
+describe("SCRUM-54 cleared-cheque bank identity", () => {
+  test("a missing destination bank refuses clearance before any financial write", async () => {
+    const { t, asAdmin, orgId, customerId } = await seedOrg("s54-bank-missing");
+    const chequeId = await asAdmin.mutation(api.collections.registerCheque, {
+      orgId, customerId, bank: "Customer's bank", chequeNumber: "S54-1",
+      chequeDate: Date.now(), amount: 100,
+    });
+    const before = await t.run(async (ctx) => ({
+      payments: (await ctx.db.query("collectionPayments").collect()).length,
+      movements: (await ctx.db.query("receiptMovements").collect()).length,
+      events: (await ctx.db.query("accountingEvents").collect()).length,
+      pending: (await ctx.db.query("pendingAccountingEvents").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }));
+
+    await expect(asAdmin.mutation(api.collections.clearCheque, {
+      orgId, chequeId, idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(/bank account/i);
+
+    const after = await t.run(async (ctx) => ({
+      chequeStatus: (await ctx.db.get(chequeId))?.status,
+      payments: (await ctx.db.query("collectionPayments").collect()).length,
+      movements: (await ctx.db.query("receiptMovements").collect()).length,
+      events: (await ctx.db.query("accountingEvents").collect()).length,
+      pending: (await ctx.db.query("pendingAccountingEvents").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }));
+    expect(after).toEqual({ chequeStatus: "HELD", ...before });
+  });
+
+  test.each(["foreign", "inactive", "wrong currency", "deleted"] as const)(
+    "a %s destination bank refuses clearance without a financial write",
+    async (kind) => {
+      const seeded = await seedOrg(`s54-clear-${kind.replace(" ", "-")}`);
+      const chequeId = await seeded.asAdmin.mutation(api.collections.registerCheque, {
+        orgId: seeded.orgId, customerId: seeded.customerId, bank: "Customer bank",
+        chequeNumber: `S54-${kind}`, chequeDate: Date.now(), amount: 100,
+      });
+      let bankAccountId = seeded.bankAccountId;
+      if (kind === "foreign") {
+        const foreignOrgId = await seeded.t.run((ctx) => ctx.db.insert("organizations", {
+          name: "Other org", createdAt: Date.now(),
+        }));
+        bankAccountId = await seeded.t.run((ctx) => ctx.db.insert("bankAccounts", {
+          orgId: foreignOrgId, name: "Other bank", currency: "USD", openingBalanceMinor: 0,
+          openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+          createdBy: seeded.userId, createdAt: Date.now(), updatedAt: Date.now(),
+        }));
+      } else {
+        await seeded.t.run((ctx) => ctx.db.patch(bankAccountId, {
+          ...(kind === "inactive" ? { isActive: false } : {}),
+          ...(kind === "wrong currency" ? { currency: "JOD" } : {}),
+          ...(kind === "deleted" ? { isDeleted: true } : {}),
+        }));
+      }
+      const before = await seeded.t.run(async (ctx) => ({
+        payments: (await ctx.db.query("collectionPayments").collect()).length,
+        events: (await ctx.db.query("accountingEvents").collect()).length,
+        journals: (await ctx.db.query("journalEntries").collect()).length,
+      }));
+      await expect(seeded.asAdmin.mutation(api.collections.clearCheque, {
+        orgId: seeded.orgId, chequeId, bankAccountId, idempotencyKey: crypto.randomUUID(),
+      })).rejects.toThrow(/bank account|denominated/i);
+      const after = await seeded.t.run(async (ctx) => ({
+        status: (await ctx.db.get(chequeId))?.status,
+        payments: (await ctx.db.query("collectionPayments").collect()).length,
+        events: (await ctx.db.query("accountingEvents").collect()).length,
+        journals: (await ctx.db.query("journalEntries").collect()).length,
+      }));
+      expect(after).toEqual({ status: "HELD", ...before });
+    }
+  );
+
+  test("clearance and its return use the same physical bank in opposite directions", async () => {
+    const seeded = await seedOrg("s54-bank-reverse");
+    const { chequeId, paymentId } = await clearedCheque(seeded, "s54-bank-reverse", 100);
+    const readBankLines = () => seeded.t.run(async (ctx) => {
+      const entries = await ctx.db.query("journalEntries")
+        .withIndex("by_org", (q) => q.eq("orgId", seeded.orgId)).collect();
+      const lines = [];
+      for (const entry of entries) {
+        if (entry.sourceId !== paymentId.toString() && !entry.reversalOfJournalEntryId) continue;
+        const entryLines = await ctx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)).collect();
+        for (const item of entryLines) {
+          const account = await ctx.db.get(item.accountId);
+          if (account?.systemKey === SYSTEM_KEYS.BANK_ACCOUNT) {
+            lines.push({ bankAccountId: item.bankAccountId, debitMinor: item.debitMinor, creditMinor: item.creditMinor });
+          }
+        }
+      }
+      return lines;
+    });
+
+    expect(await readBankLines()).toEqual([
+      { bankAccountId: seeded.bankAccountId, debitMinor: 10_000, creditMinor: 0 },
+    ]);
+    await seeded.asAdmin.mutation(api.collections.returnClearedCheque, {
+      orgId: seeded.orgId, chequeId, idempotencyKey: crypto.randomUUID(),
+    });
+    expect(await readBankLines()).toEqual([
+      { bankAccountId: seeded.bankAccountId, debitMinor: 10_000, creditMinor: 0 },
+      { bankAccountId: seeded.bankAccountId, debitMinor: 0, creditMinor: 10_000 },
+    ]);
+  });
+
+  test("a clearance retry cannot change its bank under the same command key", async () => {
+    const seeded = await seedOrg("s54-clear-key");
+    const chequeId = await seeded.asAdmin.mutation(api.collections.registerCheque, {
+      orgId: seeded.orgId, customerId: seeded.customerId, bank: "Customer bank",
+      chequeNumber: "S54-key", chequeDate: Date.now(), amount: 100,
+    });
+    const otherBankId = await seeded.t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId: seeded.orgId, name: "Other bank", currency: "USD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: seeded.userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    const idempotencyKey = crypto.randomUUID();
+    await seeded.asAdmin.mutation(api.collections.clearCheque, {
+      orgId: seeded.orgId, chequeId, bankAccountId: seeded.bankAccountId, idempotencyKey,
+    });
+    const before = await worldSnapshot(seeded.t);
+    await expect(seeded.asAdmin.mutation(api.collections.clearCheque, {
+      orgId: seeded.orgId, chequeId, bankAccountId: otherBankId, idempotencyKey,
+    })).rejects.toThrow(/different request content/i);
+    expect(await worldSnapshot(seeded.t)).toEqual(before);
+  });
+
+  test("a positive bank return fee without its own bank refuses the entire return", async () => {
+    const seeded = await seedOrg("s54-fee-missing");
+    const { chequeId } = await clearedCheque(seeded, "s54-fee-missing", 100);
+    const before = await worldSnapshot(seeded.t);
+    await expect(seeded.asAdmin.mutation(api.collections.returnClearedCheque, {
+      orgId: seeded.orgId, chequeId, bankFeeMinor: 500,
+      idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(/bank account/i);
+    expect(await worldSnapshot(seeded.t)).toEqual(before);
+  });
+
+  test.each(["foreign", "inactive", "wrong currency", "deleted"] as const)(
+    "a %s return-fee bank refuses the entire return",
+    async (kind) => {
+      const seeded = await seedOrg(`s54-fee-${kind.replace(" ", "-")}`);
+      const { chequeId } = await clearedCheque(seeded, `s54-fee-${kind}`, 100);
+      let feeBankAccountId = seeded.bankAccountId;
+      if (kind === "foreign") {
+        const foreignOrgId = await seeded.t.run((ctx) => ctx.db.insert("organizations", {
+          name: "Other org", createdAt: Date.now(),
+        }));
+        feeBankAccountId = await seeded.t.run((ctx) => ctx.db.insert("bankAccounts", {
+          orgId: foreignOrgId, name: "Other fee bank", currency: "USD", openingBalanceMinor: 0,
+          openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+          createdBy: seeded.userId, createdAt: Date.now(), updatedAt: Date.now(),
+        }));
+      } else {
+        await seeded.t.run((ctx) => ctx.db.patch(feeBankAccountId, {
+          ...(kind === "inactive" ? { isActive: false } : {}),
+          ...(kind === "wrong currency" ? { currency: "JOD" } : {}),
+          ...(kind === "deleted" ? { isDeleted: true } : {}),
+        }));
+      }
+      const before = await worldSnapshot(seeded.t);
+      await expect(seeded.asAdmin.mutation(api.collections.returnClearedCheque, {
+        orgId: seeded.orgId, chequeId, bankFeeMinor: 500, bankFeeBankAccountId: feeBankAccountId,
+        idempotencyKey: crypto.randomUUID(),
+      })).rejects.toMatchObject({ data: { code: "CHEQUE_RETURN_FEE_BANK_INVALID" } });
+      expect(await worldSnapshot(seeded.t)).toEqual(before);
+    },
+  );
+
+  test("a return without a fee refuses a stray fee-bank ID before any write", async () => {
+    const seeded = await seedOrg("s54-fee-zero-bank");
+    const { chequeId } = await clearedCheque(seeded, "s54-fee-zero-bank", 100);
+    const before = await worldSnapshot(seeded.t);
+    await expect(seeded.asAdmin.mutation(api.collections.returnClearedCheque, {
+      orgId: seeded.orgId, chequeId, bankFeeMinor: 0, bankFeeBankAccountId: seeded.bankAccountId,
+      idempotencyKey: crypto.randomUUID(),
+    })).rejects.toMatchObject({ data: { code: "CHEQUE_RETURN_FEE_BANK_INVALID" } });
+    expect(await worldSnapshot(seeded.t)).toEqual(before);
+  });
+
+  test("a completed return cannot swap fee banks under its command key", async () => {
+    const seeded = await seedOrg("s54-fee-key-bank");
+    const { chequeId } = await clearedCheque(seeded, "s54-fee-key-bank", 100);
+    const otherBankId = await seeded.t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId: seeded.orgId, name: "Other fee bank", currency: "USD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: seeded.userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    const idempotencyKey = crypto.randomUUID();
+    await seeded.asAdmin.mutation(api.collections.returnClearedCheque, {
+      orgId: seeded.orgId, chequeId, bankFeeMinor: 500,
+      bankFeeBankAccountId: seeded.bankAccountId, idempotencyKey,
+    });
+    const before = await worldSnapshot(seeded.t);
+    await expect(seeded.asAdmin.mutation(api.collections.returnClearedCheque, {
+      orgId: seeded.orgId, chequeId, bankFeeMinor: 500,
+      bankFeeBankAccountId: otherBankId, idempotencyKey,
+    })).rejects.toMatchObject({ data: { code: "CHEQUE_RETURN_KEY_CONFLICT" } });
+    expect(await worldSnapshot(seeded.t)).toEqual(before);
+  });
+
+  test("the return fee credits its chosen bank, independently of the receipt bank", async () => {
+    const seeded = await seedOrg("s54-fee-bank");
+    const feeBankAccountId = await seeded.t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId: seeded.orgId, name: "Fee bank", currency: "USD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: seeded.userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    const { chequeId } = await clearedCheque(seeded, "s54-fee-bank", 100);
+    await seeded.asAdmin.mutation(api.collections.returnClearedCheque, {
+      orgId: seeded.orgId, chequeId, bankFeeMinor: 500, bankFeeBankAccountId: feeBankAccountId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const bankLines = await seeded.t.run(async (ctx) => {
+      const entries = await ctx.db.query("journalEntries")
+        .withIndex("by_org", (q) => q.eq("orgId", seeded.orgId)).collect();
+      const result: Array<{ bankAccountId: Id<"bankAccounts"> | undefined; debitMinor: number; creditMinor: number }> = [];
+      for (const entry of entries) {
+        const lines = await ctx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)).collect();
+        for (const line of lines) {
+          if ((await ctx.db.get(line.accountId))?.systemKey === SYSTEM_KEYS.BANK_ACCOUNT) {
+            result.push({ bankAccountId: line.bankAccountId, debitMinor: line.debitMinor, creditMinor: line.creditMinor });
+          }
+        }
+      }
+      return result;
+    });
+    expect(bankLines).toEqual([
+      { bankAccountId: seeded.bankAccountId, debitMinor: 10_000, creditMinor: 0 },
+      { bankAccountId: seeded.bankAccountId, debitMinor: 0, creditMinor: 10_000 },
+      { bankAccountId: feeBankAccountId, debitMinor: 0, creditMinor: 500 },
+    ]);
+    const feeDebitAccounts = await seeded.t.run(async (ctx) => {
+      const entries = await ctx.db.query("journalEntries")
+        .withIndex("by_org", (q) => q.eq("orgId", seeded.orgId)).collect();
+      const keys: string[] = [];
+      for (const entry of entries) {
+        const lines = await ctx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)).collect();
+        for (const line of lines) {
+          if (line.debitMinor === 500) keys.push((await ctx.db.get(line.accountId))?.systemKey ?? "UNKNOWN");
+        }
+      }
+      return keys;
+    });
+    expect(feeDebitAccounts).toEqual([SYSTEM_KEYS.PROFESSIONAL_FEES_EXPENSE]);
+  });
+});
 
 /** A date with NO open period — the previous calendar year. */
 const UNPOSTABLE_DATE = Date.UTC(new Date().getUTCFullYear() - 1, 5, 1);
@@ -220,7 +482,7 @@ async function clearedCheque(
   })) as Id<"postDatedCheques">;
   const paymentId = (await seeded.asAdmin.mutation(api.collections.clearCheque, {
       idempotencyKey: crypto.randomUUID(),
-    orgId: seeded.orgId, chequeId,
+    orgId: seeded.orgId, chequeId, bankAccountId: seeded.bankAccountId,
   })) as Id<"collectionPayments">;
   const movement = (await movementFor(seeded.t, seeded.orgId, paymentId))!;
   return { chequeId, paymentId, movement };
@@ -806,7 +1068,7 @@ describe("SCRUM-130 §D — pending vs posted receipt, both orderings", () => {
     })) as Id<"postDatedCheques">;
     const paymentId = (await seeded.asAdmin.mutation(api.collections.clearCheque, {
       idempotencyKey: crypto.randomUUID(),
-      orgId: seeded.orgId, chequeId, clearedAt: UNPOSTABLE_DATE,
+      orgId: seeded.orgId, chequeId, bankAccountId: seeded.bankAccountId, clearedAt: UNPOSTABLE_DATE,
     })) as Id<"collectionPayments">;
     return { ...seeded, chequeId, paymentId };
   }
@@ -948,6 +1210,7 @@ describe("SCRUM-130 §E — an exact replay is one return; a changed command is 
 
     await asAdmin.mutation(api.collections.returnClearedCheque, {
       orgId, chequeId, idempotencyKey: "return-e2", bankFeeMinor: 500,
+      bankFeeBankAccountId: seeded.bankAccountId,
     });
     await expect(
       asAdmin.mutation(api.collections.returnClearedCheque, {
@@ -1014,7 +1277,7 @@ async function padLineage(
 describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
   test("F1 — a refund that reversed this receipt's allocation blocks the return", async () => {
     const seeded = await seedOrg("f1");
-    const { t, asAdmin, asApprover, orgId, customerId } = seeded;
+    const { t, asAdmin, asApprover, orgId, customerId, bankAccountId } = seeded;
     const debt = await makeReceivable(asAdmin, orgId, customerId, 1000, "Own debt");
     const { chequeId } = await clearedCheque(seeded, "f1", 1000, debt);
 
@@ -1022,7 +1285,7 @@ describe("SCRUM-130 §F — boundaries refuse with zero economic delta", () => {
     // reverses the receipt's own persisted allocation, newest first.
     const requestId = await asAdmin.mutation(api.collections.requestApproval, {
       orgId, receivableId: debt, requestType: "REFUND",
-      requestedAmount: 400, disbursementMethod: "BANK_TRANSFER", reason: "customer refund",
+      requestedAmount: 400, disbursementMethod: "BANK_TRANSFER", bankAccountId, reason: "customer refund",
     });
     await asApprover.mutation(api.collections.respondToApproval, {
       idempotencyKey: crypto.randomUUID(),

@@ -20,6 +20,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { insertReceiptBank } from "../test-utils/financedDealFixture";
 import { financeReceiptAccountKey, ruleFinanceCashReceived } from "./accounting/postingRules";
 
 vi.mock("./rateLimit", () => ({
@@ -155,10 +156,21 @@ async function finalizedDeal(tag: string, method: Method, route: Route) {
   return { s, applicationId };
 }
 
-const confirm = (s: Seeded, applicationId: Id<"financeApplications">) =>
-  s.owner.mutation(api.applications.confirmDisbursement, {
+/**
+ * SCRUM-54: CASH is cash on hand and names no bank; BANK_TRANSFER / CHEQUE name an explicitly
+ * seeded physical bank. The method is passed by each call site, never inferred here.
+ */
+const confirm = async (s: Seeded, applicationId: Id<"financeApplications">, method: Method) => {
+  let bankAccountId: Id<"bankAccounts"> | undefined;
+  if (method !== "CASH") {
+    const userId = (await s.t.run((ctx) => ctx.db.query("users").first()))!._id;
+    bankAccountId = await insertReceiptBank({ t: s.t, orgId: s.orgId, owner: { userId } });
+  }
+  return await s.owner.mutation(api.applications.confirmDisbursement, {
     orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+    ...(bankAccountId ? { bankAccountId } : {}),
   });
+};
 
 /** Net debit-minus-credit per system key over the journals of every live FINANCE_CASH_RECEIVED event. */
 async function receiptNet(s: Seeded) {
@@ -208,7 +220,7 @@ describe("SCRUM-599 - the finance company's payment is debited to the account it
     "%s route, %s: the receipt debits the account the method names, agreeing with the canonical payment",
     async (route, method) => {
       const { s, applicationId } = await finalizedDeal(`m_${route}_${method}`, method, route);
-      await confirm(s, applicationId);
+      await confirm(s, applicationId, method);
 
       const { events, net } = await receiptNet(s);
       expect(events).toBe(1);
@@ -224,7 +236,7 @@ describe("SCRUM-599 - the finance company's payment is debited to the account it
 
   test("the event payload records the method it was posted under", async () => {
     const { s, applicationId } = await finalizedDeal("payload", "CASH", "MANUAL");
-    await confirm(s, applicationId);
+    await confirm(s, applicationId, "CASH");
     const event = await s.t.run(async (ctx) =>
       (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()).find(
         (e) => e.eventType === "FINANCE_CASH_RECEIVED"
@@ -249,7 +261,7 @@ describe("SCRUM-599 - the finance company's payment is debited to the account it
       for (const a of cashAccounts) await ctx.db.patch(a._id, { active: false });
     });
 
-    await confirm(s, applicationId);
+    await confirm(s, applicationId, method);
 
     expect((await receiptNet(s)).events).toBe(0);
     const pending = await s.t.run(async (ctx) =>
@@ -289,12 +301,13 @@ describe("SCRUM-599 - the finance company's payment is debited to the account it
     ).toThrow(/unsupported payment method/);
   });
 
-  test("a legacy event with no recorded method keeps its historical bank posting", () => {
-    const result = ruleFinanceCashReceived({
+  test("a legacy bank event without physical identity refuses instead of posting an unattributed bank line", () => {
+    expect(() => ruleFinanceCashReceived({
       applicationId: "legacy", payerNameSnapshot: "Legacy Co", amountMinor: G, currency: "JOD",
-    });
-    const debit = result.lines.find((l) => l.debitMinor > 0);
-    expect(debit?.accountSystemKey).toBe("BANK_ACCOUNT");
-    expect(debit?.debitMinor).toBe(G);
+    })).toThrow(/bank account is required/);
+    expect(() => ruleFinanceCashReceived({
+      applicationId: "cash", payerNameSnapshot: "Cash Co", amountMinor: G, currency: "JOD",
+      paymentMethod: "CASH", bankAccountId: "bankA",
+    })).toThrow(/cash finance receipt cannot name a bank/);
   });
 });

@@ -27,6 +27,13 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { type AppTheme } from "../../../theme";
 import { useAppTheme, useThemedStyles } from "../../../providers/ThemeProvider";
 import { compactInitials } from "../nativeModules";
+import {
+  upliftApprovedText,
+  upliftBelowMinimumBody,
+  upliftFieldLabel,
+  upliftRejectedText,
+  upliftRequestActionText,
+} from "./minimumUpliftCopy";
 import { useCommandIdentity, money, parseOptionalNumber, useGenericError, SearchInput, SelectField } from "../modules/moduleShared";
 import {
   calculateUnifiedMurabaha,
@@ -38,6 +45,8 @@ import {
   effectiveMobileQuoteVehiclePrice,
   manualExecutionFeeInputValue,
   mobileFinancingTermIsValid,
+  priceUpliftOverList,
+  profitApprovalGate,
 } from "./salesWizardQuote";
 
 export type WizardPaymentType = "CASH" | "INSTALLMENT";
@@ -189,6 +198,7 @@ export function SalesWizardScreen({
   // records it. Nothing is held until a request is confirmed.
   const [depositRequested, setDepositRequested] = useState(false);
   const [depositMethod, setDepositMethod] = useState("");
+  const [depositBankAccountId, setDepositBankAccountId] = useState("");
   const [depositId, setDepositId] = useState<string | null>(null);
   const [resumeChecked, setResumeChecked] = useState(false);
   const [resumePromptVisible, setResumePromptVisible] = useState(false);
@@ -224,6 +234,11 @@ export function SalesWizardScreen({
   const canRecordDeposit =
     myMembership?.roleName?.toUpperCase() === "OWNER" ||
     (myMembership?.permissions ?? []).includes("confirm:finance_disbursement");
+  const depositNeedsBank = depositMethod === "BANK_TRANSFER" || depositMethod === "CARD";
+  const receiptBankOptions = useQuery(api.deposits.listReceiptBankOptions,
+    canRecordDeposit && depositNeedsBank ? { orgId } : "skip");
+  const depositBankReady = !depositNeedsBank ||
+    (receiptBankOptions?.banks.some((bank) => bank._id === depositBankAccountId) ?? false);
   const commandId = useCommandIdentity();
   const saveDraft = useMutation(api.wizardDrafts.saveDraft);
   const clearDraft = useMutation(api.wizardDrafts.clearDraft);
@@ -246,10 +261,17 @@ export function SalesWizardScreen({
   const effectivePrice = effectiveMobileQuoteVehiclePrice(price, profit);
 
   const minimumProfit = selectedVehicle?.minimumProfit ?? 0;
-  const isProfitBelowMinimum = !isCash && Boolean(vehicleId) && profit < minimumProfit;
-  const hasValidApproval =
-    pendingApproval?.status === "APPROVED" && profit >= pendingApproval.requestedProfit;
-  const isBlockedByProfit = isProfitBelowMinimum && !hasValidApproval;
+  // The server compares final price minus list price with the minimum, so the
+  // alert, the gate and the approval match use that same figure.
+  const uplift = priceUpliftOverList(price, profit, selectedVehicle?.sellingPrice ?? 0);
+  const profitGate = profitApprovalGate({
+    isCash,
+    hasVehicle: Boolean(vehicleId),
+    uplift,
+    minimum: minimumProfit,
+    approval: pendingApproval,
+  });
+  const isBlockedByProfit = profitGate.blocked;
 
   // Mirrors useFinanceComparison: gate on customer statuses, filter by each
   // company's acceptedStatuses, then run the murabaha math per company.
@@ -637,7 +659,7 @@ export function SalesWizardScreen({
     setSaving(true);
     // Scoped to the QUOTE this wizard is building, so a lost response and a
     // second tap take the customer's deposit ONCE. Retired only on success.
-    const depositIntent = `wizard-deposit:${String(quoteId)}:${amount}:${depositMethod}`;
+    const depositIntent = `wizard-deposit:${String(quoteId)}:${amount}:${depositMethod}:${depositBankAccountId}`;
     try {
       if (!canRecordDeposit) {
         await requestDeposit({
@@ -651,12 +673,13 @@ export function SalesWizardScreen({
         setDepositOpen(false);
         return;
       }
-      if (!depositMethod) return;
+      if (!depositMethod || !depositBankReady) return;
       const newDepositId = await createDeposit({
         orgId,
         quoteId,
         amount,
         method: depositMethod as "CASH" | "BANK_TRANSFER" | "CARD" | "CHEQUE",
+        bankAccountId: depositNeedsBank ? depositBankAccountId : undefined,
         idempotencyKey: commandId.for(depositIntent),
       });
       commandId.retire(depositIntent);
@@ -792,21 +815,9 @@ export function SalesWizardScreen({
               <Icon color="subtleText" name="chevronDown" size={18} />
             </Pressable>
 
-            {/* Cost bar — purchase vs sale margin, like VehicleCostBar */}
-            {selectedVehicle?.purchasePrice != null ? (
-              <View style={styles.costBar}>
-                <View style={styles.costBarRow}>
-                  <Text style={styles.costBarLabel}>{locale === "ar" ? "التكلفة" : "Cost"}</Text>
-                  <Text style={styles.costBarValue}>{money(selectedVehicle.purchasePrice, locale)}</Text>
-                </View>
-                <View style={styles.costBarRow}>
-                  <Text style={styles.costBarLabel}>{locale === "ar" ? "الهامش" : "Margin"}</Text>
-                  <Text style={[styles.costBarValue, { color: accent }]}>
-                    {money(Math.max(0, (price || selectedVehicle.sellingPrice || 0) - (selectedVehicle.purchasePrice ?? 0)), locale)}
-                  </Text>
-                </View>
-              </View>
-            ) : null}
+            {/* SCRUM-55: no cost or margin panel. Purchase price alone is not the
+                books' cost (landed cost and capitalized expenses are missing), so a
+                margin derived from it disagrees with the ledger. */}
 
             {/* Pricing grid */}
             <View style={styles.fieldGrid}>
@@ -823,7 +834,7 @@ export function SalesWizardScreen({
                 <>
                   <Field
                     keyboardType="numeric"
-                    label={locale === "ar" ? "ربح المعرض" : "Dealer profit"}
+                    label={upliftFieldLabel(locale)}
                     value={desiredProfit}
                     onChangeText={(value) => {
                       setDesiredProfit(value);
@@ -1023,17 +1034,15 @@ export function SalesWizardScreen({
                       {locale === "ar" ? "موافقة مطلوبة" : "Approval required"}
                     </Text>
                     <Text style={styles.approvalBody}>
-                      {locale === "ar"
-                        ? `الربح المطلوب (${money(profit, locale)}) أقل من الحد الأدنى (${money(minimumProfit, locale)}).`
-                        : `Desired profit (${money(profit, locale)}) is below this vehicle's minimum (${money(minimumProfit, locale)}).`}
+                      {upliftBelowMinimumBody(locale, money(uplift, locale), money(minimumProfit, locale))}
                     </Text>
-                    {pendingApproval?.status === "PENDING" && pendingApproval.requestedProfit === profit ? (
+                    {profitGate.pending ? (
                       <Text style={styles.approvalPending}>
                         {locale === "ar" ? "الطلب قيد الانتظار — بانتظار المدير." : "Approval request pending — waiting for a manager."}
                       </Text>
-                    ) : pendingApproval?.status === "REJECTED" && pendingApproval.requestedProfit === profit ? (
+                    ) : profitGate.rejected ? (
                       <Text style={styles.approvalRejected}>
-                        {locale === "ar" ? "رُفض هذا المبلغ — ارفع الربح أو اطلب مجدداً." : "This amount was rejected — raise the profit or request again."}
+                        {upliftRejectedText(locale)}
                       </Text>
                     ) : (
                       <Pressable
@@ -1044,17 +1053,17 @@ export function SalesWizardScreen({
                         <Text style={styles.approvalButtonText}>
                           {requesting
                             ? locale === "ar" ? "جاري الطلب..." : "Requesting..."
-                            : locale === "ar" ? "طلب موافقة الربح" : "Request profit approval"}
+                            : upliftRequestActionText(locale)}
                         </Text>
                       </Pressable>
                     )}
                   </View>
                 ) : null}
-                {hasValidApproval && isProfitBelowMinimum ? (
+                {profitGate.approvalValid ? (
                   <View style={styles.approvedNote}>
                     <Icon color="success" name="check" size={16} />
                     <Text style={styles.approvedNoteText}>
-                      {locale === "ar" ? "تمت الموافقة على الربح — يمكنك المتابعة." : "Profit approved by management — you may proceed."}
+                      {upliftApprovedText(locale)}
                     </Text>
                   </View>
                 ) : null}
@@ -1298,7 +1307,7 @@ export function SalesWizardScreen({
                       { label: locale === "ar" ? "بطاقة" : "Card", value: "CARD" },
                       { label: locale === "ar" ? "شيك" : "Cheque", value: "CHEQUE" },
                     ]}
-                    onChange={setDepositMethod}
+                    onChange={(method) => { setDepositMethod(method); setDepositBankAccountId(""); }}
                   />
                 ) : (
                   <Text style={styles.successMonthly}>
@@ -1307,13 +1316,24 @@ export function SalesWizardScreen({
                       : "A manager or accountant will confirm receipt. Nothing is held until they do."}
                   </Text>
                 )}
+                {canRecordDeposit && depositNeedsBank && (
+                  <SelectField
+                    label={locale === "ar" ? "البنك الذي استلم العربون" : "Bank that received the deposit"}
+                    value={receiptBankOptions?.banks.some((bank) => bank._id === depositBankAccountId) ? depositBankAccountId : ""}
+                    options={(receiptBankOptions?.banks ?? []).map((bank) => ({ label: `${bank.name} · ${bank.currency}`, value: bank._id }))}
+                    onChange={setDepositBankAccountId}
+                  />
+                )}
+                {depositNeedsBank && receiptBankOptions?.truncated && (
+                  <Text style={styles.successMonthly}>{locale === "ar" ? "قائمة البنوك كبيرة جداً؛ اطلب مساعدة المسؤول." : "Too many banks to choose from; ask an administrator."}</Text>
+                )}
                 <View style={styles.rowButtons}>
                   <Pressable accessibilityRole="button" style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]} onPress={() => setDepositOpen(false)}>
                     <Text style={styles.ghostButtonText}>{locale === "ar" ? "إلغاء" : "Cancel"}</Text>
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
-                    disabled={saving || (canRecordDeposit && !depositMethod)}
+                    disabled={saving || (canRecordDeposit && (!depositMethod || !depositBankReady))}
                     style={({ pressed }) => [styles.nextButton, { backgroundColor: accent, flex: 1 }, pressed && styles.pressed]}
                     onPress={handleRecordDeposit}
                   >
@@ -1587,25 +1607,6 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
     flex: 1,
     color: theme.colors.mutedText,
     fontSize: 15,
-  },
-  costBar: {
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surfaceAlt,
-    padding: theme.spacing.md,
-  },
-  costBarRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  costBarLabel: {
-    color: theme.colors.mutedText,
-    fontSize: 13,
-  },
-  costBarValue: {
-    color: theme.colors.text,
-    fontSize: 13,
-    fontWeight: "600",
   },
   fieldGrid: {
     flexDirection: "row",

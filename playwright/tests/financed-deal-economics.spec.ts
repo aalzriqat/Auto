@@ -11,6 +11,7 @@ import {
   approveCreditDecision,
   createFinancedApplication,
   ensureFinanceCompany,
+  ensureOpenAccountingPeriod,
   openDealDetails,
   recordApprovedAmount,
   recordQuotation,
@@ -98,7 +99,6 @@ test.describe("recording a financed deal's economics through the interface", () 
     browser,
   }) => {
     await ensureFinanceCompany(page);
-
     const { model } = await createVehicle(page, {
       model: `E2E-ECON-${testDataSuffix()}`,
       requireImmediate: true,
@@ -173,6 +173,14 @@ test.describe("recording a financed deal's economics through the interface", () 
       const nextStep = managerPage.getByTestId("deal-next-step");
       await expect(nextStep).toContainText("Vehicle handover");
 
+      // The sale is recognised on the handover date, which the server stamps
+      // with its own clock when the handover is confirmed, and it refuses to
+      // close without an open period covering it (RECOGNITION_PERIOD_OPEN).
+      // Opened here, not at the start, so a run crossing a UTC month end cannot
+      // hand over into a month with no open period. Uses the salesperson's page
+      // (the manager's stays on the cockpit).
+      const periodWindow = await ensureOpenAccountingPeriod(page);
+
       await nextStep.getByRole("button", { name: "Register vehicle handover" }).click();
       const handoverDialog = managerPage.getByRole("dialog");
       // The one-way door, stated before it closes. `reopenApproval` refuses once
@@ -185,6 +193,8 @@ test.describe("recording a financed deal's economics through the interface", () 
       await expect(handoverDialog.getByText(/13,000/).first()).toBeVisible();
       await handoverDialog.getByRole("button", { name: "Confirm handover" }).click();
       await expect(handoverDialog).not.toBeVisible();
+      // Fails if the confirmation ran past the window the periods were checked for.
+      periodWindow.assertConfirmedWithinWindow();
 
       // Durable state, not the toast that fades: the rail has moved on, and the
       // block now names the step AFTER handover and offers it.
@@ -203,8 +213,8 @@ test.describe("recording a financed deal's economics through the interface", () 
 
       // --- closing readiness (SCRUM-407), completed from the cockpit ---------
       // SCRUM-432. The server refuses to finalize a covered deal whose costs
-      // are not itemized and reconciled, or that has no legal invoice (the v1
-      // plan posts revenue from it; SCRUM-411 retires that). This spec used to
+      // are not itemized and reconciled (it no longer needs a legal invoice:
+      // SCRUM-411 derives the sale on the server). This spec used to
       // click "Confirm closing" without either and then match "Closed" as a
       // substring anywhere on the page, so it passed while nothing closed.
       // The close is withheld first, and says why, rather than offered and
@@ -233,53 +243,33 @@ test.describe("recording a financed deal's economics through the interface", () 
       await costs.getByRole("button", { name: "Confirm reconciliation" }).click();
       await expect(costs.getByRole("button", { name: "Reconcile fee" })).toHaveCount(0);
 
-      // The costs are closable now, and the close is STILL withheld — for the
-      // legal invoice alone. Without this the first withheld assertion could
-      // be satisfied by the costs, and a broken invoice gate would go unseen.
+      // The costs are closable now, and nothing else is outstanding. SCRUM-411:
+      // no legal invoice was recorded and none is needed — the server derives
+      // the sale (with no deposit, no customer gap and nothing deducted,
+      // revenue is exactly the 13,000 the company remits), so the deal closes
+      // from its approved figure, handover and costs alone.
       const checklist = managerPage.getByTestId("deal-closing-checklist");
       await expect(checklist.getByTestId("closing-check-COSTS_CLOSABLE")).toHaveAttribute(
         "data-status",
         "READY",
       );
-      await expect(
-        checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED"),
-      ).toHaveAttribute("data-status", "BLOCKED");
-      await expect(close).toHaveCount(0);
+      // No legal invoice is needed: the check is NOT_APPLICABLE (exactly — the
+      // transitional legacy BLOCKED status is not accepted on this branch) and
+      // there is nothing to register.
+      await expect(checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED")).toHaveAttribute(
+        "data-status",
+        "NOT_APPLICABLE",
+      );
+      await expect(checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED")).toHaveCount(0);
 
-      // The legal invoice, made out to the finance company (the dialog's
-      // default). The plan must balance: with no deposit, no customer gap and
-      // nothing deducted, revenue is exactly the 13,000 the company remits.
-      // The checklist's own link for the blocked check opens the same dialog
-      // (both call legalInvoice.onRecord); the card-header button shares the
-      // name, so a role+name lookup matches two elements.
-      await checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED").click();
-      const invoiceDialog = managerPage.getByRole("dialog");
-      await invoiceDialog.locator("#legal-invoice-amount").fill("13000");
-      await invoiceDialog.locator("#legal-invoice-number").fill(`INV-E2E-${testDataSuffix()}`);
-      // SCRUM-596 (F-28): the invoice date is the paper's date. While the
-      // browser's day has not begun on the ledger's UTC clock (00:00-03:00 in
-      // Amman) nothing is pre-filled and saving waits for an explicit pick —
-      // never a silent move into the previous day. Either way the test picks
-      // the latest day the picker allows, which the server always accepts.
-      const invoiceDate = invoiceDialog.locator("#legal-invoice-date");
-      const save = invoiceDialog.getByRole("button", { name: "Save Legal Invoice" });
-      if (await invoiceDialog.locator("#legal-invoice-date-hint").isVisible()) {
-        await expect(invoiceDate).toHaveValue("");
-        await expect(save).toBeDisabled();
-        await managerPage.screenshot({
-          path: test.info().outputPath("legal-invoice-date-not-open-yet.png"),
-        });
-      }
-      const latestDay = await invoiceDate.getAttribute("max");
-      expect(latestDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      await invoiceDate.fill(latestDay!);
-      await save.click();
-      await expect(invoiceDialog).not.toBeVisible();
-      await expect(
-        checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED"),
-      ).toHaveAttribute("data-status", "READY");
+      // The handover date falls in the open period established above: the
+      // server's guard is satisfied, not bypassed.
+      await expect(checklist.getByTestId("closing-check-RECOGNITION_PERIOD_OPEN")).toHaveAttribute(
+        "data-status",
+        "READY",
+      );
 
-      // And now — and only now — closing is the step the rail names.
+      // Closing is the step the rail names.
       await expect(close).toBeVisible();
       await close.click();
       const finalizeDialog = managerPage.getByRole("dialog");

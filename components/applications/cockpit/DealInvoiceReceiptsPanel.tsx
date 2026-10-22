@@ -16,9 +16,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ReceiptBankSelect, useReceiptBankOptions } from "@/components/accounting/ReceiptBankSelect";
+import { ClearChequeBankDialog } from "@/components/accounting/ClearChequeBankDialog";
 
 type ReceiptMethod = "CASH" | "BANK_TRANSFER";
-type PaymentAttempt = { amount: number; method: ReceiptMethod; paymentDate: number; reference?: string };
+type PaymentAttempt = {
+  amount: number; method: ReceiptMethod; paymentDate: number; reference?: string; bankAccountId?: Id<"bankAccounts">;
+};
 type ReserveAttempt = { receiptMovementId: Id<"receiptMovements">; amountMinor: number };
 /** SCRUM-724 CR-2: a retained-credit refund is paid by bank transfer only. */
 const REFUND_METHOD = "BANK_TRANSFER" as const;
@@ -50,7 +54,6 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const activate = useMutation(api.collections.activateSaleInvoiceReceipt);
   const registerCheque = useMutation(api.collections.registerSaleInvoiceCheque);
   const depositCheque = useMutation(api.collections.depositCheque);
-  const clearCheque = useMutation(api.collections.clearCheque);
   const requestRefund = useMutation(api.retainedCreditRefunds.requestRetainedCreditRefund);
   const [pendingCursor, setPendingCursor] = useState<string | null>(null);
   const status = useQuery(api.collections.saleInvoiceReceiptStatus,
@@ -65,10 +68,12 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const [method, setMethod] = useState<ReceiptMethod>("CASH");
   const [date, setDate] = useState(economicTodayDateInput);
   const [reference, setReference] = useState("");
+  const [bankAccountId, setBankAccountId] = useState("");
   const [chequeBank, setChequeBank] = useState("");
   const [chequeNumber, setChequeNumber] = useState("");
   const [chequeAmount, setChequeAmount] = useState("");
   const [chequeDate, setChequeDate] = useState(todayDateInput);
+  const [clearTarget, setClearTarget] = useState<{ id: Id<"postDatedCheques">; label: string } | null>(null);
   const [reserveAmount, setReserveAmount] = useState("");
   const [selectedMovement, setSelectedMovement] = useState("");
   const [paymentAttempt, setPaymentAttempt] = useState<PaymentAttempt | null>(null);
@@ -80,6 +85,8 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  const needsBank = method === "BANK_TRANSFER";
+  const bankOptions = useReceiptBankOptions(orgId, canManage && needsBank, paymentAttempt?.bankAccountId ?? bankAccountId);
   if (!canView) return null;
   const invoice = status?.invoice;
   const currency = invoice?.currency ?? "JOD";
@@ -133,13 +140,15 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
     const paymentDate = economicDateInputToMs(date);
     if (!paymentAttempt && (parsedPayment.minor === null || parsedPayment.minor <= 0 ||
       parsedPayment.minor > invoice.availableToReserveMinor ||
-      !Number.isFinite(paymentDate) || (method === "BANK_TRANSFER" && !reference.trim()))) {
+      !Number.isFinite(paymentDate) || (needsBank && (!reference.trim() || !bankOptions.chosenOffered)))) {
       setError(t("DealReceiptEnterValidPayment"));
       return;
     }
-    const attempt = paymentAttempt ?? {
+    // The chosen bank is frozen with the attempt, so a retry replays the same bank under the same key.
+    const attempt: PaymentAttempt = paymentAttempt ?? {
       amount: parsedPayment.minor! / factor, method, paymentDate,
       reference: reference.trim() || undefined,
+      ...(needsBank ? { bankAccountId: bankAccountId as Id<"bankAccounts"> } : {}),
     };
     setPaymentAttempt(attempt);
     setBusy(true); setError(""); setNotice("");
@@ -147,7 +156,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
       await recordPayment({ orgId, customerId: status.customerId, invoiceSaleId: saleId, ...attempt,
         idempotencyKey: command.for(paymentIntent) });
       command.retire(paymentIntent);
-      setPaymentAttempt(null); setAmount(""); setReference("");
+      setPaymentAttempt(null); setAmount(""); setReference(""); setBankAccountId("");
       setNotice(t("DealReceiptRecorded"));
     } catch (error_) {
       showFailure(error_, "DealReceiptActionFailed");
@@ -235,27 +244,15 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
     } finally { setBusy(false); }
   }
 
-  async function onAdvanceCheque(chequeId: Id<"postDatedCheques">, state: "HELD" | "DEPOSITED", chequeAmountMajor: number) {
-    // A HELD cheque is deposited only while the live invoice can still cover it
-    // (the server refuses otherwise). A DEPOSITED one is already at the bank, so
-    // it can always be cleared: the server books it as invoice receipt or, when
-    // the sale was cancelled or is now covered, as unreserved customer credit.
-    // Neither is a pilot-switched door on the server, so neither is here.
+  async function onAdvanceCheque(chequeId: Id<"postDatedCheques">, chequeAmountMajor: number) {
+    // A held cheque is deposited only while the live invoice can still cover it.
+    // Clearing a deposited cheque uses the separate bank-selection dialog.
     if (!canManage || busy) return;
-    if (state === "HELD" && !invoiceCoversCheque(chequeAmountMajor)) return;
+    if (!invoiceCoversCheque(chequeAmountMajor)) return;
     setBusy(true); setError(""); setNotice("");
     try {
-      if (state === "HELD") {
-        await depositCheque({ orgId, chequeId });
-        setNotice(t("DealReceiptChequeDepositNotice"));
-      } else {
-        const intent = `sale-clear-cheque:${chequeId}`;
-        await clearCheque({ orgId, chequeId, idempotencyKey: command.for(intent) });
-        command.retire(intent);
-        // Never "reserved for this invoice": the server reserves only on a live
-        // intent with the doors open; otherwise the face is unreserved credit.
-        setNotice(t("DealReceiptChequeClearedToCredit"));
-      }
+      await depositCheque({ orgId, chequeId });
+      setNotice(t("DealReceiptChequeDepositNotice"));
     } catch (error_) {
       showFailure(error_, "DealReceiptChequeActionFailed");
     } finally { setBusy(false); }
@@ -293,6 +290,11 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
                 <option value="CASH">{t("MethodCash")}</option>
                 <option value="BANK_TRANSFER">{t("MethodBankTransfer")}</option>
               </select></div>
+            {needsBank && (
+              <div className="sm:col-span-2"><Label htmlFor="sale-receipt-bank">{t("ReceiptBankAccount")}</Label>
+                <ReceiptBankSelect id="sale-receipt-bank" bankOptions={bankOptions} value={paymentAttempt?.bankAccountId ?? bankAccountId}
+                  disabled={!!paymentAttempt || busy || !doorsAvailable} onChange={setBankAccountId} /></div>
+            )}
             <div><Label htmlFor="sale-receipt-date">{t("DealReceiptDate")}</Label>
               <Input id="sale-receipt-date" type="date" max={economicTodayDateInput()} value={date}
                 disabled={!!paymentAttempt || busy || !doorsAvailable} aria-describedby={doorsReason}
@@ -340,7 +342,9 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
                 {uncovered && <span className="text-muted-foreground">{t("DealReceiptChequeExceedsInvoice")}</span>}
                 {canManage && (!held || depositable) &&
                   <Button size="sm" variant="outline" disabled={busy}
-                    onClick={() => onAdvanceCheque(cheque.chequeId, held ? "HELD" : "DEPOSITED", cheque.amount)}>
+                    onClick={() => held
+                      ? onAdvanceCheque(cheque.chequeId, cheque.amount)
+                      : setClearTarget({ id: cheque.chequeId, label: `${cheque.bank} #${cheque.chequeNumber}` })}>
                     {t(held ? "DealReceiptDepositCheque" : "DealReceiptClearCheque")}</Button>}
               </li>
             );
@@ -454,6 +458,9 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
       </CardHeader>
       <CardContent className="space-y-5">
         {body}
+        <ClearChequeBankDialog orgId={orgId} chequeId={clearTarget?.id ?? null}
+          chequeLabel={clearTarget?.label ?? ""} onClose={() => setClearTarget(null)}
+          onCleared={() => { setError(""); setNotice(t("DealReceiptChequeClearedToCredit")); }} />
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {notice && <output className="block text-sm">{notice}</output>}
       </CardContent>

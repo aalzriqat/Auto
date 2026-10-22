@@ -42,6 +42,15 @@ import schema from "../../convex/schema";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("../../convex/utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../convex/utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
+
 vi.mock("../../convex/rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
@@ -275,12 +284,17 @@ beforeAll(() => {
 beforeEach(() => {
   cleanup();
   queryResults.clear();
+  queryResults.set("deposits:listRefundBankOptions", {
+    banks: [{ _id: "bank_1", name: "Test refund bank", currency: "JOD" }], truncated: false,
+  });
   mutationCalls.length = 0;
   permissions = [];
   vi.restoreAllMocks();
 });
 
-describe("a deposit paid in two instalments, on screen", () => {
+// Renders the screen over a full deposit-and-sale backend run; under coverage
+// it takes over 3 s, too close to the 5 s default (SCRUM-752).
+describe("a deposit paid in two instalments, on screen", { timeout: 30_000 }, () => {
   /** Two payments, both cars allocated, A sold and then cancelled. */
   async function twoPaymentsWithACancelled(tag: string) {
     const s = await seedQuote(tag);
@@ -573,6 +587,10 @@ describe("what each role can do with a released share", () => {
     fireEvent.click(screen.getByText("PaymentMethod_BANK_TRANSFER"));
 
     expect(within(row).queryByRole("status")).toBeNull();
+    expect(record().disabled).toBe(true);
+    const bankTrigger = within(row).getByRole("combobox", { name: "ReceiptBankAccount" });
+    fireEvent.keyDown(bankTrigger, { key: "Enter", code: "Enter" });
+    fireEvent.click(screen.getByText(/Test refund bank/));
     expect(record().disabled).toBe(false);
     fireEvent.click(record());
     expect(mutationCalls).toHaveLength(1);
@@ -580,6 +598,7 @@ describe("what each role can do with a released share", () => {
       holdId,
       treatment: "REFUND_TO_CUSTOMER",
       refundMethod: "BANK_TRANSFER",
+      bankAccountId: "bank_1",
     });
   });
 

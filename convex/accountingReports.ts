@@ -70,7 +70,7 @@ async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations"
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /** accountingDate value historical queries treat as "no date" when a range bound is open. */
-const NO_ACCOUNTING_DATE_SENTINEL = -1;
+export const NO_ACCOUNTING_DATE_SENTINEL = -1;
 
 /**
  * Concatenate index reads and put them back in insertion (_creationTime) order,
@@ -86,8 +86,61 @@ export async function getPostedLines(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   fromDate?: number,
-  toDate?: number
+  toDate?: number,
+  options?: { preferBulkRead?: boolean }
 ) {
+  // Leave headroom under Convex's per-transaction index-range limit for the
+  // rest of the report. Lines sharing a parent require only one point read.
+  const maxTargetedParents = 512;
+  const excludeSentinel = fromDate === undefined || toDate === undefined;
+  const eligibility = await ctx.db.query("journalReportEligibility")
+    .withIndex("by_org", q => q.eq("orgId", orgId)).unique();
+  if (eligibility?.phase === "READY") {
+    const lines = await ctx.db.query("journalLines")
+      .withIndex("by_org_reportPosted_date", q => {
+        const scoped = q.eq("orgId", orgId).eq("reportPosted", true);
+        if (fromDate !== undefined && toDate !== undefined) return scoped.gte("accountingDate", fromDate).lte("accountingDate", toDate);
+        if (fromDate !== undefined) return scoped.gte("accountingDate", fromDate);
+        if (toDate !== undefined) return scoped.lte("accountingDate", toDate);
+        return scoped;
+      }).collect();
+    return mergeByCreation([lines.filter(line => !excludeSentinel || line.accountingDate !== NO_ACCOUNTING_DATE_SENTINEL)]);
+  }
+  const lineQuery = () => ctx.db
+    .query("journalLines")
+    .withIndex("by_org_date", (q) => {
+      const scoped = q.eq("orgId", orgId);
+      if (fromDate !== undefined && toDate !== undefined) {
+        return scoped.gte("accountingDate", fromDate).lte("accountingDate", toDate);
+      }
+      if (fromDate !== undefined) return scoped.gte("accountingDate", fromDate);
+      if (toDate !== undefined) return scoped.lte("accountingDate", toDate);
+      return scoped;
+    });
+
+  // Read the requested lines once. A two-sided window with a bounded number
+  // of parent entries can avoid reading every posted entry in the organization.
+  // Cumulative callers can retain the bulk parent scan.
+  const hasDateBound = fromDate !== undefined && toDate !== undefined;
+  const inRange = await lineQuery().collect();
+  const parentIds = hasDateBound && !options?.preferBulkRead
+    ? [...new Set(inRange.map((line) => line.journalEntryId))]
+    : [];
+  if (hasDateBound && !options?.preferBulkRead && parentIds.length <= maxTargetedParents) {
+    const parents = await Promise.all(parentIds.map((id) => ctx.db.get("journalEntries", id)));
+    const allowedIds = new Set<Id<"journalEntries">>();
+    for (const parent of parents) {
+      if (parent?.orgId === orgId && (parent.status === "POSTED" || parent.status === "REVERSED")) {
+        allowedIds.add(parent._id);
+      }
+    }
+    return mergeByCreation([
+      inRange.filter(
+        (line) => (!excludeSentinel || line.accountingDate !== NO_ACCOUNTING_DATE_SENTINEL) && allowedIds.has(line.journalEntryId)
+      ),
+    ]);
+  }
+
   // Include REVERSED entries too, not just POSTED ones: a reversed entry's
   // own lines are still real, immutable historical postings — its status
   // just means a *separate*, independently-posted reversal entry later
@@ -106,21 +159,7 @@ export async function getPostedLines(
   for (const e of postedEntries) entryIds.add(e._id);
   for (const e of reversedEntries) entryIds.add(e._id);
 
-  const inRange = await ctx.db
-    .query("journalLines")
-    .withIndex("by_org_date", (q) => {
-      const scoped = q.eq("orgId", orgId);
-      if (fromDate !== undefined && toDate !== undefined) {
-        return scoped.gte("accountingDate", fromDate).lte("accountingDate", toDate);
-      }
-      if (fromDate !== undefined) return scoped.gte("accountingDate", fromDate);
-      if (toDate !== undefined) return scoped.lte("accountingDate", toDate);
-      return scoped;
-    })
-    .collect();
-
   // With an open bound, a line carrying the -1 sentinel date stays excluded.
-  const excludeSentinel = fromDate === undefined || toDate === undefined;
   // Callers expect insertion order; the date index returns accountingDate order.
   return mergeByCreation([
     inRange.filter(
@@ -1210,9 +1249,26 @@ export async function computeCommissionPayableReconciliation(
   // shared CURRENT-state rule the commissions page and the payroll sweep use,
   // and it is right for them. A point-in-time report cannot use it — it would
   // have to ask "was this owed then", which the predicate cannot express.
-  const recognizedBySale = await computeRecognizedCommissionAsOf(ctx, orgId, toDate);
+  const { bySale: recognizedBySale, byLine: recognizedByLine } = await computeRecognizedCommissionAsOf(
+    ctx,
+    orgId,
+    toDate
+  );
 
   const subledgerMinor = new Map<string, number>();
+  // Extra deal commission lines are their own subledger: each owes the payable
+  // until payroll pays it. Settled at or before the reporting date means the GL
+  // had already cleared it; a removed line has recognized nothing left (its
+  // reversal is netted in the recognition read).
+  for (const [lineId, recognized] of recognizedByLine) {
+    const normalized = ctx.db.normalizeId("dealCommissionLines", lineId);
+    const line = normalized ? await ctx.db.get(normalized) : null;
+    if (!line || line.orgId !== orgId) continue;
+    if (line.paidAt !== undefined && (toDate === undefined || line.paidAt <= toDate)) continue;
+    for (const [currency, minor] of recognized) {
+      subledgerMinor.set(currency, (subledgerMinor.get(currency) ?? 0) + minor);
+    }
+  }
   for (const sale of sales) {
     if (sale.isDeleted === true) continue;
     // What the GL had recognized for this sale as of the reporting date. Summed
@@ -1266,7 +1322,7 @@ async function computeRecognizedCommissionAsOf(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined
-): Promise<Map<string, Map<string, number>>> {
+): Promise<{ bySale: Map<string, Map<string, number>>; byLine: Map<string, Map<string, number>> }> {
   // by_org_eventType_status_date loads one event type, one status, for just its
   // own window instead of the org's whole history (this runs inside the close
   // checklist). POSTED and REVERSED are two reads merged back into accountingDate order.
@@ -1284,11 +1340,17 @@ async function computeRecognizedCommissionAsOf(
   };
 
   const recognized = new Map<string, Map<string, number>>();
-  const add = (saleId: unknown, minor: unknown, currency: string) => {
+  // Extra deal commission lines carry `payload.lineId`. They are kept apart from
+  // the sale's own commission so the divergence control (recognized vs the
+  // decided sale amount) is not disturbed by them.
+  const recognizedLines = new Map<string, Map<string, number>>();
+  const add = (saleId: unknown, minor: unknown, currency: string, lineId?: string) => {
     if (typeof saleId !== "string" || typeof minor !== "number" || !Number.isFinite(minor)) return;
-    const byCurrency = recognized.get(saleId) ?? new Map<string, number>();
+    const target = lineId !== undefined ? recognizedLines : recognized;
+    const key = lineId ?? saleId;
+    const byCurrency = target.get(key) ?? new Map<string, number>();
     byCurrency.set(currency, (byCurrency.get(currency) ?? 0) + minor);
-    recognized.set(saleId, byCurrency);
+    target.set(key, byCurrency);
   };
 
   const wasLiveAt = async (event: Doc<"accountingEvents">): Promise<boolean> => {
@@ -1300,12 +1362,12 @@ async function computeRecognizedCommissionAsOf(
   };
 
   for (const e of await inWindow("COMMISSION_ACCRUED")) {
-    if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.amountMinor, e.currency);
+    if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.amountMinor, e.currency, e.sourceType === "dealCommissionLines" ? e.sourceId : undefined);
   }
   for (const e of await inWindow("COMMISSION_ADJUSTED")) {
     if (await wasLiveAt(e)) add(e.payload?.saleId, e.payload?.deltaMinor, e.currency);
   }
-  return recognized;
+  return { bySale: recognized, byLine: recognizedLines };
 }
 
 /**
@@ -1412,7 +1474,7 @@ export async function computeCommissionRecognitionDivergence(
   // which is a question about now, not about a date. Its cost is one bounded
   // read of the org's commission events; the duplicate outbox reads that made
   // the checklist expensive are threaded in above.
-  const recognized = await computeRecognizedCommissionAsOf(ctx, orgId, undefined);
+  const { bySale: recognized } = await computeRecognizedCommissionAsOf(ctx, orgId, undefined);
   const outbox =
     provided?.pendingEvents ??
     (

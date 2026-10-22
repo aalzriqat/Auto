@@ -22,6 +22,10 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
+
+// SCRUM-795: manual journals are OFF in the shipped pilot build. This suite proves
+// the ENABLED behaviour (the switch is reversible), so it runs with the leaf off.
+vi.mock("./utils/pilotSwitches", async (importOriginal) => ({ ...(await importOriginal<typeof import("./utils/pilotSwitches")>()), MANUAL_JOURNALS_PILOT_DISABLED: false }));
 import schema from "./schema";
 import { api } from "./_generated/api";
 
@@ -138,6 +142,68 @@ async function seedDealer() {
     priorPeriod, currentPeriod, now,
   };
 }
+
+describe("SCRUM-54 — manual journals cannot create unbanked control lines", () => {
+  test("bank control cannot be configured for manual posting", async () => {
+    const s = await seedDealer();
+    const bank = (await s.asUser.query(api.chartOfAccounts.list, { orgId: s.orgId }))
+      .find((account) => account.systemKey === "BANK_ACCOUNT");
+    if (!bank) throw new Error("Bank control account missing from fixture");
+
+    await expect(s.asUser.mutation(api.chartOfAccounts.update, {
+      orgId: s.orgId, accountId: bank._id, allowManualPosting: true,
+    })).rejects.toThrow(/physical bank/i);
+    expect(await s.t.run((ctx) => ctx.db.get(bank._id))).toMatchObject({ allowManualPosting: false });
+  });
+
+  test("enabling manual posting on bank control cannot create an unbanked journal draft", async () => {
+    const s = await seedDealer();
+    const bank = (await s.asUser.query(api.chartOfAccounts.list, { orgId: s.orgId }))
+      .find((account) => account.systemKey === "BANK_ACCOUNT");
+    if (!bank) throw new Error("Bank control account missing from fixture");
+    // Simulate a persisted setting from before the chart-update guard.
+    await s.t.run((ctx) => ctx.db.patch(bank._id, { allowManualPosting: true }));
+
+    await expect(s.asUser.mutation(api.financialAudit.createManualJournal, {
+      orgId: s.orgId,
+      memo: "Unbanked manual debit",
+      lines: [
+        { accountId: bank._id, debitMinor: 50_000, creditMinor: 0 },
+        { accountId: s.manualAccounts[0]._id, debitMinor: 0, creditMinor: 50_000 },
+      ],
+      idempotencyKey: "scrum54-manual-bank-create",
+      accountingDate: s.declaredDate,
+    })).rejects.toThrow(/physical bank/i);
+    expect(await s.t.run((ctx) => ctx.db.query("manualJournalDrafts").collect())).toHaveLength(0);
+  });
+
+  test("approval refuses a persisted bank-control draft without physical bank identity", async () => {
+    const s = await seedDealer();
+    const bank = (await s.asUser.query(api.chartOfAccounts.list, { orgId: s.orgId }))
+      .find((account) => account.systemKey === "BANK_ACCOUNT");
+    if (!bank) throw new Error("Bank control account missing from fixture");
+    await s.t.run((ctx) => ctx.db.patch(bank._id, { allowManualPosting: true }));
+    const draftId = await s.t.run((ctx) => ctx.db.insert("manualJournalDrafts", {
+      orgId: s.orgId,
+      status: "PENDING_APPROVAL",
+      memo: "Older unbanked draft",
+      lines: [
+        { accountId: bank._id, debitMinor: 50_000, creditMinor: 0 },
+        { accountId: s.manualAccounts[0]._id, debitMinor: 0, creditMinor: 50_000 },
+      ],
+      accountingDate: s.declaredDate,
+      idempotencyKey: "scrum54-manual-bank-approve",
+      createdBy: s.userId,
+      createdAt: Date.now(),
+    }));
+
+    await expect(s.asReviewer.mutation(api.financialAudit.approveManualJournal, {
+      orgId: s.orgId, draftId,
+    })).rejects.toThrow(/physical bank/i);
+    expect(await s.t.run((ctx) => ctx.db.get(draftId))).toMatchObject({ status: "PENDING_APPROVAL" });
+    expect(await s.t.run((ctx) => ctx.db.query("journalEntries").collect())).toHaveLength(0);
+  });
+});
 
 describe("SCRUM-50 — a manual journal posts to its declared accounting date", () => {
   test("the journal entry carries the declared date, not the approval timestamp", async () => {

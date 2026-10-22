@@ -113,6 +113,8 @@ function allReferences(): Ref[] {
  * preflight blocks every non-internal caller, and the reason must say so.
  */
 const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
+  "dealCommissionLines.payrollItemId->payrollItems":
+    "Written only (payroll.ts payItem patch when a line is paid); no reader dereferences it. Lines are deleted after payroll items, so a pass that stops between them leaves a line pointing at a deleted item that nothing reads.",
   "accountingEvents.reversalOfEventId->accountingEvents":
     "Self-reference; read only as an id compare (utils/financeCompanyForward.ts:154) and passed to a null-guarded get (utils/prepaidRecognitionEvents.ts:179-182); never a hard dereference.",
   "accountingEvents.reversedByEventId->accountingEvents":
@@ -236,9 +238,16 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "depositVehicleHolds.depositId->deposits":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  "customerFinanceCompanyPayments.applicationId->financeApplications":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row. Same shape and decision as financeCompanyForwards.applicationId; nothing reads the evidence except through its application.",
   "employeeAdvanceRecoveries.payrollItemId->payrollItems":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "financeCompanyForwards.applicationId->financeApplications":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  // SCRUM-411 P2-02: the per-deposit provenance of a forward; same treatment as its parent forward row.
+  "financeCompanyForwardSlices.applicationId->financeApplications":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  "financeCompanyForwardSlices.depositId->deposits":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
   "fixedAssetEvents.accountingEventId->accountingEvents":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",

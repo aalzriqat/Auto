@@ -17,6 +17,15 @@ import { api } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { supplierReceivableView } from "./supplierReceivables";
 
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -72,6 +81,11 @@ async function seed(tag: string) {
   const asUser = t.withIdentity({ subject: `${tag}_u`, clerkId: `${tag}_u` });
   const asManager = t.withIdentity({ subject: `${tag}_m`, clerkId: `${tag}_m` });
   await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Supplier collections", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
   const fiscalYear = new Date().getUTCFullYear();
   await asUser.mutation(api.accountingPeriods.create, {
@@ -105,7 +119,7 @@ async function seed(tag: string) {
     ctx.db.query("vehicleSupplierReceivables").collect()
   ))[0]!;
 
-  return { t, orgId, userId, asUser, asManager, customerId, vehicleId, saleId, receivable };
+  return { t, orgId, userId, bankAccountId, asUser, asManager, customerId, vehicleId, saleId, receivable };
 }
 
 /** Net movement per system key across the org's posted ledger. */
@@ -136,6 +150,62 @@ async function ledger(
 }
 
 describe("the claim a direct-settled sale opens", () => {
+  test("a bank-funded supplier collection without a physical bank refuses without changing books or claim", async () => {
+    const s = await seed("bank-required");
+    const before = await s.t.run(async (ctx) => ({
+      claim: await ctx.db.get(s.receivable._id),
+      events: (await ctx.db.query("accountingEvents").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }));
+    await expect(s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId, receivableId: s.receivable._id, amount: 100,
+      receiptMethod: "BANK_TRANSFER", idempotencyKey: "missing-bank",
+    })).rejects.toThrow(/bank account/i);
+    expect(await s.t.run(async (ctx) => ({
+      claim: await ctx.db.get(s.receivable._id),
+      events: (await ctx.db.query("accountingEvents").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }))).toEqual(before);
+  });
+
+  test("bank choices are claim-currency scoped and an inactive or foreign bank is refused", async () => {
+    const s = await seed("bank-guards");
+    const options = await s.asUser.query(api.supplierReceivables.listReceiptBankOptions, {
+      orgId: s.orgId, receivableId: s.receivable._id,
+    });
+    expect(options).toMatchObject({ truncated: false, banks: [{ _id: s.bankAccountId, currency: "JOD" }] });
+    await s.t.run((ctx) => ctx.db.patch(s.bankAccountId, { isActive: false }));
+    await expect(s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId, receivableId: s.receivable._id, amount: 100,
+      receiptMethod: "CARD", bankAccountId: s.bankAccountId, idempotencyKey: "inactive-bank",
+    })).rejects.toThrow(/inactive/);
+    const otherOrgId = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "Other supplier bank org", createdAt: Date.now() }));
+    const foreignBankId = await s.t.run((ctx) => ctx.db.insert("bankAccounts", {
+      orgId: otherOrgId, name: "Foreign", currency: "JOD", openingBalanceMinor: 0,
+      openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+      createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    await expect(s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId, receivableId: s.receivable._id, amount: 100,
+      receiptMethod: "BANK_TRANSFER", bankAccountId: foreignBankId, idempotencyKey: "foreign-bank",
+    })).rejects.toThrow(/not found in this organization/i);
+    expect((await s.t.run((ctx) => ctx.db.get(s.receivable._id)))?.amountReceived).toBeUndefined();
+  });
+
+  test("a supplier cheque is held without a bank, and cash rejects a bank selection", async () => {
+    const s = await seed("cheque-direction");
+    await expect(s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId, receivableId: s.receivable._id, amount: 100,
+      receiptMethod: "CASH", bankAccountId: s.bankAccountId, idempotencyKey: "cash-with-bank",
+    })).rejects.toThrow(/does not post to a bank/);
+    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+      orgId: s.orgId, receivableId: s.receivable._id, amount: 100,
+      receiptMethod: "CHEQUE", idempotencyKey: "cheque-received",
+    });
+    const gl = await ledger(s.t, s.orgId);
+    expect(gl[SYSTEM_KEYS.CHEQUES_IN_HAND]).toBe(100 * SCALE);
+    expect(gl[SYSTEM_KEYS.BANK_ACCOUNT] ?? 0).toBe(0);
+  });
   test("records which deal the margin is owed on, not just that it is owed", async () => {
     const s = await seed("open");
     expect(s.receivable.saleId).toBe(s.saleId);
@@ -186,6 +256,7 @@ describe("collecting it", () => {
       receivableId: s.receivable._id,
       amount: 1_000,
       receiptMethod: "BANK_TRANSFER",
+      bankAccountId: s.bankAccountId,
       receiptReference: "TRF-99120",
     });
 
@@ -202,6 +273,14 @@ describe("collecting it", () => {
     const row = await s.t.run((ctx) => ctx.db.get(s.receivable._id));
     expect(row?.receiptReference).toBe("TRF-99120");
     expect(row?.receiptMethod).toBe("BANK_TRANSFER");
+    expect(row?.receiptBankAccountId).toBe(s.bankAccountId);
+    const bankLines = await s.t.run(async (ctx) => {
+      const control = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) =>
+        q.eq("orgId", s.orgId).eq("systemKey", SYSTEM_KEYS.BANK_ACCOUNT)).unique();
+      return (await ctx.db.query("journalLines").collect()).filter((line) => line.accountId === control?._id);
+    });
+    expect(bankLines).toHaveLength(1);
+    expect(bankLines[0]).toMatchObject({ bankAccountId: s.bankAccountId, debitMinor: 1_000 * SCALE });
   });
 
   test("instalments accumulate and the last one settles the claim to zero", async () => {

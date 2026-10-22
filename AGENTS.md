@@ -12,6 +12,14 @@ Convex agent skills for common tasks can be installed by running
 
 <!-- convex-ai-end -->
 
+## Agent skills
+
+Shared skills live in `.claude/skills/`. Read `.claude/skills/README.md` for which skill to use in which situation and for what is deliberately not adopted. The skills sit below this file and the project instructions in precedence. They never replace the two-seat review for money changes, and a subagent they suggest is not a review seat.
+
+When evidence shows the same agent mistake has occurred twice in this repo, invoke `.claude/skills/correct/SKILL.md` automatically. Do not wait for a user request. Follow its evidence and scope rules, and keep the normal review and release gates.
+
+Invocation is enforced, not optional. A session hook (`.claude/settings.json`) blocks commit, push and PR creation until the skills required for the touched paths have been invoked, and the required `skill-evidence` PR check fails a money, permission or gate PR whose body lacks a filled `## Skill evidence` section (red run, `/simplify` output, Seat 1 session and model, Seat 2 model and effort). See the Enforcement section of `.claude/skills/README.md`. These checks never write `review-evidence/*.json`.
+
 ## Pilot release gate (owner standard, 2026-10-07)
 
 The pilot release, which happens before the repository transfer, is gated by Jira epic
@@ -42,12 +50,47 @@ Until SCRUM-760 is Done, none of the following is evidence of correctness:
 - the pull-request visual Playwright gate;
 - a swarm run that never reached its attack workers.
 
-**Owner ruling SCRUM-813 c22622 (2026-10-10):** the pilot retains the original
-30-day no-code lifecycle. Customer invoice receipt application, unwind/refund
-and operator correction must work and be certified before launch. The current
-narrowed CASH + configured FINANCED controls remain disabled until their broader
-routes have been implemented, reviewed, deployed and certified. A green test of
-only the narrowed path does not satisfy SCRUM-714 or SCRUM-760.
+**Owner ruling SCRUM-760 (2026-10-19), decision B — narrow pilot gate.** This
+supersedes the SCRUM-813 c22622 ruling (2026-10-10) for the *initial pilot only*.
+Two gates now exist and must not be confused:
+
+- **Pilot launch gate (SCRUM-760).** One dealer (Bloom Cars), CASH and FINANCED
+  deals through delivery, and only certified financial operations enabled. The
+  full receipt, refund and correction lifecycle is **not** required to launch.
+  The gate passes only when the narrow scope is independently verified (the
+  three bug hunters, the scenario library run against a real backend under
+  SCRUM-762, and the trusted cloud rehearsal). The verifier is two independent
+  agent seats (Codex and Opus), never the implementing session; there is no
+  second person and no human review is claimed. The evidence required is:
+  - every enabled workflow preserves the accounting invariants;
+  - every excluded or uncertified financial mutation is blocked **server-side**
+    (hiding it in the UI is not a block) and cannot corrupt financial state;
+  - no critical financial defect is open against an enabled workflow;
+  - any refund or correction capability the owner rules indispensable for
+    launch is certified and owner-approved before launch. An agent does not
+    make that call.
+- **Full-lifecycle production certification (post-pilot).** The original 30-day
+  no-code lifecycle (customer invoice receipt application, unwind/refund,
+  operator correction, SCRUM-813 / 714 / 716 / 722 / 723 / 724 / 571) is a set of
+  **post-pilot activation gates**. Each deferred workflow stays disabled, and is
+  enabled only by its own implemented, reviewed, deployed and certified change
+  plus separate owner approval. The compile-time switches in
+  `convex/utils/customerCreditPayoutContainment.ts` stay as they are until then,
+  and dark helpers without a public caller stay uncalled. Those switches cover
+  only the receipt and customer-credit payout doors; every other excluded
+  mutation needs its own server-side block evidence under the "blocked server-side"
+  evidence bullet.
+
+The narrowed CASH and configured FINANCED controls may be enabled for the pilot
+only once certified; that certification is part of SCRUM-760's evidence. For the
+pilot, gate item 1 ("fully correct and truthful") means the enabled scope is correct and every excluded door
+refuses truthfully, server-side.
+
+Do not broaden the pilot scope or enable a deferred financial operation without
+that separate certification and approval. A green test of only the narrowed path
+is necessary but not sufficient for the pilot: independent verification,
+server-side block evidence and the exact-SHA rehearsal are still required, and
+it never satisfies full-lifecycle certification.
 
 ### Exact-SHA cloud rehearsal before a release
 
@@ -66,7 +109,41 @@ same-SHA attempts refuse the release. Inspect the run's uploaded evidence and
 cleanup step; a green unit harness or PR rehearsal does not replace them.
 An incorrectly targeted dispatch still fails visibly, but its job uses a
 different check name so it cannot permanently poison the current main tip.
-SCRUM-759's FD1 failure currently prevents this cloud gate from passing.
+The cloud gate passed at the 2026-10-21 releases (SCRUM-759's FD1 failure no
+longer blocks it): Accounting Cloud Rehearsal run 39628786851 and trusted
+verdict run 39628833593 at a6086d11, released by Deploy production runs
+39608097817 (3a31e4b8) and 39634067343 (a6086d11). Any red result is a blocker.
+
+### Release order at the tip (learned 2026-10-21)
+
+The release guard refuses a commit when a required check has no result, or when
+more than one result shares the same producer and name. So, in this order:
+
+1. Merge. The push to `main` runs `Trusted Main E2E (Playwright)`, which produces
+   the required `playwright` check. **Never dispatch `playwright.yml` by hand**:
+   its second result at the same SHA makes the guard refuse that commit for good.
+   Likewise never dispatch `trusted-main-e2e.yml` by hand at the same SHA: on
+   `main` its job is also `github-actions/playwright`, so a hand dispatch makes a
+   duplicate result. To retry a failed run, use Re-run on the push run.
+2. Wait for `Trusted Main E2E` to be green at the exact tip.
+3. Dispatch `accounting-rehearsal.yml` and the `autoflow-release-accounting-rehearsal`
+   repository event for the full tip SHA, and confirm both are green (a red
+   rehearsal refuses the release; see above).
+4. Wait for SonarCloud to report on the tip. The push already runs `Sonar Main`
+   (it can take 30 to 50 minutes). Dispatch `sonar-main.yml` only if that run is
+   missing or cancelled; a second manual run can leave two results and refuse the
+   release, so cancel the extra one.
+5. Dispatch **Deploy production** for the full tip SHA. Its `authorize` job runs
+   the release guard; the `deploy` job then waits for the human approval.
+6. Merge nothing to `main` while the approval waits: any new commit moves the tip
+   and invalidates it.
+
+`Contract skew` may show red on `main` between a merge and the next deploy only
+for PRODUCTION SKEW (exit 7), and only when its summary lists no "ALSO PRESENT"
+causes (or you inspected and resolved each one) and its deploy-fixes-it line
+covers every skew call. The CLI picks one primary exit and ranks skew ahead of
+the other causes, so an exit 7 can hide a standing defect or incomplete coverage. Every other red verdict is a blocker: RELEASE BREAK (8), STANDING
+DEFECT (5), CONTROL FAILED (1) and COVERAGE INCOMPLETE (9).
 
 ## Deploying the Convex backend to production
 
@@ -171,6 +248,19 @@ skips orgs already `completed`. SCRUM-126 adds the materializable-event count
 that would make this enforceable; until then it is an anomaly in the summary and
 a human decides.
 
+The same step also rebuilds every organization's bank balance aggregates
+(`bankBalanceBackfill:runPage`, SCRUM-54), page by page, before it verifies the
+Social Inbox. Until an org is rebuilt for the current aggregate layout its bank
+balances read as unavailable, never as a wrong number. An org without a bank
+control account is reported and skipped. An org that refuses (a reset in
+progress, a historical bank line the aggregate rejects, a failed call) is
+recorded and the others still run, as does the Social Inbox verification; the
+run then fails as deployed but incomplete, listing each refused org by its
+opaque hash. The rebuild and the verification share one deadline
+(`ROLLOUT_TIMEOUT_MINUTES`), which stays inside the job timeout. `runPage`
+returns READY at once for an org already rebuilt, so a re-run resumes; a
+refused org restarts its walk from the beginning on each attempt.
+
 Backfills run in the same job on purpose. Between the code landing and the
 backfills completing, database I/O goes **up**: the conversation trigger adds a
 read and a write per inbound webhook while every inbox is still served by the
@@ -267,7 +357,7 @@ longer true, and reviews of it should be read with that in mind.
 | What | Where | State | Detail |
 | --- | --- | --- | --- |
 | `Production` environment | Settings → Environments | ✅ | Required reviewer `aalzriqat`; branches restricted to `main`; admin bypass disabled. **Self-review NOT prevented** — see above |
-| `CONVEX_PROD_DEPLOYMENT` | that environment's **variables** | ✅ | `kindly-hound-172`. Not a secret — it is an identifier, and naming it is the point |
+| `CONVEX_PROD_DEPLOYMENT` | that environment's **variables** | ✅ | `clever-mockingbird-719`. Not a secret — it is an identifier, and naming it is the point |
 | `CONVEX_PROD_DEPLOY_KEY` | that environment's secrets | ✅ | Intended scope: that deployment, permission `deployment:deploy` **only** |
 | `CONVEX_PROD_OPERATOR_KEY` | that environment's secrets | ✅ | Intended scope: `deployment:functions:runInternalMutations` + `runInternalQueries` **only** |
 | `CONVEX_FRESH_OBSERVER_KEY` | that environment's secrets | ✅ | Read by ONE step only — `Verify zero-state (fresh launch checkpoint)`, which runs only when the dispatch input `zero_state` is `fresh-launch`. **Full deploy capability** — Convex mints no narrower key (checked 2026-09-11: `convex deployment token create` has no scope option). The read-only property is `scripts/verifyZeroState.mjs`'s fixed command set, not the key |
@@ -397,7 +487,8 @@ every push to `main`, with a timeout sized for coverage plus the scan (SCRUM-384
 Two separate problems:
 
 - **Missing or cancelled at the tip:** the release refuses. Dispatch Sonar Main
-  on `main`, then confirm the producer-bound result at that exact SHA before
+  on `main` (only when the push-triggered run did not report, see the release
+  order above), then confirm the producer-bound result at that exact SHA before
   re-running the release:
 
   ```bash

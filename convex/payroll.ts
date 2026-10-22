@@ -24,6 +24,8 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { isCommissionOwed } from "./utils/commission";
 import { saleHasActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { checkPostingAllowed } from "./accountingPeriods";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 
 // ─── Employee compensation (fixed monthly salary) ──────────────────────────────
 
@@ -115,6 +117,14 @@ export const listCompensation = query({
 
 // ─── Employee advances (سلفة) — a recoverable ASSET, not an expense ─────────────
 
+export const listPayrollBankOptions = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
 export const recordAdvance = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -122,6 +132,7 @@ export const recordAdvance = mutation({
     amount: v.number(),
     date: v.optional(v.number()),
     method: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     note: v.optional(v.string()),
     idempotencyKey: v.string(),
   },
@@ -162,6 +173,7 @@ export const recordAdvance = mutation({
             amount: args.amount,
             date: args.date ?? null,
             method: normalizePaymentMethod(args.method),
+            ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
             note: args.note?.trim() || null,
           }),
         },
@@ -170,6 +182,15 @@ export const recordAdvance = mutation({
           const now = Date.now();
           const date = args.date ?? now;
           const method = normalizePaymentMethod(args.method);
+          if (method !== "CASH") {
+            await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId, bankAccountId: args.bankAccountId, currency,
+              missingMessage: "Select the physical bank account used for this advance.",
+              currencySubject: "employee advance", errorCode: AppErrorCode.PAYROLL_BANK_INVALID,
+            });
+          } else if (args.bankAccountId) {
+            throwAppError(AppErrorCode.PAYROLL_BANK_NOT_APPLICABLE, "A cash advance cannot name a bank account.");
+          }
 
           const advanceId = await ctx.db.insert("employeeAdvances", {
             orgId: args.orgId,
@@ -179,6 +200,7 @@ export const recordAdvance = mutation({
             currency,
             date,
             method,
+            bankAccountId: args.bankAccountId,
             status: "OUTSTANDING",
             note: args.note,
             createdBy: user._id,
@@ -194,6 +216,7 @@ export const recordAdvance = mutation({
             amountMinor: toMinorUnits(args.amount, currency),
             currency,
             paymentMethod: method,
+            bankAccountId: args.bankAccountId,
             actorId: user._id,
             occurredAt: date,
           });
@@ -219,6 +242,7 @@ export const recoverAdvance = mutation({
     orgId: v.id("organizations"),
     advanceId: v.id("employeeAdvances"),
     method: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     amount: v.optional(v.number()),
     idempotencyKey: v.string(),
   },
@@ -334,6 +358,7 @@ export const recoverAdvance = mutation({
             advanceId: args.advanceId,
             recoverMinor: requestedMinor,
             method,
+            ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
           }),
         },
         async () => {
@@ -365,6 +390,18 @@ export const recoverAdvance = mutation({
             throw new ConvexError("Repayment amount exceeds the outstanding balance.");
           }
 
+          // An inbound CHEQUE is held in CHEQUES_IN_HAND until clearance; it
+          // has not entered a physical bank yet.
+          if (method === "BANK_TRANSFER" || method === "CARD") {
+            await requireActiveBankInCurrency(ctx, {
+              orgId: args.orgId, bankAccountId: args.bankAccountId, currency: current.currency,
+              missingMessage: "Select the physical bank account that received this repayment.",
+              currencySubject: "employee advance repayment", errorCode: AppErrorCode.PAYROLL_BANK_INVALID,
+            });
+          } else if (args.bankAccountId) {
+            throwAppError(AppErrorCode.PAYROLL_BANK_NOT_APPLICABLE, "A cash or held-cheque repayment cannot name a bank account.");
+          }
+
           const now = Date.now();
 
           // Don't credit Employee Advances before the issuance that debited it has
@@ -391,6 +428,7 @@ export const recoverAdvance = mutation({
             amountMinor: recoverMinor,
             currency: current.currency,
             method,
+            bankAccountId: args.bankAccountId,
             source: "DIRECT",
             recoveredAt: now,
             recoveredBy: user._id,
@@ -406,6 +444,7 @@ export const recoverAdvance = mutation({
             amountMinor: recoverMinor,
             currency: current.currency,
             paymentMethod: method,
+            bankAccountId: args.bankAccountId,
             actorId: user._id,
             occurredAt: now,
           });
@@ -559,6 +598,55 @@ async function collectUnpaidCommissions(
 }
 
 /**
+ * Whether an extra deal commission line is still owed through payroll: not
+ * removed, not paid, on a live COMPLETED sale that is not being unwound, in the
+ * run's currency. The same rule drives the sweep, approval and payment, so the
+ * three cannot disagree about what a payslip carries.
+ */
+async function isDealLineOwed(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  line: Doc<"dealCommissionLines">,
+  currency: string
+): Promise<boolean> {
+  if (line.orgId !== orgId || line.removedAt !== undefined || line.paidAt !== undefined) return false;
+  if (line.currency !== currency || !(line.amountMinor > 0)) return false;
+  const sale = await ctx.db.get(line.saleId);
+  if (!sale || sale.orgId !== orgId || sale.isDeleted === true || sale.status !== "COMPLETED") return false;
+  return !(await saleHasActiveDealUnwind(ctx, orgId, sale._id));
+}
+
+/**
+ * Unpaid extra deal commission lines grouped by employee (active members only),
+ * with the same `saleDate <= periodEnd` cutoff as the sale commissions.
+ */
+async function collectUnpaidCommissionLines(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  currency: string,
+  activeMemberIds: Set<string>,
+  periodEndMs: number
+): Promise<Map<string, { minor: number; lineIds: Id<"dealCommissionLines">[] }>> {
+  const byUser = new Map<string, { minor: number; lineIds: Id<"dealCommissionLines">[] }>();
+  for (const memberId of activeMemberIds) {
+    const lines = await ctx.db
+      .query("dealCommissionLines")
+      .withIndex("by_org_employee", (q) => q.eq("orgId", orgId).eq("employeeId", memberId as Id<"users">))
+      .collect();
+    for (const line of lines) {
+      if (!(await isDealLineOwed(ctx, orgId, line, currency))) continue;
+      const sale = await ctx.db.get(line.saleId);
+      if (!sale || sale.saleDate > periodEndMs) continue;
+      const entry = byUser.get(memberId) ?? { minor: 0, lineIds: [] };
+      entry.minor += line.amountMinor;
+      entry.lineIds.push(line._id);
+      byUser.set(memberId, entry);
+    }
+  }
+  return byUser;
+}
+
+/**
  * Every stored minor-unit amount is meaningful only in its own currency, and
  * payroll performs no conversion — mixing currencies would silently misvalue
  * pay. Reject rather than guess.
@@ -657,10 +745,30 @@ async function assertAccrualsPosted(
     _id: Id<"payrollItems">;
     baseSalaryMinor: number;
     commissionSaleIds: Id<"sales">[];
+    commissionLineIds?: Id<"dealCommissionLines">[];
     currency: string;
   }[]
 ): Promise<void> {
   for (const item of items) {
+    for (const lineId of item.commissionLineIds ?? []) {
+      const failed = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `commission_line_accrued_${lineId}`)
+        )
+        .filter((q) => q.eq(q.field("status"), "FAILED"))
+        .first();
+      if (failed) {
+        throw new ConvexError(
+          "A ledger entry for a commission line in this run has failed and needs to be retried before you can pay. Ask an administrator to retry it from Accounting → Setup."
+        );
+      }
+      if (await accrualStillQueued(ctx, orgId, `commission_line_accrued_${lineId}`)) {
+        throw new ConvexError(
+          "A commission line in this run hasn't posted to the ledger yet (its accounting period may be closed). Open the period so it posts, then pay."
+        );
+      }
+    }
     if (item.baseSalaryMinor > 0 && (await accrualStillQueued(ctx, orgId, `payroll_accrued_${item._id}`))) {
       throw new ConvexError(
         "This run's salary accrual hasn't posted to the ledger yet (its accounting period may be closed). Open the period so the accrual posts, then pay."
@@ -768,9 +876,16 @@ async function assertAccrualsPosted(
 async function settleItemCommissions(
   ctx: MutationCtx,
   item: Doc<"payrollItems">
-): Promise<{ commissionMinor: number; saleIdsToSettle: Id<"sales">[] }> {
+): Promise<{ commissionMinor: number; saleIdsToSettle: Id<"sales">[]; lineIdsToSettle: Id<"dealCommissionLines">[] }> {
   let commissionMinor = 0;
   const saleIdsToSettle: Id<"sales">[] = [];
+  const lineIdsToSettle: Id<"dealCommissionLines">[] = [];
+  for (const lineId of item.commissionLineIds ?? []) {
+    const line = await ctx.db.get(lineId);
+    if (!line || line.employeeId !== item.userId || !(await isDealLineOwed(ctx, item.orgId, line, item.currency))) continue;
+    commissionMinor += line.amountMinor;
+    lineIdsToSettle.push(lineId);
+  }
   for (const saleId of item.commissionSaleIds) {
     const sale = await ctx.db.get(saleId);
     // The same shared rule the sweep uses. These two paths decide what is
@@ -785,7 +900,7 @@ async function settleItemCommissions(
     commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);
     saleIdsToSettle.push(saleId);
   }
-  return { commissionMinor, saleIdsToSettle };
+  return { commissionMinor, saleIdsToSettle, lineIdsToSettle };
 }
 
 /**
@@ -875,10 +990,11 @@ async function payItem(
   orgId: Id<"organizations">,
   item: Doc<"payrollItems">,
   method: PaymentMethod,
+  bankAccountId: Id<"bankAccounts"> | undefined,
   actorId: Id<"users">,
   now: number
 ): Promise<{ grossMinor: number; netMinor: number }> {
-  const { commissionMinor, saleIdsToSettle } = await settleItemCommissions(ctx, item);
+  const { commissionMinor, saleIdsToSettle, lineIdsToSettle } = await settleItemCommissions(ctx, item);
   const salaryMinor = item.baseSalaryMinor;
   const grossMinor = salaryMinor + commissionMinor;
   const advanceRecoveredMinor = await recoverItemAdvances(ctx, orgId, item.userId, item.currency, grossMinor, item._id, actorId, now);
@@ -898,6 +1014,7 @@ async function payItem(
       netMinor,
       currency: item.currency,
       paymentMethod: method,
+      bankAccountId,
       actorId,
       occurredAt: now,
     });
@@ -908,7 +1025,12 @@ async function payItem(
       commissionPaidAt: now,
       commissionPaidBy: actorId,
       commissionPaymentMethod: method,
+      commissionBankAccountId: bankAccountId,
     });
+  }
+
+  for (const lineId of lineIdsToSettle) {
+    await ctx.db.patch(lineId, { paidAt: now, paidBy: actorId, payrollItemId: item._id });
   }
 
   await ctx.db.patch(item._id, {
@@ -917,6 +1039,7 @@ async function payItem(
     grossMinor,
     netMinor,
     commissionSaleIds: saleIdsToSettle,
+    commissionLineIds: lineIdsToSettle,
   });
   return { grossMinor, netMinor };
 }
@@ -989,7 +1112,15 @@ export const createRun = mutation({
       const salaryByUser = await resolveSalariesForPeriod(ctx, args.orgId, periodEndMs, currency, activeMemberIds);
       const commissionByUser = await collectUnpaidCommissions(ctx, args.orgId, currency, activeMemberIds, periodEndMs);
 
-      const userIds = new Set<string>([...salaryByUser.keys(), ...commissionByUser.keys()]);
+      const lineCommissionByUser = await collectUnpaidCommissionLines(
+        ctx, args.orgId, currency, activeMemberIds, periodEndMs
+      );
+
+      const userIds = new Set<string>([
+        ...salaryByUser.keys(),
+        ...commissionByUser.keys(),
+        ...lineCommissionByUser.keys(),
+      ]);
 
       // Build every payslip BEFORE inserting the run, so an empty period (no
       // salaries, no commissions) is rejected instead of leaving a zero-item
@@ -1004,12 +1135,15 @@ export const createRun = mutation({
         grossMinor: number;
         netMinor: number;
         commissionSaleIds: Id<"sales">[];
+        commissionLineIds: Id<"dealCommissionLines">[];
       }[] = [];
       for (const uid of userIds) {
         const userId = uid as Id<"users">;
         const baseSalaryMinor = salaryByUser.get(uid) ?? 0;
         const commission = commissionByUser.get(uid) ?? { minor: 0, saleIds: [] };
-        const grossMinor = baseSalaryMinor + commission.minor;
+        const lineCommission = lineCommissionByUser.get(uid) ?? { minor: 0, lineIds: [] };
+        const commissionTotalMinor = commission.minor + lineCommission.minor;
+        const grossMinor = baseSalaryMinor + commissionTotalMinor;
         if (grossMinor <= 0) continue;
 
         const outstanding = await outstandingAdvanceMinor(ctx, args.orgId, userId, currency);
@@ -1018,11 +1152,12 @@ export const createRun = mutation({
         itemPayloads.push({
           userId,
           baseSalaryMinor,
-          commissionMinor: commission.minor,
+          commissionMinor: commissionTotalMinor,
           advanceDeductionMinor,
           grossMinor,
           netMinor,
           commissionSaleIds: commission.saleIds,
+          commissionLineIds: lineCommission.lineIds,
         });
         totalGross += grossMinor;
         totalNet += netMinor;
@@ -1060,6 +1195,7 @@ export const createRun = mutation({
           netMinor: p.netMinor,
           currency,
           commissionSaleIds: p.commissionSaleIds,
+          commissionLineIds: p.commissionLineIds,
           createdAt: now,
         });
       }
@@ -1264,6 +1400,16 @@ export const approveRun = mutation({
           liveSaleIds.push(saleId);
         }
 
+        // Extra deal commission lines were accrued when they were registered;
+        // approval only keeps the ones that are still owed.
+        const liveLineIds: Id<"dealCommissionLines">[] = [];
+        for (const lineId of item.commissionLineIds ?? []) {
+          const line = await ctx.db.get(lineId);
+          if (!line || line.employeeId !== item.userId || !(await isDealLineOwed(ctx, args.orgId, line, item.currency))) continue;
+          commissionMinor += line.amountMinor;
+          liveLineIds.push(lineId);
+        }
+
         const grossMinor = baseSalaryMinor + commissionMinor;
         const advanceDeductionMinor = Math.min(
           await outstandingAdvanceMinor(ctx, args.orgId, item.userId, item.currency),
@@ -1274,6 +1420,7 @@ export const approveRun = mutation({
           baseSalaryMinor,
           commissionMinor,
           commissionSaleIds: liveSaleIds,
+          commissionLineIds: liveLineIds,
           advanceDeductionMinor,
           grossMinor,
           netMinor,
@@ -1340,6 +1487,7 @@ export const payRun = mutation({
     orgId: v.id("organizations"),
     runId: v.id("payrollRuns"),
     method: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
   },
   handler: async (ctx, args) => {
     try {
@@ -1386,6 +1534,16 @@ export const payRun = mutation({
         return { status: "NEEDS_REAPPROVAL" as const };
       }
 
+      if (method !== "CASH") {
+        await requireActiveBankInCurrency(ctx, {
+          orgId: args.orgId, bankAccountId: args.bankAccountId, currency: run.currency,
+          missingMessage: "Select the physical bank account used to pay this payroll run.",
+          currencySubject: "payroll payment", errorCode: AppErrorCode.PAYROLL_BANK_INVALID,
+        });
+      } else if (args.bankAccountId) {
+        throwAppError(AppErrorCode.PAYROLL_BANK_NOT_APPLICABLE, "A cash payroll run cannot name a bank account.");
+      }
+
       // Accrual-before-payment: if the payment itself will hit the ledger now,
       // every prerequisite accrual must already be POSTED — otherwise the
       // payment debits a payable that is still queued (e.g. the accrual is dated
@@ -1427,7 +1585,7 @@ export const payRun = mutation({
       let paidGrossMinor = 0;
       let paidNetMinor = 0;
       for (const item of items) {
-        const paid = await payItem(ctx, args.orgId, item, method, user._id, now);
+        const paid = await payItem(ctx, args.orgId, item, method, args.bankAccountId, user._id, now);
         paidGrossMinor += paid.grossMinor;
         paidNetMinor += paid.netMinor;
       }
@@ -1437,6 +1595,7 @@ export const payRun = mutation({
         paidBy: user._id,
         paidAt: now,
         paidMethod: method,
+        paidBankAccountId: args.bankAccountId,
         totalGrossMinor: paidGrossMinor,
         totalNetMinor: paidNetMinor,
         updatedAt: now,

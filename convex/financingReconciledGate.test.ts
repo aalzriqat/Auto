@@ -73,7 +73,7 @@ let flaggedForReads: Promise<Seeded> | undefined;
 const flaggedDealForReads = () => (flaggedForReads ??= seedDeal({ flag: true }));
 
 describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot finalize", () => {
-  test("T7: a flagged, otherwise-closeable financed deal is not ready; FINANCING_RECONCILED is BLOCKED and ordered LAST", async () => {
+  test("T7: a flagged, otherwise-closeable financed deal is not ready; FINANCING_RECONCILED is BLOCKED and precedes the SCRUM-766 and SCRUM-411 checks", async () => {
     const s = await flaggedDealForReads();
     const served = await readiness(s.asOwner, s);
     const blocked = served.checks.filter((check) => check.status === "BLOCKED" || check.status === "UNAVAILABLE");
@@ -81,11 +81,13 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
     // The fixture is otherwise closeable: the flag is the ONLY unmet condition.
     expect(blocked.map((check) => check.key)).toEqual(["FINANCING_RECONCILED"]);
     expect(served.state).toBe("BLOCKED");
-    expect(served.checks[served.checks.length - 1]).toMatchObject({
-      key: "FINANCING_RECONCILED",
-      status: "BLOCKED",
-      reasonCode: "FINANCING_RECONCILIATION_FLAGGED",
-    });
+    // Ordered after every check that existed when it was added. SCRUM-766's check follows it (NOT_APPLICABLE here),
+    // then SCRUM-411's RECOGNITION_PERIOD_OPEN (READY here: the fixture's handover period is open).
+    expect(served.checks.slice(-3)).toMatchObject([
+      { key: "FINANCING_RECONCILED", status: "BLOCKED", reasonCode: "FINANCING_RECONCILIATION_FLAGGED" },
+      { key: "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", status: "NOT_APPLICABLE" },
+      { key: "RECOGNITION_PERIOD_OPEN", status: "READY" },
+    ]);
   });
 
   test("T7: a below-finance-tier caller is served the WITHHELD code, with no figures or reason text", async () => {
@@ -149,11 +151,12 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
     expect((await s.counts()).sales).toBe(1);
   });
 
-  test("T18: a flagged deal with an EXISTING unmet check still surfaces the existing reason (the new check is appended LAST)", async () => {
+  test("T18: a flagged deal with an EXISTING unmet check still surfaces the existing reason (the new checks are appended after it)", async () => {
     const s = await seedDeal({ flag: true, reconcileFee: false });
     const served = await readiness(s.asOwner, s);
     const keys = served.checks.map((check) => check.key);
-    expect(keys[keys.length - 1]).toBe("FINANCING_RECONCILED");
+    // SCRUM-766 appended the customer-payment check after it and SCRUM-411 appended RECOGNITION_PERIOD_OPEN after that.
+    expect(keys.slice(-3)).toEqual(["FINANCING_RECONCILED", "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "RECOGNITION_PERIOD_OPEN"]);
     expect(served.checks.find((c) => c.key === "COSTS_CLOSABLE")).toMatchObject({
       status: "BLOCKED", reasonCode: "COSTS_AWAITING_RECONCILIATION",
     });

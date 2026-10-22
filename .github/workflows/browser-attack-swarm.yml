@@ -305,6 +305,18 @@ jobs:
           echo "convex_cloud_url=$CONVEX_PREVIEW_URL" >> "$GITHUB_OUTPUT"
           node scripts/previewDeploymentLifecycle.mjs pin
 
+      # The pin step only warns on failure, and preview-cleanup acts only on a
+      # recorded pin. Stop before anything claims the preview (#650).
+      - name: Refuse to continue without a recorded cleanup pin
+        env:
+          CONVEX_PREVIEW_CREATED_AT: ${{ steps.pin.outputs.preview_created_at }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]; then
+            echo "Disposable preview has no pinned cleanup identity." >&2
+            exit 1
+          fi
+
       # The lookup is by preview name, so it can return a newer run's
       # replacement; it refuses anything but CONVEX_PREVIEW_URL, the deployment
       # this run created (SCRUM-377).
@@ -542,8 +554,16 @@ jobs:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
           CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          CONVEX_PREVIEW_CREATED_AT: ${{ needs.prepare.outputs.cleanup_preview_created_at }}
         run: |
           set -euo pipefail
+
+          # The pin step only warns when it fails, and preview-cleanup runs only for a
+          # recorded cleanup identity. Do not change a preview nothing will retire.
+          if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]; then
+            echo "Disposable preview has no pinned cleanup identity." >&2
+            exit 1
+          fi
 
           ADMIN_KEY="$(
             node --input-type=module <<'NODE'
@@ -917,6 +937,25 @@ jobs:
           node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
           node scripts/intelligence/browserEgressProofVerify.mjs egress-evidence/browser-egress-proof.json
 
+      # SCRUM-411: main's financed-deal spec closes a deal against the candidate
+      # backend, and the server refuses handover (HANDOVER_PERIOD_OPEN) without an
+      # open period (finance PR #585, run 38693332010). Establish and verify the
+      # current period BEFORE the full suite; the same setup runs again after it.
+      # Distinct report/results directories keep both runs' evidence.
+      - name: Establish the open accounting period before the full trusted E2E suite
+        working-directory: trusted
+        run: >-
+          pnpm exec playwright test playwright/tests/browser-swarm-accounting-period.spec.ts
+          --project=chromium --no-deps --output=test-results-swarm-period-pre
+        env:
+          BROWSER_EGRESS_REQUIRED: "1"
+          BROWSER_SWARM_PERIOD_SETUP: "1"
+          CI: true
+          PLAYWRIGHT_HTML_REPORT: playwright-report-swarm-period-pre
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+
       - name: Run full trusted E2E suite against exact candidate
         working-directory: trusted
         run: pnpm exec playwright test --project=chromium --no-deps
@@ -931,10 +970,11 @@ jobs:
 
       # SCRUM-350 G4: the preview is seeded with a chart and, on purpose, no
       # accounting period, so every swarm posting stayed QUEUED and ACC-2 could
-      # not judge reversal. Open the current period once, after trusted E2E and
-      # before any attack worker, and refuse to continue until the backend
-      # reports it open with nothing dated inside it still pending. The full
-      # suite's report and results are left untouched: this run writes its own.
+      # not judge reversal. The current period is opened before the full trusted
+      # E2E suite and verified again here, after it and before any attack worker;
+      # refuse to continue until the backend reports it open with nothing dated
+      # inside it still pending. The full suite's report and results are left
+      # untouched: this run writes its own.
       - name: Open the swarm accounting period and drain its pending outbox
         working-directory: trusted
         run: >-
@@ -973,6 +1013,8 @@ jobs:
           path: |
             trusted/playwright-report/
             trusted/test-results/
+            trusted/playwright-report-swarm-period-pre/
+            trusted/test-results-swarm-period-pre/
             trusted/playwright-report-swarm-period/
             trusted/test-results-swarm-period/
             trusted/egress-evidence/

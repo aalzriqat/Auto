@@ -12,7 +12,7 @@
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
 import {
-  C, G, H, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership,
+  C, G, H, finalizeAsOwner, insertReceiptBank, readyDeal, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
@@ -27,6 +27,12 @@ import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
 import { reservePendingInvoiceReceipt } from "./accounting/invoiceReceiptReservation";
 import { activatePendingInvoiceReceipt, planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
 import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
+
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -103,14 +109,14 @@ async function paidDeal(
     });
   }
   await beforeFinalize?.(s, applicationId);
+  // SCRUM-411 P2-01: finalizeAsOwner records the H + D payment to the company BEFORE it closes the deal.
   await finalizeAsOwner(s, applicationId);
-  await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-    expectedAmountMinor: FORWARD, idempotencyKey: crypto.randomUUID(),
-  });
   if (method === "CASH") await s.t.run((ctx) => ctx.db.patch(applicationId, { expectedPaymentMethod: "CASH" }));
+  // SCRUM-54: a bank receipt names its physical bank; CASH is cash on hand and names none.
+  const bankAccountId = method === "CASH" ? undefined : await insertReceiptBank(s);
   await s.owner.as.mutation(api.applications.confirmDisbursement, {
     orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+    ...(bankAccountId ? { bankAccountId } : {}),
   });
   return { s, applicationId };
 }
@@ -129,8 +135,9 @@ async function paidDealWithActiveCustomerReceipt(tag: string) {
     orgId: s.orgId, customerId: s.customerId, bank: "Customer bank",
     chequeNumber: `S723-${tag}`, chequeDate: Date.now(), amount: 10,
   });
+  const bankAccountId = await insertReceiptBank(s);
   const collectionId = await s.owner.as.mutation(api.collections.clearCheque, {
-    orgId: s.orgId, chequeId, idempotencyKey: crypto.randomUUID(),
+    orgId: s.orgId, chequeId, bankAccountId, idempotencyKey: crypto.randomUUID(),
   });
   const movement = await s.t.run((ctx) => ctx.db.query("receiptMovements")
     .withIndex("by_org_payment", (q) => q.eq("orgId", s.orgId).eq("collectionPaymentId", collectionId))
@@ -169,15 +176,33 @@ describe("SCRUM-723 customer receipt disposition during paid-deal unwind (pilot 
   beforeEach(() => { payoutSwitch.disabled = false; });
   afterEach(() => { payoutSwitch.disabled = true; });
 
+  test("a bank customer refund without a selected physical bank leaves the unwind and credit intact", async () => {
+    const { s, applicationId, applicationReceiptId } = await paidDealWithActiveCustomerReceipt("s54bankmissing");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await expect(s.owner.as.mutation(api.dealUnwind.finishDealUnwind, {
+      ...finishArgs(s, unwindId), customerRefundAmountMinor: 2000,
+      customerRefundMethod: "BANK_TRANSFER", customerRefundReference: "BANK-MISSING",
+      customerRefundedAt: Date.now(),
+    })).rejects.toThrow(/Select the bank account/i);
+    expect((await s.t.run((ctx) => ctx.db.get(unwindId)))?.status).toBe("ACTIVE");
+    expect((await s.t.run((ctx) => ctx.db.get(applicationReceiptId)))?.status).toBe("ACTIVE");
+    const refunds = await s.t.run((ctx) => ctx.db.query("accountingEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect());
+    expect(refunds.filter((event) => event.eventType === "RETAINED_CREDIT_REFUNDED")).toHaveLength(0);
+  });
+
   test("a later return of the source cheque refuses while its customer payout remains", async () => {
     const { s, applicationId, chequeId, movement } =
       await paidDealWithActiveCustomerReceipt("s723bounce");
     const unwindId = await start(s, applicationId);
     await forwardReturn(s, unwindId);
+    const customerRefundBankAccountId = await insertReceiptBank(s);
     await s.owner.as.mutation(api.dealUnwind.finishDealUnwind, {
       ...finishArgs(s, unwindId),
       customerRefundAmountMinor: 2000,
       customerRefundMethod: "BANK_TRANSFER",
+      customerRefundBankAccountId,
       customerRefundReference: "CUST-PV-BOUNCE",
       customerRefundedAt: Date.now(),
     });
@@ -197,10 +222,12 @@ describe("SCRUM-723 customer receipt disposition during paid-deal unwind (pilot 
       await paidDealWithActiveCustomerReceipt("s723partial");
     const unwindId = await start(s, applicationId);
     await forwardReturn(s, unwindId);
+    const customerRefundBankAccountId = await insertReceiptBank(s);
     const args = {
       ...finishArgs(s, unwindId),
       customerRefundAmountMinor: 2000,
       customerRefundMethod: "BANK_TRANSFER" as const,
+      customerRefundBankAccountId,
       customerRefundReference: "CUST-PV-1",
       customerRefundedAt: Date.now(),
     };
@@ -230,11 +257,12 @@ describe("SCRUM-723 customer receipt disposition during paid-deal unwind (pilot 
         .collect();
       return Promise.all(lines.map(async (line) => ({
         key: (await ctx.db.get(line.accountId))?.systemKey,
-        debit: line.debitMinor, credit: line.creditMinor,
+        debit: line.debitMinor, credit: line.creditMinor, bankAccountId: line.bankAccountId,
       })));
     });
     expect(refundLines.find((line) => line.key === SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)?.debit).toBe(2000);
     expect(refundLines.find((line) => line.key === SYSTEM_KEYS.BANK_ACCOUNT)?.credit).toBe(2000);
+    expect(refundLines.find((line) => line.key === SYSTEM_KEYS.BANK_ACCOUNT)?.bankAccountId).toBe(customerRefundBankAccountId);
     await expect(s.owner.as.mutation(api.dealUnwind.finishDealUnwind, {
       ...args, idempotencyKey: crypto.randomUUID(),
     })).rejects.toThrow();
@@ -1046,7 +1074,8 @@ describe("SCRUM-693 D3 - the returned car goes into inspection (Sol A', c22134)"
         expectedActualEvidenceRevision: 0,
       });
       await seeded.owner.as.mutation(api.financeDealCosts.recordDirectFeePayment, {
-        orgId: seeded.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: 50_000,
+        orgId: seeded.orgId, feeId, method: "BANK_TRANSFER", bankAccountId: await insertReceiptBank(seeded),
+        paidAt: Date.now(), expectedAmountMinor: 50_000,
         idempotencyKey: crypto.randomUUID(),
       });
     });

@@ -9,6 +9,7 @@ import {
 import { EGRESS_EVIDENCE_PATH } from "./browserEgressProofVerify.mjs";
 
 type WorkflowStep = {
+  id?: string;
   name?: string;
   if?: string;
   uses?: string;
@@ -267,6 +268,28 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(trustedMainE2EWorkflow.jobs?.playwright?.if).toBe(
       "github.ref == 'refs/heads/main'",
     );
+  });
+
+  it("sets backend variables on the main E2E preview only after its cleanup pin is recorded", () => {
+    const steps = trustedMainE2EWorkflow.jobs?.playwright?.steps ?? [];
+    const setter = steps.find((entry) => String(entry.run ?? "").includes("convex env set"));
+    expect(setter, "a step that sets the preview's backend variables").toBeDefined();
+    // The pin step only warns on failure, so a failed pin must stop the setter
+    // here: otherwise the preview is changed while the always() delete step,
+    // which needs CONVEX_PREVIEW_CREATED_AT, would skip its cleanup.
+    expect(setter?.env).toHaveProperty("CONVEX_PREVIEW_CREATED_AT");
+    const run = String(setter?.run ?? "");
+    const guard = run.indexOf('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
+    expect(guard, "a CONVEX_PREVIEW_CREATED_AT guard in the setter").toBeGreaterThanOrEqual(0);
+    // The guard comes before the admin-key claim too, so a failed pin touches the control plane not at all.
+    const claim = run.indexOf("resolveConvexPreviewCredentials");
+    expect(claim).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeLessThan(claim);
+    expect(guard).toBeLessThan(run.indexOf("convex env set"));
+    expect(run.slice(guard, run.indexOf("convex env set"))).toContain("exit 1");
+    const pinIndex = steps.findIndex((entry) => String(entry.run ?? "").includes("previewDeploymentLifecycle.mjs pin"));
+    expect(pinIndex).toBeGreaterThanOrEqual(0);
+    expect(steps.indexOf(setter!)).toBeGreaterThan(pinIndex);
   });
 
   it("runs only as a successful Playwright workflow_run follow-up", () => {
@@ -533,6 +556,67 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       source.match(/Build exact tested candidate once in isolated container/g) ?? [],
     ).toHaveLength(1);
     expect(source).not.toContain("Build exact candidate frontend in isolated container");
+  });
+
+  it("refuses to scrub the swarm preview unless its cleanup pin was recorded", () => {
+    const scrub = step(
+      "trusted-e2e",
+      "Scrub disposable preview environment before candidate execution",
+    );
+    // The pin step only warns when it fails, and preview-cleanup runs only for a
+    // recorded cleanup_preview_created_at. Without it, changing the preview would
+    // leave one nothing retires.
+    expect(scrub.env?.CONVEX_PREVIEW_CREATED_AT).toBe(
+      "${{ needs.prepare.outputs.cleanup_preview_created_at }}",
+    );
+    const run = String(scrub.run ?? "");
+    const guard = run.indexOf('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
+    expect(guard, "a CONVEX_PREVIEW_CREATED_AT guard in the scrub step").toBeGreaterThanOrEqual(0);
+    const claim = run.indexOf("resolveConvexPreviewCredentials");
+    expect(claim).toBeGreaterThanOrEqual(0);
+    expect(run.slice(guard, claim)).toContain("exit 1");
+    expect(guard).toBeLessThan(claim);
+    // Every change to the preview, removals and sets alike, comes after the guard.
+    const changes = [...run.matchAll(/convex env (remove|set)/g)].map((m) => m.index ?? -1);
+    expect(changes.length).toBeGreaterThan(0);
+    for (const at of changes) expect(guard).toBeLessThan(at);
+    expect([job("trusted-e2e").needs].flat()).toContain("prepare");
+
+    // The guard is only as good as its source: the output must come from the pin
+    // step, and that step must be the one that publishes `preview_created_at`.
+    const pinStep = (job("prepare").steps ?? []).find(
+      (entry) => entry.name === "Pin the disposable preview for cleanup",
+    );
+    expect(pinStep?.id).toBe("pin");
+    expect(String(pinStep?.run ?? "")).toContain("previewDeploymentLifecycle.mjs pin");
+    expect(job("prepare").outputs?.cleanup_preview_created_at).toBe(
+      "${{ steps.pin.outputs.preview_created_at }}",
+    );
+    expect(readFileSync(path.resolve(process.cwd(), "scripts/previewDeploymentLifecycle.mjs"), "utf8")).toContain(
+      '[env.GITHUB_OUTPUT, "preview_created_at"]',
+    );
+  });
+
+  it("stops the prepare job before it claims the preview when the cleanup pin was not recorded", () => {
+    const steps = job("prepare").steps ?? [];
+    const at = (name: string) => steps.findIndex((entry) => entry.name === name);
+    const pin = at("Pin the disposable preview for cleanup");
+    const guard = at("Refuse to continue without a recorded cleanup pin");
+    const claim = at("Resolve named Convex preview from trusted control plane");
+    expect(pin).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeGreaterThan(pin);
+    expect(claim).toBeGreaterThan(guard);
+    const refuse = steps[guard];
+    // No `if:`, so the guard runs on every path that reaches it.
+    expect(refuse?.if).toBeUndefined();
+    expect(refuse?.env?.CONVEX_PREVIEW_CREATED_AT).toBe("${{ steps.pin.outputs.preview_created_at }}");
+    const run = String(refuse?.run ?? "");
+    expect(run).toContain('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
+    expect(run).toContain("exit 1");
+    // Nothing between the pin and the guard may claim the preview.
+    for (const entry of steps.slice(pin + 1, guard)) {
+      expect(JSON.stringify(entry)).not.toContain("CONVEX_PREVIEW_DEPLOY_KEY");
+    }
   });
 
   it("scrubs the disposable preview to an explicit non-sensitive environment allowlist before candidate backend execution", () => {
@@ -1337,8 +1421,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
 
   // SCRUM-350 G4 (PR #581, run 38529903614): the swarm preview has a chart of
   // accounts and no accounting period, so every posting stayed QUEUED and ACC-2
-  // returned HARNESS_ERROR. The period is opened once, after trusted E2E and
-  // before any attack worker, never by a worker and never by the bootstrap.
+  // returned HARNESS_ERROR. The period is opened before the full trusted E2E and
+  // verified again after it, before any attack worker, never by a worker and
+  // never by the bootstrap.
   describe("swarm accounting period setup (SCRUM-350 G4)", () => {
     const SETUP = "Open the swarm accounting period and drain its pending outbox";
     const FULL_SUITE = "Run full trusted E2E suite against exact candidate";
@@ -1397,6 +1482,55 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       expect(uploaded).toContain("trusted/playwright-report-swarm-period/");
       expect(uploaded).toContain("trusted/test-results-swarm-period/");
       expect(upload?.if).toBe("always()");
+    });
+
+    // SCRUM-411: finance PR #585 run 38693332010 ran main's financed-deal spec
+    // against the candidate; 33/34 passed but the deal could not close because
+    // HANDOVER_PERIOD_OPEN was "Needs action". The period must already be open
+    // when the full suite starts, and is still re-verified after it.
+    describe("period established before the full suite (SCRUM-411)", () => {
+      const PRE = "Establish the open accounting period before the full trusted E2E suite";
+      const EGRESS_PROOF = "Prove browser egress containment before authenticated traffic";
+      const names = (job("trusted-e2e").steps ?? []).map((entry) => entry.name);
+      const outputOf = (run: unknown): string | undefined =>
+        /--output=(\S+)/.exec(String(run ?? ""))?.[1];
+
+      it("runs after egress proof and before the full suite, unskippable", () => {
+        const proof = names.indexOf(EGRESS_PROOF);
+        expect(proof).toBeGreaterThan(-1);
+        expect(names.indexOf(PRE)).toBeGreaterThan(proof);
+        expect(names.indexOf(PRE)).toBeLessThan(names.indexOf(FULL_SUITE));
+        const pre = step("trusted-e2e", PRE);
+        expect(pre.if).toBeUndefined();
+        expect(pre).not.toHaveProperty("continue-on-error");
+      });
+
+      it("uses the same setup spec and env but its own report and results, and uploads both", () => {
+        const pre = step("trusted-e2e", PRE);
+        const post = step("trusted-e2e", SETUP);
+        const run = String(pre.run ?? "").replace(/\s+/g, " ");
+        expect(run).toContain(`playwright test ${SPEC} --project=chromium --no-deps`);
+        expect(outputOf(pre.run)).toBe("test-results-swarm-period-pre");
+        expect(outputOf(post.run)).toBe("test-results-swarm-period");
+        expect(outputOf(pre.run)).not.toBe(outputOf(post.run));
+        expect(pre["working-directory"]).toBe("trusted");
+        expect(pre.env).toMatchObject({
+          BROWSER_SWARM_PERIOD_SETUP: "1",
+          BROWSER_EGRESS_REQUIRED: "1",
+          PLAYWRIGHT_SKIP_WEBSERVER: "1",
+          NEXT_PUBLIC_CONVEX_URL: "${{ needs.prepare.outputs.convex_cloud_url }}",
+          PLAYWRIGHT_HTML_REPORT: "playwright-report-swarm-period-pre",
+        });
+        for (const forbidden of CANDIDATE_FORBIDDEN_ENV) {
+          expect(pre.env, forbidden).not.toHaveProperty(forbidden);
+        }
+        const upload = (job("trusted-e2e").steps ?? []).find(
+          (entry) => entry.name === "Upload trusted E2E report",
+        );
+        const uploaded = String(upload?.with?.path ?? "");
+        expect(uploaded).toContain("trusted/playwright-report-swarm-period-pre/");
+        expect(uploaded).toContain("trusted/test-results-swarm-period-pre/");
+      });
     });
 
     it("is never run by an attack worker or the ordinary PR E2E workflow", () => {

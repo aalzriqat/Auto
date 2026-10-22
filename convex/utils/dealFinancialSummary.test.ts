@@ -117,6 +117,43 @@ describe("deriveDealFinancialSummary", () => {
       expect(before.customerGapCashPlannedMinor).toBeNull();
       expect(after.customerGapCashPlannedMinor).toBe(750_000);
     });
+    test("the part the customer pays the finance company is served as its own planned figure, never inside gap cash or the paid total (SCRUM-766 PR-B)", () => {
+      const s = deriveDealFinancialSummary(
+        inputs({ app: { ...inputs().app, customerGapToFinanceCompanyAppliedMinor: 400_000 } })
+      );
+      expect(s.customerGapToFinanceCompanyPlannedMinor).toBe(400_000);
+      expect(s.customerGapCashPlannedMinor).toBe(200_000);
+      expect(s.customerPaidToDealer?.totalMinor).toBe(500_000);
+      expect(deriveDealFinancialSummary(inputs()).customerGapToFinanceCompanyPlannedMinor).toBeNull();
+    });
+    test("what is still unconfirmed is the stored balance verbatim, never recomputed from agreed less confirmed (SCRUM-766 PR-B)", () => {
+      const served = (unconfirmed?: number, confirmed?: number) =>
+        deriveDealFinancialSummary(
+          inputs({
+            app: {
+              ...inputs().app,
+              customerGapToFinanceCompanyUnconfirmedMinor: unconfirmed,
+              customerGapToFinanceCompanyAppliedMinor: confirmed,
+            },
+          })
+        );
+      expect(served(400_000, undefined).customerGapToFinanceCompanyUnconfirmedMinor).toBe(400_000);
+      expect(served(250_000, 150_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(250_000);
+      expect(served(0, 400_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(0);
+      // Agreed 400 but only 325 creditable: the engine's balance is 175 after 150 confirmed, whatever agreed - confirmed says.
+      expect(served(175_000, 150_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(175_000);
+      expect(served(undefined, undefined).customerGapToFinanceCompanyUnconfirmedMinor).toBeNull();
+      const corrupt = served(Number.NaN, undefined);
+      expect(corrupt.customerGapToFinanceCompanyUnconfirmedMinor).toBeNull();
+      expect(corrupt.unreadable).toContainEqual({ field: "customerGapToFinanceCompanyUnconfirmed", reason: "UNSAFE_AMOUNT" });
+    });
+    test("an unreadable finance-company payment is withheld and named, not served as a figure", () => {
+      const s = deriveDealFinancialSummary(
+        inputs({ app: { ...inputs().app, customerGapToFinanceCompanyAppliedMinor: Number.NaN } })
+      );
+      expect(s.customerGapToFinanceCompanyPlannedMinor).toBeNull();
+      expect(s.unreadable).toContainEqual({ field: "customerGapToFinanceCompanyPlanned", reason: "UNSAFE_AMOUNT" });
+    });
     test("withheld when the customer row is UNKNOWN (unreadable deposit or unknown route)", () => {
       expect(
         deriveDealFinancialSummary(inputs({ parties: [party("CUSTOMER", "UNKNOWN", 0)] })).customerPaidToDealer

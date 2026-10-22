@@ -1,9 +1,19 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { insertReceiptBank } from "../test-utils/financedDealFixture";
+
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -423,6 +433,8 @@ describe("Finance lifecycle Phase 4", () => {
       orgId,
       applicationId,
       disbursedAmountMinor: 20_000_000,
+      // SCRUM-54: a BANK_TRANSFER receipt names the physical bank (JOD, the receivable's currency).
+      bankAccountId: await insertReceiptBank({ t, orgId, owner: { userId: salespersonId } }),
     });
 
     const app = await t.run((ctx) => ctx.db.get(applicationId));

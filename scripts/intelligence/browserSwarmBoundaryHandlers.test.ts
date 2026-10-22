@@ -375,6 +375,17 @@ class World {
         this.deletedExpenses.add(expenseId);
         return null;
       }
+      case "accountingOutbox:listPending":
+        // A never-posting expense is verifiably waiting in the outbox.
+        if (!this.faults.neverPosts || a.status !== "PENDING") return [];
+        return [...this.expenses.keys()].map((sourceId) => ({
+          kind: "POST",
+          status: "PENDING",
+          sourceType: "expenses",
+          sourceId,
+          eventType: "EXPENSE_POSTED",
+          attempts: 0,
+        }));
       case "accountingLedger:listAccountingEvents":
         return this.customerLedger(String(a.sourceId)).map(({ sourceId: _sourceId, ...event }) => ({ ...event }));
       case "accountingLedger:getJournalEntry": {
@@ -1102,5 +1113,16 @@ describe("SCRUM-350 LIFECYCLE_REVERSAL handler", () => {
 
   it("an expense that never reaches the ledger is unjudged, never a pass", async () => {
     await expect(lifecycle({ neverPosts: true }).run()).rejects.toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+  });
+
+  it("does not extend the posting wait for a queued row: only the navigation mission opts in (SCRUM-851)", async () => {
+    const h = lifecycle({ neverPosts: true });
+    await expect(h.run()).rejects.toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    // The outbox was inspected and does hold the waiting row, yet the ledger was read only for the base wait.
+    expect(h.world.queryLog).toContain("owner:accountingOutbox:listPending");
+    expect(h.world.queryLog.filter((line) => line === "owner:accountingLedger:listAccountingEvents").length).toBeLessThanOrEqual(40);
+    expect(h.evidence[0]?.ledgerSettleTimeouts).toMatchObject([
+      { extendedForQueuedPost: false, outbox: "COMPLETE", queuedPosts: [{ status: "PENDING" }] },
+    ]);
   });
 });

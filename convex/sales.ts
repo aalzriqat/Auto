@@ -17,6 +17,8 @@ import {
   consignedSettlementRouteValidator,
   isConsignedAgentSale,
   recordedConsignedMargin,
+  recordedFinancedConsideration,
+  recordedFinancedNetRevenue,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
   saleIsAgentSale,
@@ -36,12 +38,15 @@ import {
 import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
+import { effectiveCommissionMode, isAutoCommissionMode } from "./utils/commissionMode";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
-import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
+import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED, refuseDepositOtherTreatment } from "./utils/depositOtherContainment";
+import { assertCashDraftCarriesNoExtras, assertCashSaleCarriesNoExtras } from "./utils/cashSalePilotGate";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertCustomerCreditPayoutAllowed } from "./utils/customerCreditPayoutContainment";
@@ -67,6 +72,7 @@ import { applicationProvesFinancing, hasVerifiedFinancingApplication } from "./u
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
 import { planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
@@ -104,6 +110,7 @@ const depositResolutionValidator = v.object({
   // Required for REFUND_TO_CUSTOMER: the deposit's own recorded method may be
   // OTHER, which the release path refuses because it cannot be paid out.
   refundMethod: v.optional(depositMethodValidator),
+  bankAccountId: v.optional(v.id("bankAccounts")),
 });
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
@@ -651,6 +658,16 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
+    // Refused after auth and ahead of the rate limiter, validation and the idempotency claim.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
+
+    // SCRUM-802 (owner ruling 2026-10-19): a CASH sale carrying tax, fees, a warranty or GAP is not offered in the
+    // pilot. After tenant auth, before the rate limit, any write and `runWithIdempotency`.
+    assertCashSaleCarriesNoExtras(args);
+
     const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
@@ -744,6 +761,15 @@ export const completeFromQuote = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
+    // Refused after auth and ahead of the rate limiter and the idempotency claim, so it precedes the first write.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
+
+    // SCRUM-802: no early extras check here by construction. A quote carries no tax, fee, warranty or GAP and this door
+    // passes none to `completeSalesForLineItems`; if that ever changes, `completeSale` (the choke point) refuses it, and
+    // convex/scrum802CashSaleExtras.test.ts pins both facts.
     const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
@@ -882,6 +908,16 @@ export const completeDraft = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
+    // Refused after auth and ahead of the rate limiter and the idempotency claim, so it precedes the first write.
+    if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
+
+    // SCRUM-802 (owner ruling 2026-10-19): as `create`. The draft carries the money terms, so it is read here (no
+    // write) and a CASH draft carrying tax, fees, a warranty or GAP is refused before `runWithIdempotency`.
+    await assertCashDraftCarriesNoExtras(ctx, args.orgId, args.saleId);
+
     const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
@@ -951,6 +987,7 @@ export const update = mutation({
     customerPaymentDisposition: v.optional(v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT"))),
     customerRefundAmountMinor: v.optional(v.number()),
     customerRefundMethod: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+    customerRefundBankAccountId: v.optional(v.id("bankAccounts")),
     customerRefundReference: v.optional(v.string()),
     customerRefundedAt: v.optional(v.number()),
   },
@@ -987,6 +1024,7 @@ export const update = mutation({
     const isCancellingCompletedSale = args.status === "CANCELLED" && sale.status === "COMPLETED";
     const customerDispositionProvided = args.customerPaymentDisposition !== undefined ||
       args.customerRefundAmountMinor !== undefined || args.customerRefundMethod !== undefined ||
+      args.customerRefundBankAccountId !== undefined ||
       args.customerRefundReference !== undefined || args.customerRefundedAt !== undefined;
     if (customerDispositionProvided && !isCancellingCompletedSale) {
       throwAppError(AppErrorCode.VALIDATION_FAILED, "Customer receipt disposition requires cancellation of a completed sale.");
@@ -1103,7 +1141,7 @@ export const update = mutation({
           // SCRUM-435: a v2 deal has payments held by the finance company. This door
           // applies the SAME manager gate and the SAME forward proof as
           // `cancelApplication`, so it is never a way round them.
-          if (planVersionOf(app) === 2) {
+          if (isForwardPlanVersion(planVersionOf(app))) {
             try {
               await requireTenantAuth(ctx, args.orgId, [
                 PERMISSIONS.CANCEL_CLOSED_DEAL,
@@ -1175,7 +1213,7 @@ export const update = mutation({
         // after the MANAGE_FINANCE check above; the shared helper refuses too.
         if ((args.customerPaymentDisposition === "REFUND" && invoicePlan.totalMinor > 0) ||
             [args.customerRefundAmountMinor, args.customerRefundMethod,
-              args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined)) {
+              args.customerRefundBankAccountId, args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined)) {
           assertCustomerCreditPayoutAllowed();
         }
         if (invoicePlan.totalMinor > 0 && !args.customerPaymentDisposition) {
@@ -1205,6 +1243,7 @@ export const update = mutation({
           payout: allRefundFields ? {
             amountMinor: args.customerRefundAmountMinor!,
             method: args.customerRefundMethod!,
+            bankAccountId: args.customerRefundBankAccountId,
             reference: refundReference!,
             paidAt: args.customerRefundedAt!,
           } : undefined,
@@ -1407,8 +1446,8 @@ async function commissionPage(
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-    const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
+    const mode = effectiveCommissionMode(orgSettings);
+    const isAutoMode = isAutoCommissionMode(mode);
     // MANUAL mode has no calculator: an amount only ever exists because somebody
     // typed it on this page. Listing only sales that already carry one is a
     // closed loop — the first amount can never be entered. So in MANUAL mode
@@ -1633,8 +1672,8 @@ export const listCommissions = query({
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-    const isAutoMode = mode === "AUTO_MEMBER" || mode === "AUTO_TIERS";
+    const mode = effectiveCommissionMode(orgSettings);
+    const isAutoMode = isAutoCommissionMode(mode);
 
     // The pre-pagination predicate, unchanged: a positive commission, or an
     // AUTO completed sale whose commission was never computed.
@@ -1841,11 +1880,21 @@ async function assertCommissionRecognitionMatches(
   }
 }
 
+/** Eligible physical banks for a direct commission payment; names only. */
+export const listCommissionBankOptions = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+    return await listEligibleBanks(ctx, args.orgId, await getOrgCurrency(ctx, args.orgId));
+  },
+});
+
 export const markCommissionPaid = mutation({
   args: {
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
     paymentMethod: v.optional(paymentMethodValidator),
+    bankAccountId: v.optional(v.id("bankAccounts")),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -1860,7 +1909,10 @@ export const markCommissionPaid = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ saleId: args.saleId, paymentMethod }),
+        fingerprint: JSON.stringify({
+          saleId: args.saleId, paymentMethod,
+          ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
+        }),
       },
       async () => {
         const sale = await ctx.db.get(args.saleId);
@@ -1879,6 +1931,18 @@ export const markCommissionPaid = mutation({
         }
         if (sale.commissionAmount == null || sale.commissionAmount <= 0) {
           throwAppError(AppErrorCode.VALIDATION_FAILED, "This sale has no commission amount to pay.");
+        }
+        if (paymentMethod !== "CASH") {
+          await requireActiveBankInCurrency(ctx, {
+            orgId: args.orgId,
+            bankAccountId: args.bankAccountId,
+            currency: await getOrgCurrency(ctx, args.orgId),
+            missingMessage: "Select the physical bank account used to pay this commission.",
+            currencySubject: "commission payment",
+            errorCode: AppErrorCode.COMMISSION_BANK_INVALID,
+          });
+        } else if (args.bankAccountId) {
+          throwAppError(AppErrorCode.COMMISSION_BANK_INVALID, "A cash commission cannot name a bank account.");
         }
         // Only when the accrual is genuinely absent. The safety-net accrual
         // below is dated to the sale, so for a sale that never accrued, a closed
@@ -1917,6 +1981,7 @@ export const markCommissionPaid = mutation({
           commissionPaidAt: now,
           commissionPaidBy: user._id,
           commissionPaymentMethod: paymentMethod,
+          commissionBankAccountId: args.bankAccountId,
           commissionPaymentIdempotencyKey: args.idempotencyKey,
         });
         const currency = await getOrgCurrency(ctx, args.orgId);
@@ -1949,6 +2014,7 @@ export const markCommissionPaid = mutation({
           amountMinor,
           currency,
           paymentMethod,
+          bankAccountId: args.bankAccountId,
           actorId: user._id,
           occurredAt: now,
         });
@@ -2026,7 +2092,7 @@ export const setCommissionAmount = mutation({
         .query("orgSettings")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .unique();
-      const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+      const mode = effectiveCommissionMode(orgSettings);
 
       // AUTO-mode commissions are derived from the org's rules, so a completed
       // sale's amount is not hand-editable — changing it would silently diverge
@@ -2267,8 +2333,8 @@ export const recalculateCommission = mutation({
         .query("orgSettings")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .unique();
-      const mode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-      if (mode !== "AUTO_MEMBER" && mode !== "AUTO_TIERS") {
+      const mode = effectiveCommissionMode(orgSettings);
+      if (!isAutoCommissionMode(mode)) {
         throwAppError(
           AppErrorCode.VALIDATION_FAILED,
           "Recalculation only applies to automatic commission modes. Set the amount directly in manual mode."
@@ -2776,6 +2842,7 @@ export const dealCockpit = query({
       recordedMargin: recordedConsignedMargin(sale),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      recordedConsideration: recordedFinancedConsideration(sale),
       // The FACTS, not a pre-derived boolean: `saleIsAgentSale` asks the one
       // admissibility derivation itself, so this screen cannot reach a
       // different verdict than `saleEconomics` does about the same sale.
@@ -3092,8 +3159,10 @@ export const dealCockpit = query({
       capitalizedCost,
       supplierSettlementRoute: sale.supplierSettlementRoute,
       recordedMargin: recordedConsignedMargin(sale),
+      recordedNetRevenue: recordedFinancedNetRevenue(sale, await getOrgCurrency(ctx, sale.orgId)),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      recordedConsideration: recordedFinancedConsideration(sale),
       // Always false on this screen in practice — `money` is already null for a
       // sale that HAS an application, because its real screen is the
       // application-keyed one. Passed rather than hardcoded so the two can never

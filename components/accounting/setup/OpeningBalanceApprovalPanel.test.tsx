@@ -562,3 +562,69 @@ describe("the reviewer can actually read what they are approving", () => {
     expect(headerCells()).toEqual(["Account", "Debit", "Credit"]);
   });
 });
+
+describe("SCRUM-54: the approver sees which physical bank a bank line seeds", () => {
+  function bankDraft(bankAccountName: string | null) {
+    return draftFixture({
+      lines: [
+        {
+          accountId: "acc_bank",
+          accountCode: "1010",
+          accountName: "Bank",
+          debitMinor: 100_000 * SCALE,
+          creditMinor: 0,
+          requiresBankAccount: true,
+          bankAccountName,
+        },
+        { accountId: "acc_cap", accountCode: "3010", accountName: "Owner Capital", debitMinor: 0, creditMinor: 100_000 * SCALE, requiresBankAccount: false, bankAccountName: null },
+      ],
+    });
+  }
+
+  function renderView(draft: PendingOpeningBalanceDraft, onApprove = vi.fn()) {
+    render(
+      <OpeningBalanceApprovalView draft={draft} isOwnDraft={false} busy={false} onApprove={onApprove} onReject={vi.fn()} />
+    );
+    return screen.getByTestId("opening-balance-approval");
+  }
+
+  test("shows the chosen bank under the bank line only, and approval stays available", () => {
+    const panel = renderView(bankDraft("Arab Bank JOD"));
+    const shown = within(panel).getAllByTestId("opening-balance-bank");
+    expect(shown).toHaveLength(1);
+    expect(shown[0].textContent).toContain("Arab Bank JOD");
+    expect((within(panel).getByTestId("opening-balance-approve") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("a bank line with no usable bank is not approvable and says why", () => {
+    const onApprove = vi.fn();
+    const panel = renderView(bankDraft(null), onApprove);
+    expect(within(panel).queryByTestId("opening-balance-bank")).toBeNull();
+    expect(within(panel).getByTestId("opening-balance-bank-missing")).toBeTruthy();
+    const approve = within(panel).getByTestId("opening-balance-approve") as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    fireEvent.click(approve);
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  test("a draft with no bank lines is unaffected", () => {
+    const panel = renderView(draftFixture());
+    expect(within(panel).queryByTestId("opening-balance-bank")).toBeNull();
+    expect(within(panel).queryByTestId("opening-balance-bank-missing")).toBeNull();
+    expect((within(panel).getByTestId("opening-balance-approve") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("the gate blocks approval on a missing bank for a reviewer, with the reject-and-resubmit instruction", () => {
+    const gate = computeApprovalGate({
+      isOwnDraft: false,
+      busy: false,
+      balanced: true,
+      denominationKnown: true,
+      bankIdentityMissing: true,
+    });
+    expect(gate.canApprove).toBe(false);
+    expect(gate.canReject).toBe(true);
+    expect(gate.blockingFacts.map((f) => f.key)).toEqual(["OpeningBalanceBankMissing"]);
+    expect(gate.recoveryKey).toBe("OpeningBalanceRejectAndResubmit");
+  });
+});

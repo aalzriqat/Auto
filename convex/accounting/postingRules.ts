@@ -1,8 +1,13 @@
 import { ConvexError } from "convex/values";
 import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
 import { CUSTODY_CLEARING_KEY, custodyFeeExpenseKey } from "../utils/dealCustodyPosting";
-import type { FeeAccountingTreatment } from "../utils/financedSalePostingPlan";
+import {
+  isForwardPlanVersion,
+  isServerDerivedPlanVersion,
+  type FeeAccountingTreatment,
+} from "../utils/financedSalePostingPlan";
 import type { Id } from "../_generated/dataModel";
+import { partnerEquityNeedsBank } from "../utils/partnerEquityBank";
 
 /**
  * The one spelling of an expense's EXPENSE_POSTED idempotency key. Lives in
@@ -174,6 +179,8 @@ export interface LineSpec {
   financeCompanyId?: string;
   /** SCRUM-27: a MANUAL finance company has no id; its letter name is its identity. */
   payerNameSnapshot?: string;
+  /** SCRUM-54: the physical bank a BANK_ACCOUNT control line moved money through. */
+  bankAccountId?: string;
 }
 
 /**
@@ -244,7 +251,7 @@ function line(
   debitMinor: number,
   creditMinor: number,
   description?: string,
-  dims?: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "cashierId" | "financeCompanyId" | "payerNameSnapshot">>
+  dims?: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "cashierId" | "financeCompanyId" | "payerNameSnapshot" | "bankAccountId">>
 ): LineSpec {
   return { accountSystemKey, debitMinor, creditMinor, description, ...dims };
 }
@@ -256,6 +263,7 @@ export interface DepositReceivedPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
   customerId: string;
 }
 
@@ -273,6 +281,7 @@ export interface DepositRefundedPayload {
   currency: string;
   customerId: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 export interface DepositForfeitedPayload {
@@ -318,8 +327,15 @@ export interface FinancedSalePlanPayload {
   /** Exactly one of `financeCompanyId` / `payerNameSnapshot` (SCRUM-27). */
   financeCompanyId?: string;
   payerNameSnapshot?: string;
-  /** The only figure the vehicle leg's revenue is posted from. */
-  legalInvoiceConsiderationMinor: number;
+  /**
+   * v1/v2 only: the only figure the vehicle leg's revenue is posted from. A v3
+   * plan carries `considerationMinor` instead and never this field; read either
+   * through `planConsiderationMinor`, so an event of one version can never be
+   * posted from the other's field.
+   */
+  legalInvoiceConsiderationMinor?: number;
+  /** v3 only: A + R, derived by the server from the frozen economics (SCRUM-411). */
+  considerationMinor?: number;
   /** N — what the financing company will actually remit. */
   financeCompanyReceivableMinor: number;
   /** P — what the dealership owes the company when deductions exceed the gross. */
@@ -334,11 +350,45 @@ export interface FinancedSalePlanPayload {
    * liability, and debiting cash here as well would book the same money twice.
    */
   depositLiabilityAppliedMinor: number;
-  /** v2 only: H forwarded to the finance company (credit AP-Finance). */
+  /** v2/v3 only: H forwarded to the finance company (credit AP-Finance). */
   forwardDepositMinor?: number;
-  /** v2 only: C, the dealership contribution forwarded (contra-revenue / AP-Finance). */
+  /** v2/v3 only: C, the dealership contribution forwarded (contra-revenue / AP-Finance). */
   forwardContributionMinor?: number;
   components: FinancedSalePlanLine[];
+}
+
+/**
+ * The vehicle consideration a plan recognises: v3 reads its server-derived
+ * `considerationMinor`, v1/v2 their invoice-sourced field. Throws (so the
+ * outbox dead-letters the event) when the version's own field is absent,
+ * rather than reading the other version's field or posting a NaN line.
+ */
+export function planConsiderationMinor(plan: Pick<FinancedSalePlanPayload, "version" | "legalInvoiceConsiderationMinor" | "considerationMinor">): number {
+  const amount = isServerDerivedPlanVersion(plan.version) ? plan.considerationMinor : plan.legalInvoiceConsiderationMinor;
+  if (amount === undefined || !Number.isSafeInteger(amount) || amount < 0) {
+    throw new ConvexError(
+      `A financed sale plan (version ${plan.version}) carries no usable consideration, so its revenue cannot be posted. Re-derive the deal's settlement before posting it.`
+    );
+  }
+  return amount;
+}
+
+/**
+ * The contra-revenue a plan posts against the vehicle leg: the showroom's
+ * contribution C (v2/v3) plus every classified component whose treatment posts to
+ * SALES_CONSIDERATION_REDUCTIONS, net of any that credit it. Read off the lines
+ * `settlementFundingLines` itself writes - not re-selected here - so
+ * `consideration - this` is the revenue the ledger nets, the figure a sale
+ * freezes for the reports to read.
+ */
+export function planContraRevenueMinor(plan: FinancedSalePlanPayload): number {
+  let contra = 0;
+  for (const funded of settlementFundingLines(plan, {}).lines) {
+    if (funded.accountSystemKey === SYSTEM_KEYS.SALES_CONSIDERATION_REDUCTIONS) {
+      contra += funded.debitMinor - funded.creditMinor;
+    }
+  }
+  return contra;
 }
 
 export interface SaleCompletedPayload {
@@ -490,6 +540,7 @@ export interface SupplierPaymentSettledPayload {
   taxMinor?: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
   /**
    * Which account AP-Suppliers was originally credited against for this
    * payable — a sourced/drop-ship vehicle credits AP against COST_OF_VEHICLES_SOLD
@@ -524,6 +575,12 @@ export interface CollectionPaymentPayload {
   currency: string;
   customerId: string;
   paymentMethod?: string;
+  /**
+   * SCRUM-54: the physical bank a BANK_TRANSFER / CARD receipt reached. Optional only
+   * for old queued payload shapes; a bank receipt without it is refused at
+   * posting rather than attributed to a guessed physical account.
+   */
+  bankAccountId?: string;
 }
 
 /**
@@ -561,6 +618,7 @@ export interface CollectionRefundPayload {
   currency: string;
   customerId: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 export interface RetainedCreditRefundPayload {
@@ -574,6 +632,7 @@ export interface RetainedCreditRefundPayload {
   currency: string;
   customerId: string;
   paymentMethod: "BANK_TRANSFER" | "CASH";
+  bankAccountId?: string;
 }
 
 export interface ExpensePostedPayload {
@@ -583,6 +642,8 @@ export interface ExpensePostedPayload {
   taxMinor?: number;
   currency: string;
   paymentMethod?: string;
+  /** Physical account used when a validated expense payment reaches the bank. */
+  bankAccountId?: string;
   category?: string;
   /** Present when this expense reconditions a specific in-stock vehicle. */
   vehicleId?: string;
@@ -658,6 +719,7 @@ export interface CommissionPaidPayload {
   currency: string;
   salespersonId: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 export interface ChequeReceivedPayload {
@@ -685,9 +747,16 @@ export interface ChequeReturnedPayload {
 
 export function ruleDepositReceived(p: DepositReceivedPayload): RuleResult {
   const cashKey = cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Deposit receipt has no physical bank identity; refusing the journal.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Non-bank deposit receipt names a physical bank; refusing the journal.");
+  }
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, "Deposit received", { customerId: p.customerId }),
+      line(cashKey, p.amountMinor, 0, "Deposit received", { customerId: p.customerId,
+        ...(cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}) }),
       line(SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, 0, p.amountMinor, "Customer deposit liability", { customerId: p.customerId }),
     ],
     memo: "Deposit received",
@@ -754,7 +823,8 @@ export function ruleDepositRefunded(p: DepositRefundedPayload): RuleResult {
   return {
     lines: [
       line(SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, p.amountMinor, 0, "Deposit liability released", { customerId: p.customerId }),
-      line(disbursementKey, 0, p.amountMinor, "Deposit refund paid out", { customerId: p.customerId }),
+      line(disbursementKey, 0, p.amountMinor, "Deposit refund paid out", { customerId: p.customerId,
+        ...(disbursementKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}) }),
     ],
     memo: "Deposit refunded to customer",
     category: "SYSTEM",
@@ -850,8 +920,17 @@ interface SettlementFunding {
   lines: LineSpec[];
   /** C — for the basis to fold into the customer receivable it already raises. */
   customerReceivableMinor: number;
-  /** L — the consideration the plan was made under, for the basis's balance bridge. */
-  legalInvoiceConsiderationMinor: number;
+  /** L (v1/v2) or K (v3) — the consideration the plan was made under, for the basis's balance bridge. */
+  considerationMinor: number;
+  /**
+   * v3: the consideration is the server's own A + R, so a basis measures its
+   * commission from it instead of bridging it against the quote's gross.
+   */
+  serverDerivedConsideration: boolean;
+  /** N - what the company will remit to the dealership. A direct-route plan must carry none. */
+  financeReceivableMinor: number;
+  /** H - the deposit liability released. A direct-route plan may carry it: it is discharged against the amount owed onward to the finance company. */
+  depositAppliedMinor: number;
 }
 
 function settlementFundingLines(
@@ -909,7 +988,7 @@ function settlementFundingLines(
   // ONWARD to the finance company, which transfers the full approved amount. H
   // is the debit above (liability released) against AP-Finance; C is
   // contra-revenue against AP-Finance. The forward payment later clears 2220.
-  if (plan.version === 2) {
+  if (isForwardPlanVersion(plan.version)) {
     const forwardDeposit = plan.forwardDepositMinor ?? 0;
     const forwardContribution = plan.forwardContributionMinor ?? 0;
     if (forwardDeposit > 0) {
@@ -962,7 +1041,10 @@ function settlementFundingLines(
   return {
     lines,
     customerReceivableMinor: plan.customerReceivableMinor,
-    legalInvoiceConsiderationMinor: plan.legalInvoiceConsiderationMinor,
+    considerationMinor: planConsiderationMinor(plan),
+    serverDerivedConsideration: isServerDerivedPlanVersion(plan.version),
+    financeReceivableMinor: plan.financeCompanyReceivableMinor,
+    depositAppliedMinor: plan.depositLiabilityAppliedMinor,
   };
 }
 
@@ -1040,10 +1122,15 @@ function consignedAgentSaleLines(
       `Consigned sale ${p.saleId} settles directly with ${supplier} and is externally financed, but records no amount actually paid to him. The dealership's claim cannot be measured against the sale price on this route — repair the event with the finance company's approved amount before posting it.`
     );
   }
+  // SCRUM-411 (plan v3): on the through route the dealership's consideration is
+  // the server-derived A + R, not the quote's gross - so commission is measured
+  // from it (K - E), and the legal-invoice bridge below no longer applies.
   const settlementBasisMinor =
     consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
       ? (consignment.supplierGrossReceiptMinor ?? p.saleAmountMinor)
-      : p.saleAmountMinor;
+      : funding?.serverDerivedConsideration
+        ? funding.considerationMinor
+        : p.saleAmountMinor;
   const marginMinor = settlementBasisMinor - entitlementMinor;
 
   // Fail closed. A negative margin means the supplier is paid less than he is
@@ -1110,7 +1197,34 @@ function consignedAgentSaleLines(
       `Consigned sale ${p.saleId} carries ${taxMinor} minor units of sales tax, and agency sales have no agreed tax treatment yet: the dealership sells this car as ${supplier}'s agent, so whether the tax is his liability or its own changes which of them the money is owed by. Record the tax against the supplier agreement, or sell the car as dealership stock, before completing the sale.`
     );
   }
-  const commissionMinor = marginMinor;
+  // SCRUM-411 (plan v3) on the DIRECT route. The finance company pays the supplier
+  // A, so the supplier now owes the dealership A - E (`marginMinor`, the claim the
+  // subledger opens); the dealership's commission is the whole consideration over
+  // the entitlement, K - E, because the customer's gap R is also the dealership's
+  // to collect. The contribution D is contra-revenue owed onward to the company, and
+  // any held deposit H is discharged against that same amount owed onward.
+  const directV3 = consignment.settlementRoute === "DIRECT_TO_SUPPLIER" && funding?.serverDerivedConsideration === true;
+  if (directV3 && funding) {
+    // A v3 direct plan opens no finance receivable; one that does is a
+    // through-route plan on a direct event, and posting it would credit revenue for
+    // money the company never owed the dealership. Fail closed. A held deposit H is
+    // allowed: it is discharged here (Dr deposit liability) against the same amount
+    // owed onward to the company (Cr AP-finance), so the entry still balances and
+    // no separate DEPOSIT_APPLIED event releases it twice.
+    if (funding.financeReceivableMinor !== 0) {
+      throw new ConvexError(
+        `Consigned sale ${p.saleId} settles directly with ${supplier} but its settlement plan carries a finance-company receivable, which only a sale settled through the dealership has. Re-derive the deal's settlement before posting it.`
+      );
+    }
+    // K must be exactly what reaches the supplier plus what the customer owes; the
+    // two sides of the entry balance only then, and a gap is never plugged.
+    if (settlementBasisMinor + funding.customerReceivableMinor !== funding.considerationMinor) {
+      throw new ConvexError(
+        `Consigned sale ${p.saleId} settles directly with ${supplier}: the amount paid to him plus what the customer owes the dealership does not equal the settlement plan's consideration of ${funding.considerationMinor} minor units. Re-derive the deal's settlement before posting it.`
+      );
+    }
+  }
+  const commissionMinor = directV3 && funding ? funding.considerationMinor - entitlementMinor : marginMinor;
 
   // A zero margin is a real deal, not a broken one: the dealership placed the
   // car for a supplier and made nothing on the metal, earning only the dealer
@@ -1127,9 +1241,10 @@ function consignedAgentSaleLines(
   // handler and turned "no settlement route" and "below the minimum profit"
   // into the wrong message.
   //
-  // DIRECT_TO_SUPPLIER is excluded because no plan is ever built for it: the
-  // company pays the supplier, so the dealership holds no finance receivable to
-  // recognise (`financedSaleRecognitionApplies` returns false on that route).
+  // DIRECT_TO_SUPPLIER is excluded because the company pays the supplier, so the
+  // dealership holds no finance receivable and no gross to bridge. A v3 plan on
+  // that route carries the contribution, any held deposit H and the customer's
+  // gap, which the direct branch below posts itself (`directV3`).
   if (consignment.settlementRoute !== "DIRECT_TO_SUPPLIER") {
     // FAIL CLOSED. A consigned sale financed by a configured company funds its
     // gross from that company, which is the legal buyer of the car. Falling
@@ -1189,16 +1304,31 @@ function consignedAgentSaleLines(
     // equality with the plan's legal-invoice consideration. Do not infer a
     // balancing amount from a difference." Written down here so the next
     // reviewer does not have to re-derive it.
-    if (funding && funding.legalInvoiceConsiderationMinor !== p.saleAmountMinor) {
+    if (funding && !funding.serverDerivedConsideration && funding.considerationMinor !== p.saleAmountMinor) {
       throw new ConvexError(
-        `Consigned sale ${p.saleId} was invoiced to the financing company for ${funding.legalInvoiceConsiderationMinor} minor units but records gross proceeds of ${p.saleAmountMinor}. The supplier's entitlement and the dealership's commission are measured from the proceeds, so the two must agree before this can post. Reconcile the legal invoice with the sale before completing it.`
+        `Consigned sale ${p.saleId} was invoiced to the financing company for ${funding.considerationMinor} minor units but records gross proceeds of ${p.saleAmountMinor}. The supplier's entitlement and the dealership's commission are measured from the proceeds, so the two must agree before this can post. Reconcile the legal invoice with the sale before completing it.`
       );
     }
   }
 
   const lines: LineSpec[] =
     consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
-      ? marginMinor > 0
+      ? directV3 && funding
+        ? [
+            ...(marginMinor > 0
+              ? [line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, marginMinor, 0, `Commission due from ${supplier}`, dims)]
+              : []),
+            // The contribution D (contra-revenue) and any held deposit H (Dr deposit liability),
+            // both against the amount owed onward to the company (AP-finance).
+            ...funding.lines,
+            ...(funding.customerReceivableMinor > 0
+              ? [line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, funding.customerReceivableMinor, 0, "Consigned sale — customer's own share", dims)]
+              : []),
+            ...(commissionMinor > 0
+              ? [line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, commissionMinor, "Consignment commission earned", dims)]
+              : []),
+          ]
+        : marginMinor > 0
         ? [
             // The buyer paid the supplier. Nothing gross ever reaches these
             // books; the only asset is the margin he now owes back.
@@ -1494,12 +1624,14 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // to write a payload directly through the super-admin raw-JSON editor, which
   // can post an arbitrary payload to any rule by design. Stated because the
   // earlier wording claimed the refusal held generally, and it does not.
-  // With a plan the consideration comes from the legal invoice, which is the only
-  // document the sale of the car was made under. `saleAmountMinor` is the
-  // dealership's own operational figure and the two are allowed to differ — a
-  // 10,500 target against a 12,500 invoice to the financier is the ordinary
+  // With a plan the consideration comes from the plan, never from `saleAmountMinor`,
+  // the dealership's own operational figure; the two are allowed to differ — a
+  // 10,500 target against a 12,500 consideration to the financier is the ordinary
   // shape of these deals, not an error to reconcile away.
-  const vehicleRevenueMinor = plan ? plan.legalInvoiceConsiderationMinor : revenueMinor;
+  // v3 (SCRUM-411): the consideration is the server-derived A + R. A v2 event
+  // keeps posting from its own legal-invoice field; `planConsiderationMinor` reads
+  // whichever the plan's version defines.
+  const vehicleRevenueMinor = plan ? planConsiderationMinor(plan) : revenueMinor;
   if (vehicleRevenueMinor > 0) {
     lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, vehicleRevenueMinor, "Vehicle sale revenue", dims));
   }
@@ -1610,6 +1742,12 @@ export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): Ru
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
     : cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Supplier bank payment lacks its physical bank account; refusing to post.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Cash supplier payment cannot name a physical bank account.");
+  }
   // AP-Suppliers was originally credited for the full gross amountMinor back
   // at SALE_COMPLETED (ruleSaleCompleted's isSourced branch), so it must be
   // debited in full here too — netting it would leave a permanent residual
@@ -1619,7 +1757,7 @@ export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): Ru
   // the AP/cash settlement lines.
   const lines: LineSpec[] = [
     line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, p.amountMinor, 0, `AP settled — ${p.sourcedFromName}`),
-    line(cashKey, 0, p.amountMinor, "Cash paid to supplier"),
+    line(cashKey, 0, p.amountMinor, "Cash paid to supplier", cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
   ];
   if (p.taxMinor && p.taxMinor > 0) {
     // Reclassify out of whichever account AP was actually credited against
@@ -1642,6 +1780,7 @@ export interface SupplierReceivableCollectedPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
   vehicleId?: string;
 }
 
@@ -1662,9 +1801,15 @@ export function ruleSupplierReceivableCollected(p: SupplierReceivableCollectedPa
   // Inbound money, so the cheque case is a cheque the dealership HOLDS —
   // cashAccountKey, not disbursementAccountKey.
   const cashKey = cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Supplier collection bank posting has no physical bank identity.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Supplier collection unexpectedly names a physical bank.");
+  }
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, `Received from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+      line(cashKey, p.amountMinor, 0, `Received from ${p.sourcedFromName}`, { vehicleId: p.vehicleId, ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}) }),
       line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, 0, p.amountMinor, `Commission collected from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
     ],
     memo: `Supplier commission received — ${p.sourcedFromName}`,
@@ -1680,6 +1825,7 @@ export interface SupplierCostRecoveryReceivedPayload {
   currency: string;
   /** CASH or BANK_TRANSFER only — cheque receipts are SCRUM-400. */
   paymentMethod: string;
+  bankAccountId?: string;
   vehicleId: string;
 }
 
@@ -1696,9 +1842,15 @@ export function ruleSupplierCostRecoveryReceived(p: SupplierCostRecoveryReceived
     throw new Error(`A supplier cost recovery cannot be received by ${p.paymentMethod}.`);
   }
   const cashKey = cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Supplier recovery bank posting has no physical bank identity.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Supplier recovery unexpectedly names a physical bank.");
+  }
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, `Recovered from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+      line(cashKey, p.amountMinor, 0, `Recovered from ${p.sourcedFromName}`, { vehicleId: p.vehicleId, ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}) }),
       line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, 0, p.amountMinor, `Supplier-borne cost recovered from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
     ],
     memo: `Supplier-borne cost recovered — ${p.sourcedFromName}`,
@@ -1760,7 +1912,19 @@ function assertReceiptSplit(p: CollectionPaymentPayload): void {
 export function ruleCollectionPayment(p: CollectionPaymentPayload): RuleResult {
   assertReceiptSplit(p);
   const cashKey = cashAccountKey(p.paymentMethod);
-  const lines = [line(cashKey, p.receivedMinor, 0, "Payment received", { customerId: p.customerId })];
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A bank account is required for a collection receipt posted to the bank.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A non-bank collection receipt cannot name a bank account.");
+  }
+  const lines = [
+    line(cashKey, p.receivedMinor, 0, "Payment received", {
+      customerId: p.customerId,
+      // SCRUM-54: only the bank control line names the bank.
+      ...(cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}),
+    }),
+  ];
   if (p.appliedMinor > 0) {
     lines.push(
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.appliedMinor, "AR settled", { customerId: p.customerId })
@@ -1813,10 +1977,16 @@ export function ruleCollectionRefund(p: CollectionRefundPayload): RuleResult {
   // Use the refund-specific mapper so outbound cheques credit BANK_ACCOUNT,
   // not CHEQUES_IN_HAND (which is reserved for cheques held from customers).
   const disbursementKey = disbursementAccountKey(p.paymentMethod);
+  if (disbursementKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A bank account is required for a collection refund paid from a bank.");
+  }
+  if (disbursementKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A cash collection refund cannot name a bank account.");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.amountMinor, 0, "AR reopened by refund", { customerId: p.customerId }),
-      line(disbursementKey, 0, p.amountMinor, "Refund paid out", { customerId: p.customerId }),
+      line(disbursementKey, 0, p.amountMinor, "Refund paid out", { customerId: p.customerId, ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}) }),
     ],
     memo: "Collection payment refunded",
     category: "SYSTEM",
@@ -1834,7 +2004,8 @@ export function ruleRetainedCreditRefunded(p: RetainedCreditRefundPayload): Rule
       line(SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY, p.amountMinor, 0,
         "Customer credit refunded", { customerId: p.customerId }),
       line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor,
-        "Customer refund paid out", { customerId: p.customerId }),
+          "Customer refund paid out", { customerId: p.customerId,
+            ...(p.paymentMethod === "BANK_TRANSFER" ? { bankAccountId: p.bankAccountId } : {}) }),
     ],
     memo: "Retained customer credit refunded",
     category: "SYSTEM",
@@ -1860,6 +2031,15 @@ export function classifyExpensePosting(args: {
 
 export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   const { capitalize, prepaid } = classifyExpensePosting(p);
+  // Outbound for either bearer: a CHEQUE here is one the dealership ISSUED,
+  // so it credits the bank, never CHEQUES_IN_HAND (customer cheques held).
+  const paymentKey = disbursementAccountKey(p.paymentMethod);
+  if (paymentKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A paid expense bank posting requires its physical bank account.");
+  }
+  if (paymentKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A non-bank paid expense cannot name a physical bank account.");
+  }
   // SCRUM-389: a supplier-borne cost is money the supplier owes back, so it is
   // a receivable, not an expense. The refusals below are a second line, not
   // the enforcement — `assertCostBearerAllowed` refuses these shapes at the
@@ -1876,7 +2056,8 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
         line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, p.amountMinor, 0, "Supplier-borne vehicle cost recoverable", { vehicleId: p.vehicleId }),
         // Outbound: a CHEQUE here is one the dealership ISSUED, so it credits
         // the bank — never Cheques in Hand, which holds customers' cheques.
-        line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash payment"),
+        line(paymentKey, 0, p.amountMinor, "Cash payment",
+          paymentKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
       ],
       memo: "Supplier-borne vehicle cost paid — recoverable from the supplier",
       category: "SYSTEM",
@@ -1904,7 +2085,8 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   if (p.taxMinor && p.taxMinor > 0) {
     lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, p.taxMinor, 0, "Input VAT paid"));
   }
-  lines.push(line(cashAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash payment"));
+  lines.push(line(paymentKey, 0, p.amountMinor, "Cash payment",
+    paymentKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined));
   return {
     lines,
     memo: capitalize
@@ -1940,6 +2122,7 @@ export interface PrepaidExpenseRefundedPayload {
   taxMinor?: number; // VAT portion of the refund, reclaimed from VAT_RECEIVABLE
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 /**
@@ -1953,8 +2136,15 @@ export interface PrepaidExpenseRefundedPayload {
  */
 export function rulePrepaidExpenseRefunded(p: PrepaidExpenseRefundedPayload): RuleResult {
   const taxMinor = p.taxMinor ?? 0;
+  const refundKey = cashAccountKey(p.paymentMethod);
+  if (refundKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Prepaid refund bank posting has no physical bank identity.");
+  }
+  if (refundKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Prepaid refund unexpectedly names a physical bank.");
+  }
   const lines: LineSpec[] = [
-    line(cashAccountKey(p.paymentMethod), p.amountMinor + taxMinor, 0, "Prepaid expense refund received"),
+    line(refundKey, p.amountMinor + taxMinor, 0, "Prepaid expense refund received", p.bankAccountId ? { bankAccountId: p.bankAccountId } : undefined),
     line(SYSTEM_KEYS.PREPAID_EXPENSES, 0, p.amountMinor, "Prepaid expense asset released (refund)"),
   ];
   if (taxMinor > 0) {
@@ -2065,10 +2255,19 @@ export function ruleCommissionPaid(p: CommissionPaidPayload): RuleResult {
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
     : cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A commission bank posting requires its physical bank account.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A non-bank commission payment cannot name a physical bank account.");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.COMMISSION_PAYABLE, p.amountMinor, 0, "Commission settled", { salespersonId: p.salespersonId }),
-      line(cashKey, 0, p.amountMinor, "Commission paid", { salespersonId: p.salespersonId }),
+      line(cashKey, 0, p.amountMinor, "Commission paid", {
+        salespersonId: p.salespersonId,
+        ...(cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}),
+      }),
     ],
     memo: "Commission paid",
     category: "SYSTEM",
@@ -2129,6 +2328,12 @@ export interface FinanceCashReceivedPayload {
    * its canonical payment. Absent on events emitted before SCRUM-599.
    */
   paymentMethod?: FinanceReceiptMethod;
+  /**
+   * SCRUM-54: the physical bank a BANK_TRANSFER / CHEQUE receipt reached.
+   * Optional only for old queued payload shapes; bank receipts without it
+   * fail closed at posting. Never set for CASH, which is cash on hand.
+   */
+  bankAccountId?: string;
 }
 
 /** How a finance company's disbursement can reach the dealership. */
@@ -2139,8 +2344,10 @@ export type FinanceReceiptMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE";
  * hand. BANK_TRANSFER is the bank, and so is CHEQUE: confirmDisbursement clears
  * the cheque in the same transaction, so the money is never held as a cheque.
  *
- * Absent means an event emitted before the method was carried, which keeps the
- * bank posting it always had. Deliberately neither `cashAccountKey` (CHEQUE →
+ * Absent means an event emitted before the method was carried, which maps to
+ * the historical bank control. The posting rule then refuses it unless a
+ * physical bank identity is present; no legacy identity is guessed.
+ * Deliberately neither `cashAccountKey` (CHEQUE →
  * cheques in hand) nor `disbursementAccountKey` (absent → cash on hand). Any
  * other value is refused rather than guessed into the bank.
  */
@@ -2163,11 +2370,22 @@ export function ruleFinanceDisbursed(p: FinanceDisbursedPayload): RuleResult {
 }
 
 export function ruleFinanceCashReceived(p: FinanceCashReceivedPayload): RuleResult {
+  const receiptKey = financeReceiptAccountKey(p.paymentMethod);
+  if (receiptKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A bank account is required for a finance receipt posted to the bank.");
+  }
+  if (receiptKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A cash finance receipt cannot name a bank account.");
+  }
   return {
     lines: [
       // Actual receipt of funds from the finance company settles their receivable,
-      // debited to wherever the money landed (SCRUM-599).
-      line(financeReceiptAccountKey(p.paymentMethod), p.amountMinor, 0, "Finance company disbursement received", financePayerDims(p)),
+      // debited to wherever the money landed (SCRUM-599). Only the bank control
+      // line names the bank (SCRUM-54) - cash on hand is not a bank.
+      line(receiptKey, p.amountMinor, 0, "Finance company disbursement received", {
+        ...financePayerDims(p),
+        ...(receiptKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : {}),
+      }),
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance company receivable settled", { ...financePayerDims(p), customerId: p.customerId }),
     ],
     memo: "Finance company disbursement received",
@@ -2253,6 +2471,7 @@ export interface VehicleAcquiredPayload {
   costMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 /**
@@ -2275,10 +2494,19 @@ export function ruleVehicleAcquired(p: VehicleAcquiredPayload): RuleResult {
   const creditKey = isOnAccount
     ? SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS
     : p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
+  if (creditKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("VEHICLE_ACQUISITION_BANK_REQUIRED");
+  }
+  if (creditKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("VEHICLE_ACQUISITION_BANK_UNEXPECTED");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.VEHICLE_INVENTORY, p.costMinor, 0, "Vehicle acquired", { vehicleId: p.vehicleId }),
-      line(creditKey, 0, p.costMinor, isOnAccount ? "Supplier payable created" : "Payment for vehicle", { vehicleId: p.vehicleId }),
+      line(creditKey, 0, p.costMinor, isOnAccount ? "Supplier payable created" : "Payment for vehicle", {
+        vehicleId: p.vehicleId,
+        ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}),
+      }),
     ],
     memo: "Vehicle acquired for inventory",
     category: "SYSTEM",
@@ -2320,13 +2548,14 @@ export interface VehicleLandedCostCapitalizedPayload {
   /**
    * Signed change per settlement account since the landed-cost record was
    * last saved (upsertLandedCosts replaces the whole items list on every
-   * save, so the caller diffs old-vs-new items grouped by paymentMethod
+   * save, so the caller diffs old-vs-new items grouped by paymentMethod and
+   * physical bank identity
    * rather than passing one aggregate delta) — a positive entry capitalizes
    * more cost into inventory paid from that account, a negative entry
    * reverses a previously capitalized amount from that SAME account (not
    * whatever account happens to be selected on this call).
    */
-  accountDeltas: Array<{ paymentMethod?: string; deltaMinor: number }>;
+  accountDeltas: Array<{ paymentMethod?: string; bankAccountId?: string; deltaMinor: number }>;
 }
 
 /**
@@ -2339,15 +2568,22 @@ export interface VehicleLandedCostCapitalizedPayload {
 export function ruleVehicleLandedCostCapitalized(p: VehicleLandedCostCapitalizedPayload): RuleResult {
   const lines: LineSpec[] = [];
   let netDeltaMinor = 0;
-  for (const { paymentMethod, deltaMinor } of p.accountDeltas) {
+  for (const { paymentMethod, bankAccountId, deltaMinor } of p.accountDeltas) {
     if (deltaMinor === 0) continue;
     // Outbound payment — see ruleVehicleAcquired for why CHEQUE routes to the bank.
     const cashKey = paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(paymentMethod);
+    if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !bankAccountId) {
+      throw new Error("VEHICLE_LANDED_COST_BANK_REQUIRED");
+    }
+    if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && bankAccountId) {
+      throw new Error("VEHICLE_LANDED_COST_BANK_UNEXPECTED");
+    }
     const amountMinor = Math.abs(deltaMinor);
+    const dims = { vehicleId: p.vehicleId, ...(bankAccountId ? { bankAccountId } : {}) };
     lines.push(
       deltaMinor > 0
-        ? line(cashKey, 0, amountMinor, "Landed cost paid", { vehicleId: p.vehicleId })
-        : line(cashKey, amountMinor, 0, "Landed cost reversed", { vehicleId: p.vehicleId })
+        ? line(cashKey, 0, amountMinor, "Landed cost paid", dims)
+        : line(cashKey, amountMinor, 0, "Landed cost reversed", dims)
     );
     netDeltaMinor += deltaMinor;
   }
@@ -2400,6 +2636,7 @@ export interface VehicleAcquisitionCostCorrectedPayload {
   correctionType?: AcquisitionCorrectionType;
   /** Only meaningful (and required by the caller) when correctionType is CASH_REFUND. */
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 /**
@@ -2422,6 +2659,9 @@ export interface VehicleAcquisitionCostCorrectedPayload {
  * stale figure instead of only the GL being corrected.
  */
 export function ruleVehicleAcquisitionCostCorrected(p: VehicleAcquisitionCostCorrectedPayload): RuleResult {
+  if (p.correctionType === "CASH_REFUND" && p.paymentMethod === "CHEQUE" && p.deltaMinor < 0) {
+    throw new ConvexError("A received supplier cheque needs a tracked custody and clearing flow.");
+  }
   const amountMinor = Math.abs(p.deltaMinor);
   const counterKey = ((): SystemKey => {
     switch (p.correctionType) {
@@ -2429,19 +2669,28 @@ export function ruleVehicleAcquisitionCostCorrected(p: VehicleAcquisitionCostCor
       case "VENDOR_CREDIT":
         return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
       case "CASH_REFUND":
-        return p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
+        return p.paymentMethod === "CHEQUE"
+          ? p.deltaMinor < 0 ? SYSTEM_KEYS.CHEQUES_IN_HAND : SYSTEM_KEYS.BANK_ACCOUNT
+          : cashAccountKey(p.paymentMethod);
       case "PRIOR_PERIOD_RESTATEMENT":
       default:
         return SYSTEM_KEYS.RETAINED_EARNINGS;
     }
   })();
+  if (counterKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new ConvexError("Select the physical bank for this purchase cost correction.");
+  }
+  if (counterKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new ConvexError("A physical bank does not apply to this purchase cost correction.");
+  }
+  const counterDims = { vehicleId: p.vehicleId, ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}) };
   const lines: LineSpec[] = p.deltaMinor > 0
     ? [
         line(SYSTEM_KEYS.VEHICLE_INVENTORY, amountMinor, 0, "Acquisition cost corrected upward", { vehicleId: p.vehicleId }),
-        line(counterKey, 0, amountMinor, "Acquisition cost correction", { vehicleId: p.vehicleId }),
+        line(counterKey, 0, amountMinor, "Acquisition cost correction", counterDims),
       ]
     : [
-        line(counterKey, amountMinor, 0, "Acquisition cost correction", { vehicleId: p.vehicleId }),
+        line(counterKey, amountMinor, 0, "Acquisition cost correction", counterDims),
         line(SYSTEM_KEYS.VEHICLE_INVENTORY, 0, amountMinor, "Acquisition cost corrected downward", { vehicleId: p.vehicleId }),
       ];
   return { lines, memo: "Vehicle acquisition cost corrected", category: "ADJUSTMENT" };
@@ -2527,6 +2776,7 @@ export interface AssetCapitalizedPayload {
   costMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 export interface DepreciationPostedPayload {
@@ -2547,6 +2797,7 @@ export interface AssetDisposedPayload {
   accumulatedDepreciationMinor: number;
   proceedsMinor: number;
   currency: string;
+  bankAccountId?: string;
 }
 
 export function ruleAssetCapitalized(p: AssetCapitalizedPayload): RuleResult {
@@ -2556,10 +2807,16 @@ export function ruleAssetCapitalized(p: AssetCapitalizedPayload): RuleResult {
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
     : cashAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new ConvexError("Select the physical bank used to pay for this asset.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new ConvexError("A physical bank does not apply to this cash asset purchase.");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.FIXED_ASSETS, p.costMinor, 0, "Asset capitalized"),
-      line(cashKey, 0, p.costMinor, "Payment for asset"),
+      line(cashKey, 0, p.costMinor, "Payment for asset", p.bankAccountId ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Fixed asset capitalized",
     category: "SYSTEM",
@@ -2628,6 +2885,12 @@ export function ruleAssetImpaired(p: AssetImpairedPayload): RuleResult {
  * zero contribution can't unbalance the entry either way.
  */
 export function ruleAssetDisposed(p: AssetDisposedPayload): RuleResult {
+  if (p.proceedsMinor > 0 && !p.bankAccountId) {
+    throw new ConvexError("Select the physical bank receiving the disposal proceeds.");
+  }
+  if (p.proceedsMinor === 0 && p.bankAccountId) {
+    throw new ConvexError("A physical bank does not apply to a disposal without proceeds.");
+  }
   const netBookValue = p.costMinor - p.accumulatedDepreciationMinor;
   const gainOrLoss = p.proceedsMinor - netBookValue;
 
@@ -2636,7 +2899,7 @@ export function ruleAssetDisposed(p: AssetDisposedPayload): RuleResult {
     lines.push(line(SYSTEM_KEYS.ACCUMULATED_DEPRECIATION, p.accumulatedDepreciationMinor, 0, "Remove accumulated depreciation"));
   }
   if (p.proceedsMinor > 0) {
-    lines.push(line(SYSTEM_KEYS.BANK_ACCOUNT, p.proceedsMinor, 0, "Disposal proceeds"));
+    lines.push(line(SYSTEM_KEYS.BANK_ACCOUNT, p.proceedsMinor, 0, "Disposal proceeds", { bankAccountId: p.bankAccountId }));
   }
   lines.push(line(SYSTEM_KEYS.FIXED_ASSETS, 0, p.costMinor, "Remove asset cost"));
   if (gainOrLoss > 0) {
@@ -2660,15 +2923,31 @@ export interface PartnerEquityMovementPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
+}
+
+function partnerEquityBankDims(
+  type: "CONTRIBUTION" | "DRAW",
+  p: PartnerEquityMovementPayload
+): Pick<LineSpec, "bankAccountId"> | undefined {
+  const needsBank = partnerEquityNeedsBank(type, p.paymentMethod);
+  if (needsBank && !p.bankAccountId) {
+    throw new ConvexError("Select the physical bank for this partner payment before posting.");
+  }
+  if (!needsBank && p.bankAccountId) {
+    throw new ConvexError("A physical bank does not apply to this partner payment.");
+  }
+  return needsBank ? { bankAccountId: p.bankAccountId } : undefined;
 }
 
 export function ruleCapitalContributed(p: PartnerEquityMovementPayload): RuleResult {
   // Inbound money: a cheque handed over by the partner genuinely sits in
   // CHEQUES_IN_HAND, so the shared inbound mapper applies as-is.
   const cashKey = cashAccountKey(p.paymentMethod);
+  const bankDims = partnerEquityBankDims("CONTRIBUTION", p);
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, "Capital contribution received"),
+      line(cashKey, p.amountMinor, 0, "Capital contribution received", bankDims),
       line(SYSTEM_KEYS.PARTNER_CAPITAL, 0, p.amountMinor, "Partner capital"),
     ],
     memo: "Partner capital contributed",
@@ -2682,10 +2961,11 @@ export function rulePartnerDrew(p: PartnerEquityMovementPayload): RuleResult {
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
     : cashAccountKey(p.paymentMethod);
+  const bankDims = partnerEquityBankDims("DRAW", p);
   return {
     lines: [
       line(SYSTEM_KEYS.PARTNER_DRAWINGS, p.amountMinor, 0, "Partner draw"),
-      line(cashKey, 0, p.amountMinor, "Draw paid out"),
+      line(cashKey, 0, p.amountMinor, "Draw paid out", bankDims),
     ],
     memo: "Partner draw",
     category: "SYSTEM",
@@ -2695,6 +2975,9 @@ export function rulePartnerDrew(p: PartnerEquityMovementPayload): RuleResult {
 export function ruleProfitDistributed(p: PartnerEquityMovementPayload): RuleResult {
   // Pure equity reclassification — accumulated profit becomes partner
   // capital; no cash moves until the partner later draws it.
+  if (p.paymentMethod || p.bankAccountId) {
+    throw new ConvexError("A profit distribution does not move cash or bank money.");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.RETAINED_EARNINGS, p.amountMinor, 0, "Profit distributed to partner"),
@@ -2756,12 +3039,22 @@ export interface CashDrawerDepositedPayload {
   sessionId: string;
   amountMinor: number;
   currency: string;
+  /**
+   * SCRUM-54: the physical bank the cash was deposited into, chosen by the
+   * approver. Optional in the historic payload shape only; an event queued
+   * before this field existed is refused rather than posting an unbanked line.
+   */
+  bankAccountId?: string;
 }
 
 export function ruleCashDrawerDeposited(p: CashDrawerDepositedPayload): RuleResult {
+  if (!p.bankAccountId) {
+    throw new Error("A cash drawer bank deposit requires its physical bank account.");
+  }
   return {
     lines: [
-      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Cash drawer deposited to bank"),
+      // Only the bank control line names the bank - CASH_ON_HAND is not a bank.
+      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Cash drawer deposited to bank", { bankAccountId: p.bankAccountId }),
       line(SYSTEM_KEYS.CASH_ON_HAND, 0, p.amountMinor, "Drawer cash removed"),
     ],
     memo: "Cash drawer session deposited",
@@ -2779,6 +3072,16 @@ export interface EmployeeAdvancePaidPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
+}
+
+function assertPayrollBankDimension(cashKey: SystemKey, bankAccountId: string | undefined): void {
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !bankAccountId) {
+    throw new Error("A physical bank account is required for a payroll bank posting.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && bankAccountId) {
+    throw new Error("A non-bank payroll posting cannot name a bank account.");
+  }
 }
 
 /** Advance issued to an employee: Dr Employee Advances (asset) / Cr cash. */
@@ -2786,10 +3089,12 @@ export function ruleEmployeeAdvancePaid(p: EmployeeAdvancePaidPayload): RuleResu
   // Outbound: a CHEQUE here is one the dealership WRITES, so it comes out of
   // the bank — never out of CHEQUES_IN_HAND (customer cheques we hold).
   const cashKey = disbursementAccountKey(p.paymentMethod);
+  assertPayrollBankDimension(cashKey, p.bankAccountId);
   return {
     lines: [
       line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, p.amountMinor, 0, "Employee advance issued"),
-      line(cashKey, 0, p.amountMinor, "Advance paid to employee"),
+      line(cashKey, 0, p.amountMinor, "Advance paid to employee",
+        cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Employee advance paid",
     category: "SYSTEM",
@@ -2799,9 +3104,11 @@ export function ruleEmployeeAdvancePaid(p: EmployeeAdvancePaidPayload): RuleResu
 /** Advance repaid directly by an employee (outside payroll): Dr cash / Cr Employee Advances. */
 export function ruleEmployeeAdvanceRecovered(p: EmployeeAdvancePaidPayload): RuleResult {
   const cashKey = cashAccountKey(p.paymentMethod);
+  assertPayrollBankDimension(cashKey, p.bankAccountId);
   return {
     lines: [
-      line(cashKey, p.amountMinor, 0, "Advance repaid by employee"),
+      line(cashKey, p.amountMinor, 0, "Advance repaid by employee",
+        cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
       line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, 0, p.amountMinor, "Employee advance recovered"),
     ],
     memo: "Employee advance recovered",
@@ -2841,6 +3148,7 @@ export interface PayrollPaidPayload {
   netMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 /**
@@ -2853,6 +3161,7 @@ export function rulePayrollPaid(p: PayrollPaidPayload): RuleResult {
   // Outbound: a payroll CHEQUE is written by the dealership → credit the bank,
   // never CHEQUES_IN_HAND (that asset is customer cheques we hold).
   const cashKey = disbursementAccountKey(p.paymentMethod);
+  assertPayrollBankDimension(cashKey, p.bankAccountId);
   const lines: LineSpec[] = [];
   if (p.salaryMinor > 0) lines.push(line(SYSTEM_KEYS.SALARIES_PAYABLE, p.salaryMinor, 0, "Salary settled"));
   if (p.commissionMinor > 0) {
@@ -2861,7 +3170,8 @@ export function rulePayrollPaid(p: PayrollPaidPayload): RuleResult {
   if (p.advanceRecoveredMinor > 0) {
     lines.push(line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, 0, p.advanceRecoveredMinor, "Advance recovered from payroll"));
   }
-  if (p.netMinor > 0) lines.push(line(cashKey, 0, p.netMinor, "Net pay disbursed"));
+  if (p.netMinor > 0) lines.push(line(cashKey, 0, p.netMinor, "Net pay disbursed",
+    cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined));
   // Defense-in-depth: the payroll caller skips all-zero payslips, but a
   // zero-line "journal entry" passes validateBalance trivially (0 === 0), so
   // fail closed here too rather than letting an empty entry post.
@@ -2882,6 +3192,7 @@ export interface CustodyCashPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: string;
 }
 
 function assertCustodyAmount(p: { amountMinor: number }, what: string): void {
@@ -2891,13 +3202,24 @@ function assertCustodyAmount(p: { amountMinor: number }, what: string): void {
   }
 }
 
+function assertCustodyBankIdentity(p: CustodyCashPayload, cashKey: SystemKey): void {
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("Custody bank posting has no physical bank identity; refusing the journal.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("Custody cash posting unexpectedly names a physical bank; refusing the journal.");
+  }
+}
+
 /** Cash handed to the employee: Dr Custody Clearing / Cr cash or bank (outbound). */
 export function ruleCustodyCashIssued(p: CustodyCashPayload): RuleResult {
   assertCustodyAmount(p, "CUSTODY_CASH_ISSUED");
+  const cashKey = disbursementAccountKey(p.paymentMethod);
+  assertCustodyBankIdentity(p, cashKey);
   return {
     lines: [
       line(CUSTODY_CLEARING_KEY, p.amountMinor, 0, "Deal custody cash issued to employee"),
-      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Cash handed to employee for deal custody"),
+      line(cashKey, 0, p.amountMinor, "Cash handed to employee for deal custody", p.bankAccountId ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Deal custody cash issued",
     category: "SYSTEM",
@@ -2907,9 +3229,11 @@ export function ruleCustodyCashIssued(p: CustodyCashPayload): RuleResult {
 /** Unspent cash the employee gave back: Dr cash or bank (inbound) / Cr Custody Clearing. */
 export function ruleCustodyCashReturned(p: CustodyCashPayload): RuleResult {
   assertCustodyAmount(p, "CUSTODY_CASH_RETURNED");
+  const cashKey = cashAccountKey(p.paymentMethod);
+  assertCustodyBankIdentity(p, cashKey);
   return {
     lines: [
-      line(cashAccountKey(p.paymentMethod), p.amountMinor, 0, "Deal custody cash returned by employee"),
+      line(cashKey, p.amountMinor, 0, "Deal custody cash returned by employee", p.bankAccountId ? { bankAccountId: p.bankAccountId } : undefined),
       line(CUSTODY_CLEARING_KEY, 0, p.amountMinor, "Custody balance returned"),
     ],
     memo: "Deal custody cash returned",
@@ -2925,10 +3249,12 @@ export function ruleCustodyCashReturned(p: CustodyCashPayload): RuleResult {
  */
 export function ruleCustodyReimbursed(p: CustodyCashPayload): RuleResult {
   assertCustodyAmount(p, "CUSTODY_REIMBURSED");
+  const cashKey = disbursementAccountKey(p.paymentMethod);
+  assertCustodyBankIdentity(p, cashKey);
   return {
     lines: [
       line(CUSTODY_CLEARING_KEY, p.amountMinor, 0, "Employee reimbursed for deal costs paid out of pocket"),
-      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Reimbursement paid to employee"),
+      line(cashKey, 0, p.amountMinor, "Reimbursement paid to employee", p.bankAccountId ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Deal custody reimbursement paid",
     category: "SYSTEM",
@@ -2979,6 +3305,12 @@ export interface HandoverCostPaidDirectPayload {
   currency: string;
   /** How the money left: REQUIRED, never defaulted — see the rule. */
   paymentMethod: string;
+  /**
+   * SCRUM-54: the physical bank the money left from. Optional only so an event queued
+   * before this field existed can be parsed. A bank event without it is refused
+   * at posting; the command requires it for every new bank payment.
+   */
+  bankAccountId?: string;
 }
 
 /**
@@ -3009,10 +3341,19 @@ export function ruleHandoverCostPaidDirect(p: HandoverCostPaidDirectPayload): Ru
   }
   const expense = custodyFeeExpenseKey(p.accountingTreatment);
   if (expense.systemKey === null) throw new Error(expense.refusal);
+  const cashKey = disbursementAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A physical bank account is required for a direct handover bank payment.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A cash direct handover payment cannot name a bank account.");
+  }
   return {
     lines: [
       line(expense.systemKey, p.amountMinor, 0, `Handover cost (${p.feeType}) paid directly by the dealership`, { vehicleId: p.vehicleId }),
-      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Handover cost paid by the dealership"),
+      // SCRUM-54: only the bank control line names the bank.
+      line(cashKey, 0, p.amountMinor, "Handover cost paid by the dealership",
+        cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
     ],
     memo: "Handover cost paid directly by the dealership",
     category: "SYSTEM",
@@ -3029,6 +3370,11 @@ export interface FinanceCompanyForwardPaidPayload {
   currency: string;
   /** How the money left: REQUIRED, never defaulted. */
   paymentMethod: string;
+  /**
+   * SCRUM-54: the physical bank a BANK_ACCOUNT payment left. Optional only
+   * for old queued payload shapes; missing identity refuses posting.
+   */
+  bankAccountId?: string;
 }
 
 /**
@@ -3050,10 +3396,23 @@ export function ruleFinanceCompanyForwardPaid(p: FinanceCompanyForwardPaidPayloa
       `FINANCE_COMPANY_FORWARD_PAID carries a payment method that is not CASH, BANK_TRANSFER, CHEQUE or CARD (${String(p.paymentMethod)}) - refusing to post.`
     );
   }
+  const cashKey = disbursementAccountKey(p.paymentMethod);
+  if (cashKey === SYSTEM_KEYS.BANK_ACCOUNT && !p.bankAccountId) {
+    throw new Error("A physical bank account is required for a finance-company forward bank payment.");
+  }
+  if (cashKey !== SYSTEM_KEYS.BANK_ACCOUNT && p.bankAccountId) {
+    throw new Error("A cash finance-company forward cannot name a bank account.");
+  }
   return {
     lines: [
       line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_FINANCE_COMPANIES, p.amountMinor, 0, "Forwarded to the finance company", financePayerDims(p)),
-      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor, "Paid to the finance company"),
+      line(
+        cashKey,
+        0,
+        p.amountMinor,
+        "Paid to the finance company",
+        cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined
+      ),
     ],
     memo: "Deposit and dealership contribution forwarded to the finance company",
     category: "SYSTEM",

@@ -134,6 +134,37 @@ describe("resetOrgFinancialData", () => {
     expect(await countFor(t, "customers", orgId)).toBe(1);
   });
 
+  test("derived dashboard expense totals of every generation are cleared, and only for the reset org (SCRUM-807)", async () => {
+    // The expenses trigger maintains only the latest generation, so an older or
+    // blocked one would keep the reset org's pre-reset amounts unless it is purged.
+    const t = setup();
+    const target = await seedOrg(t, "Summary Target");
+    const bystander = await seedOrg(t, "Summary Bystander");
+    const days = () => new Array<number>(31).fill(0);
+    const seedSummary = (orgId: Id<"organizations">) =>
+      t.run(async (ctx) => {
+        for (const [generation, phase] of [[1, "READY"], [2, "BLOCKED"]] as const) {
+          await ctx.db.insert("dashboardExpenseSummaryState", { orgId, generation, phase });
+          await ctx.db.insert("dashboardExpenseMonths", {
+            orgId, generation, month: 202610,
+            cashOut: days(), showroom: days(), general: days(), showroomCount: days(),
+            unrepresentable: 0, absTotal: 50_000, overflowed: false,
+          });
+        }
+      });
+    await seedSummary(target);
+    await seedSummary(bystander);
+    const count = (orgId: Id<"organizations">, table: "dashboardExpenseMonths" | "dashboardExpenseSummaryState") =>
+      t.run(async (ctx) => (await ctx.db.query(table).collect()).filter((row) => row.orgId === orgId).length);
+
+    await runContinuationBatch(t, target);
+
+    expect(await count(target, "dashboardExpenseMonths")).toBe(0);
+    expect(await count(target, "dashboardExpenseSummaryState")).toBe(0);
+    expect(await count(bystander, "dashboardExpenseMonths")).toBe(2);
+    expect(await count(bystander, "dashboardExpenseSummaryState")).toBe(2);
+  });
+
   test("never touches another organization's rows", async () => {
     // The failure that would matter most: a reset for one dealership reaching
     // into another's books.
@@ -354,7 +385,22 @@ describe("resetOrgFinancialData", () => {
     // its receipt movement, invoice and sale parents.
     // 40 -> 41: `retainedCreditRefundRequests` (SCRUM-724) names a retained position,
     // its movement and the canonical payout, all of which the reset clears.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(41);
+    // 41 -> 43: bank aggregate line markers and readiness state are financial
+    // derivatives; reset must remove both with the underlying journal history.
+    // 43 -> 44: the sharded gross-flow counters behind that aggregate are the
+    // same kind of derivative and go with it.
+    // 44 -> 46: the dashboard expense month totals and their generation state
+    // (SCRUM-807) are derived from `expenses`, which the reset deletes.
+    // 46 -> 47: `dealCommissionLines`, the extra per-deal commission lines. Each names
+    // a sale (which the reset deletes) and is paid through a payslip (also
+    // deleted), so leaving them would strand rows pointing at nothing.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(47);
+    expect(RESET_TABLES_FOR_TEST).toContain("dashboardExpenseMonths");
+    expect(RESET_TABLES_FOR_TEST).toContain("dashboardExpenseSummaryState");
+    expect(RESET_TABLES_FOR_TEST.indexOf("dashboardExpenseMonths")).toBeGreaterThan(RESET_TABLES_FOR_TEST.indexOf("expenses"));
+    expect(RESET_TABLES_FOR_TEST).toContain("bankBalanceAggregateItems");
+    expect(RESET_TABLES_FOR_TEST).toContain("bankBalanceAggregateStates");
+    expect(RESET_TABLES_FOR_TEST).toContain("bankBalanceGrossShards");
   });
 });
 
@@ -634,6 +680,67 @@ describe("resetOrgFinancialData never strands a payrollItem's run reference", ()
     expect(remaining).toBe(0);
     await t.run(async (ctx) => {
       expect(await ctx.db.get(runId)).toBeNull();
+      expect(await ctx.db.query("payrollItems").collect()).toHaveLength(0);
+    });
+  });
+});
+
+describe("resetOrgFinancialData never strands a payslip's commission line reference", () => {
+  test("a partial pass keeps every line while any payroll item still names it", async () => {
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Commission Line Motors", createdAt: Date.now(), suspended: true })
+    );
+    await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset_cl", email: "cl@x.com" });
+      const runId = await ctx.db.insert("payrollRuns", {
+        orgId, periodYear: 2026, periodMonth: 9, currency: "JOD", status: "DRAFT",
+        totalGrossMinor: 3000, totalNetMinor: 3000, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VINRESETCL", make: "Kia", model: "Rio", year: 2024, mileage: 10,
+        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
+        status: "AVAILABLE",
+      });
+      const customerId = await ctx.db.insert("customers", { orgId, firstName: "Line", lastName: "Customer" });
+      const saleId = await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 15000,
+        saleDate: Date.now(), status: "COMPLETED" as const,
+      });
+      const lineIds = [];
+      for (let i = 0; i < 3; i += 1) {
+        lineIds.push(
+          await ctx.db.insert("dealCommissionLines", {
+            orgId, saleId, kind: "PURCHASE", employeeId: userId,
+            amountMinor: 1000, currency: "JOD", createdBy: userId,
+          })
+        );
+      }
+      for (const lineId of [...lineIds].reverse()) {
+        await ctx.db.insert("payrollItems", {
+          orgId, runId, userId, baseSalaryMinor: 0, commissionMinor: 1000,
+          otherEarningsMinor: 0, advanceDeductionMinor: 0, otherDeductionMinor: 0,
+          grossMinor: 1000, netMinor: 1000, currency: "JOD", commissionSaleIds: [],
+          commissionLineIds: [lineId], createdAt: Date.now(),
+        });
+      }
+    });
+
+    let remaining = Number.POSITIVE_INFINITY;
+    for (let pass = 0; pass < 20 && remaining > 0; pass += 1) {
+      const res = await runContinuationBatch(t, orgId, 1);
+      remaining = res.remaining;
+      await t.run(async (ctx) => {
+        for (const item of await ctx.db.query("payrollItems").collect()) {
+          for (const lineId of item.commissionLineIds ?? []) {
+            expect(await ctx.db.get(lineId), `pass ${pass}: payrollItem names a missing line`).not.toBeNull();
+          }
+        }
+      });
+    }
+    expect(remaining).toBe(0);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("dealCommissionLines").collect()).toHaveLength(0);
       expect(await ctx.db.query("payrollItems").collect()).toHaveLength(0);
     });
   });

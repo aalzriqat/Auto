@@ -22,6 +22,13 @@ import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { salesAr, salesEn } from "../lib/i18n/domains/sales";
 import { getLocalizedErrorMessage } from "../lib/errors";
 import { ConvexError } from "convex/values";
+import { insertReceiptBank, payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -114,7 +121,7 @@ async function seed(tag: string, ledger: Ledger) {
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
 /** Approved deal with a registered 12,500 CHEQUE tender, finalized. `forward` adds the deposit H and contribution C (plan v2 forward due). */
-async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?: boolean } = {}) {
+async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?: boolean; cash?: boolean } = {}) {
   const s = await seed(tag, ledger);
   const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
@@ -137,7 +144,14 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
       orgId: s.orgId, applicationId, method: "CHEQUE", expectedDate: Date.now(),
       chequeDetails: { bank: "Arab Bank", chequeNumber }, faceAmount: String(G / SCALE),
     });
-  await registerCheque("CHQ-239-1");
+  if (opts.cash) {
+    // SCRUM-54: the CASH receipt (cash on hand) names no bank.
+    await s.owner.as.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId, applicationId, method: "CASH", expectedDate: Date.now(),
+    });
+  } else {
+    await registerCheque("CHQ-239-1");
+  }
   await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
     orgId: s.orgId, applicationId, legalInvoiceAmountMinor: G, legalInvoiceNumber: `INV-${applicationId}`,
     legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
@@ -158,14 +172,21 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
       await ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C });
     });
   }
+  // SCRUM-411 P2-01: H + C is paid to the finance company BEFORE finalizing (null when nothing is owed).
+  const forwardId = await payForwardBeforeFinalize(s, s.owner.as, applicationId);
   await s.owner.as.mutation(api.applications.finalizeDeal, {
     idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
   });
 
+  // SCRUM-54: a cheque receipt names its physical bank. One bank per deal, made
+  // on first use, so every confirm of this deal names the same one.
+  let receiptBankId: Id<"bankAccounts"> | undefined;
+  const receiptBank = async () => (receiptBankId ??= await insertReceiptBank(s));
   // `expected` is the disbursement version the confirmer observed (round 3).
-  const confirm = (expected?: number) =>
+  const confirm = async (expected?: number) =>
     s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+      ...(opts.cash ? {} : { bankAccountId: await receiptBank() }),
       ...(expected !== undefined ? { expectedDisbursementVersion: expected } : {}),
     });
   const cheques = () =>
@@ -180,15 +201,7 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
       orgId: s.orgId, applicationId, chequeId, returnReason: over.reason ?? "Bank returned: insufficient funds",
       idempotencyKey: over.key ?? crypto.randomUUID(),
     });
-  const recordForward = async () => {
-    const due = await s.t.run(async (ctx) => (await ctx.db.get(applicationId))?.financeCompanyForwardDueMinor ?? 0);
-    if (due <= 0) return null;
-    return await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-      expectedAmountMinor: due, idempotencyKey: crypto.randomUUID(),
-    });
-  };
-  return { s, quoteId, applicationId, registerCheque, confirm, cheques, app, giveBack, recordForward };
+  return { s, quoteId, applicationId, registerCheque, confirm, receiptBank, cheques, app, giveBack, forwardId };
 }
 
 function codeOf(error: unknown): string | null {
@@ -564,7 +577,7 @@ describe("SCRUM-239 - the forward is a separate fact", () => {
   test("g) plan-v2 deal whose forward was reported returned: the return succeeds and forward state is byte-identical", async () => {
     const d = await finalizedChequeDeal("g1", "OPEN_YEAR", { forward: true });
     const { s, applicationId } = d;
-    const forwardId = await d.recordForward();
+    const forwardId = d.forwardId;
     expect(forwardId).not.toBeNull();
     await d.confirm();
     await s.owner.as.mutation(api.financeCompanyForward.reportFinanceCompanyForwardReturned, {
@@ -894,9 +907,10 @@ describe("SCRUM-239 F4 - audit: a RETURNED stamped cheque whose payment row is m
 });
 
 describe("SCRUM-239 round 2 - stale confirm key, coded return refusals", () => {
-  const confirmWith = (d: Awaited<ReturnType<typeof finalizedChequeDeal>>, key: string, expected?: number) =>
+  const confirmWith = async (d: Awaited<ReturnType<typeof finalizedChequeDeal>>, key: string, expected?: number) =>
     d.s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: d.s.orgId, applicationId: d.applicationId, disbursedAmountMinor: G, idempotencyKey: key,
+      bankAccountId: await d.receiptBank(),
       ...(expected !== undefined ? { expectedDisbursementVersion: expected } : {}),
     });
   const confirmRow = (s: Seeded, key: string) =>
@@ -955,12 +969,68 @@ describe("SCRUM-239 round 2 - stale confirm key, coded return refusals", () => {
     void applicationId;
   });
 
-  test("F1: at version 1 the stored fingerprint is byte-identical to the historical shape", async () => {
+  test("F1: at version 1 the stored fingerprint is the historical shape plus the named bank (SCRUM-54), nothing else", async () => {
     const d = await finalizedChequeDeal("r2c", "OPEN_YEAR");
     const keyK = "confirm-disbursement:fp";
     await confirmWith(d, keyK);
     const row = await confirmRow(d.s, keyK);
+    expect(row?.fingerprint).toBe(
+      JSON.stringify({ applicationId: d.applicationId, disbursedAmountMinor: G, bankAccountId: await d.receiptBank() })
+    );
+  });
+
+  test("SCRUM-54: a CASH receipt's stored fingerprint is exactly the historical shape - no bankAccountId key at all", async () => {
+    const d = await finalizedChequeDeal("r2cash", "OPEN_YEAR", { cash: true });
+    const keyK = "confirm-disbursement:fp-cash";
+    await d.s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: d.s.orgId, applicationId: d.applicationId, disbursedAmountMinor: G, idempotencyKey: keyK,
+    });
+    const row = await confirmRow(d.s, keyK);
     expect(row?.fingerprint).toBe(JSON.stringify({ applicationId: d.applicationId, disbursedAmountMinor: G }));
+  });
+
+  test("SCRUM-54: a bank-less version-1 key stored before this change replays to its stored result with no new write, though a fresh bank-less key is now refused", async () => {
+    const d = await finalizedChequeDeal("r2legacy", "OPEN_YEAR");
+    const { s, applicationId } = d;
+    const keyK = "confirm-disbursement:pre-scrum54";
+    const first = await confirmWith(d, keyK);
+    // Simulate the pre-SCRUM-54 row: same key, completed result, historical (bank-less) fingerprint.
+    const row = (await confirmRow(s, keyK))!;
+    await s.t.run((ctx) =>
+      ctx.db.patch(row._id, { fingerprint: JSON.stringify({ applicationId, disbursedAmountMinor: G }) })
+    );
+    const snapshot = () =>
+      s.t.run(async (ctx) => ({
+        app: await ctx.db.get(applicationId),
+        payments: await ctx.db.query("canonicalPayments").collect(),
+        allocations: await ctx.db.query("paymentAllocations").collect(),
+        events: await ctx.db.query("accountingEvents").collect(),
+        pending: await ctx.db.query("pendingAccountingEvents").collect(),
+        cheques: await ctx.db.query("postDatedCheques").collect(),
+        journals: await ctx.db.query("journalEntries").collect(),
+        idempotency: await ctx.db.query("commandIdempotency").collect(),
+      }));
+    const before = await snapshot();
+
+    const replay = await s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: keyK,
+    });
+    expect(replay).toEqual(first);
+    expect(await snapshot()).toEqual(before);
+
+    // Control: the SAME bank-less arguments under a fresh key on a not-yet-confirmed
+    // cheque deal are refused for the missing bank. So the replay above succeeds only
+    // because the stored key is honoured before bank validation; validating first
+    // would have refused it.
+    const fresh = await finalizedChequeDeal("r2legacyc", "OPEN_YEAR");
+    const refusal = await errOf(
+      fresh.s.owner.as.mutation(api.applications.confirmDisbursement, {
+        orgId: fresh.s.orgId, applicationId: fresh.applicationId, disbursedAmountMinor: G,
+        idempotencyKey: "confirm-disbursement:fresh-bankless",
+      })
+    );
+    expect(refusal?.data).toBe("Select the bank account the finance company's payment was received into.");
+    expect(await cashEvents(fresh.s)).toHaveLength(0);
   });
 
   test("F3b: an empty or over-long key on the finance return is refused with FINANCE_RETURN_KEY_INVALID, nothing written; default messages unchanged elsewhere", async () => {
@@ -1015,9 +1085,10 @@ describe("SCRUM-239 round 2 - stale confirm key, coded return refusals", () => {
 
 describe("SCRUM-239 round 3 - a confirm is bound to the version the confirmer observed", () => {
   type Deal = Awaited<ReturnType<typeof finalizedChequeDeal>>;
-  const confirmWith = (d: Deal, key: string, expected?: number) =>
+  const confirmWith = async (d: Deal, key: string, expected?: number) =>
     d.s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: d.s.orgId, applicationId: d.applicationId, disbursedAmountMinor: G, idempotencyKey: key,
+      bankAccountId: await d.receiptBank(),
       ...(expected !== undefined ? { expectedDisbursementVersion: expected } : {}),
     });
   const errOf = (promise: Promise<unknown>) =>
@@ -1100,7 +1171,7 @@ describe("SCRUM-239 round 3 - a confirm is bound to the version the confirmer ob
     expect(await cashEvents(d.s)).toHaveLength(1);
   });
 
-  test("R1: the expected version is not part of the fingerprint (version 1 stays byte-identical)", async () => {
+  test("R1: the expected version is not part of the fingerprint (version 1 keeps the historical shape plus the named bank)", async () => {
     const d = await finalizedChequeDeal("r3f", "OPEN_YEAR");
     await confirmWith(d, "confirm-disbursement:fp-expected", 1);
     const row = await d.s.t.run((ctx) =>
@@ -1108,7 +1179,9 @@ describe("SCRUM-239 round 3 - a confirm is bound to the version the confirmer ob
         q.eq("orgId", d.s.orgId).eq("operation", "applications.confirmDisbursement").eq("idempotencyKey", "confirm-disbursement:fp-expected")
       ).unique()
     );
-    expect(row?.fingerprint).toBe(JSON.stringify({ applicationId: d.applicationId, disbursedAmountMinor: G }));
+    expect(row?.fingerprint).toBe(
+      JSON.stringify({ applicationId: d.applicationId, disbursedAmountMinor: G, bankAccountId: await d.receiptBank() })
+    );
   });
 
   test("tenant: an expected version for another organisation's application answers the ordinary not-found refusal, never STALE", async () => {
@@ -1241,8 +1314,9 @@ describe("SCRUM-239 round 3 - every reachable confirm-after-return refusal is co
     expect(ar.ServerError_CHEQUE_BANK_FEE_INVALID).toContain("عددًا صحيحًا غير سالب");
     expect(ar.ServerError_FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES).toContain("أكثر من شيك واحد فعّال");
     expect(ar.ServerError_FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH).toContain("لا يساوي مبلغ الصرف");
-    expect(FC_RETURN_MESSAGES.CHEQUE_RETURN_KEY_CONFLICT).toContain("cheque, reason or bank fee");
+    expect(FC_RETURN_MESSAGES.CHEQUE_RETURN_KEY_CONFLICT).toContain("cheque, reason, bank fee or bank account");
     expect(ar.ServerError_CHEQUE_RETURN_KEY_CONFLICT).toContain("رسوم بنكية");
+    expect(ar.ServerError_CHEQUE_RETURN_KEY_CONFLICT).toContain("حساب مصرفي");
   });
 
   test("every new confirm/return refusal has EN text equal to the server text, AR text, and the nothing-changed sentence", () => {

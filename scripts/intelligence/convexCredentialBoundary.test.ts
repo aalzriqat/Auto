@@ -196,19 +196,24 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // before the preview is created, in trusted-e2e before it deploys over the
   // preview, and in attack-worker before the missions. None of them touches a
   // Convex credential or a candidate path.
-  // SCRUM-350 G4: also re-pinned for one trusted-e2e step only — the swarm
-  // accounting period setup (`playwright test` of one trusted spec, no secret,
-  // no candidate path) — plus its report folders in the E2E report upload.
-  // The step is named for what it measures (opens the period, drains the
-  // pending outbox); it does not claim a later posting will settle.
+  // SCRUM-350 G4 / SCRUM-411: also re-pinned for the swarm accounting period
+  // setup in trusted-e2e — the same trusted spec (`playwright test` of one
+  // trusted spec, no secret, no candidate path) run twice, once before the full
+  // E2E suite and once after it — plus both runs' report and results folders
+  // in the E2E report upload. The steps are named for what they measure (open
+  // the period, drain the pending outbox); they do not claim a later posting
+  // will settle.
+  // #650: re-pinned for two guards only — the prepare job stops before it claims
+  // the preview, and the scrub step before it changes it, when the preview's
+  // cleanup pin was not recorded. No new secret, trigger or candidate path.
   "browser-attack-swarm.yml":
-    "d3e24f70b3e4b91258044cc4d78194c48af1cf8d61f9746c41c0a1999cd12362",
+    "840ddb2a34e70bb15d285ebdc6c49ee348d3c905dcc94bf975d4e7e056550468",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
     "f5c1c675661c7f2a16184475a333f9380036cac809190247c945ce823e20f572",
   "hunt-preview.yml":
-    "f755f7106032668891d1a43827e2558b626fde48bf73471f7bdd991774a0bf51",
+    "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":
     "a47a5289bc35c018cbb378d68d7b0d389f3f78774272d4ada03f64eb4197f54d",
   "convex-preview-key-diagnostic.yml":
@@ -217,8 +222,12 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     "61789e5b96d2a5e5e9b41be44fcf2afccf9bd372865e3c39a1154cb3788edde2",
   "trusted-accounting-rehearsal.yml":
     "da8ee3225cb7a94f92593a2f18d336eb5284446fe06cd1c81846bbec780d72d8",
+  // Re-pinned for one step only: it sets the public Turnstile test secret and
+  // NEXT_PUBLIC_APP_URL on this run's own disposable preview (the same two values
+  // and control-plane claim the swarm uses), so the dealer-site spec can submit
+  // its public lead form. No candidate path, no production deployment.
   "trusted-main-e2e.yml":
-    "ba0277012803ed365c944dbad5ecef410036c5773e6b401a7021a0b37855d9f4",
+    "c8d8cee8d7aea6275252635de0de51a865cdd66cdd1c65e1cd7fd0c5ea179541",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {

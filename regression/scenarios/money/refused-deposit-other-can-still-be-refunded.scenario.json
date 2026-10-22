@@ -1,0 +1,61 @@
+{
+  "id": "refused-deposit-other-can-still-be-refunded",
+  "fingerprint": "0a4b7eb6293d22c677b6dd127102eda812f0eb21c8081cfaa422bdac715b6857",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum801-pilot-other",
+    "firstSeen": "2026-10-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "depositResolution": "OTHER",
+        "reason": "present"
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "depositResolution": "REFUND_TO_CUSTOMER",
+        "method": "CASH"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "DEPOSIT_OTHER_TREATMENT_DISABLED"
+    },
+    {
+      "observable": "deposit.status",
+      "value": "REFUNDED"
+    },
+    {
+      "observable": "refund.liabilityDebited",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-795#c22485",
+      "digest": "bd755080a878c8ff3d11c74259c7d36a7395cf1d926274131ca7927f65135378"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedDepositResolution.test.ts",
+    "testName": "after OTHER is refused, a second approver can still refund the deposit"
+  },
+  "matrixRow": "SCRUM-801-deposit-other"
+}

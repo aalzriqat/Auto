@@ -13,10 +13,20 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
+
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -347,6 +357,9 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "clears", 1000);
     const { applicationId } = await readyToFinalize(t, ids, 1500);
+    // SCRUM-411 P2-01: this 100%-LTV, deposit-free deal owes the company nothing onward,
+    // so no payment is recorded before finalize.
+    expect(await payForwardBeforeFinalize({ t, orgId: ids.orgId }, ids.asOwner, applicationId)).toBeNull();
 
     const saleId = await ids.asOwner.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
       orgId: ids.orgId,

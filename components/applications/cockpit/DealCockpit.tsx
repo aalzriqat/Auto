@@ -108,6 +108,10 @@ import {
   type FinanceDecisionDialog,
   type FinanceDecisionFacts,
 } from "./FinanceCompanyDecisionCard";
+import {
+  CustomerFinanceCompanyPaymentCard,
+  type CustomerFinanceCompanyPayment,
+} from "./CustomerFinanceCompanyPaymentCard";
 import { ResolveReconciliationDialog } from "./ResolveReconciliationDialog";
 import { ResolveGapDialog } from "./ResolveGapDialog";
 import {
@@ -159,6 +163,7 @@ import {
 import { DisbursementConfirmationDialog } from "../DisbursementConfirmationDialog";
 import {
   RecordForwardToFinanceCompanyDialog,
+  type ForwardConfirmOutcome,
   type ForwardPaymentValues,
 } from "../RecordForwardToFinanceCompanyDialog";
 import { ForwardCorrectionDialog, type ForwardCorrectionKind } from "../ForwardCorrectionDialog";
@@ -181,6 +186,7 @@ import {
   type ExpectedHandoverRow,
   type ActualHandoverCost,
   type DirectHandoverPayment,
+  type DirectPaymentBankOptions,
   type HandoverCostsData,
   type HandoverCostSource,
   type NewHandoverCost,
@@ -188,8 +194,10 @@ import {
 import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
 import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
 import { useClosingReadiness } from "./useClosingReadiness";
+import { usePreFinalizeForward, type PreFinalizeForward } from "./usePreFinalizeForward";
 import { closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
 import { ProfitApprovalNotice, useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
+import { DealCommissionsRow } from "@/components/commissions/DealCommissionsRow";
 import { formatMinorAmount, formatMoneyAmount } from "@/lib/moneyDisplay";
 
 /**
@@ -456,6 +464,13 @@ const PROFIT_BLOCKED_REASON: Record<
   FinancedDirectUnverified: "ProfitFinancedDirectUnverified",
 };
 
+/** What the money card hands the commissions row: the headline profit and its own formatter. */
+type DealCommissionsSlot = (args: {
+  profitMinor: number | null;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}) => React.ReactNode;
+
 /** The same labels the legal-invoice dialog offers, so the record reads as it was entered. */
 const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
   FINANCE_COMPANY: "PartyFinancier",
@@ -502,33 +517,68 @@ const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
 function finalizeUnavailableReasonKey({
   routeRequired,
   canRecordRoute,
-  heldDepositBlocksDirectClose,
   readinessBlocksClose,
   readinessUnreadable,
+  forwardReasonKey,
   canClose,
   canReadReadiness,
 }: Readonly<{
   routeRequired: boolean;
   canRecordRoute: boolean;
-  /**
-   * `finalizeDeal` refuses a DIRECT_TO_SUPPLIER deal whose quote still holds a
-   * reservation deposit (SCRUM-417, G7) — the same refusal
-   * `setSupplierSettlementRoute` makes, by the other door.
-   */
-  heldDepositBlocksDirectClose: boolean;
   readinessBlocksClose: boolean;
   readinessUnreadable: boolean;
+  /**
+   * SCRUM-411 P2-01: `finalizeDeal` refuses until the deposit and the
+   * contribution owed to the finance company are on the books for the plan it
+   * would freeze. Judged after the readiness (the server cannot form the plan
+   * before the deal is ready to close) and before the close permission, because
+   * the payment is a fact about the deal that someone other than the closer may
+   * have to act on.
+   */
+  forwardReasonKey: string | undefined;
   canClose: boolean;
   canReadReadiness: boolean;
 }>): string | undefined {
   if (routeRequired && !canRecordRoute) return "FinalizeNeedsRouteAndPermission";
   if (routeRequired) return "FinalizeNeedsSettlementRoute";
-  if (heldDepositBlocksDirectClose) return "FinalizeNeedsHeldDepositResolved";
   if (readinessUnreadable) return "FinalizeWaitsForReadiness";
   if (readinessBlocksClose) return "FinalizeNeedsClosingReadiness";
+  if (forwardReasonKey !== undefined) return forwardReasonKey;
   if (!canClose) return "FinalizeNeedsPermission";
   if (!canReadReadiness) return "FinalizeNeedsReadinessAccess";
   return undefined;
+}
+
+/** The step's note when the caller may record the payment: the close waits for it, and the step IS the payment. */
+const FORWARD_PAYMENT_STEP_KEY = "FinalizeNeedsForwardPayment";
+
+/**
+ * Why the close waits on the payment to the finance company (SCRUM-411 P2-01), or
+ * `undefined` when it does not. The server's own verdict, never recomputed here:
+ * UNPAID is the payment still to be recorded - by this caller, or by the manager
+ * or accountant who may; every other blocking state names who resolves it. A
+ * verdict still loading, unavailable or not applicable (`undefined`) blocks
+ * nothing on this screen; `finalizeDeal` judges it on the server regardless.
+ */
+function preFinalizeForwardReasonKey(status: PreFinalizeForward | undefined): string | undefined {
+  switch (status?.state) {
+    case "FIRST_PAYMENT_UNFUNDED":
+      return "FinalizeFirstPaymentUnfunded";
+    case "UNPAID":
+      return status.mayRecord ? FORWARD_PAYMENT_STEP_KEY : "ForwardNeedsPermission";
+    case "STALE":
+      return "FinalizeForwardPaymentStale";
+    case "POSTING_PENDING":
+      return "FinalizeForwardPaymentPosting";
+    case "POSTING_FAILED":
+      return "FinalizeForwardPaymentPostingFailed";
+    case "REVERSAL_PENDING":
+      return "FinalizeForwardPaymentReversing";
+    case "NEEDS_REPAIR":
+      return "FinalizeForwardPaymentNeedsReview";
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -1054,6 +1104,20 @@ export function DealCockpit({
     readinessUnreadable: closingReadinessServiceUnavailable,
   });
   const finalizeAllowedByReadiness = finalizeReadinessHoldKey === undefined;
+  // SCRUM-411 P2-01: the deposit and the contribution owed to the finance company
+  // are paid BEFORE the close. The server judges it against the plan the close
+  // would freeze (the cockpit's own `forward` block only knows a frozen plan, so
+  // it says nothing about an approved deal that is not finalized yet). Asked while
+  // the deal is APPROVED; the plan it judges is formed from the same inputs the
+  // readiness already evaluated, so `planReady` tells the server to skip that second
+  // derivation until the deal is ready to close. The payment itself (which one to take
+  // back, and that Cancel must wait) is answered either way (SCRUM-411 B1). Read
+  // without throwing like the readiness above.
+  const preFinalizeForward = usePreFinalizeForward(
+    canViewApplications && deal?.status === "APPROVED"
+      ? { orgId, applicationId, planReady: finalizeAllowedByReadiness }
+      : "skip"
+  );
   const planCustodyHandler = useMutation(api.financeDealCosts.planCustodyHandler);
   const openDealCustody = useMutation(api.financeDealCosts.openDealCustody);
   const recordCustodyMovement = useMutation(api.financeDealCosts.recordCustodyMovement);
@@ -1072,6 +1136,18 @@ export function DealCockpit({
   const reportFinanceCompanyForwardReturned = useMutation(
     api.financeCompanyForward.reportFinanceCompanyForwardReturned
   );
+  // SCRUM-766 PR-B: the evidence list is read for every deal a caller the server would let read it
+  // can see, NOT only while an agreement is held: a payment confirmed against an earlier agreement
+  // (reopen / reapproval to a zero-to-finance-company split) must stay visible and correctable.
+  const agreedToFinanceCompanyMinor = economicsApp?.customerGapToFinanceCompanyMinor ?? 0;
+  const customerPayments = useQuery(
+    api.customerFinanceCompanyPayments.listPayments,
+    economicsApp !== null && !permissionsLoading && hasPermission(PERMISSIONS.VIEW_FINANCE)
+      ? { orgId, applicationId }
+      : "skip"
+  );
+  const confirmCustomerFinanceCompanyPayment = useMutation(api.customerFinanceCompanyPayments.confirmPayment);
+  const voidCustomerFinanceCompanyPayment = useMutation(api.customerFinanceCompanyPayments.voidPayment);
   const confirmSupplierDisbursement = useMutation(api.applications.confirmSupplierDisbursement);
   const returnFinanceDisbursementCheque = useMutation(api.applications.returnFinanceDisbursementCheque);
   const setSupplierSettlementRoute = useMutation(api.applications.setSupplierSettlementRoute);
@@ -1222,8 +1298,22 @@ export function DealCockpit({
   // `app` is undefined while loading or reconnecting and null if not found: no
   // version is observed then, and `?? 1` above must not read as "moved to v1".
   const appObserved = app != null;
+  // SCRUM-54: the physical bank a BANK_TRANSFER / CHEQUE receipt reached, named
+  // by the operator on every open - never preselected, never carried over. The
+  // kept confirm key is bound to the bank it was minted for (like the version):
+  // a different bank is a different command, and the server's already-confirmed
+  // refusal keeps a changed bank from double-posting after a lost response.
+  const [disbursementBankId, setDisbursementBankId] = useState("");
+  const confirmDisbursementKeyBankRef = useRef("");
+  const disbursementBankOptions = useQuery(
+    api.applications.listDisbursementBankOptions,
+    confirmingDisbursement && canConfirmFinanceDisbursement ? { orgId, applicationId } : "skip"
+  );
   const setConfirmingDisbursementObserved = (open: boolean) => {
-    if (open) setConfirmObservedVersion(observedDisbursementVersion);
+    if (open) {
+      setConfirmObservedVersion(observedDisbursementVersion);
+      setDisbursementBankId("");
+    }
     setConfirmingDisbursement(open);
   };
   useEffect(() => {
@@ -1383,6 +1473,19 @@ export function DealCockpit({
    * idempotent by construction (a set and a void) and the server takes no
    * identity for them.
    */
+  // SCRUM-54: banks a bank-method handover payment may name, in the deal's cost currency.
+  const directPaymentBankOptions = useQuery(
+    api.financeDealCosts.listDirectPaymentBankOptions,
+    app && deal && canConfirmFinanceDisbursement
+      ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
+      : "skip"
+  );
+  const custodyBankOptions = useQuery(
+    api.financeDealCosts.listCustodyBankOptions,
+    app && deal && canConfirmFinanceDisbursement
+      ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
+      : "skip"
+  );
   const handoverCosts =
     app && deal
       ? {
@@ -1653,6 +1756,7 @@ export function DealCockpit({
           // caller who may confirm a finance disbursement is offered it (R1);
           // the server refuses anyone else regardless.
           canRecordDirectPayment: canConfirmFinanceDisbursement,
+          directPaymentBankOptions,
           // The reconcile mutation checks the same permission (confirm:finance_disbursement).
           canReconcile: canConfirmFinanceDisbursement,
           onRecordDirectPayment: async (feeId: string, values: DirectHandoverPayment) => {
@@ -1662,6 +1766,8 @@ export function DealCockpit({
                 orgId,
                 feeId: feeId as Id<"financeDealFees">,
                 method: values.method,
+                // SCRUM-54: the physical bank, frozen in the form's attempt so a replay sends the same one.
+                ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                 paidAt: values.paidAt,
                 // The amount the operator saw when they chose to pay: the
                 // server refuses if the line has changed since (R1).
@@ -1866,13 +1972,17 @@ export function DealCockpit({
   // once APPROVED). A CLOSED deal is cancelled only on the server's own answer
   // (`mayCancelFinalized`: the same permission tiers AND the forward gate); no
   // answer yet means no Cancel, never a permission-only guess.
+  // SCRUM-411 B1: an approved deal that already carries a payment to the finance company
+  // cannot be cancelled either (the server refuses until it is taken back), so the
+  // server's `blocksCancel` withholds Cancel before the close as `mayCancelFinalized` does after.
+  const preFinalizeCancelBlocked = app?.status !== "CLOSED" && preFinalizeForward?.blocksCancel === true;
   const canCancel =
     app != null &&
     app.status !== "CANCELLED" &&
     (app.status === "CLOSED"
       ? // A recorded supplier payment bars bare cancellation just as the company's own payment does.
         canCancelClosedDeal && deal?.forward?.mayCancelFinalized === true && !app.disbursedAt && !app.supplierDisbursementStatus
-      : canCreateApplication && (app.status === "APPROVED" ? canApproveApplication : true));
+      : canCreateApplication && (app.status === "APPROVED" ? canApproveApplication : true) && !preFinalizeCancelBlocked);
   // The caller holds the cancel authority but the server still refuses: with no
   // disbursement authority the missing piece is a manager; with it, only the
   // forward gate is left, which is not a permission.
@@ -1886,14 +1996,48 @@ export function DealCockpit({
       ? canConfirmFinanceDisbursement
         ? "FORWARD"
         : "MANAGER"
-      : undefined;
+      : preFinalizeCancelBlocked && canCreateApplication && canApproveApplication
+        ? "FORWARD"
+        : undefined;
   const forwardBlocksTransfer =
     deal?.forward?.applies === true && deal.forward.state !== "SETTLED" && deal.forward.state !== "NOT_DUE";
+  /**
+   * The figures the payment dialog pins, and the amount it sends. After the close
+   * they are the frozen plan's (`money.forward`); before it, the plan the close
+   * WOULD freeze (SCRUM-411 P2-01), offered only while the server says the payment
+   * is still to be recorded and this caller may record it. The two never overlap:
+   * the cockpit's `forward.applies` is false until a plan is frozen.
+   */
+  const forwardPayment =
+    deal?.forward?.applies === true && deal.money?.forward
+      ? deal.money.forward
+      : preFinalizeForward?.state === "UNPAID" && preFinalizeForward.mayRecord
+        ? preFinalizeForward.money
+        : null;
+  // SCRUM-54: banks a bank-method forward may name. The query needs the SAME pair of
+  // permissions as the payment (a manager can hold both without MANAGE_FINANCE), so
+  // it is asked only for a caller who holds both.
+  const forwardBankOptions = useQuery(
+    api.financeCompanyForward.listForwardBankOptions,
+    forwardPayment && canConfirmFinanceDisbursement && hasPermission(PERMISSIONS.VIEW_FINANCE)
+      ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
+      : "skip"
+  );
+  /**
+   * The payment the take-back / report-returned control acts on. A finalized
+   * deal's comes from the cockpit; before the close, from the server's status of
+   * the payment recorded for the plan the close would freeze, which is also how a
+   * STALE payment (recorded against other figures) is taken back and re-recorded.
+   */
+  const forwardCorrectionTargetId = deal?.forward?.onBooksForwardId ?? preFinalizeForward?.onBooksForwardId ?? null;
+  const mayCorrectForward =
+    deal?.forward?.planV2 === true ? deal.forward.mayRecord === true : preFinalizeForward?.mayRecord === true;
   const applicationDeposits: DealDeposit[] = (app?.deposits ?? []).map((deposit) => ({
     _id: deposit._id,
     amount: deposit.amount,
     status: deposit.status,
     method: deposit.method,
+    currency: deposit.currency,
     releasedAmountMinor: deposit.releasedAmountMinor,
     releaseCount: deposit.releaseCount,
   }));
@@ -2421,15 +2565,26 @@ export function DealCockpit({
       : finalizeUnavailableReasonKey({
           routeRequired: settlementRouteRequired,
           canRecordRoute: canRecordSupplierRoute,
-          heldDepositBlocksDirectClose:
-            app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
-            (app.deposits ?? []).some((deposit) => deposit.status === "HELD"),
           readinessBlocksClose:
             closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
           readinessUnreadable: closingReadinessServiceUnavailable,
+          forwardReasonKey: preFinalizeForwardReasonKey(preFinalizeForward),
           canClose: canCloseDeal,
           canReadReadiness: canViewApplications,
         });
+    // SCRUM-411 P2-01: the deposit and the contribution go to the finance company
+    // BEFORE the close. For the caller who may record that payment the step IS the
+    // payment (the existing dialog, with the server's pinned amount); everyone else
+    // is told who does, by the reason above. Nothing here forms its own opinion of
+    // what is owed: the status is the server's.
+    if (finalizeReasonKey === FORWARD_PAYMENT_STEP_KEY) {
+      return {
+        stageKey: "SETTLEMENT",
+        actionKey: "RecordForwardToFinanceCompany",
+        onStart: () => setRecordingForward(true),
+        noteKey: FORWARD_PAYMENT_STEP_KEY,
+      };
+    }
     // The same wait as `app` above, for the readiness verdict (S414-R2-SKEW-1,
     // S414-R3-1): the close is offered only under `finalizeAllowedByReadiness`.
     // With no reason to name — a read still in flight, or a verdict that says
@@ -2463,14 +2618,6 @@ export function DealCockpit({
        */
       unavailableReasonKey: finalizeReasonKey,
       unavailableDetail: finalizeDenominationDetail,
-      // SCRUM-417 UX1 (S4): the held deposit is resolved in the vehicle's
-      // deposit manager, on the vehicles page. Linked only for a caller who
-      // can resolve deposits AND open that page; everyone else is told who acts.
-      ...(finalizeReasonKey === "FinalizeNeedsHeldDepositResolved"
-        ? canResolveDeposits && hasPermission(PERMISSIONS.VIEW_VEHICLES)
-          ? { unavailableLink: { href: `/${orgId}/vehicles`, labelKey: "OpenDepositManagerAction" } }
-          : { unavailableNoteKey: "DepositManagerNeedsApprover" }
-        : {}),
     };
   }
 
@@ -2570,6 +2717,8 @@ export function DealCockpit({
               economicsApp.financeCompanyFundedPortionMinor ?? null,
             unfinancedPortionMinor: economicsApp.unfinancedPortionMinor ?? null,
             dealerContributionMinor: economicsApp.dealerContributionMinor ?? null,
+            customerGapToFinanceCompanyAppliedMinor:
+              economicsApp.customerGapToFinanceCompanyAppliedMinor ?? null,
             appliedLtvPercent: economicsApp.appliedLtvPercent ?? null,
             closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED",
             ltvMissing,
@@ -2676,6 +2825,57 @@ export function DealCockpit({
               reason: values.reason,
             });
           },
+          customerPayment:
+            agreedToFinanceCompanyMinor > 0 || (customerPayments ?? []).length > 0
+              ? {
+                  agreedMinor: agreedToFinanceCompanyMinor,
+                  confirmedMinor: economicsApp.customerGapToFinanceCompanyAppliedMinor ?? 0,
+                  // The server's one stored balance; absent with an agreement held means nothing is confirmed yet.
+                  awaitingMinor:
+                    economicsApp.customerGapToFinanceCompanyUnconfirmedMinor ?? agreedToFinanceCompanyMinor,
+                  payments: customerPayments,
+                  // The same authority and the same own-deal refusal the server applies.
+                  canRecord:
+                    hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
+                    hasPermission(PERMISSIONS.VIEW_FINANCE) &&
+                    membership?.userId !== economicsApp.salespersonId,
+                  closed: economicsApp.status !== "APPROVED" || economicsApp.finalizedSaleId !== undefined,
+                  onConfirm: async (values: { amountMinor: number; paidAt: number; reference: string }) => {
+                    // One key per attempt: a retry after a lost response is the SAME command.
+                    const intent = `confirm-customer-fc-payment:${applicationId}:${values.amountMinor}:${values.paidAt}:${values.reference}`;
+                    try {
+                      await confirmCustomerFinanceCompanyPayment({
+                        orgId,
+                        applicationId,
+                        ...values,
+                        idempotencyKey: commandId.for(intent),
+                      });
+                      commandId.retire(intent);
+                      toast.success(t("CustFcPayConfirmedSuccess"));
+                      return true;
+                    } catch (error) {
+                      if (isConvexError(error)) commandId.retire(intent);
+                      toast.error(getErrorMessage(error));
+                      return false;
+                    }
+                  },
+                  onVoid: async (values: { paymentId: string; reason: string }) => {
+                    try {
+                      await voidCustomerFinanceCompanyPayment({
+                        orgId,
+                        applicationId,
+                        paymentId: values.paymentId as Id<"customerFinanceCompanyPayments">,
+                        reason: values.reason,
+                      });
+                      toast.success(t("CustFcPayVoidedSuccess"));
+                      return true;
+                    } catch (error) {
+                      toast.error(getErrorMessage(error));
+                      return false;
+                    }
+                  },
+                }
+              : null,
         }
       : undefined;
 
@@ -2730,6 +2930,7 @@ export function DealCockpit({
     app && custodyCommandsOffered
       ? {
           members: custodyCandidates?.candidates,
+          bankOptions: custodyBankOptions,
           eligibleFees: (dealCosts?.fees ?? [])
             .filter((fee) => fee.custodyEligible && fee.custodyId === undefined && fee.actualAmountMinor !== undefined && fee.actualAmountMinor > 0)
             .map((fee) => ({
@@ -2758,6 +2959,7 @@ export function DealCockpit({
                 userId: values.userId,
                 issuedMinor: values.amountMinor,
                 method: values.method,
+                ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                 reference: values.reference,
                 note: values.note,
                 occurredAt: values.occurredAt,
@@ -2772,6 +2974,7 @@ export function DealCockpit({
                 kind,
                 amountMinor: values.amountMinor,
                 method: values.method,
+                ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                 reference: values.reference,
                 note: values.note,
                 occurredAt: values.occurredAt,
@@ -2863,6 +3066,10 @@ export function DealCockpit({
   return (
     <>
       <DealCockpitView
+        orgId={orgId}
+        renderCommissions={({ profitMinor, money, t }) => (
+          <DealCommissionsRow orgId={orgId} saleId={deal?.canonicalSaleId} profitMinor={profitMinor} money={money} t={t} />
+        )}
       deal={deal}
       stageDeepLink={stageDeepLink}
       backHref={`/${orgId}/deals`}
@@ -2985,23 +3192,22 @@ export function DealCockpit({
           : undefined
       }
       forwardCorrection={
-        deal?.forward?.planV2 === true &&
-        deal.forward.mayRecord === true &&
-        deal.forward.onBooksForwardId &&
+        mayCorrectForward &&
+        forwardCorrectionTargetId &&
         // A live unwind owns the forward payment: the server refuses either correction meanwhile.
         !unwindBars
           ? {
-              canVoid: deal.forward.transferConfirmed !== true,
+              canVoid: deal?.forward?.transferConfirmed !== true,
               open: forwardCorrection,
               submitting: forwardCorrectionSubmitting,
               onOpen: setForwardCorrection,
               onClose: () => setForwardCorrection(null),
               onConfirm: async (reason: string) => {
-                const forwardId = deal.forward?.onBooksForwardId;
+                const forwardId = forwardCorrectionTargetId;
                 const kind = forwardCorrection;
                 if (!forwardId || !kind) return;
                 // A VOID dialog opened before the transfer was confirmed must not submit after it.
-                if (kind === "VOID" && deal.forward?.transferConfirmed === true) {
+                if (kind === "VOID" && deal?.forward?.transferConfirmed === true) {
                   toast.error(t("ForwardVoidAfterTransfer"));
                   setForwardCorrection(null);
                   return;
@@ -3256,17 +3462,17 @@ export function DealCockpit({
               resolvingId: resolvingDepositId,
               unconfirmed: pendingPayouts.blocked,
               onDismissUnconfirmed: pendingPayouts.dismiss,
-              onResolve: async (depositId, resolution, refundMethod, observedReleaseCount) => {
+              onResolve: async (depositId, resolution, refundMethod, observedReleaseCount, bankAccountId) => {
                 const method = resolution === "REFUNDED" ? refundMethod : "NONE";
                 // A DIFFERENT decision than an unconfirmed earlier attempt is not
                 // sent: it would mint a new key and could pay out twice. The panel
                 // shows the reconciliation notice instead.
-                const gate = pendingPayouts.check(depositId, resolution, String(method));
+                const gate = pendingPayouts.check(depositId, resolution, String(method), bankAccountId);
                 if (gate.status === "blocked") return;
                 const releaseIntent =
                   gate.recordedIntent ??
-                  `release-deposit:${depositId}:${resolution}:${method}:gen${observedReleaseCount}`;
-                pendingPayouts.record(depositId, { resolution, method: String(method), intent: releaseIntent });
+                  `release-deposit:${depositId}:${resolution}:${method}:${bankAccountId ?? "none"}:gen${observedReleaseCount}`;
+                pendingPayouts.record(depositId, { resolution, method: String(method), bankAccountId, intent: releaseIntent });
                 setResolvingDepositId(depositId);
                 try {
                   await trackRecorded(
@@ -3276,6 +3482,7 @@ export function DealCockpit({
                         depositId: depositId as Id<"deposits">,
                         resolution,
                         refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
+                        bankAccountId,
                         idempotencyKey: commandId.for(releaseIntent),
                       }),
                     resolution === "REFUNDED" ? "DepositRefundedSuccess" : "DepositForfeitedSuccess",
@@ -3303,9 +3510,26 @@ export function DealCockpit({
                 confirming: confirmingDisbursement,
                 submitting: disbursementSubmitting,
                 amountLabel: expectedDisbursementLabel,
+                // Only a receipt that reached a bank names one; the server's own
+                // answer (CASH needs none) decides, not a guess made here.
+                bank:
+                  disbursementBankOptions?.needsBank === false
+                    ? undefined
+                    : {
+                        options: disbursementBankOptions?.banks,
+                        value: disbursementBankId,
+                        onChange: setDisbursementBankId,
+                        truncated: disbursementBankOptions?.truncated === true,
+                        receivableMissing: disbursementBankOptions?.receivableMissing === true,
+                      },
                 onOpenChange: setConfirmingDisbursementObserved,
                 onConfirm: async () => {
                   if (!expectedDisbursementMinor) return;
+                  // The bank this request is for, fixed at click time. Absent
+                  // for CASH; a bank receipt cannot be sent without one.
+                  const bankAccountId =
+                    disbursementBankOptions?.needsBank === false ? "" : disbursementBankId;
+                  if (disbursementBankOptions?.needsBank !== false && bankAccountId === "") return;
                   // The version captured when the dialog OPENED, not the one the
                   // screen shows now (the dialog closes itself if that moves).
                   // Held in the closure so this request's answer, however late,
@@ -3342,10 +3566,14 @@ export function DealCockpit({
                   const generation = confirmGenerationRef.current;
                   const superseded = () => confirmGenerationRef.current !== generation;
                   try {
-                    if (confirmDisbursementKeyVersionRef.current !== observedVersion) {
+                    if (
+                      confirmDisbursementKeyVersionRef.current !== observedVersion ||
+                      confirmDisbursementKeyBankRef.current !== bankAccountId
+                    ) {
                       confirmDisbursementKeyRef.current = null;
                     }
                     confirmDisbursementKeyVersionRef.current = observedVersion;
+                    confirmDisbursementKeyBankRef.current = bankAccountId;
                     confirmDisbursementKeyRef.current ??= `confirm-disbursement:${crypto.randomUUID()}`;
                     const disbursementKey = confirmDisbursementKeyRef.current;
                     // Sent: until the server answers, the outcome is unknown here.
@@ -3364,6 +3592,7 @@ export function DealCockpit({
                           // argument, so a v1 confirm must look exactly like the old
                           // call. The server already refuses an omitted value at v2+.
                           ...(observedVersion > 1 ? { expectedDisbursementVersion: observedVersion } : {}),
+                          ...(bankAccountId !== "" ? { bankAccountId: bankAccountId as Id<"bankAccounts"> } : {}),
                         }),
                       "DisbursementConfirmedSuccess",
                       { reflectedWhen: financeDisbursementReflected }
@@ -3429,26 +3658,31 @@ export function DealCockpit({
                 },
               },
               forward:
-                deal?.forward?.applies === true && deal.money?.forward
+                forwardPayment
                   ? {
                       confirming: recordingForward,
                       submitting: forwardSubmitting,
-                      totalLabel: formatEconomics(deal.money.forward.dueMinor),
-                      depositLabel: formatEconomics(deal.money.forward.depositMinor),
-                      contributionLabel: formatEconomics(deal.money.forward.contributionMinor),
+                      dueMinor: forwardPayment.dueMinor,
+                      totalLabel: formatEconomics(forwardPayment.dueMinor),
+                      depositLabel: formatEconomics(forwardPayment.depositMinor),
+                      contributionLabel: formatEconomics(forwardPayment.contributionMinor),
+                      bankOptions: forwardBankOptions,
                       onOpenChange: setRecordingForward,
-                      onConfirm: async (values) => {
-                        const dueMinor = deal.money?.forward?.dueMinor;
+                      onConfirm: async (values): Promise<ForwardConfirmOutcome> => {
+                        // The amount pinned with the first attempt, never the live due: a retry
+                        // after a lost response must be byte-identical (same key, same args).
+                        const dueMinor = values.expectedAmountMinor;
                         if (!dueMinor) return;
                         setForwardSubmitting(true);
                         // One key per attempt: a retry after a lost response is the
-                        // SAME command, and a changed input is a new one.
-                        const intent = `record-forward:${applicationId}:${dueMinor}:${values.method}:${values.paidAt}:${values.reference ?? ""}`;
+                        // SAME command, and a changed input (the bank included) is a new one.
+                        const intent = `record-forward:${applicationId}:${dueMinor}:${values.method}:${values.bankAccountId ?? ""}:${values.paidAt}:${values.reference ?? ""}`;
                         try {
                           await recordFinanceCompanyForward({
                             orgId,
                             applicationId,
                             method: values.method,
+                            ...(values.bankAccountId ? { bankAccountId: values.bankAccountId } : {}),
                             paidAt: values.paidAt,
                             expectedAmountMinor: dueMinor,
                             reference: values.reference,
@@ -3458,8 +3692,10 @@ export function DealCockpit({
                           toast.success(t("ForwardRecordedSuccess"));
                           setRecordingForward(false);
                         } catch (error) {
-                          if (isConvexError(error)) commandId.retire(intent);
                           toast.error(getErrorMessage(error));
+                          // The server's own answer committed nothing; anything else may have.
+                          if (isConvexError(error)) commandId.retire(intent);
+                          else return "UNKNOWN";
                         } finally {
                           setForwardSubmitting(false);
                         }
@@ -3745,6 +3981,7 @@ export function DealCockpit({
           receivableId,
           amount: receipt.amount,
           receiptMethod: receipt.receiptMethod,
+          ...(receipt.bankAccountId ? { bankAccountId: receipt.bankAccountId } : {}),
           receiptReference: receipt.receiptReference,
           receivedAt: receipt.receivedAt,
           idempotencyKey: receipt.idempotencyKey,
@@ -3755,9 +3992,9 @@ export function DealCockpit({
           ? {
               readiness: closingReadiness,
               serviceUnavailable: closingReadinessServiceUnavailable,
-              // The legal invoice is still recorded by hand while the v1
-              // posting plan reads it (SCRUM-411 retires that dependency); it
-              // is shown and recorded by the disbursement tier only, as before.
+              // The legal invoice is OPTIONAL evidence since plan v3 (SCRUM-411):
+              // the server derives the sale and never reads it as revenue. It is
+              // shown and recorded by the disbursement tier only, as before.
               legalInvoice:
                 dealCosts && canConfirmFinanceDisbursement
                   ? {
@@ -3819,6 +4056,7 @@ export function DealCockpit({
           error={legalInvoiceError}
           scale={scaleForCurrency(dealCosts?.currency ?? orgCurrency.code)}
           currency={dealCosts?.currency ?? orgCurrency.code}
+          vehicleIsConsigned={isConsignedDeal}
           existing={
             dealCosts?.legalInvoiceAmountMinor !== undefined
               ? {
@@ -3826,6 +4064,7 @@ export function DealCockpit({
                   number: dealCosts.legalInvoiceNumber,
                   date: dealCosts.legalInvoiceDate,
                   issuedTo: dealCosts.legalInvoiceIssuedTo,
+                  issuerName: dealCosts.legalInvoiceIssuerName,
                 }
               : undefined
           }
@@ -3845,6 +4084,8 @@ export function DealCockpit({
                     legalInvoiceDate: values.legalInvoiceDate,
                     issuedTo: values.issuedTo,
                     issuedToOther: values.issuedToOther,
+                    issuedBy: values.issuedBy,
+                    issuerName: values.issuerName,
                   }),
                 "LegalInvoiceRecorded",
                 {
@@ -3853,6 +4094,7 @@ export function DealCockpit({
                     amountMinor: values.legalInvoiceAmountMinor,
                     date: values.legalInvoiceDate,
                     issuedTo: values.issuedTo,
+                    issuerName: values.issuerName,
                   }),
                 }
               );
@@ -4041,6 +4283,10 @@ export function SaleDealCockpit({
   return (
     <>
       <DealCockpitView
+        orgId={orgId}
+        renderCommissions={({ profitMinor, money, t }) => (
+          <DealCommissionsRow orgId={orgId} saleId={deal?.saleId} profitMinor={profitMinor} money={money} t={t} />
+        )}
         deal={deal}
         stageDeepLink={stageDeepLink}
         backHref={`/${orgId}/deals`}
@@ -4057,6 +4303,7 @@ export function SaleDealCockpit({
             receivableId,
             amount: receipt.amount,
             receiptMethod: receipt.receiptMethod,
+            ...(receipt.bankAccountId ? { bankAccountId: receipt.bankAccountId } : {}),
             receiptReference: receipt.receiptReference,
             receivedAt: receipt.receivedAt,
             idempotencyKey: receipt.idempotencyKey,
@@ -4542,9 +4789,12 @@ function MoneyPanel({
   parties,
   overview,
   customerInvoice,
+  renderCommissions,
   t,
 }: Readonly<{
   money: (minor: number) => string;
+  /** The employee commissions row, supplied by the container that holds the permissions. */
+  renderCommissions?: DealCommissionsSlot;
   profit: DealMoney["profit"];
   summary: SummaryEvidence;
   /**
@@ -4622,6 +4872,12 @@ function MoneyPanel({
         ) : (
           <ProfitHeadline profit={canonicalProfit} money={money} t={t} />
         )}
+        {renderCommissions?.({
+          profitMinor:
+            typeof canonicalProfit !== "string" && canonicalProfit.available ? canonicalProfit.amountMinor : null,
+          money,
+          t,
+        })}
         {overview && !overview.loading && overview.data?.financialSummary && (
           <DealFinancialOverview summary={overview.data.financialSummary} money={overview.moneyIn} t={t} />
         )}
@@ -4724,6 +4980,21 @@ export type FinanceDecisionWiring = {
   /** SCRUM-373 D2: present only when the server would accept the correction. */
   firstPaymentCorrection?: { quoteDownPaymentMinor: number; economicsStamp: string } | null;
   onApplyQuoteFirstPayment?: (values: { reason: string; economicsStamp: string }) => Promise<void>;
+  /**
+   * SCRUM-766 PR-B: present only when the customer agreed to pay part of the
+   * shortfall to the finance company. The agreement is a promise; the card shows
+   * how much of it is confirmed paid and offers the confirm / take-back commands.
+   */
+  customerPayment?: {
+    agreedMinor: number;
+    confirmedMinor: number;
+    awaitingMinor: number;
+    payments: ReadonlyArray<CustomerFinanceCompanyPayment> | undefined;
+    canRecord: boolean;
+    closed: boolean;
+    onConfirm: (values: { amountMinor: number; paidAt: number; reference: string }) => Promise<boolean>;
+    onVoid: (values: { paymentId: string; reason: string }) => Promise<boolean>;
+  } | null;
   onRecordAppraisal: (values: {
     appraisalAmountMinor: number;
     providerType: AppraisalProviderType;
@@ -4734,6 +5005,7 @@ export type FinanceDecisionWiring = {
 };
 
 export function DealCockpitView({
+  orgId,
   deal,
   stageDeepLink,
   backHref,
@@ -4772,7 +5044,11 @@ export function DealCockpitView({
   deposits,
   disbursement,
   closingChecklist,
+  renderCommissions,
 }: Readonly<{
+  /** Renders the employee commissions row on the money card; absent in a plain view. */
+  renderCommissions?: DealCommissionsSlot;
+  orgId?: Id<"organizations">;
   /** `undefined` while loading, `null` when the deal is not readable. */
   deal: DealCockpitData | null | undefined;
   /**
@@ -4913,7 +5189,8 @@ export function DealCockpitView({
       depositId: string,
       resolution: DepositResolution,
       refundMethod: PaymentMethod | undefined,
-      observedReleaseCount: number
+      observedReleaseCount: number,
+      bankAccountId?: Id<"bankAccounts">
     ) => Promise<void>;
     /** SCRUM-469 F1: earlier unconfirmed payouts blocking a different decision, by deposit id. */
     unconfirmed: Readonly<Record<string, PendingPayout>>;
@@ -4925,6 +5202,8 @@ export function DealCockpitView({
       confirming: boolean;
       submitting: boolean;
       amountLabel: string;
+      /** SCRUM-54: present while the receipt must name its bank (not CASH). */
+      bank?: React.ComponentProps<typeof DisbursementConfirmationDialog>["bank"];
       onOpenChange: (open: boolean) => void;
       onConfirm: () => void | Promise<void>;
     };
@@ -4932,11 +5211,13 @@ export function DealCockpitView({
     forward?: {
       confirming: boolean;
       submitting: boolean;
+      dueMinor: number;
       totalLabel: string;
       depositLabel: string;
       contributionLabel: string;
+      bankOptions: DirectPaymentBankOptions;
       onOpenChange: (open: boolean) => void;
-      onConfirm: (values: ForwardPaymentValues) => void | Promise<void>;
+      onConfirm: (values: ForwardPaymentValues) => ForwardConfirmOutcome | Promise<ForwardConfirmOutcome>;
     };
     supplier: {
       confirming: boolean;
@@ -5146,6 +5427,7 @@ export function DealCockpitView({
     receipt: {
       amount: number;
       receiptMethod?: PaymentMethod;
+      bankAccountId?: Id<"bankAccounts">;
       receiptReference?: string;
       receivedAt?: number;
       /**
@@ -5408,6 +5690,12 @@ export function DealCockpitView({
     supplierRow?.position === "OWED_TO_DEALERSHIP" &&
     supplierReceipt?.actionable === true;
   const canSettleSupplier = callerMaySettleSupplier && supplierClaimSettleable;
+  const supplierReceiptBankOptions = useQuery(
+    api.supplierReceivables.listReceiptBankOptions,
+    orgId && canSettleSupplier && settlingSupplier && supplierRow?.receivableId
+      ? { orgId, receivableId: supplierRow.receivableId as Id<"vehicleSupplierReceivables"> }
+      : "skip"
+  );
   // Named guidance for the one refusal the operator can act on. Every other
   // reason simply withholds the button, as before.
   const supplierGuidance =
@@ -5720,6 +6008,7 @@ export function DealCockpitView({
   const handleSupplierReceipt = async (receipt: {
     amount: number;
     receiptMethod?: PaymentMethod;
+    bankAccountId?: Id<"bankAccounts">;
     receiptReference?: string;
     receivedAt?: number;
   }) => {
@@ -6061,6 +6350,7 @@ export function DealCockpitView({
                     : null
                 }
                 customerInvoice={deal.money.customerInvoice}
+                renderCommissions={renderCommissions}
                 t={t}
               />
 
@@ -6164,6 +6454,14 @@ export function DealCockpitView({
             setReopeningApproval(true);
           }}
         />
+      {financeDecision.customerPayment && (
+        <CustomerFinanceCompanyPaymentCard
+          {...financeDecision.customerPayment}
+          factor={decisionFactor}
+          money={decisionMoney}
+          t={t}
+        />
+      )}
       {/* SCRUM-373 D2 — only on the server's verdict that it would accept. */}
       {financeDecision?.firstPaymentCorrection && (
         <div
@@ -6980,6 +7278,7 @@ export function DealCockpitView({
               lists, formatted the way that dialog formatted them. */}
           {deposits && (
             <StoppedDealDepositsPanel
+              orgId={orgId}
               deposits={deposits.items}
               canResolve={deposits.canResolve}
               faceValueIsReleasable={deposits.faceValueIsReleasable}
@@ -7175,6 +7474,7 @@ export function DealCockpitView({
           supplierName={supplierRow.name}
           outstandingMajor={supplierRow.amountMinor / factor}
           outstandingLabel={money(supplierRow.amountMinor)}
+          bankOptions={supplierReceiptBankOptions}
           t={t}
           onOpenChange={setSettlingSupplier}
           onConfirm={handleSupplierReceipt}
@@ -7270,6 +7570,7 @@ export function DealCockpitView({
               : null
           }
           grossLabel={deal.money.shortfall.method !== "NET"}
+          allowFinanceCompany={deal.money.shortfall.method !== "GROSS_MANUAL"}
           submittedQuotationMinor={gapResolution.submittedQuotationMinor}
           approvedPurchaseAmountMinor={gapResolution.approvedPurchaseAmountMinor}
           economicsStamp={"economicsStamp" in deal ? deal.economicsStamp : undefined}
@@ -7383,8 +7684,9 @@ export function DealCockpitView({
           onConfirm={chequeReturn.onConfirm}
         />
       )}
-      {unwind?.offered && (
+      {unwind?.offered && orgId && (
         <UnwindDealDialog
+          orgId={orgId}
           open={unwind.open}
           status={unwind.status}
           submitting={unwind.submitting}
@@ -7421,9 +7723,11 @@ export function DealCockpitView({
             <RecordForwardToFinanceCompanyDialog
               open={disbursement.forward.confirming}
               submitting={disbursement.forward.submitting}
+              dueMinor={disbursement.forward.dueMinor}
               totalLabel={disbursement.forward.totalLabel}
               depositLabel={disbursement.forward.depositLabel}
               contributionLabel={disbursement.forward.contributionLabel}
+              bankOptions={disbursement.forward.bankOptions}
               t={t}
               onOpenChange={disbursement.forward.onOpenChange}
               onConfirm={disbursement.forward.onConfirm}
@@ -7435,6 +7739,7 @@ export function DealCockpitView({
             disabled={disbursement.financeCompany.submitting}
             submitting={disbursement.financeCompany.submitting}
             amountLabel={disbursement.financeCompany.amountLabel}
+            bank={disbursement.financeCompany.bank}
             t={t}
             onOpenChange={disbursement.financeCompany.onOpenChange}
             onConfirm={disbursement.financeCompany.onConfirm}

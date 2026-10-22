@@ -18,7 +18,8 @@ export type BrowserAttackFamily =
   | "MULTI_TAB_RACE"
   | "COMPLETENESS_BOUNDARY"
   | "RTL_PARITY"
-  | "UI_BACKEND_MISMATCH";
+  | "UI_BACKEND_MISMATCH"
+  | "ACCOUNTING_DATE_BOUNDARY";
 
 export const PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES = [
   "DUPLICATE_SUBMIT",
@@ -30,6 +31,11 @@ export const PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES = [
   "LIFECYCLE_REVERSAL",
   "COMPLETENESS_BOUNDARY",
   "NETWORK_RECOVERY",
+  "CONSIGNMENT_ECONOMICS",
+  "STALE_UI",
+  "MONEY_BOUNDARY",
+  "NAVIGATION_RACE",
+  "ACCOUNTING_DATE_BOUNDARY",
 ] as const satisfies readonly BrowserAttackFamily[];
 
 const PHASE_A_EXECUTABLE_FAMILY_SET = new Set<BrowserAttackFamily>(
@@ -49,9 +55,9 @@ export type BrowserOracleKind =
 /**
  * A handler judges the oracles listed here and no others. A family with a
  * handler is not "executable" for a mission whose oracle the handler does not
- * judge: reporting it so would certify an obligation nothing checks (LIFE-1
- * maps LIFECYCLE_REVERSAL to STATE_TRANSITION, which the ACC-2 reversal
- * handler does not judge).
+ * judge: reporting it so would certify an obligation nothing checks (a forged
+ * LIFECYCLE_REVERSAL mission asking for ECONOMIC_AUTHORITY has a handler, but
+ * that handler judges only REVERSAL_RECONCILIATION and STATE_TRANSITION).
  */
 const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   Record<(typeof PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES)[number], readonly BrowserOracleKind[]>
@@ -62,9 +68,21 @@ const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   UI_BACKEND_MISMATCH: ["UI_BACKEND_AUTHORITY"],
   TENANT_ESCAPE: ["TENANT_ISOLATION"],
   AUTHORIZATION_ABUSE: ["AUTHORIZATION"],
-  LIFECYCLE_REVERSAL: ["REVERSAL_RECONCILIATION"],
+  // ACC-2 reconciles a reversed expense; LIFE-1 judges a deposit void's state transition.
+  LIFECYCLE_REVERSAL: ["REVERSAL_RECONCILIATION", "STATE_TRANSITION"],
   COMPLETENESS_BOUNDARY: ["LIST_COMPLETENESS"],
   NETWORK_RECOVERY: ["IDEMPOTENCY_SINGLE_EFFECT", "STATE_TRANSITION"],
+  CONSIGNMENT_ECONOMICS: ["ECONOMIC_AUTHORITY"],
+  STALE_UI: ["UI_BACKEND_AUTHORITY"],
+  // ACC-1 (a financed sale of owned stock) judges ECONOMIC_AUTHORITY; LIFE-1 (voiding a directly paid cost) is a
+  // distinct scenario of the same family that judges STATE_TRANSITION. Only that one LIFE-1 path is covered.
+  MONEY_BOUNDARY: ["ECONOMIC_AUTHORITY", "STATE_TRANSITION"],
+  NAVIGATION_RACE: ["STATE_TRANSITION"],
+  // ACC-3 (SCRUM-795): manual journals are off for the pilot, so this mission covers ONLY the create door being
+  // refused with the pilot code and leaving journals and drafts unchanged. It does not cover the approve door, the
+  // posted date or the closed-period rule (proven in backend tests with the switch mocked off), a LOCKED or
+  // unopened period, outbox posting or a reopen.
+  ACCOUNTING_DATE_BOUNDARY: ["STATE_TRANSITION"],
 };
 
 /** True when a handler exists for the family AND judges the mission's oracle. */
@@ -165,12 +183,26 @@ const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
   // Opens a second authenticated seat, creates a foreign tenant and probes it.
   TENANT_ESCAPE: 180_000,
   AUTHORIZATION_ABUSE: 120_000,
-  // Posts an expense, waits for the ledger to settle, then reverses it twice.
-  LIFECYCLE_REVERSAL: 180_000,
+  // Readiness waits alone can total 60s (20s org route, 15s Add Customer, 5s dialog, 15s reload search, 5s result) before launch, the customer submit and the backend query.
+  UI_BACKEND_MISMATCH: 120_000,
+  // Posts an expense and reverses it twice (ACC-2), or takes two deposits, voids one
+  // and reads the ledger three times (LIFE-1); the larger bound fits the deposit leg.
+  LIFECYCLE_REVERSAL: 240_000,
   // Seeds more rows than one page holds, then walks the whole list.
   COMPLETENESS_BOUNDARY: 240_000,
   // Holds the connection down, waits out the recovery window, then settles.
   NETWORK_RECOVERY: 180_000,
+  // About 25 product commands (some may wait out the write rate limit) plus up to 30s for the sale to post.
+  CONSIGNMENT_ECONOMICS: 240_000,
+  // Posts an expense, arms its reversal on the screen, reverses it server-side, then settles the ledger three times.
+  STALE_UI: 180_000,
+  // About 27 product commands (some may wait out the write rate limit) plus up to 30s for the sale to post.
+  MONEY_BOUNDARY: 240_000,
+  // Posts an expense, races its reversal against history back/forward, settles the ledger and repeats the reversal if it did not apply.
+  // Five ledger reads of up to 20s each plus one shared 60s wait for a queued posting (SCRUM-851), with screen steps on top.
+  NAVIGATION_RACE: 240_000,
+  // Establishes two periods, closes one, prepares and approves two journals, then reads the periods, the journals and the pending list.
+  ACCOUNTING_DATE_BOUNDARY: 180_000,
 };
 
 export function browserMissionTimeoutMs(family: BrowserAttackFamily): number {
@@ -246,8 +278,9 @@ const DETERMINISTIC_MISSIONS: Readonly<
       "BACKEND_STATE",
     ]),
   ],
+  // The create door refused while manual journals are off for the pilot (SCRUM-795), judged on the backend's journal and draft state.
   "ACC-3": [
-    template("MONEY_BOUNDARY", "STATE_TRANSITION", 5, [
+    template("ACCOUNTING_DATE_BOUNDARY", "STATE_TRANSITION", 5, [
       "TRACE",
       "SCREENSHOT",
       "BACKEND_STATE",
@@ -272,6 +305,12 @@ const DETERMINISTIC_MISSIONS: Readonly<
       "BACKEND_STATE",
     ]),
     template("STALE_UI", "UI_BACKEND_AUTHORITY", 4, [
+      "TRACE",
+      "SCREENSHOT",
+      "BACKEND_STATE",
+    ]),
+    // Voiding a directly paid deal cost: one linked reversal, the sibling cost untouched.
+    template("MONEY_BOUNDARY", "STATE_TRANSITION", 5, [
       "TRACE",
       "SCREENSHOT",
       "BACKEND_STATE",
@@ -313,6 +352,12 @@ export const SUPPORTED_BROWSER_SWARM_INVARIANT_IDS = Object.freeze(
   Object.keys(DETERMINISTIC_MISSIONS).sort((left, right) => left.localeCompare(right)),
 );
 
+/**
+ * Active invariants no browser mission judges. Planning one throws, so a change that impacts it refuses the
+ * swarm rather than passing it. Removing an entry requires a mission whose oracle really judges the invariant.
+ */
+export const UNSUPPORTED_BROWSER_SWARM_INVARIANTS: Readonly<Record<string, string>> = Object.freeze({});
+
 const JEV_DEFAULT_ORACLE: Readonly<Record<BrowserAttackFamily, BrowserOracleKind>> = {
   TENANT_ESCAPE: "TENANT_ISOLATION",
   AUTHORIZATION_ABUSE: "AUTHORIZATION",
@@ -328,6 +373,7 @@ const JEV_DEFAULT_ORACLE: Readonly<Record<BrowserAttackFamily, BrowserOracleKind
   COMPLETENESS_BOUNDARY: "LIST_COMPLETENESS",
   RTL_PARITY: "UI_BACKEND_AUTHORITY",
   UI_BACKEND_MISMATCH: "UI_BACKEND_AUTHORITY",
+  ACCOUNTING_DATE_BOUNDARY: "STATE_TRANSITION",
 };
 
 const FAMILY_EVIDENCE: Readonly<
@@ -347,6 +393,7 @@ const FAMILY_EVIDENCE: Readonly<
   COMPLETENESS_BOUNDARY: ["TRACE", "SCREENSHOT", "BACKEND_STATE"],
   RTL_PARITY: ["TRACE", "SCREENSHOT"],
   UI_BACKEND_MISMATCH: ["TRACE", "SCREENSHOT", "BACKEND_STATE"],
+  ACCOUNTING_DATE_BOUNDARY: ["TRACE", "SCREENSHOT", "BACKEND_STATE"],
 };
 
 function stableId(parts: readonly string[]): string {

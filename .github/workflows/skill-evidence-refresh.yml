@@ -1,0 +1,38 @@
+name: Refresh Local Skill Evidence
+
+# Comments run on the default branch. Never execute the PR's code.
+on:
+  issue_comment:
+    types: [edited, deleted]
+
+permissions: {}
+
+concurrency:
+  group: local-skill-evidence-${{ github.event.issue.number }}-${{ github.event.comment.id }}
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    name: Refresh local review evidence
+    if: github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+      - name: Recheck the referenced report on the PR head
+        run: node scripts/skillEnforcement/refreshPrSkillEvidence.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}

@@ -19,6 +19,7 @@ coverage-contract-skew/
 
 # Playwright — .auth/ holds a real signed-in storageState (session cookies)
 playwright-report/
+playwright-json/
 test-results/
 playwright/.auth/
 
@@ -88,7 +89,9 @@ sentry-wizard-installation-error-*.log
 /PROJECT_PLAN.md
 /handoff.md
 /DEAL-FINANCIALS-SPEC.md
-/.claude/
+/.claude/*
+!/.claude/skills/
+!/.claude/settings.json
 /.agents/
 /graphify-out/
 /.mem0/

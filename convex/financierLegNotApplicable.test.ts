@@ -2,11 +2,21 @@ import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents, recordReconciledZeroCost } from "../test-utils/convexTest";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { seedSaleInvoice } from "../test-utils/saleInvoiceFixtures";
-import { describe, expect, test } from "vitest";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
+
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
 
 type TestConvex = ConvexTestInstance<typeof schema>;
 
@@ -682,6 +692,22 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       const applicationId = await readyManualDeal(s);
       await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
       expect((await costsCheck(s, applicationId)).status).toBe("READY");
+      // SCRUM-411 P2-01: the dealer's contribution (1_650_000) is paid to the company before finalizing.
+      // The payment counts only once it is posted, so the books (subscription, chart, open period) exist first.
+      const fiscalYear = new Date().getUTCFullYear();
+      await s.t.run((ctx) =>
+        ctx.db.insert("subscriptions", { orgId: s.orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+      );
+      await s.asOwner.mutation(api.chartOfAccounts.initialize, { orgId: s.orgId });
+      await s.asOwner.mutation(api.accountingPeriods.create, {
+        orgId: s.orgId,
+        startDate: Date.UTC(fiscalYear, 0, 1),
+        endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+        fiscalYear,
+        periodNumber: 1,
+        openImmediately: true,
+      });
+      await payForwardBeforeFinalize(s, s.asOwner, applicationId);
       await finalize(s, applicationId);
       const after = await s.t.run((ctx) => ctx.db.get(applicationId));
       expect(after?.status).toBe("CLOSED");

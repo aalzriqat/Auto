@@ -26,6 +26,7 @@ import { forwardPostKey, forwardReversalKey } from "../utils/financeCompanyForwa
 import { financeDisbursementKeys } from "../utils/financeDisbursementKeys";
 import { getOpenPeriodForDate, checkPostingAllowed } from "../accountingPeriods";
 import { SYSTEM_KEYS, type SystemKey } from "../utils/defaultChart";
+import { allLinesForSale } from "../utils/dealCommissionLineReads";
 import {
   assertStoredVersion,
   custodyDependenciesPayload,
@@ -820,6 +821,7 @@ export async function hookDepositReceived(
     amountMinor: number;
     currency: string;
     paymentMethod: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -838,6 +840,7 @@ export async function hookDepositReceived(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId,
       customerId: args.customerId.toString(),
     },
   });
@@ -1076,6 +1079,7 @@ export async function hookSupplierReceivableCollected(
     amountMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     receiptSeq: number;
     actorId: Id<"users">;
     occurredAt: number;
@@ -1099,6 +1103,7 @@ export async function hookSupplierReceivableCollected(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
       vehicleId: args.vehicleId.toString(),
     },
   });
@@ -1114,6 +1119,7 @@ type DepositResolutionHookArgs = {
   occurredAt: number;
   /** Only meaningful for DEPOSIT_REFUNDED — forfeiture never moves cash. */
   paymentMethod?: string;
+  bankAccountId?: Id<"bankAccounts">;
   /**
    * Scopes the entry to ONE vehicle's slice of a shared quote deposit.
    *
@@ -1160,6 +1166,7 @@ function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORF
         currency: args.currency,
         customerId: args.customerId.toString(),
         paymentMethod: args.paymentMethod,
+        bankAccountId: args.bankAccountId?.toString(),
         holdId: args.sliceHoldId?.toString(),
       },
     });
@@ -1299,6 +1306,7 @@ export async function hookSupplierPaymentSettled(
     taxMinor?: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     /** See SupplierPaymentSettledPayload — defaults to "COGS" (sale-originated payables). */
     costOrigin?: "COGS" | "VEHICLE_INVENTORY";
     actorId: Id<"users">;
@@ -1328,6 +1336,7 @@ export async function hookSupplierPaymentSettled(
       taxMinor: args.taxMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
       costOrigin: args.costOrigin,
     },
   });
@@ -1340,6 +1349,7 @@ type CollectionHookArgs = {
   amountMinor: number;
   currency: string;
   paymentMethod: string;
+  bankAccountId?: Id<"bankAccounts">;
   actorId: Id<"users">;
   occurredAt: number;
 };
@@ -1386,6 +1396,7 @@ function makeCollectionHook(eventType: "COLLECTION_REFUND", keyPrefix: string) {
         currency: args.currency,
         customerId: args.customerId.toString(),
         paymentMethod: args.paymentMethod,
+        ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
       },
     });
 }
@@ -1428,6 +1439,7 @@ export async function hookExpensePosted(
     currency: string;
     category?: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
     vehicleId?: Id<"vehicles">;
@@ -1478,6 +1490,7 @@ export async function hookExpensePosted(
       currency: args.currency,
       category: args.category,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
       vehicleId: args.vehicleId?.toString(),
       capitalizeToInventory: args.capitalizeToInventory,
       isPrepaid: prepaid,
@@ -1499,6 +1512,7 @@ export async function hookVehicleAcquired(
     costMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -1517,6 +1531,7 @@ export async function hookVehicleAcquired(
       costMinor: args.costMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId,
     },
   });
 }
@@ -1583,7 +1598,7 @@ export async function hookVehicleLandedCostCapitalized(
     vehicleId: Id<"vehicles">;
     editToken: string;
     /** Per-account signed deltas — see VehicleLandedCostCapitalizedPayload. */
-    accountDeltas: Array<{ paymentMethod?: string; deltaMinor: number }>;
+    accountDeltas: Array<{ paymentMethod?: string; bankAccountId?: Id<"bankAccounts">; deltaMinor: number }>;
     currency: string;
     actorId: Id<"users">;
     occurredAt: number;
@@ -1621,6 +1636,7 @@ export async function hookVehicleAcquisitionCostCorrected(
     currency: string;
     correctionType?: AcquisitionCorrectionType;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -1640,6 +1656,7 @@ export async function hookVehicleAcquisitionCostCorrected(
       currency: args.currency,
       correctionType: args.correctionType,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -1717,6 +1734,7 @@ type CommissionHookArgs = {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: Id<"bankAccounts">;
   actorId: Id<"users">;
   occurredAt: number;
 };
@@ -1750,6 +1768,7 @@ function makeCommissionHook(
       salespersonId: args.salespersonId.toString(),
     };
     if (args.paymentMethod) payload.paymentMethod = args.paymentMethod;
+    if (args.bankAccountId) payload.bankAccountId = args.bankAccountId.toString();
     await postDomainEvent(ctx, {
       orgId: args.orgId,
       eventType,
@@ -1766,6 +1785,45 @@ function makeCommissionHook(
 
 export const hookCommissionAccrued = makeCommissionHook("COMMISSION_ACCRUED", "commission", "commission_accrued");
 export const hookCommissionPaid = makeCommissionHook("COMMISSION_PAID", "commission_paid", "commission_paid");
+
+/**
+ * Accrues one extra deal commission line (purchase / execution / another sale
+ * commission). Keyed on the LINE, not the sale, so it never collides with the
+ * salesperson's own `commission_accrued_<saleId>`. The payload still names the
+ * sale, which keeps the outbox guard holding it behind the sale's own entry.
+ */
+export async function hookDealCommissionLineAccrued(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    lineId: Id<"dealCommissionLines">;
+    saleId: Id<"sales">;
+    employeeId: Id<"users">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensureCommissionAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "COMMISSION_ACCRUED",
+    sourceType: "dealCommissionLines",
+    sourceId: args.lineId.toString(),
+    idempotencyKey: `commission_line_accrued_${args.lineId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      saleId: args.saleId.toString(),
+      lineId: args.lineId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      salespersonId: args.employeeId.toString(),
+    },
+  });
+}
 
 /**
  * Corrects an already-recognized commission by a SIGNED delta. Each correction
@@ -2163,6 +2221,7 @@ export async function hookEmployeeAdvancePaid(
     amountMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2183,6 +2242,7 @@ export async function hookEmployeeAdvancePaid(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -2201,6 +2261,7 @@ export async function hookEmployeeAdvanceRecovered(
     amountMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2221,6 +2282,7 @@ export async function hookEmployeeAdvanceRecovered(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -2271,6 +2333,7 @@ export async function hookPayrollPaid(
     netMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2294,6 +2357,7 @@ export async function hookPayrollPaid(
       netMinor: args.netMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -2356,6 +2420,15 @@ export const hookCommissionReversed = makeReversalHook<{ saleId: Id<"sales"> }>(
   sourceId: (a) => `commission_${a.saleId}`,
   reversalKey: (a) => `commission_reversed_${a.saleId}`,
   pendingPostKey: (a) => `commission_accrued_${a.saleId}`,
+});
+
+/** Reverses (or cancels the queued post of) one extra deal commission line's accrual. */
+export const hookDealCommissionLineReversed = makeReversalHook<{ lineId: Id<"dealCommissionLines"> }>({
+  eventType: "COMMISSION_ACCRUED",
+  sourceType: "dealCommissionLines",
+  sourceId: (a) => a.lineId.toString(),
+  reversalKey: (a) => `commission_line_reversed_${a.lineId}`,
+  pendingPostKey: (a) => `commission_line_accrued_${a.lineId}`,
 });
 
 /**
@@ -2446,6 +2519,26 @@ export async function reverseCommissionForSale(
       actorId: args.actorId,
       reversalDate: args.reversalDate,
     });
+  }
+  // The extra deal commission lines are part of the same commission: back each
+  // unpaid one out and mark it removed. A paid line is refused, like the
+  // salesperson's own paid commission.
+  const lines = await allLinesForSale(ctx, args.orgId, args.saleId);
+  for (const line of lines) {
+    if (line.removedAt !== undefined) continue;
+    if (line.paidAt !== undefined) {
+      throw new ConvexError(
+        "Cannot automatically cancel a sale after a commission line has been paid. Use a manual accounting correction."
+      );
+    }
+    await hookDealCommissionLineReversed(ctx, {
+      orgId: args.orgId,
+      lineId: line._id,
+      reason: args.reason,
+      actorId: args.actorId,
+      reversalDate: args.reversalDate,
+    });
+    await ctx.db.patch(line._id, { removedAt: args.reversalDate, removedBy: args.actorId });
   }
 }
 
@@ -2559,6 +2652,8 @@ export async function hookFinanceCashReceived(
      * canonical payment in the same transaction. Picks the debited account.
      */
     paymentMethod: FinanceReceiptMethod;
+    /** SCRUM-54: the physical bank, already validated by the caller. Bank receipts only. */
+    bankAccountId?: Id<"bankAccounts">;
   }
 ) {
   const keys = financeDisbursementKeys(args.applicationId, args.disbursementVersion);
@@ -2583,6 +2678,7 @@ export async function hookFinanceCashReceived(
       currency: args.currency,
       customerId: args.customerId?.toString(),
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -2762,6 +2858,7 @@ export async function hookAssetCapitalized(
     costMinor: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2771,6 +2868,7 @@ export async function hookAssetCapitalized(
     payload: {
       costMinor: args.costMinor,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -2909,6 +3007,7 @@ export async function hookPrepaidExpenseRefunded(
     taxMinor?: number;
     currency: string;
     paymentMethod?: string;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -2934,6 +3033,7 @@ export async function hookPrepaidExpenseRefunded(
       taxMinor: args.taxMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -3186,6 +3286,7 @@ export interface PartnerEquityHookArgs {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  bankAccountId?: Id<"bankAccounts">;
   actorId: Id<"users">;
   occurredAt: number;
 }
@@ -3210,6 +3311,7 @@ async function postPartnerEquityEvent(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -3278,6 +3380,8 @@ export async function hookCashDrawerDeposited(
     sessionId: Id<"cashDrawerSessions">;
     amountMinor: number;
     currency: string;
+    /** SCRUM-54: the physical bank, already validated by the caller. */
+    bankAccountId: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -3295,6 +3399,7 @@ export async function hookCashDrawerDeposited(
       sessionId: args.sessionId.toString(),
       amountMinor: args.amountMinor,
       currency: args.currency,
+      bankAccountId: args.bankAccountId.toString(),
     },
   });
 }
@@ -3315,6 +3420,7 @@ export async function hookAssetDisposed(
     costMinor: number;
     accumulatedDepreciationMinor: number;
     proceedsMinor: number;
+    bankAccountId?: Id<"bankAccounts">;
     currency: string;
     actorId: Id<"users">;
     occurredAt: number;
@@ -3326,6 +3432,7 @@ export async function hookAssetDisposed(
       costMinor: args.costMinor,
       accumulatedDepreciationMinor: args.accumulatedDepreciationMinor,
       proceedsMinor: args.proceedsMinor,
+      bankAccountId: args.bankAccountId?.toString(),
     },
   });
 }
@@ -3404,6 +3511,7 @@ export async function hookCustodyCashMoved(
       amountMinor: args.entry.amountMinor,
       currency: args.custody.currency,
       paymentMethod: args.entry.method,
+      bankAccountId: args.entry.bankAccountId?.toString(),
     },
   });
 }
@@ -3572,6 +3680,8 @@ export async function hookHandoverCostPaidDirect(
     version: number;
     amountMinor: number;
     paymentMethod: string;
+    /** SCRUM-54: the physical bank, set exactly when `cashKey` is the bank control account. */
+    bankAccountId?: Id<"bankAccounts">;
     expenseKey: SystemKey;
     cashKey: SystemKey;
     actorId: Id<"users">;
@@ -3602,6 +3712,7 @@ export async function hookHandoverCostPaidDirect(
       amountMinor: args.amountMinor,
       currency: args.fee.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }
@@ -3659,6 +3770,8 @@ export async function hookFinanceCompanyForwardPaid(
     currency: string;
     paymentMethod: string;
     cashKey: SystemKey;
+    /** SCRUM-54: the physical bank a BANK_ACCOUNT payment left; absent for cash. */
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -3686,6 +3799,7 @@ export async function hookFinanceCompanyForwardPaid(
       amountMinor: args.amountMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
   });
 }

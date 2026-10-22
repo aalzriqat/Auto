@@ -10,9 +10,31 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
+
+// SCRUM-795: manual journals are OFF in the shipped pilot build. This suite proves
+// the ENABLED behaviour (the switch is reversible), so it runs with the leaf off.
+vi.mock("./utils/pilotSwitches", async (importOriginal) => ({ ...(await importOriginal<typeof import("./utils/pilotSwitches")>()), MANUAL_JOURNALS_PILOT_DISABLED: false }));
 import schema from "./schema";
-import { settleOutbox, makeDue } from "../test-utils/outboxWork";
+import {
+  settleOutbox, makeDue, outboxRows, quiesceScheduler, settleScheduledOnly, withFrozenScheduler,
+} from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
+import { insertReceiptBank } from "../test-utils/financedDealFixture";
+
+// SCRUM-760: this suite drives the cleared-cheque return, which the narrow pilot blocks by default.
+// It exercises the behaviour that returns when the door is activated, so the block is off here.
+// The shipped state is asserted in convex/postDeliveryDoorContainment.test.ts.
+vi.mock("./utils/postDeliveryDoorContainment", async (importOriginal) =>
+  (await import("../test-utils/postDeliveryDoorSwitches")).openPostDeliveryDoors(await importOriginal()));
+
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -81,8 +103,13 @@ async function seedDealer(tag = "p9", openPeriod = true) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Test", lastName: "Customer" })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
-  return { t, orgId, userId, roleId, period, asUser, customerId };
+  return { t, orgId, userId, roleId, period, asUser, customerId, bankAccountId };
 }
 
 /** Maps an event's journal lines to { accountCode -> { debit, credit } }. */
@@ -125,7 +152,7 @@ describe("Phase 9 — expense account mapping", () => {
   });
 
   test("bank-transfer expense stores method and credits Bank", async () => {
-    const { t, orgId, asUser } = await seedDealer("exp_method");
+    const { t, orgId, asUser, bankAccountId } = await seedDealer("exp_method");
 
     const expenseId = await asUser.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -135,6 +162,7 @@ describe("Phase 9 — expense account mapping", () => {
       category: "REPAIR",
       status: "PAID",
       paymentMethod: "BANK_TRANSFER",
+      bankAccountId,
     });
 
     const event = await eventForSource(asUser, orgId, "expenses", expenseId.toString());
@@ -155,7 +183,7 @@ describe("Phase 9 — expense account mapping", () => {
 
 describe("Phase 9 — supplier payable payment method", () => {
   test("markPaid stores bank-transfer method and credits Bank", async () => {
-    const { t, orgId, userId, asUser } = await seedDealer("supplier_method");
+    const { t, orgId, userId, asUser, bankAccountId } = await seedDealer("supplier_method");
     const now = Date.now();
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
@@ -192,6 +220,7 @@ describe("Phase 9 — supplier payable payment method", () => {
       orgId,
       payableId,
       paymentMethod: "BANK_TRANSFER",
+      bankAccountId,
       idempotencyKey: "supplier_bank_transfer_1",
     });
 
@@ -346,9 +375,10 @@ describe("Phase 9 — accounting outbox", () => {
     });
 
     // The org works through the year normally, opening one month at a time.
-    // Every open schedules an ORG-WIDE drain, which reaches the December entry
-    // even though December is nowhere near being open. The entry is not broken
-    // and nothing about it failed — it is simply waiting for its own period.
+    // Once parked, the December entry is invisible to the cron and to the
+    // generic drains every open schedules. Each open wakes only parked rows
+    // dated inside the period it opened, so the entry is never reached and
+    // never charged an attempt — it is simply waiting for its own period.
     for (let month = 0; month < 10; month++) {
       await asUser.mutation(api.accountingPeriods.create, {
         orgId,
@@ -367,20 +397,33 @@ describe("Phase 9 — accounting outbox", () => {
     const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
     expect(failed).toHaveLength(0);
 
-    // December finally opens — the entry must still be drainable and post.
-    await asUser.mutation(api.accountingPeriods.create, {
-      orgId, fiscalYear, periodNumber: 12,
-      startDate: Date.UTC(fiscalYear, 11, 1),
-      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    // Ten unrelated opens spent nothing: still pending, zero attempts, parked.
+    const waiting = await outboxRows(t, orgId);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0].status).toBe("PENDING");
+    expect(waiting[0].attempts).toBe(0);
+    expect(waiting[0].dispatchState).toBe("PERIOD_HELD");
+
+    // December finally opens. Only the wake that `open` itself scheduled may
+    // release the entry: no cron or test-supplied drain. The generic drain
+    // scheduled by open itself skips parked rows.
+    // The opens run under the frozen scheduler so the wake is drainable.
+    await quiesceScheduler(t);
+    await withFrozenScheduler(async () => {
+      await asUser.mutation(api.accountingPeriods.create, {
+        orgId, fiscalYear, periodNumber: 12,
+        startDate: Date.UTC(fiscalYear, 11, 1),
+        endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      });
+      const allPeriods = await asUser.query(api.accountingPeriods.list, { orgId });
+      const december = allPeriods.find((p) => p.periodNumber === 12)!;
+      await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: december._id });
+      await settleScheduledOnly(t, orgId);
     });
-    const allPeriods = await asUser.query(api.accountingPeriods.list, { orgId });
-    const december = allPeriods.find((p) => p.periodNumber === 12)!;
-    await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: december._id });
-    await makeDue(t, orgId);
-    await settleOutbox(t, orgId);
 
     const posted = await eventForSource(asUser, orgId, "expenses", decemberExpenseId.toString());
     expect(posted?.status).toBe("POSTED");
+    expect(await outboxRows(t, orgId)).toHaveLength(1);
   });
 
   test("retryFailed resets a FAILED event back to PENDING for another drain attempt", async () => {
@@ -541,7 +584,7 @@ describe("Phase 9 — manual journal reviewer authority", () => {
 
 describe("Phase 9 — cheque GL posting", () => {
   test("clearing a cheque posts DR Bank / CR AR, and return-after-clearing reverses it", async () => {
-    const { orgId, asUser, customerId } = await seedDealer("chq");
+    const { orgId, asUser, customerId, bankAccountId } = await seedDealer("chq");
 
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -555,7 +598,7 @@ describe("Phase 9 — cheque GL posting", () => {
     });
 
     const paymentId = await asUser.mutation(api.collections.clearCheque, {
-      orgId, chequeId, idempotencyKey: `clear_${chequeId}`,
+      orgId, chequeId, bankAccountId, idempotencyKey: `clear_${chequeId}`,
     });
 
     // Clearing posted a COLLECTION_PAYMENT to the GL (DR Bank 1110 / CR AR 1200).
@@ -568,6 +611,7 @@ describe("Phase 9 — cheque GL posting", () => {
     // Return after clearing reverses the clearing event and posts the bank fee.
     await asUser.mutation(api.collections.returnClearedCheque, {
       orgId, chequeId, returnReason: "NSF", bankFeeMinor: 5000,
+      bankFeeBankAccountId: bankAccountId,
       idempotencyKey: `return_${chequeId}`,
     });
 
@@ -629,6 +673,8 @@ describe("Phase 9 — finance disbursement receipt", () => {
     await asUser.mutation(api.applications.confirmDisbursement, {
       orgId, applicationId: appId, disbursedAmountMinor: 10_000_000,
       idempotencyKey: "disb_gl_1",
+      // SCRUM-54: a BANK_TRANSFER receipt names the physical bank (JOD, the receivable's currency).
+      bankAccountId: await insertReceiptBank({ t, orgId, owner: { userId } }),
     });
 
     const event = await eventForSource(asUser, orgId, "financeApplications", `disbursement_${appId}`);
@@ -703,7 +749,7 @@ describe("Phase 9 — commission payment GL posting", () => {
   });
 
   test("markCommissionPaid stores bank-transfer method and credits Bank", async () => {
-    const { t, orgId, asUser, customerId, userId } = await seedDealer("comm_method");
+    const { t, orgId, asUser, customerId, userId, bankAccountId } = await seedDealer("comm_method");
 
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
@@ -739,11 +785,13 @@ describe("Phase 9 — commission payment GL posting", () => {
       orgId,
       saleId,
       paymentMethod: "BANK_TRANSFER",
+      bankAccountId,
       idempotencyKey: "comm_method_paid_1",
     });
 
     const event = await eventForSource(asUser, orgId, "sales", `commission_paid_${saleId}`);
     expect((event.payload as { paymentMethod?: string }).paymentMethod).toBe("BANK_TRANSFER");
+    expect((event.payload as { bankAccountId?: string }).bankAccountId).toBe(bankAccountId);
     const byCode = await journalByCode(asUser, orgId, event.journalEntryId);
     expect(byCode["2300"]?.debit).toBe(700_000);
     expect(byCode["1110"]?.credit).toBe(700_000);
@@ -752,6 +800,13 @@ describe("Phase 9 — commission payment GL posting", () => {
     await t.run(async (ctx) => {
       const sale = await ctx.db.get(saleId);
       expect(sale?.commissionPaymentMethod).toBe("BANK_TRANSFER");
+      expect(sale?.commissionBankAccountId).toBe(bankAccountId);
+      const lines = await ctx.db.query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event.journalEntryId))
+        .collect();
+      expect(lines.filter((line) => line.bankAccountId === bankAccountId)).toEqual([
+        expect.objectContaining({ creditMinor: 700_000 }),
+      ]);
     });
   });
 });

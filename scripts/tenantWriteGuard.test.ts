@@ -159,12 +159,9 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `create`, which is requireSuperAdmin-gated, and its cross-org writes are
   // the entire point of a platform-wide broadcast.
   //
-  // Then 420→421 by `adminSystem.pruneOperationalLogs`, which also lands in
-  // `skippedNoOrgId` rather than `analysed`. Correct, not a hole: it takes no
-  // args at all, and the two tables it deletes from (cronHeartbeats,
-  // webhookLogs) are deployment-global diagnostics with no orgId column — there
-  // is no tenant boundary for a write to cross. It is an internalMutation
-  // reachable only from the `prune-operational-logs` cron.
+  // Then 420→421 by `adminSystem.pruneOperationalLogs`, a global-diagnostics
+  // sweep with no orgId. SCRUM-807 removed it (421→420 again) so no code path
+  // deletes operational records; the shifts recorded below are net of that.
   //
   // Then 421→422 by `migrations.backfillVehicleAggregate`, which seeds the
   // vehicle aggregate from existing rows. Also `skippedNoOrgId`, and also
@@ -675,12 +672,38 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // unchanged at 354 (re-measured FROM THE ANALYSER). A super-admin-only mutation (requireSuperAdmin) with
   // no `orgId` arg that patches the PLATFORM `supportThreads` table (not tenant data); the unguarded-write
   // audit stays empty.
+  // SCRUM-766 PR-B: + customerFinanceCompanyPayments.confirmPayment/voidPayment (+2) - 528 -> 530 total,
+  // 354 -> 356 analysed (re-measured FROM THE ANALYSER). Each takes `orgId`, runs requireTenantAuth and reads
+  // the application and (for void) the evidence row through requireOwnedRow before its only write.
+  // SCRUM-807: + accountingOutbox.wakePeriodHeldRows (+1) - 530 -> 531 total, 356 -> 357 analysed (re-measured
+  // FROM THE ANALYSER). An internalMutation that takes `orgId`; it reads only through the `by_org_hold_date`
+  // index with `orgId` as its first equality and patches only the rows that read returned (no caller-supplied
+  // document id), so the unguarded-write audit stays empty.
+  // SCRUM-807: - adminSystem.pruneOperationalLogs (-1) - 530 -> 529 total, 159 -> 158 skippedNoOrgId, `analysed`
+  // unchanged at 356 (re-measured FROM THE ANALYSER). The removed internalMutation had no `orgId` and deleted
+  // deployment-global diagnostics; operational records are now never deleted.
+  // The two SCRUM-807 changes are independent; with both applied: 529 + 1 = 530 total, 356 + 1 = 357 analysed.
+  // SCRUM-807: deliverTaskAlarmToManagers is one retained internal mutation keyed by deliveryId, not orgId. Re-measured from the analyser after merging main: 534 total.
+  // SCRUM-807 (#608): the collections reminder child adds one orgId mutation - 535 total, 361 analysed.
+  // SCRUM-54: bankBalanceBackfill.runPage is one additional org-scoped internal
+  // mutation; it reads the mapped account and bounded journal page by org - 536 total, 362 analysed.
+  // Weekly Workpool (#610) adds six internal mutations keyed by run/delivery IDs, not orgId:
+  // sendWeeklyProofReports, produceWeeklyDeliveries, freezeWeeklyDelivery, beginWeeklySend,
+  // recordWeeklySendOutcome and cancelWeeklyRun. Measured from the analyser: +6 total and skippedNoOrgId.
+  // SCRUM-807: + dashboardExpenseSummary.{begin,blockForImport,buildPage} (+3). All three take `orgId` and
+  // write only that org's summary rows, found by index - 545 total, 365 analysed.
+  // SCRUM-778: + orgSettings.setCommissionMode (+1). Takes `orgId`, owner-only via `requireOwner`, and patches only
+  // the settings row it looked up by that org's `by_org` index (or inserts one for that org); the unguarded-write
+  // audit stays empty.
+  // Deal commission lines: + dealCommissions.{addLine,removeLine} (+2 total, +2 analysed). Both take `orgId`;
+  // addLine checks the sale and employee membership in that org, removeLine loads the line and refuses another org's.
+  // Combined: 545 -> 548 total, 365 -> 368 analysed (re-measured FROM THE ANALYSER).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 528,
-      analysed: 354,
+      totalMutations: 548,
+      analysed: 368,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 159,
+      skippedNoOrgId: 165,
     });
   });
 });

@@ -1,0 +1,67 @@
+{
+  "id": "cash-sale-with-tax-is-refused-with-the-specific-code-before-any-write",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "deposits.create",
+      "input": {
+        "amount": 20000,
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "financingType": "CASH",
+        "salePrice": 20000,
+        "taxAmount": 3200,
+        "status": "COMPLETED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "create.refusalCode",
+      "value": "CASH_SALE_TAX_FEES_WARRANTY_REFUSED"
+    },
+    {
+      "observable": "sales.count",
+      "value": 0
+    },
+    {
+      "observable": "gl.customerReceivableNetMinor",
+      "value": 0
+    },
+    {
+      "observable": "db.rowsChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-802#c23551",
+      "digest": "5df9996af54015f3016d5e997292d7a52c56995d0900dc82a5884d9d7d96f8ee"
+    }
+  ],
+  "impl": {
+    "file": "convex/ownedSaleTaxEndToEnd.test.ts",
+    "testName": "a taxed CASH sale is refused with the specific code even when the full price is already held as a deposit; deposit and books untouched"
+  },
+  "matrixRow": "pilot-cash-sale-refusals",
+  "fingerprint": "ce2c666fe73797e09f9a28f97016bfaec09952ab29d720ee0151559e39d6ac01",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum802-owner-decision-cards",
+    "firstSeen": "2026-10-19"
+  }
+}

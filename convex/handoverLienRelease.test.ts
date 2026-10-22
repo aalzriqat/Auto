@@ -1,5 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { seedBank } from "../test-utils/bankFixture";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -94,7 +95,7 @@ async function openCustody(seed: Seed, issued: number) {
 
 async function payDirect(seed: Seed, feeId: Id<"financeDealFees">, amountMinor: number) {
   return await seed.asUser.mutation(api.financeDealCosts.recordDirectFeePayment, {
-    orgId: seed.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now() - DAY,
+    orgId: seed.orgId, feeId, method: "BANK_TRANSFER", bankAccountId: await seedBank(seed.t, seed.orgId), paidAt: Date.now() - DAY,
     expectedAmountMinor: amountMinor, idempotencyKey: crypto.randomUUID(),
   });
 }

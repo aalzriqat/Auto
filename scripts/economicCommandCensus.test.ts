@@ -63,6 +63,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "accountingMigration.backfillVehicleInventoryOpeningBalances": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: dryRun unless explicitly false; each vehicle is SKIPPED when a VEHICLE_ACQUIRED/VEHICLE_INVENTORY_OPENING_BALANCE event already exists or a vehicle_acquired_ row is pending, and the posting it delegates to keys on `vehicle_inventory_opening_${vehicleId}` — the pre-existing vehicle — which the posting engine dedupes by_org_idempotency" },
   "accountingOutbox.redrive": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: drains the first page of the outbox inline and schedules the claims, which claim only PENDING rows and posts each under the idempotencyKey STORED on the row; the posting engine dedupes that key by_org_idempotency, so a re-run re-drives nothing already posted" },
   "accountingOutbox.retryFailed": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 (was NON_ECONOMIC, which was false: it revives the row and schedules claimOutboxRow, which posts): refuses unless the row is FAILED, reviveFailedEntry re-checks FAILED and refuses a retired posting, and the worker posts under the idempotencyKey stored on the row, deduped by_org_idempotency; a retry finds the row no longer FAILED and throws" },
+  "accountingPeriods.create": { bucket: "STATE_GUARDED", mechanism: "SCRUM-807: with openImmediately it schedules wakePeriodHeldRows for the new period's own date range, which releases only this org's PENDING period-held rows and schedules their claims; each claim refuses a row that is not PENDING, already DISPATCHED or not yet due, and the worker re-proves eligibility and posts under the idempotencyKey STORED on the row, deduped by_org_idempotency, so a repeat wake posts nothing twice. create itself refuses a duplicate fiscalYear/periodNumber or an overlapping range, so it cannot be replayed to re-wake" },
   "accountingPeriods.open": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain after opening the period; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency, so a duplicate drain posts nothing twice" },
   "accountingPeriods.reopen": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain after reopening the period; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency, so a duplicate drain posts nothing twice" },
   "applications.amendSupplierDisbursementAdvice": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -106,6 +107,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "collections.submitCashierReconciliation": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "customers.softDelete": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "deposits.create": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
+  "dealCommissions.addLine": { bucket: "STATE_GUARDED", mechanism: "mints a dealCommissionLines row and accrues under `commission_line_accrued_${lineId}`, so the posting key alone is blind to a retry; the replay is refused because an active line with the same kind and employee on the sale already exists, the sale must be COMPLETED, and a sale holds at most 100 line rows" },
+  "dealCommissions.removeLine": { bucket: "STATE_GUARDED", mechanism: "refuses a line already removed or paid; reverses the accrual under `commission_line_reversed_${lineId}` (the pre-existing line), deduped by_org_idempotency, and marks the line removed in the same transaction" },
   "dealUnwind.abandonDealUnwind": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; posts nothing — ends an ACTIVE unwind (SCRUM-693)" },
   "dealUnwind.finishDealUnwind": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the unwind must be ACTIVE (it leaves COMPLETED); the receipt reversal is keyed on the disbursement version it reverses and proven POSTED, and it and the closed-deal teardown commit or roll back together (SCRUM-693 ruling B)" },
   "dealUnwind.recordDealUnwindForwardReturn": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; STEP_DONE once forwardReturn is recorded, and reverseForward refuses a forward already reversed (SCRUM-693)" },
@@ -128,11 +131,13 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "financeDealCosts.recordCustodyMovement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "financeDealCosts.recordDealFee": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "financeDealCosts.recordTemplateFeeActual": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted (position included); one live line per (deal, position) refused inside the idempotent section" },
-  "financeDealCosts.recordDirectFeePayment": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on fee, method, date, reference and the required expectedAmountMinor the approver saw; the HANDOVER_COST_PAID_DIRECT posting is keyed on the fee id plus a stored version and every state check (already paid, custody-linked, no actual, actual changed since the form rendered, earlier payment still posted) is inside the section" },
+  "financeDealCosts.recordDirectFeePayment": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on fee, method, bank account (bank methods), date, reference and the required expectedAmountMinor the approver saw; the HANDOVER_COST_PAID_DIRECT posting is keyed on the fee id plus a stored version and every state check (already paid, custody-linked, no actual, actual changed since the form rendered, earlier payment still posted) is inside the section" },
   "financeDealCosts.recordExecutionFeeActual": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on application, currency, amount, payer, custody, paid date and reference; the line it mints posts custody only through syncCustodyFeePosting keyed on that fee id plus a stored version, INSIDE the section, and an already-linked execution fee is refused inside it (SCRUM-690)" },
   "financeDealCosts.bindExecutionFeeLine": { bucket: "NON_ECONOMIC", mechanism: "sets the executionFeeBinding marker on one identified existing fee line; no posting call is reachable, the only downstream write is the derived-economics recompute (a projection patch, deducted lines only), and re-linking the line already linked returns early (SCRUM-690)" },
   "financeDealCosts.unbindExecutionFeeLine": { bucket: "NON_ECONOMIC", mechanism: "clears the executionFeeBinding marker on one identified fee line and is refused while the line carries a custody posting or direct payment; no posting call is reachable, and an already-unlinked line returns early (SCRUM-690)" },
-  "financeCompanyForward.recordFinanceCompanyForward": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, method, paid date, reference and the expectedAmountMinor the payer saw; the FINANCE_COMPANY_FORWARD_PAID posting is keyed on the application id plus a stored version and every state check (finalized, transfer not yet confirmed, proof is DUE, amount unchanged, closed period) is inside the section" },
+  "financeCompanyForward.recordFinanceCompanyForward": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, method, the physical bank (bank-account methods only), paid date, reference and the expectedAmountMinor the payer saw; the FINANCE_COMPANY_FORWARD_PAID posting is keyed on the application id plus a stored version and every state check (finalized, transfer not yet confirmed, proof is DUE, amount unchanged, closed period) is inside the section" },
+  "customerFinanceCompanyPayments.confirmPayment": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, amount, paid date and reference; the open-deal check, the not-the-salesperson check and the cap of what the agreement still leaves unconfirmed are all inside the section, and the contribution is re-derived from the evidence rows, never decremented" },
+  "customerFinanceCompanyPayments.voidPayment": { bucket: "STATE_GUARDED", mechanism: "refuses unless the evidence row is CONFIRMED and the deal is still open, so a replay is refused rather than applied twice; the contribution is re-derived from the remaining CONFIRMED rows, never incremented" },
   "financeCompanyForward.reverseFinanceCompanyForward": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, forward and reason; reverses the pinned forward version through reverseEventIfPosted, keyed on the stored version, and refuses a forward already being taken back" },
   "financeCompanyForward.reportFinanceCompanyForwardReturned": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, forward and reason; reverses the pinned ON_BOOKS forward version through reverseEventIfPosted, keyed on the stored version" },
   "financeDealCosts.recordLegalInvoice": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
@@ -155,6 +160,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "fixedAssets.impair": { bucket: "STATE_GUARDED", mechanism: "hookAssetImpaired keys on `asset_impaired_${assetId}` — pre-existing asset id, stable across a retry" },
   "fixedAssets.remove": { bucket: "STATE_GUARDED", mechanism: "refuses removal of a capitalized, undisposed asset (callers must dispose instead); soft-deletes only legacy or already-DISPOSED assets, which carry no ledger effect" },
   "fixedAssets.update": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "orgSettings.setCommissionMode": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-853: reads completed unpaid sales to guard the policy transition, then writes only orgSettings and the audit log; no commission, journal, outbox or payment writer is reachable" },
   "orgSettings.upsert": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "partnerEquity.add": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "partnerEquity.recordEquityMovement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -320,12 +326,16 @@ describe("analyzer self-tests — the seven blind spots, pinned", () => {
     // Pinned real paths, each through a function reference.
     expect(edge("accountingPeriods.open", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     expect(edge("accountingPeriods.reopen", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
+    // SCRUM-807: both period doors wake the rows they cover, and the wake only schedules claims.
+    expect(edge("accountingPeriods.create", "accountingOutbox.wakePeriodHeldRows")).toBe(true);
+    expect(edge("accountingPeriods.open", "accountingOutbox.wakePeriodHeldRows")).toBe(true);
+    expect(edge("accountingOutbox.wakePeriodHeldRows", "accountingOutbox.claimOutboxRow")).toBe(true);
     expect(edge("chartOfAccounts.initialize", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     expect(edge("chartOfAccounts.repairMissingSystemAccounts", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     expect(edge("accountingOutbox.retryFailed", "accountingOutbox.claimOutboxRow")).toBe(true);
     expect(edge("prepaidExpenses.runAmortizationNow", "prepaidExpenses.catchUpScheduleMutation")).toBe(true);
     for (const id of [
-      "accountingPeriods.open", "accountingPeriods.reopen", "chartOfAccounts.initialize",
+      "accountingPeriods.create", "accountingPeriods.open", "accountingPeriods.reopen", "chartOfAccounts.initialize",
       "chartOfAccounts.repairMissingSystemAccounts", "accountingOutbox.redrive",
       "accountingMigration.backfillVehicleInventoryOpeningBalances", "prepaidExpenses.runAmortizationNow",
     ]) expect([...forward], id).toContain(id);
@@ -667,7 +677,14 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // its only edge was `reopen()` written in a comment.
     // 143 -> 147 (SCRUM-724): `collections.registerSaleInvoiceCheque`, `.reserveSaleInvoiceReceipt`,
     // `.activateSaleInvoiceReceipt` and `retainedCreditRefunds.executeRetainedCreditRefund`.
-    expect(population).toHaveLength(147);
+    // 147 -> 149: `customerFinanceCompanyPayments.confirmPayment` and `.voidPayment` (SCRUM-766 PR-B confirmed payment evidence).
+    // 149 -> 150: `accountingPeriods.create` (SCRUM-807): a period created with openImmediately now
+    // schedules `accountingOutbox.wakePeriodHeldRows`, which schedules `claimOutboxRow` and so reaches posting
+    // by function reference. It is the same wake `open` performs; `accountingPeriods.lock` is still excluded.
+    // 150 -> 152: `dealCommissions.addLine` and `.removeLine` (extra deal commission lines), both classified above.
+    // 152 -> 153: `orgSettings.setCommissionMode` (SCRUM-853) reads sales to guard
+    // the policy change; its settings patch is over-included and posts nothing.
+    expect(population).toHaveLength(153);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

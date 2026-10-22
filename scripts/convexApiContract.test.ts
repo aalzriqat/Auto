@@ -36,7 +36,15 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // checked against the backend, with nothing dropped from the extraction.
 // 195 -> 196: `depositRequests:request`, the salesperson's deposit request on the
 // mobile sales wizard (SCRUM-444). A real reference, checked against the backend.
-const EXPECTED_REFERENCE_COUNT = 196;
+// 196 -> 197: `vehicles:listAcquisitionBankOptions`, the mobile vehicle purchase
+// and landed-cost picker. The function exists on the backend and is now checked.
+// 197 -> 198: `deposits:listRefundBankOptions`, the physical-bank picker for
+// mobile deposit refunds. The backend query is included in this contract check.
+// 198 -> 199: `deposits:listReceiptBankOptions`, the physical-bank picker for
+// mobile deposit receipts. The backend query is included in this contract check.
+// 199 -> 200: `orgSettings:setCommissionMode`, the only door that changes the
+// commission mode (SCRUM-778). A real reference, checked against the backend.
+const EXPECTED_REFERENCE_COUNT = 200;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {

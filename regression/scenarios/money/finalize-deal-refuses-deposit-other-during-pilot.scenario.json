@@ -1,0 +1,56 @@
+{
+  "id": "finalize-deal-refuses-deposit-other-during-pilot",
+  "fingerprint": "512805a078b6704a13a84a362af06b632f0c7577ef8eaa15f33366a8baa1837d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum801-pilot-other",
+    "firstSeen": "2026-10-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "route": "THROUGH_DEALERSHIP",
+        "deposit": 3000,
+        "depositResolution": "OTHER",
+        "reason": "present"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "DEPOSIT_OTHER_TREATMENT_DISABLED"
+    },
+    {
+      "observable": "sales.count",
+      "value": 0
+    },
+    {
+      "observable": "deposit.status",
+      "value": "HELD"
+    },
+    {
+      "observable": "deposit.liability",
+      "value": -3000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-795#c22485",
+      "digest": "bd755080a878c8ff3d11c74259c7d36a7395cf1d926274131ca7927f65135378"
+    }
+  ],
+  "impl": {
+    "file": "convex/financedConsignedSettlement.test.ts",
+    "testName": "SCRUM-801: finalizing with the OTHER treatment is refused during the pilot"
+  },
+  "matrixRow": "SCRUM-801-deposit-other"
+}

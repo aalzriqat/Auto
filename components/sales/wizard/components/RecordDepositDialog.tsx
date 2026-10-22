@@ -36,6 +36,7 @@ import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { supportedCurrencyScale } from "@/convex/utils/money";
 import { formatMinorAsMajor, parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
+import { DepositReceiptBankPicker, useDepositReceiptBankOptions } from "@/components/deposits/DepositReceiptBankPicker";
 
 type Translate = (key: string) => string;
 
@@ -121,6 +122,10 @@ export function RecordDepositDialog({
   const requestDeposit = useMutation(api.depositRequests.request);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [method, setMethod] = useState<PaymentMethod | undefined>(undefined);
+  const [bankAccountId, setBankAccountId] = useState<Id<"bankAccounts"> | undefined>(undefined);
+  const { required: bankRequired, options: bankOptions } =
+    useDepositReceiptBankOptions(activeOrgId ?? undefined, canRecord ? method : undefined, currency.code);
+  const bankReady = !bankRequired || (bankOptions?.banks.some((bank) => bank._id === bankAccountId) ?? false);
   const [methodMissing, setMethodMissing] = useState(false);
   // The key is retained across a retry of the SAME intent so a lost response
   // cannot post twice, and replaced when what is being asked for changes so an
@@ -138,6 +143,7 @@ export function RecordDepositDialog({
       setMethodMissing(true);
       return;
     }
+    if (canRecord && !bankReady) return;
     const parsed = parseMajorToMinor(values.amount, scale);
     if (!parsed.ok || parsed.minor <= 0) return;
     const amount = exactMajorAmount(parsed.minor, scale);
@@ -145,12 +151,13 @@ export function RecordDepositDialog({
     setIsSubmitting(true);
     try {
       if (canRecord && method) {
-        const intent = `record-deposit:${quoteId}:${amount}:${method}:${values.notes ?? ""}`;
+        const intent = `record-deposit:${quoteId}:${amount}:${method}:${bankAccountId ?? ""}:${values.notes ?? ""}`;
         const depositId = await createDeposit({
           orgId: activeOrgId,
           quoteId,
           amount,
           method,
+          bankAccountId: bankRequired ? bankAccountId : undefined,
           notes: values.notes || undefined,
           idempotencyKey: commandId.for(intent),
         });
@@ -219,6 +226,7 @@ export function RecordDepositDialog({
                   value={method}
                   onValueChange={(next) => {
                     setMethod(next);
+                    setBankAccountId(undefined);
                     setMethodMissing(false);
                   }}
                   ariaLabel={t("PaymentMethodLabel" as any)}
@@ -231,6 +239,10 @@ export function RecordDepositDialog({
                 ) : null}
               </div>
             ) : null}
+            {canRecord && bankRequired && (
+              <DepositReceiptBankPicker id="record-deposit-bank"
+                options={bankOptions} value={bankAccountId} onChange={setBankAccountId} />
+            )}
 
             <FormField
               control={form.control}
@@ -250,7 +262,7 @@ export function RecordDepositDialog({
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any) || "Cancel"}
               </Button>
-              <Button type="submit" disabled={isSubmitting}>
+              <Button type="submit" disabled={isSubmitting || (canRecord && !bankReady)}>
                 {isSubmitting ? (t("Saving" as any) || "Saving...") : title}
               </Button>
             </div>

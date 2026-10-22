@@ -5,6 +5,7 @@ import {
   type BrowserSwarmRunManifest,
   type BrowserSwarmWorkerPlan,
 } from "./browserAttackSwarm";
+import { customersAr, customersEn } from "../../lib/i18n/domains/customers";
 import type { BrowserMissionExecutionContext } from "./browserAttackSwarmExecutor";
 
 const mocks = vi.hoisted(() => ({
@@ -45,8 +46,47 @@ type Scenario = {
   languageButtonVisible: boolean;
   initialLanguageButton: "en" | "ar";
   addCustomerVisible: boolean;
+  // The Add Customer control only renders this long after /customers loads
+  // (the app shows "Loading your workspace..." until then). Absent = instant.
+  addCustomerVisibleAfterMs?: number;
   dialogVisible: boolean;
-  searchVisibleAfterReload: boolean;
+  // After page.reload() the search control only renders this long later.
+  // Absent = instant.
+  reloadVisibleAfterMs?: number;
+  // After the search is typed, the customer result only renders this long
+  // later. Absent = instant.
+  resultVisibleAfterMs?: number;
+  // The customer result renders only after this many settle polls
+  // (page.waitForTimeout calls), i.e. after the first bounded wait gave up.
+  resultVisibleAfterPolls?: number;
+  // The results wrapper reports data-customers-status "CanLoadMore" (no busy marker, the
+  // count line reads "0 loaded results") until this many settle polls, then "Exhausted".
+  // "never" = the search never completes.
+  exhaustedAfterPolls?: number | "never";
+  // The first DOM text match is the hidden mobile card; only filter({ visible: true }) finds the
+  // visible desktop row.
+  hiddenMobileMatchFirst?: boolean;
+  // How reading the status attribute behaves: resolves null (marker missing), rejects with a
+  // Playwright TimeoutError, or rejects with this other error. Absent = the scripted status.
+  statusRead?: "null" | "timeout" | Error;
+  // The backend search returns no row for this many queries (the save has not committed yet).
+  backendCommitAfterQueries?: number;
+  // Exact-match count per backend search (the last entry repeats), e.g. [1, 2] = a second insert lands later.
+  backendMatchesSequence?: number[];
+  // The backend search never answers.
+  backendQueryHangs?: boolean;
+  // The dialog never closes after submit (validation or a failed save).
+  dialogStaysOpen?: boolean;
+  // The dialog closes but no success toast ever shows (it was removed without a save).
+  noSuccessToast?: boolean;
+  /** The toast auto-dismisses this long after submit (default: stays). */
+  toastVisibleForMs?: number;
+  // The dialog closes this many ms after submit. Absent = at once.
+  dialogClosedAfterMs?: number;
+  // The result row appears only DURING the final wait that follows an observed Exhausted status.
+  resultOnlyDuringFinalWait?: boolean;
+  searchControlVisible: boolean;
+  resultVisibleAfterReload: boolean;
   backendOwnsOrg: boolean;
   backendCustomerMatches: number;
   backendQueryError?: Error;
@@ -65,7 +105,8 @@ function defaultScenario(overrides: Partial<Scenario> = {}): Scenario {
     initialLanguageButton: "en",
     addCustomerVisible: true,
     dialogVisible: true,
-    searchVisibleAfterReload: true,
+    searchControlVisible: true,
+    resultVisibleAfterReload: true,
     backendOwnsOrg: true,
     backendCustomerMatches: 1,
     ...overrides,
@@ -126,7 +167,10 @@ function makeBrowserFixture(
     lang: scenario.initialLanguageButton === "ar" ? "ar" : "en",
     dir: scenario.initialLanguageButton === "ar" ? "rtl" : "ltr",
     dialogOpened: false,
+    dialogClosed: false,
     submitted: false,
+    submittedAt: 0,
+    toastWaitStartedAfterClose: null as boolean | null,
     firstName: "",
     lastName: "",
     email: "",
@@ -143,8 +187,48 @@ function makeBrowserFixture(
     }),
   };
 
+  // Real Playwright: isVisible() answers for this instant and ignores any
+  // timeout; waitFor() is what waits, and rejects with a TimeoutError.
+  let controlRevealed = scenario.addCustomerVisibleAfterMs === undefined;
+  let reloadRevealed = true;
+  let resultRevealed = true;
+  let settlePolls = 0;
+  const statusGetAttribute = vi.fn(async (name: string) => {
+    const read = scenario.statusRead;
+    if (read instanceof Error) throw read;
+    if (read === "timeout") {
+      const error = new Error("locator.getAttribute: Timeout 1000ms exceeded.");
+      error.name = "TimeoutError";
+      throw error;
+    }
+    if (read === "null") return null;
+    const status = name === "data-customers-status" ? customersStatus() : null;
+    if (status === "Exhausted" && exhaustedObservedAt === null) exhaustedObservedAt = Date.now();
+    return status;
+  });
+  // When the handler first read Exhausted: the row of resultOnlyDuringFinalWait renders after it.
+  let exhaustedObservedAt: number | null = null;
+  let searchQueries = 0;
+  const customersStatus = () => {
+    if (scenario.exhaustedAfterPolls === "never") return "CanLoadMore";
+    return settlePolls >= (scenario.exhaustedAfterPolls ?? 0) ? "Exhausted" : "CanLoadMore";
+  };
+  // A finite stand-in for the real timeout: 20 polls x 5ms = 100ms.
+  const waitUntilVisible = async (visible: () => boolean) => {
+    for (let poll = 0; poll < 20; poll += 1) {
+      if (visible()) return undefined;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const error = new Error("locator.waitFor: Timeout exceeded.");
+    error.name = "TimeoutError";
+    throw error;
+  };
+
   const addCustomerButton = {
-    isVisible: vi.fn(async () => scenario.addCustomerVisible),
+    isVisible: vi.fn(async () => scenario.addCustomerVisible && controlRevealed),
+    waitFor: vi.fn(async () =>
+      waitUntilVisible(() => scenario.addCustomerVisible && controlRevealed),
+    ),
     click: vi.fn(async () => {
       state.dialogOpened = true;
     }),
@@ -158,7 +242,13 @@ function makeBrowserFixture(
 
   const dialog = {
     isVisible: vi.fn(
-      async () => state.dialogOpened && scenario.dialogVisible,
+      async () => state.dialogOpened && !state.dialogClosed && scenario.dialogVisible,
+    ),
+    // Like Playwright: state "hidden" waits for the dialog to close, anything else for it to show.
+    waitFor: vi.fn(async (options?: { state?: string }) =>
+      options?.state === "hidden"
+        ? waitUntilVisible(() => state.submitted && state.dialogClosed)
+        : waitUntilVisible(() => state.dialogOpened && scenario.dialogVisible),
     ),
     getByLabel: vi.fn((label: string) => {
       if (label === "First Name") return field("firstName");
@@ -169,14 +259,30 @@ function makeBrowserFixture(
     getByRole: vi.fn(() => ({
       click: vi.fn(async () => {
         state.submitted = true;
+        state.submittedAt = Date.now();
+        // CustomerDialog closes only after the create mutation resolved; a failed save leaves it open.
+        if (scenario.dialogStaysOpen) return;
+        const delay = scenario.dialogClosedAfterMs ?? 0;
+        if (delay === 0) state.dialogClosed = true;
+        else setTimeout(() => { state.dialogClosed = true; }, delay);
       }),
     })),
   };
 
   const searchInput = {
-    isVisible: vi.fn(async () => true),
+    isVisible: vi.fn(async () => reloadRevealed && scenario.searchControlVisible),
+    waitFor: vi.fn(async () =>
+      waitUntilVisible(() => reloadRevealed && scenario.searchControlVisible),
+    ),
     fill: vi.fn(async (value: string) => {
       state.search = value;
+      const delay = scenario.resultVisibleAfterMs;
+      if (delay !== undefined) {
+        resultRevealed = false;
+        setTimeout(() => {
+          resultRevealed = true;
+        }, delay);
+      }
     }),
   };
 
@@ -211,6 +317,13 @@ function makeBrowserFixture(
           "http://127.0.0.1:3000/" + scenario.orgId + "/dashboard";
       } else {
         state.currentUrl = "http://127.0.0.1:3000" + url;
+        const delay = scenario.addCustomerVisibleAfterMs;
+        if (url.endsWith("/customers") && delay !== undefined) {
+          controlRevealed = false;
+          setTimeout(() => {
+            controlRevealed = true;
+          }, delay);
+        }
       }
     }),
     waitForURL: vi.fn(
@@ -219,13 +332,14 @@ function makeBrowserFixture(
         // Resolve as soon as the current URL (now or after a later redirect)
         // matches. With no redirect left to wait for and no match, the real
         // 20s timeout is what would fire; model it as an immediate rejection.
-        for (;;) {
+        // The loop is bounded well below Vitest's per-test timeout instead:
+        // 200 polls x 5ms = 1s, still far longer than any modeled redirect.
+        for (let poll = 0; poll < 200; poll += 1) {
           if (urlMatches(matcher, state.currentUrl)) return undefined;
-          if (pendingRedirects === 0) {
-            throw new Error("page.waitForURL: Timeout 20000ms exceeded.");
-          }
+          if (pendingRedirects === 0) break;
           await new Promise((resolve) => setTimeout(resolve, 5));
         }
+        throw new Error("page.waitForURL: Timeout 20000ms exceeded.");
       },
     ),
     url: vi.fn(() => state.currentUrl),
@@ -244,8 +358,13 @@ function makeBrowserFixture(
         "Unexpected role lookup " + role + " " + String(options?.name),
       );
     }),
-    waitForTimeout: vi.fn(async () => undefined),
+    waitForTimeout: vi.fn(async () => {
+      settlePolls += 1;
+    }),
     locator: vi.fn((selector: string) => {
+      if (selector === '[data-testid="customers-results"]') {
+        return { getAttribute: statusGetAttribute };
+      }
       if (selector === "html") {
         return {
           getAttribute: vi.fn(async (name: string) => {
@@ -259,17 +378,62 @@ function makeBrowserFixture(
         first: vi.fn(() => searchInput),
       };
     }),
-    reload: vi.fn(async () => undefined),
-    getByText: vi.fn(() => ({
-      first: vi.fn(() => ({
-        isVisible: vi.fn(
-          async () =>
-            scenario.searchVisibleAfterReload &&
-            state.submitted &&
-            state.search === state.email,
-        ),
-      })),
-    })),
+    reload: vi.fn(async () => {
+      const delay = scenario.reloadVisibleAfterMs;
+      if (delay !== undefined) {
+        reloadRevealed = false;
+        setTimeout(() => {
+          reloadRevealed = true;
+        }, delay);
+      }
+    }),
+    getByText: vi.fn((text: string | RegExp) => {
+      // The success toast ("Customer added successfully" / Arabic): shown with the closing dialog.
+      if (text instanceof RegExp) {
+        // Like sonner, it auto-dismisses: visible from submit until toastVisibleForMs later.
+        const toastShown = () =>
+          state.submitted &&
+          !scenario.noSuccessToast &&
+          (scenario.toastVisibleForMs === undefined ||
+            Date.now() - state.submittedAt < scenario.toastVisibleForMs);
+        const toast = {
+          isVisible: vi.fn(async () => toastShown()),
+          waitFor: vi.fn(async () => {
+            // Records whether the toast wait began only after the dialog had already closed.
+            state.toastWaitStartedAfterClose ??= state.dialogClosed;
+            return waitUntilVisible(toastShown);
+          }),
+        };
+        return { first: vi.fn(() => toast) };
+      }
+      const resultVisible = () =>
+        resultRevealed &&
+        settlePolls >= (scenario.resultVisibleAfterPolls ?? 0) &&
+        (!scenario.resultOnlyDuringFinalWait ||
+          (exhaustedObservedAt !== null && Date.now() - exhaustedObservedAt >= 25)) &&
+        scenario.resultVisibleAfterReload &&
+        state.submitted &&
+        state.search === state.email;
+      const visibleRow = {
+        isVisible: vi.fn(async () => resultVisible()),
+        waitFor: vi.fn(async () => waitUntilVisible(resultVisible)),
+      };
+      const hiddenMobileCard = {
+        isVisible: vi.fn(async () => false),
+        waitFor: vi.fn(async () => waitUntilVisible(() => false)),
+      };
+      return {
+        first: vi.fn(() => (scenario.hiddenMobileMatchFirst ? hiddenMobileCard : visibleRow)),
+        // Real semantics: filter({ visible: true }) keeps the visible text matches themselves.
+        filter: vi.fn((options: { visible?: boolean }) => {
+          if (options.visible !== true) throw new Error("Unexpected text filter " + JSON.stringify(options));
+          return { first: vi.fn(() => visibleRow) };
+        }),
+        // Real semantics: locator() searches DESCENDANTS of each text match. The matched span
+        // or button holds the name directly and has none, so this never finds the row.
+        locator: vi.fn(() => ({ first: vi.fn(() => hiddenMobileCard) })),
+      };
+    }),
     isClosed: vi.fn(() => state.closed),
     screenshot: vi.fn(async () => undefined),
   };
@@ -307,8 +471,15 @@ function makeBrowserFixture(
       if (scenario.backendQueryError) throw scenario.backendQueryError;
 
       if ("search" in args) {
+        searchQueries += 1;
+        if (scenario.backendQueryHangs) return new Promise<never>(() => undefined);
+        if (searchQueries <= (scenario.backendCommitAfterQueries ?? 0)) return [];
+        const sequence = scenario.backendMatchesSequence;
+        const count = sequence
+          ? (sequence[searchQueries - 1] ?? sequence[sequence.length - 1])
+          : scenario.backendCustomerMatches;
         return Array.from(
-          { length: scenario.backendCustomerMatches },
+          { length: count },
           () => ({
             email: state.email,
             firstName: state.firstName,
@@ -330,7 +501,42 @@ function makeBrowserFixture(
     browserContext,
     tracing,
     addCustomerButton,
+    searchInput,
+    statusGetAttribute,
+    searchQueryCount: () => searchQueries,
   };
+}
+
+// The backend-state JSON the UI/backend attack wrote, from the faked writeFile.
+function backendEvidenceBody(): string | undefined {
+  return (mocks.writeFile.mock.calls as unknown[][])
+    .map((call) => String(call[1]))
+    .find((body) => body.includes("UI_BACKEND_MISMATCH"));
+}
+
+interface FakeRow {
+  isVisible: () => Promise<boolean>;
+  waitFor: (...args: unknown[]) => Promise<unknown>;
+}
+interface FakeTextLookup {
+  first: () => FakeRow;
+  filter: (options: { visible: boolean }) => { first: () => FakeRow };
+  locator: (selector: string) => { first: () => FakeRow };
+}
+
+// Replaces only the customer-name text lookup; the success-toast lookup (a RegExp) keeps the fixture's fake.
+function overrideResultLookup(
+  fixture: ReturnType<typeof makeBrowserFixture>,
+  make: (original: FakeTextLookup) => FakeTextLookup,
+): void {
+  const getByText = fixture.page.getByText as unknown as {
+    getMockImplementation: () => (text: string | RegExp) => unknown;
+    mockImplementation: (implementation: (text: string | RegExp) => unknown) => void;
+  };
+  const original = getByText.getMockImplementation();
+  getByText.mockImplementation((text) =>
+    text instanceof RegExp ? original(text) : make(original(text) as FakeTextLookup),
+  );
 }
 
 function mission(
@@ -772,6 +978,36 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(fixture.browser.close).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for the Add Customer control while the workspace is still loading", async () => {
+    const fixture = makeBrowserFixture(
+      defaultScenario({ addCustomerVisibleAfterMs: 40 }),
+    );
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(
+      executionContext("UI_BACKEND_MISMATCH"),
+    );
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    expect(fixture.state.submitted).toBe(true);
+  });
+
+  it("treats an Add Customer control that never appears as a harness failure with the route", async () => {
+    const fixture = makeBrowserFixture(
+      defaultScenario({ addCustomerVisible: false }),
+    );
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(
+        executionContext("UI_BACKEND_MISMATCH"),
+      ),
+    ).rejects.toThrow(
+      /could not locate the Add Customer control within 15000ms at \/org_preview_1\/customers/,
+    );
+
+    expect(fixture.addCustomerButton.click).not.toHaveBeenCalled();
+    expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
   it("treats a dialog that never opens as a harness failure, not a product breach", async () => {
     const fixture = makeBrowserFixture(defaultScenario({ dialogVisible: false }));
 
@@ -784,15 +1020,391 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(fixture.browser.close).toHaveBeenCalled();
   });
 
+  it("waits for the search control while the page reloads", async () => {
+    const fixture = makeBrowserFixture(
+      defaultScenario({ reloadVisibleAfterMs: 40 }),
+    );
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(
+      executionContext("UI_BACKEND_MISMATCH"),
+    );
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    expect(fixture.state.search).toBe(fixture.state.email);
+    expect(fixture.addCustomerButton.waitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 15_000,
+    });
+    expect(fixture.searchInput.waitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 15_000,
+    });
+  });
+
+  it("waits for the customer result that renders after the search is typed", async () => {
+    const fixture = makeBrowserFixture(
+      defaultScenario({ resultVisibleAfterMs: 40 }),
+    );
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(
+      executionContext("UI_BACKEND_MISMATCH"),
+    );
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    expect(fixture.searchInput.fill).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a search control that never reappears after reload as a harness failure", async () => {
+    const fixture = makeBrowserFixture(
+      defaultScenario({ searchControlVisible: false }),
+    );
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(
+        executionContext("UI_BACKEND_MISMATCH"),
+      ),
+    ).rejects.toThrow(/could not locate the customer search control after reload/);
+
+    expect(fixture.state.search).toBe("");
+    expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
+  it("fails the oracle, never passes, when the customer never shows after reload", async () => {
+    makeBrowserFixture(defaultScenario({ resultVisibleAfterReload: false }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(
+      executionContext("UI_BACKEND_MISMATCH"),
+    );
+
+    expect(evidence.oracle.passed).toBe(false);
+  });
+
+  it("passes a customer that arrives while the search is still paging, long past the first wait (no busy marker, 0 loaded results)", async () => {
+    makeBrowserFixture(defaultScenario({ exhaustedAfterPolls: 12, resultVisibleAfterPolls: 9 }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    expect(backendEvidenceBody()).toContain('"resultSettle": "VISIBLE"');
+  });
+
+  it("passes a customer whose row renders only after the status reaches Exhausted", async () => {
+    makeBrowserFixture(defaultScenario({ exhaustedAfterPolls: 6, resultVisibleAfterPolls: 6 }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+  });
+
+  it("matches the visible desktop row, not the hidden mobile card that comes first in the DOM", async () => {
+    makeBrowserFixture(defaultScenario({ hiddenMobileMatchFirst: true }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+  });
+
+  it("is a harness error, never a breach, when the customers search never completes", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ exhaustedAfterPolls: "never", resultVisibleAfterReload: false }));
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH")),
+    ).rejects.toThrow(/customers search did not complete/);
+
+    expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
+  it("confirms the breach only on a complete (Exhausted) search that still lacks the customer, backend count 1", async () => {
+    makeBrowserFixture(defaultScenario({ exhaustedAfterPolls: 5, resultVisibleAfterReload: false }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: false });
+    expect(backendEvidenceBody()).toContain('"resultSettle": "SETTLED_ABSENT"');
+  });
+
+  it("does not poll the UI status when the backend count is not 1", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ backendCustomerMatches: 0, resultVisibleAfterReload: false }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: false });
+    expect(fixture.statusGetAttribute).not.toHaveBeenCalled();
+  });
+
+  it("is a harness error with the last status null when the status marker reads null, after a few reads", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ statusRead: "null", resultVisibleAfterReload: false }));
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH")),
+    ).rejects.toThrow(/last status null/);
+
+    expect(fixture.statusGetAttribute).toHaveBeenCalledTimes(3);
+  });
+
+  it("treats a status read that times out as a missing marker, never as a complete search", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ statusRead: "timeout", resultVisibleAfterReload: false }));
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH")),
+    ).rejects.toThrow(/last status null/);
+
+    expect(fixture.statusGetAttribute).toHaveBeenCalledTimes(3);
+  });
+
+  it("propagates a non-timeout status read failure instead of swallowing it", async () => {
+    makeBrowserFixture(defaultScenario({ statusRead: new Error("page crashed"), resultVisibleAfterReload: false }));
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH")),
+    ).rejects.toThrow(/page crashed/);
+  });
+
+  it("stops polling a never-complete status at the wall-clock deadline and reports the last status", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ exhaustedAfterPolls: "never", resultVisibleAfterReload: false }));
+    // Each status read burns one second of wall clock: 80 polls would be ~80s without the deadline.
+    let clock = 1_700_000_000_000;
+    const real = fixture.statusGetAttribute.getMockImplementation();
+    fixture.statusGetAttribute.mockImplementation(async (name: string) => {
+      clock += 1_000;
+      return real ? real(name) : null;
+    });
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      await expect(
+        handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH")),
+      ).rejects.toThrow(/last status CanLoadMore/);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(fixture.statusGetAttribute.mock.calls.length).toBeLessThanOrEqual(21);
+  });
+
+  it("waits for a save that commits after the click: count 0 before commit is not a breach", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ backendCommitAfterQueries: 3 }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    // 3 reads before the commit, the first read that sees it, and the re-read just before the verdict.
+    expect(fixture.searchQueryCount()).toBe(5);
+    const body = backendEvidenceBody() ?? "";
+    expect(body).toContain('"exactBackendMatchCount": 1');
+    expect(body).toContain('"finalBackendMatchCount": 1');
+    expect(body).toContain('"backendReads": 5');
+    expect(body).toMatch(/"backendReadElapsedMs": \d+/);
+    expect(body).toContain('"uiSaveSucceeded": true');
+  });
+
+  it("is a harness error, never a breach, when the dialog stays open after submit, and reads no backend count", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ dialogStaysOpen: true, backendCustomerMatches: 0 }));
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH")),
+    ).rejects.toThrow(/dialog stayed open after submit/);
+
+    expect(fixture.searchQueryCount()).toBe(0);
+    expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
+  it("reads the backend only after the dialog has closed", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ dialogClosedAfterMs: 40 }));
+    const closedWhenRead: boolean[] = [];
+    const client = await mocks.authenticatedConvexClient();
+    const query = client.query;
+    client.query = vi.fn(async (...args: unknown[]) => {
+      closedWhenRead.push(fixture.state.dialogClosed);
+      return query(...args);
+    });
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    expect(closedWhenRead.length).toBeGreaterThan(0);
+    expect(closedWhenRead.every(Boolean)).toBe(true);
+  });
+
+  it("fails the oracle when a second insert lands after the first read: 1 then 2", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ backendMatchesSequence: [1, 2] }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: false });
+    expect(fixture.searchQueryCount()).toBe(2);
+    const body = backendEvidenceBody() ?? "";
+    expect(body).toContain('"exactBackendMatchCount": 1');
+    expect(body).toContain('"finalBackendMatchCount": 2');
+  });
+
+  it("confirms a mismatch when the UI saved (dialog closed) but the backend still has no customer after the bounded reads", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ backendCustomerMatches: 0 }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: false });
+    expect(fixture.searchQueryCount()).toBe(21);
+    const body = backendEvidenceBody() ?? "";
+    expect(body).toContain('"uiSaveSucceeded": true');
+    expect(body).toContain('"finalBackendMatchCount": 0');
+    expect(body).toContain('"backendReads": 21');
+  });
+
+  it("passes a row that becomes visible only DURING the final wait after Exhausted was observed", async () => {
+    makeBrowserFixture(defaultScenario({ resultOnlyDuringFinalWait: true, exhaustedAfterPolls: 2 }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    expect(backendEvidenceBody()).toContain('"resultSettle": "VISIBLE"');
+  });
+
+  it("falls back to one last isVisible when the settle polls run out and passes a row visible by then", async () => {
+    makeBrowserFixture(defaultScenario({ exhaustedAfterPolls: "never", resultVisibleAfterPolls: 80 }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+  });
+
+  it("does not let a backend query that never answers hang the mission", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      makeBrowserFixture(defaultScenario({ backendQueryHangs: true }));
+      const run = handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+      const settled = expect(run).rejects.toThrow(/backend customer query did not answer within 5000ms/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops with a harness error when the mission budget is already spent", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    const context = executionContext("UI_BACKEND_MISMATCH");
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")({ ...context, mission: { ...context.mission, timeoutMs: 15_000 } }),
+    ).rejects.toThrow(/ran out of mission time before the customers page loaded/);
+
+    expect(fixture.searchQueryCount()).toBe(0);
+  });
+
+  it("fails a count above 1 at the first read, without waiting or re-reading", async () => {
+    const duplicate = makeBrowserFixture(defaultScenario({ backendCustomerMatches: 2 }));
+    const duplicated = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+    expect(duplicated.oracle).toMatchObject({ passed: false });
+    expect(duplicate.searchQueryCount()).toBe(1);
+  });
+
+  it("is a harness error with zero backend reads when the dialog vanishes without the success toast", async () => {
+    const fixture = makeBrowserFixture(defaultScenario({ noSuccessToast: true, backendCustomerMatches: 0 }));
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH")),
+    ).rejects.toThrow(/closed without the success toast/);
+
+    expect(fixture.state.dialogClosed).toBe(true);
+    expect(fixture.searchQueryCount()).toBe(0);
+  });
+
+  it("waits for the toast and the dialog concurrently: a short-lived toast is still seen before a slower close", async () => {
+    // Toast gone 20ms after submit, dialog closes at 40ms: only a wait begun alongside the
+    // dialog wait can see the toast; one begun after the close would time out.
+    const fixture = makeBrowserFixture(
+      defaultScenario({ toastVisibleForMs: 20, dialogClosedAfterMs: 40 }),
+    );
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    expect(fixture.state.toastWaitStartedAfterClose).toBe(false);
+    expect(backendEvidenceBody()).toContain('"uiSaveSucceeded": true');
+  });
+
+  it("matches the success toast against the real English and Arabic catalog strings", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+
+    await handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH"));
+
+    const toastPattern = fixture.page.getByText.mock.calls
+      .map(([text]) => text)
+      .find((text): text is RegExp => text instanceof RegExp);
+    expect(toastPattern?.test(customersEn.CustomerAddedSuccess)).toBe(true);
+    expect(toastPattern?.test(customersAr.CustomerAddedSuccess)).toBe(true);
+    expect(toastPattern?.test("Customer removed")).toBe(false);
+  });
+
+  describe("mission budget exhausted midway", () => {
+    // Moves the handler's clock forward at a chosen step, as if that step had used up the budget.
+    const spendBudget = () => {
+      const real = Date.now.bind(Date);
+      let offset = 0;
+      const spy = vi.spyOn(Date, "now").mockImplementation(() => real() + offset);
+      return { spend: () => { offset += 31_000; }, restore: () => spy.mockRestore() };
+    };
+
+    it("is a harness error when the budget runs out during the result search", async () => {
+      const clock = spendBudget();
+      try {
+        const fixture = makeBrowserFixture(defaultScenario());
+        const fill = fixture.searchInput.fill.getMockImplementation();
+        fixture.searchInput.fill.mockImplementation(async (value: string) => {
+          await fill?.(value);
+          clock.spend();
+        });
+
+        await expect(
+          handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH")),
+        ).rejects.toThrow(/ran out of mission time before the customer result appeared/);
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it("is a harness error when the budget runs out before the final backend read, never a verdict", async () => {
+      const clock = spendBudget();
+      try {
+        const fixture = makeBrowserFixture(defaultScenario());
+        overrideResultLookup(fixture, (found) => {
+          const row = found.filter({ visible: true }).first();
+          const spent: FakeRow = {
+            ...row,
+            waitFor: async (...args) => {
+              await row.waitFor(...args);
+              clock.spend();
+            },
+          };
+          return { ...found, filter: () => ({ first: () => spent }) };
+        });
+
+        await expect(
+          handlerFor("UI_BACKEND_MISMATCH")(executionContext("UI_BACKEND_MISMATCH")),
+        ).rejects.toThrow(/ran out of mission time before the backend customer query/);
+
+        // Only the first read happened; the final one was refused, so no verdict was written.
+        expect(fixture.searchQueryCount()).toBe(1);
+        expect(backendEvidenceBody()).toBeUndefined();
+      } finally {
+        clock.restore();
+      }
+    });
+  });
+
   it("propagates a post-reload visibility probe failure as a harness error", async () => {
     const fixture = makeBrowserFixture(defaultScenario());
-    fixture.page.getByText.mockReturnValueOnce({
-      first: vi.fn(() => ({
-        isVisible: vi.fn(async () => {
-          throw new Error("page closed during oracle");
-        }),
-      })),
-    });
+    const closedRow = {
+      isVisible: vi.fn(async () => false),
+      waitFor: vi.fn(async () => {
+        throw new Error("page closed during oracle");
+      }),
+    };
+    overrideResultLookup(fixture, () => ({
+      first: () => closedRow,
+      filter: () => ({ first: () => closedRow }),
+      locator: () => ({ first: () => closedRow }),
+    }));
 
     await expect(
       handlerFor("UI_BACKEND_MISMATCH")(

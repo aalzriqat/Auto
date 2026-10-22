@@ -86,6 +86,14 @@ export const AppErrorCode = {
   FINANCE_CONFIRM_NO_FINANCIER_PAYS: "FINANCE_CONFIRM_NO_FINANCIER_PAYS",
   FINANCE_CONFIRM_NO_FINANCE_COMPANY: "FINANCE_CONFIRM_NO_FINANCE_COMPANY",
   CHEQUE_BANK_FEE_INVALID: "CHEQUE_BANK_FEE_INVALID",
+  CHEQUE_CLEAR_BANK_INVALID: "CHEQUE_CLEAR_BANK_INVALID",
+  CHEQUE_RETURN_FEE_BANK_INVALID: "CHEQUE_RETURN_FEE_BANK_INVALID",
+  EXPENSE_BANK_INVALID: "EXPENSE_BANK_INVALID",
+  COMMISSION_BANK_INVALID: "COMMISSION_BANK_INVALID",
+  PAYROLL_BANK_INVALID: "PAYROLL_BANK_INVALID",
+  PAYROLL_BANK_NOT_APPLICABLE: "PAYROLL_BANK_NOT_APPLICABLE",
+  ASSET_BANK_INVALID: "ASSET_BANK_INVALID",
+  ASSET_BANK_NOT_APPLICABLE: "ASSET_BANK_NOT_APPLICABLE",
   CHEQUE_RETURN_NO_RECEIPT_LINEAGE: "CHEQUE_RETURN_NO_RECEIPT_LINEAGE",
   CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE: "CHEQUE_RETURN_NO_PAYMENT_TO_REVERSE",
   // SCRUM-239 round 4: `collections.returnClearedCheque` key reuse with a different
@@ -110,6 +118,9 @@ export const AppErrorCode = {
   RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED: "RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED",
   CHEQUE_INVOICE_UNCOVERED_HELD: "CHEQUE_INVOICE_UNCOVERED_HELD",
   SALE_INVOICE_RECEIPT_DOORS_DISABLED: "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+  // SCRUM-760 decision B: the cleared-cheque return is blocked for the narrow pilot
+  // (utils/postDeliveryDoorContainment.ts). Translated under ServerError_<code>.
+  CLEARED_CHEQUE_RETURN_PILOT_DISABLED: "CLEARED_CHEQUE_RETURN_PILOT_DISABLED",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",
@@ -178,8 +189,17 @@ export const AppErrorCode = {
   SALE_HAS_LEGACY_RECEIVABLE: "SALE_HAS_LEGACY_RECEIVABLE",
   SALE_DEBT_RECEIPT_REFUSED: "SALE_DEBT_RECEIPT_REFUSED",
   PAYMENT_LINKS_DISABLED: "PAYMENT_LINKS_DISABLED",
+  // SCRUM-795 (SCRUM-50): manual journals are off for the pilot (owner ruling SCRUM-760 c22474).
+  MANUAL_JOURNALS_DISABLED: "MANUAL_JOURNALS_DISABLED",
+  // SCRUM-802 (pilot cash-sale containment).
+  CASH_SALE_BALANCE_UNPAID_REFUSED: "CASH_SALE_BALANCE_UNPAID_REFUSED",
+  CASH_SALE_TAX_FEES_WARRANTY_REFUSED: "CASH_SALE_TAX_FEES_WARRANTY_REFUSED",
+  UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED: "UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED",
   // SCRUM-724/SCRUM-795 c22479 + Sol Q7: pilot containment of customer-credit payouts. Translated under ServerError_<code>.
   CUSTOMER_CREDIT_PAYOUT_DISABLED: "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+  DEAL_COMMISSION_LINES_DISABLED: "DEAL_COMMISSION_LINES_DISABLED",
+  // SCRUM-854. A SALE line for the sale's own salesperson would pay the same role twice. Translated under ServerError_<code>.
+  DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON: "DEAL_COMMISSION_LINE_DUPLICATES_SALESPERSON",
   CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED: "CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED",
   // SCRUM-113. `approvals.respondToApproval` refuses APPROVED when the request's vehicle is
   // missing, in another organisation or soft-deleted; REJECTED stays allowed. Translated under
@@ -203,6 +223,9 @@ export const AppErrorCode = {
   COST_CORRECTION_TYPE_NOT_ALLOWED: "COST_CORRECTION_TYPE_NOT_ALLOWED",
   COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE: "COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE",
   COST_CORRECTION_PAYMENT_METHOD_REQUIRED: "COST_CORRECTION_PAYMENT_METHOD_REQUIRED",
+  COST_CORRECTION_BANK_INVALID: "COST_CORRECTION_BANK_INVALID",
+  COST_CORRECTION_BANK_NOT_APPLICABLE: "COST_CORRECTION_BANK_NOT_APPLICABLE",
+  COST_CORRECTION_HELD_CHEQUE_UNSUPPORTED: "COST_CORRECTION_HELD_CHEQUE_UNSUPPORTED",
   // SCRUM-725 (D-44 c). A restatement through Retained Earnings is only offered, and only
   // accepted, for an acquisition recorded in a CLOSED or LOCKED accounting period.
   COST_CORRECTION_RESTATEMENT_PERIOD_OPEN: "COST_CORRECTION_RESTATEMENT_PERIOD_OPEN",
@@ -234,6 +257,38 @@ export const AppErrorCode = {
   FORWARD_CANCEL_POSTING_UNSETTLED: "FORWARD_CANCEL_POSTING_UNSETTLED",
   FORWARD_CANCEL_REVERSAL_PENDING: "FORWARD_CANCEL_REVERSAL_PENDING",
   FORWARD_CANCEL_NEEDS_REPAIR: "FORWARD_CANCEL_NEEDS_REPAIR",
+  // SCRUM-411 P2-01. `finalizeDeal` and the finance company's transfer (`confirmDisbursement`,
+  // `confirmSupplierDisbursement`) refuse while the deposit + contribution payment to the finance
+  // company is not on the books (`forwardGateRefusal`). One code per (gate, reason); the EN
+  // dictionary text equals the server message. Translated under ServerError_<code>.
+  // SCRUM-411 P2-02 containment. A held deposit already inside a live pre-finalize payment to the
+  // finance company cannot also be refunded, forfeited, voided or paid out (`assertDepositNotInLiveForward`).
+  DEPOSIT_PAID_ONWARD_TO_FINANCE_COMPANY: "DEPOSIT_PAID_ONWARD_TO_FINANCE_COMPANY",
+  // SCRUM-411 P2-02. The deposits held on the deal cannot be tied, one by one, to the payment being recorded
+  // (`recordFinanceCompanyForward`), so no provenance is written and no payment is recorded.
+  FORWARD_DEPOSIT_PROVENANCE_UNCLEAR: "FORWARD_DEPOSIT_PROVENANCE_UNCLEAR",
+  // SCRUM-411 P2-01 / SCRUM-766 Q2. `customerFinanceCompanyPayments.confirmPayment` / `voidPayment` change the
+  // showroom's contribution, so they refuse while a payment to the finance company is on the books or unsettled
+  // (`assertForwardAllowsContributionChange`): the amount already paid would no longer match the plan.
+  CUSTOMER_PAYMENT_FORWARD_LIVE: "CUSTOMER_PAYMENT_FORWARD_LIVE",
+  // SCRUM-411 P2-01. The shared economics recompute and the two writers that clear the contribution refuse a
+  // change to the showroom's contribution while a payment to the finance company is live
+  // (`assertForwardAllowsEconomicsChange`): the amount already paid would no longer match the plan.
+  DEAL_ECONOMICS_FORWARD_LIVE: "DEAL_ECONOMICS_FORWARD_LIVE",
+  FORWARD_FINALIZE_UNPAID: "FORWARD_FINALIZE_UNPAID",
+  FORWARD_FINALIZE_STALE: "FORWARD_FINALIZE_STALE",
+  FORWARD_FINALIZE_POSTING_PENDING: "FORWARD_FINALIZE_POSTING_PENDING",
+  FORWARD_FINALIZE_POSTING_FAILED: "FORWARD_FINALIZE_POSTING_FAILED",
+  FORWARD_FINALIZE_REVERSAL_PENDING: "FORWARD_FINALIZE_REVERSAL_PENDING",
+  FORWARD_FINALIZE_NEEDS_REPAIR: "FORWARD_FINALIZE_NEEDS_REPAIR",
+  FORWARD_TRANSFER_UNPAID: "FORWARD_TRANSFER_UNPAID",
+  FORWARD_TRANSFER_POSTING_PENDING: "FORWARD_TRANSFER_POSTING_PENDING",
+  FORWARD_TRANSFER_POSTING_FAILED: "FORWARD_TRANSFER_POSTING_FAILED",
+  FORWARD_TRANSFER_REVERSAL_PENDING: "FORWARD_TRANSFER_REVERSAL_PENDING",
+  FORWARD_TRANSFER_NEEDS_REPAIR: "FORWARD_TRANSFER_NEEDS_REPAIR",
+  // SCRUM-411 P2-03. The agreed first payment was founded on a reservation deposit that is not being
+  // applied to the purchase (`resolveFinancedSalePlan`), so it would be funded by nothing.
+  FIRST_PAYMENT_UNFUNDED: "FIRST_PAYMENT_UNFUNDED",
   // SCRUM-413 S413B-4/L-2
   OWNER_NAMED_ROLE_LOCKED: "OWNER_NAMED_ROLE_LOCKED",
   // SCRUM-693. Unwinding a paid finance deal (convex/dealUnwind.ts). Messages live in
@@ -265,6 +320,10 @@ export const AppErrorCode = {
   DEAL_UNWIND_ALLOCATION_SHAPE: "DEAL_UNWIND_ALLOCATION_SHAPE",
   DEAL_UNWIND_REVERSAL_UNPROVEN: "DEAL_UNWIND_REVERSAL_UNPROVEN",
   DEAL_UNWIND_DISPOSITION_REQUIRED: "DEAL_UNWIND_DISPOSITION_REQUIRED",
+  // SCRUM-801 (owner, SCRUM-795 c22485): see convex/utils/depositOtherContainment.ts.
+  // Translated under ServerError_<code>.
+  DEPOSIT_OTHER_TREATMENT_DISABLED: "DEPOSIT_OTHER_TREATMENT_DISABLED",
+  OPENING_BALANCE_AFTER_LEDGER_ACTIVITY: "OPENING_BALANCE_AFTER_LEDGER_ACTIVITY",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

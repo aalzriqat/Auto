@@ -3,7 +3,6 @@ import { afterEach, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
-import { FACEBOOK_REVOCATION_RETENTION_MS } from "./utils/facebookRevocation";
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -274,111 +273,12 @@ test("getCronStatus returns the newest heartbeat per job without scanning the ta
   expect(status[0].ranAt).toBe(now - 60_000);
 });
 
-test("pruneOperationalLogs deletes aged rows, keeps recent ones and the newest heartbeat per job", async () => {
-  const t = convexTestWithComponents(schema, MODULES);
-  const now = Date.now();
-
-  // Two rows past the 7-day heartbeat window and one inside it.
-  await seedHeartbeat(t, "check-upcoming-tasks", now - 30 * DAY_MS);
-  await seedHeartbeat(t, "check-upcoming-tasks", now - 9 * DAY_MS);
-  await seedHeartbeat(t, "check-upcoming-tasks", now - 60_000);
-
-  // A job whose only heartbeat predates the window must survive, or its admin
-  // row would vanish permanently.
-  await seedHeartbeat(t, "monthly-only-job", now - 45 * DAY_MS);
-
-  await t.run(async (ctx) => {
-    await ctx.db.insert("webhookLogs", {
-      source: "clerk",
-      status: "success",
-      summary: "aged out",
-      createdAt: now - 45 * DAY_MS,
-    });
-    await ctx.db.insert("webhookLogs", {
-      source: "clerk",
-      status: "success",
-      summary: "still in window",
-      createdAt: now - DAY_MS,
-    });
-  });
-
-  const result = await t.mutation(internal.adminSystem.pruneOperationalLogs, {});
-  expect(result).toEqual({ heartbeatsDeleted: 2, webhookLogsDeleted: 1, notificationsDeleted: 0, facebookRevocationsDeleted: 0 });
-
-  const remaining = await t.run((ctx) => ctx.db.query("cronHeartbeats").collect());
-  expect(remaining.map((r) => r.ranAt).sort((a, b) => a - b)).toEqual(
-    [now - 45 * DAY_MS, now - 60_000].sort((a, b) => a - b),
-  );
-
-  const remainingLogs = await t.run((ctx) => ctx.db.query("webhookLogs").collect());
-  expect(remainingLogs.map((r) => r.summary)).toEqual(["still in window"]);
-});
-
-test("pruneOperationalLogs removes Facebook revocation fences past the retention window and keeps newer ones (SCRUM-841)", async () => {
-  const t = convexTestWithComponents(schema, MODULES);
-  const now = Date.now();
-  await t.run(async (ctx) => {
-    await ctx.db.insert("facebookRevocations", { facebookUserId: "fb_expired", revokedAt: now - FACEBOOK_REVOCATION_RETENTION_MS - 1000 });
-    await ctx.db.insert("facebookRevocations", { facebookUserId: "fb_recent", revokedAt: now - 60_000 });
-  });
-
-  const result = await t.mutation(internal.adminSystem.pruneOperationalLogs, {});
-
-  expect(result.facebookRevocationsDeleted).toBe(1);
-  const rows = await t.run((ctx) => ctx.db.query("facebookRevocations").collect());
-  expect(rows.map((r) => r.facebookUserId)).toEqual(["fb_recent"]);
-});
-
-test("pruneOperationalLogs ages out old notifications regardless of read state", async () => {
-  // Notifications are aged by `_creationTime`, which convex-test stamps from
-  // the real clock — `vi.setSystemTime` does not reach it, so an already-old
-  // row cannot be seeded. The retention override is the seam: rows are written
-  // now, and the window is narrowed until they fall outside it.
-  //
-  // Age is the whole eligibility rule, deliberately. Pruning "only if read"
-  // would let a user who never reads anything pin the oldest rows in place
-  // forever, and every hourly sweep would rescan that same block and delete
-  // nothing.
-  const t = convexTestWithComponents(schema, MODULES);
-
-  const orgId = await t.run((ctx) =>
-    ctx.db.insert("organizations", { name: "Prune Motors", createdAt: Date.now() })
-  );
-  const userId = await t.run((ctx) =>
-    ctx.db.insert("users", { clerkId: "prune_user", email: "p@test.com", name: "Prune" })
-  );
-
-  async function seedNotification(isRead: boolean, title: string) {
-    return await t.run((ctx) =>
-      ctx.db.insert("notifications", { orgId, userId, isRead, title, message: title })
-    );
-  }
-
-  await seedNotification(true, "read");
-  await seedNotification(false, "never opened");
-
-  // A *negative* window puts the cutoff a second into the future, which is what
-  // it takes to make a just-written row eligible: convex-test stamps
-  // `_creationTime` with sub-millisecond precision (…462.002) while `Date.now()`
-  // truncates, so a row created in the same millisecond compares as *newer*
-  // than "now" and a window of 0 matches nothing.
-  //
-  // Both rows go, the unread one included — that is the behaviour under test.
-  const swept = await t.mutation(internal.adminSystem.pruneOperationalLogs, {
-    notificationRetentionMsOverride: -1000,
-  });
-  expect(swept.notificationsDeleted).toBe(2);
-  expect(await t.run((ctx) => ctx.db.query("notifications").collect())).toHaveLength(0);
-
-  // And with the real 90-day window, freshly written rows are untouched.
-  await seedNotification(false, "recent unread");
-  await seedNotification(true, "recent read");
-
-  const kept = await t.mutation(internal.adminSystem.pruneOperationalLogs, {});
-  expect(kept.notificationsDeleted).toBe(0);
-
-  const remaining = await t.run((ctx) => ctx.db.query("notifications").collect());
-  expect(remaining.map((r) => r.title).sort()).toEqual(["recent read", "recent unread"]);
+test("the removed adminSystem.pruneOperationalLogs sweep is not exported again (SCRUM-807)", async () => {
+  // Narrow on purpose: this pins only that specific removed export. It cannot
+  // prove that no other function deletes operational records (a differently
+  // named deleter would pass); that stays a code-review obligation until a
+  // retention policy is ruled, at which point this test is updated with it.
+  expect(Object.keys(await import("./adminSystem"))).not.toContain("pruneOperationalLogs");
 });
 
 test("getOverview returns a capped count and a truncation flag per table", async () => {

@@ -33,7 +33,7 @@ vi.mock("web-push", () => ({
 }));
 
 const PREVIEW_URL = "https://combative-gerbil-860.convex.cloud";
-const PROD_URL = "https://kindly-hound-172.convex.cloud";
+const PROD_URL = "https://clever-mockingbird-719.convex.cloud";
 
 type Where = "preview" | "production";
 

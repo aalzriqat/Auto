@@ -44,6 +44,7 @@ import {
   type MissionBrowserRuntime,
 } from "./browserSwarmEconomicAttacks";
 import { BrowserSwarmOracleInconclusiveError } from "./browserSwarmEconomicOracle";
+import { depositVoidTransitionSpec } from "./browserSwarmLifecycleAttack";
 
 export interface BoundaryAttackOptions {
   /** Replaces real waiting so tests run instantly. */
@@ -79,7 +80,7 @@ function inconclusive(message: string): never {
   throw new BrowserSwarmOracleInconclusiveError(message);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -696,17 +697,22 @@ function completenessBoundarySpec(options: Required<BoundaryAttackOptions>) {
 
 // ─── LIFECYCLE_REVERSAL ──────────────────────────────────────────────────────
 
-async function readLedger(client: ConvexHttpClient, orgId: string, expenseId: string): Promise<LedgerSnapshot> {
+async function readLedger(
+  client: ConvexHttpClient,
+  orgId: string,
+  sourceId: string,
+  sourceType: string,
+): Promise<LedgerSnapshot> {
   const raw = asArray(
     await client.query(api.accountingLedger.listAccountingEvents, {
       orgId: orgId as Id<"organizations">,
-      sourceType: "expenses",
-      sourceId: expenseId,
+      sourceType,
+      sourceId,
       limit: LEDGER_ROW_LIMIT,
     }),
     "listAccountingEvents",
   );
-  if (raw.length >= LEDGER_ROW_LIMIT) inconclusive(`accounting events for expense ${expenseId} may be truncated`);
+  if (raw.length >= LEDGER_ROW_LIMIT) inconclusive(`accounting events for ${sourceType}/${sourceId} may be truncated`);
   const events: LedgerEvent[] = raw.map((row) => {
     if (!isRecord(row)) inconclusive("listAccountingEvents returned a malformed row");
     return {
@@ -749,27 +755,158 @@ async function readLedger(client: ConvexHttpClient, orgId: string, expenseId: st
   return { events, journals };
 }
 
-/** Two consecutive identical reads: the posting outbox drains asynchronously. */
-async function readSettledLedger(
-  env: BoundaryMissionEnv,
-  options: Required<BoundaryAttackOptions>,
-  expenseId: string,
-  until?: (snapshot: LedgerSnapshot) => boolean,
-): Promise<LedgerSnapshot> {
-  const deadline = Date.now() + options.postingWaitMs;
-  let previous = await untilAborted(env.signal, readLedger(env.client, env.orgId, expenseId));
-  for (let reads = 1; reads < LEDGER_MAX_READS && Date.now() < deadline; reads += 1) {
-    await untilAborted(env.signal, options.sleep(options.pollMs));
-    const current = await untilAborted(env.signal, readLedger(env.client, env.orgId, expenseId));
-    const repeated = JSON.stringify(current) === JSON.stringify(previous);
-    if (repeated && (until === undefined || until(current))) return current;
-    previous = current;
-  }
-  return inconclusive(`the ledger state for expense ${expenseId} did not settle`);
+/** What `readSettledLedger` waits for, and whose events it reads. */
+export interface SettledLedgerRead {
+  /** The snapshot must also satisfy this before it counts as settled. */
+  until?: (snapshot: LedgerSnapshot) => boolean;
+  /** The ledger source `sourceId` belongs to; an expense unless a mission names another. */
+  sourceType?: string;
+  /**
+   * Extra wait a mission lets a verifiably queued posting use after `postingWaitMs`, shared by all its reads:
+   * each use is subtracted from `remainingMs`. Absent means no extension.
+   */
+  extraWait?: { remainingMs: number };
 }
 
-/** Delete → the posted-expense refusal flips the dialog to Reverse & Delete → reverse. */
-async function reverseOnExpenseScreen(page: Page, signal: AbortSignal, expenseId: string, reason: string): Promise<void> {
+/** An outbox row for one source, reduced to structural fields: no payload, ids, reason or error text. */
+interface QueuedPost {
+  kind: string;
+  status: string;
+  eventType: string | null;
+  attempts: number;
+  hasError: boolean;
+}
+
+/**
+ * What the outbox showed for one source. `listPending` returns only the newest page (the server caps it at
+ * `LEDGER_ROW_LIMIT`), so a full page without a match cannot show absence: that status is `incomplete`.
+ */
+interface QueuedInspection {
+  posts: QueuedPost[];
+  incomplete: ("PENDING" | "FAILED")[];
+}
+
+/** The outbox rows for one source; null when they cannot be read, never taken to mean "nothing queued". */
+async function readQueuedPosts(env: BoundaryMissionEnv, sourceType: string, sourceId: string): Promise<QueuedInspection | null> {
+  try {
+    const inspection: QueuedInspection = { posts: [], incomplete: [] };
+    for (const status of ["PENDING", "FAILED"] as const) {
+      const rows = asArray(
+        await untilAborted(
+          env.signal,
+          env.client.query(api.accountingOutbox.listPending, {
+            orgId: env.orgId as Id<"organizations">,
+            status,
+            limit: LEDGER_ROW_LIMIT,
+          }),
+        ),
+        "listPending",
+      );
+      const before = inspection.posts.length;
+      for (const row of rows) {
+        if (!isRecord(row) || row.sourceType !== sourceType || row.sourceId !== sourceId) continue;
+        inspection.posts.push({
+          kind: typeof row.kind === "string" ? row.kind : "UNKNOWN",
+          status,
+          eventType: typeof row.eventType === "string" ? row.eventType : null,
+          attempts: typeof row.attempts === "number" ? row.attempts : 0,
+          hasError: typeof row.lastError === "string" && row.lastError.length > 0,
+        });
+      }
+      if (rows.length >= LEDGER_ROW_LIMIT && inspection.posts.length === before) inspection.incomplete.push(status);
+    }
+    return inspection;
+  } catch (error) {
+    if (env.signal.aborted) throw error;
+    return null;
+  }
+}
+
+/**
+ * Two consecutive identical reads: the posting outbox drains asynchronously. The events are those whose
+ * source is `sourceId` in `sourceType`.
+ *
+ * A posting that did not land inline waits in the outbox for the one-minute tick, which `postingWaitMs`
+ * alone does not cover. A mission that passes `extraWait` lets the wait grow, once per read and from that
+ * shared allowance, when the outbox verifiably holds a still-waiting row for this source and no failed one
+ * (and the failed rows were fully inspected). Without `extraWait` the wait is never extended. Every lapse is
+ * unjudged (never a pass) and records the last ledger read and the outbox inspection on
+ * `env.detail.ledgerSettleTimeouts`.
+ */
+export async function readSettledLedger(
+  env: BoundaryMissionEnv,
+  options: Pick<Required<BoundaryAttackOptions>, "sleep" | "pollMs" | "postingWaitMs">,
+  sourceId: string,
+  { until, sourceType = "expenses", extraWait }: SettledLedgerRead = {},
+): Promise<LedgerSnapshot> {
+  let last = await untilAborted(env.signal, readLedger(env.client, env.orgId, sourceId, sourceType));
+  const settle = async (waitMs: number, maxReads: number): Promise<LedgerSnapshot | null> => {
+    const deadline = Date.now() + waitMs;
+    for (let reads = 0; reads < maxReads && Date.now() < deadline; reads += 1) {
+      await untilAborted(env.signal, options.sleep(options.pollMs));
+      const current = await untilAborted(env.signal, readLedger(env.client, env.orgId, sourceId, sourceType));
+      const repeated = JSON.stringify(current) === JSON.stringify(last);
+      last = current;
+      if (repeated && (until === undefined || until(current))) return current;
+    }
+    return null;
+  };
+
+  const settled = await settle(options.postingWaitMs, LEDGER_MAX_READS - 1);
+  if (settled) return settled;
+
+  let queued = await readQueuedPosts(env, sourceType, sourceId);
+  const extraMs = Math.max(extraWait?.remainingMs ?? 0, 0);
+  const extend =
+    extraWait !== undefined &&
+    extraMs > 0 &&
+    queued !== null &&
+    queued.posts.some((post) => post.status === "PENDING") &&
+    !queued.posts.some((post) => post.status === "FAILED") &&
+    !queued.incomplete.includes("FAILED");
+  if (extend) {
+    const extendedAt = Date.now();
+    const lateSettled = await settle(extraMs, Math.ceil(extraMs / Math.max(options.pollMs, 1)));
+    extraWait.remainingMs = Math.max(extraMs - (Date.now() - extendedAt), 0);
+    if (lateSettled) return lateSettled;
+    queued = await readQueuedPosts(env, sourceType, sourceId);
+  }
+  const outbox = queued === null ? "UNREADABLE" : queued.incomplete.length > 0 ? "INCOMPLETE" : "COMPLETE";
+  const timeouts = (env.detail.ledgerSettleTimeouts ??= []) as unknown[];
+  timeouts.push({
+    sourceType,
+    sourceId,
+    extendedForQueuedPost: extend,
+    lastRead: last.events.map((event) => ({
+      eventType: event.eventType,
+      status: event.status,
+      journalRead: event.journalEntryId === null ? null : event.journalEntryId in last.journals,
+    })),
+    outbox,
+    queuedPosts: queued?.posts ?? null,
+    outboxPagesWithoutMatch: queued?.incomplete ?? null,
+  });
+  const queuedNote =
+    outbox === "UNREADABLE"
+      ? "outbox unreadable"
+      : outbox === "INCOMPLETE"
+        ? "outbox inspection incomplete, newest page full"
+        : `${queued?.posts.length ?? 0} queued post(s)${extend ? ", wait extended" : ""}`;
+  return inconclusive(
+    `the ledger state for ${sourceType}/${sourceId} did not settle (${last.events.length} event(s) read, ${queuedNote})`,
+  );
+}
+
+/**
+ * Delete → the posted-expense refusal flips the dialog to Reverse & Delete → the
+ * reason is typed, which arms the action. Nothing is submitted.
+ */
+export async function armReversalOnExpenseScreen(
+  page: Page,
+  signal: AbortSignal,
+  expenseId: string,
+  reason: string,
+): Promise<void> {
   const row = page.locator(`#row-${expenseId}`);
   await untilAborted(signal, row.waitFor({ state: "visible", ...UI_STEP }));
   await untilAborted(signal, row.getByRole("button").last().click(UI_STEP));
@@ -778,9 +915,24 @@ async function reverseOnExpenseScreen(page: Page, signal: AbortSignal, expenseId
   const reasonField = dialog.locator("#reversal-reason");
   await untilAborted(signal, reasonField.waitFor({ state: "visible", ...UI_STEP }));
   await untilAborted(signal, reasonField.fill(reason, UI_STEP));
+}
+
+/** Arms the reversal, then submits it and waits for the dialog to close. */
+export async function reverseOnExpenseScreen(page: Page, signal: AbortSignal, expenseId: string, reason: string): Promise<void> {
+  await armReversalOnExpenseScreen(page, signal, expenseId, reason);
+  const dialog = page.getByRole("dialog");
   await untilAborted(signal, dialog.getByRole("button", { name: "Reverse & Delete", exact: true }).click(UI_STEP));
   await untilAborted(signal, dialog.waitFor({ state: "hidden", ...UI_STEP }));
 }
+
+/** The expense's posting is on the ledger with every journal it names readable. */
+export const isPosted = (snapshot: LedgerSnapshot): boolean =>
+  snapshot.events.some((event) => event.eventType === "EXPENSE_POSTED" && event.status === "POSTED") &&
+  snapshot.events.every((event) => event.journalEntryId === null || event.journalEntryId in snapshot.journals);
+
+/** The ledger holds a posted reversal event. */
+export const isReversed = (snapshot: LedgerSnapshot): boolean =>
+  snapshot.events.some((event) => event.eventType === "JOURNAL_REVERSAL" && event.status === "POSTED");
 
 /**
  * ACC-2: posted financial history is immutable and corrections use the
@@ -843,10 +995,7 @@ function lifecycleReversalSpec(options: Required<BoundaryAttackOptions>) {
       detail.expenseId = expenseId;
       const expense = expenseId as Id<"expenses">;
 
-      const isPosted = (snapshot: LedgerSnapshot): boolean =>
-        snapshot.events.some((event) => event.eventType === "EXPENSE_POSTED" && event.status === "POSTED") &&
-        snapshot.events.every((event) => event.journalEntryId === null || event.journalEntryId in snapshot.journals);
-      const posted = await readSettledLedger(env, options, expenseId, isPosted);
+      const posted = await readSettledLedger(env, options, expenseId, { until: isPosted });
 
       // Rewrite attempts on posted history: both must be refused as locked.
       const edit = await attempt(env, "expenses.update (rewrite the posted amount)", POSTED_HISTORY_REFUSAL, () =>
@@ -871,9 +1020,7 @@ function lifecycleReversalSpec(options: Required<BoundaryAttackOptions>) {
         return;
       }
       detail.reversalVia = "expense screen";
-      const reversed = await readSettledLedger(env, options, expenseId, (snapshot) =>
-        snapshot.events.some((event) => event.eventType === "JOURNAL_REVERSAL" && event.status === "POSTED"),
-      );
+      const reversed = await readSettledLedger(env, options, expenseId, { until: isReversed });
 
       // Asking again: the expense is gone, so "Expense not found" is the only
       // legitimate refusal. Anything else never reached the reversal.
@@ -916,6 +1063,14 @@ export function createBoundaryAttackHandlers(
     TENANT_ESCAPE: (context) => runBoundaryMission(runtimeApi, context, tenantEscapeSpec(options)),
     AUTHORIZATION_ABUSE: (context) => runBoundaryMission(runtimeApi, context, authorizationAbuseSpec(options)),
     COMPLETENESS_BOUNDARY: (context) => runBoundaryMission(runtimeApi, context, completenessBoundarySpec(options)),
-    LIFECYCLE_REVERSAL: (context) => runBoundaryMission(runtimeApi, context, lifecycleReversalSpec(options)),
+    // One family, two obligations: ACC-2 judges the reconciliation of a reversed
+    // expense, LIFE-1 judges the state transition of a voided deposit. The spec's
+    // own oracle list refuses any mission asking for a third.
+    LIFECYCLE_REVERSAL: (context) =>
+      runBoundaryMission(
+        runtimeApi,
+        context,
+        context.mission.oracle === "STATE_TRANSITION" ? depositVoidTransitionSpec(options) : lifecycleReversalSpec(options),
+      ),
   };
 }

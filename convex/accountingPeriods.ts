@@ -321,6 +321,15 @@ export const create = mutation({
       description: `Created period ${args.fiscalYear}-${String(args.periodNumber).padStart(2, "0")} (status: ${status})`,
     });
 
+    // A period created already OPEN resolves the same blocker `open` does.
+    if (status === "OPEN") {
+      await ctx.scheduler.runAfter(0, internal.accountingOutbox.wakePeriodHeldRows, {
+        orgId: args.orgId,
+        startDate: args.startDate,
+        endDate: args.endDate,
+      });
+    }
+
     return periodId;
   },
 });
@@ -352,6 +361,13 @@ export const open = mutation({
     // covered their date — drain the accounting outbox.
     await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
       orgId: args.orgId,
+    });
+    // SCRUM-807 — period holds back off, so the drain above does not reach
+    // them; wake exactly the rows this period now covers.
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.wakePeriodHeldRows, {
+      orgId: args.orgId,
+      startDate: period.startDate,
+      endDate: period.endDate,
     });
     return args.periodId;
   },
@@ -774,6 +790,12 @@ export const reopen = mutation({
     // a reopened prior period may be never.
     await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
       orgId: args.orgId,
+    });
+    // SCRUM-807 — every transition into OPEN wakes the period-parked rows it covers.
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.wakePeriodHeldRows, {
+      orgId: args.orgId,
+      startDate: period.startDate,
+      endDate: period.endDate,
     });
     return args.periodId;
   },

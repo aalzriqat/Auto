@@ -3,6 +3,15 @@ import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
+
 // Mock the rate limiter so we don't need to register the Convex component.
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -854,6 +863,50 @@ describe("MANUAL mode: the commissions page is an entry point, not a dead end", 
 
     const sale = await t.run((ctx) => ctx.db.get(saleId));
     expect(sale?.commissionPaidAt).toBeUndefined();
+  });
+
+  test("a bank-paid commission without a physical bank leaves the sale unpaid", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const ids = await seedCommissionOrg(t, "bank_missing");
+    await setMode(t, ids.orgId, "MANUAL");
+    const saleId = await completedSale(ids);
+    await ids.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: ids.orgId, saleId, commissionAmount: 400,
+    });
+    await expect(ids.asAdmin.mutation(api.sales.markCommissionPaid, {
+      orgId: ids.orgId, saleId, paymentMethod: "BANK_TRANSFER", idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow();
+    expect((await t.run((ctx) => ctx.db.get(saleId)))?.commissionPaidAt).toBeUndefined();
+  });
+
+  test("a commission cannot spend from a foreign, inactive, or wrong-currency bank", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const ids = await seedCommissionOrg(t, "bank_invalid");
+    await setMode(t, ids.orgId, "MANUAL");
+    const saleId = await completedSale(ids);
+    await ids.asAdmin.mutation(api.sales.setCommissionAmount, {
+      orgId: ids.orgId, saleId, commissionAmount: 400,
+    });
+    const banks = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other dealer", createdAt: Date.now() });
+      const base = {
+        name: "Paying bank", currency: "USD", openingBalanceMinor: 0,
+        openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+        createdBy: ids.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      };
+      return [
+        await ctx.db.insert("bankAccounts", { ...base, orgId: otherOrgId }),
+        await ctx.db.insert("bankAccounts", { ...base, orgId: ids.orgId, isActive: false }),
+        await ctx.db.insert("bankAccounts", { ...base, orgId: ids.orgId, currency: "JOD" }),
+      ];
+    });
+    for (const bankAccountId of banks) {
+      await expect(ids.asAdmin.mutation(api.sales.markCommissionPaid, {
+        orgId: ids.orgId, saleId, paymentMethod: "BANK_TRANSFER",
+        bankAccountId, idempotencyKey: crypto.randomUUID(),
+      })).rejects.toThrow();
+      expect((await t.run((ctx) => ctx.db.get(saleId)))?.commissionPaidAt).toBeUndefined();
+    }
   });
 
   test("the legacy endpoint returns the rows an old bundle can actually render", async () => {

@@ -25,6 +25,17 @@ import { AppErrorCode } from "./utils/errors";
 import { SALE_DEBT_CONTAINMENT_REFUSALS, saleHasLegacyReceivable } from "./utils/saleDebtContainment";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 
+// SCRUM-802 legacy-cash-lifecycle opt-out. Audited with the real switch (SCRUM-802 Option A): the only cell that
+// fails is T1, a control that completes a PENDING draft with no payment to prove the SCRUM-571 legacy-receivable
+// guard does not misfire; the real switch refuses that completion (CASH_SALE_BALANCE_UNPAID_REFUSED), which
+// scrum802CashSaleContainment.test.ts pins. No cell here asserts unlinked-receipt or partial-cash completion
+// behaviour (those are pinned with the real switch in scrum802CashSaleContainment.test.ts and
+// scrum761CashReceiptDoors.test.ts). The census in convex/scrum802OptOutCensus.test.ts allows only the listed files.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
+
 const DUE = () => Date.now() + 7 * 24 * 60 * 60 * 1000;
 
 const TRACKED = [
@@ -86,12 +97,18 @@ export async function seedWorld() {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Layla", lastName: "Nasser", phone: "+962790000000" })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
   return {
     t,
     orgId,
     userId,
     approverId,
     customerId,
+    bankAccountId,
     asFinance: t.withIdentity({ subject: "s571s1_user", clerkId: "s571s1_user" }),
     asApprover: t.withIdentity({ subject: "s571s1_approver", clerkId: "s571s1_approver" }),
   };
@@ -603,6 +620,7 @@ describe("SCRUM-571 s1 R3 — cheque registration and clearing refuse sale linea
       idempotencyKey: crypto.randomUUID(),
       orgId: w.orgId,
       chequeId,
+      bankAccountId: w.bankAccountId,
     });
     expect((await w.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("CLEARED");
     expect((await w.t.run((ctx) => ctx.db.get(receivableId)))?.outstandingAmount).toBe(300);

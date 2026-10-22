@@ -6,10 +6,12 @@ import { assertVehicleNotDeleted } from "./vehicleLiveness";
 import { requireActorPermission } from "./tenancy";
 import { PERMISSIONS } from "./permissions";
 import { assertDifferentActors } from "./financialGuards";
+import { requireActiveBankInCurrency } from "./bankAccountGuards";
 import { normalizeCurrency, amountToMinorOrThrow, type DepositMethod } from "./depositRecording";
 import { fromMinorUnits } from "./money";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { assertQuoteDepositConservation } from "./depositAllocation";
+import { assertDepositNotInLiveForward } from "./financeCompanyForward";
 import {
   clearPendingDisposition,
   hasPendingDisposition,
@@ -492,6 +494,13 @@ export type DepositTreatment =
   | "OTHER";
 
 /**
+ * Every treatment except OTHER. The helpers that resolve or release a deposit
+ * through a posting take this, so OTHER can only ever be recorded by
+ * `recordUnpostedDepositTreatment` (SCRUM-801: gated behind the pilot switch).
+ */
+export type PostedDepositTreatment = Exclude<DepositTreatment, "OTHER">;
+
+/**
  * The deposit row status each treatment leaves behind.
  *
  * OTHER maps to null deliberately. It means a human has approved a treatment
@@ -552,7 +561,7 @@ export async function resolveDepositsForQuote(
      * Absent for the implicit dealer-owned path, where "applied to what the
      * customer owes" is the only thing APPLIED has ever meant.
      */
-    treatment?: DepositTreatment;
+    treatment?: PostedDepositTreatment;
     treatmentReason?: string;
     saleId?: Id<"sales">;
   }
@@ -735,16 +744,22 @@ export async function recordUnpostedDepositTreatment(
     .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
     .collect();
 
-  let total = 0;
-  const depositIds: Id<"deposits">[] = [];
-  const now = Date.now();
-  for (const deposit of deposits) {
-    if (!deposit.holdActive) continue;
-    if (deposit.vehicleId !== args.vehicleId) continue;
+  const held = deposits.filter((deposit) => deposit.holdActive && deposit.vehicleId === args.vehicleId);
+  // Every refusal is decided before the first write, so no deposit is touched when any is refused.
+  for (const deposit of held) {
+    // SCRUM-411 P2-02: freeing the car while the finance company holds this deposit would let it
+    // be spent again; the liability this leaves on the books is the forwarded money, not free money.
+    await assertDepositNotInLiveForward(ctx, deposit);
     // SCRUM-712: "OTHER" is not a decision about a cancelled sale's share.
     if (await hasPendingDispositionForDeposit(ctx, deposit.orgId, deposit._id)) {
       throw new ConvexError(PENDING_EXIT_MESSAGE);
     }
+  }
+
+  let total = 0;
+  const depositIds: Id<"deposits">[] = [];
+  const now = Date.now();
+  for (const deposit of held) {
     await ctx.db.patch(deposit._id, {
       // status deliberately untouched — the money is still held.
       holdActive: false,
@@ -866,6 +881,7 @@ export async function payOutDepositSlice(
     currency: string;
     resolution: "REFUNDED" | "FORFEITED";
     refundMethod?: DepositMethod;
+    bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     notes?: string;
     occurredAt: number;
@@ -873,6 +889,10 @@ export async function payOutDepositSlice(
   }
 ): Promise<void> {
   if (args.amountMinor <= 0) return;
+
+  // SCRUM-411 P2-02: the money leaves here, so the payment-to-the-finance-company check lives
+  // at the executor, so no caller can skip it.
+  await assertDepositNotInLiveForward(ctx, args.deposit, args.holdId);
 
   if (args.resolution === "REFUNDED") {
     if (!args.refundMethod) {
@@ -899,6 +919,18 @@ export async function payOutDepositSlice(
     args.deposit.createdBy,
     "Deposit creator cannot resolve their own deposit refund or forfeiture."
   );
+
+  if (args.resolution === "REFUNDED" && args.refundMethod !== "CASH") {
+    await requireActiveBankInCurrency(ctx, {
+      orgId: args.orgId,
+      bankAccountId: args.bankAccountId,
+      currency: args.currency,
+      missingMessage: "Select the bank account that paid this deposit refund.",
+      currencySubject: "deposit refund",
+    });
+  } else if (args.bankAccountId) {
+    throw new ConvexError("A cash refund or forfeiture cannot name a bank account.");
+  }
 
   const amountMajor = fromMinorUnits(args.amountMinor, args.currency);
 
@@ -983,6 +1015,7 @@ export async function payOutDepositSlice(
     actorId: args.actorId,
     occurredAt: args.occurredAt,
     paymentMethod: args.refundMethod,
+    bankAccountId: args.bankAccountId,
     sliceHoldId: args.holdId,
   });
 }
@@ -1011,12 +1044,13 @@ export async function releaseHeldDeposit(
     resolution: "REFUNDED" | "FORFEITED";
     actorId: Id<"users">;
     refundMethod?: DepositMethod;
+    bankAccountId?: Id<"bankAccounts">;
     notes?: string;
     idempotencyKey?: string;
     occurredAt?: number;
     /** Recorded on the deposit when the release was decided by closing a sale. */
     saleId?: Id<"sales">;
-    treatment?: DepositTreatment;
+    treatment?: PostedDepositTreatment;
   }
 ): Promise<{ amountMinor: number; currency: string }> {
   if (args.resolution === "REFUNDED" && !args.refundMethod) {
@@ -1044,6 +1078,11 @@ export async function releaseHeldDeposit(
   if (deposit.status !== "HELD") {
     throwAppError(AppErrorCode.DEPOSIT_ALREADY_RESOLVED, "This deposit has already been resolved.");
   }
+  // SCRUM-411 P2-02: a deposit paid onward to the finance company cannot also leave as a refund or
+  // forfeiture. Here, at the executor, because a finalize that refunds or forfeits reaches this
+  // without passing `deposits.release`. Applying the deposit to the sale (`applyHeldDeposits`) is
+  // the intended consumption and does not come through here.
+  await assertDepositNotInLiveForward(ctx, deposit);
   assertDifferentActors(
     args.actorId,
     deposit.createdBy,
@@ -1052,6 +1091,17 @@ export async function releaseHeldDeposit(
 
   const now = args.occurredAt ?? Date.now();
   const currency = normalizeCurrency(deposit.currency ?? (await getOrgCurrency(ctx, args.orgId)));
+  if (args.resolution === "REFUNDED" && args.refundMethod !== "CASH") {
+    await requireActiveBankInCurrency(ctx, {
+      orgId: args.orgId,
+      bankAccountId: args.bankAccountId,
+      currency,
+      missingMessage: "Select the bank account that paid this deposit refund.",
+      currencySubject: "deposit refund",
+    });
+  } else if (args.bankAccountId) {
+    throw new ConvexError("A cash refund or forfeiture cannot name a bank account.");
+  }
   const rowMinor = deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency);
 
   // Only the part of the row nobody has a claim on.
@@ -1231,6 +1281,7 @@ export async function releaseHeldDeposit(
       actorId: args.actorId,
       occurredAt: now,
       paymentMethod: args.refundMethod,
+      bankAccountId: args.bankAccountId,
       releaseSeq,
     });
   } else {

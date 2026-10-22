@@ -1,12 +1,31 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
 import {
   assembleTrustedBrowserSwarmRun,
   prepareTrustedBrowserSwarmRun,
 } from "./prepareTrustedBrowserSwarmRun.mjs";
+import { FORGED_MISSION_REFUSAL } from "./browserSwarmForgedMissionFixture";
+
+// Test seam: when `forge` is set, the planner hands run assembly one extra mission no handler judges. Planning
+// and assertBrowserSwarmMissionsExecutable stay the real implementations; the refusal is the real one.
+const seam = vi.hoisted(() => ({ forge: false }));
+vi.mock("./browserAttackSwarm.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./browserAttackSwarm")>();
+  const { FORGED_UNEXECUTABLE_MONEY_MISSION } = await import("./browserSwarmForgedMissionFixture");
+  return {
+    ...original,
+    planBrowserAttackSwarm: (...args: Parameters<typeof original.planBrowserAttackSwarm>) => {
+      const plan = original.planBrowserAttackSwarm(...args);
+      return seam.forge ? { ...plan, missions: [...plan.missions, FORGED_UNEXECUTABLE_MONEY_MISSION] } : plan;
+    },
+  };
+});
+afterEach(() => {
+  seam.forge = false;
+});
 
 const BASE_SHA = "a".repeat(40);
 const HEAD_SHA = "b".repeat(40);
@@ -266,14 +285,48 @@ describe("trusted browser swarm run assembly", () => {
   // to reject. Run 38224038549 shows what that cost: preview provisioning, an
   // exact-SHA build and a full trusted E2E suite all ran before both workers
   // refused at setup. The trusted plan now refuses it itself.
-  it("refuses impact whose mandatory missions have no executable handler before workers are scheduled", () => {
+  // No active mapping is unexecutable any more (the ACC-3 mapping was removed instead), so the refusal is reached through the
+  // planner seam above: a MONEY_BOUNDARY / UI_BACKEND_AUTHORITY mission that the family's handler does not judge.
+  it("refuses impact whose planned missions have no executable handler before workers are scheduled", () => {
+    seam.forge = true;
     expect(() =>
-      assemble({
-        impactArtifact: impact([
-          { id: "CONS-1", severity: "CRITICAL" },
-        ]),
-      }),
-    ).toThrow(/no executable handler.*CONSIGNMENT_ECONOMICS.*CONS-1/i);
+      assemble({ impactArtifact: impact([{ id: "ACC-1", severity: "CRITICAL" }]) }),
+    ).toThrow(FORGED_MISSION_REFUSAL);
+    // The same impact assembles once nothing unexecutable is planned: the refusal is the mission's, not the impact's.
+    seam.forge = false;
+    expect(assemble({ impactArtifact: impact([{ id: "ACC-1", severity: "CRITICAL" }]) }).workerCount).toBe(2);
+  });
+
+  it("assembles LIFE-1's MONEY_BOUNDARY / STATE_TRANSITION fee-void mission into the scheduled plan", () => {
+    const payload = assemble({
+      impactArtifact: impact([{ id: "LIFE-1", severity: "CRITICAL" }]),
+      jevArtifact: jev("LIVE", { suggestions: [] }),
+    });
+    expect(payload.plannedMissions).toContainEqual({
+      id: "det::LIFE-1::MONEY_BOUNDARY",
+      family: "MONEY_BOUNDARY",
+      source: "DETERMINISTIC",
+      invariantIds: ["LIFE-1"],
+      oracle: "STATE_TRANSITION",
+      timeoutMs: 240_000,
+    });
+  });
+
+  it("assembles ACC-3's ACCOUNTING_DATE_BOUNDARY / STATE_TRANSITION mission into the scheduled plan", () => {
+    const payload = assemble({
+      impactArtifact: impact([{ id: "ACC-3", severity: "CRITICAL" }]),
+      jevArtifact: jev("LIVE", { suggestions: [] }),
+    });
+    expect(payload.plannedMissions).toEqual([
+      {
+        id: "det::ACC-3::ACCOUNTING_DATE_BOUNDARY",
+        family: "ACCOUNTING_DATE_BOUNDARY",
+        source: "DETERMINISTIC",
+        invariantIds: ["ACC-3"],
+        oracle: "STATE_TRANSITION",
+        timeoutMs: 180_000,
+      },
+    ]);
   });
 
   it("binds the executable mission plan to the trusted run evidence", () => {

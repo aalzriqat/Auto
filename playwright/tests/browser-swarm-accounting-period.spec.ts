@@ -14,8 +14,8 @@ import { authenticatedConvexClient, resolveOrgId } from "../utils";
 // and replace its "did not settle" blockers with a bare timeout.
 const BROWSER_AND_MUTATION_MARGIN_MS = 90_000;
 
-// SCRUM-350 G4: runs once, after the full trusted E2E suite and before any
-// attack worker, only when the trusted swarm workflow opts in. Anywhere else
+// SCRUM-350 G4 / SCRUM-411: runs twice in trusted-e2e, before the full trusted
+// E2E suite and again after it and before any attack worker, only when the trusted swarm workflow opts in. Anywhere else
 // (PR E2E, local runs) this file registers no test at all.
 if (process.env[SWARM_PERIOD_SETUP_FLAG] === "1") {
   test.describe("SCRUM-350 swarm accounting period setup", () => {

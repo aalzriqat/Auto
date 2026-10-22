@@ -22,6 +22,15 @@ import { saleEconomics } from "./utils/vehicleOwnership";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import type { Id } from "./_generated/dataModel";
 
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -1747,7 +1756,7 @@ describe("turnover past the dashboard's costing cap", () => {
      * turnover let a chart reporting 0 sit under a headline reporting the
      * margin.
      */
-    expect(dash.salesTrend.reduce((total, point) => total + point.Profit, 0)).toBe(
+    expect(dash.salesTrend.reduce((total, point) => total + (point.Profit ?? Number.NaN), 0)).toBe(
       CAP * (OWNED_PRICE - OWNED_COST) + MARGIN
     );
   }, HEAVY_TEST_TIMEOUT_MS);
@@ -1796,7 +1805,7 @@ describe("turnover past the dashboard's costing cap", () => {
     );
     // And its unknowable profit is not invented from that stale figure. The
     // cap's own flag reports the shortfall.
-    expect(dash.salesTrend.reduce((total, point) => total + point.Profit, 0)).toBe(
+    expect(dash.salesTrend.reduce((total, point) => total + (point.Profit ?? Number.NaN), 0)).toBe(
       CAP * (OWNED_PRICE - OWNED_COST) + MARGIN
     );
   }, HEAVY_TEST_TIMEOUT_MS);

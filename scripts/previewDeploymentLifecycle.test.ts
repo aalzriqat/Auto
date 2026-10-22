@@ -106,6 +106,7 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
 
   it("refuses the production deployment and non-canonical URLs before any request", async () => {
     for (const url of [
+      "https://clever-mockingbird-719.convex.cloud",
       "https://kindly-hound-172.convex.cloud",
       "https://elegant-butterfly-952.convex.site",
       "http://elegant-butterfly-952.convex.cloud",
@@ -117,6 +118,7 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
       await expect(deletePreview({ env: env({ CONVEX_PREVIEW_URL: url }), fetchImpl })).rejects.toThrow();
       expect(calls).toEqual([]);
     }
+    expect(() => deploymentNameFromUrl("https://clever-mockingbird-719.convex.cloud")).toThrow(/protected/);
     expect(() => deploymentNameFromUrl("https://kindly-hound-172.convex.cloud")).toThrow(/protected/);
   });
 

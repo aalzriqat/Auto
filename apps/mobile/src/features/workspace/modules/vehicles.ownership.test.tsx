@@ -10,11 +10,12 @@
 import { act, fireEvent, render } from "@testing-library/react-native";
 import { Alert } from "react-native";
 import * as SecureStore from "expo-secure-store";
-import { useMutation, usePaginatedQuery } from "convex/react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 
 jest.mock("convex/react", () => ({
   useMutation: jest.fn(),
   usePaginatedQuery: jest.fn(),
+  useQuery: jest.fn(),
 }));
 jest.mock("expo-router", () => ({ useRouter: () => ({ push: jest.fn(), back: jest.fn() }) }));
 jest.mock("expo-image-picker", () => ({ launchImageLibraryAsync: jest.fn() }));
@@ -44,6 +45,7 @@ import { VehiclesModule } from "./vehicles";
 
 const mockUseMutation = useMutation as jest.MockedFunction<typeof useMutation>;
 const mockUsePaginatedQuery = usePaginatedQuery as jest.MockedFunction<typeof usePaginatedQuery>;
+const mockUseQuery = useQuery as jest.MockedFunction<typeof useQuery>;
 const mockGetItem = SecureStore.getItemAsync as jest.MockedFunction<typeof SecureStore.getItemAsync>;
 
 const createVehicle = jest.fn();
@@ -63,6 +65,7 @@ beforeEach(() => {
     loadMore: jest.fn(),
     isLoading: false,
   } as unknown as ReturnType<typeof usePaginatedQuery>);
+  mockUseQuery.mockReturnValue({ banks: [{ _id: "bank_1", name: "Operating", currency: "JOD" }], truncated: false } as never);
   // Only the create mutation is observed; every other mutation is an inert stub.
   mockUseMutation.mockImplementation(((ref: unknown) => (ref === api.vehicles.create ? createVehicle : ref === api.vehicles.update ? updateVehicle : jest.fn())) as unknown as typeof useMutation);
 });
@@ -174,9 +177,35 @@ describe("mobile new-vehicle ownership validation", () => {
     expect(createVehicle).not.toHaveBeenCalled();
     expect(view.getByText(required)).toBeTruthy();
   });
+
+  test("a bank-funded purchase requires a physical bank", async () => {
+    const view = await openWizard();
+    await fillBasics(view);
+    await fireEvent.press(view.getByText("Owned"));
+    await fireEvent.changeText(view.getByLabelText("Purchase price"), "15000");
+    await fireEvent.changeText(view.getByTestId("select-Payment method"), "BANK_TRANSFER");
+
+    await save(view);
+
+    expect(createVehicle).not.toHaveBeenCalled();
+    expect(view.getByTestId("select-Bank account paid from-error").props.children).toBe(chooseOption);
+  });
 });
 
 describe("mobile new-vehicle ownership wire shape", () => {
+  test("a bank-funded purchase carries the selected physical bank", async () => {
+    const view = await openWizard();
+    await fillBasics(view);
+    await fireEvent.press(view.getByText("Owned"));
+    await fireEvent.changeText(view.getByLabelText("Purchase price"), "15000");
+    await fireEvent.changeText(view.getByTestId("select-Payment method"), "BANK_TRANSFER");
+    await fireEvent.changeText(view.getByTestId("select-Bank account paid from"), "bank_1");
+
+    await save(view);
+
+    expect(createVehicle).toHaveBeenCalledTimes(1);
+    expect(createVehicle.mock.calls[0]![0]).toMatchObject({ purchasePaymentMethod: "BANK_TRANSFER", bankAccountId: "bank_1" });
+  });
   test("a valid owned car carries its price and settlement and no consignment supplier", async () => {
     const view = await openWizard();
     await fillBasics(view);
@@ -240,6 +269,28 @@ describe("mobile new-vehicle ownership wire shape", () => {
     expect(args).not.toHaveProperty("purchasePrice");
     expect(args).not.toHaveProperty("purchasePaymentMethod");
   });
+});
+
+test("editing an unpriced owned vehicle posts its first acquisition against the selected bank", async () => {
+  const menu = jest.spyOn(Alert, "alert").mockImplementation(() => undefined);
+  mockUsePaginatedQuery.mockReturnValue({
+    results: [{ _id: "veh_1", vin: VALID_VIN, make: "Honda", model: "Accord", year: 2022, mileage: 12000,
+      color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20000,
+      status: "AVAILABLE", sourceType: "STOCK" }],
+    status: "Exhausted", loadMore: jest.fn(), isLoading: false,
+  } as unknown as ReturnType<typeof usePaginatedQuery>);
+  const view = await render(<ThemeProvider><LocaleProvider><VehiclesModule orgId="org_1" permissions={["edit:vehicles"]} /></LocaleProvider></ThemeProvider>);
+  await fireEvent.press(view.getByRole("button", { name: "More options" }));
+  const buttons = menu.mock.calls.at(-1)![2] as Array<{ text: string; onPress?: () => void }>;
+  buttons.find((button) => button.text === "Edit")!.onPress!();
+  await next(view);
+  await fireEvent.changeText(view.getByLabelText("Purchase price"), "15000");
+  await fireEvent.changeText(view.getByTestId("select-Payment method"), "BANK_TRANSFER");
+  await fireEvent.changeText(view.getByTestId("select-Bank account paid from"), "bank_1");
+  await save(view);
+  expect(updateVehicle).toHaveBeenCalledWith(expect.objectContaining({
+    vehicleId: "veh_1", purchasePrice: 15000, purchasePaymentMethod: "BANK_TRANSFER", bankAccountId: "bank_1",
+  }));
 });
 
 describe("editing an existing vehicle", () => {

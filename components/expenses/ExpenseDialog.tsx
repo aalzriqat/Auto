@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -40,6 +40,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { CostBearerSelect } from "@/components/expenses/CostBearerSelect";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 
 import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
 
@@ -48,11 +49,17 @@ const CREATE_EXPENSE_INTENT = "create-expense";
 
 export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProps) {
   const commandId = useCommandIdentity();
+  const uncertainSubmission = useRef<ExpenseFormValues | null>(null);
+  const lastOfferedBank = useRef<{ id: string; name: string; currency: string } | null>(null);
   // Closing the dialog ends the intent. Without this, reopening it to record a
   // DIFFERENT expense would reuse the previous identity and be refused as a
   // fingerprint conflict instead of recording a new one.
   useEffect(() => {
-    if (!open) commandId.retire(CREATE_EXPENSE_INTENT);
+    if (!open) {
+      commandId.retire(CREATE_EXPENSE_INTENT);
+      uncertainSubmission.current = null;
+      lastOfferedBank.current = null;
+    }
   }, [open, commandId]);
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -85,6 +92,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       vendor: "",
       payerId: "none",
       paymentMethod: "CASH",
+      bankAccountId: "",
       notes: "",
       isPrepaid: false,
       amortizationMonths: undefined,
@@ -93,6 +101,19 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
     },
   });
   const paymentStatus = form.watch("status");
+  const paymentMethod = form.watch("paymentMethod");
+  const bankAccountId = form.watch("bankAccountId") ?? "";
+  const needsBank = paymentStatus === "PAID" && paymentMethod !== "CASH";
+  const bankOptions = useQuery(
+    api.expenses.listPaymentBankOptions,
+    needsBank && activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+  const offeredBank = bankOptions?.banks.find((bank) => bank._id === bankAccountId);
+  useEffect(() => {
+    if (offeredBank) {
+      lastOfferedBank.current = { id: offeredBank._id, name: offeredBank.name, currency: offeredBank.currency };
+    }
+  }, [offeredBank]);
   const isPrepaid = form.watch("isPrepaid");
   const expenseDateValue = form.watch("date");
   const selectedVehicleId = form.watch("vehicleId");
@@ -104,7 +125,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
   const selectedVehicle = availableVehicles?.find((v: Doc<"vehicles">) => v._id === selectedVehicleId);
   const showCostBearer = selectedVehicle?.sourceType === "SOURCED" || expense?.costBearer === "SUPPLIER";
   // Immutable once PAID — the server refuses the change; the control says so first.
-  const costBearerLocked = !!expense && (expense.status ?? "PAID") === "PAID";
+  const paidExpenseLocked = !!expense && (expense.status ?? "PAID") === "PAID";
   const isSupplierBorne = showCostBearer && costBearer === "SUPPLIER";
 
   useEffect(() => {
@@ -127,6 +148,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         vendor: expense.vendor || "",
         payerId: expense.payerId || "none",
         paymentMethod: (expense.paymentMethod || "CASH") as PaymentMethod,
+        bankAccountId: expense.bankAccountId ?? "",
         notes: expense.notes || "",
         isPrepaid: expense.isPrepaid ?? false,
         amortizationMonths: expense.amortizationMonths ?? undefined,
@@ -147,6 +169,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         vendor: "",
         payerId: "none",
         paymentMethod: "CASH",
+        bankAccountId: "",
         notes: "",
         isPrepaid: false,
         amortizationMonths: undefined,
@@ -158,6 +181,21 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
 
   const onSubmit = async (values: ExpenseFormValues) => {
     if (!activeOrgId) return;
+    if (uncertainSubmission.current && JSON.stringify(values) !== JSON.stringify(uncertainSubmission.current)) {
+      toast.error(t("ExpenseRetrySameDetails" as any));
+      return;
+    }
+    const retryingUncertainSubmission = uncertainSubmission.current !== null;
+    const bankPayment = values.status === "PAID" && values.paymentMethod !== "CASH";
+    const unchangedPaidExpense = !!expense && (expense.status ?? "PAID") === "PAID" &&
+      values.paymentMethod === (expense.paymentMethod ?? "CASH") &&
+      (values.bankAccountId ?? "") === (expense.bankAccountId ?? "");
+    const canUseBank = bankOptions !== undefined && bankOptions.truncated !== true &&
+      bankOptions.banks.some((bank) => bank._id === values.bankAccountId);
+    if (bankPayment && !unchangedPaidExpense && !retryingUncertainSubmission && (!values.bankAccountId || !canUseBank)) {
+      toast.error(t("ServerError_EXPENSE_BANK_INVALID" as any));
+      return;
+    }
     setIsSubmitting(true);
     try {
       const parsedDate = new Date(values.date).getTime();
@@ -193,6 +231,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           vendor: values.vendor,
           payerId: parsedPayerId === undefined ? null : parsedPayerId,
           paymentMethod: values.status === "PAID" ? values.paymentMethod : undefined,
+          bankAccountId: unchangedPaidExpense ? undefined : bankPayment ? values.bankAccountId as Id<"bankAccounts"> : null,
           notes: values.notes,
           isPrepaid: values.isPrepaid ?? false,
           amortizationMonths: values.isPrepaid ? values.amortizationMonths : undefined,
@@ -222,6 +261,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           vendor: values.vendor,
           payerId: parsedPayerId,
           paymentMethod: values.status === "PAID" ? values.paymentMethod : undefined,
+          bankAccountId: bankPayment ? values.bankAccountId as Id<"bankAccounts"> : undefined,
           notes: values.notes,
           isPrepaid: values.isPrepaid ?? false,
           amortizationMonths: values.isPrepaid ? values.amortizationMonths : undefined,
@@ -234,7 +274,15 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       }
       onOpenChange(false);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("ExpenseSaveFail" as any));
+      if (isConvexError(error)) {
+        if (!expense) {
+          commandId.retire(CREATE_EXPENSE_INTENT);
+        }
+        uncertainSubmission.current = null;
+      } else {
+        uncertainSubmission.current = values;
+      }
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setIsSubmitting(false);
     }
@@ -377,7 +425,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                         t={t}
                         testId="expense-cost-bearer"
                         value={field.value ?? "SHOWROOM"}
-                        disabled={costBearerLocked}
+                        disabled={paidExpenseLocked}
                         onValueChange={(value) => {
                           field.onChange(value);
                           // A supplier-borne cost carries no VAT and is never
@@ -390,7 +438,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                         }}
                       />
                       <p className="text-xs text-muted-foreground">
-                        {costBearerLocked
+                        {paidExpenseLocked
                           ? t("CostBearerLockedHint" as any)
                           : isSupplierBorne
                             ? t("CostBearerSupplierHint" as any)
@@ -446,12 +494,68 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                     <FormItem>
                       <FormLabel>{t("PaymentMethodLabel" as any)}</FormLabel>
                       <FormControl>
-                        <PaymentMethodSelect
-                          t={t as any}
-                          value={field.value as PaymentMethod}
-                          onValueChange={field.onChange}
-                        />
+                        {paidExpenseLocked ? (
+                          <p className="rounded-md border border-input px-3 py-2 text-sm">
+                            {t(`PaymentMethod_${field.value}` as any)}
+                          </p>
+                        ) : (
+                          <PaymentMethodSelect
+                            t={t as any}
+                            value={field.value as PaymentMethod}
+                            onValueChange={field.onChange}
+                          />
+                        )}
                       </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+
+              {needsBank && paidExpenseLocked && (
+                <div className="md:col-span-2 space-y-1">
+                  <p className="text-sm font-medium">{t("ExpenseBankLabel" as any)}</p>
+                  <p className="text-sm" role="status">
+                    {offeredBank
+                      ? <><bdi>{offeredBank.name}</bdi> · {offeredBank.currency}</>
+                      : t(expense?.bankAccountId ? "ExpenseBankPreviouslyRecorded" as any : "ExpenseBankHistoricalMissing" as any)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{t("ExpenseBankLocked" as any)}</p>
+                </div>
+              )}
+
+              {needsBank && !paidExpenseLocked && (
+                <FormField
+                  control={form.control}
+                  name="bankAccountId"
+                  render={({ field }) => (
+                    <FormItem className="md:col-span-2">
+                      <FormLabel>{t("ExpenseBankLabel" as any)}</FormLabel>
+                      <Select
+                        value={offeredBank?._id ?? ""}
+                        onValueChange={field.onChange}
+                        disabled={bankOptions === undefined || bankOptions.truncated || bankOptions.banks.length === 0 || isSubmitting}
+                      >
+                        <FormControl>
+                          <SelectTrigger aria-label={t("ExpenseBankLabel" as any)}>
+                            <SelectValue placeholder={t("ExpenseBankChoose" as any)} />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {(bankOptions?.banks ?? []).map((bank) => (
+                            <SelectItem key={bank._id} value={bank._id}>
+                              <bdi>{bank.name}</bdi> · {bank.currency}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {bankOptions?.truncated && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("ExpenseBankTooMany" as any)}</p>}
+                      {uncertainSubmission.current?.bankAccountId === bankAccountId && !offeredBank && lastOfferedBank.current?.id === bankAccountId && (
+                        <p role="status" className="text-xs text-muted-foreground">
+                          {t("ExpenseRetryBank" as any)} <bdi>{lastOfferedBank.current.name}</bdi> · {lastOfferedBank.current.currency}
+                        </p>
+                      )}
+                      {bankOptions && !bankOptions.truncated && bankOptions.banks.length === 0 && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("ExpenseBankUnavailable" as any)}</p>}
                       <FormMessage />
                     </FormItem>
                   )}

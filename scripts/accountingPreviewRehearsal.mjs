@@ -51,6 +51,7 @@
  * canonical payments, ledger effects, remaining balance — and asserts on that.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { isPreviewDeployKey } from "./e2ePreviewBootstrap.mjs";
@@ -154,6 +155,8 @@ export async function convexCall(
     ok: false,
     // ConvexError payloads arrive under errorData; plain throws under errorMessage.
     error: String(body.errorData?.message ?? body.errorData ?? body.errorMessage ?? "unknown error"),
+    // Additive: the machine code of a coded refusal, so an expected-refusal case can assert the specific code.
+    ...(typeof body.errorData?.code === "string" ? { errorCode: body.errorData.code } : {}),
   };
 }
 
@@ -493,6 +496,30 @@ export function summarize(results) {
   };
 }
 
+/**
+ * FD1's SCRUM-54 bank-contract input, from trusted provenance only.
+ *
+ * The tested merge is checked out BESIDE this trusted checkout (`../candidate`) and
+ * read as data; an unreadable source is `undefined`, which leaves FD1 UNPROVEN.
+ * The bank receipt contract itself is unconditional: FD1 fails unless the candidate
+ * source and the deployed backend both take the physical bank.
+ */
+export function fd1BankContractInputs({ env, cwd, readText = (file) => readFileSync(file, "utf8") }) {
+  const candidateSource = (filename) => {
+    try {
+      return readText(path.join(cwd, "..", "candidate", "convex", filename));
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    candidateSource: candidateSource("applications.ts"),
+    directFeeSource: candidateSource("financeDealCosts.ts"),
+    chequeSource: candidateSource("collections.ts"),
+    requireBankContract: env.PR_NUMBER === "602",
+  };
+}
+
 /* c8 ignore start — the orchestration below only runs inside CI against a preview. */
 export async function main(env = process.env) {
   const config = assertRehearsalEnv(env);
@@ -570,8 +597,13 @@ export async function main(env = process.env) {
   evidence.orgId = orgId;
 
   const results = evidence.cases;
-  const { runRehearsalCases } = await import("./accountingRehearsalCases.mjs");
+  const { runRehearsalCases, candidateNamesReceiptBank, candidateCommandNamesBank } = await import("./accountingRehearsalCases.mjs");
+  const fd1Bank = fd1BankContractInputs({ env, cwd: process.cwd() });
   await runRehearsalCases({
+    candidateFinanceReceiptNamesBank: candidateNamesReceiptBank(fd1Bank.candidateSource),
+    candidateDirectFeeNamesBank: candidateCommandNamesBank(fd1Bank.directFeeSource, "recordDirectFeePayment"),
+    candidateChequeClearNamesBank: candidateCommandNamesBank(fd1Bank.chequeSource, "clearCheque"),
+    requireFinanceReceiptBankContract: fd1Bank.requireBankContract,
     results,
     orgId,
     config,

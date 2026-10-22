@@ -54,6 +54,7 @@
     "@clerk/nextjs": "^7.4.2",
     "@convex-dev/aggregate": "0.2.2",
     "@convex-dev/rate-limiter": "^0.3.2",
+    "@convex-dev/workpool": "0.4.14",
     "@hookform/resolvers": "^3.9.0",
     "@radix-ui/react-accordion": "^1.2.13",
     "@radix-ui/react-avatar": "^1.2.0",
@@ -102,6 +103,7 @@
   },
   "devDependencies": {
     "@ai-sdk/openai": "4.0.87",
+    "@convex-dev/batch-worker": "0.2.2",
     "@convex-dev/eslint-plugin": "^1.2.2",
     "@e2e-dev/web": "^0.13.0",
     "@playwright/test": "^1.61.1",

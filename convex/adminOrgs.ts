@@ -34,7 +34,7 @@ type StorageDeletionStep =
   | { kind: "vehicleOwnershipConversionsWithStorage" }
   | { kind: "orgSettingsWithStorage" }
   | { kind: "socialPostsWithStorage" };
-type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" };
+type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" } | { kind: "retainTaskAlarmHistory" };
 type DeletionStep = OrgScopedDeletionStep | SpecialDeletionStep;
 
 const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "APPROVED", "RUNNING"];
@@ -121,6 +121,8 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // SCRUM-435: forward rows reference the application; gone before it. The
   // index leads with orgId, so the org-scoped read is the same prefix scan.
   { kind: "orgRows", table: "financeCompanyForwards", index: "by_org_application" },
+  // SCRUM-766 PR-B: the customer's confirmed payments to the finance company reference the application too.
+  { kind: "orgRows", table: "customerFinanceCompanyPayments", index: "by_org_application" },
   { kind: "orgRows", table: "financeDealCustodyEntries", index: "by_org" },
   { kind: "financeDealFeesWithStorage" },
   { kind: "orgRows", table: "financeDealCustody", index: "by_org" },
@@ -226,6 +228,30 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // SCRUM-724: standalone retained-credit refund requests. Appended last because
   // the order is pinned; nothing references these rows, so no pre-drain needed.
   { kind: "orgRows", table: "retainedCreditRefundRequests", index: "by_org" },
+  // SCRUM-411 P2-02: per-deposit provenance of a forward payment. Appended last
+  // because the order is pinned; the index leads with orgId, so the read is a
+  // prefix scan, and nothing references these rows.
+  { kind: "orgRows", table: "financeCompanyForwardSlices", index: "by_org_forward" },
+  // Appended after the existing steps so saved deletion cursors keep their
+  // meaning (the retention marker below stays last). Journal-line
+  // triggers remove projections before these residual cleanup steps run.
+  { kind: "orgRows", table: "bankBalanceAggregateItems", index: "by_org" },
+  { kind: "orgRows", table: "bankBalanceAggregateStates", index: "by_org" },
+  { kind: "orgRows", table: "bankBalanceGrossShards", index: "by_org" },
+  // SCRUM-807: derived dashboard expense totals. The expenses trigger only
+  // maintains an org's latest generation, so superseded or blocked generations
+  // keep their amounts; purge them with the org. Both indexes lead with orgId,
+  // and `expenses` is deleted earlier in this list, so nothing rewrites them.
+  { kind: "orgRows", table: "dashboardExpenseMonths", index: "by_org_generation_month" },
+  { kind: "orgRows", table: "dashboardExpenseSummaryState", index: "by_org_generation" },
+  // Employee commission lines on a deal. Appended after the existing steps
+  // because the order is pinned; the index leads with orgId, and nothing
+  // references these rows.
+  { kind: "orgRows", table: "dealCommissionLines", index: "by_org_sale" },
+  // Explicit retention marker, not a deletion step: the owner requires task
+  // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
+  // never purged here. Keep it last; never turn it into a delete.
+  { kind: "retainTaskAlarmHistory" },
 ];
 
 async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {
@@ -694,6 +720,9 @@ async function deleteLiveChatThreadBatch(ctx: MutationCtx, orgId: Id<"organizati
 }
 
 async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"organizations">) {
+  if (step.kind === "retainTaskAlarmHistory") {
+    return {};
+  }
   if (step.kind === "dmConversations") {
     return await deleteDmConversationBatch(ctx, orgId);
   }

@@ -28,13 +28,14 @@ import { DEAL_UNWIND_MESSAGES, type DealUnwindRefusalCode } from "./utils/dealUn
 import { activeDealUnwindFor, paidDealReversalRoute, receiptPostedToPaymentAccount } from "./utils/dealUnwindGuard";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
-import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { reverseForward } from "./financeCompanyForward";
 import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
 import { assertSaleTeardownPreflight } from "./utils/saleCancellation";
+import { allLinesForSale } from "./utils/dealCommissionLineReads";
 import { assertNoActiveAllocations } from "./collections";
 import { manualPayerOf } from "./utils/manualFinancePayer";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
@@ -204,7 +205,7 @@ async function assertDealUnwindable(
   app: Doc<"financeApplications">,
   action: string
 ): Promise<Doc<"sales">> {
-  if (app.status !== "CLOSED" || planVersionOf(app) !== 2) refuse("DEAL_UNWIND_NOT_ELIGIBLE");
+  if (app.status !== "CLOSED" || !isForwardPlanVersion(planVersionOf(app))) refuse("DEAL_UNWIND_NOT_ELIGIBLE");
   if (app.supplierDisbursementConfirmedAt !== undefined || app.supplierDisbursedAmountMinor !== undefined) {
     refuse("DEAL_UNWIND_DIRECT_ROUTE");
   }
@@ -212,6 +213,11 @@ async function assertDealUnwindable(
   if (!sale || sale.orgId !== app.orgId || sale.status !== "COMPLETED") refuse("DEAL_UNWIND_SALE_NOT_COMPLETED");
   // D1: paid commission cannot be recovered here yet; an unpaid one is reversed by the teardown.
   if (sale.commissionPaidAt !== undefined) refuse("DEAL_UNWIND_COMMISSION_PAID");
+  // Same rule for a paid extra commission line.
+  const paidLine = await allLinesForSale(ctx, app.orgId, sale._id);
+  if (paidLine.some((line) => line.removedAt === undefined && line.paidAt !== undefined)) {
+    refuse("DEAL_UNWIND_COMMISSION_PAID");
+  }
 
   const openCustody = (await loadCustodyRecords(ctx, app._id, action)).find((row) => row.status === "OPEN");
   if (openCustody) refuse("DEAL_UNWIND_OPEN_CUSTODY");
@@ -575,6 +581,7 @@ export const finishDealUnwind = mutation({
     customerPaymentDisposition: v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT")),
     customerRefundAmountMinor: v.optional(v.number()),
     customerRefundMethod: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+    customerRefundBankAccountId: v.optional(v.id("bankAccounts")),
     customerRefundReference: v.optional(v.string()),
     customerRefundedAt: v.optional(v.number()),
     idempotencyKey: v.string(),
@@ -618,6 +625,7 @@ export const finishDealUnwind = mutation({
           customerPaymentDisposition: args.customerPaymentDisposition,
           customerRefundAmountMinor: args.customerRefundAmountMinor ?? null,
           customerRefundMethod: args.customerRefundMethod ?? null,
+          customerRefundBankAccountId: args.customerRefundBankAccountId ?? null,
           customerRefundReference: args.customerRefundReference ?? null,
           customerRefundedAt: args.customerRefundedAt ?? null,
         }),
@@ -642,7 +650,7 @@ export const finishDealUnwind = mutation({
         // any request that could pay the customer out also needs MANAGE_FINANCE,
         // checked BEFORE the pilot refusal and before any write below.
         const payoutFieldGiven = [args.customerRefundAmountMinor, args.customerRefundMethod,
-          args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined);
+          args.customerRefundBankAccountId, args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined);
         if (payoutFieldGiven || (args.customerPaymentDisposition === "REFUND" && invoicePlan.totalMinor > 0)) {
           await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
           assertCustomerCreditPayoutAllowed();
@@ -688,6 +696,7 @@ export const finishDealUnwind = mutation({
           ? {
               amountMinor: args.customerRefundAmountMinor,
               method: args.customerRefundMethod,
+              bankAccountId: args.customerRefundBankAccountId,
               reference: requiredText(
                 args.customerRefundReference,
                 MAX_DIRECT_PAYMENT_REFERENCE_CHARS,
@@ -698,7 +707,7 @@ export const finishDealUnwind = mutation({
           : undefined;
         if (
           [args.customerRefundAmountMinor, args.customerRefundMethod,
-            args.customerRefundReference, args.customerRefundedAt]
+            args.customerRefundBankAccountId, args.customerRefundReference, args.customerRefundedAt]
             .some((value) => value !== undefined) && !customerPayout
         ) {
           refuse("DEAL_UNWIND_EVIDENCE_REQUIRED");

@@ -147,7 +147,7 @@ export function judgeTenantRead(
   }
 }
 
-function stable(value: unknown): string {
+export function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   if (typeof value === "object" && value !== null) {
     const entries = Object.entries(value as Record<string, unknown>)

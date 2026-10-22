@@ -46,7 +46,7 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
-  reporter: process.env.CI ? [["html", { open: "never" }], ["list"]] : "list",
+  reporter: process.env.CI ? [["html", { open: "never" }], ["json", { outputFile: "playwright-json/results.json" }], ["list"]] : "list",
   timeout: 60_000,
   expect: {
     timeout: 15_000,

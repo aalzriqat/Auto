@@ -10,7 +10,8 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
-import { errorMessage, scaleForCurrency } from "../AccountingTabShared";
+import { getLocalizedErrorMessage } from "@/lib/errors";
+import { scaleForCurrency } from "../AccountingTabShared";
 import { accountDisplayName } from "../reports/FinancialReportShared";
 
 export type PendingOpeningBalanceLine = {
@@ -29,6 +30,14 @@ export type PendingOpeningBalanceLine = {
   accountNameAr?: string;
   debitMinor: number;
   creditMinor: number;
+  /** True for a line on the bank control account, which must name a bank. */
+  requiresBankAccount?: boolean;
+  /**
+   * The physical bank this line seeds, as the server would accept it at
+   * approval. Null on a bank line means the identity is missing or no longer
+   * usable, and approval will be refused.
+   */
+  bankAccountName?: string | null;
 };
 
 export type PendingOpeningBalanceDraft = {
@@ -119,8 +128,10 @@ export function computeApprovalGate(args: {
   busy: boolean;
   balanced: boolean;
   denominationKnown: boolean;
+  /** A bank line has no bank the server would accept (SCRUM-54). */
+  bankIdentityMissing?: boolean;
 }): ApprovalGate {
-  const { isOwnDraft, busy, balanced, denominationKnown } = args;
+  const { isOwnDraft, busy, balanced, denominationKnown, bankIdentityMissing = false } = args;
 
   const blockingFacts: ApprovalGate["blockingFacts"] = [];
   if (!balanced) {
@@ -132,6 +143,12 @@ export function computeApprovalGate(args: {
       testId: "opening-balance-unknown-currency",
     });
   }
+  if (bankIdentityMissing) {
+    blockingFacts.push({
+      key: "OpeningBalanceBankMissing",
+      testId: "opening-balance-bank-missing",
+    });
+  }
 
   // Segregation of duties is the server's rule (approveOpeningBalance and
   // rejectOpeningBalanceDraft both refuse preparer === approver), so it gates
@@ -139,7 +156,7 @@ export function computeApprovalGate(args: {
   // change for the preparer instead of telling them to do something they
   // cannot.
   const canReject = !isOwnDraft && !busy;
-  const canApprove = canReject && balanced && denominationKnown;
+  const canApprove = canReject && balanced && denominationKnown && !bankIdentityMissing;
 
   let recoveryKey: string | null = null;
   if (isOwnDraft) {
@@ -194,6 +211,7 @@ export function OpeningBalanceApprovalView({
     busy,
     balanced,
     denominationKnown: draft.denominationKnown,
+    bankIdentityMissing: draft.lines.some((line) => line.requiresBankAccount && !line.bankAccountName),
   });
 
   return (
@@ -321,6 +339,14 @@ export function OpeningBalanceApprovalView({
                     { name: line.accountName, nameAr: line.accountNameAr },
                     locale
                   )}
+                  {/* The physical bank this line seeds: what the approver is
+                      actually signing off on for the bank control account.
+                      Isolated in <bdi> like the other identifiers here. */}
+                  {line.requiresBankAccount && line.bankAccountName ? (
+                    <div data-testid="opening-balance-bank" className="text-xs text-muted-foreground">
+                      {t("OpeningBalanceBankAccount")}: <bdi className="font-medium">{line.bankAccountName}</bdi>
+                    </div>
+                  ) : null}
                 </td>
                 <td className="py-1.5 ps-3 text-end tabular-nums whitespace-nowrap text-foreground">
                   {line.debitMinor > 0 ? formatMinor(line.debitMinor, draft.currency, draft.denominationKnown) : ""}
@@ -498,6 +524,8 @@ export function OpeningBalanceApprovalPanel({
         accountNameAr: account?.nameAr,
         debitMinor: line.debitMinor,
         creditMinor: line.creditMinor,
+        requiresBankAccount: line.requiresBankAccount,
+        bankAccountName: line.bankAccountName,
       };
     }),
   };
@@ -508,7 +536,7 @@ export function OpeningBalanceApprovalPanel({
       await action();
       toast.success(t(successKey));
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setBusy(false);
     }

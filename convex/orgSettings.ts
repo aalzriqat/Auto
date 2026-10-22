@@ -1,10 +1,17 @@
 import { v, ConvexError } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
+import { writeAuditLog } from "./utils/auditLog";
+import { AppErrorCode, throwAppError } from "./utils/errors";
+import { effectiveCommissionMode } from "./utils/commissionMode";
+import { isCommissionOwed } from "./utils/commission";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
+
+const commissionModeValidator = v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"));
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -95,7 +102,8 @@ export const upsert = mutation({
     commissionTiers: v.optional(
       v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
     ),
-    commissionMode: v.optional(v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"))),
+    // Accepted for clients built before setCommissionMode; a change is refused below.
+    commissionMode: v.optional(commissionModeValidator),
     generatedLeadAutoAssignmentEnabled: v.optional(v.boolean()),
     reservationHoldDays: v.optional(v.number()),
   },
@@ -230,7 +238,23 @@ export const upsert = mutation({
       }
     }
 
-    const { orgId, ...fields } = args;
+    // SCRUM-778: the commission mode decides whether sales accrue commission
+    // with nobody entering an amount, so it changes only through the
+    // deliberate `setCommissionMode` door. A mobile bundle shipped before this
+    // rule defaults an unset mode to AUTO_MEMBER inside its general settings
+    // form and sends it on every save; accepting a CHANGE here would opt the
+    // dealership into automatic commission without anyone choosing it.
+    // Resending the mode already in force is not a change and still saves.
+    if (
+      args.commissionMode !== undefined &&
+      args.commissionMode !== effectiveCommissionMode(existing)
+    ) {
+      throw new ConvexError(
+        "The commission mode is changed on the Commission settings screen. Update the app and choose it there."
+      );
+    }
+
+    const { orgId, commissionMode: _resentMode, ...fields } = args;
     if (fields.dealershipPhones !== undefined) {
       fields.dealershipPhones = fields.dealershipPhones.map((phone) => phone.trim()).filter(Boolean);
     }
@@ -263,11 +287,137 @@ export const upsert = mutation({
         approvalThresholdEnabled: fields.approvalThresholdEnabled,
         approvalMinProfitPercent: fields.approvalMinProfitPercent,
         commissionTiers: fields.commissionTiers,
-        commissionMode: fields.commissionMode,
         generatedLeadAutoAssignmentEnabled: fields.generatedLeadAutoAssignmentEnabled,
         reservationHoldDays: fields.reservationHoldDays,
       });
       return newId;
+    }
+  },
+});
+
+const ACCESS_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  AppErrorCode.UNAUTHENTICATED,
+  AppErrorCode.UNAUTHORIZED,
+  AppErrorCode.FORBIDDEN,
+]);
+
+function isAccessRefusal(error: unknown): boolean {
+  const data: unknown = error instanceof ConvexError ? error.data : undefined;
+  const code = typeof data === "object" && data !== null ? (data as { code?: unknown }).code : undefined;
+  return typeof code === "string" && ACCESS_REFUSAL_CODES.has(code);
+}
+
+/**
+ * SCRUM-778: the commission mode in force, for anyone who reviews commissions.
+ * `get` is gated on VIEW_SETTINGS and returns null without it, which the
+ * resolver would read as the default — so a commissions reviewer in an automatic
+ * organization was shown the manual work queue. Returns null while signed out
+ * or when the caller may not view commissions.
+ */
+export const getCommissionMode = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.union(commissionModeValidator, v.null()),
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
+    } catch (error) {
+      // Only an auth or permission refusal means "this caller may not see it".
+      // Anything else (a corrupt role, a database fault) must surface, not read
+      // as "no access".
+      if (isAccessRefusal(error)) return null;
+      throw error;
+    }
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    return effectiveCommissionMode(settings);
+  },
+});
+
+/**
+ * SCRUM-778: the only door that changes the commission mode. Owner-only, and
+ * called solely from the deliberate mode choice on the Commission settings
+ * screens. An org that never chose a mode stays AUTO_MEMBER; MANUAL is reachable
+ * only through this audited owner action (project ruling #506).
+ */
+export const setCommissionMode = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    commissionMode: commissionModeValidator,
+  },
+  returns: v.id("orgSettings"),
+  handler: async (ctx, args) => {
+    try {
+      const { user } = await requireOwner(ctx, args.orgId);
+      const settings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .unique();
+      const before = effectiveCommissionMode(settings);
+      // Already stored as this mode: nothing to patch and nothing to audit. An
+      // unset org choosing a mode still writes, because that pins the choice.
+      if (settings && settings.commissionMode === args.commissionMode) return settings._id;
+      if (before !== "MANUAL" && args.commissionMode === "MANUAL") {
+        // Missing and zero amounts do not establish an owed commission. Read the two
+        // extrema of stored unpaid amounts instead of scanning paid history or
+        // making a zero-commission sale impossible to settle. Both reads share
+        // this mutation's transaction with the policy write and audit.
+        const unpaidWithAmount = () => ctx.db
+          .query("sales")
+          .withIndex("by_org_status_live_commissionPaidAt_commissionAmount", (q) =>
+            q.eq("orgId", args.orgId).eq("status", "COMPLETED")
+              .eq("isDeleted", undefined).eq("commissionPaidAt", undefined)
+              .gt("commissionAmount", undefined)
+          );
+        const [lowest, highest] = await Promise.all([
+          unpaidWithAmount().first(),
+          unpaidWithAmount().order("desc").first(),
+        ]);
+        if ([lowest, highest].some((sale) => sale !== null && (
+          typeof sale.commissionAmount !== "number" ||
+          !Number.isFinite(sale.commissionAmount) || sale.commissionAmount < 0
+        ))) {
+          throwAppError(
+            AppErrorCode.VALIDATION_FAILED,
+            "Completed sale commission amounts need accounting review before changing the commission mode."
+          );
+        }
+        if (highest && isCommissionOwed(highest)) {
+          throwAppError(
+            AppErrorCode.VALIDATION_FAILED,
+            "Settle completed sale commissions before switching to manual mode."
+          );
+        }
+      }
+      let settingsId: Id<"orgSettings">;
+      if (settings) {
+        await ctx.db.patch(settings._id, { commissionMode: args.commissionMode });
+        settingsId = settings._id;
+      } else {
+        settingsId = await ctx.db.insert("orgSettings", {
+          orgId: args.orgId,
+          currency: DEFAULT_SETTINGS.currency,
+          currencySymbol: DEFAULT_SETTINGS.currencySymbol,
+          enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
+          commissionMode: args.commissionMode,
+        });
+      }
+      await writeAuditLog(ctx, user, {
+        action: "commission mode changed",
+        targetTable: "orgSettings",
+        targetId: settingsId,
+        orgId: args.orgId,
+        before: { commissionMode: before },
+        after: { commissionMode: args.commissionMode },
+      });
+      return settingsId;
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("Failed to change commission mode", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
     }
   },
 });

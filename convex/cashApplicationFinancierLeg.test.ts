@@ -1,5 +1,5 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -8,6 +8,16 @@ import { ALL_PERMISSIONS } from "./utils/permissions";
 import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { allocatePaymentToReceivable } from "./subledger";
 import { salesAr } from "../lib/i18n/domains/sales";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
 
 type TestConvex = ConvexTestInstance<typeof schema>;
 const MODULES = import.meta.glob("./**/*.*s");
@@ -367,6 +377,8 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
   test("(d) a manual finance payer (no companyId) stays EXPECTED", async () => {
     const s = await seed("d_manual");
     const applicationId = await readyManualDeal(s);
+    // SCRUM-411 P2-01: the 1,650 the letter says the dealership sends is paid before finalizing.
+    await payForwardBeforeFinalize(s, s.asOwner, applicationId);
     await finalize(s, applicationId);
     const app = await appOf(s, applicationId);
     expect(app.companyId).toBeUndefined();
@@ -382,6 +394,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     // evidence the reader must not trust over the manual payer.
     const s = await seed("d_cashmanual");
     const applicationId = await readyManualDeal(s);
+    await payForwardBeforeFinalize(s, s.asOwner, applicationId);
     await finalize(s, applicationId);
     const app = await appOf(s, applicationId);
     expect(app.settlementStatus).toBe("EXPECTED");
@@ -608,6 +621,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     // letter, then drop it and hand-edit the sale to CASH: the manual MODE alone must keep the leg closed.
     const s = await seed("manual_noletter");
     const applicationId = await readyManualDeal(s);
+    await payForwardBeforeFinalize(s, s.asOwner, applicationId);
     await finalize(s, applicationId);
     const app = await appOf(s, applicationId);
     expect(app.settlementStatus).toBe("EXPECTED");

@@ -11,6 +11,7 @@ import {
   assertRehearsalEnv,
   convexCall,
   convexCallWithRateLimitRetry,
+  fd1BankContractInputs,
   rateLimitRetryDelayMs,
   isClerkSessionId,
   isPreviewCloudUrl,
@@ -162,6 +163,29 @@ describe("the rehearsal preview is a DIFFERENT destructive key from the browser 
   });
 });
 
+describe("FD1 bank-contract inputs come from trusted provenance (SCRUM-54)", () => {
+  const cwd = "/work/trusted";
+  const read = vi.fn((file: string) => `source of ${file.replace(/\\/g, "/")}`);
+
+  test("the candidate source is read from the checkout beside the trusted one; unreadable is undefined", () => {
+    const inputs = fd1BankContractInputs({ env: { PR_NUMBER: "602" }, cwd, readText: read });
+    expect(inputs.candidateSource).toMatch(/\/work\/candidate\/convex\/applications\.ts$/);
+    expect(inputs.directFeeSource).toMatch(/\/work\/candidate\/convex\/financeDealCosts\.ts$/);
+    expect(inputs.chequeSource).toMatch(/\/work\/candidate\/convex\/collections\.ts$/);
+    const unreadable = fd1BankContractInputs({
+      env: { PR_NUMBER: "602" },
+      cwd,
+      readText: () => {
+        throw new Error("ENOENT");
+      },
+    });
+    expect(unreadable.candidateSource).toBeUndefined();
+    expect(unreadable.directFeeSource).toBeUndefined();
+    expect(unreadable.chequeSource).toBeUndefined();
+    expect(unreadable.requireBankContract).toBe(true);
+  });
+});
+
 describe("convexCall reports failures as data, not exceptions", () => {
   const fakeFetch = (payload: unknown, status = 200) =>
     async () => ({ status, text: async () => JSON.stringify(payload) }) as unknown as Response;
@@ -180,6 +204,21 @@ describe("convexCall reports failures as data, not exceptions", () => {
       fakeFetch({ status: "error", errorData: { message: "nothing left to refund" } }) as unknown as typeof fetch
     );
     expect(result).toEqual({ ok: false, error: "nothing left to refund" });
+  });
+
+  test("a coded refusal also surfaces its machine code, so an expected-refusal case can assert it", async () => {
+    const result = await convexCall(
+      { convexUrl: "https://x.convex.cloud", token: "t", kind: "mutation", path: "a:b", args: {} },
+      fakeFetch({
+        status: "error",
+        errorData: { code: "CLEARED_CHEQUE_RETURN_PILOT_DISABLED", message: "not available during the pilot" },
+      }) as unknown as typeof fetch
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: "not available during the pilot",
+      errorCode: "CLEARED_CHEQUE_RETURN_PILOT_DISABLED",
+    });
   });
 
   test("a non-JSON body is a hard failure, because it usually means the wrong URL", async () => {

@@ -91,6 +91,9 @@ const RESET_TABLES = [
   "accountingEvents",
   // ⚠️ SCRUM-549: `journalLines.journalEntryId` and `.accountId` are REQUIRED, so
   // lines go BEFORE their entry and their account (CHILD_TABLES defers both).
+  "bankBalanceAggregateItems",
+  "bankBalanceAggregateStates",
+  "bankBalanceGrossShards",
   "journalLines",
   "journalEntries",
   "financialAuditLog",
@@ -164,11 +167,22 @@ const RESET_TABLES = [
   "supplierCostRecoveryReceipts",
   "supplierCostRecoveries",
   "expenses",
+  // SCRUM-807: derived dashboard expense totals. The expenses trigger maintains
+  // only an org's latest summary generation, so a superseded or blocked one
+  // would keep this org's pre-reset amounts. Listed after `expenses` so the
+  // trigger has already run for every deleted expense.
+  "dashboardExpenseMonths",
+  "dashboardExpenseSummaryState",
   // Payroll. ⚠️ SCRUM-546: `payrollItems.runId` is REQUIRED, so items go BEFORE
   // their run (and `CHILD_TABLES` defers the run while any item remains).
   "payrollItems",
   "payrollRuns",
   "employeeCompensation",
+  // Extra deal commission lines are listed AFTER payroll items: a payslip lists the
+  // lines it pays (`commissionLineIds`), and payroll skips a missing line, so a line
+  // must never be deleted while a surviving payslip still names it. CHILD_TABLES
+  // defers the lines until no payroll item remains (batches commit separately).
+  "dealCommissionLines",
   // Finance applications and their children. Ordering IS a safety property,
   // contrary to what this comment used to claim: the batch limit applies to
   // each table separately, so a run that clears one of two fee rows and then
@@ -291,8 +305,9 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // `original.journalEntryId` (`ctx.db.patch`, throws on a deleted row) and
   // loads its lines through it. The reverse edge (`journalEntries.accountingEventId`)
   // is deliberately NOT added: it would make the graph cyclic.
+  journalLines: ["bankBalanceAggregateItems"],
   journalEntries: ["journalLines", "accountingEvents"],
-  chartOfAccounts: ["journalLines", "accountBalanceSnapshots"],
+  chartOfAccounts: ["journalLines", "accountBalanceSnapshots", "bankBalanceAggregateItems", "bankBalanceAggregateStates"],
   // `paymentVouchers.depositId` is REQUIRED; `commitmentAuthorityWork.depositId`
   // is too (not behaviour-tested: the authority preflight refuses a destructive
   // reset while those rows exist).
@@ -328,6 +343,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     "transactions",
     // payrollItems.commissionSaleIds is a REQUIRED v.array(v.id("sales")).
     "payrollItems",
+    "dealCommissionLines",
     "commitmentAuthorityWork",
     "depositCancellationPendings",
     // SCRUM-724: `receiptRetainedPositions.originatingSaleId` (immutable lineage).
@@ -335,6 +351,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   ],
   quotes: ["sales", "financeApplications", "deposits", "receivables"],
   payrollRuns: ["payrollItems"],
+  dealCommissionLines: ["payrollItems"],
 };
 
 /**
@@ -365,6 +382,9 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   pendingAccountingEvents: "by_org_status",
   journalEntries: "by_org",
   journalLines: "by_org",
+  bankBalanceAggregateItems: "by_org",
+  bankBalanceAggregateStates: "by_org",
+  bankBalanceGrossShards: "by_org",
   financialAuditLog: "by_org",
   accountBalanceSnapshots: "by_org_period",
   chartOfAccounts: "by_org",
@@ -388,6 +408,9 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   supplierCostRecoveryReceipts: "by_org",
   supplierCostRecoveries: "by_org",
   expenses: "by_org",
+  dashboardExpenseMonths: "by_org_generation_month",
+  dashboardExpenseSummaryState: "by_org_generation",
+  dealCommissionLines: "by_org_sale",
   payrollItems: "by_org",
   payrollRuns: "by_org",
   employeeCompensation: "by_org",

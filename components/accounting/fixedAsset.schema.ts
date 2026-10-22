@@ -8,6 +8,7 @@ export const capitalizeAssetSchema = z
     salvageValue: z.coerce.number().min(0, "Salvage value must be zero or greater"),
     usefulLifeMonths: z.coerce.number().int().positive("Useful life must be a positive number of months"),
     paymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"]),
+    bankAccountId: z.string().optional(),
     notes: z.string().optional(),
   })
   .refine((data) => data.salvageValue < data.cost, {
@@ -25,6 +26,7 @@ export type ImpairAssetFormValues = z.infer<typeof impairAssetSchema>;
 
 export const disposeAssetSchema = z.object({
   proceeds: z.coerce.number().min(0, "Proceeds must be zero or greater"),
+  bankAccountId: z.string().optional(),
   occurredAt: z.string().min(1, "Disposal date is required"),
 });
 

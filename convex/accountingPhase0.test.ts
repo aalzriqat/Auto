@@ -5,6 +5,15 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
+// SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
+// cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
+// itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
+// files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
+}));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
@@ -82,6 +91,11 @@ async function seedPhase0Dealer() {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Dana", lastName: "Saleh" })
   );
+  const bankAccountId = await t.run((ctx) => ctx.db.insert("bankAccounts", {
+    orgId, name: "Cheque receipt bank", currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
 
   return {
     t,
@@ -91,6 +105,7 @@ async function seedPhase0Dealer() {
     approverId,
     vehicleId,
     customerId,
+    bankAccountId,
     asUser: t.withIdentity({ subject: "phase0_user", clerkId: "phase0_user" }),
     asApprover: t.withIdentity({ subject: "phase0_approver", clerkId: "phase0_approver" }),
   };
@@ -275,7 +290,7 @@ describe("Phase 0 financial safety controls", () => {
   });
 
   test("duplicate_cheque_clear_key_posts_cheque_payment_once", async () => {
-    const { t, orgId, customerId, asUser } = await seedPhase0Dealer();
+    const { t, orgId, customerId, bankAccountId, asUser } = await seedPhase0Dealer();
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -299,11 +314,13 @@ describe("Phase 0 financial safety controls", () => {
     const firstPaymentId = await asUser.mutation(api.collections.clearCheque, {
       orgId,
       chequeId,
+      bankAccountId,
       idempotencyKey: "cheque-clear-1",
     });
     const secondPaymentId = await asUser.mutation(api.collections.clearCheque, {
       orgId,
       chequeId,
+      bankAccountId,
       idempotencyKey: "cheque-clear-1",
     });
 

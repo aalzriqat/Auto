@@ -1,8 +1,29 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runBrowserSwarmCoverageGate } from "./browserSwarmCoverageGate.mjs";
+import { FORGED_MISSION_REFUSAL } from "./browserSwarmForgedMissionFixture";
+
+// Test seam: the gate only calls assertMandatoryBrowserSwarmCoverage, which plans internally. When `forge` is
+// set, the REAL function runs first (real plan, real assertion), then the REAL assertBrowserSwarmMissionsExecutable
+// judges that plan plus one mission no handler judges. Nothing about the refusal is stubbed; only the extra mission is added.
+const seam = vi.hoisted(() => ({ forge: false }));
+vi.mock("./browserAttackSwarm.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./browserAttackSwarm")>();
+  const { FORGED_UNEXECUTABLE_MONEY_MISSION } = await import("./browserSwarmForgedMissionFixture");
+  return {
+    ...original,
+    assertMandatoryBrowserSwarmCoverage: (...args: Parameters<typeof original.assertMandatoryBrowserSwarmCoverage>) => {
+      const plan = original.assertMandatoryBrowserSwarmCoverage(...args);
+      if (seam.forge) original.assertBrowserSwarmMissionsExecutable([...plan.missions, FORGED_UNEXECUTABLE_MONEY_MISSION]);
+      return plan;
+    },
+  };
+});
+afterEach(() => {
+  seam.forge = false;
+});
 
 const BASE_SHA = "a".repeat(40);
 const HEAD_SHA = "b".repeat(40);
@@ -68,18 +89,69 @@ describe("SCRUM-826 trusted coverage gate before preview provisioning", () => {
     });
   });
 
-  it("refuses unexecutable mandatory missions before anything is provisioned", async () => {
+  // Every active mandatory mapping has a handler now, so no real impact set reaches the refusal; the seam
+  // above adds a MONEY_BOUNDARY / UI_BACKEND_AUTHORITY mission so the gate's refusal branch stays tested.
+  it("refuses unexecutable mandatory missions before anything is provisioned, and records the refusal as evidence", async () => {
+    seam.forge = true;
     await withImpact(
       impact([
         { id: "ECON-2", severity: "CRITICAL" },
-        { id: "CONS-1", severity: "CRITICAL" },
+        { id: "ACC-1", severity: "CRITICAL" },
       ]),
       async (repoRoot) => {
-        await expect(runBrowserSwarmCoverageGate({ repoRoot, env })).rejects.toThrow(
-          /no executable handler.*CONSIGNMENT_ECONOMICS.*CONS-1/i,
-        );
+        await expect(runBrowserSwarmCoverageGate({ repoRoot, env })).rejects.toThrow(FORGED_MISSION_REFUSAL);
+        const written = JSON.parse(await readFile(path.join(repoRoot, "artifacts/browser-swarm-coverage.json"), "utf8"));
+        expect(written).toMatchObject({
+          version: 1,
+          authority: "TRUSTED_MAIN_BROWSER_SWARM_COVERAGE",
+          baseSha: BASE_SHA,
+          headSha: HEAD_SHA,
+          status: "REFUSED_UNEXECUTABLE_MANDATORY_MISSIONS",
+          mandatoryMissions: [],
+        });
+        expect(written.reason).toMatch(FORGED_MISSION_REFUSAL);
       },
     );
+  });
+
+  it("plans LIFE-1's MONEY_BOUNDARY / STATE_TRANSITION fee-void mission as executable", async () => {
+    await withImpact(
+      impact([
+        { id: "ECON-2", severity: "CRITICAL" },
+        { id: "LIFE-1", severity: "CRITICAL" },
+      ]),
+      async (repoRoot) => {
+        const result = await runBrowserSwarmCoverageGate({ repoRoot, env });
+        expect(result.status).toBe("EXECUTABLE");
+        expect(
+          result.mandatoryMissions.map((mission: { family: string; oracle: string }) => `${mission.family}/${mission.oracle}`),
+        ).toContain("MONEY_BOUNDARY/STATE_TRANSITION");
+      },
+    );
+  });
+
+  it("plans ACC-3's ACCOUNTING_DATE_BOUNDARY / STATE_TRANSITION mission as executable", async () => {
+    await withImpact(impact([{ id: "ACC-3", severity: "CRITICAL" }]), async (repoRoot) => {
+      const result = await runBrowserSwarmCoverageGate({ repoRoot, env });
+      expect(result.status).toBe("EXECUTABLE");
+      expect(
+        result.mandatoryMissions.map((mission: { family: string; oracle: string }) => `${mission.family}/${mission.oracle}`),
+      ).toEqual(["ACCOUNTING_DATE_BOUNDARY/STATE_TRANSITION"]);
+    });
+  });
+
+  it("refuses an absent or unparseable impact artifact for an ACC-3 change, and writes no coverage as if it had passed", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "autoflow-swarm-coverage-"));
+    try {
+      const artifacts = path.join(repoRoot, "artifacts");
+      await mkdir(artifacts, { recursive: true });
+      await expect(runBrowserSwarmCoverageGate({ repoRoot, env })).rejects.toThrow(/missing or is not valid JSON/);
+      await writeFile(path.join(artifacts, "browser-swarm-trusted-impact.json"), '{"impactedInvariants": [{"id": "ACC-3"', "utf8");
+      await expect(runBrowserSwarmCoverageGate({ repoRoot, env })).rejects.toThrow(/missing or is not valid JSON/);
+      await expect(readFile(path.join(artifacts, "browser-swarm-coverage.json"), "utf8")).rejects.toThrow(/ENOENT/);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
   });
 
   it("records an explicit no-impact result instead of planning missions", async () => {
