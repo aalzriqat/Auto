@@ -7,6 +7,7 @@ import { ALL_PERMISSIONS, PRE_413_OWNER_FALLBACK_PERMISSIONS } from "./utils/per
 describe("SCRUM-729 public membership projection qualified-owner authority", () => {
   test.each([
     ["OWNER", false, ["view:finance"], false],
+    ["OWNER", false, [...PRE_413_OWNER_FALLBACK_PERMISSIONS], false],
     ["Dealer principal", true, ["view:finance"], true],
     ["OWNER", undefined, [...PRE_413_OWNER_FALLBACK_PERMISSIONS], true],
     ["OWNER", undefined, ["view:finance"], false],

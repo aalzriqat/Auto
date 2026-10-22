@@ -134,7 +134,9 @@ jobs:
         if: always()
         with:
           name: pilot-role-audit-${{ matrix.role }}
-          path: playwright-report/
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 14
 
       # SCRUM-799: capture only a request ID, error class and public source
