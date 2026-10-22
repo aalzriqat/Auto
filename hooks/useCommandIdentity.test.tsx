@@ -10,8 +10,21 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 import { useCommandIdentity } from "./useCommandIdentity";
+import { MAX_IDEMPOTENCY_KEY_LENGTH } from "../convex/utils/idempotency";
 
 describe("useCommandIdentity", () => {
+  test("long correction reasons keep bounded keys, full-intent separation and retry identity", () => {
+    const { result, rerender } = renderHook(() => useCommandIdentity());
+    const prefix = `forward-correction:RETURNED:${"a".repeat(32)}:${"b".repeat(32)}:`;
+    const intent = prefix + "The finance company returned the full forwarded payment before cancellation. ".repeat(6);
+    const first = result.current.for(intent);
+    expect(first.length).toBeLessThanOrEqual(MAX_IDEMPOTENCY_KEY_LENGTH);
+    rerender();
+    expect(result.current.for(intent)).toBe(first);
+    expect(result.current.for(`${intent}different`)).not.toBe(first);
+    act(() => result.current.retire(intent));
+    expect(result.current.for(intent)).not.toBe(first);
+  });
   test("the same intent yields the SAME identity across retries", () => {
     const { result } = renderHook(() => useCommandIdentity());
     const first = result.current.for("pay-commission:sale_1");

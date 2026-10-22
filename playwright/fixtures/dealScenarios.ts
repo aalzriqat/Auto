@@ -357,6 +357,9 @@ export async function confirmCustomerPaymentToFinanceCompany(
   managerPage: Page,
   expectedConfirmedMajor: number,
 ): Promise<void> {
+  // The recorded approval advances the workbench to handover. Its financial
+  // decision card remains available in the operator's deal-details section.
+  await openDealDetails(managerPage);
   const card = managerPage.getByTestId("customer-finance-company-payment-card");
   await card.getByRole("button", { name: "Confirm payment" }).click();
   const dialog = managerPage.getByRole("dialog");
