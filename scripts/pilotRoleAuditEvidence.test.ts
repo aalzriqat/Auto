@@ -23,6 +23,27 @@ const canary = "Synthetic.QA@EXAMPLE.INVALID";
 let fingerprint = "";
 let image: Buffer;
 
+// Child processes need native OS paths, not the calling CI job's audit identity.
+// Each behavioral test declares the context whose stage it intends to measure.
+function auditTestEnvironment(context: "local" | "trustedRoleCI" | "invalidCI",
+  extra: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { NODE_ENV: "test" };
+  for (const name of ["PATH", "Path", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+    "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "LANG", "LC_ALL"]) {
+    if (process.env[name] !== undefined) env[name] = process.env[name];
+  }
+  env.GITHUB_SHA = sha;
+  env.HUNT_AUDIT_ROLE = "OWNER";
+  env.PILOT_ROLE_GPG_BINARY = gpg;
+  if (context !== "local") env.GITHUB_ACTIONS = "true";
+  if (context === "trustedRoleCI") {
+    env.GITHUB_RUN_ID = "123456789";
+    env.GITHUB_RUN_ATTEMPT = "2";
+    env.GITHUB_WORKFLOW_REF = "aalzriqat/Auto/.github/workflows/pilot-role-audit.yml@refs/heads/main";
+  }
+  return { ...env, ...extra, NODE_ENV: "test" };
+}
+
 function runGpg(args: string[]): string {
   return execFileSync(gpg, ["--homedir", gpgArgumentPath(gpg, keyHomeArgument), "--batch", "--yes", "--no-tty", "--pinentry-mode", "loopback",
     "--passphrase-file", gpgArgumentPath(gpg, passphrase), ...args.map((arg) => path.isAbsolute(arg) ? gpgArgumentPath(gpg, arg) : arg)],
@@ -36,7 +57,7 @@ beforeAll(async () => {
     // represented by its native Windows short name; no external key custody.
     keyHomeArgument = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
       "$fso=New-Object -ComObject Scripting.FileSystemObject; $fso.GetFolder($env:PILOT_SYNTHETIC_GPG_HOME).ShortPath"],
-    { env: { ...process.env, PILOT_SYNTHETIC_GPG_HOME: keyHome }, encoding: "utf8", timeout: 10_000, windowsHide: true }).trim();
+  { env: auditTestEnvironment("local", { PILOT_SYNTHETIC_GPG_HOME: keyHome }), encoding: "utf8", timeout: 10_000, windowsHide: true }).trim();
   }
   mkdirSync(resultsRoot);
   writeFileSync(passphrase, "SYNTHETIC-TEST-ONLY-NOT-A-REAL-CREDENTIAL", { mode: 0o600 });
@@ -203,25 +224,34 @@ test("a failing native child keeps both output streams in the private log", () =
   const logFile = path.join(root, "failed-command.private.log");
   const result = captureAuditProcess({ command: process.execPath,
     args: ["-e", "process.stdout.write(process.env.AUDIT_CANARY);process.stderr.write(process.env.AUDIT_CANARY.toLowerCase());process.exit(17)"],
-    cwd: root, logFile, env: { ...process.env, AUDIT_CANARY: canary }, timeout: 10_000 });
+    cwd: root, logFile, env: auditTestEnvironment("local", { AUDIT_CANARY: canary }), timeout: 10_000 });
   expect(result).toEqual({ execution: "FAILED", exitCode: 17 });
   expect(readFileSync(logFile, "utf8")).toContain(canary);
   expect(readFileSync(logFile, "utf8")).toContain(canary.toLowerCase());
   expect(Object.keys(result).sort()).toEqual(["execution", "exitCode"]);
 });
 
-test("CLI preflight failure reports unavailable without leaking malformed key text or starting a browser", () => {
-  const fakeRepo = path.join(root, "malformed-recipient-repo");
+test.each([
+  ["invalid JSON", "EVIDENCE_UNAVAILABLE"],
+  ["unexpected field", "RECIPIENT_UNAVAILABLE"],
+] as const)("CLI %s recipient refuses at its measured stage without starting a browser", (kind, reason) => {
+  const fakeRepo = path.join(root, `malformed-recipient-repo-${kind}`);
   mkdirSync(path.join(fakeRepo, ".github"), { recursive: true });
-  writeFileSync(path.join(fakeRepo, ".github/pilot-role-evidence-recipient.json"), `${canary} invalid JSON`);
-  const runnerTemp = path.join(root, "cli-runner-temp");
+  const descriptor = kind === "invalid JSON" ? `${canary} invalid JSON`
+    : JSON.stringify({ fingerprint, publicKey: readFileSync(publicKey, "utf8"), unexpected: canary });
+  writeFileSync(path.join(fakeRepo, ".github/pilot-role-evidence-recipient.json"), descriptor);
+  const runnerTemp = path.join(root, `cli-runner-temp-${kind}`);
   mkdirSync(runnerTemp);
   const result = spawnSync(process.execPath, [path.resolve("scripts/pilotRoleAuditEvidence.mjs")], {
-    cwd: fakeRepo, env: { ...process.env, RUNNER_TEMP: runnerTemp, GITHUB_SHA: sha, HUNT_AUDIT_ROLE: "OWNER" },
+    cwd: fakeRepo, env: auditTestEnvironment("local", { RUNNER_TEMP: runnerTemp }),
     encoding: "utf8", timeout: 15_000, windowsHide: true });
   expect(result.status).toBe(1);
   expect(result.stdout + result.stderr).not.toContain(canary);
-  expect(result.stdout + result.stderr).toContain('"execution":"UNAVAILABLE"');
+  // Node can emit its module-format warning before the CLI's bounded JSON.
+  const diagnostics = result.stderr.split(/\r?\n/).filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line) as unknown);
+  expect(diagnostics).toEqual([{ execution: "UNAVAILABLE", reason }]);
+  expect(result.stdout).toBe("");
   expect(readdirSync(runnerTemp)).toEqual([]);
 });
 
@@ -250,10 +280,8 @@ test.each([0, 17])("native orchestration preserves a full synthetic matrix and m
   }
   const stub = path.join(repo, "synthetic-browser.cjs");
   writeFileSync(stub, `process.stdout.write(process.env.AUDIT_CANARY);process.stderr.write(process.env.AUDIT_CANARY.toLowerCase());process.exit(${exitCode});`);
-  const outcome = await runRoleAudit({ cwd: repo, browserCli: stub, env: { ...process.env, RUNNER_TEMP: runnerTemp,
-    GITHUB_SHA: sha, HUNT_AUDIT_ROLE: "OWNER", PILOT_ROLE_GPG_BINARY: gpg, AUDIT_CANARY: canary,
-    GITHUB_ACTIONS: "true", GITHUB_RUN_ID: "123456789", GITHUB_RUN_ATTEMPT: "2",
-    GITHUB_WORKFLOW_REF: "aalzriqat/Auto/.github/workflows/pilot-role-audit.yml@refs/heads/main" } });
+  const outcome = await runRoleAudit({ cwd: repo, browserCli: stub,
+    env: auditTestEnvironment("trustedRoleCI", { RUNNER_TEMP: runnerTemp, AUDIT_CANARY: canary }) });
   expect(outcome).toMatchObject({ cellsComplete: true, observedCells: 136, isolationVerified: true,
     complete: exitCode === 0, execution: exitCode === 0 ? "SUCCEEDED" : "FAILED",
     visualReview: "UNAVAILABLE_UNTIL_LOCAL_DECRYPT_AND_INSPECTION" });
@@ -268,9 +296,13 @@ test.each([0, 17])("native orchestration preserves a full synthetic matrix and m
   expect(readdirSync(runnerTemp).sort()).toEqual(["deal-scenarios-output.log", "pilot-role-audit-public"]);
 }, 45_000);
 
-test("CI cannot start an audit with missing run identity", async () => {
+test.each([
+  { label: "missing run identity", extra: {} },
+  { label: "unit workflow identity", extra: { GITHUB_RUN_ID: "1", GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_WORKFLOW_REF: "aalzriqat/Auto/.github/workflows/test.yml@refs/pull/661/merge" } },
+])("CI cannot start an audit with $label", async ({ extra }) => {
   const before = readdirSync(root).sort();
-  await expect(runRoleAudit({ env: { NODE_ENV: "test", RUNNER_TEMP: root, HUNT_AUDIT_ROLE: "OWNER", GITHUB_SHA: sha, GITHUB_ACTIONS: "true" } }))
+  await expect(runRoleAudit({ env: auditTestEnvironment("invalidCI", { RUNNER_TEMP: root, ...extra }) }))
     .rejects.toThrow("INVALID_CONTEXT");
   expect(readdirSync(root).sort()).toEqual(before);
 });
@@ -281,8 +313,7 @@ test("the default native Playwright CLI failure is captured and encrypted after 
   mkdirSync(path.join(repo, ".github"), { recursive: true }); mkdirSync(runnerTemp);
   writeFileSync(path.join(repo, ".github/pilot-role-evidence-recipient.json"), JSON.stringify({ fingerprint,
     publicKey: readFileSync(publicKey, "utf8") }));
-  const result = await runRoleAudit({ cwd: repo, env: { ...process.env, RUNNER_TEMP: runnerTemp,
-    GITHUB_SHA: sha, HUNT_AUDIT_ROLE: "OWNER", PILOT_ROLE_GPG_BINARY: gpg } });
+  const result = await runRoleAudit({ cwd: repo, env: auditTestEnvironment("local", { RUNNER_TEMP: runnerTemp }) });
   expect(result).toMatchObject({ complete: false, observedCells: 0, execution: "FAILED" });
   const publication = path.join(runnerTemp, "pilot-role-audit-public");
   expect(readFileSync(path.join(publication, "results.json"), "utf8")).not.toContain(repo);
