@@ -260,7 +260,7 @@ function useLeadDropdownOptions({
 
   const sourceOptions = useMemo(() => {
     const configured =
-      dynamicLeadSources && dynamicLeadSources.length > 0
+      dynamicLeadSources != null
         ? dynamicLeadSources.map((source) => source.label)
         : ["Walk-in", "Website", "Facebook", "Instagram", "Referral", "Phone", "Other"];
 
