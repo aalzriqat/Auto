@@ -211,7 +211,12 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
-    "f5c1c675661c7f2a16184475a333f9380036cac809190247c945ce823e20f572",
+    // SCRUM-616/617: the reviewed change opts into the cross-screen oracle.
+    "205f3f79560db95fb0ab12b4dc001cf273bcd4aff96fc27d6566cd4c468e2232",
+  // SCRUM-616: main-only, serialized disposable previews; this whole-workflow
+  // pin keeps its triggers, credentials, deploy and cleanup inside the review.
+  "pilot-role-audit.yml":
+    "151f8f9f6d6ddab8a026e8fd9e8d52ebe9c6cf6ef77669056bc540adb1fddac3",
   "hunt-preview.yml":
     "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":
