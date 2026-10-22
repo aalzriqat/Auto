@@ -216,8 +216,9 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // SCRUM-616: main-only, serialized disposable previews; this whole-workflow
   // pin keeps its triggers, credentials, deploy and cleanup inside the review.
   "pilot-role-audit.yml":
-    // PR #661: also retain the role audit's screenshots in test-results/.
-    "7ffa8ac2759f318df985b8ce11be448d03ec176818c58d100e71ec34a3458171",
+    // PR #661: publish only explicit post-login screenshots and summaries,
+    // never the authenticated trace/video/HTML report directories.
+    "6b730c7afebdf3787ec886e3f30876102b5ab8b6a56f2128fa1b4a577857d30a",
   "hunt-preview.yml":
     "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":

@@ -135,8 +135,11 @@ jobs:
         with:
           name: pilot-role-audit-${{ matrix.role }}
           path: |
-            playwright-report/
-            test-results/
+            test-results/**/role-locale-route.png
+            test-results/**/A-to-B-*.png
+            test-results/**/B-to-A-*.png
+            test-results/**/role-cell.json
+            test-results/**/tenant-boundary.json
           retention-days: 14
 
       # SCRUM-799: capture only a request ID, error class and public source

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { test, expect, type Page } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
+import { test, expect, type Page, type TestInfo } from "@playwright/test";
 import { z } from "zod";
 import { ConvexError } from "convex/values";
 import { api } from "../../convex/_generated/api";
@@ -21,6 +22,12 @@ const attestationSchema = z.object({
   primary: seatSchema, approver: seatSchema,
 });
 type Attestation = z.infer<typeof attestationSchema>;
+
+async function attachPublicEvidence(testInfo: TestInfo, name: "role-cell.json" | "tenant-boundary.json", evidence: unknown) {
+  const body = JSON.stringify(evidence, null, 2);
+  await writeFile(testInfo.outputPath(name), body, "utf8");
+  await testInfo.attach(name, { contentType: "application/json", body });
+}
 
 // Separate CLI entry: re-reads exact product role authority; never reseeds or
 // changes the scripted suite's stricter finance attestation.
@@ -162,12 +169,12 @@ for (const locale of ["en", "ar"] as const) {
         await page.screenshot({ path: testInfo.outputPath("role-locale-route.png"), fullPage: true });
         const observedPath = new URL(page.url()).pathname;
         expect(observedPath).toBe(expectedPath);
-        await testInfo.attach("role-cell.json", { contentType: "application/json", body: JSON.stringify({
+        await attachPublicEvidence(testInfo, "role-cell.json", {
           sha: process.env.GITHUB_SHA, preview: expectedDeployment, orgId,
           role: attestation.approver, locale, viewport, route,
           requestedPath, expectedPath, observedPath,
           expected: allowed ? "ALLOWED_ROUTE" : "DENIED_ROUTE", observed: "MATCHED",
-        }, null, 2) });
+        });
       });
     }
   }
@@ -257,12 +264,12 @@ test("isolated tenants deny public reads, writes and foreign row IDs in both dir
         }
       }
     }
-    await testInfo.attach("tenant-boundary.json", { contentType: "application/json", body: JSON.stringify({
+    await attachPublicEvidence(testInfo, "tenant-boundary.json", {
       sha: process.env.GITHUB_SHA, preview: process.env.NEXT_PUBLIC_CONVEX_URL,
       auditedRoleBeforeIsolation: attestation.approver.roleName, actualProbeRoles: { A: "OWNER", B: "OWNER" },
       orgA, orgB, attempts, stateUnchanged: true,
       scope: "Organization and customer public APIs, both directions; mixed-ID delete can refuse at role authority before row ownership. Not all financial relationships.",
-    }, null, 2) });
+    });
   } finally {
     await contextA.close();
   }

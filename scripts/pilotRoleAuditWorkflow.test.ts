@@ -5,6 +5,7 @@ import { parse } from "yaml";
 import { z } from "zod";
 import { DEFAULT_ROLE_TEMPLATES } from "../convex/utils/permissions";
 import { auditDestination } from "../playwright/fixtures/screenAuditRoutes";
+import roleConfig from "../playwright.role-audit.config";
 
 test.each([
   ["OWNER", "dashboard"], ["MANAGER", "dashboard"], ["SALES", "sales"],
@@ -17,6 +18,7 @@ test.each([
 
 const source = readFileSync(path.resolve(".github/workflows/pilot-role-audit.yml"), "utf8");
 const stepSchema = z.object({ name: z.string().optional(), run: z.string().optional(),
+  with: z.object({ path: z.string().optional() }).passthrough().optional(),
   if: z.string().optional(), env: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])).optional() });
 const jobSchema = z.object({ if: z.string(), steps: z.array(stepSchema) });
 const workflow = z.object({
@@ -32,6 +34,18 @@ function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
 }
 
 describe("SCRUM-616 role audit trust and coverage contract", () => {
+  test("publishes only explicit post-login evidence and never records auth traces or video", () => {
+    const upload = stepNamed(workflow.jobs.roles.steps, "Upload Playwright report");
+    expect(upload.with?.path?.trim().split(/\r?\n/).map((line) => line.trim())).toEqual([
+      "test-results/**/role-locale-route.png", "test-results/**/A-to-B-*.png", "test-results/**/B-to-A-*.png",
+      "test-results/**/role-cell.json", "test-results/**/tenant-boundary.json",
+    ]);
+    for (const project of roleConfig.projects ?? []) {
+      expect(project.use?.trace ?? roleConfig.use?.trace).toBe("off");
+      expect(project.use?.video ?? roleConfig.use?.video).toBe("off");
+      expect(project.use?.screenshot ?? roleConfig.use?.screenshot).toBe("off");
+    }
+  });
   test("executes only trusted main code and runs every product role with one worker", () => {
     expect(Object.keys(workflow.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
     expect(workflow.permissions).toEqual({ contents: "read" });
