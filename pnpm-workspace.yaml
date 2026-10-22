@@ -2,6 +2,10 @@ packages:
   - "apps/*"
   - "packages/*"
 overrides:
+  # SCRUM-859: GHSA-cg2g-xh64-v4q7 and GHSA-mrv2-3pqr-j5jr
+  # (registry audit: critical/high), patched in 3.4.17. jsPDF's optional sanitizer stays on its
+  # supported major; this release was published 2026-10-12.
+  dompurify: 3.4.17
   # GHSA-rfgv-xxqx-mfg5 (DoS) and GHSA-w293-vg96-wgc3 (TLS certificate validation
   # bypass), both HIGH, published 2026-09-29, patched in 7.29.1 (SCRUM-483). Dev-only
   # (jsdom). dealer-worker's separate npm tree (wrangler -> miniflare) carries the
