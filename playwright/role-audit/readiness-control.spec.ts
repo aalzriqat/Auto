@@ -17,6 +17,10 @@ test("screen readiness refuses permanent English, Arabic and spinner loading sta
   }
   await page.setContent("<main><h2>Customers</h2></main>");
   await expect(requireReadyScreen(page, 200)).rejects.toThrow();
+  for (const busy of ['aria-busy="true"', 'data-loading="true"']) {
+    await page.setContent(`<main ${busy}><table><tbody><tr><td>Old row</td></tr></tbody></table></main>`);
+    await expect(requireReadyScreen(page, 200), busy).rejects.toThrow();
+  }
 });
 
 test("screen readiness accepts resolved rows and a recognized empty table", async ({ page }) => {
@@ -33,4 +37,18 @@ test("ready content on an unexpected route cannot certify the requested screen",
   await page.goto("https://audit.invalid/org/customers");
   await expect(requireReadyScreen(page, 200, "/org/deals")).rejects.toThrow();
   await requireReadyScreen(page, 200, "/org/customers");
+});
+
+test("a redirect while content loads cannot certify the original destination", async ({ page }) => {
+  await page.route("https://audit.invalid/**", (route) => route.fulfill({
+    contentType: "text/html", body: '<main><div aria-busy="true"><table><tbody><tr><td>Loaded customer</td></tr></tbody></table></div></main>',
+  }));
+  await page.goto("https://audit.invalid/org/deals");
+  await page.evaluate(() => {
+    setTimeout(() => {
+      history.replaceState(null, "", "/org/customers");
+      document.querySelector("[aria-busy]")?.removeAttribute("aria-busy");
+    }, 200);
+  });
+  await expect(requireReadyScreen(page, 1_000, "/org/deals")).rejects.toThrow();
 });

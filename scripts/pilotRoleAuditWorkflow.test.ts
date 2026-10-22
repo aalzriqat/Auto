@@ -4,6 +4,16 @@ import { describe, expect, test } from "vitest";
 import { parse } from "yaml";
 import { z } from "zod";
 import { DEFAULT_ROLE_TEMPLATES } from "../convex/utils/permissions";
+import { auditDestination } from "../playwright/fixtures/screenAuditRoutes";
+
+test.each([
+  ["OWNER", "dashboard"], ["MANAGER", "dashboard"], ["SALES", "sales"],
+  ["RECEPTION", "leads"], ["ACCOUNTANT", "accounting"], ["SENIOR_ACCOUNTANT", "accounting"],
+] as const)("dashboard audit models the actual %s landing destination", (role, destination) => {
+  expect(auditDestination("dashboard", role)).toBe(destination);
+  expect(auditDestination("applications", role)).toBe("deals");
+  expect(auditDestination("customers", role)).toBe("customers");
+});
 
 const source = readFileSync(path.resolve(".github/workflows/pilot-role-audit.yml"), "utf8");
 const stepSchema = z.object({ name: z.string().optional(), run: z.string().optional(),

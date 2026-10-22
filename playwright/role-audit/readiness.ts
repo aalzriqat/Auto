@@ -7,6 +7,8 @@ export async function requireReadyScreen(page: Page, timeout = 15_000, expectedP
   }
   const main = page.locator("main");
   await expect(main).toBeVisible({ timeout });
+  await expect(main).not.toHaveAttribute("aria-busy", "true", { timeout });
+  await expect(main).not.toHaveAttribute("data-loading", "true", { timeout });
   // These states are rendered by the audited pages and their shared guards.
   // Their absence measures visible loading completion, not query completeness.
   await expect(main.locator('[aria-busy="true"], [data-loading="true"], .animate-spin, .animate-pulse, [data-slot="skeleton"]'))
@@ -20,4 +22,7 @@ export async function requireReadyScreen(page: Page, timeout = 15_000, expectedP
   await expect(main.locator('table, form, button, input, select, textarea, a[href], [role="tablist"], [data-testid]'))
     .not.toHaveCount(0, { timeout });
   expect(await main.innerText()).not.toMatch(/\bNaN\b|\bundefined\b|\[object Object\]|Something went wrong|Application error|حدث خطأ ما/);
+  if (expectedPath !== undefined) {
+    await expect(page).toHaveURL((url) => url.pathname === expectedPath, { timeout });
+  }
 }

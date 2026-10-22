@@ -9,6 +9,20 @@ export const SCREEN_AUDIT_ROUTES = [
 
 export type ScreenAuditRoute = typeof SCREEN_AUDIT_ROUTES[number];
 
+/** Intentional redirects in applications/page.tsx and dashboard/page.tsx. */
+export function auditDestination(route: ScreenAuditRoute, roleName: string): ScreenAuditRoute {
+  if (route === "applications") return "deals";
+  if (route !== "dashboard") return route;
+  switch (roleName.toUpperCase()) {
+    case "SALES":
+    case "SALESPERSON": return "sales";
+    case "RECEPTION": return "leads";
+    case "ACCOUNTANT":
+    case "SENIOR_ACCOUNTANT": return "accounting";
+    default: return route;
+  }
+}
+
 /**
  * Source-enumerated route-level RoleGuard requirements. Navigation has its own
  * permission metadata in lib/navigation.ts; neither proves backend dominance.

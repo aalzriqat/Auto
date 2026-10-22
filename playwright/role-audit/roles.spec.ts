@@ -9,7 +9,7 @@ import { USER_AUTH_FILE, authenticatedConvexClient, testDataSuffix } from "../ut
 import { newContainedContext } from "../containedContext";
 import { probe, TENANT_REFUSAL } from "../../scripts/intelligence/browserSwarmBoundaryOracle";
 import { requireReadyScreen } from "./readiness";
-import { SCREEN_AUDIT_ROUTES as routes, ROLE_ROUTE_GUARDS as routePermissions } from "../fixtures/screenAuditRoutes";
+import { SCREEN_AUDIT_ROUTES as routes, ROLE_ROUTE_GUARDS as routePermissions, auditDestination } from "../fixtures/screenAuditRoutes";
 import { convexDeploymentOf, servedDeployments } from "../scenarios/formExplorer/attestedPreview";
 
 const seatSchema = z.object({
@@ -128,11 +128,14 @@ for (const locale of ["en", "ar"] as const) {
         expect(membership.roleId).toBe(attestation.approver.roleId);
         expect(membership.roleName).toBe(attestation.approver.roleName);
         expect([...membership.permissions].sort()).toEqual([...attestation.approver.permissions].sort());
-        const allowed = route.startsWith("settings/") ? attestation.approver.isSystemOwnerRole
-          : (routePermissions[route] ?? []).every((permission) => membership.permissions.includes(permission));
+        const destination = auditDestination(route, membership.roleName);
+        const requestedPath = `/${orgId}/${route}`;
+        const expectedPath = `/${orgId}/${destination}`;
+        const allowed = destination.startsWith("settings/") ? attestation.approver.isSystemOwnerRole
+          : (routePermissions[destination] ?? []).every((permission) => membership.permissions.includes(permission));
         const denied = page.getByRole("heading", { name: locale === "ar" ? "الوصول غير مسموح" : "Access Not Allowed", exact: true });
         if (allowed) {
-          await requireReadyScreen(page, 15_000, `/${orgId}/${route === "applications" ? "deals" : route}`);
+          await requireReadyScreen(page, 15_000, expectedPath);
           await expect(denied).toHaveCount(0);
           await expect(page.locator("main")).toBeVisible();
         } else {
@@ -157,9 +160,12 @@ for (const locale of ["en", "ar"] as const) {
         expect(servedDeployments(sockets).filter((deployment) => deployment !== expectedDeployment)).toEqual([]);
         expect(errors).toEqual([]);
         await page.screenshot({ path: testInfo.outputPath("role-locale-route.png"), fullPage: true });
+        const observedPath = new URL(page.url()).pathname;
+        if (allowed) expect(observedPath).toBe(expectedPath);
         await testInfo.attach("role-cell.json", { contentType: "application/json", body: JSON.stringify({
           sha: process.env.GITHUB_SHA, preview: expectedDeployment, orgId,
           role: attestation.approver, locale, viewport, route,
+          requestedPath, expectedPath, observedPath,
           expected: allowed ? "ALLOWED_ROUTE" : "DENIED_ROUTE", observed: "MATCHED",
         }, null, 2) });
       });
