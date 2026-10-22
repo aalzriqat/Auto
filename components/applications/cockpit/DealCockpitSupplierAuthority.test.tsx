@@ -1,3 +1,4 @@
+import { ALL_PERMISSIONS } from "@/convex/utils/permissions";
 /**
  * Who is offered "Settle supplier", decided at the CONTAINER.
  *
@@ -12,13 +13,14 @@
  * already defaults `canSettleSupplier` to `false`: a view-level test cannot
  * tell "the container wired the permission" from "the container forgot and the
  * default hid it". Rendering `DealCockpit` and `SaleDealCockpit` against a
- * controllable `usePermissions` is what catches the missing wire on either
- * path. The permission stub is shaped like the real hook — a list membership
- * check, OWNER short-circuit and all — so a test cannot pass by handing the
- * container a role name to pattern-match on.
+ * real permission hook with controllable SDK membership catches missing wires
+ * on either path. Qualified owners receive the server-resolved permission list;
+ * an OWNER display name alone grants no action.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as renderTree, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { OrgProvider } from "@/components/providers/OrgProvider";
 import type { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
@@ -50,28 +52,10 @@ const stubs = vi.hoisted(() => ({
    * The membership as the real `usePermissions` reads it: `undefined` while the
    * query is in flight, otherwise a role name and a flat permission list.
    */
-  membership: undefined as { roleName: string; permissions: string[] } | undefined,
+  membership: undefined as { roleName: string; isSystemOwnerRole?: boolean; permissions: string[] } | undefined,
 }));
 
-// The same predicate the real hook applies, over the stubbed membership —
-// nothing the containers could satisfy by reading a role name, except OWNER,
-// which the product itself grants everything to.
-vi.mock("@/hooks/use-permissions", () => ({
-  usePermissions: () => {
-    const membership = stubs.membership;
-    const isOwner = membership?.roleName === "OWNER";
-    return {
-      permissions: membership?.permissions ?? [],
-      isLoading: membership === undefined,
-      isOwner,
-      hasPermission: (permission: string) =>
-        isOwner || (membership?.permissions ?? []).includes(permission),
-      role: membership?.roleName,
-      membership,
-    };
-  },
-}));
-
+// Use the real permission hook; only the Convex SDK boundary is simulated.
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
@@ -80,12 +64,19 @@ vi.mock("convex/react", async () => {
       Object.fromEntries(
         Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))])
       ),
-    useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
+    useConvexAuth: () => ({ isAuthenticated: true }),
+    useQuery: (reference: never) => {
+      const name = getFunctionName(reference);
+      if (name === "organizations:listMine") return [{ _id: "org1" }];
+      return name === "memberships:getMyMembership" ? stubs.membership : stubs.queryResults.get(name);
+    },
     useMutation: () => vi.fn(),
   };
 });
 
 vi.mock("next/navigation", () => ({
+  useParams: () => ({ orgId: "org1" }),
+  usePathname: () => "/org1/deals",
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
 }));
 
@@ -93,6 +84,8 @@ import { DealCockpit, SaleDealCockpit } from "./DealCockpit";
 
 type FinancedDealCockpitData = Extract<DealCockpitData, { dealKind: "FINANCED" }>;
 type CashDealCockpitData = NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
+
+function render(element: ReactElement) { return renderTree(element, { wrapper: OrgProvider }); }
 
 const ORG = "org1" as Id<"organizations">;
 const SALE = "sale_7731" as Id<"sales">;
@@ -387,10 +380,14 @@ describe.each(PATHS)("$path offers the supplier settlement only to a caller who 
     expect(screen.getByText("SettleSupplierTitle")).toBeTruthy();
   });
 
-  test("an OWNER is granted the action by the product's own rule, not by a role-name match here", () => {
-    // OWNER's list is empty on purpose: the real hook short-circuits on the
-    // role, and that is the only role-based grant the containers may inherit.
-    stubs.membership = { roleName: "OWNER", permissions: [] };
+  test("an unqualified OWNER name does not grant supplier settlement", () => {
+    stubs.membership = { roleName: "OWNER", isSystemOwnerRole: false, permissions: [] };
+    mount();
+    expect(settleButton()).toBeNull();
+  });
+
+  test("a qualified owner receives the action through the resolved permission list", () => {
+    stubs.membership = { roleName: "OWNER", isSystemOwnerRole: true, permissions: [...ALL_PERMISSIONS] };
     mount();
     expect(settleButton()).not.toBeNull();
   });
@@ -504,7 +501,7 @@ describe.each(PATHS)("$path withholds the settlement on a DISPUTED claim, and sa
   });
 
   test("a non-dispute refusal withholds the action silently, and MANAGE_FINANCE cannot override it", () => {
-    stubs.membership = { roleName: "OWNER", permissions: [] };
+    stubs.membership = { roleName: "OWNER", isSystemOwnerRole: true, permissions: [...ALL_PERMISSIONS] };
     const tree = mount();
     tree.serveSupplierReceipt({ actionable: false, reason: "CLAIM_NOT_OPEN" });
     expect(settleButton()).toBeNull();

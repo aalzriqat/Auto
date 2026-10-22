@@ -152,8 +152,8 @@ export default function TeamPage() {
     setEditingCommission(null);
   }
 
-  const isOwner = myMembership?.roleName === "OWNER";
-  const canManageUsers = myMembership?.permissions.includes("manage:users") || myMembership?.permissions.includes("MANAGE_USERS") || isOwner;
+  const isOwner = myMembership?.isSystemOwnerRole === true;
+  const canManageUsers = myMembership?.permissions.includes("manage:users") === true;
 
   const handleDelete = async () => {
     if (!activeOrgId || !memberToDelete) return;
