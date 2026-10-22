@@ -18,7 +18,7 @@ export function Sidebar() {
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const permissions = myMembership?.permissions || [];
-  const isOwner = myMembership?.roleName === "OWNER";
+  const isOwner = myMembership?.isSystemOwnerRole === true;
   const logoUrl = useQuery(
     api.orgSettings.getLogoUrl,
     activeOrgId ? { orgId: activeOrgId } : "skip"
@@ -98,7 +98,7 @@ export function Sidebar() {
         )}
       </div>
 
-      <div className="p-4 border-t border-slate-200/50">
+      {isOwner && <div className="p-4 border-t border-slate-200/50">
         <Link href={activeOrgId ? `/${activeOrgId}/settings/billing` : "#"}>
           <div className="rounded-xl bg-slate-50 p-4 border border-slate-100 hover:bg-slate-100 transition-colors cursor-pointer">
             <div className="flex items-center justify-between gap-2">
@@ -110,7 +110,7 @@ export function Sidebar() {
             <p className="text-[10px] text-slate-400 mt-1">{t("BillingManagePlan" as any)}</p>
           </div>
         </Link>
-      </div>
+      </div>}
     </aside>
   );
 }

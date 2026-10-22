@@ -2,7 +2,7 @@
  * SCRUM-226-2: the failed-outbox subscription must be gated on the
  * server-resolved permission list, not on `hasPermission`.
  *
- * `hasPermission` returns true for ANY role named "OWNER". The server gates
+ * Previously, `hasPermission` returned true for any role named "OWNER". The server gates
  * `listFailedEvents` on the real resolved set (getMyMembership grants every
  * permission only to a QUALIFIED system owner). An unqualified "OWNER"-named
  * role with view:finance but no manage:finance therefore subscribed, the
@@ -14,6 +14,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 
 const state = vi.hoisted(() => ({
   roleName: "OWNER",
+  isSystemOwnerRole: false,
   permissions: [] as string[],
   paginatedArgs: undefined as unknown,
 }));
@@ -26,23 +27,13 @@ vi.mock("@/components/providers/OrgProvider", () => ({
   useOrg: () => ({ activeOrgId: "org1" }),
 }));
 
-// Mirrors hooks/use-permissions.tsx: isOwner short-circuits hasPermission.
-vi.mock("@/hooks/use-permissions", () => ({
-  usePermissions: () => {
-    const isOwner = state.roleName === "OWNER";
-    return {
-      permissions: state.permissions,
-      isLoading: false,
-      isOwner,
-      hasPermission: (p: string) => isOwner || state.permissions.includes(p),
-    };
-  },
-}));
-
+// Use the real permission hook over the simulated SDK membership.
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-vi.mock("convex/react", () => ({
-  useQuery: () => ({
+vi.mock("convex/react", async () => {
+  const { getFunctionName } = await import("convex/server");
+  return {
+  useQuery: (reference: never) => getFunctionName(reference) === "memberships:getMyMembership" ? state : ({
     chartInitialized: true,
     systemAccountsValid: true,
     currentOpenPeriod: null,
@@ -56,7 +47,8 @@ vi.mock("convex/react", () => ({
     state.paginatedArgs = args;
     return { results: [], status: "Exhausted", loadMore: vi.fn() };
   },
-}));
+};
+});
 
 vi.mock("./AccountingTabShared", () => ({
   errorMessage: (e: unknown) => String(e),
