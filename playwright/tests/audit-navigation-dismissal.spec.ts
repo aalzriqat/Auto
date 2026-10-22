@@ -12,11 +12,27 @@ test("phone capture waits until the closing navigation overlay is gone", async (
     });</script>`);
   await dismissAuditNavigation(page, 1_000);
   // Independent observation at the screenshot boundary, not another wait.
-  expect(await page.getByRole("dialog").count()).toBe(0);
+  expect(await page.locator('[role="dialog"]').count()).toBe(0);
 });
 
 test("phone capture refuses navigation that remains open after Escape", async ({ page }) => {
   await page.setContent('<main><button>Ready page action</button></main><div role="dialog" aria-modal="true">Navigation</div>');
   await expect(dismissAuditNavigation(page, 200)).rejects.toThrow(/toHaveCount/);
-  expect(await page.getByRole("dialog").count()).toBe(1);
+  expect(await page.locator('[role="dialog"]').count()).toBe(1);
+});
+
+test("phone capture refuses navigation hidden only from accessibility", async ({ page }) => {
+  await page.setContent(`<main><button>Ready page action</button></main>
+    <div role="dialog" aria-modal="true" style="position:fixed;inset:0;background:white">Navigation</div>
+    <script>document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') document.querySelector('[role=dialog]').setAttribute('aria-hidden', 'true');
+    });</script>`);
+  let refusal: unknown;
+  try { await dismissAuditNavigation(page, 200); } catch (error) { refusal = error; }
+  // Accessibility removal does not remove the visible, obstructing DOM node.
+  expect(await page.getByRole("dialog").count()).toBe(0);
+  expect(await page.locator('[role="dialog"]').count()).toBe(1);
+  await expect(page.locator('[role="dialog"]')).toBeVisible();
+  expect(refusal).toBeInstanceOf(Error);
+  expect((refusal as Error).message).toMatch(/toHaveCount/);
 });

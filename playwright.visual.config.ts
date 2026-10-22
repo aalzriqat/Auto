@@ -24,5 +24,11 @@ export default defineConfig({
     // The deals list's whole-row link rests on a `relative` <tr>, which WebKit
     // historically ignored; prove the hit target there too (SCRUM-694 review M3).
     { name: "webkit", testMatch: /deals-list\.visual\.spec\.ts/, use: { ...devices["Desktop Safari"] } },
+    {
+      name: "audit-controls",
+      testDir: "./playwright/tests",
+      testMatch: "audit-navigation-dismissal.spec.ts",
+      use: { ...devices["Desktop Chrome"], storageState: { cookies: [], origins: [] }, trace: "off", video: "off", screenshot: "off" },
+    },
   ],
 });

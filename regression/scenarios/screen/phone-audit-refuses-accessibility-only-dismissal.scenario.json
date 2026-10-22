@@ -1,0 +1,69 @@
+{
+  "id": "phone-audit-refuses-accessibility-only-dismissal",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "local-drawer-dom-self-attack",
+    "firstSeen": "2026-10-22"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "navigation.open",
+      "input": {
+        "viewport": "phone"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "navigation.dismiss",
+      "input": {
+        "key": "Escape",
+        "ariaHiddenOnly": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "audit.capture",
+      "input": {
+        "requireDialogDomGone": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "capture.accessibleDialogCount",
+      "value": 0
+    },
+    {
+      "observable": "capture.dialogDomCount",
+      "value": 1
+    },
+    {
+      "observable": "capture.accepted",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "08384ec40d4f1a4b54825f8cc7b7a32552b5b8e1a2161e47bc37e0d0a2c8e863"
+    }
+  ],
+  "impl": {
+    "file": "playwright/tests/audit-navigation-dismissal.spec.ts",
+    "testName": "phone capture refuses navigation hidden only from accessibility"
+  },
+  "fingerprint": "cfe0684e1124af73e1f280e88ffcf69a0efdb7d295bcde56a410bb762d566eb6"
+}

@@ -1,6 +1,6 @@
 {
   "id": "phone-audit-refuses-persistent-navigation",
-  "fingerprint": "095f721f83f80b202c974c31ce5eb4c2f6903af7d5990f09525c368801eab685",
+  "fingerprint": "bcf3dcdbd0e867b948f1898c00d11c29c13e1379d8f4c2dc420f07e292157321",
   "domain": "screen",
   "level": "browser",
   "status": "active",
@@ -28,7 +28,7 @@
       "action": "navigation.dismiss",
       "input": {
         "key": "Escape",
-        "exitDelayMs": "PERSISTENT"
+        "exitState": "PERSISTENT"
       }
     },
     {

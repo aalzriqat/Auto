@@ -6,6 +6,7 @@ import { z } from "zod";
 import { DEFAULT_ROLE_TEMPLATES } from "../convex/utils/permissions";
 import { auditDestination } from "../playwright/fixtures/screenAuditRoutes";
 import roleConfig from "../playwright.role-audit.config";
+import visualConfig from "../playwright.visual.config";
 
 test.each([
   ["OWNER", "dashboard"], ["MANAGER", "dashboard"], ["SALES", "sales"],
@@ -34,6 +35,16 @@ function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
 }
 
 describe("SCRUM-616 role audit trust and coverage contract", () => {
+  test("anonymous drawer controls run in the PR static browser gate", () => {
+    const project = visualConfig.projects?.find(item => item.name === "audit-controls");
+    expect(project?.testDir).toBe("./playwright/tests");
+    expect(project?.testMatch).toBe("audit-navigation-dismissal.spec.ts");
+    expect(project?.dependencies ?? []).toEqual([]);
+    expect(project?.use?.storageState).toEqual({ cookies: [], origins: [] });
+    expect(project?.use?.trace).toBe("off");
+    expect(project?.use?.video).toBe("off");
+    expect(project?.use?.screenshot).toBe("off");
+  });
   test("publishes only explicit post-login evidence and never records auth traces or video", () => {
     const upload = stepNamed(workflow.jobs.roles.steps, "Upload encrypted role audit evidence");
     expect(upload.with?.path?.trim().split(/\r?\n/).map((line) => line.trim())).toEqual([
