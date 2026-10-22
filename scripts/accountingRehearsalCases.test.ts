@@ -491,6 +491,10 @@ type Defects = {
   commissionNotAccrued?: boolean;
   commissionWrongCurrency?: boolean;
   commissionPayableInitiallyUnavailable?: boolean;
+  saleForeignReferenceAccepted?: boolean;
+  saleReferenceWrongRefusal?: boolean;
+  saleReferenceWritesBeforeRefusing?: boolean;
+  saleOwnReferenceRefused?: boolean;
 };
 
 function makeBackend(defects: Defects = {}) {
@@ -1494,6 +1498,23 @@ function makeBackend(defects: Defects = {}) {
         }
         return { ok: true as const, value: saleId };
       }
+      case "sales:createDraft": {
+        const saleId = id("sale");
+        sales.set(saleId, { _id: saleId, ...args, status: "PENDING" });
+        return { ok: true as const, value: saleId };
+      }
+      case "sales:update": {
+        const sale = sales.get(String(args.saleId));
+        if (!sale) throw new Error("test model: missing sale");
+        const tradeIn = vehicles.get(String(args.tradeInVehicleId));
+        if (tradeIn?.orgId !== args.orgId && !defects.saleForeignReferenceAccepted) {
+          if (defects.saleReferenceWritesBeforeRefusing) sale.tradeInVehicleId = args.tradeInVehicleId;
+          return { ok: false as const, error: defects.saleReferenceWrongRefusal ? "Unrelated refusal" : "Trade-in vehicle not found in this organization." };
+        }
+        if (defects.saleOwnReferenceRefused) return { ok: false as const, error: "Unexpected same-org refusal" };
+        Object.assign(sale, args);
+        return { ok: true as const, value: null };
+      }
       case "sales:get":
         return { ok: true as const, value: sales.get(String(args.saleId)) ?? null };
       case "organizations:create": {
@@ -1534,6 +1555,7 @@ function makeBackend(defects: Defects = {}) {
         const madeVehicle = replayableCreate("veh", args)!;
         if (madeVehicle.ok) {
           vehicles.set(String(madeVehicle.value), {
+            orgId: args.orgId,
             sourceType: args.sourceType,
             status: args.status,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
@@ -2486,6 +2508,16 @@ const statusOf = (results: Array<Record<string, unknown>>, id: string) =>
   results.find((r) => r.id === id)?.status;
 
 describe("the rehearsal passes against a backend that behaves", () => {
+  test.each([
+    ["saleForeignReferenceAccepted", "S811 refused update leaves public sale, vehicles and journals unchanged"],
+    ["saleReferenceWrongRefusal", "S811 foreign trade-in did not give the expected ownership refusal"],
+    ["saleReferenceWritesBeforeRefusing", "S811 refused update leaves public sale, vehicles and journals unchanged"],
+    ["saleOwnReferenceRefused", "Unexpected same-org refusal"],
+  ] as const)("SCRUM-811 release assertions catch %s", async (defect, reason) => {
+    const result = (await runAgainst({ [defect]: true })).find((row) => row.id === "S811");
+    expect(result?.status).toBe("FAIL");
+    expect(result?.detail).toContain(reason);
+  });
   test("SCRUM-853 positive automatic commission policy refusal actually executes", async () => {
     expect(statusOf(await runAgainst(), "S853")).toBe("PASS");
   });
