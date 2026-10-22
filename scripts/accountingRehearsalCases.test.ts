@@ -489,6 +489,8 @@ type Defects = {
   commissionPolicyWrongRefusal?: boolean;
   commissionPolicyWritesBeforeRefusing?: boolean;
   commissionNotAccrued?: boolean;
+  commissionWrongCurrency?: boolean;
+  commissionPayableInitiallyUnavailable?: boolean;
 };
 
 function makeBackend(defects: Defects = {}) {
@@ -533,6 +535,7 @@ function makeBackend(defects: Defects = {}) {
   const sales = new Map<string, Record<string, any>>();
   let commissionRate = 0;
   let commissionMode = "AUTO_MEMBER";
+  let commissionPayableReads = 0;
   let certifiedCashSalePosted = false;
   let m486c5ReportStarted = false;
   let certifiedCashDepositId: string | undefined;
@@ -642,7 +645,7 @@ function makeBackend(defects: Defects = {}) {
         accountingDate: Date.now(),
         debitMinor: l.debitMinor ?? 0,
         creditMinor: l.creditMinor ?? 0,
-        currency: ORG_CURRENCY,
+        currency: eventType === "COMMISSION_ACCRUED" && defects.commissionWrongCurrency ? "USD" : ORG_CURRENCY,
         scale: LINE_SCALE,
         customerId: l.customerId,
         vehicleId: l.vehicleId,
@@ -1820,6 +1823,8 @@ function makeBackend(defects: Defects = {}) {
         // discipline as listJournalEntries above.
         const account = CHART.find((a) => a._id === String(args.accountId));
         if (!account) return { ok: true as const, value: null };
+        if (account.systemKey === "COMMISSION_PAYABLE" && ++commissionPayableReads === 1 &&
+            defects.commissionPayableInitiallyUnavailable) return { ok: true as const, value: null };
         let allLines = [...journalLines.values()].flat().filter((l) => l.accountId === account._id);
         if (args.fromDate !== undefined) allLines = allLines.filter((l) => l.accountingDate >= args.fromDate);
         if (args.toDate !== undefined) allLines = allLines.filter((l) => l.accountingDate <= args.toDate);
@@ -2489,6 +2494,8 @@ describe("the rehearsal passes against a backend that behaves", () => {
     ["commissionPolicyWrongRefusal", "S853 MANUAL transition did not give the outstanding-commission refusal"],
     ["commissionPolicyWritesBeforeRefusing", "S853 refusal leaves payable journal lines unchanged"],
     ["commissionNotAccrued", "S853 posted Commission Payable increment"],
+    ["commissionWrongCurrency", "S853 payable line denomination is unavailable or incorrect"],
+    ["commissionPayableInitiallyUnavailable", "S853 payable account read is unavailable"],
   ] as const)("SCRUM-853 release case catches %s", async (defect, reason) => {
     const result = (await runAgainst({ [defect]: true })).find((row) => row.id === "S853");
     expect(result?.status).toBe("FAIL");

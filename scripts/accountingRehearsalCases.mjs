@@ -3388,8 +3388,13 @@ export async function runRehearsalCases(ctx) {
     const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
     const payable = chart.find((account) => account.systemKey === "COMMISSION_PAYABLE");
     if (!payable?._id) fail("S853 Commission Payable account is missing");
-    const readPayable = () => allAccountActivityLines({ orgId, ownerMust, accountId: payable._id });
+    const readPayable = async () => {
+      const activity = await allAccountActivityLines({ orgId, ownerMust, accountId: payable._id });
+      if (activity.account?._id !== payable._id) fail("S853 payable account read is unavailable");
+      return activity;
+    };
     const net = ({ lines }) => lines.reduce((sum, line) => {
+      if (line.currency !== "JOD" || line.scale !== 3) fail("S853 payable line denomination is unavailable or incorrect");
       if (!Number.isFinite(line.creditMinor) || !Number.isFinite(line.debitMinor)) fail("S853 payable line amount is unavailable");
       return sum + line.creditMinor - line.debitMinor;
     }, 0);
