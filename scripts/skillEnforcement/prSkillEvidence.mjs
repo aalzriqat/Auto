@@ -1,7 +1,7 @@
 /**
- * Pure evaluation of a PR's "Skill evidence" section. No I/O, so it is testable
- * and the same code judges every PR. The workflow runs it from the base branch
- * (pull_request_target), so a PR cannot edit its own judge.
+ * Evaluation of a PR's "Skill evidence" section. I/O is supplied through
+ * callbacks, so the same rules judge every PR. Both workflows use the base
+ * branch's code, so a PR cannot edit its own judge.
  *
  * It verifies form only. The seats' own signed PR comments, not this check,
  * are the authoritative evidence that a review happened. It checks that the
@@ -15,6 +15,9 @@ import { classifyPaths, requiredSkills } from "./policy.mjs";
 
 export const SECTION = "## Skill evidence";
 const SESSION_URL = /https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/g;
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const LOCAL_SESSION = new RegExp(`^local:(${UUID})$`, "i");
+const SESSION_ID = new RegExp(`^${UUID}$`, "i");
 const PLACEHOLDER_WORDS = new Set(["", "n/a", "none", "-", "todo", "tbd", "pending", "placeholder"]);
 // A failure needs a non-zero count ("1 failed"), an upper-case FAIL, an AssertionError or a cross mark.
 // "0 failed" and prose such as "no error" do not count.
@@ -48,6 +51,11 @@ const withoutSeat1Line = (body) =>
 
 const line = (text, label) =>
   text.match(new RegExp(String.raw`^[ \t]*[-*]?[ \t]*${label}[ \t]*:[ \t]*(.+)$`, "im"))?.[1].trim();
+
+export function localReviewUrl(body) {
+  const text = section(body ?? "")?.text;
+  return text && LOCAL_SESSION.test(line(text, "Seat 1 session") ?? "") ? line(text, "Seat 1 review") : undefined;
+}
 
 /**
  * The fenced block that belongs to this item: it must open on the label's line
@@ -120,13 +128,32 @@ function checkOutputs(t, files, classes) {
   return problems;
 }
 
-function checkSeats(t, otherSessionText) {
+async function checkLocalSeat(t, otherSessionText, local, localReview) {
   const problems = [];
-  const urls = line(t, "Seat 1 session")?.match(SESSION_URL) ?? [];
-  if (urls.length !== 1) {
-    problems.push('"Seat 1 session" must be one https://claude.ai/code/session_… link.');
-  } else if ((otherSessionText.match(SESSION_URL) ?? []).includes(urls[0])) {
+  const implementer = line(t, "Implementer session") ?? "";
+  if (!SESSION_ID.test(implementer)) problems.push('Local review needs an explicit "Implementer session" UUID.');
+  if (local === implementer.toLowerCase() || otherSessionText.toLowerCase().includes(local)) {
     problems.push("Seat 1 session is the implementing session. Seat 1 must be a separate session.");
+  }
+  const sha = line(t, "Seat 1 SHA")?.match(/^[0-9a-f]{40}\b/i)?.[0].toLowerCase();
+  if (!sha) problems.push("Local review needs the full 40-character Seat 1 SHA.");
+  if (!localReview) problems.push("Local review could not be verified against its signed PR comment.");
+  else problems.push(...await localReview({ url: line(t, "Seat 1 review"), session: local, sha }));
+  return problems;
+}
+
+async function checkSeats(t, otherSessionText, localReview) {
+  const problems = [];
+  const sessionText = line(t, "Seat 1 session") ?? "";
+  const local = sessionText.match(LOCAL_SESSION)?.[1].toLowerCase();
+  if (local) problems.push(...await checkLocalSeat(t, otherSessionText, local, localReview));
+  else {
+    const urls = sessionText.match(SESSION_URL) ?? [];
+    if (urls.length !== 1) {
+      problems.push('"Seat 1 session" must be one https://claude.ai/code/session_… link or local:<UUID>.');
+    } else if ((otherSessionText.match(SESSION_URL) ?? []).includes(urls[0])) {
+      problems.push("Seat 1 session is the implementing session. Seat 1 must be a separate session.");
+    }
   }
   if (!SEAT1_MODEL.test(line(t, "Seat 1 model") ?? "")) problems.push('"Seat 1 model" must be Opus 5.5.');
   if (!SEAT2_MODEL.test(line(t, "Seat 2 model") ?? "")) problems.push('"Seat 2 model" must be gpt-6-sol (Codex).');
@@ -147,11 +174,12 @@ async function checkShas(t, isPrCommit) {
 }
 
 /**
- * @param {{body:string, files:string[], isPrCommit?:(sha:string)=>Promise<boolean>, commitText?:string}} p
+ * @param {{body:string, files:string[], isPrCommit?:(sha:string)=>Promise<boolean>, commitText?:string,
+ * localReview?:(evidence:{url:string|undefined,session:string,sha:string|undefined})=>Promise<string[]>}} p
  * `commitText` is the PR commit messages, which carry the implementing session link.
  * @returns {Promise<{required:boolean, ok:boolean, problems:string[]}>}
  */
-export async function evaluate({ body, files, isPrCommit, commitText = "" }) {
+export async function evaluate({ body, files, isPrCommit, commitText = "", localReview }) {
   const classes = classifyPaths(files);
   if (classes.sensitive.length === 0 && classes.gate.length === 0) return { required: false, ok: true, problems: [] };
   const sec = section(body ?? "");
@@ -159,7 +187,7 @@ export async function evaluate({ body, files, isPrCommit, commitText = "" }) {
   const problems = [
     ...checkSkills(sec.text, classes),
     ...checkOutputs(sec.text, files, classes),
-    ...checkSeats(sec.text, `${withoutSeat1Line(body)}\n${commitText}`),
+    ...(await checkSeats(sec.text, `${withoutSeat1Line(body)}\n${commitText}`, localReview)),
     ...(await checkShas(sec.text, isPrCommit)),
   ];
   return { required: true, ok: problems.length === 0, problems };
@@ -175,7 +203,9 @@ export const TEMPLATE = `${SECTION}
 \`\`\`
 <real output>
 \`\`\`
-- Seat 1 session: https://claude.ai/code/session_…
+- Seat 1 session: local:<UUID> OR https://claude.ai/code/session_…
+- Implementer session: <UUID, required for local reviews>
+- Seat 1 review: <same-PR signed issue-comment URL, required for local reviews>
 - Seat 1 model: claude-opus-5-5
 - Seat 1 SHA: <head sha>
 - Seat 2 model: gpt-6-sol
