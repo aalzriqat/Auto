@@ -110,9 +110,7 @@ jobs:
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
       - name: Run the attested role, locale and viewport matrix
-        run: |
-          set -o pipefail
-          pnpm exec playwright test -c playwright.role-audit.config.ts 2>&1 | tee "$RUNNER_TEMP/deal-scenarios-output.log"
+        run: node scripts/pilotRoleAuditEvidence.mjs
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
           HUNT_AUDIT_ROLE: ${{ matrix.role }}
@@ -129,17 +127,15 @@ jobs:
           E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
           CI: true
 
-      - name: Upload Playwright report
+      - name: Upload encrypted role audit evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: pilot-role-audit-${{ matrix.role }}
           path: |
-            test-results/**/role-locale-route.png
-            test-results/**/A-to-B-*.png
-            test-results/**/B-to-A-*.png
-            test-results/**/role-cell.json
-            test-results/**/tenant-boundary.json
+            ${{ runner.temp }}/pilot-role-audit-public/role-evidence.tar.gpg
+            ${{ runner.temp }}/pilot-role-audit-public/results.json
+          if-no-files-found: error
           retention-days: 14
 
       # SCRUM-799: capture only a request ID, error class and public source

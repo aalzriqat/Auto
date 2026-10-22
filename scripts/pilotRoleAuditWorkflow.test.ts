@@ -35,10 +35,10 @@ function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
 
 describe("SCRUM-616 role audit trust and coverage contract", () => {
   test("publishes only explicit post-login evidence and never records auth traces or video", () => {
-    const upload = stepNamed(workflow.jobs.roles.steps, "Upload Playwright report");
+    const upload = stepNamed(workflow.jobs.roles.steps, "Upload encrypted role audit evidence");
     expect(upload.with?.path?.trim().split(/\r?\n/).map((line) => line.trim())).toEqual([
-      "test-results/**/role-locale-route.png", "test-results/**/A-to-B-*.png", "test-results/**/B-to-A-*.png",
-      "test-results/**/role-cell.json", "test-results/**/tenant-boundary.json",
+      "${{ runner.temp }}/pilot-role-audit-public/role-evidence.tar.gpg",
+      "${{ runner.temp }}/pilot-role-audit-public/results.json",
     ]);
     for (const project of roleConfig.projects ?? []) {
       expect(project.use?.trace ?? roleConfig.use?.trace).toBe("off");
@@ -55,7 +55,7 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     expect(job.strategy["max-parallel"]).toBe(1);
     expect(job.strategy["fail-fast"]).toBe(false);
     const browserStep = stepNamed(job.steps, "Run the attested role, locale and viewport matrix");
-    expect(browserStep.run).toContain("-c playwright.role-audit.config.ts");
+    expect(browserStep.run).toBe("node scripts/pilotRoleAuditEvidence.mjs");
     expect(browserStep.env?.HUNT_AUDIT_ROLE).toBe("${{ matrix.role }}");
     expect(readFileSync(path.resolve("playwright.role-audit.config.ts"), "utf8")).toContain("workers: 1");
   });
