@@ -20,7 +20,7 @@
   "expected": [
     {
       "observable": "screen.paintedState",
-      "value": "LOADING_THEN_EMPTY"
+      "value": "LOADING_AND_EMPTY_SEPARATE_FIXTURES"
     }
   ],
   "impl": {
@@ -39,5 +39,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "49d68182cf0491f7670641c507647cd3a9730a999e78375804a0749c07f156c4"
+  "fingerprint": "85be525e96b14ea3fe98ac832365ba20e15bfa6921d8b35c2fcf931d0734a244"
 }

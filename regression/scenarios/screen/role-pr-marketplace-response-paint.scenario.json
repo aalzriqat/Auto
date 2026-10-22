@@ -10,7 +10,7 @@
       },
       "action": "fixture.paint",
       "input": {
-        "route": "marketplace",
+        "route": "marketplace/requests",
         "boundary": "SYNTHETIC_SDK_REAL_COMPONENTS",
         "locales": "EN_AR",
         "viewports": "375_1440",
@@ -44,5 +44,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "adf8158d247db7c4cbffd27c2a2f6a117f2a2591c0c95ef02135108deef628de"
+  "fingerprint": "c6d2286698676c1495fa53ddd81c632a430f99630d33e931b498287b8d346c8f"
 }
