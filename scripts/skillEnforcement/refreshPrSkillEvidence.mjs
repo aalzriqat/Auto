@@ -40,7 +40,7 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
     result = { exitCode: 1, lines: ["PR head changed or could not be measured during revalidation; refusing approval."] };
   }
   const conclusion = result.exitCode === 0 ? "success" : "failure";
-  await writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${encodeURIComponent(String(started.id))}`, {
+  await writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${Number(started.id)}`, {
     status: "completed", conclusion,
     output: { title: `Skill Evidence: ${conclusion}`, summary: result.lines.join("\n") },
   });
@@ -48,6 +48,6 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  try { console.log(JSON.stringify(await refresh(process.env))); }
+  try { await refresh(process.env); console.log("Skill Evidence refresh finished; inspect the head-bound check result."); }
   catch { console.error("Skill Evidence refresh failed; current evidence is unavailable."); process.exitCode = 1; }
 }
