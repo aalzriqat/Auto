@@ -82,6 +82,7 @@ function LeadsContent() {
   const searchParams = useSearchParams();
   const prefillCustomerId = searchParams.get("customerId");
   const { hasPermission } = usePermissions();
+  const canCreateLeads = hasPermission(PERMISSIONS.CREATE_LEADS);
   const canEditLeads = hasPermission(PERMISSIONS.EDIT_LEADS);
   const canDeleteLeads = hasPermission(PERMISSIONS.DELETE_LEADS);
   const canViewUsers = hasPermission(PERMISSIONS.VIEW_USERS);
@@ -176,6 +177,7 @@ function LeadsContent() {
   });
 
   const handleEdit = (lead: LeadListItem) => {
+    if (!canEditLeads) return;
     setEditingLead(lead);
     setDefaultCustomerId(null);
     setIsLeadDialogOpen(true);
@@ -186,6 +188,7 @@ function LeadsContent() {
   };
 
   const handleAddNew = () => {
+    if (!canCreateLeads) return;
     setEditingLead(null);
     setDefaultCustomerId(null);
     setIsLeadDialogOpen(true);
@@ -338,9 +341,11 @@ function LeadsContent() {
               <Kanban className="h-3.5 w-3.5" /> {t("LeadBoardView")}
             </button>
           </div>
-          <Button onClick={handleAddNew}>
-            <Plus className="me-2 h-4 w-4" /> {t("AddLead" as any) || "Add Lead"}
-          </Button>
+          {canCreateLeads && (
+            <Button onClick={handleAddNew}>
+              <Plus className="me-2 h-4 w-4" /> {t("AddLead") || "Add Lead"}
+            </Button>
+          )}
         </div>
 
         {/* Stats */}
@@ -500,7 +505,7 @@ function LeadsContent() {
                 {filteredLeads?.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
-                      {t("NoLeadsFoundDescription")}
+                      {t(canCreateLeads ? "NoLeadsFoundDescription" : "NoLeadsFound")}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -680,12 +685,14 @@ function LeadsContent() {
           </div>
         )}
 
-        <LeadDialog
-          open={isLeadDialogOpen}
-          onOpenChange={setIsLeadDialogOpen}
-          lead={editingLead}
-          defaultCustomerId={defaultCustomerId}
-        />
+        {isLeadDialogOpen && (editingLead ? canEditLeads : canCreateLeads) && (
+          <LeadDialog
+            open={isLeadDialogOpen}
+            onOpenChange={setIsLeadDialogOpen}
+            lead={editingLead}
+            defaultCustomerId={defaultCustomerId}
+          />
+        )}
 
         <SocialConversationDialog
           customerId={conversationCustomerId}

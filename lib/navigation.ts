@@ -38,7 +38,7 @@ export interface NavItem {
   /**
    * Visible to a member holding ANY of these. Used where two different roles
    * do different work on the same screen: Approvals is the profit-approval
-   * queue for `manage:users` AND the deposit-request queue for whoever may
+   * queue for `approve:requests` AND the deposit-request queue for whoever may
    * confirm receipt (`confirm:finance_disbursement`, i.e. accountants), and
    * gating it on `manage:users` alone left accountants with no way in
    * (SCRUM-444). When present it replaces `permission`.
@@ -71,7 +71,7 @@ export const mainNavigation: NavItem[] = [
     name: "Approvals",
     href: "/approvals",
     icon: Shield,
-    anyPermission: ["manage:users", "confirm:finance_disbursement"],
+    anyPermission: ["approve:requests", "confirm:finance_disbursement"],
   },
   { name: "MarketplaceRequests", href: "/marketplace/requests", icon: Handshake, permission: "marketplace:respond" },
 ];

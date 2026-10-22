@@ -65,4 +65,3 @@ export function readHuntAttestation(): Attestation {
   expect(result.status, "exact-role backend attestation must execute successfully").toBe(0);
   return attestationSchema.parse(JSON.parse(result.stdout.trim()));
 }
-

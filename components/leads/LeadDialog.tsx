@@ -184,7 +184,7 @@ function useLeadDropdownOptions({
 }: Readonly<LeadDropdownOptions>) {
   const { t, locale } = useLanguage();
   const { hasPermission } = usePermissions();
-  const canViewSettings = hasPermission("view:settings");
+  const canViewLeadSources = hasPermission("view:leads");
   const localeCode = locale === "ar" ? "ar-JO" : "en-US";
   const [customerSearch, setCustomerSearch] = useState("");
   const customerSelectorOptions = useQuery(
@@ -199,8 +199,8 @@ function useLeadDropdownOptions({
   );
   const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip");
   const dynamicLeadSources = useQuery(
-    api.orgLeadSources.list,
-    activeOrgId && canViewSettings ? { orgId: activeOrgId } : "skip"
+    api.orgLeadSources.listForLeads,
+    activeOrgId && canViewLeadSources ? { orgId: activeOrgId } : "skip"
   );
   const pipelineStages = useQuery(
     api.orgPipelineStages.list,
@@ -261,9 +261,7 @@ function useLeadDropdownOptions({
   const sourceOptions = useMemo(() => {
     const configured =
       dynamicLeadSources && dynamicLeadSources.length > 0
-        ? dynamicLeadSources
-            .filter((source: Doc<"orgLeadSources">) => source.isActive)
-            .map((source: Doc<"orgLeadSources">) => source.label)
+        ? dynamicLeadSources.map((source) => source.label)
         : ["Walk-in", "Website", "Facebook", "Instagram", "Referral", "Phone", "Other"];
 
     return lead?.source && !configured.includes(lead.source)

@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
 import { Car, CheckCircle2, Handshake, MapPin, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { usePermissions } from "@/hooks/use-permissions";
 
 type ResponseKind = "HAVE_MATCH" | "HAVE_SIMILAR" | "CAN_SOURCE" | "NOT_AVAILABLE";
 type InboxView = "requests" | "tradeins";
@@ -51,12 +52,14 @@ function ResponseForm({
   onSaved,
 }: MarketplaceActionFormProps<Id<"marketplaceRequests">>) {
   const { t } = useLanguage();
+  const { hasPermission } = usePermissions();
+  const canViewVehicles = hasPermission("view:vehicles");
   const respond = useMutation(api.marketplaceResponses.respond);
-  const vehiclesPage = useQuery(api.vehicles.list, {
+  const vehiclesPage = useQuery(api.vehicles.list, canViewVehicles ? {
     orgId,
     status: "AVAILABLE",
     paginationOpts: { numItems: 100, cursor: null },
-  });
+  } : "skip");
 
   const [kind, setKind] = useState<ResponseKind>("HAVE_MATCH");
   const [vehicleId, setVehicleId] = useState<string>("");

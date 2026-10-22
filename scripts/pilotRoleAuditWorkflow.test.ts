@@ -6,6 +6,7 @@ import { z } from "zod";
 import { DEFAULT_ROLE_TEMPLATES } from "../convex/utils/permissions";
 import { auditDestination } from "../playwright/fixtures/screenAuditRoutes";
 import roleConfig from "../playwright.role-audit.config";
+import visualConfig from "../playwright.visual.config";
 
 test.each([
   ["OWNER", "dashboard"], ["MANAGER", "dashboard"], ["SALES", "sales"],
@@ -34,6 +35,21 @@ function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
 }
 
 describe("SCRUM-616 role audit trust and coverage contract", () => {
+  test("PR and trusted-main paint the role screens and require their separate exact inventory", () => {
+    const project = visualConfig.projects?.find(item => item.name === "role-page-controls");
+    expect(project?.testDir).toBe("./playwright/tests");
+    expect(String(project?.testMatch)).toBe(String(/role-access\.visual\.spec\.ts/));
+    expect(project?.use?.storageState).toEqual({ cookies: [], origins: [] });
+    const manifest = JSON.parse(readFileSync(path.resolve("package.json"), "utf8"));
+    expect(manifest.scripts["test:visual:deal-cockpit"]).toContain("-c playwright.visual.config.ts");
+    expect(manifest.scripts["test:visual:deal-cockpit"]).not.toContain("--project");
+    for (const name of ["playwright.yml", "trusted-main-e2e.yml"]) {
+      const text = readFileSync(path.resolve(".github/workflows", name), "utf8");
+      expect(text).toMatch(/^\s+pnpm run test:visual:deal-cockpit\s*$/m);
+      expect(text).toContain("node scripts/assertRoleAccessVisualFrames.mjs test-results/deal-cockpit-visual");
+      expect(text).toContain("node scripts/assertDealCockpitVisualFrames.mjs test-results/deal-cockpit-visual");
+    }
+  });
   test("bound role regressions run before the matrix can isolate its audited seat", () => {
     const project = roleConfig.projects?.find(item => item.name === "role-regressions");
     expect(project?.testDir).toBe("./playwright/tests");

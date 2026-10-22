@@ -1,5 +1,13 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## Marketplace reply authority, SCRUM-760
+
+Matrix row `SCRUM760-marketplace-reply` binds `convex/marketplaceResponses.test.ts`, test `a marketplace-only member can reply without gaining inventory visibility`. The same member is refused by `vehicles.list` and persists a matched request's `NOT_AVAILABLE` response under existing `marketplace:respond` authority. The actual form skips the protected catalog query when visibility is absent; a separate control preserves catalog choices for authorized members. A non-vehicle reply does not promise lead creation, and the success message now states only that the reply was sent. These are source/harness and anonymous paint controls, not authenticated platform acceptance. No reply-kind requirements, inventory permission or write authority change.
+
+## Lead source read authority, SCRUM-760
+
+Matrix row `SCRUM760-lead-source` binds `convex/leadSourceAuthority.test.ts`, test `Reception receives active own lead sources while settings remains refused`. Reception reads only active own-tenant IDs and labels under existing `view:leads`; the settings query still refuses. The same control excludes inactive and foreign rows, refuses foreign and unauthenticated access, and refuses after authority is revoked. The form keeps its historical free-text source contract for automations. No settings permission or write authority is granted. A separate anonymous screen replay paints a configured source selected through the actual form; authenticated role execution and real-backend verification remain separate release obligations.
+
 ## Quote status read authority, SCRUM-760
 
 Matrix row `SCRUM760-quote-status` binds `convex/quoteStatusAuthority.test.ts`, test `an accountant can read only active tenant quote choices without settings authority`. Existing quote creation requires `view:sales`; its picker returns only active tenant IDs and labels under that same authority. The settings query still refuses the accountant, and separate controls refuse non-sales users, foreign tenants, unauthenticated users and revoked authority. No settings permission, quote economic rule or write door changes. The screen replay opens the actual quote dialog for every allowed audited role and compares the checkbox count to the public picker query. These are source and harness controls until the real-role browser execution passes; neither the new read nor passing component controls certify a sale, financial posting or production data.
