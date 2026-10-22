@@ -161,7 +161,7 @@ for (const locale of ["en", "ar"] as const) {
         expect(errors).toEqual([]);
         await page.screenshot({ path: testInfo.outputPath("role-locale-route.png"), fullPage: true });
         const observedPath = new URL(page.url()).pathname;
-        if (allowed) expect(observedPath).toBe(expectedPath);
+        expect(observedPath).toBe(expectedPath);
         await testInfo.attach("role-cell.json", { contentType: "application/json", body: JSON.stringify({
           sha: process.env.GITHUB_SHA, preview: expectedDeployment, orgId,
           role: attestation.approver, locale, viewport, route,
