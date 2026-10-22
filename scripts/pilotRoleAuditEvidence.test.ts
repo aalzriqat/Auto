@@ -3,13 +3,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { captureAuditProcess, gpgArgumentPath, importAuditRecipient, packageAuditEvidence, publicAuditSummary, runRoleAudit } from "./pilotRoleAuditEvidence.mjs";
+import { AuditEvidenceError, captureAuditProcess, gpgArgumentPath, importAuditRecipient, packageAuditEvidence, publicAuditSummary, runRoleAudit, withEvidenceCleanup } from "./pilotRoleAuditEvidence.mjs";
 import { SCREEN_AUDIT_ROUTES } from "../playwright/fixtures/screenAuditRoutes";
 
 // One disposable, synthetic recipient. Never use these test keys for real data.
 // No key or recovery copy survives the suite, and nothing enters the user keyring.
-const gpg = process.platform === "win32" ? "C:/Program Files/Git/usr/bin/gpg.exe" : "gpg";
-const tar = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "tar";
+const gpg = process.platform === "win32" ? "C:/Program Files/Git/usr/bin/gpg.exe" : "/usr/bin/gpg";
+const tar = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/tar";
 const parent = realpathSync(path.resolve(".."));
 const root = mkdtempSync(path.join(parent, "pilot-evidence-synthetic-controls-"));
 const keyHome = path.join(root, "synthetic-keyring");
@@ -94,6 +94,29 @@ function options(name: string) {
   return { resultsRoot, privateLog, publicRoot: path.join(root, name), role: "OWNER", sha, publicKey, fingerprint, gpgBinary: gpg, tarBinary: tar };
 }
 
+test.each([
+  { workFails: false, cleanupFails: false, reason: null },
+  { workFails: true, cleanupFails: false, reason: "PRIMARY_FAILURE" },
+  { workFails: false, cleanupFails: true, reason: "CLEANUP_FAILURE" },
+  { workFails: true, cleanupFails: true, reason: "PRIMARY_FAILURE" },
+])("resource cleanup preserves the measured result: work=$workFails cleanup=$cleanupFails", async ({ workFails, cleanupFails, reason }) => {
+  const resource = path.join(root, `cleanup-${workFails}-${cleanupFails}.private`);
+  const cleaned = resource + ".cleaned";
+  const result = withEvidenceCleanup(async () => {
+    writeFileSync(resource, "Synthetic private resource");
+    if (workFails) throw new AuditEvidenceError("PRIMARY_FAILURE");
+    return "MEASURED_RESULT";
+  }, async () => {
+    rmSync(resource);
+    writeFileSync(cleaned, "RESOURCE_REMOVED");
+    if (cleanupFails) throw new AuditEvidenceError("CLEANUP_FAILURE");
+  });
+  if (reason) await expect(result).rejects.toThrow(reason);
+  else await expect(result).resolves.toBe("MEASURED_RESULT");
+  expect(existsSync(resource)).toBe(false);
+  expect(readFileSync(cleaned, "utf8")).toBe("RESOURCE_REMOVED");
+});
+
 test("actual image and private observations survive native encryption/decryption; public results cannot contain them", async () => {
   const args = options("public-success");
   const summary = await packageAuditEvidence(args);
@@ -120,7 +143,7 @@ test("actual image and private observations survive native encryption/decryption
   expect(manifest.files).toHaveLength(3);
   for (const entry of manifest.files) {
     const content = readFileSync(path.join(extracted, entry.path));
-    expect(content.length).toBe(entry.bytes);
+    expect(content).toHaveLength(entry.bytes);
     expect(createHash("sha256").update(content).digest("hex")).toBe(entry.sha256);
   }
   const corrupted = Buffer.from(ciphertext);
@@ -214,7 +237,7 @@ test("an oversized private log retains a bounded encrypted tail and cannot pass"
   const decoded = path.join(root, "oversized-log-failure.tar");
   runGpg(["--output", decoded, "--decrypt", path.join(args.publicRoot, "role-evidence.tar.gpg")]);
   const tail = execFileSync(tar, ["-xOf", decoded, "browser.log"], { maxBuffer: 33 * 1024 * 1024, timeout: 10_000 });
-  expect(tail.length).toBe(32 * 1024 * 1024);
+  expect(tail).toHaveLength(32 * 1024 * 1024);
   expect(tail.subarray(-Buffer.byteLength(canary)).toString("utf8")).toBe(canary);
   const manifest = JSON.parse(execFileSync(tar, ["-xOf", decoded, "manifest.json"], { encoding: "utf8" }));
   expect(manifest.diagnostic).toMatchObject({ logTruncated: true, captureInventoryAccepted: false, refusal: "INVENTORY_LIMIT" });
@@ -307,17 +330,35 @@ test.each([
   expect(readdirSync(root).sort()).toEqual(before);
 });
 
-test("the default native Playwright CLI failure is captured and encrypted after valid preflight", async () => {
-  const repo = path.join(root, "native-playwright-missing-config");
-  const runnerTemp = path.join(root, "native-playwright-temp");
+test("an unqualified native binary refuses before creating preflight files", async () => {
+  const before = readdirSync(root).sort();
+  await expect(runRoleAudit({ env: auditTestEnvironment("local", { RUNNER_TEMP: root, PILOT_ROLE_GPG_BINARY: "gpg" }) }))
+    .rejects.toThrow("NATIVE_BINARY_UNAVAILABLE");
+  expect(readdirSync(root).sort()).toEqual(before);
+});
+
+test.each(["HOST_PATH", "EMPTY_PATH"] as const)("%s native Playwright CLI failure is captured and encrypted after valid preflight", (lookup) => {
+  const repo = path.join(root, `native-playwright-missing-config-${lookup}`);
+  const runnerTemp = path.join(root, `native-playwright-temp-${lookup}`);
   mkdirSync(path.join(repo, ".github"), { recursive: true }); mkdirSync(runnerTemp);
   writeFileSync(path.join(repo, ".github/pilot-role-evidence-recipient.json"), JSON.stringify({ fingerprint,
     publicKey: readFileSync(publicKey, "utf8") }));
-  const result = await runRoleAudit({ cwd: repo, env: auditTestEnvironment("local", { RUNNER_TEMP: runnerTemp }) });
+  const env = auditTestEnvironment("local", { RUNNER_TEMP: runnerTemp });
+  if (lookup === "EMPTY_PATH") {
+    const emptyPath = path.join(root, "empty-executable-search");
+    mkdirSync(emptyPath);
+    env.PATH = emptyPath;
+    env.Path = emptyPath;
+  }
+  const cli = spawnSync(process.execPath, [path.resolve("scripts/pilotRoleAuditEvidence.mjs")], {
+    cwd: repo, env, encoding: "utf8", timeout: 45_000, windowsHide: true });
+  expect(cli.status).toBe(1);
+  expect(cli.stdout).not.toBe("");
+  const result: unknown = JSON.parse(cli.stdout.trim());
   expect(result).toMatchObject({ complete: false, observedCells: 0, execution: "FAILED" });
   const publication = path.join(runnerTemp, "pilot-role-audit-public");
   expect(readFileSync(path.join(publication, "results.json"), "utf8")).not.toContain(repo);
-  const decoded = path.join(root, "native-playwright-failure.tar");
+  const decoded = path.join(root, `native-playwright-failure-${lookup}.tar`);
   runGpg(["--output", decoded, "--decrypt", path.join(publication, "role-evidence.tar.gpg")]);
   expect(execFileSync(tar, ["-xOf", decoded, "browser.log"], { encoding: "utf8" }))
     .toContain("playwright.role-audit.config.ts");

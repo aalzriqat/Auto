@@ -16,9 +16,12 @@ const SHA = /^[a-f0-9]{40}$/;
 const FINGERPRINT = /^[A-F0-9]{40}$/;
 const MAX_FILES = 1024;
 const MAX_BYTES = 512 * 1024 * 1024;
+const DEFAULT_GPG = process.platform === "win32" ? "C:/Program Files/Git/usr/bin/gpg.exe" : "/usr/bin/gpg";
+const DEFAULT_TAR = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/tar";
+const POWERSHELL = path.join(process.env.SystemRoot ?? "C:/Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 const PRIVATE_FILE = /^(?:role-locale-route\.png|role-cell\.json|tenant-boundary\.json|(?:A-to-B|B-to-A)-(?:en|ar)-(?:desktop|phone)\.png)$/;
-const PROBE_OPERATIONS = ["foreign organization read", "foreign customer read", "foreign row under own org",
-  "foreign organization update", "foreign customer delete", "foreign row delete under own org"];
+const PROBE_OPERATIONS = new Set(["foreign organization read", "foreign customer read", "foreign row under own org",
+  "foreign organization update", "foreign customer delete", "foreign row delete under own org"]);
 const runContextSchema = z.object({ runId: z.string().regex(/^\d+$/), attempt: z.string().regex(/^[1-9]\d*$/),
   workflowRef: z.string().regex(/^[\w.-]+\/[\w.-]+\/\.github\/workflows\/pilot-role-audit\.yml@refs\/heads\/main$/) }).strict();
 
@@ -26,6 +29,33 @@ const runContextSchema = z.object({ runId: z.string().regex(/^\d+$/), attempt: z
 export class AuditEvidenceError extends Error {
   /** @param {string} code */
   constructor(code) { super(code); this.name = "AuditEvidenceError"; }
+}
+
+/** @template T @param {() => Promise<T>} operation
+ * @returns {Promise<PromiseSettledResult<T>>} */
+async function settleEvidenceOperation(operation) {
+  try { return { status: "fulfilled", value: await operation() }; }
+  catch (reason) { return { status: "rejected", reason }; }
+}
+
+/** Cleanup always runs, but cannot replace an already measured failure.
+ * @template T @param {() => Promise<T>} operation @param {() => Promise<void>} cleanup
+ * @returns {Promise<T>} */
+export async function withEvidenceCleanup(operation, cleanup) {
+  const result = await settleEvidenceOperation(operation);
+  const cleaned = await settleEvidenceOperation(cleanup);
+  if (result.status === "rejected") throw result.reason;
+  if (cleaned.status === "rejected") throw cleaned.reason;
+  return result.value;
+}
+
+/** @param {string} directory @param {string} parent @param {string} prefix */
+async function removePrivateDirectory(directory, parent, prefix) {
+  const resolved = await fs.realpath(directory);
+  if (path.dirname(resolved) !== await fs.realpath(parent) || !path.basename(resolved).startsWith(prefix)) {
+    throw new AuditEvidenceError("UNSAFE_CLEANUP");
+  }
+  await fs.rm(resolved, { recursive: true, force: true });
 }
 
 /** Git-for-Windows ships an MSYS GPG; native argv needs its POSIX path form.
@@ -44,7 +74,7 @@ function gpgHomeArgument(binary, directory) {
   }
   // MSYS agent sockets cannot use long workspace names. Resolve the same
   // existing directory's OS short name without interpolating paths into code.
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+  const result = spawnSync(POWERSHELL, ["-NoProfile", "-NonInteractive", "-Command",
     "$fso=New-Object -ComObject Scripting.FileSystemObject; $fso.GetFolder($env:PILOT_GPG_HOME_DIRECTORY).ShortPath"],
   { env: { ...process.env, PILOT_GPG_HOME_DIRECTORY: directory }, encoding: "utf8", timeout: 10_000, windowsHide: true });
   if (result.status !== 0 || !result.stdout.trim()) throw new AuditEvidenceError("RECIPIENT_UNAVAILABLE");
@@ -85,7 +115,7 @@ async function captureFiles(root) {
     }
   }
   await visit(root, 0);
-  return files.sort();
+  return files.sort((left, right) => left.localeCompare(right, "en"));
 }
 
 const cellSchema = z.object({
@@ -142,7 +172,7 @@ export async function publicAuditSummary(files, role, sha) {
     const parsed = isolationSchema.safeParse(JSON.parse(await fs.readFile(file, "utf8")));
     if (!parsed.success || parsed.data.sha !== sha || parsed.data.auditedRoleBeforeIsolation !== role) throw new AuditEvidenceError("INVALID_ISOLATION");
     const identities = new Set(parsed.data.attempts.map((attempt) => `${attempt.direction}:${attempt.operation}`));
-    if (identities.size !== 12 || parsed.data.attempts.some((attempt) => !PROBE_OPERATIONS.includes(attempt.operation))) throw new AuditEvidenceError("INVALID_ISOLATION");
+    if (identities.size !== 12 || parsed.data.attempts.some((attempt) => !PROBE_OPERATIONS.has(attempt.operation))) throw new AuditEvidenceError("INVALID_ISOLATION");
     for (const direction of ["A-to-B", "B-to-A"]) for (const locale of LOCALES) for (const viewport of VIEWPORTS) {
       const image = path.join(path.dirname(file), `${direction}-${locale}-${viewport}.png`);
       await assertCapturePng(image, files);
@@ -166,7 +196,7 @@ function nativeOutput(binary, args) {
  * @param {{gpgBinary: string, keyHome: string, publicKey: string, fingerprint: string, now?: number}} options
  */
 export async function importAuditRecipient({ gpgBinary, keyHome, publicKey, fingerprint, now = Date.now() }) {
-  if (!FINGERPRINT.test(fingerprint)) throw new AuditEvidenceError("RECIPIENT_UNAVAILABLE");
+  if (!path.isAbsolute(gpgBinary) || !FINGERPRINT.test(fingerprint)) throw new AuditEvidenceError("RECIPIENT_UNAVAILABLE");
   await regularFile(publicKey);
   await fs.mkdir(keyHome, { recursive: true, mode: 0o700 });
   const homeArgument = gpgHomeArgument(gpgBinary, keyHome);
@@ -202,11 +232,12 @@ function completed(child) {
  * runContext?: {runId: string, attempt: string, workflowRef: string}}} options
  */
 export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot, role, sha, publicKey, fingerprint,
-  gpgBinary = "gpg", tarBinary = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "tar", execution = "UNAVAILABLE", runContext }) {
+  gpgBinary = DEFAULT_GPG, tarBinary = DEFAULT_TAR, execution = "UNAVAILABLE", runContext }) {
   if (!member(role, ROLES) || !SHA.test(sha) || !member(execution, ["SUCCEEDED", "FAILED", "UNAVAILABLE"]) ||
       (runContext && !runContextSchema.safeParse(runContext).success)) {
     throw new AuditEvidenceError("INVALID_CONTEXT");
   }
+  if (!path.isAbsolute(gpgBinary) || !path.isAbsolute(tarBinary)) throw new AuditEvidenceError("NATIVE_BINARY_UNAVAILABLE");
   const output = path.resolve(publicRoot);
   // A caller must supply a fresh publication directory. Never reuse stale evidence.
   await fs.mkdir(output, { recursive: false, mode: 0o700 });
@@ -215,7 +246,8 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
   const keyHome = path.join(staging, "public-keyring");
   const partial = path.join(output, "role-evidence.tar.gpg.partial");
   let keyHomeArgument = "";
-  try {
+  return withEvidenceCleanup(async () => {
+   try {
     const recipient = await importAuditRecipient({ gpgBinary, keyHome, publicKey, fingerprint });
     keyHomeArgument = recipient.homeArgument;
     const sourceRoot = await fs.realpath(resultsRoot);
@@ -290,13 +322,15 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
     { stdio: ["pipe", "ignore", "pipe"], timeout: 120_000, windowsHide: true });
     tar.stderr?.pipe(diagnostics, { end: false });
     gpg.stderr?.pipe(diagnostics, { end: false });
-    try {
+    await withEvidenceCleanup(async () => {
+     try {
       if (!tar.stdout || !gpg.stdin) throw new AuditEvidenceError("ENCRYPTION_FAILED");
       await Promise.all([completed(tar), completed(gpg), pipeline(tar.stdout, gpg.stdin)]);
-    } catch {
+     } catch {
       tar.kill(); gpg.kill();
       throw new AuditEvidenceError("ENCRYPTION_FAILED");
-    } finally { diagnostics.end(); await finished(diagnostics); }
+     }
+    }, async () => { diagnostics.end(); await finished(diagnostics); });
     if ((await regularFile(partial)).size === 0) throw new AuditEvidenceError("ENCRYPTION_FAILED");
     await fs.rename(partial, path.join(output, "role-evidence.tar.gpg"));
     const cipherHash = createHash("sha256");
@@ -305,21 +339,17 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
     await fs.writeFile(path.join(output, "results.json"), JSON.stringify(summary, null, 2), { mode: 0o600 });
     if (validationError) throw validationError;
     return summary;
-  } catch (error) {
-    await fs.rm(partial, { force: true });
+   } catch (error) {
     throw error instanceof AuditEvidenceError ? error : new AuditEvidenceError("EVIDENCE_UNAVAILABLE");
-  } finally {
+   }
+  }, async () => withEvidenceCleanup(async () => { await fs.rm(partial, { force: true }); }, async () => {
     if (keyHomeArgument) {
-      const gpgconf = path.isAbsolute(gpgBinary) ? path.join(path.dirname(gpgBinary), process.platform === "win32" ? "gpgconf.exe" : "gpgconf") : "gpgconf";
+      const gpgconf = path.join(path.dirname(gpgBinary), process.platform === "win32" ? "gpgconf.exe" : "gpgconf");
       spawnSync(gpgconf, ["--homedir", keyHomeArgument, "--kill", "all"], { timeout: 10_000, windowsHide: true, stdio: "ignore" });
     }
     // This is the private staging directory this function itself just created.
-    const resolved = await fs.realpath(staging);
-    if (path.dirname(resolved) !== await fs.realpath(path.dirname(output)) || !path.basename(resolved).startsWith(".role-evidence-private-")) {
-      throw new AuditEvidenceError("UNSAFE_CLEANUP");
-    }
-    await fs.rm(resolved, { recursive: true, force: true });
-  }
+    await removePrivateDirectory(staging, path.dirname(output), ".role-evidence-private-");
+  }));
 }
 
 /** Capture from process start. Neither a child error nor stderr reaches a public
@@ -350,13 +380,14 @@ export async function runRoleAudit({ cwd = process.cwd(), env = process.env, bro
   if (!member(role, ROLES) || !SHA.test(sha) || !env.RUNNER_TEMP) throw new AuditEvidenceError("INVALID_CONTEXT");
   const reportedRun = runContextSchema.safeParse({ runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, workflowRef: env.GITHUB_WORKFLOW_REF });
   if (env.GITHUB_ACTIONS === "true" && !reportedRun.success) throw new AuditEvidenceError("INVALID_CONTEXT");
+  const gpgBinary = env.PILOT_ROLE_GPG_BINARY ?? DEFAULT_GPG;
+  if (!path.isAbsolute(gpgBinary)) throw new AuditEvidenceError("NATIVE_BINARY_UNAVAILABLE");
   const runnerTemp = await fs.realpath(env.RUNNER_TEMP);
   const preflight = await fs.mkdtemp(path.join(runnerTemp, ".role-evidence-preflight-"));
   const privateLog = path.join(runnerTemp, "deal-scenarios-output.log");
   const publicRoot = path.join(runnerTemp, "pilot-role-audit-public");
-  const gpgBinary = env.PILOT_ROLE_GPG_BINARY ?? "gpg";
   let homeArgument = "";
-  try {
+  return withEvidenceCleanup(async () => {
     const recipient = recipientSchema.safeParse(JSON.parse(await fs.readFile(path.join(cwd, ".github/pilot-role-evidence-recipient.json"), "utf8")));
     if (!recipient.success) throw new AuditEvidenceError("RECIPIENT_UNAVAILABLE");
     const publicKey = path.join(preflight, "recipient.asc");
@@ -374,25 +405,24 @@ export async function runRoleAudit({ cwd = process.cwd(), env = process.env, bro
       publicKey, fingerprint: recipient.data.fingerprint, gpgBinary, execution: result.execution === "SUCCEEDED" ? "SUCCEEDED" : "FAILED",
       runContext: reportedRun.success ? reportedRun.data : undefined });
     return summary;
-  } finally {
+  }, async () => {
     if (homeArgument) {
-      const gpgconf = path.isAbsolute(gpgBinary) ? path.join(path.dirname(gpgBinary), process.platform === "win32" ? "gpgconf.exe" : "gpgconf") : "gpgconf";
+      const gpgconf = path.join(path.dirname(gpgBinary), process.platform === "win32" ? "gpgconf.exe" : "gpgconf");
       spawnSync(gpgconf, ["--homedir", homeArgument, "--kill", "all"], { timeout: 10_000, windowsHide: true, stdio: "ignore" });
     }
-    const resolved = await fs.realpath(preflight);
-    if (path.dirname(resolved) !== runnerTemp || !path.basename(resolved).startsWith(".role-evidence-preflight-")) throw new AuditEvidenceError("UNSAFE_CLEANUP");
-    await fs.rm(resolved, { recursive: true, force: true });
-  }
+    await removePrivateDirectory(preflight, runnerTemp, ".role-evidence-preflight-");
+  });
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
-  runRoleAudit().then((summary) => {
+  try {
+    const summary = await runRoleAudit();
     console.log(JSON.stringify({ role: summary.role, execution: summary.execution, observedCells: summary.observedCells,
       expectedCells: summary.expectedCells, complete: summary.complete, isolationVerified: summary.isolationVerified,
       visualReview: "UNAVAILABLE_UNTIL_LOCAL_DECRYPT_AND_INSPECTION" }));
     if (!summary.complete) process.exitCode = 1;
-  }).catch((error) => {
+  } catch (error) {
     console.error(JSON.stringify({ execution: "UNAVAILABLE", reason: error instanceof AuditEvidenceError ? error.message : "EVIDENCE_UNAVAILABLE" }));
     process.exitCode = 1;
-  });
+  }
 }
