@@ -61,9 +61,5 @@
   "impl": {
     "file": "playwright/tests/audit-navigation-dismissal.spec.ts",
     "testName": "phone capture refuses navigation that remains open after Escape"
-  },
-  "bugRef": {
-    "key": "SCRUM-760",
-    "failingFirst": "5e066200ad3c9819c9a410c809cdf36810c47a7a"
   }
 }

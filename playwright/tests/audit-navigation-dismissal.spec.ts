@@ -17,6 +17,6 @@ test("phone capture waits until the closing navigation overlay is gone", async (
 
 test("phone capture refuses navigation that remains open after Escape", async ({ page }) => {
   await page.setContent('<main><button>Ready page action</button></main><div role="dialog" aria-modal="true">Navigation</div>');
-  await expect(dismissAuditNavigation(page, 200)).rejects.toThrow();
+  await expect(dismissAuditNavigation(page, 200)).rejects.toThrow(/toHaveCount/);
   expect(await page.getByRole("dialog").count()).toBe(1);
 });

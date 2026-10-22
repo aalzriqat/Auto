@@ -1,6 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 
-/** Navigation interaction is not evidence that the overlay has disappeared. */
+/** Navigation interaction is not evidence that the drawer has disappeared. */
 export async function dismissAuditNavigation(page: Page, timeout = 5_000): Promise<void> {
   const drawer = page.getByRole("dialog");
   await expect(drawer).toBeVisible({ timeout });
