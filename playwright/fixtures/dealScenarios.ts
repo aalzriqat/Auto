@@ -87,6 +87,8 @@ export async function createCostedVehicle(
   orgId: Id<"organizations">,
   opts: FinancedScenario["vehicle"] & { model: string },
 ): Promise<Id<"vehicles">> {
+  const bankFunded = opts.costPaidBy === "BANK_TRANSFER" || opts.costPaidBy === "CHEQUE" || opts.costPaidBy === "CARD";
+  const bankAccountId = opts.cost > 0 && bankFunded ? await ensureReceivingBank(client, orgId) : undefined;
   return (await client.mutation(api.vehicles.create, {
     orgId,
     vin: testVin(),
@@ -100,6 +102,7 @@ export async function createCostedVehicle(
     sellingPrice: opts.price,
     purchasePrice: opts.cost,
     purchasePaymentMethod: opts.costPaidBy,
+    ...(bankAccountId ? { bankAccountId } : {}),
     // Bought on account, the payable needs someone to owe.
     // SCRUM-717: the creditor of an owned purchase is `purchaseSupplierName`;
     // `sourcedFromName` is consignment-only and is refused on an owned car.
@@ -170,6 +173,10 @@ export async function recordQuoteDeposit(
     deposit.method
   ];
   await page.getByRole("option", { name: label, exact: true }).click();
+  if (deposit.method === "BANK_TRANSFER" || deposit.method === "CARD") {
+    await dialog.locator("#record-deposit-bank").click();
+    await page.getByRole("option", { name: `${RECEIVING_BANK_NAME} · JOD`, exact: true }).click();
+  }
   await dialog.locator('textarea[name="notes"]').fill("QA TEST deposit (SCRUM-595)");
   await dialog.getByRole("button", { name: "Record Deposit" }).click();
   await expect(dialog).not.toBeVisible();
@@ -371,10 +378,10 @@ export async function resolveAppraisalGapDealerAbsorbs(managerPage: Page, dealUr
 export { approveCreditDecision };
 
 /**
- * Handover → expected payment → zero-cost line + reconcile → legal invoice →
- * close, all from the cockpit, as the manager.
+ * Handover → expected payment → zero-cost line + reconcile, as the manager.
+ * The caller separately measures the pre-close forward and final sale entries.
  */
-export async function closeFinancedDeal(
+export async function prepareFinancedDealForClosing(
   managerPage: Page,
   dealUrl: string,
   s: FinancedScenario,
@@ -422,11 +429,14 @@ export async function closeFinancedDeal(
   await costs.locator("#reconcile-notes").fill("QA TEST: nothing to match.");
   await costs.getByRole("button", { name: "Confirm reconciliation" }).click();
   await expect(costs.getByRole("button", { name: "Reconcile fee" })).toHaveCount(0);
+}
 
+/** Finalize only after the caller has recorded and checked any required forward. */
+export async function closeFinancedDeal(managerPage: Page): Promise<void> {
   // SCRUM-411: no legal invoice is recorded. The server derives the sale from the
   // approved amount, the contribution and the customer's gap, so a deal with no
   // real invoice closes once the other prerequisites are met.
-  const close = nextStep.getByRole("button", { name: "Close the deal", exact: true });
+  const close = managerPage.getByTestId("deal-next-step").getByRole("button", { name: "Close the deal", exact: true });
   await expect(close).toBeVisible();
   await close.click();
   const finalize = managerPage.getByRole("dialog");
@@ -449,8 +459,21 @@ export async function recordForward(
   const dialog = managerPage.getByRole("dialog");
   await expect(dialog.getByTestId("forward-breakdown")).toBeVisible();
   await dialog.locator("#record-forward-method").selectOption(method);
+  if (method !== "CASH") {
+    // The scenario oracles are JOD. Never pick an arbitrary bank or currency.
+    await dialog.locator("#record-forward-bank").selectOption({ label: `${RECEIVING_BANK_NAME} · JOD` });
+  }
   await dialog.locator("#record-forward-reference").fill(`FWD-QA-${testDataSuffix()}`);
   await dialog.getByRole("button", { name: "Record payment" }).click();
+  await expect(dialog).not.toBeVisible();
+}
+
+/** Record the actual QA return before cancelling a deal whose forward was paid. */
+export async function recordForwardReturned(managerPage: Page): Promise<void> {
+  await managerPage.getByTestId("deal-forward-returned").click();
+  const dialog = managerPage.getByRole("dialog").filter({ hasText: "Report the payment returned" });
+  await dialog.locator("#forward-correction-reason").fill("QA TEST: the finance company returned the full forwarded payment before cancellation.");
+  await dialog.getByRole("button", { name: "Report returned by the company", exact: true }).click();
   await expect(dialog).not.toBeVisible();
 }
 
@@ -498,6 +521,10 @@ export async function decideDeposit(
     ];
     await confirm.getByRole("combobox").click();
     await managerPage.getByRole("option", { name: method, exact: true }).click();
+    if (decision.refundMethod && decision.refundMethod !== "CASH") {
+      await confirm.getByRole("combobox", { name: "Bank account received into", exact: true }).click();
+      await managerPage.getByRole("option", { name: `${RECEIVING_BANK_NAME} · JOD`, exact: true }).click();
+    }
   }
   await confirm
     .getByRole("button", { name: decision.treatment === "REFUND" ? "Confirm Refund" : "Confirm Forfeit" })
@@ -522,13 +549,14 @@ export const RECEIVING_BANK_NAME = "QA TEST Receiving Bank";
 export async function ensureReceivingBank(
   client: ConvexHttpClient,
   orgId: Id<"organizations">,
-): Promise<void> {
+): Promise<Id<"bankAccounts">> {
   const settings = await client.query(api.orgSettings.get, { orgId });
   const currency = settings?.currency;
   if (!currency) throw new Error("ensureReceivingBank: the org has no currency configured; refusing to guess one.");
   const banks = await client.query(api.bankAccounts.list, { orgId });
-  if (banks.some((b) => b.name === RECEIVING_BANK_NAME && b.isActive && b.currency === currency)) return;
-  await client.mutation(api.bankAccounts.create, {
+  const bank = banks.find((b) => b.name === RECEIVING_BANK_NAME && b.isActive && b.currency === currency);
+  if (bank) return bank._id;
+  return await client.mutation(api.bankAccounts.create, {
     orgId,
     name: RECEIVING_BANK_NAME,
     currency,

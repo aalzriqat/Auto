@@ -9,6 +9,7 @@ import {
   approveCreditDecision,
   cancelDeal,
   closeFinancedDeal,
+  prepareFinancedDealForClosing,
   confirmDisbursement,
   createCostedVehicle,
   decideDeposit,
@@ -18,6 +19,7 @@ import {
   recordApproved,
   resolveAppraisalGap,
   recordForward,
+  recordForwardReturned,
   recordQuotationAmount,
   recordQuoteDeposit,
   scenarioCustomer,
@@ -745,8 +747,8 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
           await resolveAppraisalGap(managerPage, dealUrl, s.gap ?? { mode: "DEALER_ABSORBS" });
         }
 
-        await step(`${s.id} close`, page, orgId, s.expect.close, () =>
-          closeFinancedDeal(managerPage, dealUrl, s),
+        await noMovement(`${s.id} prepare closing`, page, orgId, () =>
+          prepareFinancedDealForClosing(managerPage, dealUrl, s),
         );
 
         if (s.expect.forward) {
@@ -758,6 +760,10 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
             managerPage.getByRole("button", { name: "Record payment to the finance company" }),
           ).toHaveCount(0);
         }
+
+        // SCRUM-411 P2-01: pay the current deposit/contribution before finalizing.
+        // Both steps retain their independent, handwritten ledger expectations.
+        await step(`${s.id} close`, page, orgId, s.expect.close, () => closeFinancedDeal(managerPage));
 
         await step(
           `${s.id} disbursement`,
@@ -1045,7 +1051,9 @@ test.describe("cancelled financed deals: the reversal and the deposit decision, 
     const context = await newContainedContext(browser, { storageState: "playwright/.auth/user.json" });
     const page = await context.newPage();
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
-    await ensureLedgerMonthOpen(await authenticatedConvexClient(page), orgId);
+    const seedClient = await authenticatedConvexClient(page);
+    await ensureLedgerMonthOpen(seedClient, orgId);
+    await ensureReceivingBank(seedClient, orgId);
     await ensureFinanceCompany(page);
     await ensureCompany(page, LTV70);
     await context.close();
@@ -1083,9 +1091,25 @@ test.describe("cancelled financed deals: the reversal and the deposit decision, 
         }
 
         if (s.cancelAfterClose) {
-          await step(`${s.id} close`, page, orgId, s.expect.close!, () =>
-            closeFinancedDeal(managerPage, dealUrl, s),
+          await noMovement(`${s.id} prepare closing`, page, orgId, () =>
+            prepareFinancedDealForClosing(managerPage, dealUrl, s),
           );
+          // The expected payable is a handwritten scenario amount, not a value
+          // read from production's calculator. SCRUM-411 requires its payment
+          // before close and its real return before cancellation.
+          const forwardMinor = s.expect.close?.["2220"]?.cr ?? 0;
+          const forward: ExpectedLedgerDelta = forwardMinor > 0
+            ? { "2220": { dr: forwardMinor }, "1110": { cr: forwardMinor } }
+            : {};
+          if (forwardMinor > 0) {
+            await step(`${s.id} forward before close`, page, orgId, forward, () => recordForward(managerPage, "BANK_TRANSFER"));
+          }
+          await step(`${s.id} close`, page, orgId, s.expect.close!, () =>
+            closeFinancedDeal(managerPage),
+          );
+          if (forwardMinor > 0) {
+            await step(`${s.id} company returns forward`, page, orgId, mirror(forward), () => recordForwardReturned(managerPage));
+          }
           await step(`${s.id} cancel`, page, orgId, mirror(s.expect.close!), () =>
             cancelDeal(managerPage, `cancel after close (${s.id})`),
           );
