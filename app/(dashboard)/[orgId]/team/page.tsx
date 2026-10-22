@@ -287,10 +287,10 @@ export default function TeamPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <Badge variant={member.roleName === "OWNER" ? "default" : "secondary"}>
+                          <Badge variant={member.isSystemOwnerRole === true ? "default" : "secondary"}>
                             {t(member.roleName as any) || member.roleName}
                           </Badge>
-                          {member.roleName === "OWNER" && (
+                          {member.isSystemOwnerRole === true && (
                             <ShieldAlert className="h-4 w-4 text-primary" />
                           )}
                         </div>
@@ -374,7 +374,7 @@ export default function TeamPage() {
                               variant="outline"
                               size="sm"
                               onClick={() => setMemberToChangeRole(member)}
-                              disabled={member.roleName === "OWNER" && member.userId === myMembership?.userId}
+                              disabled={member.isSystemOwnerRole === true && member.userId === myMembership?.userId}
                             >
                               {t("ChangeRole" as any)}
                             </Button>
@@ -382,10 +382,10 @@ export default function TeamPage() {
                               variant="ghost"
                               size="icon"
                               onClick={() => setMemberToDelete(member)}
-                              disabled={member.roleName === "OWNER" && member.userId === myMembership?.userId}
-                              title={member.roleName === "OWNER" && member.userId === myMembership?.userId ? t("YouCannotRemoveYourself" as any) : t("RemoveMember" as any)}
+                              disabled={member.isSystemOwnerRole === true && member.userId === myMembership?.userId}
+                              title={member.isSystemOwnerRole === true && member.userId === myMembership?.userId ? t("YouCannotRemoveYourself" as any) : t("RemoveMember" as any)}
                             >
-                              <Trash2 className={`h-4 w-4 ${member.roleName === "OWNER" && member.userId === myMembership?.userId ? "text-muted-foreground opacity-50" : "text-red-500"}`} />
+                              <Trash2 className={`h-4 w-4 ${member.isSystemOwnerRole === true && member.userId === myMembership?.userId ? "text-muted-foreground opacity-50" : "text-red-500"}`} />
                             </Button>
                           </div>
                         </TableCell>

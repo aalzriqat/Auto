@@ -18,10 +18,17 @@ describe("SCRUM-729 public membership projection qualified-owner authority", () 
       const userId = await ctx.db.insert("users", { clerkId: "owner-projection", email: "projection@example.test" });
       const roleId = await ctx.db.insert("roles", { orgId, name, permissions: [...permissions], ...(flag === undefined ? {} : { isSystemOwnerRole: flag }) });
       await ctx.db.insert("memberships", { orgId, userId, roleId });
+      const viewerId = await ctx.db.insert("users", { clerkId: "owner-projection-viewer", email: "viewer@example.test" });
+      const viewerRole = await ctx.db.insert("roles", { orgId, name: "Qualified viewer", permissions: [], isSystemOwnerRole: true });
+      await ctx.db.insert("memberships", { orgId, userId: viewerId, roleId: viewerRole });
       return { orgId, roleId };
     });
     const membership = await t.withIdentity({ subject: "owner-projection" }).query(api.memberships.getMyMembership, { orgId: fixture.orgId });
     expect(membership).toMatchObject({ roleId: fixture.roleId, roleName: name, isSystemOwnerRole: qualified });
     expect(membership.permissions).toEqual(qualified ? ALL_PERMISSIONS : [...permissions]);
+    const listing = await t.withIdentity({ subject: "owner-projection-viewer" }).query(api.memberships.list,
+      { orgId: fixture.orgId, paginationOpts: { numItems: 10, cursor: null } });
+    expect(listing.page.find((row) => row.roleId === fixture.roleId))
+      .toMatchObject({ roleName: name, isSystemOwnerRole: qualified });
   });
 });

@@ -35,7 +35,7 @@ export function BranchesClient() {
     { initialNumItems: 100 }
   );
   const managerOptions = (memberships || [])
-    .filter((m) => m.roleName === "MANAGER" || m.roleName === "OWNER")
+    .filter((m) => m.roleName === "MANAGER" || m.isSystemOwnerRole === true)
     .map((m) => ({ value: m.userId, label: m.userName, subLabel: m.roleName }));
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
