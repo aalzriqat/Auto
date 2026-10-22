@@ -1082,6 +1082,14 @@ export const update = mutation({
       );
     }
 
+    // SCRUM-811: an owned sale does not make a caller-supplied trade-in ours.
+    // Check the reference even at zero value, before persisting metadata.
+    if (args.tradeInVehicleId !== undefined) {
+      const tradeIn = await requireOwnedRow(ctx, args.orgId, "vehicles", args.tradeInVehicleId,
+        "Trade-in vehicle not found in this organization.");
+      if (tradeIn.isDeleted) throw new ConvexError("Trade-in vehicle not found in this organization.");
+    }
+
     const patch: Record<string, unknown> = {};
     if (args.salePrice !== undefined) patch.salePrice = args.salePrice;
     if (args.saleDate !== undefined) patch.saleDate = args.saleDate;
