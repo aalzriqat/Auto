@@ -75,7 +75,8 @@ export function useCommandIdentity(): CommandIdentity {
         // Only the diagnostic prefix is bounded. The map keeps the full intent,
         // and a fresh UUID still distinguishes identical new intents. The
         // backend accepts at most 200 characters; 160 + ':' + UUID uses 197.
-        const minted = `${intentId.slice(0, 160)}:${crypto.randomUUID()}`;
+        const prefix = intentId.slice(0, 160).replace(/[\uD800-\uDBFF]$/u, "");
+        const minted = `${prefix}:${crypto.randomUUID()}`;
         keys.current.set(intentId, minted);
         return minted;
       },

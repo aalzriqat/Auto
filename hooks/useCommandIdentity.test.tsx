@@ -13,6 +13,12 @@ import { useCommandIdentity } from "./useCommandIdentity";
 import { MAX_IDEMPOTENCY_KEY_LENGTH } from "../convex/utils/idempotency";
 
 describe("useCommandIdentity", () => {
+  test("a prefix boundary never splits a Unicode character on the wire", () => {
+    const { result } = renderHook(() => useCommandIdentity());
+    const key = result.current.for(`${"x".repeat(159)}🚗${"reason".repeat(50)}`);
+    expect(Buffer.from(key, "utf8").toString("utf8")).toBe(key);
+    expect(key.length).toBeLessThanOrEqual(MAX_IDEMPOTENCY_KEY_LENGTH);
+  });
   test("long correction reasons keep bounded keys, full-intent separation and retry identity", () => {
     const { result, rerender } = renderHook(() => useCommandIdentity());
     const prefix = `forward-correction:RETURNED:${"a".repeat(32)}:${"b".repeat(32)}:`;
