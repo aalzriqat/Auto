@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolveOrgId } from "../utils";
+import { SCREEN_AUDIT_ROUTES as ROUTES } from "../fixtures/screenAuditRoutes";
 
 /**
  * A cheap check on every screen (SCRUM-595): open each dashboard route,
@@ -14,43 +15,6 @@ import { resolveOrgId } from "../utils";
  * (`directMessages.markDelivered`). Run it only against QA data on a
  * disposable preview or localhost, never production.
  */
-
-const ROUTES = [
-  "dashboard",
-  "accounting",
-  "applications",
-  "approvals",
-  "commissions",
-  "customers",
-  "deals",
-  "expenses",
-  "leads",
-  "marketplace/requests",
-  "messages",
-  "notifications",
-  "payroll",
-  "reports",
-  "sales",
-  "sales/sales",
-  "settings/billing",
-  "settings/branches",
-  "settings/commission",
-  "settings/custom-fields",
-  "settings/feedback",
-  "settings/finance",
-  "settings/general",
-  "settings/integrations",
-  "settings/lead-sources",
-  "settings/marketplace",
-  "settings/pipeline",
-  "settings/valuation-companies",
-  "settings/website",
-  "social-inbox",
-  "sourcing",
-  "tasks",
-  "team",
-  "vehicles",
-];
 
 const VIEWPORTS = [
   { name: "desktop", width: 1440, height: 900 },

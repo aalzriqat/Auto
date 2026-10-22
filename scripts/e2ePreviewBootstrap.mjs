@@ -644,6 +644,54 @@ export const HUNT_SEAT_ROLES = [
 const HUNT_SEATS = ["primary", "approver"];
 
 /**
+ * Read product-template seat authority without relaxing the scripted preflight.
+ * @param {string} primaryRole
+ * @param {string} approverRole
+ * @param {Record<string, string | undefined>} [env]
+ * @param {Parameters<typeof assertExistingE2EPreview>[1]} [deps]
+ */
+export async function assertHuntPreview(primaryRole, approverRole, env = process.env, deps = {}) {
+  if (![primaryRole, approverRole].every((role) => HUNT_SEAT_ROLES.includes(role))) {
+    throw new PreviewTargetingError("Unknown expected hunt role.");
+  }
+  const { run = runConvex, resolveClerkUserId: resolveId = resolveClerkUserId } = deps;
+  const { deployKey, previewName, primaryClerkUserId, approverClerkUserId, expectedCloudUrl } =
+    await resolveE2EPreviewContext(env, {
+      resolveId,
+      identityError: "Both Clerk seats are required for hunt attestation.",
+      missingUrlError: "The hunt attestation requires the browser's explicit preview URL.",
+    });
+  run(buildConvexRunArgs({
+    functionName: "e2eBootstrap:assertHuntSeats",
+    argsJson: JSON.stringify({ primaryClerkUserId, approverClerkUserId, primaryRole, approverRole, expectedCloudUrl }),
+    previewName, deployKey, env,
+  }), "e2eBootstrap:assertHuntSeats");
+}
+
+/**
+ * Final marker-gated fixture, not a public Team operation.
+ * @param {Record<string, string | undefined>} [env]
+ * @param {Parameters<typeof assertExistingE2EPreview>[1]} [deps]
+ */
+export async function isolateHuntApprover(env = process.env, deps = {}) {
+  const expectedApproverRole = env.HUNT_AUDIT_ROLE;
+  if (!HUNT_SEAT_ROLES.includes(String(expectedApproverRole))) {
+    throw new PreviewTargetingError("The isolation fixture requires an explicit expected hunt role.");
+  }
+  const { run = runConvex, resolveClerkUserId: resolveId = resolveClerkUserId } = deps;
+  const { deployKey, previewName, primaryClerkUserId, approverClerkUserId, expectedCloudUrl } =
+    await resolveE2EPreviewContext(env, {
+      resolveId, identityError: "Both seeded Clerk seats are required for isolation.",
+      missingUrlError: "The isolation fixture requires the explicit preview URL.",
+    });
+  run(buildConvexRunArgs({
+    functionName: "e2eBootstrap:isolateHuntApprover",
+    argsJson: JSON.stringify({ primaryClerkUserId, approverClerkUserId, expectedApproverRole, expectedCloudUrl }),
+    previewName, deployKey, env,
+  }), "e2eBootstrap:isolateHuntApprover");
+}
+
+/**
  * Moves one seeded seat of the disposable hunt preview to another role.
  *
  * @param {string | undefined} seat "primary" | "approver"
@@ -720,6 +768,10 @@ if (invokedDirectly) {
   } else if (mode === "--set-role") {
     // Here `ref` and `prNumber` carry the seat and the role.
     run = () => setHuntSeatRole(ref, prNumber);
+  } else if (mode === "--assert-hunt") {
+    run = () => assertHuntPreview(ref, prNumber);
+  } else if (mode === "--isolate-hunt-approver") {
+    run = () => isolateHuntApprover();
   } else {
     run = () => main();
   }

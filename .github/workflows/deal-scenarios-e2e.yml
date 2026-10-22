@@ -105,6 +105,7 @@ jobs:
           pnpm exec playwright test -c playwright.scenarios.config.ts 2>&1 | tee "$RUNNER_TEMP/deal-scenarios-output.log"
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CROSS_SCREEN_ORACLE: "1"
           # The explorer re-asks the backend whether NEXT_PUBLIC_CONVEX_URL is
           # the seeded disposable preview (assertE2EBootstrap) before it
           # navigates; it trusts no "already attested" variable (Codex AF-430-03).
