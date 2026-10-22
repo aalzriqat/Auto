@@ -698,12 +698,16 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // Deal commission lines: + dealCommissions.{addLine,removeLine} (+2 total, +2 analysed). Both take `orgId`;
   // addLine checks the sale and employee membership in that org, removeLine loads the line and refuses another org's.
   // Combined: 545 -> 548 total, 365 -> 368 analysed (re-measured FROM THE ANALYSER).
+  // Pilot role audit: + e2eBootstrap.isolateHuntApprover (private preview fixture).
+  // It takes Clerk seat ids, validates the preview and exact seeded memberships,
+  // and derives its organization internally. No caller-supplied orgId is added.
+  // Measured census: +1 total and skippedNoOrgId; all 368 orgId handlers remain analysed.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 548,
+      totalMutations: 549,
       analysed: 368,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 165,
+      skippedNoOrgId: 166,
     });
   });
 });
