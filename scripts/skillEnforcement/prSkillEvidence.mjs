@@ -128,21 +128,26 @@ function checkOutputs(t, files, classes) {
   return problems;
 }
 
+async function checkLocalSeat(t, otherSessionText, local, localReview) {
+  const problems = [];
+  const implementer = line(t, "Implementer session") ?? "";
+  if (!SESSION_ID.test(implementer)) problems.push('Local review needs an explicit "Implementer session" UUID.');
+  if (local === implementer.toLowerCase() || otherSessionText.toLowerCase().includes(local)) {
+    problems.push("Seat 1 session is the implementing session. Seat 1 must be a separate session.");
+  }
+  const sha = line(t, "Seat 1 SHA")?.match(/^[0-9a-f]{40}\b/i)?.[0].toLowerCase();
+  if (!sha) problems.push("Local review needs the full 40-character Seat 1 SHA.");
+  if (!localReview) problems.push("Local review could not be verified against its signed PR comment.");
+  else problems.push(...await localReview({ url: line(t, "Seat 1 review"), session: local, sha }));
+  return problems;
+}
+
 async function checkSeats(t, otherSessionText, localReview) {
   const problems = [];
   const sessionText = line(t, "Seat 1 session") ?? "";
   const local = sessionText.match(LOCAL_SESSION)?.[1].toLowerCase();
-  if (local) {
-    const implementer = line(t, "Implementer session") ?? "";
-    if (!SESSION_ID.test(implementer)) problems.push('Local review needs an explicit "Implementer session" UUID.');
-    if (local === implementer.toLowerCase() || otherSessionText.toLowerCase().includes(local)) {
-      problems.push("Seat 1 session is the implementing session. Seat 1 must be a separate session.");
-    }
-    const sha = line(t, "Seat 1 SHA")?.match(/^[0-9a-f]{40}\b/i)?.[0].toLowerCase();
-    if (!sha) problems.push("Local review needs the full 40-character Seat 1 SHA.");
-    if (!localReview) problems.push("Local review could not be verified against its signed PR comment.");
-    else problems.push(...await localReview({ url: line(t, "Seat 1 review"), session: local, sha }));
-  } else {
+  if (local) problems.push(...await checkLocalSeat(t, otherSessionText, local, localReview));
+  else {
     const urls = sessionText.match(SESSION_URL) ?? [];
     if (urls.length !== 1) {
       problems.push('"Seat 1 session" must be one https://claude.ai/code/session_… link or local:<UUID>.');

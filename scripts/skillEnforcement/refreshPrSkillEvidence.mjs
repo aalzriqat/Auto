@@ -4,7 +4,8 @@ import { check, getJson } from "./checkPrSkillEvidence.mjs";
 import { localReviewUrl } from "./prSkillEvidence.mjs";
 
 async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
-  const response = await fetchImpl(`https://api.github.com/repos/${repo}/check-runs${suffix}`, {
+  const repositoryPath = repo.split("/").map(encodeURIComponent).join("/");
+  const response = await fetchImpl(`https://api.github.com/repos/${repositoryPath}/check-runs${suffix}`, {
     method,
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -15,8 +16,10 @@ async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
 
 export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchImpl = fetch) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(REPO ?? "") || !/^\d+$/.test(PR_NUMBER ?? "") ||
+      REPO.split("/").some((part) => part === "." || part === "..") ||
       !/^[1-9]\d*$/.test(COMMENT_ID ?? "") || !GH_TOKEN) throw new Error("Invalid refresh environment");
-  const prPath = `/repos/${REPO}/pulls/${PR_NUMBER}`;
+  const repositoryPath = REPO.split("/").map(encodeURIComponent).join("/");
+  const prPath = `/repos/${repositoryPath}/pulls/${encodeURIComponent(PR_NUMBER)}`;
   const pr = await getJson(fetchImpl, GH_TOKEN, prPath);
   const expected = `https://github.com/${REPO}/pull/${PR_NUMBER}#issuecomment-${COMMENT_ID}`;
   if (pr.state !== "open" || localReviewUrl(pr.body) !== expected) return { refreshed: false };
@@ -37,7 +40,7 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
     result = { exitCode: 1, lines: ["PR head changed or could not be measured during revalidation; refusing approval."] };
   }
   const conclusion = result.exitCode === 0 ? "success" : "failure";
-  await writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${started.id}`, {
+  await writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${encodeURIComponent(String(started.id))}`, {
     status: "completed", conclusion,
     output: { title: `Skill Evidence: ${conclusion}`, summary: result.lines.join("\n") },
   });
@@ -46,5 +49,5 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try { console.log(JSON.stringify(await refresh(process.env))); }
-  catch (error) { console.error(error.message); process.exitCode = 1; }
+  catch { console.error("Skill Evidence refresh failed; current evidence is unavailable."); process.exitCode = 1; }
 }

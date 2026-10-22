@@ -3,7 +3,7 @@
  * controls: each refusal cell has a matching pass cell so a gate that always
  * passes, or always blocks, turns a test red.
  */
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { classifyPaths, invokedSkills, requiredSkills } from "./policy.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -509,6 +509,12 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
       return { ok: true, status: 200, json: async () => json } as Response;
     }) as typeof fetch;
   const env = { REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "test" };
+
+  test.each(["../..", "o/..", "./r"])("refresh refuses repository traversal %s before any I/O", async (repo) => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ state: "closed" }) } as Response));
+    await expect(refresh({ ...env, REPO: repo, COMMENT_ID: "123" }, fetchImpl)).rejects.toThrow("Invalid refresh environment");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 
   test("accepts a separate local session whose trusted same-PR signed report certifies the head", async () => {
     expect((await check(env, api())).exitCode).toBe(0);
