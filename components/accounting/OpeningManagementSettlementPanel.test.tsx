@@ -11,7 +11,9 @@ vi.mock("next/navigation", () => ({ useParams: () => ({ orgId: "org-a" }), usePa
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }) }));
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
-  return { useConvexAuth: () => ({ isAuthenticated: true }), useMutation: () => fixture.mutation,
+  return { useConvexAuth: () => ({ isAuthenticated: true }),
+    useMutation: (reference: never) => (args: unknown) =>
+      fixture.mutation({ name: getFunctionName(reference), args }),
     useQuery: (reference: never, args: unknown) => {
       const name = getFunctionName(reference);
       fixture.calls.push({ name, args });
@@ -53,7 +55,9 @@ test("a different finance approver submits only the stored plan identity", async
   fixture.pending = true; fixture.actor = "approver";
   render(page());
   fireEvent.click(screen.getByRole("button", { name: "Approve fixed schedule" }));
-  await waitFor(() => expect(fixture.mutation).toHaveBeenCalledWith({ orgId: "org-a", planId: "plan-a" }));
+  await waitFor(() => expect(fixture.mutation).toHaveBeenCalledWith({
+    name: "openingManagementSettlement:approve", args: { orgId: "org-a", planId: "plan-a" },
+  }));
 });
 
 test("draft sends exact currency minor units and retries the same economic intent", async () => {
@@ -68,6 +72,17 @@ test("draft sends exact currency minor units and retries the same economic inten
   fireEvent.click(screen.getByRole("button", { name: "Prepare for a different approver" }));
   await waitFor(() => expect(fixture.mutation).toHaveBeenCalledTimes(2));
   const first = fixture.mutation.mock.calls[0][0];
-  expect(first).toMatchObject({ orgId: "org-a", openingDraftId: "opening-a", totalMinor: 100003, expectedCurrency: "JOD", firstEffectiveMonth: Date.UTC(2026, 1, 1), classificationAttestation: "CONSUMED_BEFORE_OPENING_NOT_PREPAID_NOT_CAPITAL" });
+  expect(first.name).toBe("openingManagementSettlement:draft");
+  expect(first.args).toMatchObject({ orgId: "org-a", openingDraftId: "opening-a", totalMinor: 100003, expectedCurrency: "JOD", firstEffectiveMonth: Date.UTC(2026, 1, 1), classificationAttestation: "CONSUMED_BEFORE_OPENING_NOT_PREPAID_NOT_CAPITAL" });
   expect(fixture.mutation.mock.calls[1][0]).toEqual(first);
+});
+
+
+test("reject sends only the stored plan identity to the reject mutation", async () => {
+  fixture.pending = true;
+  render(page());
+  fireEvent.click(screen.getByRole("button", { name: "Reject draft" }));
+  await waitFor(() => expect(fixture.mutation).toHaveBeenCalledWith({
+    name: "openingManagementSettlement:reject", args: { orgId: "org-a", planId: "plan-a" },
+  }));
 });

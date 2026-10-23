@@ -199,51 +199,68 @@ test.each(["en", "ar"] as const)("opening allocation visual fixtures %s", (local
   expect(screen.getByText("SYNTHSTOCKVIN001")).toBeTruthy();
   capture("stock-readback");
 
-  const remainingGroups: OpeningAllocationGroup[] = [
-    { accountId: "recoverable", kind: "SUPPLIER_RECOVERABLE", allowedKinds: ["SUPPLIER_RECOVERABLE"],
-      journalMinor: 4_001, label: locale === "ar" ? "1360 · مستحق من مورد" : "1360 · Supplier recoverable" },
-    { accountId: "liability", kind: "SUPPLIER_PAYABLE",
-      allowedKinds: ["SUPPLIER_PAYABLE", "OTHER_PAYABLE", "EMPLOYEE_COMMISSION", "UNALLOCATED_LIABILITY"],
-      allowedPurposes: ["CUSTOMER_DEPOSIT", "UNIDENTIFIED_RECEIPT"], journalMinor: 23_781,
-      label: locale === "ar" ? "2199 · التزامات تاريخية" : "2199 · Historical liabilities" },
-  ];
+  // Each positive review uses an admissible declared control: the backend
+  // forbids mixed families and mixed unknown purposes on one account.
+  const remainingControls = [
+    { accountId: "recoverable", code: "1360", name: "Supplier recoverable", nameAr: "مستحق من مورد", kind: "SUPPLIER_RECOVERABLE", amountMinor: 4_001 },
+    { accountId: "supplier-payable", code: "2391", name: "Opening supplier payable", nameAr: "التزام افتتاحي لمورد", kind: "SUPPLIER_PAYABLE", amountMinor: 4_001 },
+    { accountId: "other-payable", code: "2392", name: "Opening other payable", nameAr: "التزام افتتاحي آخر", kind: "OTHER_PAYABLE", amountMinor: 4_001 },
+    { accountId: "commission", code: "2393", name: "Opening employee commission", nameAr: "عمولة موظف افتتاحية", kind: "EMPLOYEE_COMMISSION", amountMinor: 7_777 },
+    { accountId: "deposit", code: "2100", name: "Customer deposits", nameAr: "عربون العملاء", kind: "UNALLOCATED_LIABILITY", amountMinor: 4_001 },
+    { accountId: "receipt", code: "2394", name: "Opening unidentified receipt control", nameAr: "حساب المقبوضات الافتتاحية غير المحددة", kind: "UNALLOCATED_LIABILITY", amountMinor: 4_001 },
+  ] as const;
+  const customLiabilityKinds: OpeningAllocationGroup["kind"][] = ["SUPPLIER_PAYABLE", "OTHER_PAYABLE", "EMPLOYEE_COMMISSION", "UNALLOCATED_LIABILITY"];
+  const remainingGroups: OpeningAllocationGroup[] = remainingControls.map(control => ({
+    accountId: control.accountId, kind: control.kind,
+    allowedKinds: control.kind === "SUPPLIER_RECOVERABLE" ? ["SUPPLIER_RECOVERABLE"]
+      : control.accountId === "deposit" ? ["UNALLOCATED_LIABILITY"] : customLiabilityKinds,
+    allowedPurposes: control.accountId === "deposit" ? ["CUSTOMER_DEPOSIT"] : ["UNIDENTIFIED_RECEIPT"],
+    journalMinor: control.amountMinor,
+    label: `${control.code} · ${locale === "ar" ? control.nameAr : control.name}`,
+  }));
   const remainingRows: OpeningAllocationDraft[] = [
     { rowKey: "recoverable", accountId: "recoverable", kind: "SUPPLIER_RECOVERABLE", partyId: "", partyLabel: "",
       counterpartyName: "Synthetic Supplier", purpose: "CLAIM", amount: "4.001", title: "Prior claim", dueDate: "", note: "" },
-    { rowKey: "supplier-payable", accountId: "liability", kind: "SUPPLIER_PAYABLE", partyId: "", partyLabel: "",
+    { rowKey: "supplier-payable", accountId: "supplier-payable", kind: "SUPPLIER_PAYABLE", partyId: "", partyLabel: "",
       counterpartyName: "Synthetic Supplier", amount: "4.001", title: "Prior supplier debt", dueDate: "", note: "" },
-    { rowKey: "other-payable", accountId: "liability", kind: "OTHER_PAYABLE", partyId: "", partyLabel: "",
+    { rowKey: "other-payable", accountId: "other-payable", kind: "OTHER_PAYABLE", partyId: "", partyLabel: "",
       counterpartyName: "Synthetic Creditor", amount: "4.001", title: "Prior other debt", dueDate: "", note: "" },
-    { rowKey: "commission", accountId: "liability", kind: "EMPLOYEE_COMMISSION", partyId: "employee-a",
+    { rowKey: "commission", accountId: "commission", kind: "EMPLOYEE_COMMISSION", partyId: "employee-a",
       partyLabel: "Synthetic Employee", amount: "7.777", title: "", dueDate: "", note: "" },
-    { rowKey: "deposit", accountId: "liability", kind: "UNALLOCATED_LIABILITY", partyId: "", partyLabel: "",
+    { rowKey: "deposit", accountId: "deposit", kind: "UNALLOCATED_LIABILITY", partyId: "", partyLabel: "",
       purpose: "CUSTOMER_DEPOSIT", amount: "4.001", title: "Unassigned deposits", dueDate: "", note: "" },
-    { rowKey: "receipt", accountId: "liability", kind: "UNALLOCATED_LIABILITY", partyId: "", partyLabel: "",
+    { rowKey: "receipt", accountId: "receipt", kind: "UNALLOCATED_LIABILITY", partyId: "", partyLabel: "",
       purpose: "UNIDENTIFIED_RECEIPT", amount: "4.001", title: "Unidentified receipts", dueDate: "", note: "" },
   ];
   mount(<div className="mx-auto max-w-5xl p-4"><OpeningAllocationEditor orgId={orgId} currency="JOD"
     groups={remainingGroups} rows={remainingRows} onChange={vi.fn()}
     canSelectCustomers={false} canSelectEmployees canSelectPartners={false} /></div>);
-  expect(screen.getAllByRole("combobox", { name: locale === "ar" ? "نوع الالتزام التاريخي" : "Historical obligation type" })).toHaveLength(5);
+  expect(screen.getAllByRole("combobox", { name: locale === "ar" ? "نوع الالتزام التاريخي" : "Historical obligation type" })).toHaveLength(4);
   capture("remaining-entry");
 
-  const remainingDetails: NonNullable<PendingOpeningBalanceDraft["allocationDetails"]> = remainingRows.map((row) => ({
-    rowKey: row.rowKey, kind: row.kind, accountId: row.accountId,
-    accountCode: row.accountId === "recoverable" ? "1360" : "2199",
-    accountName: row.accountId === "recoverable" ? "Supplier recoverable" : "Historical liabilities",
-    accountNameAr: row.accountId === "recoverable" ? "مستحق من مورد" : "التزامات تاريخية",
-    partyId: row.kind === "EMPLOYEE_COMMISSION" ? row.partyId : null,
-    partyName: row.kind === "EMPLOYEE_COMMISSION" ? "Synthetic Employee" : row.counterpartyName ?? null,
-    partyDetail: null, partyAvailable: true,
-    allocationStatus: row.kind === "UNALLOCATED_LIABILITY" ? "UNALLOCATED" : "AVAILABLE",
-    amountMinor: row.kind === "EMPLOYEE_COMMISSION" ? 7_777 : 4_001,
-    title: row.title || undefined, purpose: row.purpose,
-  }));
+  const remainingDetails: NonNullable<PendingOpeningBalanceDraft["allocationDetails"]> = remainingRows.map((row) => {
+    const control = remainingControls.find(control => control.accountId === row.accountId);
+    if (!control) throw new Error("Missing synthetic declared opening control");
+    return {
+      rowKey: row.rowKey, kind: row.kind, accountId: row.accountId,
+      accountCode: control.code, accountName: control.name, accountNameAr: control.nameAr,
+      partyId: row.kind === "EMPLOYEE_COMMISSION" ? row.partyId : null,
+      partyName: row.kind === "EMPLOYEE_COMMISSION" ? "Synthetic Employee" : row.counterpartyName ?? null,
+      partyDetail: null, partyAvailable: true,
+      allocationStatus: row.kind === "UNALLOCATED_LIABILITY" ? "UNALLOCATED" : "AVAILABLE",
+      amountMinor: control.amountMinor,
+      title: row.title || undefined, purpose: row.purpose,
+    };
+  });
   const remainingReview: PendingOpeningBalanceDraft = { ...review,
     lines: [
-      { accountId: "recoverable", accountCode: "1360", accountName: "Supplier recoverable", debitMinor: 4_001, creditMinor: 0 },
+      ...remainingControls.map(control => ({
+        accountId: control.accountId, accountCode: control.code,
+        accountName: control.name, accountNameAr: control.nameAr,
+        debitMinor: control.kind === "SUPPLIER_RECOVERABLE" ? control.amountMinor : 0,
+        creditMinor: control.kind === "SUPPLIER_RECOVERABLE" ? 0 : control.amountMinor,
+      })),
       { accountId: "cash", accountCode: "1010", accountName: "Opening cash", debitMinor: 19_780, creditMinor: 0 },
-      { accountId: "liability", accountCode: "2199", accountName: "Historical liabilities", debitMinor: 0, creditMinor: 23_781 },
     ],
     allocationDetails: remainingDetails,
   };
