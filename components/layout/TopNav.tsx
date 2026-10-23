@@ -44,7 +44,7 @@ export function TopNav() {
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const permissions = myMembership?.permissions || [];
-  const isOwner = myMembership?.roleName === "OWNER";
+  const isOwner = myMembership?.isSystemOwnerRole === true;
   const logoUrl = useQuery(
     api.orgSettings.getLogoUrl,
     activeOrgId ? { orgId: activeOrgId } : "skip"

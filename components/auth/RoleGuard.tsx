@@ -12,7 +12,7 @@ export function RoleGuard({
 }: {
   children: React.ReactNode;
   permissions?: string[];
-  /** When true, only the OWNER role may pass — overrides `permissions`. */
+  /** When true, only a server-qualified system owner may pass. */
   ownerOnly?: boolean;
 }) {
   const { activeOrgId } = useOrg();
@@ -32,7 +32,7 @@ export function RoleGuard({
   }
 
   const hasAccess = ownerOnly
-    ? membership?.roleName === "OWNER"
+    ? membership?.isSystemOwnerRole === true
     : permissions.every((p) => membership?.permissions.includes(p) ?? false);
 
   // Instead of silently bouncing the user to the dashboard, show a calm,

@@ -2,6 +2,15 @@ packages:
   - "apps/*"
   - "packages/*"
 overrides:
+  # SCRUM-859: Metro's maintained 0.84 patch line removes image-size and its
+  # ICNS/JXL/HEIF parser DoS paths. A direct image-size 2.x override breaks
+  # Metro 0.84.4's file-path API. Keep Expo on its existing Metro minor line.
+  # https://github.com/react/metro/releases/tag/v0.84.5
+  "metro@0.84.4": 0.84.6
+  # SCRUM-859: GHSA-cg2g-xh64-v4q7 and GHSA-mrv2-3pqr-j5jr
+  # (registry audit: critical/high), patched in 3.4.17. jsPDF's optional sanitizer stays on its
+  # supported major; this release was published 2026-10-12.
+  dompurify: 3.4.17
   # GHSA-rfgv-xxqx-mfg5 (DoS) and GHSA-w293-vg96-wgc3 (TLS certificate validation
   # bypass), both HIGH, published 2026-09-29, patched in 7.29.1 (SCRUM-483). Dev-only
   # (jsdom). dealer-worker's separate npm tree (wrangler -> miniflare) carries the
@@ -271,22 +280,7 @@ allowBuilds:
 patchedDependencies:
   expo-sharing: patches/expo-sharing.patch
 auditConfig:
-  # image-size parser DoS (ICNS, and JXL/HEIF). Both advisories name >=2.0.3 as
-  # the patched version, but that release does not exist — npm's latest is
-  # 2.0.2, which is itself in the vulnerable range — so no override or bump can
-  # clear these. They reach us only through
-  #   apps/mobile > @clerk/expo > @clerk/clerk-js > @solana/wallet-adapter-react
-  #   > @solana-mobile/... > react-native > metro > image-size
-  # where Metro reads image dimensions at build time from assets in this repo,
-  # not from attacker-supplied input at runtime. The cost of a parser DoS there
-  # is a hung build, not production availability.
-  #
-  # Ignored individually rather than by lowering --audit-level, so every other
-  # high advisory still fails the required dependency-audit check. Remove these
-  # once image-size 2.0.3 ships and Metro picks it up.
   ignoreGhsas:
-    - GHSA-w3rx-r6r6-pgpr
-    - GHSA-5p2g-fcmc-qvqq
     # SCRUM-556: node-forge RSA PKCS#1 v1.5 signature verification accepts extra
     # nested DigestAlgorithm elements (HIGH). Affected <=1.4.0 with
     # first_patched_version null, and npm's latest is 1.4.0 itself — so no

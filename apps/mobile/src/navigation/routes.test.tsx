@@ -42,19 +42,11 @@ jest.mock("expo-router", () => {
   };
 });
 
-jest.mock("@clerk/expo/native", () => {
-  const React = jest.requireActual<typeof import("react")>("react");
-  const { Pressable, Text } = jest.requireActual<typeof import("react-native")>("react-native");
-
-  return {
-    AuthView: ({ onDismiss }: { onDismiss: () => void }) =>
-      React.createElement(
-        Pressable,
-        { accessibilityLabel: "dismiss-auth", accessibilityRole: "button", onPress: onDismiss },
-        React.createElement(Text, null, "AuthView"),
-      ),
-  };
-});
+// Route-unit coverage does not initialize the external authentication SDK.
+// Custom sign-in behavior needs its own active fixture; the legacy test below
+// remains explicitly pending rather than pretending these hooks authenticate.
+jest.mock("@clerk/expo", () => ({ useAuth: jest.fn(), useSSO: jest.fn() }));
+jest.mock("@clerk/expo/legacy", () => ({ useSignIn: jest.fn(), useSignUp: jest.fn() }));
 
 jest.mock("../providers/AppProviders", () => ({
   AppProviders: ({ children }: { children: ReactNode }) => children,

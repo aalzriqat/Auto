@@ -295,6 +295,7 @@ export const list = query({
       activePage.map(async (m) => {
         const user = await ctx.db.get(m.userId);
         const role = await ctx.db.get(m.roleId);
+        const activeRole = role?.orgId === args.orgId && !role.isDeleted ? role : null;
         return {
           _id: m._id,
           orgId: m.orgId,
@@ -303,7 +304,8 @@ export const list = query({
           userName: user?.name ?? user?.email ?? "Unknown",
           userEmail: user?.email ?? "",
           userImage: user?.imageUrl,
-          roleName: role?.name ?? "UNKNOWN",
+          roleName: activeRole?.name ?? "UNKNOWN",
+          isSystemOwnerRole: activeRole ? isSystemOwnerRole(activeRole) : false,
           commissionRate: m.commissionRate ?? 0,
           lastSeenAt: m.lastSeenAt,
           offboardingStatus: m.offboardingStatus,
@@ -325,10 +327,15 @@ export const getMyMembership = query({
   args: {
     orgId: v.id("organizations"),
   },
+  returns: v.object({
+    _id: v.id("memberships"), userId: v.id("users"), roleId: v.id("roles"),
+    roleName: v.string(), permissions: v.array(v.string()), isSystemOwnerRole: v.boolean(),
+  }),
   handler: async (ctx, args) => {
     const { user, membership, role } = await requireTenantAuth(ctx, args.orgId);
-    // OWNER always gets all permissions — prevents stale DB roles when new permissions are added
-    const permissions: string[] = isSystemOwnerRole(role)
+    // Qualified owners get newly added permissions even when their stored set is stale.
+    const qualifiedOwner = isSystemOwnerRole(role);
+    const permissions: string[] = qualifiedOwner
       ? [...ALL_PERMISSIONS]
       : role.permissions;
     return {
@@ -337,6 +344,7 @@ export const getMyMembership = query({
       roleId: role._id,
       roleName: role.name,
       permissions,
+      isSystemOwnerRole: qualifiedOwner,
     };
   },
 });

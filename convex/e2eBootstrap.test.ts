@@ -1,6 +1,6 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
 import {
@@ -24,6 +24,137 @@ const APPROVER = {
 };
 
 const CLOUD_URL = "https://the-one-preview.convex.cloud";
+
+describe("SCRUM-616 hunt attestation is separate from scripted finance preflight", () => {
+  test("isolates only the seeded approver in a fresh second org and refuses a repeat", async () => {
+    const t = await markedDeployment();
+    await bootstrap(t);
+    await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+      seat: "approver", clerkUserId: APPROVER.clerkUserId, role: "MANAGER", expectedCloudUrl: CLOUD_URL,
+    });
+    const args = {
+      primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId,
+      expectedApproverRole: "MANAGER", expectedCloudUrl: CLOUD_URL,
+    };
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "production");
+    await expect(t.mutation(internal.e2eBootstrap.isolateHuntApprover, args)).rejects.toThrow(/preview/);
+    expect(await t.run((ctx) => ctx.db.query("organizations").collect())).toHaveLength(1);
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "preview");
+    await expect(t.mutation(internal.e2eBootstrap.isolateHuntApprover, {
+      ...args, expectedCloudUrl: "https://another-preview.convex.cloud",
+    })).rejects.toThrow(/aimed at deployment/);
+    const result = await t.mutation(internal.e2eBootstrap.isolateHuntApprover, args);
+    expect(result.orgB).not.toBe(result.orgA);
+    const primary = t.withIdentity({ subject: PRIMARY.clerkUserId });
+    const approver = t.withIdentity({ subject: APPROVER.clerkUserId });
+    expect((await primary.query(api.organizations.listMine, {})).map((org) => org?._id)).toEqual([result.orgA]);
+    expect((await approver.query(api.organizations.listMine, {})).map((org) => org?._id)).toEqual([result.orgB]);
+    await expect(approver.query(api.organizations.get, { orgId: result.orgA })).rejects.toThrow(/not a member/);
+    await expect(primary.query(api.organizations.get, { orgId: result.orgB })).rejects.toThrow(/not a member/);
+    await expect(t.mutation(internal.e2eBootstrap.isolateHuntApprover, args)).rejects.toThrow(/not the QA organization/);
+    expect((await approver.query(api.organizations.listMine, {}))).toHaveLength(1);
+  });
+
+  test.each(DEFAULT_ROLE_TEMPLATES.map((role) => role.name))(
+    "isolation keeps the real owner in A while moving the %s audited seat",
+    async (roleName) => {
+      const t = await markedDeployment();
+      await bootstrap(t);
+      await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "approver", clerkUserId: APPROVER.clerkUserId, role: roleName, expectedCloudUrl: CLOUD_URL,
+      });
+      const { orgA, orgB } = await t.mutation(internal.e2eBootstrap.isolateHuntApprover, {
+        primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId,
+        expectedApproverRole: roleName, expectedCloudUrl: CLOUD_URL,
+      });
+      expect((await t.withIdentity({ subject: PRIMARY.clerkUserId }).query(api.memberships.getMyMembership, { orgId: orgA })).roleName).toBe("OWNER");
+      expect((await t.withIdentity({ subject: APPROVER.clerkUserId }).query(api.memberships.getMyMembership, { orgId: orgB })).roleName).toBe("OWNER");
+    },
+  );
+
+  test("refuses narrowed authority, owner-name impersonation and foreign deployment", async () => {
+    const t = await markedDeployment();
+    await bootstrap(t);
+    await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+      seat: "approver", clerkUserId: APPROVER.clerkUserId, role: "MANAGER", expectedCloudUrl: CLOUD_URL,
+    });
+    const args = {
+      primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId,
+      primaryRole: "OWNER", approverRole: "MANAGER", expectedCloudUrl: CLOUD_URL,
+    };
+    await expect(t.query(internal.e2eBootstrap.assertHuntSeats, {
+      ...args, expectedCloudUrl: "https://another-preview.convex.cloud",
+    })).rejects.toThrow(/aimed at deployment/);
+    const ownerRole = await t.run(async (ctx) => {
+      const marker = await ctx.db.query("e2ePreviewBootstrap").first();
+      return await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", marker!.orgId!))
+        .filter((q) => q.eq(q.field("name"), "OWNER")).unique();
+    });
+    await t.run((ctx) => ctx.db.patch(ownerRole!._id, { isSystemOwnerRole: false }));
+    await expect(t.query(internal.e2eBootstrap.assertHuntSeats, args)).rejects.toThrow(/expected role template/);
+    const caller = t.withIdentity({ subject: PRIMARY.clerkUserId });
+    const before = await caller.query(api.orgSettings.get, { orgId: ownerRole!.orgId });
+    await expect(caller.mutation(api.orgSettings.upsert, {
+      orgId: ownerRole!.orgId, dealershipName: "Forbidden owner-name control",
+    })).rejects.toThrow(/Only the organization owner/);
+    expect(await caller.query(api.orgSettings.get, { orgId: ownerRole!.orgId })).toEqual(before);
+    await t.run((ctx) => ctx.db.patch(ownerRole!._id, { isSystemOwnerRole: true, permissions: [] }));
+    await expect(t.query(internal.e2eBootstrap.assertHuntSeats, args)).rejects.toThrow(/expected role template/);
+  });
+
+  test.each(["extra", "replacement"] as const)("refuses a template permission change: %s", async (change) => {
+    const t = await markedDeployment();
+    await bootstrap(t);
+    await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+      seat: "approver", clerkUserId: APPROVER.clerkUserId, role: "MANAGER", expectedCloudUrl: CLOUD_URL,
+    });
+    const args = { primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId,
+      primaryRole: "OWNER", approverRole: "MANAGER", expectedCloudUrl: CLOUD_URL };
+    const before = await t.query(internal.e2eBootstrap.assertHuntSeats, args);
+    const template = new Set(before.approver.permissions);
+    const foreignPermission = Object.values(PERMISSIONS).find((permission) => !template.has(permission));
+    if (!foreignPermission || before.approver.permissions.length === 0) throw new Error("Missing permission substitution fixture");
+    const permissions = change === "extra" ? [...before.approver.permissions, foreignPermission]
+      : [foreignPermission, ...before.approver.permissions.slice(1)];
+    await t.run((ctx) => ctx.db.patch(before.approver.roleId, { permissions }));
+    await expect(t.query(internal.e2eBootstrap.assertHuntSeats, args)).rejects.toThrow(/exact expected role template/);
+    expect(await t.run((ctx) => ctx.db.get(before.approver.roleId))).toMatchObject({ permissions });
+  });
+
+  test.each(DEFAULT_ROLE_TEMPLATES.map((role) => role.name))(
+    "reads back exact %s template without widening permissions",
+    async (roleName) => {
+      const t = await markedDeployment();
+      await bootstrap(t);
+      await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "primary", clerkUserId: PRIMARY.clerkUserId, role: roleName, expectedCloudUrl: CLOUD_URL,
+      });
+      await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "approver", clerkUserId: APPROVER.clerkUserId, role: "MANAGER", expectedCloudUrl: CLOUD_URL,
+      });
+      const args = {
+        primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId,
+        primaryRole: roleName, approverRole: "MANAGER", expectedCloudUrl: CLOUD_URL,
+      };
+      const result = await t.query(internal.e2eBootstrap.assertHuntSeats, args);
+      const template = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === roleName)!;
+      expect(result.primary.roleName).toBe(roleName);
+      expect(result.primary.permissions.toSorted()).toEqual([...template.permissions].sort());
+      expect(result.primary.isSystemOwnerRole).toBe(roleName === "OWNER");
+      expect(result.primary.membershipId).toBeTruthy();
+      expect(result.primary.roleId).toBeTruthy();
+      await expect(t.query(internal.e2eBootstrap.assertE2EBootstrap, {
+        primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId,
+        expectedCloudUrl: CLOUD_URL,
+      })).rejects.toThrow(/missing/);
+      await expect(t.query(internal.e2eBootstrap.assertHuntSeats, {
+        ...args, primaryRole: roleName === "SALES" ? "OWNER" : "SALES",
+      })).rejects.toThrow(/expected role/);
+      vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "production");
+      await expect(t.query(internal.e2eBootstrap.assertHuntSeats, args)).rejects.toThrow();
+    },
+  );
+});
 
 function newDeployment() {
   return convexTestWithComponents(schema, modules);

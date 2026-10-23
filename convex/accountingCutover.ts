@@ -942,15 +942,10 @@ export const hasOpeningBalance = query({
 /**
  * Everything the opening-balance UI needs, in one subscription.
  *
- * `canPostDirectly` is computed here rather than in the client on purpose.
- * `usePermissions` derives ownership from `roleName === "OWNER"`, while the
- * server gate is `isSystemOwnerRole`, which honours an explicit
- * `isSystemOwnerRole` flag first and only then falls back to the name — *and*
- * requires the role to hold every defined permission. Those two rules can
- * disagree: a role flagged as the system owner but named something else passes
- * the server and fails the client, and a role named "OWNER" with the flag off
- * does the reverse. Re-deriving an authorization rule in the browser is how a
- * UI ends up offering a button the server refuses, so the server answers it.
+ * `canPostDirectly` uses the backend's qualified-owner predicate and current
+ * opening constraints. The shared permission hook now consumes that same
+ * server-resolved owner status. This subscription supplies the actual action
+ * capability so opening forms do not reconstruct policy from a display name.
  */
 export const openingBalanceStatus = query({
   args: { orgId: v.id("organizations") },

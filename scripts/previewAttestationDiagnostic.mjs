@@ -1,17 +1,27 @@
 import { spawnSync } from "node:child_process";
 import { openSync, closeSync, fstatSync, readSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { assertPreviewTargeting } from "./e2ePreviewBootstrap.mjs";
 import { deploymentNameFromUrl } from "./previewDeploymentLifecycle.mjs";
 
 const ATTESTATION_QUERY = "e2eBootstrap:assertE2EBootstrap";
+const ATTESTATION_QUERIES = new Set([ATTESTATION_QUERY, "e2eBootstrap:assertHuntSeats"]);
 const SCENARIO_LOG = "deal-scenarios-output.log";
 const APPROVER_PERMISSIONS_ERROR = /E2E_BOOTSTRAP: E2E_APPROVER_USER holds role "[^"\r\n]{1,128}", which is missing [^\r\n]{1,256}\. The approval E2E path cannot be driven without it\./;
 
+/** @typedef {(command: string, args: string[], options: import("node:child_process").SpawnSyncOptionsWithStringEncoding) => { status: number | null, stdout: string, stderr?: string, error?: { code?: string } }} DiagnosticSpawn */
+/** @type {DiagnosticSpawn} */
+const runLogCommand = (command, args, options) => {
+  const result = spawnSync(command, args, options);
+  const code = result.error && "code" in result.error && typeof result.error.code === "string" ? result.error.code : undefined;
+  return { status: result.status, stdout: result.stdout ?? "", error: result.error ? { code } : undefined };
+};
+
 /** Only the bounded tail is needed: the form explorer runs near the end. */
-function readScenarioTail(runnerTemp) {
-  const fd = openSync(join(runnerTemp, SCENARIO_LOG), "r");
+/** @param {string} logFile */
+function readScenarioTail(logFile) {
+  const fd = openSync(logFile, "r");
   try {
     const size = fstatSync(fd).size;
     const length = Math.min(size, 2 * 1024 * 1024);
@@ -23,6 +33,7 @@ function readScenarioTail(runnerTemp) {
   }
 }
 
+/** @param {string} scenarioLog */
 export function failedAttestationRequestIds(scenarioLog) {
   return [...new Set(
     [...scenarioLog.matchAll(/Preview attestation failed:[^\r\n]*?\[Request ID: ([a-f0-9]{8,64})\]/gi)]
@@ -31,17 +42,22 @@ export function failedAttestationRequestIds(scenarioLog) {
 }
 
 /** Return only fixed categories and public source locations; raw errors may contain tenant data. */
-export function summarizeAttestationLogs(jsonl, requestIds) {
+/** @param {string} jsonl @param {string[]} requestIds @param {string} [query] */
+export function summarizeAttestationLogs(jsonl, requestIds, query = ATTESTATION_QUERY) {
+  if (!ATTESTATION_QUERIES.has(query)) return [];
   const summaries = [];
   const wanted = new Set(requestIds);
   for (const line of jsonl.split(/\r?\n/)) {
+    /** @type {unknown} */
     let event;
     try {
       event = JSON.parse(line);
     } catch {
       continue;
     }
-    if (event?.kind !== "Completion" || event.identifier !== ATTESTATION_QUERY || typeof event.error !== "string" || !wanted.has(event.requestId)) continue;
+    if (!event || typeof event !== "object" || !("kind" in event) || event.kind !== "Completion" ||
+        !("identifier" in event) || event.identifier !== query || !("error" in event) || typeof event.error !== "string" ||
+        !("requestId" in event) || typeof event.requestId !== "string" || !wanted.has(event.requestId)) continue;
     const requestId = event.requestId;
     const errorClass = /\b(ConvexError|TypeError|RangeError|ReferenceError|SyntaxError|Error)\b/.exec(event.error)?.[1] ?? "UnknownError";
     let category = "unclassified";
@@ -61,11 +77,14 @@ export function summarizeAttestationLogs(jsonl, requestIds) {
 
 /** Run only after the scenario job fails, before its disposable preview is deleted. */
 /** @param {NodeJS.ProcessEnv} [env]
- * @param {(command: string, args: string[], options: import("node:child_process").SpawnSyncOptionsWithStringEncoding) => { status: number | null, stdout: string, stderr?: string, error?: { code?: string } }} [spawn]
+ * @param {DiagnosticSpawn} [spawn]
+ * @param {{logFile?: string, query?: string}} [options]
  */
-export function diagnosePreviewAttestation(env = process.env, spawn = spawnSync) {
-  const previewName = env.CONVEX_PREVIEW_NAME;
+export function diagnosePreviewAttestation(env = process.env, spawn = runLogCommand, options = {}) {
+  const previewName = env.CONVEX_PREVIEW_NAME ?? "";
+  const query = options.query ?? ATTESTATION_QUERY;
   try {
+    if (!ATTESTATION_QUERIES.has(query) || (options.logFile && !isAbsolute(options.logFile))) throw new Error("Invalid diagnostic context.");
     assertPreviewTargeting({ deployKey: env.CONVEX_DEPLOY_KEY, previewName, env });
     if (!/^e2e-[a-z0-9._-]+$/.test(previewName)) throw new Error("Not a scenario preview name.");
     deploymentNameFromUrl(env.CONVEX_PREVIEW_URL);
@@ -78,7 +97,7 @@ export function diagnosePreviewAttestation(env = process.env, spawn = spawnSync)
 
   let requestIds;
   try {
-    requestIds = failedAttestationRequestIds(readScenarioTail(env.RUNNER_TEMP));
+    requestIds = failedAttestationRequestIds(readScenarioTail(options.logFile ?? (env.RUNNER_TEMP ? join(env.RUNNER_TEMP, SCENARIO_LOG) : "")));
   } catch {
     return "Attestation log diagnostic unavailable: scenario output was not captured.";
   }
@@ -102,7 +121,7 @@ export function diagnosePreviewAttestation(env = process.env, spawn = spawnSync)
   } catch {
     return "Attestation log diagnostic unavailable: Convex log command failed.";
   }
-  const summaries = summarizeAttestationLogs(result.stdout ?? "", requestIds);
+  const summaries = summarizeAttestationLogs(result.stdout ?? "", requestIds, query);
   if (summaries.length > 0) return `Attestation backend failures: ${summaries.join("; ")}`;
   if ((result.error && result.error.code !== "ETIMEDOUT") || (result.status !== 0 && result.error?.code !== "ETIMEDOUT")) {
     return "Attestation log diagnostic unavailable: Convex log command failed.";

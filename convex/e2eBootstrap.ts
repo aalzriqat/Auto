@@ -1269,6 +1269,82 @@ export const assertE2EBootstrap = internalQuery({
 
 // ─── Hunt seat re-roling (SCRUM-768, SCRUM-760 G8-C) ─────────────────────────
 
+const huntSeatResult = v.object({
+  userId: v.id("users"), membershipId: v.id("memberships"), roleId: v.id("roles"),
+  roleName: v.string(), permissions: v.array(v.string()), isSystemOwnerRole: v.boolean(),
+});
+
+async function readExactHuntSeat(ctx: QueryCtx, orgId: Id<"organizations">,
+  seat: SeatKey, clerkUserId: string, expectedRole: string) {
+  const template = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === expectedRole);
+  if (!template) throw new ConvexError(`${ERR}: unsupported expected role.`);
+  const actual = await describeSeat(ctx, seat, requireNonBlank(clerkUserId, "clerkUserId"), orgId);
+  const memberships = await membershipsOf(ctx, actual.userId);
+  if (memberships.length !== 1) throw new ConvexError(`${ERR}: hunt seat must have exactly one membership.`);
+  const membership = memberships[0];
+  const role = await ctx.db.get(membership.roleId);
+  const expectedPermissions = new Set<string>(template.permissions);
+  const held = new Set(actual.permissions);
+  if (!role || role.isDeleted || role.orgId !== orgId || actual.roleName !== expectedRole ||
+      held.size !== actual.permissions.length || held.size !== expectedPermissions.size ||
+      [...held].some((permission) => !expectedPermissions.has(permission)) ||
+      Boolean(role.isSystemOwnerRole) !== (expectedRole === "OWNER")) {
+    throw new ConvexError(`${ERR}: hunt seat does not hold the exact expected role template.`);
+  }
+  return { ...actual, membershipId: membership._id, roleId: role._id,
+    isSystemOwnerRole: Boolean(role.isSystemOwnerRole) };
+}
+
+/** Final hunt fixture only: isolate the QA approver without exercising Team actions. */
+export const isolateHuntApprover = internalMutation({
+  args: { primaryClerkUserId: v.string(), approverClerkUserId: v.string(),
+    expectedApproverRole: v.string(), expectedCloudUrl: v.string() },
+  returns: v.object({ orgA: v.id("organizations"), orgB: v.id("organizations"), deploymentIdentity: v.string() }),
+  handler: async (ctx, args) => {
+    const deploymentIdentity = checkDeploymentIdentity(args.expectedCloudUrl);
+    const marker = await requireMarker(ctx);
+    if (!marker.orgId || !marker.bootstrappedAt) throw new ConvexError(`${ERR}: hunt preview was never seeded.`);
+    const orgA = marker.orgId;
+    const org = await ctx.db.get(orgA);
+    if (!org || org.suspended) throw new ConvexError(`${ERR}: hunt organization is missing or suspended.`);
+    const primary = await readExactHuntSeat(ctx, orgA, "primary", args.primaryClerkUserId, "OWNER");
+    const approver = await readExactHuntSeat(ctx, orgA, "approver", args.approverClerkUserId, args.expectedApproverRole);
+    if (primary.userId === approver.userId) throw new ConvexError(`${ERR}: two distinct hunt identities are required.`);
+    const orgB = await createOrganizationWithDefaultRoles(ctx, {
+      name: "AutoFlow E2E QA isolated second dealership", ownerUserId: approver.userId,
+    });
+    await ctx.db.delete(approver.membershipId);
+    return { orgA, orgB, deploymentIdentity };
+  },
+});
+
+/** Read exact product roles after re-roling; never substitutes for scripted finance preflight. */
+export const assertHuntSeats = internalQuery({
+  args: {
+    primaryClerkUserId: v.string(), approverClerkUserId: v.string(),
+    primaryRole: v.string(), approverRole: v.string(), expectedCloudUrl: v.string(),
+  },
+  returns: v.object({
+    orgId: v.id("organizations"), deploymentIdentity: v.string(),
+    primary: huntSeatResult, approver: huntSeatResult,
+  }),
+  handler: async (ctx, args) => {
+    const deploymentIdentity = checkDeploymentIdentity(args.expectedCloudUrl);
+    const marker = await requireMarker(ctx);
+    if (!marker.orgId || !marker.bootstrappedAt) throw new ConvexError(`${ERR}: hunt preview was never seeded.`);
+    const orgId = marker.orgId;
+    const org = await ctx.db.get(orgId);
+    if (!org || org.suspended) throw new ConvexError(`${ERR}: hunt organization is missing or suspended.`);
+    if (args.primaryClerkUserId === args.approverClerkUserId) {
+      throw new ConvexError(`${ERR}: hunt seats must be distinct identities.`);
+    }
+    const primary = await readExactHuntSeat(ctx, orgId, "primary", args.primaryClerkUserId, args.primaryRole);
+    const approver = await readExactHuntSeat(ctx, orgId, "approver", args.approverClerkUserId, args.approverRole);
+    if (primary.userId === approver.userId) throw new ConvexError(`${ERR}: hunt seats resolve to the same user.`);
+    return { orgId, deploymentIdentity, primary, approver };
+  },
+});
+
 /**
  * The roles a hunt seat can be moved to: exactly the dealership roles the
  * product seeds.
