@@ -35,12 +35,13 @@ function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
 }
 
 describe("SCRUM-616 role audit trust and coverage contract", () => {
-  test("anonymous drawer controls run in the PR static browser gate", () => {
-    const project = visualConfig.projects?.find(item => item.name === "audit-controls");
+  test.each([
+    ["PR static browser gate", visualConfig, ["audit-navigation-dismissal.spec.ts", "bill-of-sale-capture.spec.ts"]],
+    ["role audit", roleConfig, "audit-navigation-dismissal.spec.ts"],
+  ] as const)("anonymous controls retain their exact scope in the %s", (_name, config, testMatch) => {
+    const project = config.projects?.find(item => item.name === "audit-controls");
     expect(project?.testDir).toBe("./playwright/tests");
-    expect(project?.testMatch).toEqual([
-      "audit-navigation-dismissal.spec.ts", "bill-of-sale-capture.spec.ts",
-    ]);
+    expect(project?.testMatch).toEqual(testMatch);
     expect(project?.dependencies ?? []).toEqual([]);
     expect(project?.use?.storageState).toEqual({ cookies: [], origins: [] });
     expect(project?.use?.trace).toBe("off");

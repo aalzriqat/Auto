@@ -31,6 +31,13 @@ describe("credential-free static visual browser environment", () => {
     const gate = steps.findIndex((step) => step.run?.includes("pnpm run test:visual:deal-cockpit"));
     expect(preflight).toBeGreaterThanOrEqual(0);
     expect(preflight).toBeLessThan(gate);
+    expect(steps[preflight].run?.trim().split(/\r?\n/).map((line) => line.trim())).toEqual([
+      'test "$(id -u)" -eq 1001',
+      'test -w "$HOME"',
+      'test -w "$GITHUB_WORKSPACE"',
+      'test "$(node --version)" = "v22.21.1"',
+      'node scripts/playwrightImagePreflight.mjs',
+    ]);
     expect(steps[gate].run).toContain("node scripts/assertDealCockpitVisualFrames.mjs test-results/deal-cockpit-visual");
     const upload = steps.find((step) => step.name === "Upload deal cockpit visual screenshots");
     expect(upload?.if).toBe("always()");
@@ -79,11 +86,25 @@ it("requires both actual browser APIs serially and closes each before the next p
   await expect(runPlaywrightImagePreflight()).rejects.toThrow("Missing system library");
 });
 
-it.each(['{"driverVersion":"1.61.0"}', '{'])("actual CLI refuses invalid image metadata without raw error disclosure", (marker) => {
+it.each([
+  { reason: "wrong image version", marker: '{"driverVersion":"1.61.0"}', installedVersion: null },
+  { reason: "malformed image metadata", marker: '{', installedVersion: null },
+  { reason: "wrong installed package version", marker: '{"driverVersion":"1.61.1"}', installedVersion: "1.61.0" },
+])("actual CLI refuses $reason before SDK import without raw error disclosure", ({ marker, installedVersion }) => {
   const script = path.resolve("scripts/playwrightImagePreflight.mjs");
-  // Child-process FS boundary only: production CLI retains its fixed native marker path.
+  // Child-process filesystem/module boundaries: retain the real CLI and refusal behavior.
   const program = `import fs from 'node:fs/promises';
-import {syncBuiltinESMExports} from 'node:module';
+import {createRequire,registerHooks,syncBuiltinESMExports} from 'node:module';
+const installedVersion=${JSON.stringify(installedVersion)};
+if(installedVersion!==null){
+  const require=createRequire(${JSON.stringify(script)});
+  const packagePath=require.resolve('@playwright/test/package.json');
+  require.cache[packagePath]={exports:{get version(){process.stderr.write('CONTROL_INSTALLED_PACKAGE_READ\\n');return installedVersion;}}};
+}
+registerHooks({resolve(specifier,context,nextResolve){
+  if(specifier==='@playwright/test'){process.stderr.write('CONTROL_BROWSER_IMPORT\\n');throw new Error('Unexpected browser SDK import');}
+  return nextResolve(specifier,context);
+}});
 const original=fs.readFile;
 fs.readFile=async (...args)=>{if(args[0]==='/ms-playwright/.docker-info'){process.stderr.write('CONTROL_MARKER_READ\\n');return ${JSON.stringify(marker)};}return original(...args);};
 syncBuiltinESMExports();process.argv[1]=${JSON.stringify(script)};
@@ -92,5 +113,5 @@ await import(${JSON.stringify(pathToFileURL(script).href)});`;
   expect(run.error).toBeUndefined();
   expect(run.status).toBe(1);
   expect(run.stdout).toBe("");
-  expect(run.stderr).toBe("CONTROL_MARKER_READ\nPLAYWRIGHT_IMAGE_PREFLIGHT_REFUSED\n");
+  expect(run.stderr).toBe(`CONTROL_MARKER_READ\n${installedVersion === null ? "" : "CONTROL_INSTALLED_PACKAGE_READ\n"}PLAYWRIGHT_IMAGE_PREFLIGHT_REFUSED\n`);
 });

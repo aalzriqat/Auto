@@ -5,6 +5,16 @@ import { pathToFileURL } from 'node:url';
 const require = createRequire(import.meta.url);
 const expectedVersion = '1.61.1';
 
+/** @param {import('@playwright/test').BrowserType} browserType */
+async function probeBrowser(browserType) {
+  const browser = await browserType.launch({ timeout: 15_000 });
+  try {
+    console.log(JSON.stringify({ browser: browserType.name(), version: browser.version(), status: 'LAUNCHED' }));
+  } finally {
+    await browser.close();
+  }
+}
+
 /** Refuse package/image drift before loading or launching any browser. */
 export async function runPlaywrightImagePreflight() {
   /** @type {unknown} */
@@ -17,19 +27,15 @@ export async function runPlaywrightImagePreflight() {
     throw new Error('PLAYWRIGHT_IMAGE_VERSION_MISMATCH');
   }
   const { chromium, webkit } = await import('@playwright/test');
-  for (const browserType of [chromium, webkit]) {
-    const browser = await browserType.launch({ timeout: 15_000 });
-    try {
-      console.log(JSON.stringify({ browser: browserType.name(), version: browser.version(), status: 'LAUNCHED' }));
-    } finally {
-      await browser.close();
-    }
-  }
+  await probeBrowser(chromium);
+  await probeBrowser(webkit);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runPlaywrightImagePreflight().catch(() => {
+  try {
+    await runPlaywrightImagePreflight();
+  } catch {
     console.error('PLAYWRIGHT_IMAGE_PREFLIGHT_REFUSED');
     process.exitCode = 1;
-  });
+  }
 }

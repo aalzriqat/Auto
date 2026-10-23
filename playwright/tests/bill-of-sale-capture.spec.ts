@@ -100,6 +100,8 @@ test("unresponsive browser telemetry cannot hold the capture rejection open", as
   expect(rejection).toBe(sentinel);
   const evidence = JSON.parse(readFileSync(output, "utf8"));
   expect(evidence.before.status).toBe("AVAILABLE");
+  // Equal inner/outer deadlines may expose either the unavailable document or
+  // an unavailable whole observation; neither changes the bounded refusal contract.
   if (evidence.after.status === "AVAILABLE") {
     expect(evidence.after.value.document.status).toBe("UNAVAILABLE");
   } else {
@@ -132,17 +134,30 @@ test("diagnostic destination is resolved only after the original capture rejects
   const sentinel = new Error("Original capture rejection");
   let captures = 0;
   let destinations = 0;
-  page.screenshot = async () => { captures += 1; throw sentinel; };
+  const order: string[] = [];
+  let rejectCapture: (reason: Error) => void = () => { throw new Error("Pending capture not initialized"); };
+  const pendingCapture = new Promise<Buffer>((_resolve, reject) => { rejectCapture = reject; });
+  page.screenshot = () => { order.push("capture"); captures += 1; return pendingCapture; };
+  let result: Promise<unknown> | undefined;
   let rejection: unknown;
   try {
-    await captureWithDiagnostics(page, { fullPage: true }, () => {
+    result = captureWithDiagnostics(page, { fullPage: true }, () => {
+      order.push("destination");
       destinations += 1;
-      expect(captures).toBe(1);
       throw new Error("Diagnostic output directory unavailable");
-    });
-  } catch (error) { rejection = error; }
-  finally { page.screenshot = screenshot; }
+    }).catch((error: unknown) => error);
+    expect(captures).toBe(1);
+    expect(destinations, "pending capture has not rejected").toBe(0);
+    order.push("reject");
+    rejectCapture(sentinel);
+    rejection = await result;
+  } finally {
+    rejectCapture(sentinel);
+    await result;
+    page.screenshot = screenshot;
+  }
   expect(captures).toBe(1);
   expect(destinations).toBe(1);
+  expect(order).toEqual(["capture", "reject", "destination"]);
   expect(rejection).toBe(sentinel);
 });
