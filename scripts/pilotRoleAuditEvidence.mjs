@@ -39,6 +39,36 @@ const roleSuiteSchema = z.object({
   suites: z.array(z.unknown()).optional(),
 }).passthrough();
 const roleReportSchema = z.object({ errors: z.array(z.unknown()), suites: z.array(z.unknown()) }).passthrough();
+/** @typedef {z.infer<typeof roleSuiteSchema>["specs"][number]} RoleSpec */
+/** @typedef {{ title: string, ok: boolean, row: RoleSpec["tests"][number] }} RoleCase */
+
+/** @param {RoleSpec[]} specs @param {RoleCase[]} observed */
+function appendRoleCases(specs, observed) {
+  for (const spec of specs) {
+    if (typeof spec?.file !== "string" || !spec.file.replaceAll("\\", "/").endsWith("/tests/audit-role-access.spec.ts")) continue;
+    for (const row of spec.tests) {
+      if (row?.projectName !== "role-regressions") continue;
+      observed.push({ title: spec.title, ok: spec.ok, row });
+    }
+  }
+}
+
+/** @param {unknown[]} suites */
+function collectRoleCases(suites) {
+  /** @type {RoleCase[]} */
+  const observed = [];
+  const pending = [...suites];
+  let visited = 0;
+  while (pending.length > 0 && visited < 10_000) {
+    visited++;
+    const result = roleSuiteSchema.safeParse(pending.pop());
+    if (!result.success) return null;
+    pending.push(...(result.data.suites ?? []));
+    appendRoleCases(result.data.specs, observed);
+  }
+  if (pending.length > 0) return null;
+  return observed;
+}
 
 /** Bounded codes only: raw process errors and DOM text are private evidence. */
 export class AuditEvidenceError extends Error {
@@ -52,31 +82,18 @@ export function roleRegressionOutcome(report) {
   const absent = { expected: ROLE_REGRESSION_TITLES.size, observed: 0, verified: false, measurement: "UNAVAILABLE" };
   const parsed = roleReportSchema.safeParse(report);
   if (!parsed.success || parsed.data.errors.length !== 0) return absent;
-  const observed = [];
-  const pending = [...parsed.data.suites];
-  let visited = 0;
-  while (pending.length > 0 && visited < 10_000) {
-    visited++;
-    const result = roleSuiteSchema.safeParse(pending.pop());
-    if (!result.success) return absent;
-    const suite = result.data;
-    pending.push(...(suite.suites ?? []));
-    for (const spec of suite.specs) {
-      if (typeof spec?.file !== "string" || !spec.file.replaceAll("\\", "/").endsWith("/tests/audit-role-access.spec.ts")) continue;
-      for (const row of spec.tests) {
-        if (row?.projectName !== "role-regressions") continue;
-        observed.push({ title: spec.title, ok: spec.ok, row });
-      }
-    }
-  }
-  if (pending.length > 0) return absent;
+  const observed = collectRoleCases(parsed.data.suites);
+  if (observed === null) return absent;
   const titles = new Set(observed.map((item) => item.title));
   const verified = observed.length === ROLE_REGRESSION_TITLES.size && titles.size === ROLE_REGRESSION_TITLES.size &&
       [...titles].every((title) => ROLE_REGRESSION_TITLES.has(title)) && observed.every(({ ok, row }) =>
         ok === true && row.expectedStatus === "passed" && row.status === "expected" &&
         Array.isArray(row.results) && row.results.length === 1 && row.results[0]?.status === "passed");
+  let measurement = "FAIL";
+  if (verified) measurement = "PASS";
+  else if (observed.length < ROLE_REGRESSION_TITLES.size) measurement = "UNAVAILABLE";
   return { expected: ROLE_REGRESSION_TITLES.size, observed: observed.length, verified,
-    measurement: verified ? "PASS" : observed.length < ROLE_REGRESSION_TITLES.size ? "UNAVAILABLE" : "FAIL" };
+    measurement };
 }
 
 /** @template T @param {() => Promise<T>} operation
