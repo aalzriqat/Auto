@@ -33,7 +33,7 @@ async function visit(page: Page, baseURL: string | undefined, route: typeof SCRE
   return { allowed, client, orgId, permissions: membership.permissions };
 }
 
-test("protected role routes render actual authority without premature subscriptions", async ({ page, baseURL }) => {
+test("protected role routes render actual authority across audited pages", async ({ page, baseURL }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   for (const route of ["expenses", "payroll", "reports", "commissions", "sales", "sales/sales", "tasks", "marketplace/requests", "leads", "social-inbox", "sourcing"] as const) {

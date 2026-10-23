@@ -47,6 +47,6 @@
   ],
   "impl": {
     "file": "playwright/tests/audit-role-access.spec.ts",
-    "testName": "protected role routes render actual authority without premature subscriptions"
+    "testName": "protected role routes render actual authority across audited pages"
   }
 }

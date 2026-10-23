@@ -20,7 +20,7 @@
   ],
   "expected": [
     {
-      "observable": "screen.leadList",
+      "observable": "screen.emptyLeadState",
       "value": "VISIBLE"
     },
     {
@@ -48,5 +48,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "ea73fc6bbf1f939e092593aad0c29c0291c72f5be59ad3f9bb98e0d91edb7679"
+  "fingerprint": "6273559119fafa08c060595f232546a6bd238678a46ffd59ff823a0fba58a34c"
 }

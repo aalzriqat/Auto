@@ -6,8 +6,9 @@ export default defineConfig({
   testDir: "./playwright/role-audit",
   workers: 1,
   retries: 0,
-  // HTML/JSON reporters own separate output paths and duplicate attachments.
-  // Keep this audit's only reporter on the privately captured process stream.
+  // Default local output stays on the private process stream. The packaged
+  // audit adds Playwright's JSON reporter to a fresh private invocation path
+  // so its four role cases are measured before completeness is published.
   reporter: "line",
   // Public evidence is limited to explicit post-login captures and summaries.
   // Auth setup must never record credentials or tokens into traces or video.
