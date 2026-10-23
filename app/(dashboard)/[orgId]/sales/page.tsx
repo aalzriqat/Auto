@@ -68,6 +68,46 @@ function SalePrefillHint({ sourceLikeVehicleId, sourceLikeVehicle, loading, cust
     return <>{vehicleDescription}{t("SourcingVehicleForSaleHint")}</>;
 }
 
+type SavedWizardDraft = NonNullable<FunctionReturnType<typeof api.wizardDrafts.getMyDraft>>;
+
+function SavedSaleDraftCard({ draft, onDiscard, onResume }: Readonly<{
+    draft: SavedWizardDraft | null | undefined;
+    onDiscard: () => Promise<void>;
+    onResume: (draft: SavedWizardDraft) => void;
+}>) {
+    const { t } = useLanguage();
+    if (!draft) return null;
+    return (
+        <div>
+            <h2 className="text-sm font-semibold mb-3 text-indigo-400 uppercase tracking-wider flex items-center gap-2">
+                <FileEdit className="w-4 h-4" />
+                {t("InProgressDraft") ?? "In-Progress Draft"}
+            </h2>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
+                <div>
+                    <p className="text-sm font-medium text-foreground">
+                        {draft.paymentType === "CASH" ? (t("CashSale") ?? "Cash Sale") : (t("Installment") ?? "Installment")}
+                        {" — "}{`Step ${draft.currentStep} of 3`}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                        {t("LastSaved") ?? "Last saved"}: {new Date(draft.savedAt).toLocaleString()}
+                    </p>
+                </div>
+                <div className="flex gap-2">
+                    <Button size="sm" variant="ghost" className="text-xs text-red-400 hover:text-red-500 hover:bg-red-500/10" onClick={onDiscard}>
+                        <X className="w-3 h-3 me-1.5" />
+                        {t("Discard") ?? "Discard"}
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-xs border-indigo-400 text-indigo-400 hover:bg-indigo-500/10" onClick={() => onResume(draft)}>
+                        <RotateCcw className="w-3 h-3 me-1.5" />
+                        {t("ResumeDraft") ?? "Resume Draft"}
+                    </Button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function SalesHomeContent() {
     const { activeOrgId } = useOrg();
     const { t } = useLanguage();
@@ -316,49 +356,7 @@ function SalesHomeContent() {
                 </div>
 
                 {/* ─── In-Progress Draft ────────────────────────────────────── */}
-                {myWizardDraft && (
-                    <div>
-                        <h2 className="text-sm font-semibold mb-3 text-indigo-400 uppercase tracking-wider flex items-center gap-2">
-                            <FileEdit className="w-4 h-4" />
-                            {t("InProgressDraft" as any) ?? "In-Progress Draft"}
-                        </h2>
-                        <div
-                            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-4 py-3"
-                        >
-                            <div>
-                                <p className="text-sm font-medium text-foreground">
-                                    {myWizardDraft.paymentType === "CASH"
-                                        ? (t("CashSale" as any) ?? "Cash Sale")
-                                        : (t("Installment" as any) ?? "Installment")}
-                                    {" — "}{`Step ${myWizardDraft.currentStep} of 3`}
-                                </p>
-                                <p className="text-xs text-muted-foreground mt-0.5">
-                                    {t("LastSaved" as any) ?? "Last saved"}: {new Date(myWizardDraft.savedAt).toLocaleString()}
-                                </p>
-                            </div>
-                            <div className="flex gap-2">
-                                <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="text-xs text-red-400 hover:text-red-500 hover:bg-red-500/10"
-                                    onClick={handleDiscardDraft}
-                                >
-                                    <X className="w-3 h-3 me-1.5" />
-                                    {t("Discard" as any) ?? "Discard"}
-                                </Button>
-                                <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="text-xs border-indigo-400 text-indigo-400 hover:bg-indigo-500/10"
-                                    onClick={() => resumeFromDbDraft(myWizardDraft)}
-                                >
-                                    <RotateCcw className="w-3 h-3 me-1.5" />
-                                    {t("ResumeDraft" as any) ?? "Resume Draft"}
-                                </Button>
-                            </div>
-                        </div>
-                    </div>
-                )}
+                <SavedSaleDraftCard draft={myWizardDraft} onDiscard={handleDiscardDraft} onResume={resumeFromDbDraft} />
 
                 {/* ─── Pending Deals (awaiting approval) ───────────────────── */}
                 <PendingDealRequests approvals={myPendingApprovals} format={format} onCancel={handleCancelApproval} onResume={resumeFromApproval} />
