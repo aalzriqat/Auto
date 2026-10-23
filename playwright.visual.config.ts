@@ -27,7 +27,7 @@ export default defineConfig({
     {
       name: "audit-controls",
       testDir: "./playwright/tests",
-      testMatch: "audit-navigation-dismissal.spec.ts",
+      testMatch: ["audit-navigation-dismissal.spec.ts", "bill-of-sale-capture.spec.ts"],
       use: { ...devices["Desktop Chrome"], storageState: { cookies: [], origins: [] }, trace: "off", video: "off", screenshot: "off" },
     },
   ],

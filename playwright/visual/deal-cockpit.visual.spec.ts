@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
 import { newContainedContext } from "../containedContext";
+import { captureWithDiagnostics } from "./browserCaptureDiagnostics";
 
 /**
  * The deal cockpit, painted. EN and AR × light and dark × 390px and 1280px.
@@ -627,7 +628,7 @@ for (const locale of LOCALES) {
 for (const locale of LOCALES) {
   for (const theme of THEMES) {
     for (const viewport of VIEWPORTS) {
-      test(`${locale} · ${theme} · ${viewport.name}px: UX5 recorded line and mobile step bar`, async ({ browser }) => {
+      test(`${locale} · ${theme} · ${viewport.name}px: UX5 recorded line and mobile step bar`, async ({ browser }, testInfo) => {
         const context = await newContainedContext(browser, {
           viewport: { width: viewport.width, height: viewport.height },
           colorScheme: theme,
@@ -704,9 +705,9 @@ for (const locale of LOCALES) {
           expect(overflow.scrollWidth, `main scrolls sideways at ${viewport.width}px`).toBeLessThanOrEqual(
             overflow.clientWidth,
           );
-          await page.screenshot({
+          await captureWithDiagnostics(page, {
             path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${UX5_SUFFIX}.png`),
-          });
+          }, () => testInfo.outputPath("cockpit-capture-failure.json"));
 
           if (mobile) {
             await openMobileRail(page, viewport.width);

@@ -44,6 +44,13 @@ jobs:
         # target in WebKit too (playwright.visual.config.ts, SCRUM-694 M3).
         run: pnpm exec playwright install --with-deps chromium webkit
 
+      - name: Record anonymous browser runner resources
+        run: |
+          uname -srm
+          free -m
+          df -h /dev/shm /tmp
+          ps -eo pid,ppid,rss,comm --sort=-rss | sed -n '1,16p'
+
       - name: Deal cockpit visual gate (static, no credentials)
         run: |
           set -euo pipefail
