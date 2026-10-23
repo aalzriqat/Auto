@@ -295,13 +295,11 @@ export const trialBalance = query({
 
 // ─── Income Statement (P&L) ───────────────────────────────────────────────────
 
-/** Shared native GL flow reader; closed balance consumers separately use accountSnapshots. */
+/** Shared native GL flow reader for authenticated accounting report handlers.
+ * Closed balance consumers separately use accountSnapshots. */
 export async function computeIncomeStatement(ctx: QueryCtx, args: {
   orgId: Id<"organizations">; fromDate: number; toDate: number;
 }) {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    await requireFeature(ctx, args.orgId, "accounting");
-
     const accounts = await ctx.db
       .query("chartOfAccounts")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -394,7 +392,11 @@ export const incomeStatement = query({
     fromDate: v.number(),
     toDate: v.number(),
   },
-  handler: computeIncomeStatement,
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    return computeIncomeStatement(ctx, args);
+  },
 });
 
 // ─── Balance Sheet ────────────────────────────────────────────────────────────

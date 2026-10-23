@@ -223,6 +223,27 @@ describe("Phase 5 — trial balance", () => {
 });
 
 describe("Phase 5 — income statement", () => {
+  test("public P&L refuses foreign organizations and members without finance access", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const foreignOrgId = await t.run(ctx => ctx.db.insert("organizations", {
+      name: "Foreign reporting dealer", createdAt: now,
+    }));
+    await expect(asUser.query(api.accountingReports.incomeStatement, {
+      orgId: foreignOrgId, fromDate: now - 1_000, toDate: now,
+    })).rejects.toThrow(/not a member/i);
+
+    await t.run(async ctx => {
+      const membership = await ctx.db.query("memberships")
+        .withIndex("by_org_user", q => q.eq("orgId", orgId).eq("userId", userId)).unique();
+      if (!membership) throw new Error("Reporting fixture membership required");
+      await ctx.db.patch(membership.roleId, { name: "Sales reader", permissions: ["view:sales"] });
+    });
+    await expect(asUser.query(api.accountingReports.incomeStatement, {
+      orgId, fromDate: now - 1_000, toDate: now,
+    })).rejects.toThrow(/missing required permissions.*view:finance/i);
+  });
+
   test("P&L shows revenue after a sale event", async () => {
     const { t, orgId, asUser } = await seedReportingDealer();
     const now = Date.now();
