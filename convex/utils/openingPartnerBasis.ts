@@ -1,3 +1,4 @@
+import { loadOpeningSourceIdentity } from "./openingSourceIdentity";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 
@@ -6,15 +7,14 @@ export type PartnerOpeningContext = {
   journal: Doc<"journalEntries"> | null;
   postedLinesValid: boolean;
   ambiguous: boolean;
+  headers: Doc<"openingBalanceDrafts">[];
 };
 type PartnerBasis = { kind: "ORDINARY"; amountMinor: number } | { kind: "OPENING"; amountMinor: number } | { kind: "INVALID" };
 
-/** One indexed parent read per request; no all-journal rescan on native reads. */
+/** Bounded header and source-journal inventories identify the current partner basis. */
 export async function loadPartnerOpening(ctx: QueryCtx, orgId: Id<"organizations">): Promise<PartnerOpeningContext> {
-  const parents = await ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", (q) =>
-    q.eq("orgId", orgId).eq("status", "POSTED")).take(2);
-  const parent = parents.length === 1 ? parents[0] : null;
-  const journal = parent?.journalEntryId ? await ctx.db.get(parent.journalEntryId) : null;
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  const { parent, journal } = source;
   let postedLinesValid = false;
   if (parent?.journalEntryId && parent.allocations?.some((row) => row.kind === "PARTNER_CAPITAL")) {
     // The immutable draft is only a claim about the GL. Check its posted lines
@@ -31,7 +31,7 @@ export async function loadPartnerOpening(ctx: QueryCtx, orgId: Id<"organizations
         line.description === original.description;
     });
   }
-  return { parent, journal, postedLinesValid, ambiguous: parents.length > 1 };
+  return { parent, journal, postedLinesValid, ambiguous: source.status === "UNAVAILABLE", headers: source.headers };
 }
 
 export function openingPartnerBasis(partner: Doc<"partnerEquity">, currency: string,
@@ -40,6 +40,10 @@ export function openingPartnerBasis(partner: Doc<"partnerEquity">, currency: str
   if (context.ambiguous) return { kind: "INVALID" };
   const rows = parent?.allocations?.filter((row) => row.kind === "PARTNER_CAPITAL" && row.partnerId === partner._id) ?? [];
   const references = parent?.allocationResults?.filter((row) => row.kind === "PARTNER_CAPITAL" && row.partnerId === partner._id) ?? [];
+  const historicalReference = context.headers.some(header => header._id !== parent?._id &&
+    ((header.allocations ?? []).some(row => row.kind === "PARTNER_CAPITAL" && row.partnerId === partner._id) ||
+      (header.allocationResults ?? []).some(row => row.kind === "PARTNER_CAPITAL" && row.partnerId === partner._id)));
+  if (historicalReference) return { kind: "INVALID" };
   if (!partner.openingBalanceDraftId && rows.length === 0 && references.length === 0) {
     return Number.isSafeInteger(legacyBaseMinor) ? { kind: "ORDINARY", amountMinor: legacyBaseMinor } : { kind: "INVALID" };
   }

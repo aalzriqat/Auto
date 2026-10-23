@@ -1,3 +1,4 @@
+import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
 import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -153,9 +154,8 @@ export const context = query({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
-    const parents = await ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", (q) =>
-      q.eq("orgId", args.orgId).eq("status", "POSTED")).take(2);
-    const parent = parents.length === 1 ? parents[0] : null;
+    const source = await loadOpeningSourceIdentity(ctx, args.orgId);
+    const parent = source.parent;
     const currency = denominationOf(parent?.currency);
     if (!parent || !currency) return { actorId: user._id, postedOpening: null };
     try {

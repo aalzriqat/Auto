@@ -1,6 +1,6 @@
 {
   "id": "opening-partner-movements-preserve-capital-basis",
-  "fingerprint": "c2ffe251a98e4b4fc8978b573966f0804d8fcd5cbf4b4a7c11f3242053603456",
+  "fingerprint": "e3d113bc5223dacce00e23e0bbb88678bff644211c5e30999fe687d69ec5b416",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -10,6 +10,19 @@
     "firstSeen": "2026-10-23"
   },
   "steps": [
+    {
+      "actor": {
+        "role": "test_harness",
+        "org": "A"
+      },
+      "action": "fixture.overrideDeploymentSwitch",
+      "input": {
+        "module": "utils/partnerDistributionContainment",
+        "PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED": false,
+        "boundary": "TEST_ONLY_DORMANT_MATH",
+        "defaultPilotRefusal": "SEPARATE_UNMOCKED_PARTNER_DISTRIBUTION_CONTROL"
+      }
+    },
     {
       "actor": {
         "role": "owner",

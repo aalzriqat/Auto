@@ -261,6 +261,7 @@ import type * as utils_openingPrepaidBasis from "../utils/openingPrepaidBasis.js
 import type * as utils_openingReceivableBasis from "../utils/openingReceivableBasis.js";
 import type * as utils_openingResetCleanup from "../utils/openingResetCleanup.js";
 import type * as utils_openingSettlementBasis from "../utils/openingSettlementBasis.js";
+import type * as utils_openingSourceIdentity from "../utils/openingSourceIdentity.js";
 import type * as utils_openingSupplierBasis from "../utils/openingSupplierBasis.js";
 import type * as utils_openingSupplierPosting from "../utils/openingSupplierPosting.js";
 import type * as utils_openingUnallocatedLiabilities from "../utils/openingUnallocatedLiabilities.js";
@@ -585,6 +586,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingReceivableBasis": typeof utils_openingReceivableBasis;
   "utils/openingResetCleanup": typeof utils_openingResetCleanup;
   "utils/openingSettlementBasis": typeof utils_openingSettlementBasis;
+  "utils/openingSourceIdentity": typeof utils_openingSourceIdentity;
   "utils/openingSupplierBasis": typeof utils_openingSupplierBasis;
   "utils/openingSupplierPosting": typeof utils_openingSupplierPosting;
   "utils/openingUnallocatedLiabilities": typeof utils_openingUnallocatedLiabilities;

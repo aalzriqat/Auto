@@ -1,3 +1,4 @@
+import { loadOpeningSourceIdentity } from "./openingSourceIdentity";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { toMinorUnits } from "./money";
@@ -15,13 +16,16 @@ export async function openingReceivableBasis(ctx: MutationCtx, orgId: Id<"organi
   receivableId: Id<"receivables">): Promise<ReceivableBasis> {
   const receivable = await ctx.db.get(receivableId);
   if (!receivable || receivable.orgId !== orgId) return invalid();
-  const postedOpening = await ctx.db.query("openingBalanceDrafts").withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .filter((q) => q.eq(q.field("status"), "POSTED")).first();
-  const references = postedOpening?.allocationResults?.filter((row) =>
-    row.kind === "CUSTOMER_RECEIVABLE" && row.receivableId === receivableId) ?? [];
-  if (!receivable.openingBalanceDraftId && references.length === 0) return { kind: "ORDINARY" };
-  if (!postedOpening || receivable.openingBalanceDraftId && receivable.openingBalanceDraftId !== postedOpening._id ||
-      references.length !== 1) return invalid();
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  if (source.status === "UNAVAILABLE") return invalid();
+  const matches = source.headers.flatMap(parent => (parent.allocationResults ?? [])
+    .filter(row => row.kind === "CUSTOMER_RECEIVABLE" && row.receivableId === receivableId)
+    .map(result => ({ parent, result })));
+  if (!receivable.openingBalanceDraftId && matches.length === 0) return { kind: "ORDINARY" };
+  const postedOpening = source.parent;
+  if (!postedOpening || matches.length !== 1 || matches[0].parent._id !== postedOpening._id ||
+      receivable.openingBalanceDraftId && receivable.openingBalanceDraftId !== postedOpening._id) return invalid();
+  const references = [matches[0].result];
   const result = references[0];
   if (result.kind !== "CUSTOMER_RECEIVABLE" || !postedOpening.currency) return invalid();
   const allocations = postedOpening.allocations?.filter((row) =>

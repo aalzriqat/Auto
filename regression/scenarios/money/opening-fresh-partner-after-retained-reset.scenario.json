@@ -1,0 +1,78 @@
+{
+  "id": "opening-fresh-partner-after-retained-reset",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "opening-retained-causal-red",
+    "firstSeen": "2026-10-23"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "generation": "OLD",
+        "family": "CUSTOMER_RECEIVABLE"
+      }
+    },
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "continuation": true,
+        "batchSize": 100,
+        "retainedHeader": "POSTED"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "generation": "CURRENT",
+        "family": "PARTNER_CAPITAL",
+        "amountMinor": 100000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "partnerEquity.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "currentPartner.balanceStatus",
+      "value": "VERIFIED"
+    },
+    {
+      "observable": "currentPartner.balanceMinor",
+      "value": 100000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingAllocatedReceivables.test.ts",
+    "testName": "fresh PARTNER source resolves retained history without trusting erased marker=false"
+  },
+  "matrixRow": "SCRUM-50-opening-balance-paths",
+  "fingerprint": "18a7211a8e46aaad8c6c8c24342b4144b9accd935fc18b06c28e2947dca99aec"
+}

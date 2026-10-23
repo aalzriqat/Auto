@@ -1,3 +1,4 @@
+import { loadOpeningSourceIdentity } from "./openingSourceIdentity";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { resolveSystemAccount } from "../chartOfAccounts";
@@ -11,14 +12,19 @@ const invalid = (): AdvanceBasis => ({ kind: "INVALID", reason: "The opening adv
 export async function openingAdvanceBasis(ctx: MutationCtx, orgId: Id<"organizations">,
   advanceId: Id<"employeeAdvances">): Promise<AdvanceBasis> {
   const advance = await ctx.db.get(advanceId);
-  const postedOpening = await ctx.db.query("openingBalanceDrafts").withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .filter((q) => q.eq(q.field("status"), "POSTED")).first();
-  const references = postedOpening?.allocationResults?.filter((row) => row.kind === "EMPLOYEE_ADVANCE" && row.advanceId === advanceId) ?? [];
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  if (source.status === "UNAVAILABLE") return invalid();
+  const matches = source.headers.flatMap(parent => (parent.allocationResults ?? [])
+    .filter(row => row.kind === "EMPLOYEE_ADVANCE" && row.advanceId === advanceId)
+    .map(result => ({ parent, result })));
+  const postedOpening = source.parent;
+  const references = matches.map(match => match.result);
   // Ordinary outbox prerequisites retain their existing event-based behavior,
   // including legacy events whose native row is no longer present.
   if (!advance?.openingBalanceDraftId && references.length === 0) return { kind: "ORDINARY" };
   if (!advance || advance.orgId !== orgId || advance.isDeleted) return invalid();
-  if (!postedOpening || advance.openingBalanceDraftId !== postedOpening._id || references.length !== 1) return invalid();
+  if (!postedOpening || advance.openingBalanceDraftId !== postedOpening._id || references.length !== 1 ||
+      matches[0].parent._id !== postedOpening._id) return invalid();
   const result = references[0];
   const allocations = postedOpening.allocations?.filter((row) => row.kind === "EMPLOYEE_ADVANCE" && row.rowKey === result.rowKey) ?? [];
   const allocation = allocations[0];

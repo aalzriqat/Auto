@@ -1,3 +1,5 @@
+import type { FunctionArgs } from "convex/server";
+import { resetOrgToCompletion } from "../test-utils/orgResetFixtures";
 import { expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { api } from "./_generated/api";
@@ -489,3 +491,140 @@ test.each(["CANCEL_RECEIVABLE", "REFUND", "RESCHEDULE"] as const)("stale opening
     status: "APPROVED", idempotencyKey: "opening-stale-approval" })).rejects.toThrow(openingChangeMessage);
   expect(await financialState(seed)).toEqual(before);
 });
+
+
+// SCRUM-858: an actual completed reset retains the old POSTED header. The new
+// source must be resolved by its journal and own immutable identity, not age.
+async function proveFreshOpeningAfterRetainedHistory(family: "AR" | "ADVANCE" | "PARTNER" | "MANAGEMENT", eraseMarker: boolean) {
+    const seed = await fixture();
+    await seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, seed.payload);
+    const old = await seed.t.run((ctx) => ctx.db.query("openingBalanceDrafts").unique());
+    if (!old) throw new Error("Missing genuine first opening");
+    await seed.t.run((ctx) => ctx.db.patch(seed.orgId, { suspended: true }));
+    await resetOrgToCompletion(seed.t, seed.orgId, 100, 40);
+    expect(await seed.t.run((ctx) => ctx.db.get(old._id))).toMatchObject({ status: "POSTED" });
+    await seed.t.run((ctx) => ctx.db.patch(seed.orgId, { suspended: false }));
+    await seed.owner.mutation(api.chartOfAccounts.initialize, { orgId: seed.orgId });
+    const year = new Date(seed.asOfDate).getUTCFullYear();
+    const periods = await seed.owner.query(api.accountingPeriods.list, { orgId: seed.orgId });
+    expect(periods.find((row) => row._id === seed.period._id)?.status).toBe("OPEN");
+    const accounts = await seed.owner.query(api.chartOfAccounts.list, { orgId: seed.orgId });
+    const account = (key: string) => {
+      const found = accounts.find((row) => row.systemKey === key);
+      if (!found) throw new Error("Missing fresh synthetic chart control");
+      return found._id;
+    };
+    const customerId = await seed.owner.mutation(api.customers.create, { orgId: seed.orgId, firstName: "Synthetic", lastName: "Fresh owner" });
+    type Opening = FunctionArgs<typeof api.accountingCutover.postOpeningBalanceDirect>;
+    let allocations: Opening["allocations"] = [];
+    let lines: Opening["lines"] = [{ accountId: account("CASH_ON_HAND"), debitMinor: 100_000, creditMinor: 0 },
+      { accountId: account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 100_000 }];
+    if (family === "AR" || family === "ADVANCE") {
+      const control = account(family === "AR" ? "ACCOUNTS_RECEIVABLE_CUSTOMERS" : "EMPLOYEE_ADVANCES");
+      lines = [{ accountId: control, debitMinor: 100_000, creditMinor: 0 }, lines[1]];
+      allocations = family === "AR" ? [{ kind: "CUSTOMER_RECEIVABLE", rowKey: "fresh-ar", accountId: control,
+        customerId, amountMinor: 100_000, title: "Synthetic fresh debt", dueDate: seed.asOfDate }] :
+        [{ kind: "EMPLOYEE_ADVANCE", rowKey: "fresh-advance", accountId: control, userId: seed.ownerId, amountMinor: 100_000 }];
+    }
+    const partnerId = family === "PARTNER" ? await seed.owner.mutation(api.partnerEquity.add,
+      { orgId: seed.orgId, partnerName: "Synthetic fresh partner", idempotencyKey: "fresh-partner" }) : undefined;
+    if (partnerId) {
+      lines[1] = { accountId: account("PARTNER_CAPITAL"), debitMinor: 0, creditMinor: 100_000 };
+      allocations = [{ kind: "PARTNER_CAPITAL", rowKey: "fresh-partner", accountId: account("PARTNER_CAPITAL"), partnerId, amountMinor: 100_000 }];
+    }
+    const posted = await seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect,
+      { orgId: seed.orgId, expectedCurrency: "JOD", asOfDate: seed.asOfDate, lines, allocations });
+    expect(await seed.t.run((ctx) => ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", q => q.eq("orgId", seed.orgId).eq("status", "POSTED")).collect())).toHaveLength(2);
+    if (family === "AR") {
+      const debt = await seed.t.run((ctx) => ctx.db.query("receivables").withIndex("by_org", q => q.eq("orgId", seed.orgId)).unique());
+      if (!debt) throw new Error("Fresh opening debt missing");
+      if (eraseMarker) await seed.t.run((ctx) => ctx.db.patch(debt._id, { openingBalanceDraftId: undefined }));
+      const collect = () => seed.owner.mutation(api.collections.recordPayment, { orgId: seed.orgId, customerId, receivableId: debt._id,
+        amount: 10, method: "CASH", paymentDate: eraseMarker ? seed.asOfDate - 1 : Date.now(), idempotencyKey: "fresh-ar-payment" });
+      if (eraseMarker) {
+        const before = await financialState(seed);
+        await expect(collect()).rejects.toThrow("cannot precede");
+        expect(await financialState(seed)).toEqual(before);
+        await seed.owner.mutation(api.collections.recordPayment, { orgId: seed.orgId, customerId, receivableId: debt._id,
+          amount: 10, method: "CASH", paymentDate: Date.now(), idempotencyKey: "fresh-ar-immutable-reproof" });
+        expect((await seed.t.run((ctx) => ctx.db.get(debt._id)))?.outstandingAmount).toBe(90);
+      } else {
+        await collect();
+        expect((await seed.t.run((ctx) => ctx.db.get(debt._id)))?.outstandingAmount).toBe(90);
+      }
+    } else if (family === "ADVANCE") {
+      const [advance] = await seed.owner.query(api.payroll.listAdvances, { orgId: seed.orgId });
+      if (!advance) throw new Error("Fresh opening advance missing");
+      if (eraseMarker) await seed.t.run((ctx) => ctx.db.patch(advance._id, { openingBalanceDraftId: undefined }));
+      const recover = () => seed.owner.mutation(api.payroll.recoverAdvance, { orgId: seed.orgId, advanceId: advance._id, amount: 10, method: "CASH", idempotencyKey: "fresh-advance-payment" });
+      if (eraseMarker) {
+        const before = await financialState(seed);
+        await expect(recover()).rejects.toThrow("basis cannot be verified");
+        expect(await financialState(seed)).toEqual(before);
+      } else {
+        await recover();
+        expect((await seed.t.run((ctx) => ctx.db.get(advance._id)))?.recoveredMinor).toBe(10_000);
+      }
+    } else if (family === "PARTNER") {
+      const partners = await seed.owner.query(api.partnerEquity.list, { orgId: seed.orgId, paginationOpts: { cursor: null, numItems: 100 } });
+      expect(partners.page.find((row) => row._id === partnerId)).toMatchObject({ balanceStatus: "VERIFIED", balanceMinor: 100_000 });
+    } else {
+      expect(await seed.owner.query(api.openingManagementSettlement.context, { orgId: seed.orgId })).toMatchObject({
+        postedOpening: { id: posted.draftId, asOfDate: seed.asOfDate, currency: "JOD" },
+      });
+      const freshDraftId = await seed.t.run(async (ctx) => ctx.db.normalizeId("openingBalanceDrafts", posted.draftId));
+      if (!freshDraftId) throw new Error("Fresh public opening returned an invalid identity");
+      const planId = await seed.owner.mutation(api.openingManagementSettlement.draft, { orgId: seed.orgId, openingDraftId: freshDraftId,
+        totalMinor: 70_003, firstEffectiveMonth: Date.UTC(year, 1, 1), supportingReference: "SYNTHETIC fresh classification",
+        classificationAttestation: "CONSUMED_BEFORE_OPENING_NOT_PREPAID_NOT_CAPITAL", expectedCurrency: "JOD", idempotencyKey: "fresh-management" });
+      expect(planId).toBeTruthy();
+    }
+}
+
+test("fresh AR source resolves retained history without trusting erased marker=false", () => proveFreshOpeningAfterRetainedHistory("AR", false), 30_000);
+test("fresh ADVANCE source resolves retained history without trusting erased marker=false", () => proveFreshOpeningAfterRetainedHistory("ADVANCE", false), 30_000);
+test("fresh PARTNER source resolves retained history without trusting erased marker=false", () => proveFreshOpeningAfterRetainedHistory("PARTNER", false), 30_000);
+test("fresh MANAGEMENT source resolves retained history without trusting erased marker=false", () => proveFreshOpeningAfterRetainedHistory("MANAGEMENT", false), 30_000);
+test("fresh AR source resolves retained history without trusting erased marker=true", () => proveFreshOpeningAfterRetainedHistory("AR", true), 30_000);
+test("fresh ADVANCE source resolves retained history without trusting erased marker=true", () => proveFreshOpeningAfterRetainedHistory("ADVANCE", true), 30_000);
+
+// Explicit damaged-proof controls: each uses a genuine public opening first.
+test.each(["MISSING_JOURNAL", "REVERSED_JOURNAL", "FOREIGN_JOURNAL", "DETACHED_HEADER", "DUPLICATE_LIVE", "DUPLICATE_HEADER", "HEADER_OVERFLOW"] as const)(
+  "opening source authority refuses %s without collection effects", async (damage) => {
+    const seed = await fixture();
+    await seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, seed.payload);
+    const opening = await seed.t.run((ctx) => ctx.db.query("openingBalanceDrafts").unique());
+    const journal = opening?.journalEntryId ? await seed.t.run((ctx) => ctx.db.get(opening.journalEntryId!)) : null;
+    const debt = (await financialState(seed)).legacy.find(row => row.customerId === seed.customerA);
+    if (!opening || !journal || !debt) throw new Error("Missing authentic proof fixture");
+    await seed.t.run(async (ctx) => {
+      if (damage === "MISSING_JOURNAL") await ctx.db.delete(journal._id);
+      if (damage === "REVERSED_JOURNAL") await ctx.db.patch(journal._id, { status: "REVERSED" });
+      if (damage === "FOREIGN_JOURNAL") {
+        const other = await ctx.db.insert("organizations", { name: "QA TEST foreign source", createdAt: Date.now() });
+        await ctx.db.patch(journal._id, { orgId: other });
+      }
+      if (damage === "DETACHED_HEADER") await ctx.db.patch(opening._id, { journalEntryId: undefined });
+      if (damage === "DUPLICATE_LIVE") {
+        const clone = Object.fromEntries(Object.entries(journal).filter(([key]) => key !== "_id" && key !== "_creationTime")) as Omit<typeof journal, "_id" | "_creationTime">;
+        await ctx.db.insert("journalEntries", clone);
+      }
+      if (damage === "DUPLICATE_HEADER" || damage === "HEADER_OVERFLOW") {
+        const clone = Object.fromEntries(Object.entries(opening).filter(([key]) => key !== "_id" && key !== "_creationTime")) as Omit<typeof opening, "_id" | "_creationTime">;
+        const copies = damage === "DUPLICATE_HEADER" ? 1 : 100;
+        for (let index = 0; index < copies; index += 1) await ctx.db.insert("openingBalanceDrafts", clone);
+      }
+    });
+    const before = await financialState(seed);
+    await expect(seed.owner.mutation(api.collections.recordPayment, { orgId: seed.orgId, customerId: debt.customerId,
+      receivableId: debt._id, amount: 10, method: "CASH", paymentDate: Date.now(), idempotencyKey: "damaged-source-collection" })).rejects.toThrow("basis cannot be verified");
+    expect(await financialState(seed)).toEqual(before);
+    const context = await seed.owner.query(api.openingManagementSettlement.context, { orgId: seed.orgId });
+    expect(context.postedOpening).toBeNull();
+    if (damage === "MISSING_JOURNAL" || damage === "REVERSED_JOURNAL") {
+      expect(await seed.owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: seed.orgId })).toMatchObject({
+        journalStatus: damage === "MISSING_JOURNAL" ? "MISSING" : "REVERSED",
+      });
+    } else await expect(seed.owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: seed.orgId })).rejects.toThrow("finance review");
+  }, 30_000,
+);

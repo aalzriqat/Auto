@@ -1,3 +1,4 @@
+import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
 import { openingRecoveryBasis, openingPayableBasis } from "./utils/openingSupplierBasis";
 import { resolveOpeningCommissionBasis } from "./utils/openingCommissionBasis";
 import { resolveOpeningSettlementBasis, createOpeningSettlementReader } from "./utils/openingSettlementBasis";
@@ -1084,20 +1085,11 @@ export const listOpeningStockChoices = query({
 /** Current readback is anchored to its real live source journal, not the age
  * of a retained historical header. Reset history never lends another source. */
 async function selectOpeningReadbackDraft(ctx:QueryCtx,orgId:Id<"organizations">):Promise<Doc<"openingBalanceDrafts">|null>{
-  const limit=100;
-  const [drafts,journals]=await Promise.all([
-    ctx.db.query("openingBalanceDrafts").withIndex("by_org_status",q=>q.eq("orgId",orgId).eq("status","POSTED")).take(limit+1),
-    ctx.db.query("journalEntries").withIndex("by_org_source",q=>q.eq("orgId",orgId).eq("sourceType","cutover").eq("sourceId",String(orgId))).take(limit+1),
-  ]);
+  const source=await loadOpeningSourceIdentity(ctx,orgId);
+  const drafts=source.headers;
   const refuse=()=>new ConvexError("Opening allocation readback requires finance review.");
-  if(drafts.length>limit || journals.length>limit)throw refuse();
-  const live=journals.filter(journal=>journal.category === "OPENING_BALANCE" && journal.status === "POSTED");
-  if(live.length>1)throw refuse();
-  if(live.length===1){
-    const matches=drafts.filter(draft=>draft.journalEntryId === live[0]._id);
-    if(matches.length!==1 || matches[0].asOfDate!==live[0].accountingDate || matches[0].currency!==undefined && matches[0].currency!==live[0].currency)throw refuse();
-    return matches[0];
-  }
+  if(source.status === "UNAVAILABLE")throw refuse();
+  if(source.status === "AVAILABLE")return source.parent;
   if(drafts.length===0)return null;
   if(drafts.length!==1)throw refuse();
   const historical=drafts[0];

@@ -1,3 +1,4 @@
+import { loadOpeningSourceIdentity } from "./openingSourceIdentity";
 import { ConvexError } from "convex/values";
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -11,9 +12,8 @@ export async function requireManagementOpening(ctx: QueryCtx | MutationCtx, orgI
   const reset = orgResetState(org);
   if (reset.inProgress) throw new ConvexError("Complete the financial reset before preparing a management schedule.");
   const parent = await requireOwnedRow(ctx, orgId, "openingBalanceDrafts", openingDraftId, "Opening balance unavailable.");
-  const posted = await ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", (q) =>
-    q.eq("orgId", orgId).eq("status", "POSTED")).take(2);
-  if (parent.status !== "POSTED" || posted.length !== 1 || posted[0]._id !== parent._id ||
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  if (parent.status !== "POSTED" || source.status !== "AVAILABLE" || source.parent._id !== parent._id ||
       parent.currency !== currency || !parent.journalEntryId || !Number.isSafeInteger(parent.asOfDate)) {
     throw new ConvexError("The posted opening basis is unavailable for this management schedule.");
   }
