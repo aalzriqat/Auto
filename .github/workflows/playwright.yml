@@ -20,6 +20,15 @@ jobs:
   playwright:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # SCRUM-861: avoid the measured per-run apt download stall.
+    # Image fonts/shared memory change; old pixel hashes do not carry, and
+    # this does not establish the screenshot-protocol failure cause.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+      options: --user 1001 --init --ipc=host
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -39,10 +48,13 @@ jobs:
       - name: Install dependencies without lifecycle scripts
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Install Playwright browsers
-        # webkit: the static visual gate proves the deals list's whole-row hit
-        # target in WebKit too (playwright.visual.config.ts, SCRUM-694 M3).
-        run: pnpm exec playwright install --with-deps chromium webkit
+      - name: Verify preinstalled Playwright browsers
+        run: |
+          test "$(id -u)" -eq 1001
+          test -w "$HOME"
+          test -w "$GITHUB_WORKSPACE"
+          test "$(node --version)" = "v22.21.1"
+          node scripts/playwrightImagePreflight.mjs
 
       - name: Record anonymous browser runner resources
         run: |
