@@ -103,22 +103,22 @@ function ResponseForm({
 
       {kind !== "NOT_AVAILABLE" && (
         <>
-          <div>
-            <p className="text-sm font-medium mb-1">{t("MarketplaceResponseVehicleLabel" as any)}</p>
+          {canViewVehicles && <div>
+            <p className="text-sm font-medium mb-1">{t("MarketplaceResponseVehicleLabel")}</p>
             <Select value={vehicleId || "none"} onValueChange={(v) => setVehicleId(v === "none" ? "" : v)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">{t("MarketplaceResponseVehicleNone" as any)}</SelectItem>
-                {(vehiclesPage?.page ?? []).map((vehicle: any) => (
+                <SelectItem value="none">{t("MarketplaceResponseVehicleNone")}</SelectItem>
+                {(vehiclesPage?.page ?? []).map((vehicle) => (
                   <SelectItem key={vehicle._id} value={vehicle._id}>
                     {vehicle.year} {vehicle.make} {vehicle.model}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          </div>
+          </div>}
 
           <div>
             <p className="text-sm font-medium mb-1">{t("MarketplaceResponseOfferPriceLabel" as any)}</p>

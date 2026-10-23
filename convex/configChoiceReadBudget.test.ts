@@ -3,6 +3,8 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { seedOrgWithMember } from "../test-utils/seedOrg";
+import { getErrorMessage, getLocalizedErrorMessage } from "../lib/errors";
+import { dictionaries } from "../lib/i18n/dictionaries";
 
 async function verifyBudget(table: "orgLeadSources" | "orgCustomerStatuses",
   query: typeof api.orgLeadSources.listForLeads | typeof api.orgCustomerStatuses.listForQuotes) {
@@ -21,7 +23,13 @@ async function verifyBudget(table: "orgLeadSources" | "orgCustomerStatuses",
   });
   expect(await reader.query(query, { orgId })).toEqual([{ _id: finalId, label: "Synthetic final active choice" }]);
   await t.run(ctx => ctx.db.insert(table, { orgId, label: "Synthetic overflow row", isActive: false, order: 8192 }));
-  await expect(reader.query(query, { orgId })).rejects.toMatchObject({ data: { code: "CONFIG_CHOICE_LIMIT" } });
+  const refusal: unknown = await reader.query(query, { orgId }).catch((error: unknown) => error);
+  expect(refusal).toMatchObject({ data: { code: "CONFIG_CHOICE_LIMIT" } });
+  expect(getErrorMessage(refusal)).toBe("Too many configured choices. Ask the owner to review these settings.");
+  expect(getLocalizedErrorMessage(refusal, key => dictionaries.ar[key as keyof typeof dictionaries.ar] ?? key))
+    .toBe("عدد الخيارات المُعدّة كبير جداً. اطلب من المالك مراجعة هذه الإعدادات.");
+  // Authentication must run before the oversized configuration is inspected.
+  await expect(t.query(query, { orgId })).rejects.toMatchObject({ data: { code: "UNAUTHENTICATED" } });
 }
 
 // Literal entry points bind the two permanent regression-library records.

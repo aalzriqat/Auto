@@ -24,6 +24,16 @@
         "configuredRows": 8193,
         "overflowRowActive": false
       }
+    },
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "A"
+      },
+      "action": "orgLeadSources.listForLeads",
+      "input": {
+        "configuredRows": 8193
+      }
     }
   ],
   "expected": [
@@ -34,6 +44,17 @@
     {
       "observable": "overflow.refusalCode",
       "value": "CONFIG_CHOICE_LIMIT"
+    },
+    {
+      "observable": "anonymous.refusalCode",
+      "value": "UNAUTHENTICATED"
+    },
+    {
+      "observable": "overflow.localizedMessages",
+      "value": {
+        "en": "REGISTERED_ENGLISH_MESSAGE",
+        "ar": "REGISTERED_ARABIC_MESSAGE"
+      }
     }
   ],
   "matrixRow": "SCRUM760-lead-choice-read-budget",
@@ -53,5 +74,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "05f111cfd1b9177ec560c06caf31dd68004e7f1402b655a652c0030cfb3bb0ac"
+  "fingerprint": "fe9dbb8362eeafba831f9d0f5336e2ce5e5fa2031b0f10e23068c60539060bfb"
 }

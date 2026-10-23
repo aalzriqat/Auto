@@ -24,6 +24,16 @@
         "configuredRows": 8193,
         "overflowRowActive": false
       }
+    },
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "A"
+      },
+      "action": "orgCustomerStatuses.listForQuotes",
+      "input": {
+        "configuredRows": 8193
+      }
     }
   ],
   "expected": [
@@ -34,6 +44,17 @@
     {
       "observable": "overflow.refusalCode",
       "value": "CONFIG_CHOICE_LIMIT"
+    },
+    {
+      "observable": "anonymous.refusalCode",
+      "value": "UNAUTHENTICATED"
+    },
+    {
+      "observable": "overflow.localizedMessages",
+      "value": {
+        "en": "REGISTERED_ENGLISH_MESSAGE",
+        "ar": "REGISTERED_ARABIC_MESSAGE"
+      }
     }
   ],
   "matrixRow": "SCRUM760-quote-choice-read-budget",
@@ -53,5 +74,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "fd89ada99d4e19f07544e008948423acc41bee94cc6cbd39d4c8a6b699384f19"
+  "fingerprint": "57e626bb09677ab7603c2e2e305957a7ce7024b003d2fe651a1695b9e5ac7fbc"
 }

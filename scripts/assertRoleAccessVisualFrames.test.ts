@@ -9,7 +9,7 @@ test("role frame inventory refuses absent, duplicate and empty evidence independ
   const dir = mkdtempSync(path.join(tmpdir(), "role-frame-census-"));
   const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1]);
   const files = EXPECTED_ROLE_FRAMES.map(name => { const file = path.join(dir, name); writeFileSync(file, bytes); return file; });
-  expect(files).toHaveLength(44);
+  expect(files).toHaveLength(48);
   expect(roleFrameErrors(files)).toEqual([]);
   expect(roleFrameErrors(files.slice(1))).toEqual([expect.stringContaining("expected one frame, found 0")]);
   mkdirSync(path.join(dir, "duplicate"));
@@ -17,7 +17,7 @@ test("role frame inventory refuses absent, duplicate and empty evidence independ
   expect(roleFrameErrors([...files, duplicate])).toEqual([expect.stringContaining("found 2")]);
   writeFileSync(files[0], "");
   expect(roleFrameErrors(files)).toEqual([expect.stringContaining("empty or invalid PNG")]);
-  expect(roleFrameErrors([])).toHaveLength(44);
+  expect(roleFrameErrors([])).toHaveLength(48);
 });
 
 test("the census CLI refuses an external root even when its frame inventory is complete", () => {

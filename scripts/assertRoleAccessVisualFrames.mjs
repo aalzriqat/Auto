@@ -2,7 +2,7 @@ import { lstatSync, realpathSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const states = ["denied-expenses", "deposit-loading", "deposit-empty", "lead-source", "sales-empty", "quote-choice", "lead-reader", "marketplace-reply", "lead-source-loading", "quote-status-loading", "marketplace-default"];
+const states = ["denied-expenses", "deposit-loading", "deposit-empty", "lead-source", "sales-empty", "quote-choice", "lead-reader", "lead-reader-detail", "marketplace-reply", "lead-source-loading", "quote-status-loading", "marketplace-default"];
 export const EXPECTED_ROLE_FRAMES = states.flatMap(state => ["en", "ar"].flatMap(locale =>
   [375, 1440].map(width => `role-access-${state}-${locale}-${width}.png`)));
 const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);

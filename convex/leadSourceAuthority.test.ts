@@ -41,4 +41,6 @@ test("Lead source projection distinguishes unconfigured from all disabled", asyn
   expect(await reader.query(api.orgLeadSources.listForLeads, { orgId })).toBeNull();
   await t.run(ctx => ctx.db.insert("orgLeadSources", { orgId, label: "Synthetic disabled channel", isActive: false, order: 0 }));
   expect(await reader.query(api.orgLeadSources.listForLeads, { orgId })).toEqual([]);
+  await expect(t.query(api.orgLeadSources.listForLeads, { orgId }))
+    .rejects.toMatchObject({ data: { code: "UNAUTHENTICATED" } });
 });

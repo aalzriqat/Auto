@@ -11,6 +11,7 @@ import ExpensesPage from "@/app/(dashboard)/[orgId]/expenses/page";
 import ApprovalsPage from "@/app/(dashboard)/[orgId]/approvals/page";
 import SalesPage from "@/app/(dashboard)/[orgId]/sales/sales/page";
 import LeadsPage from "@/app/(dashboard)/[orgId]/leads/page";
+import LeadWorkspacePage from "@/app/(dashboard)/[orgId]/leads/[leadId]/page";
 import { MarketplaceRequestsClient } from "@/app/(dashboard)/[orgId]/marketplace/requests/client";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { QuoteDialog } from "@/components/sales/QuoteDialog";
@@ -40,7 +41,7 @@ vi.mock("convex/react", async () => {
     useMutation: () => vi.fn(), useAction: () => vi.fn(),
   };
 });
-vi.mock("next/navigation", () => ({ useParams: () => ({ orgId: "org-a" }),
+vi.mock("next/navigation", () => ({ useParams: () => ({ orgId: "org-a", leadId: "lead-a" }),
   usePathname: () => "/org-a/expenses", useSearchParams: () => new URLSearchParams(),
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }) }));
 
@@ -75,6 +76,17 @@ test.each(["en", "ar"])("real role-access screen fixtures %s", locale => {
   expect(screen.queryByRole("button", { name: locale === "en" ? "Add Lead" : "إضافة عميل محتمل" })).toBeNull();
   expect(screen.queryByRole("dialog")).toBeNull();
   capture("lead-reader");
+  state.values.set("leads:get", {
+    _id: "lead-a", _creationTime: 1_700_000_000_000, orgId: "org-a", customerId: "customer-a",
+    stage: "NEW", source: "Website", customer: { _id: "customer-a", firstName: "Synthetic", lastName: "Buyer" },
+    vehicle: null, assignedUser: null,
+  });
+  state.values.set("leadActivities:listForLead", []);
+  mount(<LeadWorkspacePage />);
+  expect(screen.getByRole("heading", { name: "Synthetic Buyer" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: locale === "en" ? "Edit Lead" : "تعديل العميل المحتمل" })).toBeNull();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  capture("lead-reader-detail");
   state.overridePermissions = undefined;
 
   state.role = "ACCOUNTANT";

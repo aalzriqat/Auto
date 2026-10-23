@@ -22,6 +22,16 @@
       "input": {
         "configuration": "ALL_DISABLED"
       }
+    },
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "A"
+      },
+      "action": "orgLeadSources.listForLeads",
+      "input": {
+        "configuration": "ALL_DISABLED"
+      }
     }
   ],
   "expected": [
@@ -32,6 +42,10 @@
     {
       "observable": "allDisabled.choices",
       "value": []
+    },
+    {
+      "observable": "anonymous.refusalCode",
+      "value": "UNAUTHENTICATED"
     }
   ],
   "matrixRow": "SCRUM760-lead-source-disabled",
@@ -51,5 +65,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "621cc9f0398af616bb54951f40ba9492578be2ad74d90b610a0bc86686ec353a"
+  "fingerprint": "6b7bb049a72a211f8006838488057580f6afb88f5dae3e471dc827d5fa085c64"
 }

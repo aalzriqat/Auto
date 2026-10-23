@@ -260,14 +260,14 @@ function useLeadDropdownOptions({
 
   const sourceOptions = useMemo(() => {
     const configured =
-      !canViewLeadSources || dynamicLeadSources === null
+      dynamicLeadSources === null
         ? ["Walk-in", "Website", "Facebook", "Instagram", "Referral", "Phone", "Other"]
         : dynamicLeadSources?.map((source) => source.label) ?? [];
 
     return lead?.source && !configured.includes(lead.source)
       ? [lead.source, ...configured]
       : configured;
-  }, [canViewLeadSources, dynamicLeadSources, lead]);
+  }, [dynamicLeadSources, lead]);
 
   const customerOptions = useMemo(
     () =>

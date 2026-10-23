@@ -56,7 +56,9 @@ describe("SCRUM-616 hunt attestation is separate from scripted finance preflight
     });
     expect(JSON.stringify(await t.query(internal.e2eBootstrap.assertHuntSeats, args))).not.toContain("SYNTHETIC-PRIVATE-TOKEN-NOT-A-CREDENTIAL");
     vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "production");
-    await expect(t.query(internal.e2eBootstrap.assertHuntSeats, args)).rejects.toThrow();
+    await expect(t.query(internal.e2eBootstrap.assertHuntSeats, args)).rejects.toThrow(
+      /refusing to honour a preview bootstrap marker.*it declares a different class/
+    );
   });
 
   test("isolates only the seeded approver in a fresh second org and refuses a repeat", async () => {

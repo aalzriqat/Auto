@@ -72,6 +72,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This organization already has posted ledger activity, so an opening balance cannot be posted. The cutover needs finance-owner review.",
     "لدى هذه المنشأة قيود مرحَّلة في دفتر الأستاذ، لذا لا يمكن ترحيل رصيد افتتاحي. يلزم أن يراجع المسؤول المالي تصحيح أرصدة الانتقال.",
   ],
+  ServerError_CONFIG_CHOICE_LIMIT: [
+    "Too many configured choices. Ask the owner to review these settings.",
+    "عدد الخيارات المُعدّة كبير جداً. اطلب من المالك مراجعة هذه الإعدادات.",
+  ],
   ServerError_ASSET_EVENT_DATE_INVALID: [
     "The accounting date is not a valid date.",
     "التاريخ المحاسبي غير صالح.",

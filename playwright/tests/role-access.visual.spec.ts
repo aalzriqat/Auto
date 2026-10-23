@@ -9,7 +9,7 @@ import { newContainedContext } from "../containedContext";
 // Actual component markup and compiled app CSS. No authentication, app shell,
 // hydration or backend is claimed. Live role replays remain separate tests.
 const ROOT = resolve(__dirname, "../..");
-const STATES = ["denied-expenses", "deposit-loading", "deposit-empty", "lead-source", "sales-empty", "quote-choice", "lead-reader", "marketplace-reply", "lead-source-loading", "quote-status-loading", "marketplace-default"] as const;
+const STATES = ["denied-expenses", "deposit-loading", "deposit-empty", "lead-source", "sales-empty", "quote-choice", "lead-reader", "lead-reader-detail", "marketplace-reply", "lead-source-loading", "quote-status-loading", "marketplace-default"] as const;
 type State = typeof STATES[number];
 let fixtures = "", css = "";
 test.beforeAll(async () => {
@@ -39,6 +39,7 @@ const COPY = {
   "lead-source": { en: "Synthetic configured channel", ar: "Synthetic configured channel" },
   "quote-choice": { en: "Synthetic eligibility", ar: "Synthetic eligibility" },
   "lead-reader": { en: "No leads found.", ar: "لم يتم العثور على عملاء محتملين." },
+  "lead-reader-detail": { en: "Synthetic Buyer", ar: "Synthetic Buyer" },
   "marketplace-reply": { en: "Not available", ar: "غير متوفرة" },
   "lead-source-loading": { en: "Lead Source", ar: "مصدر العميل المحتمل" },
   "quote-status-loading": { en: "Loading customer statuses…", ar: "جارٍ تحميل حالات العميل…" },
@@ -67,6 +68,10 @@ async function paint(browser: Parameters<typeof newContainedContext>[0], info: T
           if (state === "sales-empty") await expect(page.getByRole("dialog", { includeHidden: true })).toHaveCount(0);
           if (state === "lead-reader") {
             await expect(page.getByRole("button", { name: locale === "en" ? "Add Lead" : "إضافة عميل محتمل" })).toHaveCount(0);
+            await expect(page.getByRole("dialog", { includeHidden: true })).toHaveCount(0);
+          }
+          if (state === "lead-reader-detail") {
+            await expect(page.getByRole("heading", { name: "Synthetic Buyer", exact: true })).toBeVisible();
             await expect(page.getByRole("dialog", { includeHidden: true })).toHaveCount(0);
           }
           if (state === "marketplace-reply") {
@@ -125,4 +130,8 @@ test("PR screen paint distinguishes quote status loading from empty", async ({ b
 });
 test("PR screen paint gives inventory-free responders a non-vehicle default", async ({ browser }, info) => {
   await paint(browser, info, ["marketplace-default"]);
+});
+
+test("PR screen paint opens a lead detail for a reader without edit pickers", async ({ browser }, info) => {
+  await paint(browser, info, ["lead-reader-detail"]);
 });
