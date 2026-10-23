@@ -51,7 +51,10 @@ export async function clearOpeningPayablesBatch(
       deleted += 1;
     }
     if (payments.length > 0) { remaining += 1; continue; }
-    if (!dryRun) await ctx.db.delete(row._id);
+    if (!dryRun) {
+      await clearNewOpeningResultReference(ctx, orgId, { table: "vehicleSupplierPayables", id: row._id });
+      await ctx.db.delete(row._id);
+    }
     deleted += 1;
     if (dryRun) remaining += 1;
   }
@@ -62,7 +65,8 @@ export async function clearOpeningPayablesBatch(
 export async function clearNewOpeningResultReference(
   ctx: MutationCtx, orgId: Id<"organizations">,
   source: { table: "openingCommissionLiabilities"; id: Id<"openingCommissionLiabilities"> } |
-    { table: "supplierCostRecoveries"; id: Id<"supplierCostRecoveries"> }
+    { table: "supplierCostRecoveries"; id: Id<"supplierCostRecoveries"> } |
+    { table: "vehicleSupplierPayables"; id: Id<"vehicleSupplierPayables"> }
 ) {
   const drafts = await ctx.db.query("openingBalanceDrafts")
     .withIndex("by_org", q => q.eq("orgId", orgId)).take(101);
@@ -71,7 +75,9 @@ export async function clearNewOpeningResultReference(
     const results = draft.allocationResults ?? [];
     const retained = results.filter(result => !(source.table === "openingCommissionLiabilities"
       ? result.kind === "EMPLOYEE_COMMISSION" && result.openingCommissionLiabilityId === source.id
-      : result.kind === "SUPPLIER_RECOVERABLE" && result.recoveryId === source.id));
+      : source.table === "supplierCostRecoveries"
+        ? result.kind === "SUPPLIER_RECOVERABLE" && result.recoveryId === source.id
+        : (result.kind === "SUPPLIER_PAYABLE" || result.kind === "OTHER_PAYABLE") && result.payableId === source.id));
     if (retained.length !== results.length) await ctx.db.patch(draft._id, { allocationResults: retained });
   }
 }

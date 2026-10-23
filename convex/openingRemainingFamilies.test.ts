@@ -909,7 +909,7 @@ async function replayRemainingOpeningFamily({
           .reduce((sum, line) => sum + line.creditMinor - line.debitMinor, 0),
       ).toBe(0);
     }
-    if (allocation.kind === "SUPPLIER_PAYABLE") {
+    {
       const guards = await t.run(async (ctx) => {
         const member = await ctx.db
           .query("memberships")
@@ -979,7 +979,41 @@ async function replayRemainingOpeningFamily({
             .withIndex("by_org", (q) => q.eq("orgId", orgId))
             .collect(),
         ),
-      ).toEqual([]);
+      ).toHaveLength(allocation.kind === "SUPPLIER_PAYABLE" ? 0 : 1);
+      // A second committed batch removes the AP after its payment child. The
+      // retained historical header must atomically lose only this new result
+      // reference; its allocation/economics and all legacy AP remain intact.
+      const historicalBefore = await t.run((ctx) => ctx.db.get(result.draftId as Id<"openingBalanceDrafts">));
+      if (!historicalBefore) throw new Error("Missing authentic opening parent");
+      expect(historicalBefore.allocationResults).toEqual([
+        {kind:allocation.kind,rowKey:"remaining-1",payableId:payable._id},
+      ]);
+      // OTHER_PAYABLE has two authentic payments, so consume one child per
+      // batch until the source itself disappears. Inspect each committed state.
+      let sourceDeleted = false;
+      for (let batch=0;batch<4;batch+=1) {
+        await runContinuationBatch(t, orgId, 1);
+        const afterSourceDelete = await t.run(async (ctx) => ({
+          parent:await ctx.db.get(historicalBefore._id),
+          payable:await ctx.db.get(payable._id),
+          legacy:await ctx.db.get(guards.legacyId),
+          foreign:await ctx.db.get(guards.otherId),
+        }));
+        expect(afterSourceDelete.legacy).not.toBeNull();
+        expect(afterSourceDelete.foreign).not.toBeNull();
+        expect(afterSourceDelete.parent?.allocations).toEqual(historicalBefore.allocations);
+        if(afterSourceDelete.payable === null) {
+          expect(afterSourceDelete.parent?.allocationResults,
+            "new opening payable result must not point to its reset-deleted AP after a committed batch").toEqual([]);
+          expect(afterSourceDelete.parent).toEqual({...historicalBefore,allocationResults:[]});
+          expect(await t.run(ctx=>resolveOpeningSettlementBasis(ctx,orgId,
+            {draftId:historicalBefore._id,rowKey:"remaining-1"},allocation.kind))).toMatchObject({kind:"UNAVAILABLE"});
+          sourceDeleted = true;
+          break;
+        }
+        expect(afterSourceDelete.parent?.allocationResults).toEqual(historicalBefore.allocationResults);
+      }
+      expect(sourceDeleted,"bounded reset must actually reach source deletion").toBe(true);
       await resetOrgToCompletion(t, orgId, 100, 40);
       expect(await t.run((ctx) => ctx.db.get(payable._id))).toBeNull();
       expect(await t.run((ctx) => ctx.db.get(guards.legacyId))).not.toBeNull();
