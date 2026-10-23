@@ -1,5 +1,4 @@
-import { statfs } from "node:fs/promises";
-import { writeFile } from "node:fs/promises";
+import { statfs, writeFile } from "node:fs/promises";
 import { freemem, totalmem } from "node:os";
 import type { Page } from "@playwright/test";
 
@@ -77,7 +76,10 @@ export async function captureWithDiagnostics(
     // Every diagnostic operation, including synchronous SDK getters and JSON
     // serialization, is subordinate to the original capture rejection.
     try {
-      const after = await observe(() => captureState(page));
+      const after = await captureState(page).then(
+        (value): Observation<Awaited<ReturnType<typeof captureState>>> => ({ status: "AVAILABLE", value }),
+        (): Observation<Awaited<ReturnType<typeof captureState>>> => ({ status: "UNAVAILABLE" }),
+      );
       const browserVersion = readSafely(() => {
         if (browser.status !== "AVAILABLE" || !browser.value) throw new Error("Browser unavailable");
         return browser.value.version();

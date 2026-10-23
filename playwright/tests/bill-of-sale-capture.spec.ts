@@ -1,4 +1,5 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test, expect } from "@playwright/test";
 import { captureWithDiagnostics } from "../visual/browserCaptureDiagnostics";
 
@@ -27,7 +28,6 @@ test("failed capture preserves the original rejection and leaves sanitized diagn
     expect(calls, "capture begins before any asynchronous telemetry wait").toBe(1);
     rejected = await result;
   }
-  catch (error) { rejected = error; }
   finally { page.screenshot = original; }
   expect(rejected).toBe(sentinel);
   expect(calls).toBe(1);
@@ -45,11 +45,15 @@ test("diagnostic publication failure cannot replace Chromium capture rejection",
   const original = page.screenshot;
   const sentinel = new Error("Capture rejected");
   page.screenshot = async () => { throw sentinel; };
+  const blocker = testInfo.outputPath("diagnostic-blocker");
+  writeFileSync(blocker, "not a directory");
   let rejected: unknown;
-  try { await captureWithDiagnostics(page, { fullPage: true }, () => testInfo.outputPath("missing", "failure.json")); }
+  try { await captureWithDiagnostics(page, { fullPage: true }, () => join(blocker, "failure.json")); }
   catch (error) { rejected = error; }
   finally { page.screenshot = original; }
   expect(rejected).toBe(sentinel);
+  expect(statSync(blocker).isFile()).toBe(true);
+  expect(existsSync(join(blocker, "failure.json"))).toBe(false);
 });
 
 test("closed browser page leaves failure state and no lifecycle listener leak", async ({ page }, testInfo) => {
@@ -95,13 +99,12 @@ test("unresponsive browser telemetry cannot hold the capture rejection open", as
     expect(calls, "capture begins before any asynchronous telemetry wait").toBe(1);
     rejection = await result;
   }
-  catch (error) { rejection = error; }
   finally { page.evaluate = evaluate; page.screenshot = screenshot; }
   expect(rejection).toBe(sentinel);
   const evidence = JSON.parse(readFileSync(output, "utf8"));
   expect(evidence.before.status).toBe("AVAILABLE");
-  // Equal inner/outer deadlines may expose either the unavailable document or
-  // an unavailable whole observation; neither changes the bounded refusal contract.
+  // The timed-out document is unavailable; synchronous metadata faults can
+  // also make the whole post-capture observation unavailable.
   if (evidence.after.status === "AVAILABLE") {
     expect(evidence.after.value.document.status).toBe("UNAVAILABLE");
   } else {
@@ -147,6 +150,8 @@ test("diagnostic destination is resolved only after the original capture rejects
       throw new Error("Diagnostic output directory unavailable");
     }).catch((error: unknown) => error);
     expect(captures).toBe(1);
+    // Let a premature microtask resolve the destination while capture is pending.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(destinations, "pending capture has not rejected").toBe(0);
     order.push("reject");
     rejectCapture(sentinel);
