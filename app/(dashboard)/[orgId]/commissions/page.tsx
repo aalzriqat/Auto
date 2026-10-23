@@ -29,6 +29,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
 import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X, AlertTriangle, CircleDashed, MinusCircle, ClipboardList, Ban, UserMinus } from "lucide-react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { OpeningCommissionLiabilitiesPanel } from "@/components/commissions/OpeningCommissionLiabilitiesPanel";
 import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaymentDialog";
 import { DealCommissionLinesDialog } from "@/components/commissions/DealCommissionLinesDialog";
 import { scaleForCurrency } from "@/convex/utils/money";
@@ -330,6 +331,8 @@ export default function CommissionsPage() {
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <TrendingUp className="h-6 w-6" /> {t("Commissions" as any)}
         </h1>
+
+        {activeOrgId && <OpeningCommissionLiabilitiesPanel orgId={activeOrgId} />}
 
         {/* Summary Cards */}
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">

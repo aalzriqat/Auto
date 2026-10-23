@@ -7,10 +7,17 @@
  * migration PARTNER_DRAW/CAPITAL_INJECTION skip gap is closed.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+
+// Dormant, non-pilot accounting capability: only the deployment switch is overridden.
+// The unmocked CURRENT pilot refusal is measured in partnerDistributionPilot.test.ts.
+vi.mock("./utils/partnerDistributionContainment", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/partnerDistributionContainment")>()),
+  PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED: false,
+}));
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 

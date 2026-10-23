@@ -15,6 +15,7 @@ import {
 } from "./utils/permissions";
 import { writeAuditLog } from "./utils/auditLog";
 import { notifyUser, notifyManagers } from "./utils/notifications";
+import { assertNoOpeningCommissionObligation } from "./utils/openingCommissionBasis";
 
 const MEMBERSHIP_OFFBOARDING_RETRY_BASE_MS = 60_000;
 const MEMBERSHIP_OFFBOARDING_RETRY_MAX_MS = 60 * 60_000;
@@ -205,6 +206,7 @@ async function createOrReuseMembershipOffboardingJob(
   }
 ): Promise<MembershipOffboardingJobResult> {
   const membership = args.membership;
+  await assertNoOpeningCommissionObligation(ctx, args.orgId, membership.userId);
   const user = await ctx.db.get(membership.userId);
   if (!user) {
     throw new ConvexError("Membership user record is missing.");

@@ -190,10 +190,10 @@ export interface ValidateLibraryOptions {
 const CTX_SKIP = /\b(?:ctx|context|t)\.skip\s*\(/;
 // Conservative, file-wide: any skip/conditional/todo/fails marker anywhere in the check file fails the record.
 const ANY_SKIP = /\b(?:it|test|describe|suite)(?:\.\w+)*\.(?:skip|skipIf|runIf|todo|fails|fixme)\b|\bx(?:it|describe)\(|\{\s*(?:skip|todo|fails|fixme)\s*:\s*(?!false\b)/;
-// What a configured runner actually collects: root vitest includes **/*.test.ts(x); the browser
-// replays live under playwright/ as *.spec.ts. Anything else exists but is never run.
-// Playwright testDirs: tests (PR-cadence config) and scenarios (the manual scenarios config); fixtures/visual are not replays.
-const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$)|(?:\.test\.tsx?$)/;
+// What a configured runner actually collects: root vitest includes **/*.test.ts(x);
+// Playwright uses tests (PR cadence), scenarios (manual), and *.visual.spec.ts
+// in visual (the static browser gate). Other fixtures are not collected.
+const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$)|(?:^playwright\/visual\/[^/]+\.visual\.spec\.ts$)|(?:\.test\.tsx?$)/;
 // Mirrors vitest.config.ts `exclude`: those trees are never collected by the root run.
 // Receiver-agnostic skip/expected-fail calls, `{ skip }` option keys (quoted, shorthand, any position), `.only`.
 // Static analysis is best-effort: indirection (options in a variable) can still beat it; the S3 runner census is the binding proof.
@@ -201,7 +201,7 @@ const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.
 // (an unrelated result.fail() or flags.only(3) is not a skipped test).
 const SKIP_CALL = /\.\s*(?:skip|fixme|todo|skipIf|runIf)\s*\(|\bskip\s*\(|\b(?:test|it|describe|suite|ctx|context|testInfo|t|c)(?:\.\w+)*\.(?:fail|fails|only)\b|\binfo\(\)\s*\.\s*(?:fail|fixme|skip)\s*\(/;
 const SKIP_OPTION = /[{,]\s*["']?(?:skip|todo|fails|fail|fixme)["']?\s*(?::\s*(?!false\b)|[,}])/;
-const PLAYWRIGHT_SPEC = /^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$/;
+const PLAYWRIGHT_SPEC = /^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$|^playwright\/visual\/[^/]+\.visual\.spec\.ts$/;
 const NOT_RUN_DIRS = /^(?:(?:apps|packages|\.next|out|build)\/|(?:.*\/)?(?:node_modules|\.claude)\/)/;
 const MATRIX_ROW = /^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$/;
 const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;

@@ -61,8 +61,16 @@ import { paymentMethodValidator, type PaymentMethod } from "./utils/paymentMetho
 import { runWithIdempotency } from "./utils/idempotency";
 import { drainEntries, reviveFailedEntry } from "./accountingOutbox";
 import { postedSourceExpenseEvent } from "./utils/prepaidSourceLedger";
+import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { toMinorUnits, assertValidMinorAmount } from "./utils/money";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+
+const openingCorrectionMessage = "Opening prepaid corrections require a separate finance review. Nothing has changed.";
+
+async function requireExpenseBackedCorrection(ctx: QueryCtx | MutationCtx, schedule: Doc<"prepaidExpenseSchedules">): Promise<void> {
+  const source = await resolvePrepaidScheduleSource(ctx, schedule.orgId, schedule._id);
+  if (source.kind !== "EXPENSE") throw new ConvexError(openingCorrectionMessage);
+}
 
 // Re-exported: existing callers/tests import `toYearMonth` from this module.
 export { toYearMonth };
@@ -95,7 +103,13 @@ export async function createPrepaidScheduleForExpense(
     .query("prepaidExpenseSchedules")
     .withIndex("by_expense", (q) => q.eq("expenseId", args.expenseId))
     .first();
-  if (existing) return existing._id;
+  if (existing) {
+    const source = await resolvePrepaidScheduleSource(ctx, args.orgId, existing._id);
+    if (source.kind !== "EXPENSE" || source.expenseId !== args.expenseId) {
+      throw new ConvexError("The prepaid source cannot be verified for a schedule retry.");
+    }
+    return existing._id;
+  }
 
   return await ctx.db.insert("prepaidExpenseSchedules", {
     orgId: args.orgId,
@@ -127,6 +141,10 @@ export async function cancelPrepaidScheduleForExpense(
     .withIndex("by_expense", (q) => q.eq("expenseId", expenseId))
     .first();
   if (!schedule || schedule.orgId !== orgId) return null;
+  const source = await resolvePrepaidScheduleSource(ctx, orgId, schedule._id);
+  if (source.kind !== "EXPENSE" || source.expenseId !== expenseId) {
+    throw new ConvexError("The prepaid source cannot be verified for expense reversal.");
+  }
   if (schedule.status !== "CANCELLED") {
     await ctx.db.patch(schedule._id, { status: "CANCELLED" });
   }
@@ -183,7 +201,9 @@ async function requireSourceExpensePostedForGlCorrection(
   amounts: { refundMinor: number; writeOffMinor: number },
   correctionDate: number
 ): Promise<void> {
+  await requireExpenseBackedCorrection(ctx, schedule);
   if (amounts.refundMinor <= 0 && amounts.writeOffMinor <= 0) return;
+  if (schedule.kind === "OPENING") throw new ConvexError(openingCorrectionMessage);
   const posted = await postedSourceExpenseEvent(ctx, schedule.orgId, schedule.expenseId);
   if (!posted) {
     throw new ConvexError(
@@ -276,8 +296,12 @@ export async function amortizeScheduleForMonth(
   // posting time). Recognizing first would credit an asset that isn't there
   // yet. Wait until the source expense has actually posted; the next run
   // catches it up once it does.
-  const sourcePosted = await postedSourceExpenseEvent(ctx, args.orgId, schedule.expenseId);
-  if (!sourcePosted) return { posted: false, reason: "source_expense_not_posted" };
+  const source = await resolvePrepaidScheduleSource(ctx, args.orgId, args.scheduleId);
+  if (source.kind === "UNAVAILABLE") return { posted: false, reason: "source_unavailable" };
+  if (source.basisDate === null) return { posted: false, reason: "source_expense_not_posted" };
+  if (source.kind === "OPENING" && Date.now() < source.basisDate) {
+    return { posted: false, reason: "opening_basis_in_future" };
+  }
 
   // Strict month ordering (lexicographic "YYYY-MM"): never recognize a month
   // at or before the last one already recognized — that would double-post.
@@ -354,7 +378,7 @@ export async function amortizeScheduleForMonth(
   // index past the current one is outside catchUpPrepaidSchedule's loop.) The
   // report buckets by payload.yearMonth, not this date, so the month a figure
   // reports in is unaffected either way — see prepaidRecognitionEvents.ts.
-  const occurredAt = Math.max(args.occurredAt, sourcePosted.accountingDate);
+  const occurredAt = Math.max(args.occurredAt, source.basisDate);
 
   await hookPrepaidExpenseAmortized(ctx, {
     orgId: args.orgId,
@@ -383,8 +407,8 @@ export const amortizePrepaidExpenseForMonth = internalMutation({
 
 /**
  * Catches up one ACTIVE schedule through `throughYearMonth` (inclusive), one
- * GL posting per missing month, stopping early if the source expense hasn't
- * posted yet. Shared by the monthly cron and the accountant-triggered manual
+ * GL posting per missing month, stopping early if the source basis is not
+ * available. Shared by the monthly cron and the accountant-triggered manual
  * run (runAmortizationNow / retryAmortization) so both follow byte-identical
  * recognition logic — there is exactly one code path that decides what a
  * schedule recognizes and when.
@@ -417,10 +441,10 @@ export async function catchUpPrepaidSchedule(
       monthsPosted++;
       continue;
     }
-    // The source expense hasn't posted yet (queued behind a closed period at
-    // payment time): no later month can post either, so stop and let the next
-    // run catch the whole schedule up once it posts.
-    if (result.reason === "source_expense_not_posted") {
+    // A missing or future source basis blocks every later month. Keep that
+    // blocker visible to manual retry and failure tracking instead of
+    // reporting a clean run that recognized nothing.
+    if (["source_expense_not_posted", "source_unavailable", "opening_basis_in_future"].includes(result.reason ?? "")) {
       stoppedReason = result.reason;
       break;
     }
@@ -484,9 +508,9 @@ export const recordAmortizationFailure = internalMutation({
       createdAt: Date.now(),
     });
     const schedule = await ctx.db.get(args.scheduleId);
-    const expense = schedule ? await ctx.db.get(schedule.expenseId) : null;
+    const expense = schedule && schedule.kind !== "OPENING" ? await ctx.db.get(schedule.expenseId) : null;
     await notifyFinanceManagers(ctx, args.orgId, "accounting.prepaidAmortizationFailed", {
-      expenseTitle: expense?.title ?? "Prepaid expense",
+      expenseTitle: schedule?.kind === "OPENING" ? schedule.title : expense?.title ?? "Prepaid expense",
       yearMonth: args.yearMonth,
       errorMessage: args.errorMessage,
     });
@@ -517,14 +541,14 @@ export const retryAmortizationFailure = mutation({
       systemActorId: user._id,
     });
 
-    // catchUpPrepaidSchedule sets stoppedReason when it had to break out early
-    // (currently only "source_expense_not_posted") — the underlying blocker is
+    // catchUpPrepaidSchedule sets stoppedReason when a source basis blocks
+    // recognition — the underlying blocker is
     // still there, so marking every failure resolved here would report success
     // to the accountant while the schedule is still stuck. Only clear the
     // failure records once the loop actually ran clean through the target month.
     if (result.stoppedReason) {
       throw new ConvexError(
-        `Retry could not clear the blocker (${result.stoppedReason}). The schedule's source expense still hasn't posted — resolve that first, then retry.`
+        `Retry could not clear the blocker (${result.stoppedReason}). Finance must verify the prepaid asset source before retrying.`
       );
     }
 
@@ -562,13 +586,13 @@ export const listActiveForManualRun = internalQuery({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.eq(q.field("status"), "ACTIVE"))
       .collect();
-    const expenses = await Promise.all(schedules.map((s) => ctx.db.get(s.expenseId)));
+    const expenses = await Promise.all(schedules.map((s) => s.kind === "OPENING" ? null : ctx.db.get(s.expenseId)));
 
     return {
       userId: user._id,
       schedules: schedules.map((s, i) => ({
         id: s._id,
-        expenseTitle: expenses[i]?.title ?? "Prepaid expense",
+        expenseTitle: s.kind === "OPENING" ? s.title : expenses[i]?.title ?? "Prepaid expense",
       })),
     };
   },
@@ -666,7 +690,7 @@ export const redriveScheduleEvents = mutation({
     }
 
     const scheduleKey = args.scheduleId.toString();
-    const sourceKey = `expense_posted_${schedule.expenseId}`;
+    const sourceKey = schedule.kind === "OPENING" ? null : `expense_posted_${schedule.expenseId}`;
     const scheduleRows: Doc<"pendingAccountingEvents">[] = [];
     // The schedule's own asset debit. It is sourceType "expenses", not
     // "prepaidExpenseSchedules", so a schedule-scoped sweep that filters on
@@ -680,7 +704,7 @@ export const redriveScheduleEvents = mutation({
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
         .collect();
       for (const row of rows) {
-        if (row.kind === "POST" && row.idempotencyKey === sourceKey) {
+        if (sourceKey !== null && row.kind === "POST" && row.idempotencyKey === sourceKey) {
           sourceRow = row;
           continue;
         }
@@ -754,6 +778,7 @@ async function remainingRefundableTaxMinorForSchedule(
   ctx: QueryCtx | MutationCtx,
   schedule: Doc<"prepaidExpenseSchedules">
 ): Promise<number> {
+  if (schedule.kind === "OPENING") return 0;
   const expense = await ctx.db.get(schedule.expenseId);
   const originalTaxMinor = expense?.taxAmount ? toMinorUnits(expense.taxAmount, schedule.currency) : 0;
   const priorCorrections = await ctx.db
@@ -775,6 +800,7 @@ export const getRemainingRefundableTaxMinor = query({
     if (!schedule || schedule.orgId !== args.orgId) {
       throw new ConvexError("Prepaid schedule not found in this organization.");
     }
+    if (schedule.kind === "OPENING") return 0;
     return remainingRefundableTaxMinorForSchedule(ctx, schedule);
   },
 });
@@ -901,6 +927,7 @@ async function applyScheduleCorrection(
   }
 ): Promise<Id<"prepaidScheduleCorrections">> {
   const schedule = await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId, "Prepaid schedule not found in this organization.");
+  await requireExpenseBackedCorrection(ctx, schedule);
   if (schedule.status !== "ACTIVE") {
     throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
   }
@@ -1047,6 +1074,7 @@ export const listRefundBankOptions = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
     const schedule = await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId, "Prepaid schedule not found in this organization.");
+    await requireExpenseBackedCorrection(ctx, schedule);
     return await listEligibleBanks(ctx, args.orgId, schedule.currency);
   },
 });
@@ -1079,6 +1107,8 @@ export const correctSchedule = mutation({
 
     const reason = args.reason.trim();
     if (!reason) throw new ConvexError("A reason is required for a schedule correction.");
+    const scheduleBeforeReplay = await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId, "Prepaid schedule not found in this organization.");
+    await requireExpenseBackedCorrection(ctx, scheduleBeforeReplay);
     const reference = args.reference?.trim() || undefined;
 
     const refundMinor = Math.round(args.refundMinor ?? 0);
@@ -1130,6 +1160,7 @@ export const correctSchedule = mutation({
         // accountant gets immediate feedback instead of a surprise rejection
         // once someone finally reviews the request.
         const schedule = await requireOwnedRow(ctx, args.orgId, "prepaidExpenseSchedules", args.scheduleId, "Prepaid schedule not found in this organization.");
+        await requireExpenseBackedCorrection(ctx, schedule);
         if (schedule.status !== "ACTIVE") {
           throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
         }
@@ -1188,7 +1219,7 @@ export const correctSchedule = mutation({
           description: `Requested approval for a prepaid write-off: refund ${refundMinor}, write-off ${writeOffMinor}. Reason: ${reason}`,
         });
 
-        const expense = await ctx.db.get(schedule.expenseId);
+        const expense = schedule.kind === "OPENING" ? null : await ctx.db.get(schedule.expenseId);
         const actorName = await getActorName(ctx);
         // Every OTHER MANAGE_FINANCE holder (or the owner) — never the maker
         // themselves, who already knows they just submitted this.
@@ -1196,7 +1227,7 @@ export const correctSchedule = mutation({
           ctx,
           args.orgId,
           "accounting.prepaidCorrectionRequested",
-          { actorName, expenseTitle: expense?.title ?? "Prepaid expense", amount: String(writeOffMinor) },
+          { actorName, expenseTitle: schedule.kind === "OPENING" ? schedule.title : expense?.title ?? "Prepaid expense", amount: String(writeOffMinor) },
           { excludeUserId: user._id }
         );
 
@@ -1221,11 +1252,11 @@ export const listPendingCorrectionRequests = query({
     const enriched = await Promise.all(
       requests.map(async (r) => {
         const schedule = await ctx.db.get(r.scheduleId);
-        const expense = schedule ? await ctx.db.get(schedule.expenseId) : null;
+        const expense = schedule && schedule.kind !== "OPENING" ? await ctx.db.get(schedule.expenseId) : null;
         const requester = await ctx.db.get(r.requestedBy);
         return {
           ...r,
-          expenseTitle: expense?.title ?? "Prepaid expense",
+          expenseTitle: schedule?.kind === "OPENING" ? schedule.title : expense?.title ?? "Prepaid expense",
           currency: schedule?.currency ?? "USD",
           requestedByName: requester?.name ?? requester?.email ?? "Unknown",
         };
@@ -1290,9 +1321,9 @@ export const approveCorrectionRequest = mutation({
     });
 
     const schedule = await ctx.db.get(request.scheduleId);
-    const expense = schedule ? await ctx.db.get(schedule.expenseId) : null;
+    const expense = schedule && schedule.kind !== "OPENING" ? await ctx.db.get(schedule.expenseId) : null;
     await notifyUser(ctx, args.orgId, request.requestedBy, "accounting.prepaidCorrectionDecided", {
-      expenseTitle: expense?.title ?? "Prepaid expense",
+      expenseTitle: schedule?.kind === "OPENING" ? schedule.title : expense?.title ?? "Prepaid expense",
       status: "approved",
     });
 
@@ -1338,9 +1369,9 @@ export const rejectCorrectionRequest = mutation({
 
     if (request.requestedBy !== user._id) {
       const schedule = await ctx.db.get(request.scheduleId);
-      const expense = schedule ? await ctx.db.get(schedule.expenseId) : null;
+      const expense = schedule && schedule.kind !== "OPENING" ? await ctx.db.get(schedule.expenseId) : null;
       await notifyUser(ctx, args.orgId, request.requestedBy, "accounting.prepaidCorrectionDecided", {
-        expenseTitle: expense?.title ?? "Prepaid expense",
+        expenseTitle: schedule?.kind === "OPENING" ? schedule.title : expense?.title ?? "Prepaid expense",
         status: "rejected",
       });
     }
@@ -1475,22 +1506,28 @@ export const listSchedules = query({
 
     const now = Date.now();
     const sorted = filtered.sort((a, b) => b.createdAt - a.createdAt);
-    const expenses = await Promise.all(sorted.map((s) => ctx.db.get(s.expenseId)));
+    const sources = await Promise.all(sorted.map((s) => resolvePrepaidScheduleSource(ctx, args.orgId, s._id)));
+    const expenses = await Promise.all(sources.map((source) => source.kind === "EXPENSE" ? ctx.db.get(source.expenseId) : null));
 
     return sorted.map((schedule, i) => {
       const key = schedule._id.toString();
       const monthsRecognized = schedule.monthsRecognized ?? 0;
       const expense = expenses[i];
+      const source = sources[i];
       return {
         _id: schedule._id,
-        expenseId: schedule.expenseId,
-        expenseTitle: expense?.title,
+        expenseId: source.kind === "EXPENSE" ? source.expenseId : undefined,
+        expenseTitle: source.kind === "OPENING" ? source.title : expense?.title,
         expenseVendor: expense?.vendor,
+        sourceKind: source.kind,
+        sourceTitle: source.kind === "UNAVAILABLE" ? null : source.title,
+        correctionAllowed: source.kind === "EXPENSE",
+        sourceUnavailableReason: source.kind === "UNAVAILABLE" ? source.reason : null,
         currency: schedule.currency,
         totalMinor: schedule.totalMinor,
         recognizedMinor: schedule.recognizedMinor,
-        remainingMinor: Math.max(schedule.totalMinor - schedule.recognizedMinor, 0),
-        dueMinor: recognizedDueThroughDateMinor(
+        remainingMinor: source.kind === "UNAVAILABLE" ? null : Math.max(schedule.totalMinor - schedule.recognizedMinor, 0),
+        dueMinor: source.kind === "UNAVAILABLE" ? null : recognizedDueThroughDateMinor(
           { totalMinor: schedule.totalMinor, termMonths: schedule.termMonths, startYearMonth: schedule.startYearMonth, currency: schedule.currency },
           { recognizedMinor: schedule.recognizedMinor, monthsRecognized: monthsRecognized },
           now

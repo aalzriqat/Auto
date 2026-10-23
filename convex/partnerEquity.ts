@@ -1,4 +1,5 @@
 import { v, ConvexError } from "convex/values";
+import { PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED, PARTNER_PROFIT_DISTRIBUTION_UNAVAILABLE } from "./utils/partnerDistributionContainment";
 import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
@@ -6,7 +7,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyOwner, getActorName } from "./utils/notifications";
-import { toMinorUnits } from "./utils/money";
+import { toMinorSameCurrencyOrUndefined } from "./utils/money";
 import {
   hookCapitalContributed,
   hookPartnerDrew,
@@ -18,6 +19,7 @@ import { paymentMethodValidator, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { partnerEquityNeedsBank } from "./utils/partnerEquityBank";
+import { loadPartnerOpening, openingPartnerBasis, type PartnerOpeningContext } from "./utils/openingPartnerBasis";
 
 const movementTypeValidator = v.union(
   v.literal("CONTRIBUTION"),
@@ -66,8 +68,9 @@ async function validateMovementBank(
 async function derivePartnerBalanceMinor(
   ctx: QueryCtx,
   partner: Doc<"partnerEquity">,
-  orgCurrency: string
-): Promise<{ balanceMinor: number; transactionCount: number }> {
+  orgCurrency: string,
+  opening: PartnerOpeningContext
+): Promise<{ balanceMinor: number | null; balanceStatus: "VERIFIED" | "UNAVAILABLE"; transactionCount: number }> {
   const transactions = await ctx.db
     .query("partnerEquityTransactions")
     .withIndex("by_org_partner_time", (q) =>
@@ -76,11 +79,20 @@ async function derivePartnerBalanceMinor(
     .collect();
 
   let delta = 0;
+  let validMovements = true;
   for (const tx of transactions) {
+    if (tx.currency !== orgCurrency || !Number.isSafeInteger(tx.amountMinor) || tx.amountMinor <= 0 ||
+        (opening.parent && tx.occurredAt < opening.parent.asOfDate)) validMovements = false;
     delta += tx.type === "DRAW" ? -tx.amountMinor : tx.amountMinor;
   }
-  const legacyBaseMinor = partner.openingBalanceMinor ?? toMinorUnits(partner.currentBalance ?? 0, orgCurrency);
-  return { balanceMinor: legacyBaseMinor + delta, transactionCount: transactions.length };
+  const legacyBaseMinor = partner.openingBalanceMinor ??
+    toMinorSameCurrencyOrUndefined(partner.currentBalance ?? 0, orgCurrency, orgCurrency) ?? Number.NaN;
+  const basis = openingPartnerBasis(partner, orgCurrency, opening, legacyBaseMinor);
+  const balanceMinor = basis.kind === "INVALID" ? null : basis.amountMinor + delta;
+  if (!validMovements || !Number.isSafeInteger(balanceMinor)) {
+    return { balanceMinor: null, balanceStatus: "UNAVAILABLE", transactionCount: transactions.length };
+  }
+  return { balanceMinor, balanceStatus: "VERIFIED", transactionCount: transactions.length };
 }
 
 export const list = query({
@@ -91,6 +103,7 @@ export const list = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const currency = await getOrgCurrency(ctx, args.orgId);
+    const opening = await loadPartnerOpening(ctx, args.orgId);
     const page = await ctx.db
       .query("partnerEquity")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -102,8 +115,8 @@ export const list = query({
     // so deriving each row's balance inline is fine at this scale.
     const enriched = await Promise.all(
       page.page.map(async (partner) => {
-        const { balanceMinor, transactionCount } = await derivePartnerBalanceMinor(ctx, partner, currency);
-        return { ...partner, balanceMinor, transactionCount, currency };
+        const balance = await derivePartnerBalanceMinor(ctx, partner, currency, opening);
+        return { ...partner, ...balance, currency };
       })
     );
     return { ...page, page: enriched };
@@ -240,6 +253,7 @@ async function recordMovement(
     notes?: string;
     occurredAt?: number;
     actorId: Id<"users">;
+    opening?: PartnerOpeningContext;
   }
 ): Promise<Id<"partnerEquityTransactions">> {
   if (!Number.isSafeInteger(args.amountMinor) || args.amountMinor <= 0) {
@@ -250,6 +264,16 @@ async function recordMovement(
   const occurredAt = args.occurredAt ?? Date.now();
   if (!Number.isSafeInteger(occurredAt) || occurredAt < 0 || occurredAt > Date.now()) {
     throw new ConvexError("Choose a valid partner movement date that is not in the future.");
+  }
+  const opening = args.opening ?? await loadPartnerOpening(ctx, args.orgId);
+  const partner = await requireOwnedRow(ctx, args.orgId, "partnerEquity", args.partnerId, "Partner not found in this organization.");
+  const legacyBase = partner.openingBalanceMinor ??
+    toMinorSameCurrencyOrUndefined(partner.currentBalance ?? 0, currency, currency) ?? Number.NaN;
+  if (openingPartnerBasis(partner, currency, opening, legacyBase).kind === "INVALID") {
+    throw new ConvexError("The partner opening balance cannot be verified. Ask finance to review it.");
+  }
+  if (opening.parent && occurredAt < opening.parent.asOfDate) {
+    throw new ConvexError("A partner movement cannot precede the posted opening date.");
   }
   // Use the exact predicate that postOrEnqueue uses. A CLOSING period is not
   // postable even though the general period guard has not marked it CLOSED.
@@ -308,6 +332,9 @@ export const recordEquityMovement = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    if (args.type === "PROFIT_DISTRIBUTION" && PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED) {
+      throw new ConvexError(PARTNER_PROFIT_DISTRIBUTION_UNAVAILABLE.en);
+    }
 
     return await runWithIdempotency(
       ctx,
@@ -334,6 +361,7 @@ export const recordEquityMovement = mutation({
           throw new ConvexError("Partner not found in this organization.");
         }
         const currency = await getOrgCurrency(ctx, args.orgId);
+        const opening = await loadPartnerOpening(ctx, args.orgId);
         const bankAccountId = await validateMovementBank(ctx, {
           orgId: args.orgId,
           type: args.type,
@@ -342,7 +370,8 @@ export const recordEquityMovement = mutation({
           currency,
         });
         if (args.type === "DRAW") {
-          const { balanceMinor } = await derivePartnerBalanceMinor(ctx, partner, currency);
+          const { balanceMinor } = await derivePartnerBalanceMinor(ctx, partner, currency, opening);
+          if (balanceMinor === null) throw new ConvexError("The partner balance cannot be verified. Ask finance to review it.");
           if (args.amountMinor > balanceMinor) {
             throw new ConvexError(
               "Draw exceeds this partner's equity balance. Record a profit distribution first if the partner is drawing against undistributed profit."
@@ -360,6 +389,7 @@ export const recordEquityMovement = mutation({
           notes: args.notes,
           occurredAt: args.occurredAt,
           actorId: user._id,
+          opening,
         });
 
         const actorName = await getActorName(ctx);
@@ -414,7 +444,10 @@ export const remove = mutation({
     // capital is on the books. Pure legacy rows (no transactions) may still be
     // removed; migrating those balances is GL Phase 17's job.
     const currency = await getOrgCurrency(ctx, args.orgId);
-    const { balanceMinor, transactionCount } = await derivePartnerBalanceMinor(ctx, equity, currency);
+    const opening = await loadPartnerOpening(ctx, args.orgId);
+    const { balanceMinor, transactionCount } = await derivePartnerBalanceMinor(ctx, equity, currency, opening);
+    if (balanceMinor === null) throw new ConvexError("The partner balance cannot be verified. Ask finance to review it.");
+    if (equity.openingBalanceDraftId) throw new ConvexError("This partner belongs to the posted opening. Ask finance to review retirement.");
     if (transactionCount > 0 && balanceMinor !== 0) {
       throw new ConvexError(
         "This partner still has an equity balance on the ledger. Draw it down to zero before removing them."

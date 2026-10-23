@@ -989,6 +989,12 @@ export const confirmSystemAccountAdoption = mutation({
 
     const now = Date.now();
     if (args.decision === "ADOPT") {
+      const openings = await ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", (q) =>
+        q.eq("orgId", args.orgId).eq("status", "POSTED")).take(2);
+      if (openings.length > 1 || openings.some((opening) => opening.allocations?.some((row) =>
+        row.kind === "PARTNER_CAPITAL" && row.accountId === candidate._id))) {
+        throw new ConvexError("This account belongs to a posted partner opening and cannot be adopted.");
+      }
       await ctx.db.patch(candidate._id, {
         systemKey: args.systemKey as SystemKey,
         active: true,

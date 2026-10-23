@@ -1,3 +1,4 @@
+import { openingPayableBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -59,10 +60,10 @@ export const list = query({
     return await Promise.all(
       payables.map(async (p) => {
         // Guard: only surface joined records that belong to this org.
-        const vehicle = await ctx.db.get(p.vehicleId);
+        const vehicle = p.origin === "OPENING" ? null : await ctx.db.get(p.vehicleId);
         const safeVehicle = vehicle?.orgId === args.orgId ? vehicle : null;
 
-        const sale = p.saleId ? await ctx.db.get(p.saleId) : null;
+        const sale = p.origin !== "OPENING" && p.saleId ? await ctx.db.get(p.saleId) : null;
         const safeSale = sale?.orgId === args.orgId ? sale : null;
 
         const customer = safeSale ? await ctx.db.get(safeSale.customerId) : null;
@@ -74,7 +75,7 @@ export const list = query({
           ...p,
           vehicleDesc: safeVehicle
             ? `${safeVehicle.year} ${safeVehicle.make} ${safeVehicle.model}${safeVehicle.trim ? ` ${safeVehicle.trim}` : ""}`
-            : "Unknown Vehicle",
+            : p.origin === "OPENING" ? p.title : "Unknown Vehicle",
           vehicleVin: safeVehicle?.vin,
           customerName: safeCustomer
             ? `${safeCustomer.firstName} ${safeCustomer.lastName}`
@@ -202,10 +203,10 @@ export const get = query({
     const p = await ctx.db.get(args.payableId);
     if (!p || p.orgId !== args.orgId) return null;
 
-    const vehicle = await ctx.db.get(p.vehicleId);
+    const vehicle = p.origin === "OPENING" ? null : await ctx.db.get(p.vehicleId);
     const safeVehicle = vehicle?.orgId === args.orgId ? vehicle : null;
 
-    const sale = p.saleId ? await ctx.db.get(p.saleId) : null;
+    const sale = p.origin !== "OPENING" && p.saleId ? await ctx.db.get(p.saleId) : null;
     const safeSale = sale?.orgId === args.orgId ? sale : null;
 
     const customer = safeSale ? await ctx.db.get(safeSale.customerId) : null;
@@ -238,6 +239,7 @@ export const markPaid = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const paymentMethod = normalizePaymentMethod(args.paymentMethod);
 
+    await openingPayableBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"vehicleSupplierPayables",args.payableId,"Supplier payable not found."));
     return await runWithIdempotency(
       ctx,
       {
@@ -292,6 +294,8 @@ export const markPaid = mutation({
           );
         }
 
+        const opening = await openingPayableBasis(ctx,args.orgId,payable);
+        if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError("Opening liabilities cannot be reclassified as VAT.");
         const now = Date.now();
         await ctx.db.patch(args.payableId, {
           status: "PAID",
@@ -325,11 +329,14 @@ export const markPaid = mutation({
         // reclass must follow it there rather than crediting an account the
         // vehicle's cost no longer sits in.
         let costOrigin: "COGS" | "VEHICLE_INVENTORY" = "COGS";
-        if (payable.saleId == null) {
+        if (payable.origin !== "OPENING" && payable.saleId == null) {
           const vehicle = await ctx.db.get(payable.vehicleId);
           costOrigin = vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
         }
+        const openingPaymentId = opening ? await ctx.db.insert("openingPayablePayments",{orgId:args.orgId,payableId:payable._id,seq:(payable.paymentSeq ?? 0)+1,openingBalanceDraftId:opening.draftId,openingRowKey:opening.rowKey,amountMinor:toMinorUnits(remainingToSettle, payable.currency),currency:payable.currency,method:paymentMethod,bankAccountId:args.bankAccountId,occurredAt:now,actorId:user._id,commandKey:args.idempotencyKey,operation:"markPaid",status:"LIVE"}) : undefined;
         await hookSupplierPaymentSettled(ctx, {
+          openingSource:opening ? {draftId:opening.draftId,rowKey:opening.rowKey}:undefined,
+          openingPaymentId,
           orgId: args.orgId,
           payableId: args.payableId,
           sourcedFromName: payable.sourcedFromName,
@@ -381,6 +388,7 @@ export const recordPartialPayment = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const paymentMethod = normalizePaymentMethod(args.paymentMethod);
 
+    await openingPayableBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"vehicleSupplierPayables",args.payableId,"Supplier payable not found."));
     return await runWithIdempotency(
       ctx,
       {
@@ -460,6 +468,8 @@ export const recordPartialPayment = mutation({
           );
         }
 
+        const opening = await openingPayableBasis(ctx,args.orgId,payable);
+        if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError("Opening liabilities cannot be reclassified as VAT.");
         const now = Date.now();
         const settlesInFull = projectedMinor === dueMinor;
         const paymentSeq = (payable.paymentSeq ?? 0) + 1;
@@ -481,11 +491,14 @@ export const recordPartialPayment = mutation({
         // Inventory at acquisition, unless the vehicle has since sold and its
         // cost has already moved to COGS.
         let costOrigin: "COGS" | "VEHICLE_INVENTORY" = "COGS";
-        if (payable.saleId == null) {
+        if (payable.origin !== "OPENING" && payable.saleId == null) {
           const vehicle = await ctx.db.get(payable.vehicleId);
           costOrigin = vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
         }
+        const openingPaymentId = opening ? await ctx.db.insert("openingPayablePayments",{orgId:args.orgId,payableId:payable._id,seq:(payable.paymentSeq ?? 0)+1,openingBalanceDraftId:opening.draftId,openingRowKey:opening.rowKey,amountMinor:toMinorUnits(args.amount,payable.currency),currency:payable.currency,method:paymentMethod,bankAccountId:args.bankAccountId,occurredAt:now,actorId:user._id,commandKey:args.idempotencyKey,operation:"recordPartialPayment",status:"LIVE"}) : undefined;
         await hookSupplierPaymentSettled(ctx, {
+          openingSource:opening ? {draftId:opening.draftId,rowKey:opening.rowKey}:undefined,
+          openingPaymentId,
           orgId: args.orgId,
           payableId: args.payableId,
           sourcedFromName: payable.sourcedFromName,

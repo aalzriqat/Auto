@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { OpeningManagementSettlementPanel } from "./OpeningManagementSettlementPanel";
+import { PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED, PARTNER_PROFIT_DISTRIBUTION_UNAVAILABLE } from "@/convex/utils/partnerDistributionContainment";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { usePaginatedQuery, useMutation, useQuery } from "convex/react";
@@ -106,7 +108,7 @@ const MOVEMENT_META: Record<MovementType, { titleKey: string; descKey: string; n
 
 export function PartnerEquityTab() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { code: currencyCode } = useCurrency();
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission } = usePermissions();
@@ -134,6 +136,7 @@ export function PartnerEquityTab() {
 
   return (
     <div className="p-6 space-y-6">
+      {activeOrgId && <OpeningManagementSettlementPanel orgId={activeOrgId} />}
       <div className="mb-2 flex justify-between items-center gap-4 flex-wrap">
         <h2 className="text-lg font-semibold text-foreground">{t("PartnerEquity" as any)}</h2>
         {canManage && (
@@ -165,7 +168,7 @@ export function PartnerEquityTab() {
                     <TableCell className="font-medium">{partner.partnerName}</TableCell>
                     <TableCell className="text-right">
                       <span className="font-semibold text-foreground">
-                        {formatCurrency(partner.balanceMinor / factor, scale)}
+                        {partner.balanceMinor === null ? t("FigureUnavailable") : formatCurrency(partner.balanceMinor / factor, scale)}
                       </span>
                       {hasLegacyBase && (
                         <Badge variant="outline" className="ms-2 text-muted-foreground" title={t("LegacyBalanceNotice" as any)}>
@@ -193,6 +196,7 @@ export function PartnerEquityTab() {
                               title={t("RecordContribution" as any)}
                               aria-label={t("RecordContribution" as any)}
                               onClick={() => setMovement({ partner, type: "CONTRIBUTION" })}
+                              disabled={partner.balanceStatus !== "VERIFIED"}
                             >
                               <ArrowDownToLine className="w-4 h-4 text-emerald-600" />
                             </Button>
@@ -202,15 +206,17 @@ export function PartnerEquityTab() {
                               title={t("RecordDraw" as any)}
                               aria-label={t("RecordDraw" as any)}
                               onClick={() => setMovement({ partner, type: "DRAW" })}
+                              disabled={partner.balanceStatus !== "VERIFIED"}
                             >
                               <ArrowUpFromLine className="w-4 h-4 text-rose-600" />
                             </Button>
                             <Button
                               variant="ghost"
                               size="icon"
-                              title={t("RecordDistribution" as any)}
-                              aria-label={t("RecordDistribution" as any)}
+                              title={PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED ? PARTNER_PROFIT_DISTRIBUTION_UNAVAILABLE[locale] : t("RecordDistribution" as any)}
+                              aria-label={PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED ? PARTNER_PROFIT_DISTRIBUTION_UNAVAILABLE[locale] : t("RecordDistribution" as any)}
                               onClick={() => setMovement({ partner, type: "PROFIT_DISTRIBUTION" })}
+                              disabled={PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED || partner.balanceStatus !== "VERIFIED"}
                             >
                               <PieChart className="w-4 h-4 text-violet-600" />
                             </Button>
@@ -504,7 +510,7 @@ function MovementDialog({
           <form onSubmit={(e) => void form.handleSubmit(onSubmit)(e)} className="space-y-4">
             <AmountSummary
               label={t("CurrentBalance" as any)}
-              value={formatCurrency(partner.balanceMinor / factor, scale)}
+              value={partner.balanceMinor === null ? t("FigureUnavailable") : formatCurrency(partner.balanceMinor / factor, scale)}
             />
 
             <FormField

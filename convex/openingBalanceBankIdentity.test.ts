@@ -16,6 +16,7 @@ import type { Id } from "./_generated/dataModel";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
+// Retained earnings is a synthetic test offset only; it classifies no real guide amount.
 async function seed() {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
@@ -78,7 +79,7 @@ async function seed() {
     return found._id;
   };
   const bankControlId = byKey("BANK_ACCOUNT");
-  const capitalId = byKey("PARTNER_CAPITAL");
+  const syntheticOffsetId = byKey("RETAINED_EARNINGS");
   const cashId = byKey("CASH_ON_HAND");
 
   const createBank = (name: string, currency = "JOD", isReconciliationTarget = false) =>
@@ -91,7 +92,7 @@ async function seed() {
       isReconciliationTarget,
     });
 
-  return { t, orgId, ownerId, asOwner, asAccountant, bankControlId, capitalId, cashId, createBank };
+  return { t, orgId, ownerId, asOwner, asAccountant, bankControlId, syntheticOffsetId, cashId, createBank };
 }
 
 type Fx = Awaited<ReturnType<typeof seed>>;
@@ -103,7 +104,7 @@ function bankOpening(fx: Fx, bankAccountId?: Id<"bankAccounts">, amount = 1_000_
     asOfDate: Date.now(),
     lines: [
       { accountId: fx.bankControlId, debitMinor: amount, creditMinor: 0, ...(bankAccountId ? { bankAccountId } : {}) },
-      { accountId: fx.capitalId, debitMinor: 0, creditMinor: amount },
+      { accountId: fx.syntheticOffsetId, debitMinor: 0, creditMinor: amount },
     ],
   };
 }
@@ -140,9 +141,9 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
 
     const lines = await postedLines(fx, journalId);
     const bankLine = lines.find((l) => l.accountId === fx.bankControlId);
-    const capitalLine = lines.find((l) => l.accountId === fx.capitalId);
+    const syntheticOffsetLine = lines.find((l) => l.accountId === fx.syntheticOffsetId);
     expect(bankLine?.bankAccountId).toBe(bankId);
-    expect(capitalLine?.bankAccountId).toBeUndefined();
+    expect(syntheticOffsetLine?.bankAccountId).toBeUndefined();
 
     const book = await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId });
     expect(book).toMatchObject({ status: "OK", balanceMinor: 1_000_000, unattributedLineCount: 0 });
@@ -160,7 +161,7 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
       lines: [
         { accountId: fx.bankControlId, debitMinor: 700_000, creditMinor: 0, bankAccountId: bankA },
         { accountId: fx.bankControlId, debitMinor: 300_000, creditMinor: 0, bankAccountId: bankB },
-        { accountId: fx.capitalId, debitMinor: 0, creditMinor: 1_000_000 },
+        { accountId: fx.syntheticOffsetId, debitMinor: 0, creditMinor: 1_000_000 },
       ],
     });
 
@@ -189,9 +190,9 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
       orgId: fx.orgId,
     });
     const shownBank = pending[0].lines.find((l) => l.accountId === fx.bankControlId);
-    const shownCapital = pending[0].lines.find((l) => l.accountId === fx.capitalId);
+    const shownSyntheticOffset = pending[0].lines.find((l) => l.accountId === fx.syntheticOffsetId);
     expect(shownBank).toMatchObject({ bankAccountId: bankId, bankAccountName: "Housing Bank", requiresBankAccount: true });
-    expect(shownCapital).toMatchObject({ bankAccountName: null, requiresBankAccount: false });
+    expect(shownSyntheticOffset).toMatchObject({ bankAccountName: null, requiresBankAccount: false });
 
     const { journalId } = await fx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
       orgId: fx.orgId,
@@ -225,7 +226,7 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
       asOfDate: Date.now(),
       lines: [
         { accountId: fx.cashId, debitMinor: 500_000, creditMinor: 0 },
-        { accountId: fx.capitalId, debitMinor: 0, creditMinor: 500_000 },
+        { accountId: fx.syntheticOffsetId, debitMinor: 0, creditMinor: 500_000 },
       ],
     });
     const lines = await postedLines(fx, journalId);
@@ -327,7 +328,7 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
           return {
             lines: [
               { accountId: fx.cashId, debitMinor: 1_000_000, creditMinor: 0, bankAccountId: bankId },
-              { accountId: fx.capitalId, debitMinor: 0, creditMinor: 1_000_000 },
+              { accountId: fx.syntheticOffsetId, debitMinor: 0, creditMinor: 1_000_000 },
             ],
             message: /only a bank account line/i,
           };
@@ -389,7 +390,7 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
           status: "PENDING_APPROVAL",
           lines: [
             { accountId: fx.bankControlId, debitMinor: 1_000_000, creditMinor: 0 },
-            { accountId: fx.capitalId, debitMinor: 0, creditMinor: 1_000_000 },
+            { accountId: fx.syntheticOffsetId, debitMinor: 0, creditMinor: 1_000_000 },
           ],
           asOfDate: Date.now(),
           createdBy: fx.ownerId,

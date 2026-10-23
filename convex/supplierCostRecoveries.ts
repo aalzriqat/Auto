@@ -1,3 +1,4 @@
+import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -175,8 +176,8 @@ export const list = query({
     items: v.array(
       v.object({
         _id: v.id("supplierCostRecoveries"),
-        vehicleId: v.id("vehicles"),
-        expenseId: v.id("expenses"),
+        vehicleId: v.optional(v.id("vehicles")),
+        expenseId: v.optional(v.id("expenses")),
         sourcedFromName: v.string(),
         currency: v.string(),
         amountDueMinor: v.number(),
@@ -214,13 +215,14 @@ export const list = query({
     const page = rows.slice(0, LIMIT);
     const items = await Promise.all(
       page.map(async (row) => {
-        const vehicle = await ctx.db.get(row.vehicleId);
-        const expense = await ctx.db.get(row.expenseId);
-        const { state } = await postingStateForKey(ctx, args.orgId, row.sourceEventKey);
+        const opening = await openingRecoveryBasis(ctx,args.orgId,row);
+        const vehicle = row.origin === "OPENING" ? null : await ctx.db.get(row.vehicleId);
+        const expense = row.origin === "OPENING" ? null : await ctx.db.get(row.expenseId);
+        const state = opening ? "POSTED" as const : (await postingStateForKey(ctx,args.orgId,row.origin !== "OPENING" ? row.sourceEventKey : "")).state;
         return {
           _id: row._id,
-          vehicleId: row.vehicleId,
-          expenseId: row.expenseId,
+          vehicleId: row.origin === "OPENING" ? undefined : row.vehicleId,
+          expenseId: row.origin === "OPENING" ? undefined : row.expenseId,
           sourcedFromName: row.sourcedFromName,
           currency: row.currency,
           amountDueMinor: row.amountDueMinor,
@@ -228,7 +230,7 @@ export const list = query({
           remainingMinor: Math.max(0, row.amountDueMinor - row.amountRecoveredMinor),
           status: row.status,
           sourcePostingState: state,
-          expenseTitle: expense?.title ?? null,
+          expenseTitle: row.origin === "OPENING" ? row.title : expense?.title ?? null,
           vehicleLabel: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim() : null,
           createdAt: row.createdAt,
         };
@@ -334,6 +336,7 @@ export const recordReceipt = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
+    await openingRecoveryBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"supplierCostRecoveries",args.recoveryId,"Supplier cost recovery not found."));
     return await runWithIdempotency(
       ctx,
       {
@@ -382,7 +385,8 @@ export const recordReceipt = mutation({
         // Money cannot be recovered against a debit the ledger does not carry:
         // a queued or failed source would leave this credit with nothing to
         // offset, and a reversed one has already been undone.
-        const source = await postingStateForKey(ctx, args.orgId, recovery.sourceEventKey);
+        const opening = await openingRecoveryBasis(ctx,args.orgId,recovery);
+        const source = opening ? {state:"POSTED",accountingDate:opening.asOfDate} : await postingStateForKey(ctx, args.orgId, recovery.origin !== "OPENING" ? recovery.sourceEventKey : "");
         if (source.state !== "POSTED") {
           throw new ConvexError(
             "This cost has not been posted to the ledger yet. Receipts can be recorded once it has."
@@ -408,7 +412,7 @@ export const recordReceipt = mutation({
         const receiptId = await ctx.db.insert("supplierCostRecoveryReceipts", {
           orgId: args.orgId,
           recoveryId: recovery._id,
-          vehicleId: recovery.vehicleId,
+          ...(recovery.origin === "OPENING" ? {origin:"OPENING" as const,openingBalanceDraftId:recovery.openingBalanceDraftId,openingRowKey:recovery.openingRowKey} : {vehicleId:recovery.vehicleId}),
           seq,
           amountMinor: args.amountMinor,
           currency: recovery.currency,
@@ -426,7 +430,8 @@ export const recordReceipt = mutation({
           orgId: args.orgId,
           receiptId,
           recoveryId: recovery._id,
-          vehicleId: recovery.vehicleId,
+          vehicleId: recovery.origin === "OPENING" ? undefined : recovery.vehicleId,
+          openingSource: opening ? {draftId:opening.draftId,rowKey:opening.rowKey} : undefined,
           sourcedFromName: recovery.sourcedFromName,
           amountMinor: args.amountMinor,
           currency: recovery.currency,
@@ -491,6 +496,8 @@ export const reverseReceipt = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
+    const existingReceipt=await requireOwnedRow(ctx,args.orgId,"supplierCostRecoveryReceipts",args.receiptId,"Supplier cost recovery receipt not found.");
+    await openingRecoveryBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"supplierCostRecoveries",existingReceipt.recoveryId,"Supplier cost recovery not found."));
     return await runWithIdempotency(
       ctx,
       {
@@ -534,8 +541,9 @@ export const reverseReceipt = mutation({
         // Conversion to owned stock is allowed once nothing is owed; reversing a
         // receipt afterwards would reopen a claim against a supplier on a car
         // the dealership now owns.
-        const vehicle = await ctx.db.get(recovery.vehicleId);
-        if (vehicle?.sourceType !== "SOURCED") {
+        await openingRecoveryBasis(ctx,args.orgId,recovery);
+        const vehicle = recovery.origin === "OPENING" ? null : await ctx.db.get(recovery.vehicleId);
+        if (recovery.origin !== "OPENING" && vehicle?.sourceType !== "SOURCED") {
           throw new ConvexError(
             "This car is no longer a sourced vehicle, so its supplier cost recoveries are closed and cannot be reversed."
           );

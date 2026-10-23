@@ -19,6 +19,7 @@ import { assertNoPendingBeforeAvailable } from "./utils/depositCancellationPendi
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
 import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
 import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure, throwVehicleCostPosted } from "./vehicles";
+import { assertOpeningVehicleBasis } from "./utils/openingVehicleBasis";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
@@ -295,6 +296,10 @@ export const requestUpdate = mutation({
     const mayRequestAffectAcquisition =
       "purchasePrice" in payload || "sourceCost" in payload ||
       (payload.sourceType !== undefined && payload.sourceType !== "SOURCED");
+    if (mayRequestAffectAcquisition || payload.sourceType === "SOURCED") {
+      const openingBasis = await assertOpeningVehicleBasis(ctx, args.orgId, args.vehicleId);
+      if (openingBasis === "POSTED") throw new ConvexError("Opening stock cost and ownership need a separately reviewed correction.");
+    }
     if (
       mayRequestAffectAcquisition &&
       effectiveSourceTypeForRequest !== "SOURCED" &&
@@ -521,6 +526,10 @@ export const resolve = mutation({
         const mayResolveAffectAcquisition =
           "purchasePrice" in payload || "sourceCost" in payload ||
           (payload.sourceType !== undefined && payload.sourceType !== "SOURCED");
+        if (mayResolveAffectAcquisition || payload.sourceType === "SOURCED") {
+          const openingBasis = await assertOpeningVehicleBasis(ctx, args.orgId, request.vehicleId);
+          if (openingBasis === "POSTED") throw new ConvexError("Opening stock cost and ownership need a separately reviewed correction.");
+        }
         const resolveAcquisitionAlreadyExposed = mayResolveAffectAcquisition
           ? await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, request.vehicleId)
           : false;

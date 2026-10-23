@@ -282,6 +282,7 @@ describe("review round 2 (Codex seat, PR #500): failing-first regressions", () =
     expect(run("scripts/example.spec.ts")).toContain("impl");
     expect(run("scripts/example.test.mjs")).toContain("impl");
     expect(run("playwright/scenarios/example.spec.ts")).toEqual([]);
+    expect(run("playwright/visual/example.visual.spec.ts")).toEqual([]);
     expect(run("convex/example.test.ts")).toEqual([]);
   });
 
@@ -325,6 +326,8 @@ describe("review round 3 (Opus closure, PR #500): failing-first regressions", ()
   test("R3: the runner check uses the normalised path, not the spelling", () => {
     expect(withBody(`test("named case", () => {});`, "apps/mobile/x.test.ts", "scripts/../apps/mobile/x.test.ts")).toContain("impl");
     expect(withBody(`test("named case", () => {});`, "playwright/fixtures/x.spec.ts")).toContain("impl");
+    expect(withBody(`test("named case", () => {});`, "playwright/visual/x.spec.ts")).toContain("impl");
+    expect(withBody(`test("named case", () => {});`, "playwright/visual/x.visual.spec.ts")).toEqual([]);
     expect(withBody(`test("named case", () => {});`, "build/x.test.ts")).toContain("impl");
     expect(withBody(`test("named case", () => {});`, "playwright/tests/x.spec.ts")).toEqual([]);
   });

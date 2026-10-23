@@ -1,3 +1,5 @@
+import type {OpeningSettlementReader} from "../utils/openingSettlementBasis";
+import { assertOpeningPostingProof } from "../utils/openingPostingProof";
 /**
  * workflowHooks.ts
  *
@@ -121,8 +123,10 @@ async function postOrEnqueue(
    * is a SCRUM-231 cutover decision with no reclassification door afterwards, so
    * inventing one at runtime is exactly the substitution c17653 prohibits.
    */
-  opts?: { requiredSystemKeys?: readonly SystemKey[] }
+  opts?: { requiredSystemKeys?: readonly SystemKey[] },
+  suppliedOpeningReader?:OpeningSettlementReader,
 ): Promise<void> {
+  const openingReader=await assertOpeningPostingProof(ctx,cmd,suppliedOpeningReader);
   // Period integrity: if this exact domain event is already captured but not yet
   // posted in the outbox, it will post with ITS ORIGINAL accounting date once the
   // period opens. A second hook call for the same event (e.g. a commission
@@ -224,15 +228,16 @@ async function postOrEnqueue(
       await enqueuePendingPost(
         ctx,
         cmd,
-        `System account "${key}" is not mapped for this organization at operation time`
+        `System account "${key}" is not mapped for this organization at operation time`,
+        openingReader,
       );
       return;
     }
   }
   if (await shouldPost(ctx, cmd.orgId, cmd.accountingDate)) {
-    await postAccountingEvent(ctx, cmd);
+    await postAccountingEvent(ctx, cmd,openingReader);
   } else {
-    await enqueuePendingPost(ctx, cmd, "No chart of accounts or open period at operation time");
+    await enqueuePendingPost(ctx, cmd, "No chart of accounts or open period at operation time",openingReader);
   }
 }
 
@@ -275,7 +280,8 @@ async function postDomainEvent(
      * outlives the transaction that queued it.
      */
     queueBehind?: string;
-  }
+  },
+  openingReader?:OpeningSettlementReader,
 ): Promise<void> {
   const cmd: PostCommand = {
     orgId: args.orgId,
@@ -291,13 +297,14 @@ async function postDomainEvent(
     actorId: args.actorId,
   };
   if (args.queueBehind !== undefined) {
-    await enqueuePendingPost(ctx, cmd, `Waiting on a predecessor: ${args.queueBehind}`);
+    await enqueuePendingPost(ctx, cmd, `Waiting on a predecessor: ${args.queueBehind}`,openingReader);
     return;
   }
   await postOrEnqueue(
     ctx,
     cmd,
-    args.requiredSystemKeys ? { requiredSystemKeys: args.requiredSystemKeys } : undefined
+    args.requiredSystemKeys ? { requiredSystemKeys: args.requiredSystemKeys } : undefined,
+    openingReader,
   );
 }
 
@@ -1299,6 +1306,8 @@ export async function hookSupplierPaymentSettled(
   args: {
     orgId: Id<"organizations">;
     payableId: Id<"vehicleSupplierPayables">;
+    openingSource?: {draftId:Id<"openingBalanceDrafts">;rowKey:string};
+    openingPaymentId?:Id<"openingPayablePayments">;
     /** Which payment against this payable this is. Defaults to 1. */
     paymentSeq?: number;
     sourcedFromName: string;
@@ -1331,6 +1340,8 @@ export async function hookSupplierPaymentSettled(
     actorId: args.actorId,
     payload: {
       payableId: args.payableId.toString(),
+      openingSource:args.openingSource,
+      openingPaymentId:args.openingPaymentId,
       sourcedFromName: args.sourcedFromName,
       amountMinor: args.amountMinor,
       taxMinor: args.taxMinor,
@@ -2329,6 +2340,7 @@ export async function hookPayrollPaid(
     userId: Id<"users">;
     salaryMinor: number;
     commissionMinor: number;
+    openingCommissionSettlements?: import("../utils/openingCommissionBasis").OpeningCommissionSettlement[];
     advanceRecoveredMinor: number;
     netMinor: number;
     currency: string;
@@ -2336,7 +2348,8 @@ export async function hookPayrollPaid(
     bankAccountId?: Id<"bankAccounts">;
     actorId: Id<"users">;
     occurredAt: number;
-  }
+  },
+  openingReader?: import("../utils/openingSettlementBasis").OpeningSettlementReader
 ) {
   await ensurePayrollAccountsIfChartReady(ctx, args.orgId, args.actorId);
   await postDomainEvent(ctx, {
@@ -2353,13 +2366,14 @@ export async function hookPayrollPaid(
       userId: args.userId.toString(),
       salaryMinor: args.salaryMinor,
       commissionMinor: args.commissionMinor,
+      ...(args.openingCommissionSettlements?.length ? { openingCommissionSettlements: args.openingCommissionSettlements } : {}),
       advanceRecoveredMinor: args.advanceRecoveredMinor,
       netMinor: args.netMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
       ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
     },
-  });
+  }, openingReader);
 }
 
 type ReversalHookArgs<TSourceId> = {

@@ -1,3 +1,4 @@
+import { clearOpeningPayablesBatch, clearOpeningPayrollReference, clearNewOpeningResultReference } from "./utils/openingResetCleanup";
 import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
 import type { DatabaseReader } from "./_generated/server";
@@ -56,6 +57,10 @@ import {
  * pins today's behaviour.
  */
 const RESET_TABLES = [
+  "payrollItems",
+  "openingCommissionLiabilities",
+  "openingPayablePayments",
+  "openingManagementSettlementPlans",
   // ⚠️ SCRUM-208 c15825 — AUTHORITY LIFECYCLE FIRST, IN DEPENDENCY ORDER:
   // attempts → work → the accounting rows they reference.
   //
@@ -175,7 +180,6 @@ const RESET_TABLES = [
   "dashboardExpenseSummaryState",
   // Payroll. ⚠️ SCRUM-546: `payrollItems.runId` is REQUIRED, so items go BEFORE
   // their run (and `CHILD_TABLES` defers the run while any item remains).
-  "payrollItems",
   "payrollRuns",
   "employeeCompensation",
   // Extra deal commission lines are listed AFTER payroll items: a payslip lists the
@@ -350,6 +354,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     "receiptRetainedPositions",
   ],
   quotes: ["sales", "financeApplications", "deposits", "receivables"],
+  openingCommissionLiabilities: ["payrollItems"],
   payrollRuns: ["payrollItems"],
   dealCommissionLines: ["payrollItems"],
 };
@@ -378,6 +383,9 @@ const RESET_DELETE_BATCH = 500;
 const RESET_ORG_INDEX: Record<ResetTable, string> = {
   commitmentAuthorityAttempt: "by_org_status",
   commitmentAuthorityWork: "by_org_status",
+  openingPayablePayments: "by_org",
+  openingCommissionLiabilities: "by_org",
+  openingManagementSettlementPlans: "by_org",
   accountingEvents: "by_org",
   pendingAccountingEvents: "by_org_status",
   journalEntries: "by_org",
@@ -681,11 +689,15 @@ export const resetOrgFinancialData = internalMutation({
     const perTable: Record<string, number> = {};
     let total = 0;
     let remaining = 0;
+    const openingCleanup = await clearOpeningPayablesBatch(ctx, args.orgId, limit, dryRun);
+    if (openingCleanup.deleted > 0) perTable.openingPayableCleanup = openingCleanup.deleted;
+    total += openingCleanup.deleted;
+    remaining += openingCleanup.remaining;
 
     // Tables that still hold rows for this org after their own batch ran.
     const stillPopulated = new Set<string>();
 
-    for (const table of RESET_TABLES) {
+    for (const table of openingCleanup.remaining > 0 ? [] : RESET_TABLES) {
       // One past the limit, so `remaining` reports honestly whether another
       // run is needed instead of silently stopping at a full batch.
       const rows = await orgRows(ctx.db, table, args.orgId, limit + 1);
@@ -746,6 +758,15 @@ export const resetOrgFinancialData = internalMutation({
           for (const storageId of storageIds) {
             const metadata = await ctx.db.system.get("_storage", storageId);
             if (metadata) await ctx.storage.delete(storageId);
+          }
+          if (table === "payrollItems") {
+            await clearOpeningPayrollReference(ctx, args.orgId, row._id as Id<"payrollItems">);
+          }
+          if (table === "openingCommissionLiabilities") {
+            await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> });
+          }
+          if (table === "supplierCostRecoveries") {
+            await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"supplierCostRecoveries"> });
           }
           await ctx.db.delete(row._id);
         }

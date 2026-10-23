@@ -1419,7 +1419,8 @@ describe("Fix #13 — ON_ACCOUNT credit purchases for owned vehicles", () => {
     const payable = await t.run((ctx) =>
       ctx.db.query("vehicleSupplierPayables").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()
     );
-    expect(payable?.vehicleId).toBe(vehicleId);
+    if(!payable || payable.origin === "OPENING")throw new Error("Expected native acquisition payable");
+    expect(payable.vehicleId).toBe(vehicleId);
     expect(payable?.saleId).toBeUndefined();
     expect(payable?.amountDue).toBe(10000);
     expect(payable?.sourcedFromName).toBe("Credit Supplier Co");

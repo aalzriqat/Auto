@@ -25,6 +25,7 @@ import { settlementView, deriveSettlementStatus } from "./utils/supplierSettleme
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
 import { findCommandUnit, recordCommandUnit } from "./utils/idempotency";
+import { assertOpeningVehicleBasis, listOpeningStockEvidence, openingVehicleEvidence, OPENING_STOCK_IMPORT_OPERATION } from "./utils/openingVehicleBasis";
 import { simplePayloadHash } from "./accounting/postingRules";
 import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "./utils/vin";
 import { throwAppError, AppErrorCode } from "./utils/errors";
@@ -1490,6 +1491,12 @@ export const update = mutation({
     const mayAffectAcquisition =
       "purchasePrice" in patch || "sourceCost" in patch ||
       ("sourceType" in patch && patch.sourceType !== "SOURCED");
+    if (mayAffectAcquisition || changedSourceType === "SOURCED") {
+      const openingBasis = await assertOpeningVehicleBasis(ctx, args.orgId, args.vehicleId);
+      if (openingBasis === "POSTED") {
+        throw new ConvexError("Opening stock cost and ownership need a separately reviewed correction.");
+      }
+    }
     const acquisitionAlreadyExposed = mayAffectAcquisition ? await getAcquisitionExposure() : false;
 
     if (("purchasePrice" in patch || "sourceCost" in patch) && acquisitionAlreadyExposed) {
@@ -1632,6 +1639,9 @@ export const upsertLandedCosts = mutation({
     }
     if (vehicle.status === "SOLD") {
       throw new ConvexError("Cannot edit landed costs on a sold vehicle — its inventory has already been relieved.");
+    }
+    if (vehicle.sourceType !== "SOURCED") {
+      await assertOpeningVehicleBasis(ctx, args.orgId, args.vehicleId);
     }
 
     // For a non-SOURCED vehicle a NaN total blows up later in toMinorUnits and
@@ -1868,7 +1878,7 @@ async function loadAcquisitionPayable(
       .query("vehicleSupplierPayables")
       .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicle._id))
       .collect()
-  ).filter((row) => row.saleId === undefined && row.orgId === vehicle.orgId);
+  ).filter((row) => row.origin !== "OPENING" && row.saleId === undefined && row.orgId === vehicle.orgId);
   return { row: rows.length === 1 ? rows[0] : null, count: rows.length };
 }
 
@@ -2263,7 +2273,8 @@ export const getPurchaseCostLockState = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
     return {
-      locked: await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId),
+      locked: !!(await openingVehicleEvidence(ctx, args.orgId, args.vehicleId)) ||
+        await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId),
     };
   },
 });
@@ -3662,6 +3673,7 @@ export const importBulk = mutation({
   handler: async (ctx, args) => {
     const postsAcquisitions = args.acquisitionPosting === "PURCHASE";
     const importId = args.importId?.trim();
+    const tracksOpeningStock = args.acquisitionPosting === "OPENING_STOCK" && !!importId;
     /**
      * Row ids for which DURABLE EVIDENCE says this exact import operation
      * already ran, and the row's facts are unchanged since it did.
@@ -3680,6 +3692,7 @@ export const importBulk = mutation({
     }
 
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    const openingCurrency = tracksOpeningStock ? await getOrgCurrency(ctx, args.orgId) : undefined;
 
     // Bulk import runs no Zod schema, and its two range filters (`sourceCost <= 0`
     // at the SOURCED check, `valuationAmount <= 0` on valuations) are both false
@@ -3702,6 +3715,65 @@ export const importBulk = mutation({
       // PURCHASE refuses the file), so this only adds what was silently guessed.
       if (parseVehicleSourceType(row.sourceType) === "SOURCED") continue;
       assertVehicleIntakeSourceShape(row);
+    }
+
+    // The import wizard supplies an import and source-row identity. For that
+    // cutover path, each owned car needs durable proof before it can be matched
+    // to a single opening journal. Legacy API imports without an importId keep
+    // their historical non-posting behavior and cannot be allocated as proof.
+    const provenOpeningRetries = new Set<number>();
+    if (tracksOpeningStock) {
+      const currency = openingCurrency!;
+      const priorOpeningRows = await listOpeningStockEvidence(ctx, args.orgId);
+      const priorKeys = new Set(priorOpeningRows.map((item) => item.command.idempotencyKey));
+      const newOwnedRows = args.vehicles.filter((row) =>
+        parseVehicleSourceType(row.sourceType) !== "SOURCED" && !priorKeys.has(`${importId}:${row.rowId}`));
+      if (priorOpeningRows.length + newOwnedRows.length > 100) {
+        throw new ConvexError("Opening stock exceeds the reviewed 100-vehicle allocation limit.");
+      }
+      const seenRows = new Set<number>();
+      const seenVins = new Set<string>();
+      const postedOpening = await ctx.db.query("openingBalanceDrafts")
+        .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "POSTED")).first();
+      for (const row of args.vehicles) {
+        if (parseVehicleSourceType(row.sourceType) === "SOURCED") continue;
+        if (row.rowId === undefined || !Number.isSafeInteger(row.rowId) || row.rowId < 0 || seenRows.has(row.rowId)) {
+          throw new ConvexError("Every opening stock row needs a distinct original file row number.");
+        }
+        seenRows.add(row.rowId);
+        if (isPlaceholderVin(row.vin) || hasNonCanonicalVinCharacters(row.vin)) {
+          throw new ConvexError("Opening inventory requires a real alphanumeric VIN for every owned car.");
+        }
+        const vin = row.vin.trim().toUpperCase();
+        if (seenVins.has(vin)) throw new ConvexError("Opening inventory repeats a VIN in this batch.");
+        seenVins.add(vin);
+        if (row.purchasePrice === undefined || row.purchasePrice <= 0) {
+          throw new ConvexError("Opening inventory requires each owned car's positive acquisition cost.");
+        }
+        assertMajorAmountRepresentable(row.purchasePrice, currency, "Opening stock cost");
+        const key = `${importId}:${row.rowId}`;
+        const fingerprint = await simplePayloadHash({ mode: "OPENING_STOCK", row });
+        const evidence = await findCommandUnit(ctx, { orgId: args.orgId,
+          operation: OPENING_STOCK_IMPORT_OPERATION, idempotencyKey: key, fingerprint, label: `Opening stock row ${row.rowId}` });
+        if (evidence) {
+          const prior = evidence.result as { vehicleId?: unknown; vin?: unknown;
+            costMinor?: unknown; currency?: unknown; sourceType?: unknown } | null;
+          const vehicle = typeof prior?.vehicleId === "string" ? await ctx.db.get(prior.vehicleId as Id<"vehicles">) : null;
+          if (!vehicle || vehicle.orgId !== args.orgId || vehicle.openingStockImportId !== importId ||
+              vehicle.openingStockRowId !== row.rowId || vehicle.vin !== vin ||
+              vehicle.purchasePrice !== row.purchasePrice || vehicle.sourceType !== "STOCK" || vehicle.isDeleted ||
+              prior?.vin !== vin || prior?.currency !== currency || prior?.sourceType !== "STOCK" ||
+              prior?.costMinor !== toMinorUnits(row.purchasePrice, currency)) {
+            throw new ConvexError("Opening stock retry proof conflicts with its vehicle.");
+          }
+          provenOpeningRetries.add(row.rowId);
+          continue;
+        }
+        if (postedOpening) throw new ConvexError("New opening stock cannot be imported after the opening balance posted.");
+        const existing = await ctx.db.query("vehicles")
+          .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", vin)).unique();
+        if (existing) throw new ConvexError("An opening stock VIN already exists without this import's proof.");
+      }
     }
 
     // The same rules vehicles.create enforces for a single acquisition, applied
@@ -4119,6 +4191,9 @@ export const importBulk = mutation({
 
     let companiesCreated = 0;
     for (const row of args.vehicles) {
+      if (tracksOpeningStock && row.rowId !== undefined && provenOpeningRetries.has(row.rowId)) {
+        continue;
+      }
       // ⚠️ A PROVEN RETRY CREATES NOTHING — INCLUDING COMPANIES.
       //
       // This loop runs before the row loop, so it used to reach proven-retry
@@ -4179,6 +4254,10 @@ export const importBulk = mutation({
     let alreadyRecorded = 0;
 
     for (const row of args.vehicles) {
+      if (tracksOpeningStock && row.rowId !== undefined && provenOpeningRetries.has(row.rowId)) {
+        skipped++;
+        continue;
+      }
       // ── A PROVEN RETRY IS FINISHED. Nothing below runs for it.
       //
       // ⚠️ This MUST come before the VIN lookup, and an earlier revision had it
@@ -4259,6 +4338,7 @@ export const importBulk = mutation({
         const insertedVin = normalizedVin || generateImportVinPlaceholder();
         vehicleId = await ctx.db.insert("vehicles", {
           orgId: args.orgId,
+          ...(tracksOpeningStock && !isSourced ? { openingStockImportId: importId, openingStockRowId: row.rowId } : {}),
           vin: insertedVin,
           make: row.make.trim(),
           model: row.model.trim(),
@@ -4280,6 +4360,16 @@ export const importBulk = mutation({
           updatedAt: Date.now(),
         });
         inserted++;
+
+        if (tracksOpeningStock && !isSourced) {
+          await recordCommandUnit(ctx, {
+            orgId: args.orgId, operation: OPENING_STOCK_IMPORT_OPERATION,
+            idempotencyKey: `${importId}:${row.rowId}`,
+            fingerprint: await simplePayloadHash({ mode: "OPENING_STOCK", row }),
+            result: { vehicleId, vin: insertedVin, costMinor: toMinorUnits(row.purchasePrice!, openingCurrency!),
+              currency: openingCurrency, sourceType: "STOCK" }, actorId: user._id,
+          });
+        }
 
         // Only newly inserted rows post. A duplicate-VIN row resolved to an
         // existing vehicle above must not re-post an acquisition for stock that

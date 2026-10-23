@@ -1,3 +1,6 @@
+import { assertOpeningPostingProof } from "../utils/openingPostingProof";
+import { requireOpeningSettlementBasis, type OpeningSettlementReader } from "../utils/openingSettlementBasis";
+import { isRemainingOpeningKind } from "../utils/openingAccountPolicy";
 // ⚠️ SCRUM-302 — imported FIRST, deliberately. `utils/orgLifecycle` and
 // `utils/webhookLog` are leaves: neither imports anything from this
 // application. Appended at the END of an import block, the binding was
@@ -366,8 +369,10 @@ export function assertExistingRowIsSameOccurrence(
 
 export async function postAccountingEvent(
   ctx: MutationCtx,
-  cmd: PostCommand
+  cmd: PostCommand,
+  suppliedOpeningReader?:OpeningSettlementReader,
 ): Promise<PostResult> {
+  const openingReader=await assertOpeningPostingProof(ctx,cmd,suppliedOpeningReader);
   // 1. Validate event type is known
   if (!ALL_EVENT_TYPES.has(cmd.eventType)) {
     throw new ConvexError(`Unknown event type: ${cmd.eventType}`);
@@ -580,7 +585,20 @@ export async function postAccountingEvent(
   // 8. Resolve account IDs from system keys and validate amounts
   const resolvedLines = await Promise.all(
     ruleResult.lines.map(async (spec, idx) => {
-      const accountId = await resolveSystemAccount(ctx, cmd.orgId, spec.accountSystemKey);
+      let accountId:Id<"chartOfAccounts">;
+      if(spec.openingSource){
+        if(spec.accountSystemKey !== undefined)throw new ConvexError("An opening source cannot override a native account.");
+        const draftId=ctx.db.normalizeId("openingBalanceDrafts",spec.openingSource.draftId);
+        const draft=draftId?await openingReader.parent(draftId):null;
+        const row=draft?.allocations?.find(row=>row.rowKey===spec.openingSource?.rowKey);
+        if(!draftId || !row || !isRemainingOpeningKind(row.kind))throw new ConvexError("The opening posting control cannot be verified.");
+        const basis=await requireOpeningSettlementBasis(ctx,cmd.orgId,{draftId,rowKey:row.rowKey},row.kind,openingReader);
+        if(basis.kind!=="AVAILABLE")throw new ConvexError("The opening posting control cannot be verified.");
+        accountId=basis.accountId;
+      }else{
+        if(!spec.accountSystemKey)throw new ConvexError("The posting account cannot be verified.");
+        accountId=await resolveSystemAccount(ctx,cmd.orgId,spec.accountSystemKey);
+      }
       assertValidMinorAmount(spec.debitMinor, `line ${idx + 1} debit`);
       assertValidMinorAmount(spec.creditMinor, `line ${idx + 1} credit`);
       return { ...spec, accountId, lineNumber: idx + 1 };

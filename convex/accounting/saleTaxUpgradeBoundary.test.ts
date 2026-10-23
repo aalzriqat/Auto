@@ -40,7 +40,7 @@ import { SYSTEM_KEYS } from "../utils/defaultChart";
 const jod = (major: number): number => Math.round(major * 1000);
 
 /** Net movement on an account across the whole entry: debits minus credits. */
-function net(result: { lines: { accountSystemKey: string; debitMinor: number; creditMinor: number }[] }, key: string): number {
+function net(result: { lines: { accountSystemKey?: string; debitMinor: number; creditMinor: number }[] }, key: string): number {
   return result.lines
     .filter((l) => l.accountSystemKey === key)
     .reduce((sum, l) => sum + l.debitMinor - l.creditMinor, 0);

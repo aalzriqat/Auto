@@ -3,6 +3,7 @@ import { expect, test, describe, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
 
 const ORIGINAL_ALLOWLIST = process.env.SUPER_ADMIN_EMAILS;
 
@@ -41,6 +42,37 @@ async function runDeletionToCompletion(
 }
 
 describe("adminOrgs", () => {
+  test("opening provenance is drained even when a retained deletion cursor has already passed its steps", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const fixture = await t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "QA TEST opening cleanup", createdAt: Date.now() });
+      const adminId = await ctx.db.insert("users", { clerkId: "opening-cleanup-admin", email: "admin@autoflow.dev" });
+      // The older manifest already removed the ledger/parties by this cursor.
+      // A retained legacy draft still has to be removed, even without details.
+      const draftId = await ctx.db.insert("openingBalanceDrafts", { orgId, status: "PENDING_APPROVAL", lines: [],
+        asOfDate: Date.now(), currency: "JOD", createdBy: adminId, createdAt: Date.now() });
+      const advanceId = await ctx.db.insert("employeeAdvances", { orgId, userId: adminId, amountMinor: 100_000,
+        recoveredMinor: 40_000, currency: "JOD", date: Date.now(), status: "OUTSTANDING", openingBalanceDraftId: draftId,
+        createdBy: adminId, createdAt: Date.now(), updatedAt: Date.now() });
+      const recoveryId = await ctx.db.insert("employeeAdvanceRecoveries", { orgId, advanceId, userId: adminId,
+        amountMinor: 40_000, currency: "JOD", source: "DIRECT", recoveredAt: Date.now(), recoveredBy: adminId });
+      const otherOrg = await ctx.db.insert("organizations", { name: "QA TEST unrelated purge control", createdAt: Date.now() });
+      const otherAdvance = await ctx.db.insert("employeeAdvances", { orgId: otherOrg, userId: adminId, amountMinor: 20_000,
+        recoveredMinor: 0, currency: "JOD", date: Date.now(), status: "OUTSTANDING", createdAt: Date.now(), updatedAt: Date.now() });
+      return { orgId, draftId, advanceId, recoveryId, otherOrg, otherAdvance };
+    });
+    const admin = t.withIdentity({ subject: "opening-cleanup-admin" });
+    const request = await admin.mutation(api.adminOrgs.hardDeleteOrg, { orgId: fixture.orgId, confirmName: "QA TEST opening cleanup" });
+    await t.run((ctx) => ctx.db.patch(request.requestId, { currentStepIndex: ORGANIZATION_DELETION_STEPS.length - 1 }));
+    expect((await runDeletionToCompletion(t, request.requestId))?.status).toBe("COMPLETED");
+    expect(await t.run((ctx) => ctx.db.get(fixture.draftId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(fixture.recoveryId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(fixture.advanceId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(fixture.otherAdvance))).not.toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(fixture.otherOrg))).not.toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(fixture.orgId))).toBeNull();
+  });
+
   test("event tables are purged in smaller batches than ordinary org rows", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);

@@ -1,3 +1,5 @@
+import type {OpeningSettlementReader} from "./utils/openingSettlementBasis";
+import { assertOpeningPostingProof } from "./utils/openingPostingProof";
 /**
  * accountingOutbox.ts
  *
@@ -79,8 +81,10 @@ import { requireFeature } from "./subscriptions";
 export async function enqueuePendingPost(
   ctx: MutationCtx,
   cmd: PostCommand,
-  reason: string
+  reason: string,
+  openingReader?:OpeningSettlementReader,
 ): Promise<void> {
+  await assertOpeningPostingProof(ctx,cmd,openingReader);
   await assertOrgEconomicallyActive(ctx, cmd.orgId);
 
   // Dedupe by idempotency key — never queue the same logical event twice.
@@ -260,6 +264,11 @@ const MAX_ATTEMPTS = 10;
  * a queued posting can legitimately resolve to nothing, and the drain treats
  * that as done rather than as a failure to retry forever.
  */
+async function assertOpeningPendingPostProof(ctx:MutationCtx,row:Doc<"pendingAccountingEvents">):Promise<void>{
+  if(row.kind !== "POST" || !row.eventType || !row.currency)return;
+  await assertOpeningPostingProof(ctx,{orgId:row.orgId,eventType:row.eventType,sourceType:row.sourceType,sourceId:row.sourceId,eventVersion:row.eventVersion??1,currency:row.currency,accountingDate:row.accountingDate,occurredAt:row.occurredAt??row.accountingDate,idempotencyKey:row.idempotencyKey,payload:(row.payload??{}) as Record<string,unknown>,actorId:row.actorId});
+}
+
 async function postPendingEntry(
   ctx: MutationCtx,
   p: Doc<"pendingAccountingEvents">
@@ -1387,6 +1396,7 @@ export async function reviveFailedEntry(
 ): Promise<boolean> {
   const current = await ctx.db.get(row._id);
   if (!current || current.status !== "FAILED") return false;
+  await assertOpeningPendingPostProof(ctx,current);
 
   // ⚠️ SCRUM-234 SURVIVES SCRUM-222: A PERMANENTLY RETIRED POSTING IS NOT
   // REVIVABLE, AND THIS IS AN INTEGRATION DECISION, NOT AN OPTIMISATION.
@@ -1763,6 +1773,11 @@ export const postOutboxRow = internalMutation({
       return lifecycle.permanent
         ? await failOutboxRow(ctx, row, lifecycle.message)
         : await holdOutboxRow(ctx, row, lifecycle.message);
+    }
+
+    if(row.kind === "POST"){
+      try {await assertOpeningPendingPostProof(ctx,row);}
+      catch {return await failOutboxRow(ctx,row,"The opening settlement source cannot be verified.");}
     }
 
     if (row.kind === "POST") {

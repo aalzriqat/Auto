@@ -1,5 +1,6 @@
 import { ConvexError } from "convex/values";
 import { isManualFinanceApplication } from "./manualFinancePayer";
+import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { notifyManagers, getActorName } from "./notifications";
@@ -496,6 +497,9 @@ async function prepareSaleCompletion(
   // SCRUM-693 PR-B F1: a car parked in inspection or repair (an unwound deal's returned car) is
   // not sold or drafted until an authorized edit clears it. AFTER the deleted check, both intents.
   assertVehicleReadyForSale(vehicle);
+  if (intent === "COMPLETION" && vehicle.sourceType !== "SOURCED") {
+    await assertOpeningVehicleBasis(ctx, args.orgId, args.vehicleId, args.saleDate);
+  }
 
   const customer = await ctx.db.get(args.customerId);
   if (customer?.orgId !== args.orgId) {

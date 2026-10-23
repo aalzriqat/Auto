@@ -461,7 +461,7 @@ describe("prepaid expense — operational report matches the GL", () => {
       orgId, startDate: Date.UTC(2026, 2, 1), endDate: Date.UTC(2026, 2, 31, 23, 59, 59, 999),
     });
     expect(report.totalExpenses).toBeCloseTo(100, 6); // March's 1/12
-    expect(report.expenses.some((e: { _id: Id<"expenses"> }) => e._id === expenseId)).toBe(true);
+    expect(report.expenses.some((e) => e._id === expenseId)).toBe(true);
   });
 });
 

@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { openingAllocationResultValidator, openingAllocationValidator } from "./utils/openingAllocationValidators";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator } from "./utils/paymentMethods";
 import { costBearerValidator } from "./utils/costBearer";
 import { trustPassportFieldValidators } from "./utils/vehicleStatusGuards";
@@ -36,6 +37,141 @@ const organizationDeletionRequestStatus = v.union(
   v.literal("COMPLETED"),
   v.literal("FAILED")
 );
+
+const supplierRecoveryCommon = {
+orgId: v.id("organizations"),
+/** Snapshot of the supplier at payment — there is no supplier master data. */
+    sourcedFromName: v.string(),
+amountDueMinor: v.number(),
+amountRecoveredMinor: v.number(),
+currency: v.string(),
+/** How many receipts have ever been recorded (LIVE or REVERSED). */
+    receiptSeq: v.number(),
+status: v.union(
+      v.literal("OPEN"),
+      v.literal("PARTIALLY_RECOVERED"),
+      v.literal("RECOVERED"),
+      v.literal("REVERSED")
+    ),
+reversedAt: v.optional(v.number()),
+reversedBy: v.optional(v.id("users")),
+createdBy: v.id("users"),
+createdAt: v.number(),
+updatedAt: v.number(),
+};
+
+const supplierRecoveryReceiptCommon = {
+orgId: v.id("organizations"),
+recoveryId: v.id("supplierCostRecoveries"),
+seq: v.number(),
+amountMinor: v.number(),
+currency: v.string(),
+method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+bankAccountId: v.optional(v.id("bankAccounts")),
+receivedDate: v.number(),
+reference: v.optional(v.string()),
+notes: v.optional(v.string()),
+/**
+     * The caller's command identity (runWithIdempotency). The POSTING's key is
+     * not stored: it is `supplierCostRecoveryReceiptKey(_id)`, one spelling.
+     */
+    idempotencyKey: v.string(),
+status: v.union(v.literal("POSTING"), v.literal("LIVE"), v.literal("REVERSED")),
+reversedAt: v.optional(v.number()),
+reversedBy: v.optional(v.id("users")),
+reversalReason: v.optional(v.string()),
+reversalDate: v.optional(v.number()),
+createdBy: v.id("users"),
+createdAt: v.number(),
+};
+
+const supplierPayableCommon = {
+orgId: v.id("organizations"),
+// Supplier identity is SNAPSHOT-BASED for this workflow, deliberately.
+    // No canonical supplier entity exists in AutoFlow — suppliers are a name on
+    // a vehicle — so there is nothing for a `supplierId` to point at. Do not
+    // fabricate or persist one until supplier master data is introduced: a
+    // foreign key to a table that does not exist is worse than an honest name,
+    // because it looks like referential integrity and provides none.
+    //
+    // Introduce a supplier master separately if AutoFlow needs statements
+    // across multiple vehicles, supplier-level aging, contact or tax identity,
+    // consolidated balances, or supplier analytics. That is a subsystem with
+    // its own lifecycle, permissions, deduplication and migration — not a field
+    // to be smuggled into an accounting correction.
+    sourcedFromName: v.string(),
+amountDue: v.number(),
+currency: v.string(),
+// PENDING is retained permanently as a legacy value. Every row written
+    // before consigned-agent accounting carries it, and dropping it from the
+    // union would make those rows unreadable — a schema change that destroys
+    // access to existing payables is a worse outcome than one extra literal.
+    // `deriveSettlementStatus` maps it to DUE_ON_SALE for every reader.
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("NOT_YET_DUE"),
+      v.literal("DUE_ON_SALE"),
+      v.literal("PARTIALLY_PAID"),
+      v.literal("PAID"),
+      v.literal("DISPUTED"),
+      v.literal("CANCELLED")
+    ),
+// How `amountDue` was arrived at. Recorded rather than inferred: the same
+    // number reached by an agreed cost and by a percentage of the sale means
+    // different things when the sale price later changes.
+    settlementCalculationMethod: v.optional(
+      v.union(
+        v.literal("AGREED_SOURCE_COST"),
+        v.literal("PERCENTAGE_OF_SALE"),
+        v.literal("FIXED_AMOUNT"),
+        v.literal("OTHER")
+      )
+    ),
+settlementCalculationNote: v.optional(v.string()),
+// Cumulative. `remainingAmount` is deliberately NOT stored — a second copy
+    // of a figure derivable from two others is a figure that can disagree with
+    // them, and this one decides whether a supplier is still owed money.
+    amountPaid: v.optional(v.number()),
+/**
+     * How many payments have posted. Carried into the GL event's version and
+     * idempotency key, because `postAccountingEvent` dedupes on
+     * (eventType, sourceType, sourceId, eventVersion) — without it a second
+     * instalment silently returns "already posted" and the ledger records one
+     * payment where the subledger records several.
+     */
+    paymentSeq: v.optional(v.number()),
+paymentDueTrigger: v.optional(
+      v.union(
+        v.literal("ON_SALE"),
+        v.literal("ON_SETTLEMENT_RECEIPT"),
+        v.literal("FIXED_DATE"),
+        v.literal("ON_DEMAND")
+      )
+    ),
+paymentDueDate: v.optional(v.number()),
+paidAt: v.optional(v.number()),
+paidBy: v.optional(v.id("users")),
+paymentMethod: v.optional(paymentMethodValidator),
+/** Last payment's physical bank; each instalment also retains its bank on its accounting event. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
+/** Cheque number or transfer reference. */
+    paymentReference: v.optional(v.string()),
+/** The bank or cash account the payment left. */
+    paymentAccountId: v.optional(v.id("chartOfAccounts")),
+paymentNotes: v.optional(v.string()),
+documentStorageIds: v.optional(v.array(v.id("_storage"))),
+disputedAt: v.optional(v.number()),
+disputedBy: v.optional(v.id("users")),
+disputeReason: v.optional(v.string()),
+// Portion of amountDue that is input VAT paid to the supplier (tax-inclusive,
+    // not additive) — feeds the VAT return's input side. Optional/backward compatible.
+    taxAmount: v.optional(v.number()),
+cancelledAt: v.optional(v.number()),
+cancelledBy: v.optional(v.id("users")),
+createdBy: v.id("users"),
+createdAt: v.number(),
+updatedAt: v.number(),
+};
 
 export default defineSchema({
   users: defineTable({
@@ -1082,6 +1218,28 @@ export default defineSchema({
   // system-controlled accounts is exactly the highest-risk control point
   // manualJournalDrafts already exists to protect, and a one-time seed entry
   // is no less risky for being one-time. See accountingCutover.ts.
+  // Management-only economics; never a journal, cash, prepaid or capital source.
+  openingManagementSettlementPlans: defineTable({
+    orgId: v.id("organizations"),
+    openingDraftId: v.id("openingBalanceDrafts"),
+    status: v.union(v.literal("PENDING_APPROVAL"), v.literal("APPROVED"), v.literal("REJECTED")),
+    currency: v.string(),
+    totalMinor: v.number(),
+    classificationAttestation: v.literal("CONSUMED_BEFORE_OPENING_NOT_PREPAID_NOT_CAPITAL"),
+    supportingReference: v.string(),
+    installments: v.array(v.object({
+      sequence: v.number(), effectiveMonth: v.number(), amountMinor: v.number(),
+      recognitionMonth: v.optional(v.number()),
+    })),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    approvedBy: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    rejectedBy: v.optional(v.id("users")),
+    rejectedAt: v.optional(v.number()),
+    resetGeneration: v.number(),
+  }).index("by_org", ["orgId"])
+    .index("by_org_opening_status", ["orgId", "openingDraftId", "status"]),
   openingBalanceDrafts: defineTable({
     orgId: v.id("organizations"),
     status: v.union(
@@ -1126,7 +1284,12 @@ export default defineSchema({
     // through the two-person review, and on every row predating that route —
     // so read it as "known to have skipped review", never as "reviewed".
     autoApproved: v.optional(v.boolean()),
+    // Posted drafts own immutable opening provenance and native materialization.
+    // Older rows have neither field; approval revalidates any required detail.
+    allocations: v.optional(v.array(openingAllocationValidator)),
+    allocationResults: v.optional(v.array(openingAllocationResultValidator)),
   })
+    .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"]),
 
   roles: defineTable({
@@ -1239,6 +1402,11 @@ export default defineSchema({
 
   vehicles: defineTable({
     orgId: v.id("organizations"),
+    // Informational projection only. Immutable command and posted-journal proof
+    // determine whether an opening vehicle is usable in financial operations.
+    openingStockImportId: v.optional(v.string()),
+    openingStockRowId: v.optional(v.number()),
+    openingBalanceDraftId: v.optional(v.id("openingBalanceDrafts")),
     branchId: v.optional(v.id("branches")),
     vin: v.optional(v.string()),
     make: v.string(),
@@ -1580,31 +1748,12 @@ export default defineSchema({
    * posting can drain, fail or be reversed in transactions that never touch
    * this row.
    */
-  supplierCostRecoveries: defineTable({
-    orgId: v.id("organizations"),
-    vehicleId: v.id("vehicles"),
-    expenseId: v.id("expenses"),
-    /** Snapshot of the supplier at payment — there is no supplier master data. */
-    sourcedFromName: v.string(),
-    amountDueMinor: v.number(),
-    amountRecoveredMinor: v.number(),
-    currency: v.string(),
-    /** How many receipts have ever been recorded (LIVE or REVERSED). */
-    receiptSeq: v.number(),
-    /** Idempotency key of the source EXPENSE_POSTED post. */
+  supplierCostRecoveries: defineTable(v.union(v.object({...supplierRecoveryCommon,
+vehicleId: v.id("vehicles"),
+expenseId: v.id("expenses"),
+/** Idempotency key of the source EXPENSE_POSTED post. */
     sourceEventKey: v.string(),
-    status: v.union(
-      v.literal("OPEN"),
-      v.literal("PARTIALLY_RECOVERED"),
-      v.literal("RECOVERED"),
-      v.literal("REVERSED")
-    ),
-    reversedAt: v.optional(v.number()),
-    reversedBy: v.optional(v.id("users")),
-    createdBy: v.id("users"),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  })
+origin:v.optional(v.literal("EXPENSE"))}),v.object({...supplierRecoveryCommon,origin:v.literal("OPENING"),openingBalanceDraftId:v.id("openingBalanceDrafts"),openingRowKey:v.string(),title:v.string(),purpose:v.union(v.literal("CLAIM"),v.literal("REFUNDABLE_DEPOSIT"))})))
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
@@ -1620,123 +1769,16 @@ export default defineSchema({
    * mutation (insert, post, patch LIVE); any throw rolls it back, so it is
    * never persisted.
    */
-  supplierCostRecoveryReceipts: defineTable({
-    orgId: v.id("organizations"),
-    recoveryId: v.id("supplierCostRecoveries"),
-    vehicleId: v.id("vehicles"),
-    seq: v.number(),
-    amountMinor: v.number(),
-    currency: v.string(),
-    method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
-    bankAccountId: v.optional(v.id("bankAccounts")),
-    receivedDate: v.number(),
-    reference: v.optional(v.string()),
-    notes: v.optional(v.string()),
-    /**
-     * The caller's command identity (runWithIdempotency). The POSTING's key is
-     * not stored: it is `supplierCostRecoveryReceiptKey(_id)`, one spelling.
-     */
-    idempotencyKey: v.string(),
-    status: v.union(v.literal("POSTING"), v.literal("LIVE"), v.literal("REVERSED")),
-    reversedAt: v.optional(v.number()),
-    reversedBy: v.optional(v.id("users")),
-    reversalReason: v.optional(v.string()),
-    reversalDate: v.optional(v.number()),
-    createdBy: v.id("users"),
-    createdAt: v.number(),
-  })
+  supplierCostRecoveryReceipts: defineTable(v.union(v.object({...supplierRecoveryReceiptCommon,
+vehicleId: v.id("vehicles"),
+origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierRecoveryReceiptCommon,origin:v.literal("OPENING"),openingBalanceDraftId:v.id("openingBalanceDrafts"),openingRowKey:v.string()})))
     .index("by_org", ["orgId"])
     .index("by_org_recovery", ["orgId", "recoveryId"]),
 
-  vehicleSupplierPayables: defineTable({
-    orgId: v.id("organizations"),
-    vehicleId: v.id("vehicles"),
-    saleId: v.optional(v.id("sales")),
-    // Supplier identity is SNAPSHOT-BASED for this workflow, deliberately.
-    // No canonical supplier entity exists in AutoFlow — suppliers are a name on
-    // a vehicle — so there is nothing for a `supplierId` to point at. Do not
-    // fabricate or persist one until supplier master data is introduced: a
-    // foreign key to a table that does not exist is worse than an honest name,
-    // because it looks like referential integrity and provides none.
-    //
-    // Introduce a supplier master separately if AutoFlow needs statements
-    // across multiple vehicles, supplier-level aging, contact or tax identity,
-    // consolidated balances, or supplier analytics. That is a subsystem with
-    // its own lifecycle, permissions, deduplication and migration — not a field
-    // to be smuggled into an accounting correction.
-    sourcedFromName: v.string(),
-    amountDue: v.number(),
-    currency: v.string(),
-    // PENDING is retained permanently as a legacy value. Every row written
-    // before consigned-agent accounting carries it, and dropping it from the
-    // union would make those rows unreadable — a schema change that destroys
-    // access to existing payables is a worse outcome than one extra literal.
-    // `deriveSettlementStatus` maps it to DUE_ON_SALE for every reader.
-    status: v.union(
-      v.literal("PENDING"),
-      v.literal("NOT_YET_DUE"),
-      v.literal("DUE_ON_SALE"),
-      v.literal("PARTIALLY_PAID"),
-      v.literal("PAID"),
-      v.literal("DISPUTED"),
-      v.literal("CANCELLED")
-    ),
-    // How `amountDue` was arrived at. Recorded rather than inferred: the same
-    // number reached by an agreed cost and by a percentage of the sale means
-    // different things when the sale price later changes.
-    settlementCalculationMethod: v.optional(
-      v.union(
-        v.literal("AGREED_SOURCE_COST"),
-        v.literal("PERCENTAGE_OF_SALE"),
-        v.literal("FIXED_AMOUNT"),
-        v.literal("OTHER")
-      )
-    ),
-    settlementCalculationNote: v.optional(v.string()),
-    // Cumulative. `remainingAmount` is deliberately NOT stored — a second copy
-    // of a figure derivable from two others is a figure that can disagree with
-    // them, and this one decides whether a supplier is still owed money.
-    amountPaid: v.optional(v.number()),
-    /**
-     * How many payments have posted. Carried into the GL event's version and
-     * idempotency key, because `postAccountingEvent` dedupes on
-     * (eventType, sourceType, sourceId, eventVersion) — without it a second
-     * instalment silently returns "already posted" and the ledger records one
-     * payment where the subledger records several.
-     */
-    paymentSeq: v.optional(v.number()),
-    paymentDueTrigger: v.optional(
-      v.union(
-        v.literal("ON_SALE"),
-        v.literal("ON_SETTLEMENT_RECEIPT"),
-        v.literal("FIXED_DATE"),
-        v.literal("ON_DEMAND")
-      )
-    ),
-    paymentDueDate: v.optional(v.number()),
-    paidAt: v.optional(v.number()),
-    paidBy: v.optional(v.id("users")),
-    paymentMethod: v.optional(paymentMethodValidator),
-    /** Last payment's physical bank; each instalment also retains its bank on its accounting event. */
-    bankAccountId: v.optional(v.id("bankAccounts")),
-    /** Cheque number or transfer reference. */
-    paymentReference: v.optional(v.string()),
-    /** The bank or cash account the payment left. */
-    paymentAccountId: v.optional(v.id("chartOfAccounts")),
-    paymentNotes: v.optional(v.string()),
-    documentStorageIds: v.optional(v.array(v.id("_storage"))),
-    disputedAt: v.optional(v.number()),
-    disputedBy: v.optional(v.id("users")),
-    disputeReason: v.optional(v.string()),
-    // Portion of amountDue that is input VAT paid to the supplier (tax-inclusive,
-    // not additive) — feeds the VAT return's input side. Optional/backward compatible.
-    taxAmount: v.optional(v.number()),
-    cancelledAt: v.optional(v.number()),
-    cancelledBy: v.optional(v.id("users")),
-    createdBy: v.id("users"),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  })
+  vehicleSupplierPayables: defineTable(v.union(v.object({...supplierPayableCommon,
+vehicleId: v.id("vehicles"),
+saleId: v.optional(v.id("sales")),
+origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,origin:v.literal("OPENING"),openingBalanceDraftId:v.id("openingBalanceDrafts"),openingRowKey:v.string(),openingKind:v.union(v.literal("SUPPLIER_PAYABLE"),v.literal("OTHER_PAYABLE")),title:v.string()})))
     .index("by_org", ["orgId"])
     .index("by_vehicle", ["vehicleId"])
     .index("by_sale", ["saleId"])
@@ -2282,40 +2324,50 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_sale", ["saleId"]),
 
-  // One row per PREPAID expense: its full amount is capitalized to the Prepaid
-  // Expenses asset when paid, then released to the matching operating-expense
-  // account ratably over termMonths by the monthly amortization cron. Same
-  // shape and recognition discipline as dealerProductDeferrals above (idempotent
-  // per yearMonth, strict month ordering, final month absorbs the remainder).
-  prepaidExpenseSchedules: defineTable({
+  // Legacy expense-backed schedules keep their exact shape. A posted opening
+  // allocation is a second native source family, with no invented expense.
+  // The union refuses rows with both provenance families or neither one.
+  prepaidExpenseSchedules: defineTable(v.union(v.object({
     orgId: v.id("organizations"),
     expenseId: v.id("expenses"),
+    kind: v.optional(v.literal("EXPENSE")),
     currency: v.string(),
     totalMinor: v.number(),
     termMonths: v.number(),
-    // The expense-category account the released amount is booked to (e.g.
-    // RENT_EXPENSE). Stored so recognition posts to the same account the
-    // original expense would have hit, without re-deriving from category later.
     expenseSystemKey: v.string(),
-    startYearMonth: v.string(), // "YYYY-MM" — the month recognition begins (expense.date's month, or expense.amortizationStartDate's if given)
+    startYearMonth: v.string(),
     recognizedMinor: v.number(),
-    // Contractual month count actually recognized so far — distinct from
-    // recognizedMinor/lastRecognizedYearMonth, which alone can't tell the
-    // recognizer whether the *next* call is the final contractual month (the
-    // one that must absorb the remainder so the schedule finishes in exactly
-    // termMonths, not termMonths+1).
     monthsRecognized: v.optional(v.number()),
-    lastRecognizedYearMonth: v.optional(v.string()), // "YYYY-MM"
+    lastRecognizedYearMonth: v.optional(v.string()),
     status: v.union(
       v.literal("ACTIVE"),
       v.literal("FULLY_AMORTIZED"),
       v.literal("CANCELLED"),
     ),
     createdAt: v.number(),
-  })
+  }), v.object({
+    kind: v.literal("OPENING"),
+    orgId: v.id("organizations"),
+    openingBalanceDraftId: v.id("openingBalanceDrafts"),
+    openingRowKey: v.string(),
+    title: v.string(),
+    attestedUnexpiredBenefit: v.literal(true),
+    openingBalanceDate: v.number(),
+    currency: v.string(),
+    totalMinor: v.number(),
+    termMonths: v.number(),
+    expenseSystemKey: v.string(),
+    startYearMonth: v.string(),
+    recognizedMinor: v.number(),
+    monthsRecognized: v.optional(v.number()),
+    lastRecognizedYearMonth: v.optional(v.string()),
+    status: v.union(v.literal("ACTIVE"), v.literal("FULLY_AMORTIZED"), v.literal("CANCELLED")),
+    createdAt: v.number(),
+  })))
     .index("by_org", ["orgId"])
     .index("by_status", ["status"])
     .index("by_expense", ["expenseId"])
+    .index("by_opening_row", ["orgId", "openingBalanceDraftId", "openingRowKey"])
     // SCRUM-555 lane-B: ACTIVE-schedule read without a query filter.
     .index("by_org_status", ["orgId", "status"]),
 
@@ -5049,6 +5101,7 @@ export default defineSchema({
     paymentPlanLabel: v.optional(v.string()),
     assignedTo: v.optional(v.id("users")),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
+    openingBalanceDraftId: v.optional(v.id("openingBalanceDrafts")),
     lastReminderAt: v.optional(v.number()),
     lastPaymentAt: v.optional(v.number()),
     notes: v.optional(v.string()),
@@ -5532,6 +5585,7 @@ export default defineSchema({
     // what derivePartnerBalanceMinor reads as the opening base instead of
     // converting currentBalance live.
     openingBalanceMinor: v.optional(v.number()),
+    openingBalanceDraftId: v.optional(v.id("openingBalanceDrafts")),
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
@@ -5842,6 +5896,7 @@ export default defineSchema({
   // expense, until offset against a payslip or repaid.
   employeeAdvances: defineTable({
     orgId: v.id("organizations"),
+    openingBalanceDraftId: v.optional(v.id("openingBalanceDrafts")),
     userId: v.id("users"),
     amountMinor: v.number(),
     recoveredMinor: v.number(),
@@ -5916,6 +5971,8 @@ export default defineSchema({
     .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
 
   // A monthly payroll run and its per-employee payslip items.
+  openingCommissionLiabilities: defineTable({orgId:v.id("organizations"),userId:v.id("users"),openingDraftId:v.id("openingBalanceDrafts"),openingRowKey:v.string(),sourceKey:v.string(),version:v.literal(1),amountMinor:v.number(),paidMinor:v.number(),currency:v.string(),createdAt:v.number(),paidAt:v.optional(v.number()),paidBy:v.optional(v.id("users")),paidPayrollItemId:v.optional(v.id("payrollItems"))}).index("by_org",["orgId"]).index("by_org_user",["orgId","userId"]).index("by_org_source",["orgId","sourceKey"]).index("by_org_payroll_item",["orgId","paidPayrollItemId"]),
+  openingPayablePayments: defineTable({orgId:v.id("organizations"),payableId:v.id("vehicleSupplierPayables"),seq:v.number(),openingBalanceDraftId:v.id("openingBalanceDrafts"),openingRowKey:v.string(),amountMinor:v.number(),currency:v.string(),method:paymentMethodValidator,bankAccountId:v.optional(v.id("bankAccounts")),occurredAt:v.number(),actorId:v.id("users"),commandKey:v.string(),operation:v.union(v.literal("markPaid"),v.literal("recordPartialPayment")),status:v.union(v.literal("LIVE"),v.literal("REVERSED")),reversedAt:v.optional(v.number()),reversedBy:v.optional(v.id("users")),reversalReason:v.optional(v.string())}).index("by_org",["orgId"]).index("by_payable",["payableId"]).index("by_org_payable_seq",["orgId","payableId","seq"]).index("by_org_command",["orgId","commandKey"]),
   payrollRuns: defineTable({
     orgId: v.id("organizations"),
     periodYear: v.number(),
@@ -5983,6 +6040,8 @@ export default defineSchema({
     // Unpaid commission sales this payslip settles (Option A: commissions are
     // paid through payroll). Marked paid when the run is paid.
     commissionSaleIds: v.array(v.id("sales")),
+    openingCommissionLiabilityIds: v.optional(v.array(v.id("openingCommissionLiabilities"))),
+    openingCommissionMinor: v.optional(v.number()),
     /** Extra deal commission lines paid on this payslip (see dealCommissionLines). */
     commissionLineIds: v.optional(v.array(v.id("dealCommissionLines"))),
     createdAt: v.number(),

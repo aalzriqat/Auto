@@ -1,3 +1,4 @@
+import { clearOpeningPayrollReference, clearNewOpeningResultReference } from "./utils/openingResetCleanup";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
@@ -36,6 +37,16 @@ type StorageDeletionStep =
   | { kind: "socialPostsWithStorage" };
 type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" } | { kind: "retainTaskAlarmHistory" };
 type DeletionStep = OrgScopedDeletionStep | SpecialDeletionStep;
+const RECEIPT_APPLICATION_DELETION_STEP = { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" } satisfies OrgScopedDeletionStep;
+const PAYROLL_ITEM_DELETION_STEP = { kind: "orgRows", table: "payrollItems", index: "by_org" } satisfies OrgScopedDeletionStep;
+const OPENING_PAYABLE_PAYMENT_DELETION_STEP = { kind: "orgRows", table: "openingPayablePayments", index: "by_org" } satisfies OrgScopedDeletionStep;
+const OPENING_AP_DELETION_STEP = { kind: "orgRows", table: "vehicleSupplierPayables", index: "by_org" } satisfies OrgScopedDeletionStep;
+const OPENING_COMMISSION_DELETION_STEP = { kind: "orgRows", table: "openingCommissionLiabilities", index: "by_org" } satisfies OrgScopedDeletionStep;
+const MANAGEMENT_SETTLEMENT_DELETION_STEP = { kind: "orgRows", table: "openingManagementSettlementPlans", index: "by_org" } satisfies OrgScopedDeletionStep;
+const OPENING_DRAFT_DELETION_STEP = { kind: "orgRows", table: "openingBalanceDrafts", index: "by_org" } satisfies OrgScopedDeletionStep;
+const ADVANCE_RECOVERY_DELETION_STEP = { kind: "orgRows", table: "employeeAdvanceRecoveries", index: "by_org" } satisfies OrgScopedDeletionStep;
+const ADVANCE_DELETION_STEP = { kind: "orgRows", table: "employeeAdvances", index: "by_org" } satisfies OrgScopedDeletionStep;
+const PRE_DRAIN_STEPS = [PAYROLL_ITEM_DELETION_STEP, OPENING_PAYABLE_PAYMENT_DELETION_STEP, OPENING_AP_DELETION_STEP, OPENING_COMMISSION_DELETION_STEP, MANAGEMENT_SETTLEMENT_DELETION_STEP, RECEIPT_APPLICATION_DELETION_STEP, ADVANCE_RECOVERY_DELETION_STEP, ADVANCE_DELETION_STEP, OPENING_DRAFT_DELETION_STEP] as const;
 
 const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "APPROVED", "RUNNING"];
 
@@ -214,7 +225,7 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "roles", index: "by_org" },
   // Appended to preserve saved currentStepIndex values for in-flight purges.
   // runDeletionRequestBatch drains this child before the frozen parent steps.
-  { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" },
+  RECEIPT_APPLICATION_DELETION_STEP,
   // SCRUM-571 D-8: held provider payments. Appended last (the order is pinned).
   // Rows with no orgId (UNKNOWN_REFERENCE) belong to no tenant and survive.
   { kind: "orgRows", table: "unmatchedProviderFunds", index: "by_org_review" },
@@ -248,6 +259,14 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // because the order is pinned; the index leads with orgId, and nothing
   // references these rows.
   { kind: "orgRows", table: "dealCommissionLines", index: "by_org_sale" },
+  // Preserve every frozen destructive step index. The pre-drain also covers
+  // older requests whose saved cursor already passed this appended position.
+  ADVANCE_RECOVERY_DELETION_STEP,
+  ADVANCE_DELETION_STEP,
+  OPENING_DRAFT_DELETION_STEP,
+  MANAGEMENT_SETTLEMENT_DELETION_STEP,
+  OPENING_PAYABLE_PAYMENT_DELETION_STEP,
+  OPENING_COMMISSION_DELETION_STEP,
   // Explicit retention marker, not a deletion step: the owner requires task
   // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
   // never purged here. Keep it last; never turn it into a delete.
@@ -439,6 +458,8 @@ async function deleteRowsByOrgBatch(
     .withIndex(index, (q: any) => q.eq("orgId", orgId))
     .take(batchSize);
   for (const row of rows) {
+    if (table === "payrollItems") await clearOpeningPayrollReference(ctx, orgId, row._id as Id<"payrollItems">);
+    if (table === "openingCommissionLiabilities") await clearNewOpeningResultReference(ctx, orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> });
     await ctx.db.delete(row._id);
   }
   return rows.length > 0 ? { [table]: rows.length } : {};
@@ -1113,22 +1134,19 @@ export const runDeletionRequestBatch = internalMutation({
         await ctx.db.patch(request.orgId, { destructivePurgeStartedAt: now });
       }
 
-      // The saved step index is a durable cursor, so the new reservation step
-      // must stay appended. Drain its rows before any frozen parent step runs;
-      // this also handles a request already partway through that old manifest.
-      const reservationCounts = await runDeletionStep(
-        ctx,
-        { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" },
-        request.orgId
-      );
-      const reservationsDeleted = countDeletedRows(reservationCounts);
-      if (reservationsDeleted > 0) {
-        await ctx.db.patch(args.requestId, {
-          deletedCounts: mergeDeletedCounts(request.deletedCounts, reservationCounts),
-          lastProcessedAt: now,
-        });
-        await scheduleDeletionBatch(ctx, args.requestId);
-        return { status: "RUNNING" as const, currentStepIndex, deletedInBatch: reservationsDeleted };
+      // Appended steps must cover requests already beyond their new position.
+      // Drain one bounded batch without changing the durable old cursor.
+      for (const preDrainStep of PRE_DRAIN_STEPS) {
+        const counts = await runDeletionStep(ctx, preDrainStep, request.orgId);
+        const deleted = countDeletedRows(counts);
+        if (deleted > 0) {
+          await ctx.db.patch(args.requestId, {
+            deletedCounts: mergeDeletedCounts(request.deletedCounts, counts),
+            lastProcessedAt: now,
+          });
+          await scheduleDeletionBatch(ctx, args.requestId);
+          return { status: "RUNNING" as const, currentStepIndex, deletedInBatch: deleted };
+        }
       }
 
       if (currentStepIndex >= ORGANIZATION_DELETION_STEPS.length) {

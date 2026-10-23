@@ -38,6 +38,7 @@ export interface SettlementView {
  * he is paid, so nothing is due before the sale exists.
  */
 function isDue(payable: Doc<"vehicleSupplierPayables">): boolean {
+  if(payable.origin === "OPENING") return true;
   switch (payable.paymentDueTrigger) {
     case "FIXED_DATE":
       return payable.paymentDueDate !== undefined && Date.now() >= payable.paymentDueDate;

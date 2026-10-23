@@ -16,6 +16,7 @@ import { postLegacyTransactionEvent } from "../test-utils/legacyMigrationSeed";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
+// Retained earnings is a synthetic test offset only; it classifies no real guide amount.
 async function seedCutoverDealer() {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
@@ -104,7 +105,7 @@ describe("Phase 17 — opening balance journal", () => {
   test("drafts, approves (by a different user), posts a balanced entry categorized OPENING_BALANCE, and can only be done once", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
@@ -112,7 +113,7 @@ describe("Phase 17 — opening balance journal", () => {
       asOfDate: Date.now(),
       lines: [
         { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-        { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+        { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
       ],
     });
     expect(draft.draftId).toBeTruthy();
@@ -153,7 +154,7 @@ describe("Phase 17 — opening balance journal", () => {
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 500, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 500 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 500 },
         ],
       })
     ).rejects.toThrow(/already been posted or is awaiting approval/i);
@@ -162,7 +163,7 @@ describe("Phase 17 — opening balance journal", () => {
   test("a rejected draft can be drafted again", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
@@ -170,7 +171,7 @@ describe("Phase 17 — opening balance journal", () => {
       asOfDate: Date.now(),
       lines: [
         { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
-        { accountId: capital._id, debitMinor: 0, creditMinor: 1_000 },
+        { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000 },
       ],
     });
 
@@ -194,7 +195,7 @@ describe("Phase 17 — opening balance journal", () => {
       asOfDate: Date.now(),
       lines: [
         { accountId: cash._id, debitMinor: 2_000, creditMinor: 0 },
-        { accountId: capital._id, debitMinor: 0, creditMinor: 2_000 },
+        { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 2_000 },
       ],
     });
     expect(redrafted.draftId).toBeTruthy();
@@ -203,7 +204,7 @@ describe("Phase 17 — opening balance journal", () => {
   test("rejects an unbalanced opening balance", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
@@ -212,7 +213,7 @@ describe("Phase 17 — opening balance journal", () => {
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 900 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 900 },
         ],
       })
     ).rejects.toThrow(/unbalanced/i);
@@ -221,7 +222,7 @@ describe("Phase 17 — opening balance journal", () => {
   test("rejects an opening balance dated outside any open period", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
@@ -230,7 +231,7 @@ describe("Phase 17 — opening balance journal", () => {
         asOfDate: Date.UTC(2010, 0, 1),
         lines: [
           { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000 },
         ],
       })
     ).rejects.toThrow(/no open accounting period/i);
@@ -454,7 +455,7 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
   test("signOffCutover rejects a signer who approved the opening balance themselves", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
@@ -462,7 +463,7 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
       asOfDate: Date.now(),
       lines: [
         { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
-        { accountId: capital._id, debitMinor: 0, creditMinor: 1_000 },
+        { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000 },
       ],
     });
     await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
@@ -546,7 +547,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
   test("the org currency cannot be changed while a draft is pending", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     await ctx.asReviewer.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
@@ -555,7 +556,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
       memo: "Cutover",
       lines: [
         { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-        { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+        { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
       ],
     });
 
@@ -574,7 +575,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
     // resubmission" among its required tests. Raised by CodeRabbit.
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const { draftId } = await ctx.asReviewer.mutation(
       api.accountingCutover.draftOpeningBalance,
@@ -585,7 +586,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
         memo: "Cutover",
         lines: [
           { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
         ],
       }
     );
@@ -621,7 +622,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
   test("approval posts in the currency the lines were ENTERED in, not the org's current one", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const { draftId } = await ctx.asReviewer.mutation(
       api.accountingCutover.draftOpeningBalance,
@@ -632,7 +633,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
         memo: "Drafted in JOD",
         lines: [
           { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
         ],
       }
     );
@@ -678,7 +679,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
     // before this PR nothing in the product could post a draft at all.
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const { draftId } = await ctx.asReviewer.mutation(
       api.accountingCutover.draftOpeningBalance,
@@ -689,7 +690,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
         memo: "Cutover",
         lines: [
           { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
         ],
       }
     );
@@ -721,7 +722,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
   test("a draft with no recorded currency is refused rather than posted on a guess", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const { draftId } = await ctx.asReviewer.mutation(
       api.accountingCutover.draftOpeningBalance,
@@ -731,7 +732,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
         ],
       }
     );
@@ -795,7 +796,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
     test(`the two-person approval refuses a draft denominated "${code}" (${why})`, async () => {
       const ctx = await seedCutoverDealer();
       const cash = account(ctx, "CASH_ON_HAND");
-      const capital = account(ctx, "PARTNER_CAPITAL");
+      const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
       const { draftId } = await ctx.asReviewer.mutation(
         api.accountingCutover.draftOpeningBalance,
@@ -806,7 +807,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
           memo: "Cutover",
           lines: [
             { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-            { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+            { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
           ],
         }
       );
@@ -843,7 +844,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
     test(`the owner direct-post refuses an org denominated "${code}" (${why})`, async () => {
       const ctx = await seedCutoverDealer();
       const cash = account(ctx, "CASH_ON_HAND");
-      const capital = account(ctx, "PARTNER_CAPITAL");
+      const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
       // The owner path snapshots `getOrgCurrency` into the draft it creates, so
       // the unvouchable value has to come from the settings row — which is
@@ -864,7 +865,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
           memo: "Cutover",
           lines: [
             { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-            { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+            { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
           ],
         })
       ).rejects.toThrow(/denomination|currency/i);
@@ -893,7 +894,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
   test("a canonical JOD draft still posts, at scale 3, on both paths", async () => {
     const twoPerson = await seedCutoverDealer();
     const cashA = account(twoPerson, "CASH_ON_HAND");
-    const capitalA = account(twoPerson, "PARTNER_CAPITAL");
+    const syntheticOffsetA = account(twoPerson, "RETAINED_EARNINGS");
 
     const { draftId } = await twoPerson.asReviewer.mutation(
       api.accountingCutover.draftOpeningBalance,
@@ -904,7 +905,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
         memo: "Cutover",
         lines: [
           { accountId: cashA._id, debitMinor: 1_000_000, creditMinor: 0 },
-          { accountId: capitalA._id, debitMinor: 0, creditMinor: 1_000_000 },
+          { accountId: syntheticOffsetA._id, debitMinor: 0, creditMinor: 1_000_000 },
         ],
       }
     );
@@ -921,7 +922,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
 
     const direct = await seedCutoverDealer();
     const cashB = account(direct, "CASH_ON_HAND");
-    const capitalB = account(direct, "PARTNER_CAPITAL");
+    const syntheticOffsetB = account(direct, "RETAINED_EARNINGS");
 
     await direct.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
       orgId: direct.orgId,
@@ -930,7 +931,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
       memo: "Cutover",
       lines: [
         { accountId: cashB._id, debitMinor: 1_000_000, creditMinor: 0 },
-        { accountId: capitalB._id, debitMinor: 0, creditMinor: 1_000_000 },
+        { accountId: syntheticOffsetB._id, debitMinor: 0, creditMinor: 1_000_000 },
       ],
     });
 
@@ -948,7 +949,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
   test("the approval queue reports an unvouchable draft as denomination-unknown", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const { draftId } = await ctx.asReviewer.mutation(
       api.accountingCutover.draftOpeningBalance,
@@ -959,7 +960,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
         memo: "Cutover",
         lines: [
           { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
         ],
       }
     );
@@ -997,9 +998,9 @@ describe("SCRUM-62 — minor units stay bound to the denomination they were conv
   // Both directions are tested because they fail differently: 3→2 inflates by
   // ten, 2→3 deflates by ten, and a guard that only compares scales rather than
   // codes could pass one while failing the other.
-  const LINES = (cash: Doc<"chartOfAccounts">, capital: Doc<"chartOfAccounts">) => [
+  const LINES = (cash: Doc<"chartOfAccounts">, syntheticOffset: Doc<"chartOfAccounts">) => [
     { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-    { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+    { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
   ];
 
   async function setOrgCurrency(ctx: Awaited<ReturnType<typeof seedCutoverDealer>>, code: string) {
@@ -1047,7 +1048,7 @@ describe("SCRUM-62 — minor units stay bound to the denomination they were conv
     test(`the two-person route refuses ${convertedUnder}-derived amounts once the org is ${switchedTo}`, async () => {
       const ctx = await seedCutoverDealer();
       const cash = account(ctx, "CASH_ON_HAND");
-      const capital = account(ctx, "PARTNER_CAPITAL");
+      const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
       await setOrgCurrency(ctx, switchedTo);
 
@@ -1056,7 +1057,7 @@ describe("SCRUM-62 — minor units stay bound to the denomination they were conv
           orgId: ctx.orgId,
           asOfDate: Date.now(),
           memo: "Cutover",
-          lines: LINES(cash, capital),
+          lines: LINES(cash, syntheticOffset),
           expectedCurrency: convertedUnder,
         })
       ).rejects.toThrow(new RegExp(`entered in ${convertedUnder}.*now ${switchedTo}`, "i"));
@@ -1067,7 +1068,7 @@ describe("SCRUM-62 — minor units stay bound to the denomination they were conv
     test(`the owner direct-post refuses ${convertedUnder}-derived amounts once the org is ${switchedTo}`, async () => {
       const ctx = await seedCutoverDealer();
       const cash = account(ctx, "CASH_ON_HAND");
-      const capital = account(ctx, "PARTNER_CAPITAL");
+      const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
       await setOrgCurrency(ctx, switchedTo);
 
@@ -1076,7 +1077,7 @@ describe("SCRUM-62 — minor units stay bound to the denomination they were conv
           orgId: ctx.orgId,
           asOfDate: Date.now(),
           memo: "Cutover",
-          lines: LINES(cash, capital),
+          lines: LINES(cash, syntheticOffset),
           expectedCurrency: convertedUnder,
         })
       ).rejects.toThrow(new RegExp(`entered in ${convertedUnder}.*now ${switchedTo}`, "i"));
@@ -1093,13 +1094,13 @@ describe("SCRUM-62 — minor units stay bound to the denomination they were conv
   test("an unchanged canonical currency still drafts on the two-person route", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const { draftId } = await ctx.asReviewer.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
       asOfDate: Date.now(),
       memo: "Cutover",
-      lines: LINES(cash, capital),
+      lines: LINES(cash, syntheticOffset),
       expectedCurrency: "JOD",
     });
     expect(draftId).toBeTruthy();
@@ -1111,13 +1112,13 @@ describe("SCRUM-62 — minor units stay bound to the denomination they were conv
   test("an unchanged canonical currency still posts on the owner direct route, at scale 3", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
       orgId: ctx.orgId,
       asOfDate: Date.now(),
       memo: "Cutover",
-      lines: LINES(cash, capital),
+      lines: LINES(cash, syntheticOffset),
       expectedCurrency: "JOD",
     });
 
@@ -1135,14 +1136,14 @@ describe("SCRUM-62 — minor units stay bound to the denomination they were conv
     test(`"${alias}" is refused rather than rescued into JOD`, async () => {
       const ctx = await seedCutoverDealer();
       const cash = account(ctx, "CASH_ON_HAND");
-      const capital = account(ctx, "PARTNER_CAPITAL");
+      const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
       await expect(
         ctx.asReviewer.mutation(api.accountingCutover.draftOpeningBalance, {
           orgId: ctx.orgId,
           asOfDate: Date.now(),
           memo: "Cutover",
-          lines: LINES(cash, capital),
+          lines: LINES(cash, syntheticOffset),
           expectedCurrency: alias,
         })
       ).rejects.toThrow(/currency is now JOD|not a currency AutoFlow can price/i);
@@ -1166,7 +1167,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
   test("a pending draft carries the preparer's name and the org currency", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     // Prepared by the ACCOUNTANT so the returned name is unambiguously the
     // preparer's rather than whoever happens to be reading — and so the
@@ -1178,7 +1179,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
       memo: "Cutover",
       lines: [
         { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-        { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+        { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
       ],
     });
 
@@ -1211,7 +1212,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
     // an argument-validator error.
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const { draftId } = await ctx.asAccountant.mutation(
       api.accountingCutover.draftOpeningBalance,
@@ -1221,7 +1222,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
         ],
       }
     );
@@ -1249,7 +1250,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
   test("an unresolvable preparer is reported as null, never an English display literal", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const { draftId } = await ctx.asAccountant.mutation(
       api.accountingCutover.draftOpeningBalance,
@@ -1259,7 +1260,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000 },
         ],
       }
     );
@@ -1282,7 +1283,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
   test("the owner can approve a draft an accountant prepared, which is the dead-end this fixes", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     // The exact production shape, now genuinely exercised: a NON-OWNER
     // MANAGE_FINANCE user prepares, because canPostDirectly is
@@ -1297,7 +1298,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
         memo: "Prepared by the accountant",
         lines: [
           { accountId: cash._id, debitMinor: 4_000_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 4_000_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 4_000_000 },
         ],
       }
     );
@@ -1338,7 +1339,7 @@ describe("Phase 17 — owner-only direct opening balance", () => {
   test("an owner posts an opening balance in one step and it is marked auto-approved", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     const result = await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
       orgId: ctx.orgId,
@@ -1347,7 +1348,7 @@ describe("Phase 17 — owner-only direct opening balance", () => {
       memo: "Opening cash",
       lines: [
         { accountId: cash._id, debitMinor: 2_500_000, creditMinor: 0 },
-        { accountId: capital._id, debitMinor: 0, creditMinor: 2_500_000 },
+        { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 2_500_000 },
       ],
     });
     expect(result.journalId).toBeTruthy();
@@ -1374,9 +1375,9 @@ describe("Phase 17 — owner-only direct opening balance", () => {
     expect(cashLine?.creditMinor).toBe(0);
     // Assert the other side too — checking only the debit would pass against a
     // posting that dropped or mis-signed the credit entirely.
-    const capitalLine = lines.find((l) => l.accountId === capital._id);
-    expect(capitalLine?.creditMinor).toBe(2_500_000);
-    expect(capitalLine?.debitMinor).toBe(0);
+    const syntheticOffsetLine = lines.find((l) => l.accountId === syntheticOffset._id);
+    expect(syntheticOffsetLine?.creditMinor).toBe(2_500_000);
+    expect(syntheticOffsetLine?.debitMinor).toBe(0);
   });
 
   test("a finance user who is not an owner cannot skip the second approver", async () => {
@@ -1384,7 +1385,7 @@ describe("Phase 17 — owner-only direct opening balance", () => {
     // finance permissions must not also hand them the bypass.
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     // Uses the seed's accountant rather than building a second one here: that
     // local copy shared this one's clerkId, so once the seed grew a genuine
@@ -1398,7 +1399,7 @@ describe("Phase 17 — owner-only direct opening balance", () => {
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 1_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000 },
         ],
       })
     ).rejects.toThrow(/only an owner/i);
@@ -1410,10 +1411,10 @@ describe("Phase 17 — owner-only direct opening balance", () => {
   test("the owner route still enforces one opening balance per org", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
     const lines = [
       { accountId: cash._id, debitMinor: 500_000, creditMinor: 0 },
-      { accountId: capital._id, debitMinor: 0, creditMinor: 500_000 },
+      { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 500_000 },
     ];
 
     await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
@@ -1437,7 +1438,7 @@ describe("Phase 17 — owner-only direct opening balance", () => {
     // Skipping the approver must not mean skipping the accounting.
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
-    const capital = account(ctx, "PARTNER_CAPITAL");
+    const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
@@ -1446,10 +1447,10 @@ describe("Phase 17 — owner-only direct opening balance", () => {
         asOfDate: Date.now(),
         lines: [
           { accountId: cash._id, debitMinor: 900_000, creditMinor: 0 },
-          { accountId: capital._id, debitMinor: 0, creditMinor: 100_000 },
+          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 100_000 },
         ],
       })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/unbalanced/i);
 
     expect(await ctx.t.run((c) => c.db.query("journalEntries").collect())).toHaveLength(0);
   });
@@ -1497,7 +1498,7 @@ describe("SCRUM-850 — an opening balance cannot be posted over posted ledger a
   function obLines(ctx: Ctx) {
     return [
       { accountId: account(ctx, "CASH_ON_HAND")._id, debitMinor: 1_000, creditMinor: 0 },
-      { accountId: account(ctx, "PARTNER_CAPITAL")._id, debitMinor: 0, creditMinor: 1_000 },
+      { accountId: account(ctx, "RETAINED_EARNINGS")._id, debitMinor: 0, creditMinor: 1_000 },
     ];
   }
 

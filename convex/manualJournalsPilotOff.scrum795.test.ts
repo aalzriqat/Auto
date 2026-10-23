@@ -147,14 +147,15 @@ describe("SCRUM-795 — manual journals are off in the shipped build", () => {
   // Owner ruling SCRUM-795 c22479: the switch is EXACTLY create + approve. Both
   // opening-balance paths post a journal through the same GL machinery and must
   // keep working in the shipped build.
-  async function openingLines(w: Awaited<ReturnType<typeof seedManualJournalWorld>>) {
+  // Retained earnings is a synthetic test offset only; it classifies no real guide amount.
+async function openingLines(w: Awaited<ReturnType<typeof seedManualJournalWorld>>) {
     const accounts = await w.asPoster.query(api.chartOfAccounts.list, { orgId: w.orgId, activeOnly: true });
     for (const account of accounts) expect(account.orgId).toBe(w.orgId);
     const cash = accounts.find((a) => a.systemKey === "CASH_ON_HAND")!;
-    const capital = accounts.find((a) => a.systemKey === "PARTNER_CAPITAL")!;
+    const syntheticOffset = accounts.find((a) => a.systemKey === "RETAINED_EARNINGS")!;
     return [
       { accountId: cash._id, debitMinor: 1_000_000, creditMinor: 0 },
-      { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
+      { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000_000 },
     ];
   }
 

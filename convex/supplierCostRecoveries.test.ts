@@ -245,6 +245,7 @@ describe("paying a supplier-borne cost", () => {
     expect(gl["type:ASSET"]).toBe(0); // the receivable debit is the cash credit, nothing else
 
     expect(recovery).toBeTruthy();
+    if(recovery.origin === "OPENING")throw new Error("Expected expense-backed supplier recovery");
     expect(recovery.expenseId).toBe(expenseId);
     expect(recovery.amountDueMinor).toBe(SUPPLIER_COST * SCALE);
     expect(recovery.status).toBe("OPEN");
@@ -584,6 +585,7 @@ describe("receipt chronology, cheque payment and reversal after conversion", () 
   test("SC-389-03: a receipt dated before its cost was posted is refused and records nothing", async () => {
     const s = await seed("sc03");
     const { recovery } = await paySupplierCost(s);
+    if(recovery.origin === "OPENING")throw new Error("Expected expense-backed supplier recovery");
     const source = await s.t.run((ctx) =>
       ctx.db
         .query("accountingEvents")

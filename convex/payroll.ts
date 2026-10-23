@@ -1,8 +1,9 @@
+import { createOpeningSettlementReader, type OpeningSettlementReader } from "./utils/openingSettlementBasis";
 import { v, ConvexError } from "convex/values";
 import { query, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
-import { requireTenantAuth, TenantAuthContext } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth, TenantAuthContext } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import {
   getOrgCurrency,
@@ -26,6 +27,8 @@ import { saleHasActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { AppErrorCode, throwAppError } from "./utils/errors";
+import { openingAdvanceBasis } from "./utils/openingAdvanceBasis";
+import { collectOpeningCommissions, openingCommissionsForItem } from "./utils/openingCommissionBasis";
 
 // ─── Employee compensation (fixed monthly salary) ──────────────────────────────
 
@@ -250,13 +253,18 @@ export const recoverAdvance = mutation({
     try {
       const authCtx = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
       const { user } = authCtx;
-      const advance = await ctx.db.get(args.advanceId);
-      if (!advance || advance.isDeleted || advance.orgId !== args.orgId) {
+      const advance = await requireOwnedRow(ctx, args.orgId, "employeeAdvances", args.advanceId, "Advance not found.");
+      if (advance.isDeleted) {
         throw new ConvexError("Advance not found.");
       }
       // Separation of duties: a non-owner payroll admin must not clear the record
       // of their OWN debt — an independent actor has to record the repayment.
       assertNotSelfBeneficiary(authCtx, advance.userId, "record repayment of your own advance");
+      const openingBasis = await openingAdvanceBasis(ctx, args.orgId, args.advanceId);
+      if (openingBasis.kind === "INVALID") throw new ConvexError(openingBasis.reason);
+      if (openingBasis.kind === "OPENING" && !(Date.now() >= openingBasis.basisDate)) {
+        throw new ConvexError("An advance repayment cannot precede its posted opening date. Nothing has changed.");
+      }
 
       const method = normalizePaymentMethod(args.method);
 
@@ -408,7 +416,7 @@ export const recoverAdvance = mutation({
           // actually posted — otherwise the asset goes negative (issuance queued in
           // a closed period, recovery posts now). Only enforced when the recovery
           // would post now; if it too would queue, it drains after the issuance.
-          if (await isPostableNow(ctx, args.orgId, now)) {
+          if (openingBasis.kind === "ORDINARY" && await isPostableNow(ctx, args.orgId, now)) {
             await assertAdvanceIssuancePosted(ctx, args.orgId, args.advanceId);
           }
 
@@ -713,7 +721,9 @@ async function assertAdvanceIssuancePosted(
 async function assertAdvanceIssuancesPosted(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-  items: { userId: Id<"users">; currency: string }[]
+  items: { userId: Id<"users">; currency: string }[],
+  ordinaryIssuanceRequired: boolean,
+  effectiveDate: number,
 ): Promise<void> {
   const seen = new Set<string>();
   for (const item of items) {
@@ -727,7 +737,12 @@ async function assertAdvanceIssuancesPosted(
       .collect();
     for (const adv of advances) {
       if (adv.currency !== item.currency) continue;
-      await assertAdvanceIssuancePosted(ctx, orgId, adv._id);
+      const basis = await openingAdvanceBasis(ctx, orgId, adv._id);
+      if (basis.kind === "INVALID") throw new ConvexError(basis.reason);
+      if (basis.kind === "OPENING" && !(effectiveDate >= basis.basisDate)) {
+        throw new ConvexError("Payroll cannot recover an advance before its posted opening date. Nothing has changed.");
+      }
+      if (basis.kind === "ORDINARY" && ordinaryIssuanceRequired) await assertAdvanceIssuancePosted(ctx, orgId, adv._id);
     }
   }
 }
@@ -913,10 +928,12 @@ async function settleItemCommissions(
 async function computeCurrentPayable(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-  item: Doc<"payrollItems">
+  item: Doc<"payrollItems">,
+  openingReader: OpeningSettlementReader
 ): Promise<{ grossMinor: number; netMinor: number }> {
   const { commissionMinor } = await settleItemCommissions(ctx, item);
-  const grossMinor = item.baseSalaryMinor + commissionMinor;
+  const opening = await openingCommissionsForItem(ctx, { ...item, orgId }, openingReader);
+  const grossMinor = item.baseSalaryMinor + commissionMinor + opening.minor;
   const advanceDeductionMinor = Math.min(
     await outstandingAdvanceMinor(ctx, orgId, item.userId, item.currency),
     grossMinor
@@ -992,17 +1009,22 @@ async function payItem(
   method: PaymentMethod,
   bankAccountId: Id<"bankAccounts"> | undefined,
   actorId: Id<"users">,
-  now: number
+  now: number,
+  openingReader: OpeningSettlementReader
 ): Promise<{ grossMinor: number; netMinor: number }> {
   const { commissionMinor, saleIdsToSettle, lineIdsToSettle } = await settleItemCommissions(ctx, item);
+  const opening = await openingCommissionsForItem(ctx, { ...item, orgId }, openingReader);
   const salaryMinor = item.baseSalaryMinor;
-  const grossMinor = salaryMinor + commissionMinor;
+  const grossMinor = salaryMinor + commissionMinor + opening.minor;
   const advanceRecoveredMinor = await recoverItemAdvances(ctx, orgId, item.userId, item.currency, grossMinor, item._id, actorId, now);
   const netMinor = grossMinor - advanceRecoveredMinor;
 
   // Nothing left to pay (e.g. the only commission was settled by another run and
   // there's no salary) → skip the GL post (an all-zero entry) but still zero the
   // item below so reports don't show a phantom.
+  for (const settlement of opening.settlements) {
+    await ctx.db.patch(settlement.liabilityId, { paidMinor: settlement.amountMinor, paidAt: now, paidBy: actorId, paidPayrollItemId: item._id });
+  }
   if (grossMinor > 0) {
     await hookPayrollPaid(ctx, {
       orgId,
@@ -1010,6 +1032,7 @@ async function payItem(
       userId: item.userId,
       salaryMinor,
       commissionMinor,
+      ...(opening.settlements.length ? { openingCommissionSettlements: opening.settlements } : {}),
       advanceRecoveredMinor,
       netMinor,
       currency: item.currency,
@@ -1017,7 +1040,7 @@ async function payItem(
       bankAccountId,
       actorId,
       occurredAt: now,
-    });
+    }, openingReader);
   }
 
   for (const saleId of saleIdsToSettle) {
@@ -1035,6 +1058,7 @@ async function payItem(
 
   await ctx.db.patch(item._id, {
     commissionMinor,
+    ...(item.openingCommissionLiabilityIds !== undefined ? { openingCommissionMinor: opening.minor, openingCommissionLiabilityIds: opening.settlements.map(row => row.liabilityId) } : {}),
     advanceDeductionMinor: advanceRecoveredMinor,
     grossMinor,
     netMinor,
@@ -1116,7 +1140,9 @@ export const createRun = mutation({
         ctx, args.orgId, currency, activeMemberIds, periodEndMs
       );
 
+      const openingByUser = await collectOpeningCommissions(ctx, args.orgId, currency, activeMemberIds, periodEndMs);
       const userIds = new Set<string>([
+        ...openingByUser.keys(),
         ...salaryByUser.keys(),
         ...commissionByUser.keys(),
         ...lineCommissionByUser.keys(),
@@ -1136,6 +1162,8 @@ export const createRun = mutation({
         netMinor: number;
         commissionSaleIds: Id<"sales">[];
         commissionLineIds: Id<"dealCommissionLines">[];
+        openingCommissionMinor: number;
+        openingCommissionLiabilityIds: Id<"openingCommissionLiabilities">[];
       }[] = [];
       for (const uid of userIds) {
         const userId = uid as Id<"users">;
@@ -1143,7 +1171,8 @@ export const createRun = mutation({
         const commission = commissionByUser.get(uid) ?? { minor: 0, saleIds: [] };
         const lineCommission = lineCommissionByUser.get(uid) ?? { minor: 0, lineIds: [] };
         const commissionTotalMinor = commission.minor + lineCommission.minor;
-        const grossMinor = baseSalaryMinor + commissionTotalMinor;
+        const opening = openingByUser.get(uid) ?? { minor: 0, liabilityIds: [] };
+        const grossMinor = baseSalaryMinor + commissionTotalMinor + opening.minor;
         if (grossMinor <= 0) continue;
 
         const outstanding = await outstandingAdvanceMinor(ctx, args.orgId, userId, currency);
@@ -1158,6 +1187,8 @@ export const createRun = mutation({
           netMinor,
           commissionSaleIds: commission.saleIds,
           commissionLineIds: lineCommission.lineIds,
+          openingCommissionMinor: opening.minor,
+          openingCommissionLiabilityIds: opening.liabilityIds,
         });
         totalGross += grossMinor;
         totalNet += netMinor;
@@ -1196,6 +1227,7 @@ export const createRun = mutation({
           currency,
           commissionSaleIds: p.commissionSaleIds,
           commissionLineIds: p.commissionLineIds,
+          ...(p.openingCommissionLiabilityIds.length ? { openingCommissionMinor: p.openingCommissionMinor, openingCommissionLiabilityIds: p.openingCommissionLiabilityIds } : {}),
           createdAt: now,
         });
       }
@@ -1311,6 +1343,13 @@ export const approveRun = mutation({
       // amount accrued to the GL, the amount stored on the payslip, and the
       // approved run total can never disagree — e.g. a MANUAL commission edited
       // between draft and approval accrues, and is approved, at its live value.
+      const openingReader = createOpeningSettlementReader(ctx, args.orgId);
+      const openingByItem = new Map<Id<"payrollItems">, Awaited<ReturnType<typeof openingCommissionsForItem>>>();
+      // Validate every opening source before the first salary/commission accrual or item write.
+      for (const item of items) {
+        if (item.orgId !== args.orgId) throw new ConvexError("Payroll item is unavailable in this organization.");
+        openingByItem.set(item._id, await openingCommissionsForItem(ctx, item, openingReader));
+      }
       let approvedGross = 0;
       let approvedNet = 0;
       // Sales dropped from this run because their commission cannot be
@@ -1410,7 +1449,9 @@ export const approveRun = mutation({
           liveLineIds.push(lineId);
         }
 
-        const grossMinor = baseSalaryMinor + commissionMinor;
+        const opening = openingByItem.get(item._id);
+        if (!opening) throw new ConvexError("Opening commission approval proof is unavailable.");
+        const grossMinor = baseSalaryMinor + commissionMinor + opening.minor;
         const advanceDeductionMinor = Math.min(
           await outstandingAdvanceMinor(ctx, args.orgId, item.userId, item.currency),
           grossMinor
@@ -1421,6 +1462,7 @@ export const approveRun = mutation({
           commissionMinor,
           commissionSaleIds: liveSaleIds,
           commissionLineIds: liveLineIds,
+          ...(item.openingCommissionLiabilityIds !== undefined ? { openingCommissionMinor: opening.minor, openingCommissionLiabilityIds: opening.settlements.map(row => row.liabilityId) } : {}),
           advanceDeductionMinor,
           grossMinor,
           netMinor,
@@ -1493,10 +1535,10 @@ export const payRun = mutation({
     try {
       const authCtx = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
       const { user } = authCtx;
-      const run = await ctx.db.get(args.runId);
-      if (!run || run.orgId !== args.orgId) throw new ConvexError("Payroll run not found.");
+      const run = await requireOwnedRow(ctx, args.orgId, "payrollRuns", args.runId, "Payroll run not found.");
       if (run.status !== "APPROVED") throw new ConvexError("Only an approved payroll run can be paid.");
 
+      const openingReader = createOpeningSettlementReader(ctx, args.orgId);
       const now = Date.now();
       const method = normalizePaymentMethod(args.method);
       const items = await ctx.db
@@ -1516,7 +1558,7 @@ export const payRun = mutation({
       // instead of paying. Returning (not throwing) so the transition persists.
       let drifted = false;
       for (const item of items) {
-        const cur = await computeCurrentPayable(ctx, args.orgId, item);
+        const cur = await computeCurrentPayable(ctx, args.orgId, item, openingReader);
         const approvedGross = item.approvedGrossMinor ?? item.grossMinor;
         const approvedNet = item.approvedNetMinor ?? item.netMinor;
         if (cur.grossMinor !== approvedGross || cur.netMinor !== approvedNet) {
@@ -1577,15 +1619,16 @@ export const payRun = mutation({
             : "Today's accounting period is CLOSED, so this payroll payment could never post. Reopen it before paying this run."
         );
       }
-      if (await isPostableNow(ctx, args.orgId, now)) {
+      const postableNow = await isPostableNow(ctx, args.orgId, now);
+      if (postableNow) {
         await assertAccrualsPosted(ctx, args.orgId, items);
-        await assertAdvanceIssuancesPosted(ctx, args.orgId, items);
       }
+      await assertAdvanceIssuancesPosted(ctx, args.orgId, items, postableNow, now);
 
       let paidGrossMinor = 0;
       let paidNetMinor = 0;
       for (const item of items) {
-        const paid = await payItem(ctx, args.orgId, item, method, args.bankAccountId, user._id, now);
+        const paid = await payItem(ctx, args.orgId, item, method, args.bankAccountId, user._id, now, openingReader);
         paidGrossMinor += paid.grossMinor;
         paidNetMinor += paid.netMinor;
       }
@@ -1645,7 +1688,8 @@ export const listRunItems = query({
           ...i,
           userName: u?.name ?? u?.email ?? "Unknown",
           baseSalary: fromMinorUnits(i.baseSalaryMinor, i.currency),
-          commission: fromMinorUnits(i.commissionMinor, i.currency),
+          commission: fromMinorUnits(i.commissionMinor + (i.openingCommissionMinor ?? 0), i.currency),
+          openingCommission: fromMinorUnits(i.openingCommissionMinor ?? 0, i.currency),
           advanceDeduction: fromMinorUnits(i.advanceDeductionMinor, i.currency),
           gross: fromMinorUnits(i.grossMinor, i.currency),
           net: fromMinorUnits(i.netMinor, i.currency),

@@ -31,6 +31,7 @@ import { auditLog } from "./financialAudit";
 import { computeVehicleCapitalizedCost, CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { hasVehicleAcquisitionAccountingExposure } from "./vehicles";
+import { listOpeningStockEvidence, openingVehicleEvidence } from "./utils/openingVehicleBasis";
 
 // ─── Snapshot / classification helpers ───────────────────────────────────────
 
@@ -495,6 +496,8 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .paginate({ numItems: limit, cursor: args.cursor ?? null });
     const vehicles = page.page.filter((v) => !v.isDeleted && v.status !== "SOLD" && v.sourceType !== "SOURCED");
+    const openingStockVehicleIds = new Set((await listOpeningStockEvidence(ctx, args.orgId))
+      .map((row) => String(row.vehicleId)));
 
     // A vehicle's landedCostTotal can already include amounts a separate,
     // already-posted VEHICLE_LANDED_COST_CAPITALIZED event covered (landed
@@ -528,6 +531,10 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
     }> = [];
 
     for (const vehicle of vehicles) {
+      if (openingStockVehicleIds.has(String(vehicle._id))) {
+        results.push({ vehicleId: String(vehicle._id), action: "NEEDS_REVIEW", reason: "opening_stock_bound_to_cutover" });
+        continue;
+      }
       // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
       let alreadyPosted: Doc<"accountingEvents"> | null = null;
       for await (const event of ctx.db
@@ -719,6 +726,9 @@ export const postVehicleOpeningBalanceForVehicle = internalMutation({
     actorId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    if (await openingVehicleEvidence(ctx, args.orgId, args.vehicleId)) {
+      throw new ConvexError("Opening stock cannot be capitalized again by the inventory backfill.");
+    }
     const now = Date.now();
     if (args.baseAmountMinor > 0) {
       await postAccountingEvent(ctx, {
