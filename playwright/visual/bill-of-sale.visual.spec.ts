@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
 import { newContainedContext } from "../containedContext";
+import { captureWithDiagnostics } from "./browserCaptureDiagnostics";
 
 /**
  * SCRUM-258 Gate B: the Bill of Sale print page in every economics state,
@@ -124,7 +125,7 @@ async function paint(page: Page, v: Variant) {
 }
 
 for (const v of VARIANTS) {
-  test(`bill-of-sale · ${v.state.name} · ${v.locale} · ${v.tag}`, async ({ browser }) => {
+  test(`bill-of-sale · ${v.state.name} · ${v.locale} · ${v.tag}`, async ({ browser }, testInfo) => {
     const context = await newContainedContext(browser, {
       viewport: { width: v.width, height: v.height },
       colorScheme: v.theme,
@@ -188,7 +189,7 @@ for (const v of VARIANTS) {
       });
       console.log(`METRICS ${v.state.name} ${v.locale} ${v.tag}: ${JSON.stringify(metrics)}`);
       // Shoot first so an overflow failure still leaves the picture to look at.
-      await page.screenshot({ path: resolve(SHOTS, `${v.state.name}-${v.locale}-${v.tag}.png`), fullPage: true });
+      await captureWithDiagnostics(page, { path: resolve(SHOTS, `${v.state.name}-${v.locale}-${v.tag}.png`), fullPage: true }, () => testInfo.outputPath("bill-capture-failure.json"));
       // Totals geometry: the label starts at the reading edge, the figure sits in its own column at
       // the opposite edge, and the two never overlap or touch (the AR bug glued them together).
       for (const row of metrics.rows) {

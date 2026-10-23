@@ -1,5 +1,13 @@
 import { expect, type Page } from "@playwright/test";
 
+/** Navigation interaction is not evidence that the drawer has disappeared. */
+export async function dismissAuditNavigation(page: Page, timeout = 5_000): Promise<void> {
+  const drawer = page.getByRole("dialog", { includeHidden: true });
+  await expect(drawer).toBeVisible({ timeout });
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0, { timeout });
+}
+
 /** Visible screen readiness only; never proves data completeness or accounting. */
 export async function requireReadyScreen(page: Page, timeout = 15_000, expectedPath?: string): Promise<void> {
   if (expectedPath !== undefined) {
