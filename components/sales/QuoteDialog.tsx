@@ -43,11 +43,11 @@ import { getLocalizedErrorMessage } from "@/lib/errors";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 
 
-function CustomerStatusChoices({ rows, selectedIds, onToggle }: {
+function CustomerStatusChoices({ rows, selectedIds, onToggle }: Readonly<{
   rows: { _id: Id<"orgCustomerStatuses">; label: string }[] | undefined;
   selectedIds: Id<"orgCustomerStatuses">[];
   onToggle: (id: Id<"orgCustomerStatuses">) => void;
-}) {
+}>) {
   const { t, locale } = useLanguage();
   if (rows === undefined) {
     return <p className="text-sm text-muted-foreground">{t("CustomerStatusesLoading")}</p>;

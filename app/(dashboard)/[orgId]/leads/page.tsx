@@ -94,7 +94,7 @@ export default function LeadsPage() {
   return <RoleGuard permissions={["view:leads"]}><LeadsContent /></RoleGuard>;
 }
 
-function LeadViewToggle({ view, onChange }: { view: LeadView; onChange: (view: LeadView) => void }) {
+function LeadViewToggle({ view, onChange }: Readonly<{ view: LeadView; onChange: (view: LeadView) => void }>) {
   const { t } = useLanguage();
   return (
     <div className="flex items-center gap-1 rounded-lg border bg-muted/30 p-1 w-fit">

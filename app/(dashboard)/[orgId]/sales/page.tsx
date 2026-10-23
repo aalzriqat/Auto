@@ -50,12 +50,12 @@ function buildFreshWizardPrefill({ hasPrefill, vehicleId, leadId, sourceLikeVehi
     };
 }
 
-function SalePrefillHint({ sourceLikeVehicleId, sourceLikeVehicle, loading, customer }: {
+function SalePrefillHint({ sourceLikeVehicleId, sourceLikeVehicle, loading, customer }: Readonly<{
     sourceLikeVehicleId: string | null;
     sourceLikeVehicle: PrefillVehicle | undefined;
     loading: boolean;
     customer: PrefillCustomer | undefined;
-}) {
+}>) {
     const { t } = useLanguage();
     if (!sourceLikeVehicleId) {
         const customerName = customer ? `${customer.firstName} ${customer.lastName}` : "this lead";
@@ -90,7 +90,7 @@ function SalesHomeContent() {
     // Set by a SOLD vehicle's "Source another like this" action — seeds the
     // wizard's sourcing form instead of selecting an existing vehicle.
     const prefillSourceLikeVehicleId = searchParams.get("sourceLikeVehicleId");
-    const hasPrefill = !!(prefillLeadId || prefillCustomerId || prefillVehicleId || prefillSourceLikeVehicleId);
+    const hasPrefill = [prefillLeadId, prefillCustomerId, prefillVehicleId, prefillSourceLikeVehicleId].some(Boolean);
 
     // Sale notifications deep-link here with ?highlightId=<saleId>, which
     // nothing consumed — this page has no sales table to highlight, only the

@@ -102,8 +102,7 @@ function CommissionsContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const queue = useCommissionReviewQueue(activeOrgId);
-  const { isManualMode, canManage, members, commissions, filtered, isAutoLoading,
-    hasActiveFilter, sortKey, sortDir, toggleSort } = queue;
+  const { canManage, members } = queue;
   const [linesSaleId, setLinesSaleId] = useState<Id<"sales"> | null>(null);
 
   const markPaid = useMutation(api.sales.markCommissionPaid);
@@ -233,7 +232,89 @@ function CommissionsContent() {
 
         <CommissionQueueOverview queue={queue} />
 
-        {/* Commission table */}
+        <CommissionReviewTable
+          queue={queue}
+          editingId={editingId}
+          editingAmount={editingAmount}
+          onAmountChange={setEditingAmount}
+          onSave={handleSaveCommission}
+          onStartEditing={startEditing}
+          onCancelEditing={() => { setEditingId(null); setEditingAmount(""); }}
+          onShowLines={setLinesSaleId}
+          onRecalculate={handleRecalculate}
+          onMarkPaid={startPayment}
+        />
+        {activeOrgId && canManage && (
+          <DealCommissionLinesDialog
+            orgId={activeOrgId}
+            saleId={linesSaleId}
+            members={(members?.page ?? []).map((m: { userId: Id<"users">; userName: string }) => ({ userId: m.userId, name: m.userName }))}
+            money={formatMinor}
+            t={t as any}
+            onOpenChange={(open) => { if (!open) setLinesSaleId(null); }}
+          />
+        )}
+        <CommissionPaymentDialog
+          commission={commissionToPay ? {
+            salespersonName: commissionToPay.salespersonName,
+            vehicleSummary: commissionToPay.vehicleSummary,
+            amountLabel: formatCurrency(commissionToPay.commissionAmount ?? 0),
+          } : null}
+          open={commissionToPay !== null}
+          isPaying={isPayingCommission}
+          paymentMethod={paymentMethod}
+          bankAccountId={bankAccountId}
+          bankOptions={commissionBankOptions}
+          uncertain={commissionRetry !== null}
+          retryBankName={commissionRetry?.bankName ?? null}
+          t={t as any}
+          onPaymentMethodChange={(method) => { setPaymentMethod(method); setBankAccountId(""); }}
+          onBankChange={setBankAccountId}
+          onConfirm={handleConfirmMarkPaid}
+          onOpenChange={(open) => {
+            if (!open) {
+              setCommissionToPay(null);
+              setPaymentMethod("CASH");
+              setBankAccountId("");
+            }
+          }}
+        />
+      </div>
+  );
+}
+
+function CommissionEmptyQueueMessage({ loading, hasActiveFilter, isManualMode }: Readonly<{
+  loading: boolean;
+  hasActiveFilter: boolean;
+  isManualMode: boolean;
+}>) {
+  const { t } = useLanguage();
+  if (loading) return <>{t("Loading")}</>;
+  if (hasActiveFilter) return <>{t("NoCommissionRecordsForFilter")}</>;
+  if (isManualMode) return <>{t("NoCompletedSalesYet")}</>;
+  return <>{t("NoCommissionRecords")}</>;
+}
+
+interface CommissionReviewTableProps {
+  queue: ReturnType<typeof useCommissionReviewQueue>;
+  editingId: Id<"sales"> | null;
+  editingAmount: string;
+  onAmountChange: (value: string) => void;
+  onSave: (saleId: Id<"sales">) => Promise<void>;
+  onStartEditing: (saleId: Id<"sales">, current: number | undefined) => void;
+  onCancelEditing: () => void;
+  onShowLines: (saleId: Id<"sales">) => void;
+  onRecalculate: (saleId: Id<"sales">) => Promise<void>;
+  onMarkPaid: (sale: CommissionSale) => void;
+}
+
+function CommissionReviewTable({ queue, editingId, editingAmount, onAmountChange, onSave,
+  onStartEditing, onCancelEditing, onShowLines, onRecalculate, onMarkPaid,
+}: Readonly<CommissionReviewTableProps>) {
+  const { t } = useLanguage();
+  const { isManualMode, canManage, commissions, filtered, isAutoLoading,
+    hasActiveFilter, sortKey, sortDir, toggleSort } = queue;
+  return (
         <div className="rounded-md border overflow-x-auto">
           <Table>
             <TableHeader>
@@ -267,13 +348,11 @@ function CommissionsContent() {
                         The original copy ("set a commission rate on team
                         members") only makes sense in an automatic mode —
                         MANUAL has no rates by definition. */}
-                    {isAutoLoading
-                      ? t("Loading" as any)
-                      : hasActiveFilter
-                        ? t("NoCommissionRecordsForFilter" as any)
-                        : isManualMode
-                          ? t("NoCompletedSalesYet" as any)
-                          : t("NoCommissionRecords" as any)}
+                    <CommissionEmptyQueueMessage
+                      loading={isAutoLoading}
+                      hasActiveFilter={hasActiveFilter}
+                      isManualMode={isManualMode}
+                    />
                   </TableCell>
                 </TableRow>
               ) : (
@@ -312,17 +391,17 @@ function CommissionsContent() {
                       {new Date(c.saleDate).toLocaleDateString()}
                     </TableCell>
                     <TableCell className="text-end tabular-nums">{formatCurrency(c.salePrice)}</TableCell>
-                    <CommissionAmountCell c={c} canManage={canManage} editingId={editingId} editingAmount={editingAmount} onAmountChange={setEditingAmount} onSave={handleSaveCommission} onStartEditing={startEditing} onCancel={() => { setEditingId(null); setEditingAmount(""); }} />
+                    <CommissionAmountCell c={c} canManage={canManage} editingId={editingId} editingAmount={editingAmount} onAmountChange={onAmountChange} onSave={onSave} onStartEditing={onStartEditing} onCancel={onCancelEditing} />
                     <CommissionStatusCell c={c} />
                     {canManage && (
                       <TableCell className="text-end">
                         <div className="flex flex-wrap items-center justify-end gap-2">
                         {c.commissionStatus !== "VOID" && (
-                          <Button variant="ghost" size="sm" onClick={() => setLinesSaleId(c._id)}>
+                          <Button variant="ghost" size="sm" onClick={() => onShowLines(c._id)}>
                             <ClipboardList className="h-3.5 w-3.5 me-1" /> {t("DealCommissionLinesAction" as any)}
                           </Button>
                         )}
-                        <CommissionPaymentAction c={c} editingId={editingId} onRecalculate={handleRecalculate} onStartEditing={startEditing} onMarkPaid={startPayment} />
+                        <CommissionPaymentAction c={c} editingId={editingId} onRecalculate={onRecalculate} onStartEditing={onStartEditing} onMarkPaid={onMarkPaid} />
                         </div>
                       </TableCell>
                     )}
@@ -332,42 +411,6 @@ function CommissionsContent() {
             </TableBody>
           </Table>
         </div>
-        {activeOrgId && canManage && (
-          <DealCommissionLinesDialog
-            orgId={activeOrgId}
-            saleId={linesSaleId}
-            members={(members?.page ?? []).map((m: { userId: Id<"users">; userName: string }) => ({ userId: m.userId, name: m.userName }))}
-            money={formatMinor}
-            t={t as any}
-            onOpenChange={(open) => { if (!open) setLinesSaleId(null); }}
-          />
-        )}
-        <CommissionPaymentDialog
-          commission={commissionToPay ? {
-            salespersonName: commissionToPay.salespersonName,
-            vehicleSummary: commissionToPay.vehicleSummary,
-            amountLabel: formatCurrency(commissionToPay.commissionAmount ?? 0),
-          } : null}
-          open={commissionToPay !== null}
-          isPaying={isPayingCommission}
-          paymentMethod={paymentMethod}
-          bankAccountId={bankAccountId}
-          bankOptions={commissionBankOptions}
-          uncertain={commissionRetry !== null}
-          retryBankName={commissionRetry?.bankName ?? null}
-          t={t as any}
-          onPaymentMethodChange={(method) => { setPaymentMethod(method); setBankAccountId(""); }}
-          onBankChange={setBankAccountId}
-          onConfirm={handleConfirmMarkPaid}
-          onOpenChange={(open) => {
-            if (!open) {
-              setCommissionToPay(null);
-              setPaymentMethod("CASH");
-              setBankAccountId("");
-            }
-          }}
-        />
-      </div>
   );
 }
 
