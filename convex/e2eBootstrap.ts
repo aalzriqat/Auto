@@ -143,7 +143,7 @@
  * is how an E2E suite starts proving that fixtures exist rather than that the
  * product works.
  */
-import { v, ConvexError } from "convex/values";
+import { v, ConvexError, convexToJson } from "convex/values";
 import { internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
@@ -154,6 +154,7 @@ import { DEFAULT_STAGES } from "./orgPipelineStages";
 import { DEFAULT_SETTINGS } from "./orgSettings";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import { DEFAULT_CHART } from "./utils/defaultChart";
+import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 
 /** Prefix on every error this module throws, so a CI log names the subsystem. */
 const ERR = "E2E_BOOTSTRAP";
@@ -1326,7 +1327,7 @@ export const assertHuntSeats = internalQuery({
   },
   returns: v.object({
     orgId: v.id("organizations"), deploymentIdentity: v.string(),
-    primary: huntSeatResult, approver: huntSeatResult,
+    primary: huntSeatResult, approver: huntSeatResult, settingsState: v.string(),
   }),
   handler: async (ctx, args) => {
     const deploymentIdentity = checkDeploymentIdentity(args.expectedCloudUrl);
@@ -1341,7 +1342,12 @@ export const assertHuntSeats = internalQuery({
     const primary = await readExactHuntSeat(ctx, orgId, "primary", args.primaryClerkUserId, args.primaryRole);
     const approver = await readExactHuntSeat(ctx, orgId, "approver", args.approverClerkUserId, args.approverRole);
     if (primary.userId === approver.userId) throw new ConvexError(`${ERR}: hunt seats resolve to the same user.`);
-    return { orgId, deploymentIdentity, primary, approver };
+    const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
+    if (!settings) throw new ConvexError(`${ERR}: hunt settings baseline is missing.`);
+    // Read-only preview proof for roles that cannot read orgSettings.get.
+    // Reuse its exact allowlist; credentials never enter this diagnostic.
+    const settingsState = JSON.stringify(convexToJson(toPublicOrgSettings(settings)));
+    return { orgId, deploymentIdentity, primary, approver, settingsState };
   },
 });
 

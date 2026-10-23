@@ -83,6 +83,10 @@ function rowToConversationKey(row: ConversationRow): ConversationKey {
 }
 
 export default function SocialInboxPage() {
+  return <RoleGuard permissions={["view:leads"]}><SocialInboxContent /></RoleGuard>;
+}
+
+function SocialInboxContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { hasPermission } = usePermissions();
@@ -212,7 +216,6 @@ export default function SocialInboxPage() {
     filterNeedsReply !== undefined;
 
   return (
-    <RoleGuard permissions={["view:leads"]}>
       <div className="space-y-6 flex flex-col md:h-full md:overflow-hidden">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -559,6 +562,5 @@ export default function SocialInboxPage() {
           onOpenChange={(o) => !o && setActiveConversation(null)}
         />
       </div>
-    </RoleGuard>
   );
 }

@@ -24,6 +24,7 @@ vi.mock("convex/react", async () => {
       const name = getFunctionName(reference);
       stubs.queryArgs.set(name, args);
       if (args === "skip") return undefined;
+      if (name === "memberships:getMyMembership") return { permissions: stubs.permissions, isSystemOwnerRole: false };
       // The server refuses the profit-approval queue to anyone without the
       // permission; model that so an unguarded call fails the way production did.
       if (name === "approvals:listPendingApprovals" && !stubs.permissions.includes("approve:requests")) {

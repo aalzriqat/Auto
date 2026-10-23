@@ -11,8 +11,30 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+test("a non-finance manager cannot read sourcing financial queues", async () => {
+  const { t, orgId, asOwner } = await seedDealerWithPayable();
+  const template = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "MANAGER");
+  if (!template) throw new Error("Missing actual manager template");
+  expect(template.permissions).not.toContain("view:finance");
+  await t.run(async (ctx) => {
+    const userId = await ctx.db.insert("users", { clerkId: "sourcing-manager", email: "manager@example.test" });
+    const roleId = await ctx.db.insert("roles", { orgId, name: template.name, permissions: template.permissions });
+    await ctx.db.insert("memberships", { orgId, userId, roleId });
+  });
+  const manager = t.withIdentity({ subject: "sourcing-manager" });
+  // Positive controls prove the queries and fixture work. The negative checks
+  // require the structured authorization refusal, never any rejected request.
+  expect(await asOwner.query(api.sourcingPayables.list, { orgId })).toHaveLength(1);
+  expect(await asOwner.query(api.sourcingPayables.listPipeline, { orgId })).toEqual([]);
+  expect(await asOwner.query(api.supplierCostRecoveries.list, { orgId })).toEqual({ complete: true, items: [] });
+  await expect(manager.query(api.sourcingPayables.list, { orgId })).rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
+  await expect(manager.query(api.sourcingPayables.listPipeline, { orgId })).rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
+  await expect(manager.query(api.supplierCostRecoveries.list, { orgId })).rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
+});
 
 async function seedDealerWithPayable(amountDue = 5000) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);

@@ -16,11 +16,99 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Doc, Id } from "@/convex/_generated/dataModel";
+import { Id } from "@/convex/_generated/dataModel";
+import type { FunctionReturnType } from "convex/server";
 import { SaleTrailDialog } from "@/components/sales/SaleTrailDialog";
 import { buildInitialDraftFromApproval } from "@/components/sales/wizard/approvalResume";
 
 export default function SalesHomePage() {
+    return <RoleGuard permissions={["view:sales"]}><SalesHomeContent /></RoleGuard>;
+}
+
+type PrefillVehicle = FunctionReturnType<typeof api.vehicles.get>;
+type PrefillCustomer = FunctionReturnType<typeof api.customers.get>;
+
+function buildFreshWizardPrefill({ hasPrefill, vehicleId, leadId, sourceLikeVehicle }: {
+    hasPrefill: boolean;
+    vehicleId: string | null;
+    leadId: string | null;
+    sourceLikeVehicle: PrefillVehicle | undefined;
+}): Partial<WizardData> | undefined {
+    if (!hasPrefill) return undefined;
+    return {
+        vehicleId: vehicleId ?? undefined,
+        leadId: leadId ?? undefined,
+        sourceLikeVehicle: sourceLikeVehicle ? {
+            make: sourceLikeVehicle.make,
+            model: sourceLikeVehicle.model,
+            year: sourceLikeVehicle.year,
+            trim: sourceLikeVehicle.trim,
+            color: sourceLikeVehicle.color,
+            fuelType: sourceLikeVehicle.fuelType,
+            transmission: sourceLikeVehicle.transmission,
+        } : undefined,
+    };
+}
+
+function SalePrefillHint({ sourceLikeVehicleId, sourceLikeVehicle, loading, customer }: Readonly<{
+    sourceLikeVehicleId: string | null;
+    sourceLikeVehicle: PrefillVehicle | undefined;
+    loading: boolean;
+    customer: PrefillCustomer | undefined;
+}>) {
+    const { t } = useLanguage();
+    if (!sourceLikeVehicleId) {
+        const customerName = customer ? `${customer.firstName} ${customer.lastName}` : "this lead";
+        return <>Creating a quote for {customerName} — choose a payment type to continue.</>;
+    }
+    if (loading) return <>{t("LoadingVehicleDetails") ?? "Loading vehicle details…"}</>;
+    const vehicleDescription = sourceLikeVehicle
+        ? `${sourceLikeVehicle.year} ${sourceLikeVehicle.make} ${sourceLikeVehicle.model} — `
+        : "";
+    return <>{vehicleDescription}{t("SourcingVehicleForSaleHint")}</>;
+}
+
+type SavedWizardDraft = NonNullable<FunctionReturnType<typeof api.wizardDrafts.getMyDraft>>;
+
+function SavedSaleDraftCard({ draft, onDiscard, onResume }: Readonly<{
+    draft: SavedWizardDraft | null | undefined;
+    onDiscard: () => Promise<void>;
+    onResume: (draft: SavedWizardDraft) => void;
+}>) {
+    const { t } = useLanguage();
+    if (!draft) return null;
+    return (
+        <div>
+            <h2 className="text-sm font-semibold mb-3 text-indigo-400 uppercase tracking-wider flex items-center gap-2">
+                <FileEdit className="w-4 h-4" />
+                {t("InProgressDraft") ?? "In-Progress Draft"}
+            </h2>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-4 py-3">
+                <div>
+                    <p className="text-sm font-medium text-foreground">
+                        {draft.paymentType === "CASH" ? (t("CashSale") ?? "Cash Sale") : (t("Installment") ?? "Installment")}
+                        {" — "}{`Step ${draft.currentStep} of 3`}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                        {t("LastSaved") ?? "Last saved"}: {new Date(draft.savedAt).toLocaleString()}
+                    </p>
+                </div>
+                <div className="flex gap-2">
+                    <Button size="sm" variant="ghost" className="text-xs text-red-400 hover:text-red-500 hover:bg-red-500/10" onClick={onDiscard}>
+                        <X className="w-3 h-3 me-1.5" />
+                        {t("Discard") ?? "Discard"}
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-xs border-indigo-400 text-indigo-400 hover:bg-indigo-500/10" onClick={() => onResume(draft)}>
+                        <RotateCcw className="w-3 h-3 me-1.5" />
+                        {t("ResumeDraft") ?? "Resume Draft"}
+                    </Button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function SalesHomeContent() {
     const { activeOrgId } = useOrg();
     const { t } = useLanguage();
     const { format } = useCurrency();
@@ -42,7 +130,7 @@ export default function SalesHomePage() {
     // Set by a SOLD vehicle's "Source another like this" action — seeds the
     // wizard's sourcing form instead of selecting an existing vehicle.
     const prefillSourceLikeVehicleId = searchParams.get("sourceLikeVehicleId");
-    const hasPrefill = !!(prefillLeadId || prefillCustomerId || prefillVehicleId || prefillSourceLikeVehicleId);
+    const hasPrefill = [prefillLeadId, prefillCustomerId, prefillVehicleId, prefillSourceLikeVehicleId].some(Boolean);
 
     // Sale notifications deep-link here with ?highlightId=<saleId>, which
     // nothing consumed — this page has no sales table to highlight, only the
@@ -122,25 +210,12 @@ export default function SalesHomePage() {
     }
 
     function openFreshWizard(type: PaymentType) {
-        setWizardInitialDraft(
-            hasPrefill
-                ? {
-                      vehicleId: prefillVehicleId ?? undefined,
-                      leadId: prefillLeadId ?? undefined,
-                      sourceLikeVehicle: sourceLikeVehicle
-                          ? {
-                                make: sourceLikeVehicle.make,
-                                model: sourceLikeVehicle.model,
-                                year: sourceLikeVehicle.year,
-                                trim: sourceLikeVehicle.trim,
-                                color: sourceLikeVehicle.color,
-                                fuelType: sourceLikeVehicle.fuelType,
-                                transmission: sourceLikeVehicle.transmission,
-                            }
-                          : undefined,
-                  }
-                : undefined
-        );
+        setWizardInitialDraft(buildFreshWizardPrefill({
+            hasPrefill,
+            vehicleId: prefillVehicleId,
+            leadId: prefillLeadId,
+            sourceLikeVehicle,
+        }));
         setWizardResumeDraft(undefined);
         setActiveWizard(type);
     }
@@ -165,16 +240,9 @@ export default function SalesHomePage() {
         setActiveWizard(draft.paymentType as PaymentType);
     }
 
-    const prefillHintText = prefillSourceLikeVehicleId
-        ? sourceLikeVehicleLoading
-            ? (t("LoadingVehicleDetails" as any) ?? "Loading vehicle details…")
-            : `${sourceLikeVehicle ? `${sourceLikeVehicle.year} ${sourceLikeVehicle.make} ${sourceLikeVehicle.model} — ` : ""}${t("SourcingVehicleForSaleHint" as any)}`
-        : `Creating a quote for ${prefillCustomer ? `${prefillCustomer.firstName} ${prefillCustomer.lastName}` : "this lead"} — choose a payment type to continue.`;
-
     // If wizard is active, render it full-width instead of the hero
     if (activeWizard) {
         return (
-            <RoleGuard permissions={["view:sales"]}>
                 <SalesWizard
                     paymentType={activeWizard}
                     onClose={() => { setActiveWizard(null); setWizardInitialDraft(undefined); setWizardResumeDraft(undefined); }}
@@ -182,17 +250,21 @@ export default function SalesHomePage() {
                     resumeDraft={wizardResumeDraft}
                     initialCustomer={wizardInitialDraft ? prefillCustomer : undefined}
                 />
-            </RoleGuard>
         );
     }
 
     return (
-        <RoleGuard permissions={["view:sales"]}>
+        <>
             <div className="space-y-10 pb-10">
 
                 {hasPrefill && (
                     <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-300">
-                        {prefillHintText}
+                        <SalePrefillHint
+                            sourceLikeVehicleId={prefillSourceLikeVehicleId}
+                            sourceLikeVehicle={sourceLikeVehicle}
+                            loading={sourceLikeVehicleLoading}
+                            customer={prefillCustomer}
+                        />
                     </div>
                 )}
 
@@ -284,112 +356,10 @@ export default function SalesHomePage() {
                 </div>
 
                 {/* ─── In-Progress Draft ────────────────────────────────────── */}
-                {myWizardDraft && (
-                    <div>
-                        <h2 className="text-sm font-semibold mb-3 text-indigo-400 uppercase tracking-wider flex items-center gap-2">
-                            <FileEdit className="w-4 h-4" />
-                            {t("InProgressDraft" as any) ?? "In-Progress Draft"}
-                        </h2>
-                        <div
-                            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-4 py-3"
-                        >
-                            <div>
-                                <p className="text-sm font-medium text-foreground">
-                                    {myWizardDraft.paymentType === "CASH"
-                                        ? (t("CashSale" as any) ?? "Cash Sale")
-                                        : (t("Installment" as any) ?? "Installment")}
-                                    {" — "}{`Step ${myWizardDraft.currentStep} of 3`}
-                                </p>
-                                <p className="text-xs text-muted-foreground mt-0.5">
-                                    {t("LastSaved" as any) ?? "Last saved"}: {new Date(myWizardDraft.savedAt).toLocaleString()}
-                                </p>
-                            </div>
-                            <div className="flex gap-2">
-                                <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="text-xs text-red-400 hover:text-red-500 hover:bg-red-500/10"
-                                    onClick={handleDiscardDraft}
-                                >
-                                    <X className="w-3 h-3 me-1.5" />
-                                    {t("Discard" as any) ?? "Discard"}
-                                </Button>
-                                <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="text-xs border-indigo-400 text-indigo-400 hover:bg-indigo-500/10"
-                                    onClick={() => resumeFromDbDraft(myWizardDraft)}
-                                >
-                                    <RotateCcw className="w-3 h-3 me-1.5" />
-                                    {t("ResumeDraft" as any) ?? "Resume Draft"}
-                                </Button>
-                            </div>
-                        </div>
-                    </div>
-                )}
+                <SavedSaleDraftCard draft={myWizardDraft} onDiscard={handleDiscardDraft} onResume={resumeFromDbDraft} />
 
                 {/* ─── Pending Deals (awaiting approval) ───────────────────── */}
-                {myPendingApprovals && myPendingApprovals.length > 0 && (
-                    <div>
-                        <h2 className="text-sm font-semibold mb-3 text-amber-400 uppercase tracking-wider flex items-center gap-2">
-                            <Clock className="w-4 h-4" />
-                            {t("PendingDeals" as any) ?? "Pending Deals"}
-                        </h2>
-                        <div className="space-y-2">
-                            {myPendingApprovals.map((approval: Doc<"profitApprovalRequests"> & { vehicleSummary: string }) => (
-                                <div
-                                    key={approval._id}
-                                    className="flex items-center justify-between rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3"
-                                >
-                                    <div>
-                                        <p className="text-sm font-medium text-foreground">{approval.vehicleSummary}</p>
-                                        <p className="text-xs text-muted-foreground mt-0.5">
-                                            {t("RequestedProfit" as any)}: {format(approval.requestedProfit)}
-                                        </p>
-                                    </div>
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        {approval.status === "PENDING" ? (
-                                            <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">
-                                                <Clock className="w-3 h-3 me-1" />
-                                                {t("AwaitingApproval" as any) ?? "Awaiting Approval"}
-                                            </Badge>
-                                        ) : (
-                                            <Badge variant="outline" className="text-green-600 border-green-400 text-xs">
-                                                <CheckCircle2 className="w-3 h-3 me-1" />
-                                                {t("Approved" as any) ?? "Approved"}
-                                            </Badge>
-                                        )}
-                                        {approval.status === "PENDING" && (
-                                            <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                className="text-xs text-red-400 hover:text-red-500 hover:bg-red-500/10"
-                                                onClick={() => handleCancelApproval(approval._id)}
-                                            >
-                                                <X className="w-3 h-3 me-1.5" />
-                                                {t("Cancel" as any) ?? "Cancel"}
-                                            </Button>
-                                        )}
-                                        {approval.wizardSnapshot && (
-                                            <Button
-                                                size="sm"
-                                                variant={approval.status === "APPROVED" ? "default" : "outline"}
-                                                className={cn(
-                                                    "text-xs",
-                                                    approval.status === "APPROVED" && "bg-green-600 hover:bg-green-700 text-white"
-                                                )}
-                                                onClick={() => resumeFromApproval(approval)}
-                                            >
-                                                <RotateCcw className="w-3 h-3 me-1.5" />
-                                                {t("ResumeDeal" as any) ?? "Resume Deal"}
-                                            </Button>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
+                <PendingDealRequests approvals={myPendingApprovals} format={format} onCancel={handleCancelApproval} onResume={resumeFromApproval} />
 
                 {/* ─── Recent Sales ──────────────────────────────────────────── */}
                 {recentSales && recentSales.length > 0 && (
@@ -435,6 +405,86 @@ export default function SalesHomePage() {
                 open={!!trailSaleId}
                 onOpenChange={(open) => !open && setTrailSaleId(null)}
             />
-        </RoleGuard>
+        </>
     );
+}
+
+type PendingApproval = NonNullable<
+  FunctionReturnType<typeof api.approvals.listMyPendingApprovals>
+>[number];
+
+function PendingDealRequests({
+  approvals,
+  format,
+  onCancel,
+  onResume,
+}: Readonly<{
+  approvals: readonly PendingApproval[] | undefined;
+  format: ReturnType<typeof useCurrency>["format"];
+  onCancel: (id: Id<"profitApprovalRequests">) => Promise<void>;
+  onResume: (approval: PendingApproval) => void;
+}>) {
+  const { t } = useLanguage();
+  if (!approvals?.length) return null;
+  return (
+    <div>
+      <h2 className="text-sm font-semibold mb-3 text-amber-400 uppercase tracking-wider flex items-center gap-2">
+        <Clock className="w-4 h-4" />
+        {t("PendingDeals") ?? "Pending Deals"}
+      </h2>
+      <div className="space-y-2">
+        {approvals.map((approval: PendingApproval) => (
+          <div
+            key={approval._id}
+            className="flex items-center justify-between rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3"
+          >
+            <div>
+              <p className="text-sm font-medium text-foreground">{approval.vehicleSummary}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {t("RequestedProfit")}: {format(approval.requestedProfit)}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {approval.status === "PENDING" ? (
+                <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">
+                  <Clock className="w-3 h-3 me-1" />
+                  {t("AwaitingApproval") ?? "Awaiting Approval"}
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-green-600 border-green-400 text-xs">
+                  <CheckCircle2 className="w-3 h-3 me-1" />
+                  {t("Approved") ?? "Approved"}
+                </Badge>
+              )}
+              {approval.status === "PENDING" && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-xs text-red-400 hover:text-red-500 hover:bg-red-500/10"
+                  onClick={() => onCancel(approval._id)}
+                >
+                  <X className="w-3 h-3 me-1.5" />
+                  {t("Cancel") ?? "Cancel"}
+                </Button>
+              )}
+              {approval.wizardSnapshot && (
+                <Button
+                  size="sm"
+                  variant={approval.status === "APPROVED" ? "default" : "outline"}
+                  className={cn(
+                    "text-xs",
+                    approval.status === "APPROVED" && "bg-green-600 hover:bg-green-700 text-white",
+                  )}
+                  onClick={() => onResume(approval)}
+                >
+                  <RotateCcw className="w-3 h-3 me-1.5" />
+                  {t("ResumeDeal") ?? "Resume Deal"}
+                </Button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

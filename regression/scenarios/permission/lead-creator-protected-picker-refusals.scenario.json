@@ -1,0 +1,98 @@
+{
+  "id": "lead-creator-protected-picker-refusals",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_LEAD_CREATOR",
+        "org": "A"
+      },
+      "action": "customers.selectorOptions",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_LEAD_CREATOR",
+        "org": "A"
+      },
+      "action": "customers.get",
+      "input": {
+        "customerId": "KNOWN_CUSTOMER"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_LEAD_CREATOR",
+        "org": "A"
+      },
+      "action": "vehicles.listAll",
+      "input": {
+        "status": "AVAILABLE",
+        "includeReserved": true
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_LEAD_CREATOR",
+        "org": "A"
+      },
+      "action": "memberships.list",
+      "input": {
+        "paginationOpts": {
+          "numItems": 100,
+          "cursor": null
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_LEAD_CREATOR",
+        "org": "A"
+      },
+      "action": "leads.create",
+      "input": {
+        "customerId": "KNOWN_CUSTOMER",
+        "source": "Website"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_LEAD_CREATOR",
+        "org": "A"
+      },
+      "action": "leads.get",
+      "input": {
+        "leadId": "CREATED_LEAD"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "protectedPicker.refusalCodes",
+      "value": "FORBIDDEN_CUSTOMER_OPTIONS_CUSTOMER_GET_VEHICLES_MEMBERSHIPS"
+    },
+    {
+      "observable": "createdLead.source",
+      "value": "Website"
+    }
+  ],
+  "matrixRow": "SCRUM760-lead-creator-catalogs",
+  "impl": {
+    "file": "convex/leadDetailAuthority.test.ts",
+    "testName": "a minimal lead creator can create a known-customer lead while protected picker reads remain refused"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "PR668-R10-Codex-c636-catalog-red",
+    "firstSeen": "2026-10-23"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "41a527dc290665e0ce3d0bdfba12eeda71968ba7c701ac8f09ba7951510ceed7"
+}

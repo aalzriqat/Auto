@@ -24,6 +24,15 @@ test("phone capture refuses navigation that remains open after Escape", async ({
   expect(await page.locator('[role="dialog"]').count()).toBe(1);
 });
 
+test("phone capture refuses an absent navigation drawer before Escape", async ({ page }) => {
+  await page.setContent(`<main><button>Ready page action</button></main>
+    <script>document.body.dataset.escapeCount = '0'; document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') document.body.dataset.escapeCount = '1';
+    });</script>`);
+  await expect(dismissAuditNavigation(page, 200)).rejects.toThrow(/toBeVisible/);
+  expect(await page.locator("body").getAttribute("data-escape-count")).toBe("0");
+});
+
 test("phone capture refuses navigation hidden only from accessibility", async ({ page }) => {
   await page.setContent(`<main><button>Ready page action</button></main>
     <div role="dialog" aria-modal="true" style="position:fixed;inset:0;background:white">Navigation</div>

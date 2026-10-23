@@ -16,10 +16,14 @@ const stubs = vi.hoisted(() => ({
   queryResult: undefined as unknown,
 }));
 
-vi.mock("convex/react", () => ({
-  useQuery: () => stubs.queryResult,
-  useMutation: () => async () => null,
-}));
+vi.mock("convex/react", async () => {
+  const { getFunctionName } = await import("convex/server");
+  return {
+    useQuery: (reference: never) => getFunctionName(reference) === "memberships:getMyMembership"
+      ? { permissions: ["approve:requests"], isSystemOwnerRole: false } : stubs.queryResult,
+    useMutation: () => async () => null,
+  };
+});
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),

@@ -114,12 +114,12 @@ export default function Step1QuoteSetup({
   // Undefined while loading: "none configured" is only true once the list has
   // loaded empty (SCRUM-628 F-12).
   const customerStatusRows = useQuery(
-    api.orgCustomerStatuses.list,
+    api.orgCustomerStatuses.listForQuotes,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
   const customerStatusesLoading = customerStatusRows === undefined;
   const customerStatusOptions =
-    customerStatusRows?.filter((s: Doc<"orgCustomerStatuses">) => s.isActive) ?? [];
+    customerStatusRows ?? [];
 
   const financeCompanies = useQuery(
     api.finance.listCompanies,
@@ -623,7 +623,7 @@ export default function Step1QuoteSetup({
               </p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
-                {customerStatusOptions.map((option: Doc<"orgCustomerStatuses">) => (
+                {customerStatusOptions.map((option) => (
                   <div key={option._id} className="flex items-center gap-2 rounded-md border p-4">
                     <Checkbox
                       id={`status-${option._id}`}

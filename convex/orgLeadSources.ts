@@ -3,6 +3,7 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { assertConfigChoiceReadBudget, CONFIG_CHOICE_MAX_ROWS } from "./utils/configChoiceLimits";
 
 // ─── Seed data ────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,21 @@ export const list = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
     return sources.sort((a, b) => a.order - b.order);
+  },
+});
+
+/** Active picker choices; null means unconfigured, [] means all are disabled. */
+export const listForLeads = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.union(v.null(), v.array(v.object({ _id: v.id("orgLeadSources"), label: v.string() }))),
+  handler: async (ctx, { orgId }) => {
+    await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_LEADS]);
+    const sources = await ctx.db.query("orgLeadSources")
+      .withIndex("by_org", q => q.eq("orgId", orgId)).take(CONFIG_CHOICE_MAX_ROWS + 1);
+    assertConfigChoiceReadBudget(sources.length);
+    if (sources.length === 0) return null;
+    return sources.filter(source => source.isActive).sort((a, b) => a.order - b.order)
+      .map(source => ({ _id: source._id, label: source.label }));
   },
 });
 

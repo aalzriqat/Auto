@@ -190,9 +190,10 @@ export interface ValidateLibraryOptions {
 const CTX_SKIP = /\b(?:ctx|context|t)\.skip\s*\(/;
 // Conservative, file-wide: any skip/conditional/todo/fails marker anywhere in the check file fails the record.
 const ANY_SKIP = /\b(?:it|test|describe|suite)(?:\.\w+)*\.(?:skip|skipIf|runIf|todo|fails|fixme)\b|\bx(?:it|describe)\(|\{\s*(?:skip|todo|fails|fixme)\s*:\s*(?!false\b)/;
-// What a configured runner actually collects: root vitest includes **/*.test.ts(x); the browser
-// replays live under playwright/ as *.spec.ts. Anything else exists but is never run.
-// Playwright testDirs: tests (PR-cadence config) and scenarios (the manual scenarios config); fixtures/visual are not replays.
+// This checks eligible source paths, not execution cadence: root Vitest collects
+// *.test.ts(x), while Playwright replays live under tests/ or scenarios/ as
+// *.spec.ts. The authenticated role-fixture file is collected by the scheduled
+// main audit, not the ordinary PR browser config. Runner evidence is separate.
 const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$)|(?:\.test\.tsx?$)/;
 // Mirrors vitest.config.ts `exclude`: those trees are never collected by the root run.
 // Receiver-agnostic skip/expected-fail calls, `{ skip }` option keys (quoted, shorthand, any position), `.only`.

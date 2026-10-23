@@ -103,13 +103,8 @@ test("unresponsive browser telemetry cannot hold the capture rejection open", as
   expect(rejection).toBe(sentinel);
   const evidence = JSON.parse(readFileSync(output, "utf8"));
   expect(evidence.before.status).toBe("AVAILABLE");
-  // The timed-out document is unavailable; synchronous metadata faults can
-  // also make the whole post-capture observation unavailable.
-  if (evidence.after.status === "AVAILABLE") {
-    expect(evidence.after.value.document.status).toBe("UNAVAILABLE");
-  } else {
-    expect(evidence.after.status).toBe("UNAVAILABLE");
-  }
+  expect(evidence.after.status).toBe("AVAILABLE");
+  expect(evidence.after.value.document.status).toBe("UNAVAILABLE");
 });
 for (const failureAt of ["before", "after"] as const) {
   test(`SDK metadata fault ${failureAt} capture preserves the sole capture and its rejection`, async ({ page }, testInfo) => {
@@ -130,9 +125,33 @@ for (const failureAt of ["before", "after"] as const) {
     finally { page.viewportSize = viewportSize; page.screenshot = screenshot; }
     expect(calls).toBe(1);
     expect(rejection).toBe(sentinel);
+    const evidence = JSON.parse(readFileSync(testInfo.outputPath("getter.json"), "utf8"));
+    expect(evidence.before.status).toBe(failureAt === "before" ? "UNAVAILABLE" : "AVAILABLE");
+    expect(evidence.after.status).toBe("UNAVAILABLE");
   });
 }
+test("oversize SDK metadata cannot publish a diagnostic or replace the capture rejection", async ({ page }, testInfo) => {
+  const browser = page.context().browser()!;
+  const version = browser.version;
+  const screenshot = page.screenshot;
+  const sentinel = new Error("Original capture rejection");
+  const output = testInfo.outputPath("oversize.json");
+  let destinationCalls = 0;
+  browser.version = () => "x".repeat(20_000);
+  page.screenshot = async () => { throw sentinel; };
+  let rejection: unknown;
+  try {
+    rejection = await captureWithDiagnostics(page, { fullPage: true }, () => {
+      destinationCalls += 1;
+      return output;
+    }).catch((error: unknown) => error);
+  } finally { browser.version = version; page.screenshot = screenshot; }
+  expect(rejection).toBe(sentinel);
+  expect(destinationCalls).toBe(0);
+  expect(existsSync(output)).toBe(false);
+});
 test("diagnostic destination is resolved only after the original capture rejects", async ({ page }) => {
+  test.setTimeout(5_000);
   const screenshot = page.screenshot;
   const sentinel = new Error("Original capture rejection");
   let captures = 0;
@@ -150,8 +169,9 @@ test("diagnostic destination is resolved only after the original capture rejects
       throw new Error("Diagnostic output directory unavailable");
     }).catch((error: unknown) => error);
     expect(captures).toBe(1);
-    // Let a premature microtask resolve the destination while capture is pending.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // Keep capture pending past both 250 ms observations. This detects an
+    // early destination lookup even when it runs on a later timer or I/O turn.
+    await new Promise<void>((resolve) => setTimeout(resolve, 600));
     expect(destinations, "pending capture has not rejected").toBe(0);
     order.push("reject");
     rejectCapture(sentinel);

@@ -1,0 +1,41 @@
+import { expect, test } from "vitest";
+import { convexTestWithComponents } from "../test-utils/convexTest";
+import schema from "./schema";
+import { api } from "./_generated/api";
+import { seedOrgWithMember } from "../test-utils/seedOrg";
+import { getErrorMessage, getLocalizedErrorMessage } from "../lib/errors";
+import { dictionaries } from "../lib/i18n/dictionaries";
+
+async function verifyBudget(table: "orgLeadSources" | "orgCustomerStatuses",
+  query: typeof api.orgLeadSources.listForLeads | typeof api.orgCustomerStatuses.listForQuotes) {
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  const { orgId, identity: reader } = await seedOrgWithMember(t, {
+    clerkId: "bounded-choice-reader", orgName: "Synthetic configuration budget",
+    permissions: ["view:org", "view:leads", "view:sales"],
+  });
+  const finalId = await t.run(async ctx => {
+    // 8192 is Convex's published maximum array length. The final active row
+    // makes silent truncation distinguishable from the complete old response.
+    for (let index = 0; index < 8191; index++) {
+      await ctx.db.insert(table, { orgId, label: `Synthetic choice ${index}`, isActive: false, order: index });
+    }
+    return ctx.db.insert(table, { orgId, label: "Synthetic final active choice", isActive: true, order: 8191 });
+  });
+  expect(await reader.query(query, { orgId })).toEqual([{ _id: finalId, label: "Synthetic final active choice" }]);
+  await t.run(ctx => ctx.db.insert(table, { orgId, label: "Synthetic overflow row", isActive: false, order: 8192 }));
+  const refusal: unknown = await reader.query(query, { orgId }).catch((error: unknown) => error);
+  expect(refusal).toMatchObject({ data: { code: "CONFIG_CHOICE_LIMIT" } });
+  expect(getErrorMessage(refusal)).toBe("Too many configured choices. Ask the owner to review these settings.");
+  expect(getLocalizedErrorMessage(refusal, key => dictionaries.ar[key as keyof typeof dictionaries.ar] ?? key))
+    .toBe("عدد الخيارات المُعدّة كبير جداً. اطلب من المالك مراجعة هذه الإعدادات.");
+  // Authentication must run before the oversized configuration is inspected.
+  await expect(t.query(query, { orgId })).rejects.toMatchObject({ data: { code: "UNAUTHENTICATED" } });
+}
+
+// Literal entry points bind the two permanent regression-library records.
+test("lead choices retain boundary values and refuse an oversized configuration", async () => {
+  await verifyBudget("orgLeadSources", api.orgLeadSources.listForLeads);
+});
+test("quote choices retain boundary values and refuse an oversized configuration", async () => {
+  await verifyBudget("orgCustomerStatuses", api.orgCustomerStatuses.listForQuotes);
+});

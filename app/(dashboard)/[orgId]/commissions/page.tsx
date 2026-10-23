@@ -95,81 +95,15 @@ function errorToast(error: unknown, fallback: string, t?: (key: string) => strin
 }
 
 export default function CommissionsPage() {
+  return <RoleGuard permissions={["view:commissions"]}><CommissionsContent /></RoleGuard>;
+}
+
+function CommissionsContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  // SCRUM-778: the mode in force, resolved on the server (an unset mode is
-  // AUTO_MEMBER) and readable by commission reviewers who cannot view settings.
-  // `undefined` is loading and `null` is no access — no queue banner for either.
-  // A null read is deliberately treated as "not MANUAL": a caller who cannot read the mode
-  // must not be shown a manual work queue that may not match the org's real mode.
-  const commissionMode = useQuery(api.orgSettings.getCommissionMode, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const isManualMode = commissionMode === "MANUAL";
-
-  const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const canManage = myMembership?.permissions.includes("manage:commissions") ?? false;
-
-  const members = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId, paginationOpts: { numItems: 100, cursor: null } } : "skip");
-
-  const [filterSalesperson, setFilterSalesperson] = useState<string>("all");
-  const [filterStatus, setFilterStatus] = useState<StatusFilter>("all");
+  const queue = useCommissionReviewQueue(activeOrgId);
+  const { canManage, members } = queue;
   const [linesSaleId, setLinesSaleId] = useState<Id<"sales"> | null>(null);
-
-  const {
-    results: loadedCommissions,
-    status: pageStatus,
-    loadMore,
-  } = usePaginatedQuery(
-    api.sales.listCommissionsPaginated,
-    activeOrgId ? {
-      orgId: activeOrgId,
-      salespersonId: filterSalesperson !== "all" ? (filterSalesperson as Id<"users">) : undefined,
-      paidStatus: filterStatus !== "all" ? filterStatus : undefined,
-    } : "skip",
-    { initialNumItems: PAGE_SIZE }
-  );
-  const isLoadingFirstPage = pageStatus === "LoadingFirstPage";
-  const commissions = isLoadingFirstPage ? undefined : loadedCommissions;
-  // Everything below the cards is summed over the rows that have been loaded.
-  // While more remain, the totals are a running subtotal, not the year's
-  // figures — a currency amount that quietly means something narrower than its
-  // label is worse than one that admits it.
-  const hasMore = pageStatus === "CanLoadMore" || pageStatus === "LoadingMore";
-
-  const {
-    search,
-    setSearch,
-    sortKey,
-    sortDir,
-    toggleSort,
-    rows: sortedCommissions,
-    isAutoLoading,
-  } = useTableControls({
-    data: commissions,
-    // The server pages by documents read, not by matches found, so a filtered
-    // page routinely comes back short or empty while matching rows sit further
-    // back. Without this the review queue would report "nothing to review" over
-    // real work — the closed loop this whole page exists to open, in a new
-    // disguise. Searching already exhausts for exactly the same reason.
-    //
-    // Both server-side filters count. Leaving the salesperson filter out left
-    // the per-rep view unable to reach its own older rows: the hook was not
-    // walking, and the page thought it was, so no control was offered either.
-    pagination: {
-      status: pageStatus,
-      loadMore,
-      pagesMayBeEmpty: true,
-      exhaustWhen: filterStatus !== "all" || filterSalesperson !== "all",
-    },
-    searchFields: (c: CommissionSale) => [c.salespersonName, c.vehicleSummary, c.customerName],
-    sortAccessors: {
-      saleDate: (c: CommissionSale) => c.saleDate,
-      salePrice: (c: CommissionSale) => c.salePrice,
-      commissionAmount: (c: CommissionSale) => c.commissionAmount ?? 0,
-      // Five distinct states, ordered by how much they want attention — a
-      // paid/unpaid boolean would sort a cancelled sale next to money owed.
-      status: (c: CommissionSale) => STATUS_SORT_RANK[c.commissionStatus] ?? 99,
-    },
-  });
 
   const markPaid = useMutation(api.sales.markCommissionPaid);
   const commandId = useCommandIdentity();
@@ -191,47 +125,6 @@ export default function CommissionsPage() {
   );
   const commissionRetry = commissionToPay && uncertainPayment?.saleId === commissionToPay._id
     ? uncertainPayment : null;
-
-  const filtered = sortedCommissions ?? [];
-
-  // A cancelled sale keeps its commission amount as history, but the accrual
-  // behind it was reversed — so it is not earned, not paid and not pending.
-  // Counting it here is what makes this page disagree with the Commission
-  // Payable reconciliation, which has always excluded it.
-  const settleable = filtered.filter((c: CommissionSale) => c.commissionStatus !== "VOID");
-  const totalEarned = settleable.reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
-  const totalPaid = settleable
-    .filter((c: CommissionSale) => c.commissionStatus === "PAID")
-    .reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
-  const totalPending = totalEarned - totalPaid;
-  // Only rows that actually carry a decided commission belong in the "deals with
-  // commission" count — undecided ones contribute nothing and would inflate it.
-  const decidedCount = settleable.filter((c: CommissionSale) => (c.commissionAmount ?? 0) > 0).length;
-  const paidCount = settleable.filter((c: CommissionSale) => c.commissionStatus === "PAID").length;
-  const unpaidCount = settleable.filter((c: CommissionSale) => c.commissionStatus === "UNPAID").length;
-  const notSetCount = filtered.filter((c: CommissionSale) => c.commissionStatus === "NOT_SET").length;
-  const hasActiveFilter =
-    filterStatus !== "all" || filterSalesperson !== "all" || search.trim().length > 0;
-  // The count is only a fact once every page has been read; until then it is
-  // "how many are on the pages we happen to have", which is not the same claim.
-  const queueCountIsComplete = pageStatus === "Exhausted" && !hasActiveFilter;
-
-  // Group by salesperson for summary
-  const bySalesperson = useMemo(() => {
-    const map = new Map<string, { name: string; earned: number; paid: number; count: number }>();
-    for (const c of settleable) {
-      const existing = map.get(c.salespersonId) ?? { name: c.salespersonName, earned: 0, paid: 0, count: 0 };
-      existing.earned += c.commissionAmount ?? 0;
-      if (c.commissionPaidAt) existing.paid += c.commissionAmount ?? 0;
-      existing.count++;
-      map.set(c.salespersonId, existing);
-    }
-    return Array.from(map.entries()).map(([id, v]) => ({ id, ...v }));
-    // `settleable` is derived from `filtered` on every render, so `filtered` is
-    // the real dependency — keying on the derived array would rebuild the map
-    // each render and defeat the memo.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered]);
 
   async function handleConfirmMarkPaid() {
     if (!activeOrgId || !commissionToPay) return;
@@ -324,13 +217,555 @@ export default function CommissionsPage() {
     setEditingAmount(current == null ? "" : String(current));
   }
 
+  function startPayment(c: CommissionSale) {
+    const retry = uncertainPayment?.saleId === c._id ? uncertainPayment : null;
+    setCommissionToPay(c);
+    setPaymentMethod(retry?.paymentMethod ?? "CASH");
+    setBankAccountId(retry?.bankAccountId ?? "");
+  }
+
   return (
-    <RoleGuard permissions={["view:commissions"]}>
       <div className="space-y-6">
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <TrendingUp className="h-6 w-6" /> {t("Commissions" as any)}
         </h1>
 
+        <CommissionQueueOverview queue={queue} />
+
+        <CommissionReviewTable
+          queue={queue}
+          editingId={editingId}
+          editingAmount={editingAmount}
+          onAmountChange={setEditingAmount}
+          onSave={handleSaveCommission}
+          onStartEditing={startEditing}
+          onCancelEditing={() => { setEditingId(null); setEditingAmount(""); }}
+          onShowLines={setLinesSaleId}
+          onRecalculate={handleRecalculate}
+          onMarkPaid={startPayment}
+        />
+        {activeOrgId && canManage && (
+          <DealCommissionLinesDialog
+            orgId={activeOrgId}
+            saleId={linesSaleId}
+            members={(members?.page ?? []).map((m: { userId: Id<"users">; userName: string }) => ({ userId: m.userId, name: m.userName }))}
+            money={formatMinor}
+            t={t as any}
+            onOpenChange={(open) => { if (!open) setLinesSaleId(null); }}
+          />
+        )}
+        <CommissionPaymentDialog
+          commission={commissionToPay ? {
+            salespersonName: commissionToPay.salespersonName,
+            vehicleSummary: commissionToPay.vehicleSummary,
+            amountLabel: formatCurrency(commissionToPay.commissionAmount ?? 0),
+          } : null}
+          open={commissionToPay !== null}
+          isPaying={isPayingCommission}
+          paymentMethod={paymentMethod}
+          bankAccountId={bankAccountId}
+          bankOptions={commissionBankOptions}
+          uncertain={commissionRetry !== null}
+          retryBankName={commissionRetry?.bankName ?? null}
+          t={t as any}
+          onPaymentMethodChange={(method) => { setPaymentMethod(method); setBankAccountId(""); }}
+          onBankChange={setBankAccountId}
+          onConfirm={handleConfirmMarkPaid}
+          onOpenChange={(open) => {
+            if (!open) {
+              setCommissionToPay(null);
+              setPaymentMethod("CASH");
+              setBankAccountId("");
+            }
+          }}
+        />
+      </div>
+  );
+}
+
+function CommissionEmptyQueueMessage({ loading, hasActiveFilter, isManualMode }: Readonly<{
+  loading: boolean;
+  hasActiveFilter: boolean;
+  isManualMode: boolean;
+}>) {
+  const { t } = useLanguage();
+  if (loading) return <>{t("Loading")}</>;
+  if (hasActiveFilter) return <>{t("NoCommissionRecordsForFilter")}</>;
+  if (isManualMode) return <>{t("NoCompletedSalesYet")}</>;
+  return <>{t("NoCommissionRecords")}</>;
+}
+
+interface CommissionReviewTableProps {
+  queue: ReturnType<typeof useCommissionReviewQueue>;
+  editingId: Id<"sales"> | null;
+  editingAmount: string;
+  onAmountChange: (value: string) => void;
+  onSave: (saleId: Id<"sales">) => Promise<void>;
+  onStartEditing: (saleId: Id<"sales">, current: number | undefined) => void;
+  onCancelEditing: () => void;
+  onShowLines: (saleId: Id<"sales">) => void;
+  onRecalculate: (saleId: Id<"sales">) => Promise<void>;
+  onMarkPaid: (sale: CommissionSale) => void;
+}
+
+function CommissionReviewTable({ queue, editingId, editingAmount, onAmountChange, onSave,
+  onStartEditing, onCancelEditing, onShowLines, onRecalculate, onMarkPaid,
+}: Readonly<CommissionReviewTableProps>) {
+  const { t } = useLanguage();
+  const { isManualMode, canManage, commissions, filtered, isAutoLoading,
+    hasActiveFilter, sortKey, sortDir, toggleSort } = queue;
+  return (
+        <div className="rounded-md border overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("Salesperson" as any)}</TableHead>
+                <TableHead>{t("Vehicle" as any)}</TableHead>
+                <TableHead>{t("Customer" as any)}</TableHead>
+                <SortableColumnHeader label={t("SaleDate" as any)} sortKey="saleDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableColumnHeader className="text-end" label={t("SalePrice" as any)} sortKey="salePrice" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableColumnHeader className="text-end" label={t("CommissionAmount" as any)} sortKey="commissionAmount" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableColumnHeader label={t("Status" as any)} sortKey="status" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                {canManage && <TableHead className="text-end">{t("Actions" as any)}</TableHead>}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {!commissions ? (
+                <TableRow>
+                  <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8 text-muted-foreground">
+                    {t("Loading" as any)}
+                  </TableCell>
+                </TableRow>
+              ) : filtered.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8 text-muted-foreground">
+                    {/* "Nothing matches" is a claim about the whole dataset, so
+                        it must not be made while pages are still unread — that
+                        would put a definitive denial directly above a banner
+                        offering to load more. With a filter on, nothing is
+                        wrong; the filter simply excluded everything. With no
+                        filter in MANUAL mode there are no completed sales yet.
+                        The original copy ("set a commission rate on team
+                        members") only makes sense in an automatic mode —
+                        MANUAL has no rates by definition. */}
+                    <CommissionEmptyQueueMessage
+                      loading={isAutoLoading}
+                      hasActiveFilter={hasActiveFilter}
+                      isManualMode={isManualMode}
+                    />
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filtered.map((c: CommissionSale) => (
+                  <TableRow
+                    key={c._id}
+                    className={
+                      c.missingPurchaseCost
+                        ? "bg-amber-50 dark:bg-amber-950/20"
+                        : c.needsRecalculation
+                          ? "bg-blue-50 dark:bg-blue-950/20"
+                          : undefined
+                    }
+                  >
+                    <TableCell className="font-medium">
+                      <span className="inline-flex flex-wrap items-center gap-1.5">
+                        {c.salespersonName}
+                        {/* Payroll skips offboarded members entirely, so an
+                            amount entered here would sit "pending" forever with
+                            no run ever picking it up and no error anywhere. */}
+                        {c.salespersonOffboarded && c.commissionStatus === "UNPAID" && (
+                          <Badge
+                            variant="outline"
+                            className="text-amber-700 border-amber-400 dark:text-amber-300 dark:border-amber-700 text-[10px] font-normal"
+                            title={t("SalespersonOffboardedHint" as any)}
+                          >
+                            <UserMinus className="h-3 w-3 me-1" />
+                            {t("SalespersonOffboarded" as any)}
+                          </Badge>
+                        )}
+                      </span>
+                    </TableCell>
+                    <TableCell>{c.vehicleSummary}</TableCell>
+                    <TableCell>{c.customerName}</TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {new Date(c.saleDate).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="text-end tabular-nums">{formatCurrency(c.salePrice)}</TableCell>
+                    <CommissionAmountCell c={c} canManage={canManage} editingId={editingId} editingAmount={editingAmount} onAmountChange={onAmountChange} onSave={onSave} onStartEditing={onStartEditing} onCancel={onCancelEditing} />
+                    <CommissionStatusCell c={c} />
+                    {canManage && (
+                      <TableCell className="text-end">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                        {c.commissionStatus !== "VOID" && (
+                          <Button variant="ghost" size="sm" onClick={() => onShowLines(c._id)}>
+                            <ClipboardList className="h-3.5 w-3.5 me-1" /> {t("DealCommissionLinesAction" as any)}
+                          </Button>
+                        )}
+                        <CommissionPaymentAction c={c} editingId={editingId} onRecalculate={onRecalculate} onStartEditing={onStartEditing} onMarkPaid={onMarkPaid} />
+                        </div>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+  );
+}
+
+interface CommissionAmountCellProps {
+  c: CommissionSale;
+  canManage: boolean;
+  editingId: Id<"sales"> | null;
+  editingAmount: string;
+  onAmountChange: (value: string) => void;
+  onCancel: () => void;
+  onSave: (saleId: Id<"sales">) => Promise<void>;
+  onStartEditing: (saleId: Id<"sales">, current: number | undefined) => void;
+}
+
+function CommissionAmountCell({
+  c,
+  canManage,
+  editingId,
+  editingAmount,
+  onAmountChange,
+  onCancel,
+  onSave,
+  onStartEditing,
+}: Readonly<CommissionAmountCellProps>) {
+  const { t } = useLanguage();
+  return (
+    <TableCell className="text-end tabular-nums font-semibold">
+      {c.missingPurchaseCost ? (
+        <span
+          className="inline-flex items-center gap-1.5 rounded-md bg-amber-100 dark:bg-amber-900/40 px-2 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
+          title={t("MissingPurchaseCostHint")}
+        >
+          <AlertTriangle className="h-3.5 w-3.5" />
+          {t("MissingPurchaseCost")}
+        </span>
+      ) : c.canSetAmount && canManage && editingId === c._id ? (
+        <div className="flex items-center justify-end gap-1">
+          <Input
+            type="number"
+            min="0"
+            step="1"
+            value={editingAmount}
+            onChange={(e) => onAmountChange(e.target.value)}
+            className="h-7 w-24 text-sm text-end"
+            aria-label={t("CommissionAmount")}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void onSave(c._id);
+              if (e.key === "Escape") {
+                onCancel();
+              }
+            }}
+          />
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7"
+            onClick={() => onSave(c._id)}
+            aria-label={t("Save")}
+          >
+            <Check className="h-3.5 w-3.5 text-green-600" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7"
+            onClick={() => {
+              onCancel();
+            }}
+            aria-label={t("Cancel")}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center justify-end gap-1.5">
+          {/* An undecided commission is not zero. Showing "0"
+                              here reads as a real decision that was never made. */}
+          {c.commissionAmount == null ? (
+            <span className="text-muted-foreground">—</span>
+          ) : (
+            formatCurrency(c.commissionAmount)
+          )}
+          {/* An undecided row already carries a full "Set
+                              commission" button in Actions; a pencil beside the
+                              dash would be a second control for the same thing. */}
+          {c.canSetAmount && canManage && c.commissionAmount != null && (
+            <button
+              onClick={() => onStartEditing(c._id, c.commissionAmount)}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              title={t("EditCommission")}
+              aria-label={t("EditCommission")}
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      )}
+    </TableCell>
+  );
+}
+
+function CommissionStatusCell({ c }: Readonly<{ c: CommissionSale }>) {
+  return <TableCell><CommissionStatusBadge c={c} /></TableCell>;
+}
+
+function CommissionStatusBadge({ c }: Readonly<{ c: CommissionSale }>) {
+  const { t } = useLanguage();
+  if (c.commissionStatus === "PAID" && c.commissionPaidAt) return ((
+        <Badge
+          variant="outline"
+          className="text-green-600 border-green-600 text-xs whitespace-nowrap"
+        >
+          <CheckCircle2 className="h-3 w-3 me-1" />
+          {t("Paid")} {new Date(c.commissionPaidAt).toLocaleDateString()}
+          <span className="ms-1 text-muted-foreground">
+            {t(`PaymentMethod_${c.commissionPaymentMethod ?? "CASH"}`)}
+          </span>
+        </Badge>
+      ));
+  if (c.commissionStatus === "NOT_SET") return ((
+        <Badge
+          variant="outline"
+          className="text-muted-foreground text-xs whitespace-nowrap"
+          title={t("CommissionNotSetHint")}
+        >
+          <CircleDashed className="h-3 w-3 me-1" />
+          {t("CommissionNotSet")}
+        </Badge>
+      ));
+  if (c.commissionStatus === "NO_COMMISSION") return ((
+        <Badge
+          variant="outline"
+          className="text-muted-foreground text-xs whitespace-nowrap"
+          title={t("NoCommissionOwedHint")}
+        >
+          <MinusCircle className="h-3 w-3 me-1" />
+          {t("NoCommissionOwed")}
+        </Badge>
+      ));
+  if (c.commissionStatus === "PENDING_SALE") return ((
+        // Not reachable from the current listing rules, but the
+        // default arm below is the orange "money owed" badge —
+        // the worst place for an unhandled status to land.
+        <Badge
+          variant="outline"
+          className="text-muted-foreground text-xs whitespace-nowrap"
+          title={t("CommissionPendingSaleHint")}
+        >
+          <Clock className="h-3 w-3 me-1" />
+          {t("CommissionPendingSale")}
+        </Badge>
+      ));
+  if (c.commissionStatus === "VOID") return ((
+        <Badge
+          variant="outline"
+          className="text-muted-foreground text-xs whitespace-nowrap line-through decoration-1"
+          title={t("CommissionVoidHint")}
+        >
+          <Ban className="h-3 w-3 me-1" />
+          {t("CommissionVoid")}
+        </Badge>
+      ));
+  return ((
+        <Badge
+          variant="outline"
+          className="text-orange-600 border-orange-300 text-xs whitespace-nowrap"
+        >
+          <Clock className="h-3 w-3 me-1" />
+          {t("Unpaid")}
+        </Badge>
+      ));
+}
+
+interface CommissionPaymentActionProps {
+  c: CommissionSale;
+  editingId: Id<"sales"> | null;
+  onRecalculate: (saleId: Id<"sales">) => Promise<void>;
+  onStartEditing: (saleId: Id<"sales">, current: number | undefined) => void;
+  onMarkPaid: (sale: CommissionSale) => void;
+}
+
+function CommissionPaymentAction({
+  c,
+  editingId,
+  onRecalculate,
+  onStartEditing,
+  onMarkPaid,
+}: Readonly<CommissionPaymentActionProps>) {
+  const { t } = useLanguage();
+  // Paid, cancelled and cost-incomplete rows have no settlement action.
+  // The mutation remains the authority for all write decisions.
+  if (c.commissionPaidAt || c.commissionStatus === "VOID" || c.missingPurchaseCost) return null;
+  if (c.needsRecalculation) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className="text-blue-600 border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+        title={t("RecalculateCommissionHint")}
+        onClick={() => onRecalculate(c._id)}
+      >
+        <Undo2 className="h-3.5 w-3.5 me-1" /> {t("RecalculateCommission")}
+      </Button>
+    );
+  }
+  if ((c.commissionAmount ?? 0) <= 0) {
+    if (!c.canSetAmount || editingId === c._id) return null;
+    return (
+      <Button variant="outline" size="sm" onClick={() => onStartEditing(c._id, c.commissionAmount)}>
+        <Pencil className="h-3.5 w-3.5 me-1" /> {t("SetCommission")}
+      </Button>
+    );
+  }
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="text-green-600 border-green-600 hover:bg-green-50"
+      onClick={() => onMarkPaid(c)}
+    >
+      <Check className="h-3.5 w-3.5 me-1" /> {t("MarkPaid")}
+    </Button>
+  );
+}
+
+/** Read-side queue state and loaded-row summaries; only mounted beneath RoleGuard. */
+function useCommissionReviewQueue(activeOrgId: Id<"organizations"> | null) {
+  // SCRUM-778: the mode in force, resolved on the server (an unset mode is
+  // AUTO_MEMBER) and readable by commission reviewers who cannot view settings.
+  // `undefined` is loading and `null` is no access — no queue banner for either.
+  // A null read is deliberately treated as "not MANUAL": a caller who cannot read the mode
+  // must not be shown a manual work queue that may not match the org's real mode.
+  const commissionMode = useQuery(api.orgSettings.getCommissionMode, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const isManualMode = commissionMode === "MANUAL";
+
+  const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const canManage = myMembership?.permissions.includes("manage:commissions") ?? false;
+
+  const members = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId, paginationOpts: { numItems: 100, cursor: null } } : "skip");
+
+  const [filterSalesperson, setFilterSalesperson] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>("all");
+
+  const {
+    results: loadedCommissions,
+    status: pageStatus,
+    loadMore,
+  } = usePaginatedQuery(
+    api.sales.listCommissionsPaginated,
+    activeOrgId ? {
+      orgId: activeOrgId,
+      salespersonId: filterSalesperson !== "all" ? (filterSalesperson as Id<"users">) : undefined,
+      paidStatus: filterStatus !== "all" ? filterStatus : undefined,
+    } : "skip",
+    { initialNumItems: PAGE_SIZE }
+  );
+  const isLoadingFirstPage = pageStatus === "LoadingFirstPage";
+  const commissions = isLoadingFirstPage ? undefined : loadedCommissions;
+  // Everything below the cards is summed over the rows that have been loaded.
+  // While more remain, the totals are a running subtotal, not the year's
+  // figures — a currency amount that quietly means something narrower than its
+  // label is worse than one that admits it.
+  const hasMore = pageStatus === "CanLoadMore" || pageStatus === "LoadingMore";
+
+  const {
+    search,
+    setSearch,
+    sortKey,
+    sortDir,
+    toggleSort,
+    rows: sortedCommissions,
+    isAutoLoading,
+  } = useTableControls({
+    data: commissions,
+    // The server pages by documents read, not by matches found, so a filtered
+    // page routinely comes back short or empty while matching rows sit further
+    // back. Without this the review queue would report "nothing to review" over
+    // real work — the closed loop this whole page exists to open, in a new
+    // disguise. Searching already exhausts for exactly the same reason.
+    //
+    // Both server-side filters count. Leaving the salesperson filter out left
+    // the per-rep view unable to reach its own older rows: the hook was not
+    // walking, and the page thought it was, so no control was offered either.
+    pagination: {
+      status: pageStatus,
+      loadMore,
+      pagesMayBeEmpty: true,
+      exhaustWhen: filterStatus !== "all" || filterSalesperson !== "all",
+    },
+    searchFields: (c: CommissionSale) => [c.salespersonName, c.vehicleSummary, c.customerName],
+    sortAccessors: {
+      saleDate: (c: CommissionSale) => c.saleDate,
+      salePrice: (c: CommissionSale) => c.salePrice,
+      commissionAmount: (c: CommissionSale) => c.commissionAmount ?? 0,
+      // Five distinct states, ordered by how much they want attention — a
+      // paid/unpaid boolean would sort a cancelled sale next to money owed.
+      status: (c: CommissionSale) => STATUS_SORT_RANK[c.commissionStatus] ?? 99,
+    },
+  });
+
+  const filtered = sortedCommissions ?? [];
+
+  // A cancelled sale keeps its commission amount as history, but the accrual
+  // behind it was reversed — so it is not earned, not paid and not pending.
+  // Counting it here is what makes this page disagree with the Commission
+  // Payable reconciliation, which has always excluded it.
+  const settleable = filtered.filter((c: CommissionSale) => c.commissionStatus !== "VOID");
+  const totalEarned = settleable.reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
+  const totalPaid = settleable
+    .filter((c: CommissionSale) => c.commissionStatus === "PAID")
+    .reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
+  const totalPending = totalEarned - totalPaid;
+  // Only rows that actually carry a decided commission belong in the "deals with
+  // commission" count — undecided ones contribute nothing and would inflate it.
+  const decidedCount = settleable.filter((c: CommissionSale) => (c.commissionAmount ?? 0) > 0).length;
+  const paidCount = settleable.filter((c: CommissionSale) => c.commissionStatus === "PAID").length;
+  const unpaidCount = settleable.filter((c: CommissionSale) => c.commissionStatus === "UNPAID").length;
+  const notSetCount = filtered.filter((c: CommissionSale) => c.commissionStatus === "NOT_SET").length;
+  const hasActiveFilter =
+    filterStatus !== "all" || filterSalesperson !== "all" || search.trim().length > 0;
+  // The count is only a fact once every page has been read; until then it is
+  // "how many are on the pages we happen to have", which is not the same claim.
+  const queueCountIsComplete = pageStatus === "Exhausted" && !hasActiveFilter;
+
+  // Group by salesperson for summary
+  const bySalesperson = useMemo(() => {
+    const map = new Map<string, { name: string; earned: number; paid: number; count: number }>();
+    for (const c of settleable) {
+      const existing = map.get(c.salespersonId) ?? { name: c.salespersonName, earned: 0, paid: 0, count: 0 };
+      existing.earned += c.commissionAmount ?? 0;
+      if (c.commissionPaidAt) existing.paid += c.commissionAmount ?? 0;
+      existing.count++;
+      map.set(c.salespersonId, existing);
+    }
+    return Array.from(map.entries()).map(([id, v]) => ({ id, ...v }));
+    // `settleable` is derived from `filtered` on every render, so `filtered` is
+    // the real dependency — keying on the derived array would rebuild the map
+    // each render and defeat the memo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered]);
+
+  return { isManualMode, canManage, members, filterSalesperson, setFilterSalesperson, filterStatus, setFilterStatus,
+    pageStatus, loadMore, commissions, hasMore, search, setSearch, sortKey, sortDir, toggleSort, isAutoLoading,
+    filtered, totalEarned, totalPaid, totalPending, decidedCount, paidCount, unpaidCount, notSetCount,
+    hasActiveFilter, queueCountIsComplete, bySalesperson };
+}
+
+/** Summary, filters and pagination notices all describe the same loaded queue. */
+function CommissionQueueOverview({ queue }: Readonly<{ queue: ReturnType<typeof useCommissionReviewQueue> }>) {
+  const { t } = useLanguage();
+  const { totalEarned, totalPaid, totalPending, decidedCount, paidCount, unpaidCount, canManage, isManualMode,
+    filterStatus, setFilterStatus, queueCountIsComplete, notSetCount, bySalesperson, search, setSearch,
+    filterSalesperson, setFilterSalesperson, members, hasMore, isAutoLoading, pageStatus, loadMore } = queue;
+  return <>
         {/* Summary Cards */}
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
           <Card>
@@ -481,301 +916,5 @@ export default function CommissionsPage() {
           </div>
         )}
 
-        {/* Commission table */}
-        <div className="rounded-md border overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("Salesperson" as any)}</TableHead>
-                <TableHead>{t("Vehicle" as any)}</TableHead>
-                <TableHead>{t("Customer" as any)}</TableHead>
-                <SortableColumnHeader label={t("SaleDate" as any)} sortKey="saleDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortableColumnHeader className="text-end" label={t("SalePrice" as any)} sortKey="salePrice" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortableColumnHeader className="text-end" label={t("CommissionAmount" as any)} sortKey="commissionAmount" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <SortableColumnHeader label={t("Status" as any)} sortKey="status" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                {canManage && <TableHead className="text-end">{t("Actions" as any)}</TableHead>}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {!commissions ? (
-                <TableRow>
-                  <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8 text-muted-foreground">
-                    {t("Loading" as any)}
-                  </TableCell>
-                </TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8 text-muted-foreground">
-                    {/* "Nothing matches" is a claim about the whole dataset, so
-                        it must not be made while pages are still unread — that
-                        would put a definitive denial directly above a banner
-                        offering to load more. With a filter on, nothing is
-                        wrong; the filter simply excluded everything. With no
-                        filter in MANUAL mode there are no completed sales yet.
-                        The original copy ("set a commission rate on team
-                        members") only makes sense in an automatic mode —
-                        MANUAL has no rates by definition. */}
-                    {isAutoLoading
-                      ? t("Loading" as any)
-                      : hasActiveFilter
-                        ? t("NoCommissionRecordsForFilter" as any)
-                        : isManualMode
-                          ? t("NoCompletedSalesYet" as any)
-                          : t("NoCommissionRecords" as any)}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filtered.map((c: CommissionSale) => (
-                  <TableRow
-                    key={c._id}
-                    className={
-                      c.missingPurchaseCost
-                        ? "bg-amber-50 dark:bg-amber-950/20"
-                        : c.needsRecalculation
-                          ? "bg-blue-50 dark:bg-blue-950/20"
-                          : undefined
-                    }
-                  >
-                    <TableCell className="font-medium">
-                      <span className="inline-flex flex-wrap items-center gap-1.5">
-                        {c.salespersonName}
-                        {/* Payroll skips offboarded members entirely, so an
-                            amount entered here would sit "pending" forever with
-                            no run ever picking it up and no error anywhere. */}
-                        {c.salespersonOffboarded && c.commissionStatus === "UNPAID" && (
-                          <Badge
-                            variant="outline"
-                            className="text-amber-700 border-amber-400 dark:text-amber-300 dark:border-amber-700 text-[10px] font-normal"
-                            title={t("SalespersonOffboardedHint" as any)}
-                          >
-                            <UserMinus className="h-3 w-3 me-1" />
-                            {t("SalespersonOffboarded" as any)}
-                          </Badge>
-                        )}
-                      </span>
-                    </TableCell>
-                    <TableCell>{c.vehicleSummary}</TableCell>
-                    <TableCell>{c.customerName}</TableCell>
-                    <TableCell className="text-muted-foreground text-sm">
-                      {new Date(c.saleDate).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell className="text-end tabular-nums">{formatCurrency(c.salePrice)}</TableCell>
-                    <TableCell className="text-end tabular-nums font-semibold">
-                      {c.missingPurchaseCost ? (
-                        <span
-                          className="inline-flex items-center gap-1.5 rounded-md bg-amber-100 dark:bg-amber-900/40 px-2 py-1 text-xs font-medium text-amber-700 dark:text-amber-300"
-                          title={t("MissingPurchaseCostHint" as any)}
-                        >
-                          <AlertTriangle className="h-3.5 w-3.5" />
-                          {t("MissingPurchaseCost" as any)}
-                        </span>
-                      ) : c.canSetAmount && canManage && editingId === c._id ? (
-                        <div className="flex items-center justify-end gap-1">
-                          <Input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={editingAmount}
-                            onChange={(e) => setEditingAmount(e.target.value)}
-                            className="h-7 w-24 text-sm text-end"
-                            aria-label={t("CommissionAmount" as any)}
-                            autoFocus
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleSaveCommission(c._id);
-                              if (e.key === "Escape") { setEditingId(null); setEditingAmount(""); }
-                            }}
-                          />
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleSaveCommission(c._id)} aria-label={t("Save" as any)}>
-                            <Check className="h-3.5 w-3.5 text-green-600" />
-                          </Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditingId(null); setEditingAmount(""); }} aria-label={t("Cancel" as any)}>
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* An undecided commission is not zero. Showing "0"
-                              here reads as a real decision that was never made. */}
-                          {c.commissionAmount == null ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : (
-                            formatCurrency(c.commissionAmount)
-                          )}
-                          {/* An undecided row already carries a full "Set
-                              commission" button in Actions; a pencil beside the
-                              dash would be a second control for the same thing. */}
-                          {c.canSetAmount && canManage && c.commissionAmount != null && (
-                            <button
-                              onClick={() => startEditing(c._id, c.commissionAmount)}
-                              className="text-muted-foreground hover:text-foreground transition-colors"
-                              title={t("EditCommission" as any)}
-                              aria-label={t("EditCommission" as any)}
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {/* Orange is reserved for money actually owed. An
-                          undecided or deliberately-zero row owes nothing yet, so
-                          both stay neutral — otherwise the page reads as a
-                          backlog of debt that does not exist. */}
-                      {c.commissionStatus === "PAID" && c.commissionPaidAt ? (
-                        <Badge variant="outline" className="text-green-600 border-green-600 text-xs whitespace-nowrap">
-                          <CheckCircle2 className="h-3 w-3 me-1" />
-                          {t("Paid" as any)} {new Date(c.commissionPaidAt).toLocaleDateString()}
-                          <span className="ms-1 text-muted-foreground">
-                            {t(`PaymentMethod_${c.commissionPaymentMethod ?? "CASH"}` as any)}
-                          </span>
-                        </Badge>
-                      ) : c.commissionStatus === "NOT_SET" ? (
-                        <Badge
-                          variant="outline"
-                          className="text-muted-foreground text-xs whitespace-nowrap"
-                          title={t("CommissionNotSetHint" as any)}
-                        >
-                          <CircleDashed className="h-3 w-3 me-1" />
-                          {t("CommissionNotSet" as any)}
-                        </Badge>
-                      ) : c.commissionStatus === "NO_COMMISSION" ? (
-                        <Badge
-                          variant="outline"
-                          className="text-muted-foreground text-xs whitespace-nowrap"
-                          title={t("NoCommissionOwedHint" as any)}
-                        >
-                          <MinusCircle className="h-3 w-3 me-1" />
-                          {t("NoCommissionOwed" as any)}
-                        </Badge>
-                      ) : c.commissionStatus === "PENDING_SALE" ? (
-                        // Not reachable from the current listing rules, but the
-                        // default arm below is the orange "money owed" badge —
-                        // the worst place for an unhandled status to land.
-                        <Badge
-                          variant="outline"
-                          className="text-muted-foreground text-xs whitespace-nowrap"
-                          title={t("CommissionPendingSaleHint" as any)}
-                        >
-                          <Clock className="h-3 w-3 me-1" />
-                          {t("CommissionPendingSale" as any)}
-                        </Badge>
-                      ) : c.commissionStatus === "VOID" ? (
-                        <Badge
-                          variant="outline"
-                          className="text-muted-foreground text-xs whitespace-nowrap line-through decoration-1"
-                          title={t("CommissionVoidHint" as any)}
-                        >
-                          <Ban className="h-3 w-3 me-1" />
-                          {t("CommissionVoid" as any)}
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-orange-600 border-orange-300 text-xs whitespace-nowrap">
-                          <Clock className="h-3 w-3 me-1" />
-                          {t("Unpaid" as any)}
-                        </Badge>
-                      )}
-                    </TableCell>
-                    {canManage && (
-                      <TableCell className="text-end">
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                        {c.commissionStatus !== "VOID" && (
-                          <Button variant="ghost" size="sm" onClick={() => setLinesSaleId(c._id)}>
-                            <ClipboardList className="h-3.5 w-3.5 me-1" /> {t("DealCommissionLinesAction" as any)}
-                          </Button>
-                        )}
-                        {c.commissionPaidAt ? (
-                          // Paid commissions are locked server-side (reversing a
-                          // paid commission needs an accounting reversal, not a
-                          // flag flip) — so no Revert action is offered here.
-                          null
-                        ) : c.commissionStatus === "VOID" ? (
-                          // Nothing to settle on a cancelled sale — its accrual
-                          // is already reversed and every mutation refuses it.
-                          null
-                        ) : c.missingPurchaseCost ? null : c.needsRecalculation ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-blue-600 border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950/30"
-                            title={t("RecalculateCommissionHint" as any)}
-                            onClick={() => handleRecalculate(c._id)}
-                          >
-                            <Undo2 className="h-3.5 w-3.5 me-1" /> {t("RecalculateCommission" as any)}
-                          </Button>
-                        ) : (c.commissionAmount ?? 0) <= 0 ? (
-                          // Nothing to pay yet. Offering "Mark paid" here would
-                          // only produce a server rejection, so the action that
-                          // is actually available is the one that's shown.
-                          c.canSetAmount && editingId !== c._id ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => startEditing(c._id, c.commissionAmount)}
-                            >
-                              <Pencil className="h-3.5 w-3.5 me-1" /> {t("SetCommission" as any)}
-                            </Button>
-                          ) : null
-                        ) : (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-green-600 border-green-600 hover:bg-green-50"
-                            onClick={() => {
-                              const retry = uncertainPayment?.saleId === c._id ? uncertainPayment : null;
-                              setCommissionToPay(c);
-                              setPaymentMethod(retry?.paymentMethod ?? "CASH");
-                              setBankAccountId(retry?.bankAccountId ?? "");
-                            }}
-                          >
-                            <Check className="h-3.5 w-3.5 me-1" /> {t("MarkPaid" as any)}
-                          </Button>
-                        )}
-                        </div>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-        {activeOrgId && canManage && (
-          <DealCommissionLinesDialog
-            orgId={activeOrgId}
-            saleId={linesSaleId}
-            members={(members?.page ?? []).map((m: { userId: Id<"users">; userName: string }) => ({ userId: m.userId, name: m.userName }))}
-            money={formatMinor}
-            t={t as any}
-            onOpenChange={(open) => { if (!open) setLinesSaleId(null); }}
-          />
-        )}
-        <CommissionPaymentDialog
-          commission={commissionToPay ? {
-            salespersonName: commissionToPay.salespersonName,
-            vehicleSummary: commissionToPay.vehicleSummary,
-            amountLabel: formatCurrency(commissionToPay.commissionAmount ?? 0),
-          } : null}
-          open={commissionToPay !== null}
-          isPaying={isPayingCommission}
-          paymentMethod={paymentMethod}
-          bankAccountId={bankAccountId}
-          bankOptions={commissionBankOptions}
-          uncertain={commissionRetry !== null}
-          retryBankName={commissionRetry?.bankName ?? null}
-          t={t as any}
-          onPaymentMethodChange={(method) => { setPaymentMethod(method); setBankAccountId(""); }}
-          onBankChange={setBankAccountId}
-          onConfirm={handleConfirmMarkPaid}
-          onOpenChange={(open) => {
-            if (!open) {
-              setCommissionToPay(null);
-              setPaymentMethod("CASH");
-              setBankAccountId("");
-            }
-          }}
-        />
-      </div>
-    </RoleGuard>
-  );
+  </>;
 }

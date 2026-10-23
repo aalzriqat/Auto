@@ -71,13 +71,57 @@ const NEXT_ACTION_TRANSLATION_KEYS: Record<LeadStage, TranslationKey> = {
   LOST: "NextActionRecordLoss",
 };
 
+const LEAD_STAGE_STYLES: ReadonlyMap<string, { badge: string; border: string }> = new Map([
+  ["NEW", { badge: "bg-blue-500/10 text-blue-500", border: "border-t-blue-400" }],
+  ["CONTACTED", { badge: "bg-purple-500/10 text-purple-500", border: "border-t-purple-400" }],
+  ["INTERESTED", { badge: "bg-indigo-500/10 text-indigo-500", border: "border-t-indigo-400" }],
+  ["TEST_DRIVE", { badge: "bg-orange-500/10 text-orange-500", border: "border-t-orange-400" }],
+  ["NEGOTIATION", { badge: "bg-yellow-500/10 text-yellow-500", border: "border-t-yellow-400" }],
+  ["RESERVED", { badge: "bg-teal-500/10 text-teal-500", border: "border-t-teal-400" }],
+  ["WON", { badge: "bg-green-500/10 text-green-500", border: "border-t-green-400" }],
+  ["LOST", { badge: "bg-red-500/10 text-red-500", border: "border-t-red-400" }],
+]);
+
+function getStageColor(stage: string) {
+  return LEAD_STAGE_STYLES.get(stage)?.badge ?? "bg-gray-500/10 text-gray-500";
+}
+
+function getStageBorderColor(stage: string) {
+  return LEAD_STAGE_STYLES.get(stage)?.border ?? "border-t-gray-400";
+}
+
 export default function LeadsPage() {
+  return <RoleGuard permissions={["view:leads"]}><LeadsContent /></RoleGuard>;
+}
+
+function LeadViewToggle({ view, onChange }: Readonly<{ view: LeadView; onChange: (view: LeadView) => void }>) {
+  const { t } = useLanguage();
+  return (
+    <div className="flex items-center gap-1 rounded-lg border bg-muted/30 p-1 w-fit">
+      <button
+        onClick={() => onChange("table")}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "table" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+      >
+        <LayoutList className="h-3.5 w-3.5" /> {t("LeadListView")}
+      </button>
+      <button
+        onClick={() => onChange("kanban")}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "kanban" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+      >
+        <Kanban className="h-3.5 w-3.5" /> {t("LeadBoardView")}
+      </button>
+    </div>
+  );
+}
+
+function LeadsContent() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const router = useRouter();
   const searchParams = useSearchParams();
   const prefillCustomerId = searchParams.get("customerId");
   const { hasPermission } = usePermissions();
+  const canCreateLeads = hasPermission(PERMISSIONS.CREATE_LEADS);
   const canEditLeads = hasPermission(PERMISSIONS.EDIT_LEADS);
   const canDeleteLeads = hasPermission(PERMISSIONS.DELETE_LEADS);
   const canViewUsers = hasPermission(PERMISSIONS.VIEW_USERS);
@@ -172,6 +216,7 @@ export default function LeadsPage() {
   });
 
   const handleEdit = (lead: LeadListItem) => {
+    if (!canEditLeads) return;
     setEditingLead(lead);
     setDefaultCustomerId(null);
     setIsLeadDialogOpen(true);
@@ -182,6 +227,7 @@ export default function LeadsPage() {
   };
 
   const handleAddNew = () => {
+    if (!canCreateLeads) return;
     setEditingLead(null);
     setDefaultCustomerId(null);
     setIsLeadDialogOpen(true);
@@ -285,59 +331,19 @@ export default function LeadsPage() {
     return acc;
   }, {} as Record<LeadStage, LeadListItem[]>);
 
-  const getStageColor = (stage: string) => {
-    switch (stage) {
-      case "NEW": return "bg-blue-500/10 text-blue-500";
-      case "CONTACTED": return "bg-purple-500/10 text-purple-500";
-      case "INTERESTED": return "bg-indigo-500/10 text-indigo-500";
-      case "TEST_DRIVE": return "bg-orange-500/10 text-orange-500";
-      case "NEGOTIATION": return "bg-yellow-500/10 text-yellow-500";
-      case "RESERVED": return "bg-teal-500/10 text-teal-500";
-      case "WON": return "bg-green-500/10 text-green-500";
-      case "LOST": return "bg-red-500/10 text-red-500";
-      default: return "bg-gray-500/10 text-gray-500";
-    }
-  };
-
-  const getStageBorderColor = (stage: string) => {
-    switch (stage) {
-      case "NEW": return "border-t-blue-400";
-      case "CONTACTED": return "border-t-purple-400";
-      case "INTERESTED": return "border-t-indigo-400";
-      case "TEST_DRIVE": return "border-t-orange-400";
-      case "NEGOTIATION": return "border-t-yellow-400";
-      case "RESERVED": return "border-t-teal-400";
-      case "WON": return "border-t-green-400";
-      case "LOST": return "border-t-red-400";
-      default: return "border-t-gray-400";
-    }
-  };
-
   const translateStage = (stage: LeadStage) => translateLeadStage(stage, t);
   const nextAction = (stage: LeadStage) => t(NEXT_ACTION_TRANSLATION_KEYS[stage]);
 
   return (
-    <RoleGuard permissions={["view:leads"]}>
       <div className="space-y-6 flex flex-col md:h-full md:overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           {/* View toggle */}
-          <div className="flex items-center gap-1 rounded-lg border bg-muted/30 p-1 w-fit">
-            <button
-              onClick={() => setView("table")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "table" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              <LayoutList className="h-3.5 w-3.5" /> {t("LeadListView")}
-            </button>
-            <button
-              onClick={() => setView("kanban")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "kanban" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              <Kanban className="h-3.5 w-3.5" /> {t("LeadBoardView")}
-            </button>
-          </div>
-          <Button onClick={handleAddNew}>
-            <Plus className="me-2 h-4 w-4" /> {t("AddLead" as any) || "Add Lead"}
-          </Button>
+          <LeadViewToggle view={view} onChange={setView} />
+          {canCreateLeads && (
+            <Button onClick={handleAddNew}>
+              <Plus className="me-2 h-4 w-4" /> {t("AddLead") || "Add Lead"}
+            </Button>
+          )}
         </div>
 
         {/* Stats */}
@@ -497,7 +503,7 @@ export default function LeadsPage() {
                 {filteredLeads?.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
-                      {t("NoLeadsFoundDescription")}
+                      {t(canCreateLeads ? "NoLeadsFoundDescription" : "NoLeadsFound")}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -677,12 +683,14 @@ export default function LeadsPage() {
           </div>
         )}
 
-        <LeadDialog
-          open={isLeadDialogOpen}
-          onOpenChange={setIsLeadDialogOpen}
-          lead={editingLead}
-          defaultCustomerId={defaultCustomerId}
-        />
+        {isLeadDialogOpen && (editingLead ? canEditLeads : canCreateLeads) && (
+          <LeadDialog
+            open={isLeadDialogOpen}
+            onOpenChange={setIsLeadDialogOpen}
+            lead={editingLead}
+            defaultCustomerId={defaultCustomerId}
+          />
+        )}
 
         <SocialConversationDialog
           customerId={conversationCustomerId}
@@ -722,6 +730,5 @@ export default function LeadsPage() {
           />
         )}
       </div>
-    </RoleGuard>
   );
 }
