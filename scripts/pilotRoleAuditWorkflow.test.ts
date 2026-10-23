@@ -74,6 +74,19 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     expect(roleConfig.workers).toBe(1);
     expect(roleConfig.retries).toBe(0);
   });
+  test.each([
+    ["PR static browser gate", visualConfig, ["audit-navigation-dismissal.spec.ts", "bill-of-sale-capture.spec.ts"]],
+    ["role audit", roleConfig, "audit-navigation-dismissal.spec.ts"],
+  ] as const)("anonymous controls retain their exact scope in the %s", (_name, config, testMatch) => {
+    const project = config.projects?.find(item => item.name === "audit-controls");
+    expect(project?.testDir).toBe("./playwright/tests");
+    expect(project?.testMatch).toEqual(testMatch);
+    expect(project?.dependencies ?? []).toEqual([]);
+    expect(project?.use?.storageState).toEqual({ cookies: [], origins: [] });
+    expect(project?.use?.trace).toBe("off");
+    expect(project?.use?.video).toBe("off");
+    expect(project?.use?.screenshot).toBe("off");
+  });
   test("publishes only explicit post-login evidence and never records auth traces or video", () => {
     const upload = stepNamed(workflow.jobs.roles.steps, "Upload encrypted role audit evidence");
     expect(upload.with?.path?.trim().split(/\r?\n/).map((line) => line.trim())).toEqual([

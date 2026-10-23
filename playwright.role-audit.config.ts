@@ -26,5 +26,12 @@ export default defineConfig({
       ...project, dependencies: [...(project.dependencies ?? []), "role-regressions"],
       use: { ...project.use, storageState: "playwright/.auth/approver.json" },
     })),
+    {
+      name: "audit-controls",
+      testDir: "./playwright/tests",
+      testMatch: "audit-navigation-dismissal.spec.ts",
+      dependencies: [],
+      use: { browserName: "chromium", storageState: { cookies: [], origins: [] }, trace: "off", video: "off", screenshot: "off" },
+    },
   ],
 });
