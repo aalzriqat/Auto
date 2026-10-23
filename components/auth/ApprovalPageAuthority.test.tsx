@@ -5,7 +5,7 @@ import { OrgProvider } from "@/components/providers/OrgProvider";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
 import { DEFAULT_ROLE_TEMPLATES } from "@/convex/utils/permissions";
 
-const state = vi.hoisted(() => ({ role: "ACCOUNTANT", pending: undefined as unknown[] | undefined }));
+const state = vi.hoisted(() => ({ role: "ACCOUNTANT", permissionsOverride: null as string[] | null, pending: undefined as unknown[] | undefined }));
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
@@ -14,16 +14,17 @@ vi.mock("convex/react", async () => {
       if (args === "skip") return undefined;
       const name = getFunctionName(ref);
       const role = DEFAULT_ROLE_TEMPLATES.find((candidate) => candidate.name === state.role);
-      if (!role) throw new Error("Missing actual role template");
+      if (!role && !state.permissionsOverride) throw new Error("Missing actual role template");
+      const permissions: readonly string[] = state.permissionsOverride ?? role!.permissions;
       if (name === "organizations:listMine") return [{ _id: "org-a", name: "Synthetic Dealer" }];
-      if (name === "memberships:getMyMembership") return { roleName: role.name, permissions: [...role.permissions] };
+      if (name === "memberships:getMyMembership") return { roleName: role?.name ?? "Synthetic request approver", permissions: [...permissions] };
       if (name === "orgSettings:get") return null;
       if (name === "approvals:listPendingApprovals") {
-        if (!role.permissions.includes("approve:requests")) throw new Error("Synthetic approval refusal");
+        if (!permissions.includes("approve:requests")) throw new Error("Synthetic approval refusal");
         return [];
       }
       if (name === "depositRequests:listPending") {
-        if (!role.permissions.includes("confirm:finance_disbursement")) throw new Error("Synthetic deposit refusal");
+        if (!permissions.includes("confirm:finance_disbursement")) throw new Error("Synthetic deposit refusal");
         return state.pending;
       }
       throw new Error("Unexpected network query: " + name);
@@ -34,7 +35,7 @@ vi.mock("convex/react", async () => {
 });
 vi.mock("next/navigation", () => ({ useParams: () => ({ orgId: "org-a" }), usePathname: () => "/org-a/approvals",
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }) }));
-beforeEach(() => { state.role = "ACCOUNTANT"; state.pending = undefined;
+beforeEach(() => { state.role = "ACCOUNTANT"; state.permissionsOverride = null; state.pending = undefined;
   vi.stubGlobal("localStorage", { getItem: () => "en", setItem: () => {} }); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const mount = () => render(<OrgProvider><LanguageProvider><ApprovalsPage /></LanguageProvider></OrgProvider>);
@@ -62,5 +63,15 @@ test("manager's independent profit approval queue remains available", () => {
   state.role = "MANAGER";
   mount();
   expect(screen.getByText("No pending approvals")).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Access Not Allowed" })).toBeNull();
+});
+
+ test("request-only approver sees profit requests without subscribing to deposit confirmation", () => {
+  state.role = "REQUEST_ONLY";
+  state.permissionsOverride = ["view:org", "approve:requests"];
+  mount();
+  expect(screen.getByText("No pending approvals")).toBeTruthy();
+  expect(screen.queryByTestId("pending-deposit-loading")).toBeNull();
+  expect(screen.queryByTestId("pending-deposit-empty")).toBeNull();
   expect(screen.queryByRole("heading", { name: "Access Not Allowed" })).toBeNull();
 });

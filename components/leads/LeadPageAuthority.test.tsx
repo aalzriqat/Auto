@@ -15,10 +15,19 @@ vi.mock("convex/react", async () => {
       if (name === "organizations:listMine") return [{ _id: "org-a", name: "Synthetic Dealer" }];
       if (name === "memberships:getMyMembership") return { roleName: "Synthetic lead reader", permissions: state.permissions };
       if (["orgSettings:get", "orgSettings:getLogoUrl"].includes(name)) return null;
+      const catalogPermissions: Partial<Record<string, string>> = { "customers:selectorOptions": "view:customers", "customers:get": "view:customers", "vehicles:listAll": "view:vehicles", "orgLeadSources:listForLeads": "view:leads" };
+      const catalogPermission = catalogPermissions[name];
+      if (catalogPermission && !state.permissions.includes(catalogPermission)) throw new Error("Forbidden lead catalog query: " + name);
+      // Pipeline stages and custom-field definitions require tenant membership only.
       if (["orgLeadSources:listForLeads", "customers:selectorOptions", "vehicles:listAll", "orgPipelineStages:list", "orgCustomFields:list"].includes(name)) return [];
       throw new Error("Unexpected lead reader fixture query: " + name);
     },
-    usePaginatedQuery: () => ({ results: [], status: "Exhausted", loadMore: vi.fn() }),
+    usePaginatedQuery: (ref: never, args: unknown) => {
+      if (args !== "skip" && getFunctionName(ref) === "memberships:list" && !state.permissions.includes("view:users")) {
+        throw new Error("Forbidden lead catalog query: memberships:list");
+      }
+      return { results: [], status: "Exhausted", loadMore: vi.fn() };
+    },
     useMutation: () => vi.fn(), useAction: () => vi.fn(),
   };
 });
@@ -56,4 +65,18 @@ test("a lead reader without create authority sees the list without an Add Lead a
   expect(screen.getByText("Total Leads")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Add Lead" })).toBeNull();
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+
+test.each([
+  ["view:customers"],
+  ["view:vehicles"],
+  ["view:users"],
+])("a lead creator missing %s does not subscribe to its protected picker", (permission) => {
+  state.permissions = ["view:org", "view:leads", "create:leads", "view:customers", "view:vehicles", "view:users"]
+    .filter((candidate) => candidate !== permission);
+  render(<OrgProvider><LanguageProvider><LeadsPage /></LanguageProvider></OrgProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Add Lead" }));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "No Access" }).hasAttribute("disabled")).toBe(true);
 });

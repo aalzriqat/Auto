@@ -14,6 +14,12 @@ test("Reception receives active own lead sources while settings remains refused"
     const userId = await ctx.db.insert("users", { clerkId: "lead-source-reader", email: "reader@example.test" });
     const roleId = await ctx.db.insert("roles", { orgId, name: template.name, permissions: [...template.permissions] });
     await ctx.db.insert("memberships", { orgId, userId, roleId });
+    const ownerTemplate = DEFAULT_ROLE_TEMPLATES.find(role => role.name === "OWNER");
+    if (!ownerTemplate) throw new Error("Missing actual Owner template");
+    const ownerId = await ctx.db.insert("users", { clerkId: "lead-source-owner", email: "owner@example.test" });
+    const ownerRoleId = await ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [...ownerTemplate.permissions], isSystemOwnerRole: true });
+    await ctx.db.insert("memberships", { orgId, userId: ownerId, roleId: ownerRoleId });
+    await ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() });
     const sourceId = await ctx.db.insert("orgLeadSources", { orgId, label: "Synthetic configured channel", isActive: true, order: 1 });
     await ctx.db.insert("orgLeadSources", { orgId, label: "Synthetic retired", isActive: false, order: 0 });
     await ctx.db.insert("orgLeadSources", { orgId: foreignOrgId, label: "Synthetic foreign", isActive: true, order: 0 });
@@ -24,7 +30,7 @@ test("Reception receives active own lead sources while settings remains refused"
   expect(await reception.query(api.orgLeadSources.listForLeads, { orgId })).toEqual([{ _id: sourceId, label: "Synthetic configured channel" }]);
   await expect(reception.query(api.orgLeadSources.listForLeads, { orgId: foreignOrgId })).rejects.toMatchObject({ data: { code: "UNAUTHORIZED" } });
   await expect(t.query(api.orgLeadSources.listForLeads, { orgId })).rejects.toMatchObject({ data: { code: "UNAUTHENTICATED" } });
-  await t.run(ctx => ctx.db.patch(roleId, { permissions: ["view:org"] }));
+  await t.withIdentity({ subject: "lead-source-owner" }).mutation(api.roles.update, { orgId, roleId, permissions: ["view:org"] });
   await expect(reception.query(api.orgLeadSources.listForLeads, { orgId })).rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
 });
 

@@ -18,6 +18,27 @@
       },
       "action": "orgLeadSources.listForLeads",
       "input": {}
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "roleId": "RECEPTION_ROLE",
+        "permissions": [
+          "view:org"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "RECEPTION",
+        "org": "A"
+      },
+      "action": "orgLeadSources.listForLeads",
+      "input": {}
     }
   ],
   "expected": [
@@ -55,5 +76,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "c40f9090bb5c74b732c009a0c1edea2acf4eb9efdbc9c86ea4dfcf6c8f3393ba"
+  "fingerprint": "5378f01bf9f9d42fbbe6fceaf2b547893e72198bf964ff8215491b14351c5a07"
 }
