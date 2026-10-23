@@ -81,6 +81,8 @@ export function groupOpeningAllocations(
 }
 
 type AllocationPayload = NonNullable<Doc<"openingBalanceDrafts">["allocations"]>;
+type AllocationPayloadRow = AllocationPayload[number];
+type AllocationBase = Pick<AllocationPayloadRow, "rowKey" | "accountId" | "amountMinor">;
 
 function dateInputToUtcMs(value: string): number | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -98,6 +100,68 @@ export function retainOpeningAllocations(rows: OpeningAllocationDraft[], account
   return rows.filter((row) => accountIds.has(row.accountId));
 }
 
+function customerReceivablePayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
+  const title = row.title.trim();
+  const dueDate = dateInputToUtcMs(row.dueDate);
+  if (!title || title.length > 200 || dueDate === null) return null;
+  return { ...base, kind: "CUSTOMER_RECEIVABLE", customerId: row.partyId as Id<"customers">, title, dueDate };
+}
+
+function prepaidExpensePayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
+  const title = row.title.trim();
+  const startYearMonth = row.startYearMonth ?? "";
+  const termMonths = Number(row.termMonths);
+  const expenseSystemKey = row.expenseSystemKey ?? "";
+  if (!title || title.length > 200 || !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(startYearMonth) ||
+      !/^[1-9]\d*$/.test(row.termMonths ?? "") || !Number.isSafeInteger(termMonths) ||
+      !OPENING_PREPAID_EXPENSE_OPTIONS.some(([key]) => key === expenseSystemKey) ||
+      row.attestedUnexpiredBenefit !== true) return null;
+  return { ...base, kind: "PREPAID_EXPENSE", title,
+    startYearMonth, termMonths, expenseSystemKey, attestedUnexpiredBenefit: true };
+}
+
+function counterpartyPayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
+  const counterpartyName = row.counterpartyName?.trim() ?? "";
+  const title = row.title.trim();
+  if (!counterpartyName || counterpartyName.length > 200 || !title || title.length > 200) return null;
+  if (row.kind === "SUPPLIER_RECOVERABLE") {
+    if (row.purpose !== "CLAIM" && row.purpose !== "REFUNDABLE_DEPOSIT") return null;
+    return { ...base, kind: row.kind, counterpartyName, title, purpose: row.purpose };
+  }
+  if (row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE") {
+    return { ...base, kind: row.kind, counterpartyName, title };
+  }
+  return null;
+}
+
+function unallocatedLiabilityPayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
+  const title = row.title.trim();
+  if (!title || title.length > 200 ||
+      (row.purpose !== "CUSTOMER_DEPOSIT" && row.purpose !== "UNIDENTIFIED_RECEIPT")) return null;
+  return { ...base, kind: "UNALLOCATED_LIABILITY", purpose: row.purpose, title };
+}
+
+function openingAllocationRowPayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
+  switch (row.kind) {
+    case "CUSTOMER_RECEIVABLE": return customerReceivablePayload(row, base);
+    case "EMPLOYEE_ADVANCE":
+      if (row.note.length > 500) return null;
+      return { ...base, kind: row.kind, userId: row.partyId as Id<"users">, note: row.note.trim() || undefined };
+    case "VEHICLE_INVENTORY":
+      return { ...base, kind: row.kind, vehicleId: row.partyId as Id<"vehicles"> };
+    case "PREPAID_EXPENSE": return prepaidExpensePayload(row, base);
+    case "SUPPLIER_RECOVERABLE":
+    case "SUPPLIER_PAYABLE":
+    case "OTHER_PAYABLE": return counterpartyPayload(row, base);
+    case "EMPLOYEE_COMMISSION":
+      return { ...base, kind: row.kind, userId: row.partyId as Id<"users"> };
+    case "UNALLOCATED_LIABILITY": return unallocatedLiabilityPayload(row, base);
+    case "PARTNER_CAPITAL":
+      return { ...base, kind: row.kind, partnerId: row.partyId as Id<"partnerEquity"> };
+    default: return null;
+  }
+}
+
 /** UI payload assembly; backend validators still own tenant and money rules. */
 export function buildOpeningAllocationPayload(rows: OpeningAllocationDraft[], currency: string): AllocationPayload | null {
   if (rows.length > 100) return null;
@@ -106,64 +170,20 @@ export function buildOpeningAllocationPayload(rows: OpeningAllocationDraft[], cu
   const payload: AllocationPayload = [];
   for (const row of rows) {
     const amountMinor = parseOpeningMoneyMinor(row.amount, currency);
-    if (amountMinor === null || amountMinor <= 0 ||
-        (["CUSTOMER_RECEIVABLE", "EMPLOYEE_ADVANCE", "PARTNER_CAPITAL", "VEHICLE_INVENTORY", "EMPLOYEE_COMMISSION"] as OpeningAllocationKind[]).includes(row.kind) && !row.partyId ||
+    const requiresParty = ["CUSTOMER_RECEIVABLE", "EMPLOYEE_ADVANCE", "PARTNER_CAPITAL", "VEHICLE_INVENTORY", "EMPLOYEE_COMMISSION"].includes(row.kind);
+    if (amountMinor === null || amountMinor <= 0 || requiresParty && !row.partyId ||
         !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(row.rowKey) || keys.has(row.rowKey)) return null;
     keys.add(row.rowKey);
-    const accountId = row.accountId as Id<"chartOfAccounts">;
-    if (row.kind === "CUSTOMER_RECEIVABLE") {
-      const title = row.title.trim();
-      const dueDate = dateInputToUtcMs(row.dueDate);
-      if (!title || title.length > 200 || dueDate === null) return null;
-      payload.push({ kind: row.kind, rowKey: row.rowKey, accountId,
-        customerId: row.partyId as Id<"customers">, amountMinor, title, dueDate });
-    } else if (row.kind === "EMPLOYEE_ADVANCE") {
-      if (row.note.length > 500) return null;
-      payload.push({ kind: row.kind, rowKey: row.rowKey, accountId,
-        userId: row.partyId as Id<"users">, amountMinor, note: row.note.trim() || undefined });
-    } else if (row.kind === "VEHICLE_INVENTORY") {
-      payload.push({ kind: row.kind, rowKey: row.rowKey, accountId,
-        vehicleId: row.partyId as Id<"vehicles">, amountMinor });
-    } else if (row.kind === "PREPAID_EXPENSE") {
-      const title = row.title.trim();
-      const startYearMonth = row.startYearMonth ?? "";
-      const termMonths = Number(row.termMonths);
-      const expenseSystemKey = row.expenseSystemKey ?? "";
-      if (!title || title.length > 200 || !/^[0-9]{4}-(?:0[1-9]|1[0-2])$/.test(startYearMonth) ||
-          !/^[1-9][0-9]*$/.test(row.termMonths ?? "") || !Number.isSafeInteger(termMonths) ||
-          !OPENING_PREPAID_EXPENSE_OPTIONS.some(([key]) => key === expenseSystemKey) ||
-          row.attestedUnexpiredBenefit !== true) return null;
-      payload.push({ kind: row.kind, rowKey: row.rowKey, accountId, amountMinor, title,
-        startYearMonth, termMonths, expenseSystemKey, attestedUnexpiredBenefit: true });
-    } else if (row.kind === "SUPPLIER_RECOVERABLE") {
-      const counterpartyName = row.counterpartyName?.trim() ?? "";
-      const title = row.title.trim();
-      if (!counterpartyName || counterpartyName.length > 200 || !title || title.length > 200 ||
-          (row.purpose !== "CLAIM" && row.purpose !== "REFUNDABLE_DEPOSIT")) return null;
-      payload.push({ kind: row.kind, rowKey: row.rowKey, accountId, amountMinor,
-        counterpartyName, title, purpose: row.purpose });
-    } else if (row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE") {
-      const counterpartyName = row.counterpartyName?.trim() ?? "";
-      const title = row.title.trim();
-      if (!counterpartyName || counterpartyName.length > 200 || !title || title.length > 200) return null;
-      payload.push({ kind: row.kind, rowKey: row.rowKey, accountId, amountMinor, counterpartyName, title });
-    } else if (row.kind === "EMPLOYEE_COMMISSION") {
-      payload.push({ kind: row.kind, rowKey: row.rowKey, accountId, amountMinor,
-        userId: row.partyId as Id<"users"> });
-    } else if (row.kind === "UNALLOCATED_LIABILITY") {
-      const title = row.title.trim();
-      if (!title || title.length > 200 ||
-          (row.purpose !== "CUSTOMER_DEPOSIT" && row.purpose !== "UNIDENTIFIED_RECEIPT")) return null;
-      payload.push({ kind: row.kind, rowKey: row.rowKey, accountId, amountMinor, purpose: row.purpose, title });
-    } else if (row.kind === "PARTNER_CAPITAL") {
+    if (row.kind === "PARTNER_CAPITAL") {
       const pair = `${row.accountId}:${row.partyId}`;
       if (partnerPairs.has(pair)) return null;
       partnerPairs.add(pair);
-      payload.push({ kind: row.kind, rowKey: row.rowKey, accountId,
-        partnerId: row.partyId as Id<"partnerEquity">, amountMinor });
-    } else {
-      return null;
     }
+    const allocation = openingAllocationRowPayload(row, {
+      rowKey: row.rowKey, accountId: row.accountId as Id<"chartOfAccounts">, amountMinor,
+    });
+    if (!allocation) return null;
+    payload.push(allocation);
   }
   return payload;
 }

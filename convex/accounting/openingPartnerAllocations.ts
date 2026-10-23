@@ -7,6 +7,7 @@ import { resolveSystemAccount } from "../chartOfAccounts";
 
 type Allocation = NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number];
 type PartnerAllocation = Extract<Allocation, { kind: "PARTNER_CAPITAL" }>;
+type OpeningPartnerLine = { accountId: Id<"chartOfAccounts">; debitMinor: number; creditMinor: number };
 const reservedCodes = new Set(DEFAULT_CHART.map((account) => account.code));
 
 export function isOpeningPartnerAccount(account: Doc<"chartOfAccounts">): boolean {
@@ -17,42 +18,10 @@ export function isOpeningPartnerAccount(account: Doc<"chartOfAccounts">): boolea
 /** All partners must start clean, not just the ones named by the submitted rows.
  * Bounds are an admission limit; exceeding them never means partial validation. */
 export async function validateOpeningPartners(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">,
-  lines: readonly { accountId: Id<"chartOfAccounts">; debitMinor: number; creditMinor: number }[],
+  lines: readonly OpeningPartnerLine[],
   allocations: readonly Allocation[]): Promise<void> {
-  const partners = await ctx.db.query("partnerEquity").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(101);
-  if (partners.length > 100) throw new ConvexError("This opening requires a finance review because it has too many partners.");
-  for (const partner of partners) {
-    if (partner.openingBalanceDraftId || [partner.openingBalanceMinor, partner.currentBalance, partner.initialCapital]
-      .some((amount) => amount !== undefined && (!Number.isFinite(amount) || amount !== 0)) ||
-      await ctx.db.query("partnerEquityTransactions").withIndex("by_org_partner_time", (q) =>
-        q.eq("orgId", orgId).eq("partnerId", partner._id)).first()) {
-      throw new ConvexError("Existing partner balances require a finance review before an opening can be posted.");
-    }
-  }
-  const rows: PartnerAllocation[] = allocations.filter((row): row is PartnerAllocation => row.kind === "PARTNER_CAPITAL");
-  const totals = new Map<Id<"chartOfAccounts">, number>();
-  const pairs = new Set<string>();
-  const partnerTotals = new Map<Id<"partnerEquity">, number>();
-  const canonicalCapital = rows.some((row) => lines.some((line) => line.accountId === row.accountId))
-    ? await resolveSystemAccount(ctx, orgId, SYSTEM_KEYS.PARTNER_CAPITAL) : undefined;
-  for (const row of rows) {
-    const partner = await requireOwnedRow(ctx, orgId, "partnerEquity", row.partnerId, "Opening partner not found in this organization.");
-    if (partner.isDeleted) throw new ConvexError("Opening partner is unavailable.");
-    const account = await requireOwnedRow(ctx, orgId, "chartOfAccounts", row.accountId, "Opening account not found in this organization.");
-    if (!isOpeningPartnerAccount(account)) throw new ConvexError("Partner openings require an explicitly classified capital account.");
-    if (account.systemKey === SYSTEM_KEYS.PARTNER_CAPITAL && account._id !== canonicalCapital) {
-      throw new ConvexError("Partner openings must use the account used by native partner movements.");
-    }
-    const pair = `${row.partnerId}:${row.accountId}`;
-    if (pairs.has(pair)) throw new ConvexError("A partner can have only one opening allocation per account.");
-    pairs.add(pair);
-    const total = (totals.get(row.accountId) ?? 0) + row.amountMinor;
-    if (!Number.isSafeInteger(total)) throw new ConvexError("The opening partner total is too large.");
-    totals.set(row.accountId, total);
-    const partnerTotal = (partnerTotals.get(row.partnerId) ?? 0) + row.amountMinor;
-    if (!Number.isSafeInteger(partnerTotal)) throw new ConvexError("The opening partner total is too large.");
-    partnerTotals.set(row.partnerId, partnerTotal);
-  }
+  await requireCleanOpeningPartners(ctx, orgId);
+  const totals = await collectOpeningPartnerTotals(ctx, orgId, lines, allocations);
   const credits = new Map<Id<"chartOfAccounts">, number>();
   for (const line of lines) {
     const account = await requireOwnedRow(ctx, orgId, "chartOfAccounts", line.accountId, "Opening account not found in this organization.");
@@ -66,5 +35,52 @@ export async function validateOpeningPartners(ctx: QueryCtx | MutationCtx, orgId
     if ((totals.get(accountId) ?? 0) <= 0 || totals.get(accountId) !== credits.get(accountId)) {
       throw new ConvexError("Partner opening allocations must match each capital account's credit balance.");
     }
+  }
+}
+
+async function requireCleanOpeningPartners(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
+  const partners = await ctx.db.query("partnerEquity").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(101);
+  if (partners.length > 100) throw new ConvexError("This opening requires a finance review because it has too many partners.");
+  for (const partner of partners) {
+    if (partner.openingBalanceDraftId || [partner.openingBalanceMinor, partner.currentBalance, partner.initialCapital]
+      .some((amount) => amount !== undefined && (!Number.isFinite(amount) || amount !== 0)) ||
+      await ctx.db.query("partnerEquityTransactions").withIndex("by_org_partner_time", (q) =>
+        q.eq("orgId", orgId).eq("partnerId", partner._id)).first()) {
+      throw new ConvexError("Existing partner balances require a finance review before an opening can be posted.");
+    }
+  }
+}
+
+async function collectOpeningPartnerTotals(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">,
+  lines: readonly OpeningPartnerLine[], allocations: readonly Allocation[]) {
+  const rows: PartnerAllocation[] = allocations.filter((row): row is PartnerAllocation => row.kind === "PARTNER_CAPITAL");
+  const totals = new Map<Id<"chartOfAccounts">, number>();
+  const pairs = new Set<string>();
+  const partnerTotals = new Map<Id<"partnerEquity">, number>();
+  const canonicalCapital = rows.some((row) => lines.some((line) => line.accountId === row.accountId))
+    ? await resolveSystemAccount(ctx, orgId, SYSTEM_KEYS.PARTNER_CAPITAL) : undefined;
+  for (const row of rows) {
+    await validateOpeningPartnerTarget(ctx, orgId, row, canonicalCapital);
+    const pair = `${row.partnerId}:${row.accountId}`;
+    if (pairs.has(pair)) throw new ConvexError("A partner can have only one opening allocation per account.");
+    pairs.add(pair);
+    const total = (totals.get(row.accountId) ?? 0) + row.amountMinor;
+    if (!Number.isSafeInteger(total)) throw new ConvexError("The opening partner total is too large.");
+    totals.set(row.accountId, total);
+    const partnerTotal = (partnerTotals.get(row.partnerId) ?? 0) + row.amountMinor;
+    if (!Number.isSafeInteger(partnerTotal)) throw new ConvexError("The opening partner total is too large.");
+    partnerTotals.set(row.partnerId, partnerTotal);
+  }
+  return totals;
+}
+
+async function validateOpeningPartnerTarget(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">,
+  row: PartnerAllocation, canonicalCapital: Id<"chartOfAccounts"> | undefined) {
+  const partner = await requireOwnedRow(ctx, orgId, "partnerEquity", row.partnerId, "Opening partner not found in this organization.");
+  if (partner.isDeleted) throw new ConvexError("Opening partner is unavailable.");
+  const account = await requireOwnedRow(ctx, orgId, "chartOfAccounts", row.accountId, "Opening account not found in this organization.");
+  if (!isOpeningPartnerAccount(account)) throw new ConvexError("Partner openings require an explicitly classified capital account.");
+  if (account.systemKey === SYSTEM_KEYS.PARTNER_CAPITAL && account._id !== canonicalCapital) {
+    throw new ConvexError("Partner openings must use the account used by native partner movements.");
   }
 }

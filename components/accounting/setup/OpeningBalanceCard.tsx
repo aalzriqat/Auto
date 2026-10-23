@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { CheckCircle2, Clock, Plus, Trash2, Wallet } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -85,6 +86,83 @@ function dateInputToUtcMs(value: string): number | null {
   if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
   const [y, m, d] = parts;
   return Date.UTC(y, m - 1, d);
+}
+
+function allocationConfirmationLine(row: OpeningAllocationDraft, currency: string, t: ReturnType<typeof useLanguage>["t"]): string {
+  if (row.kind === "PREPAID_EXPENSE") {
+    return `  ${row.title} · ${row.startYearMonth} · ${row.termMonths} ${t("OpeningPrepaidTermMonths")} · ${row.amount} ${currency}`;
+  }
+  if (row.kind === "UNALLOCATED_LIABILITY") {
+    const purposeLabel = t(`OpeningAllocationPurpose_${row.purpose}`);
+    return `  ${t("OpeningAllocationKind_UNALLOCATED_LIABILITY")} · ${purposeLabel} · ${row.title} · ${row.amount} ${currency}`;
+  }
+  if (row.kind === "SUPPLIER_RECOVERABLE" || row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE") {
+    const kindLabel = t(`OpeningAllocationKind_${row.kind}`);
+    return `  ${kindLabel} · ${row.counterpartyName} · ${row.title} · ${row.amount} ${currency}`;
+  }
+  return `  ${row.partyLabel} (${row.partyId}) · ${row.amount} ${currency}`;
+}
+
+type PostedReadback = NonNullable<FunctionReturnType<typeof api.accountingCutover.postedOpeningAllocationReadback>>;
+type PostedReadbackRow = Extract<PostedReadback["rows"][number], { restricted: false }>;
+
+function PostedAllocationSource({ row }: Readonly<{ row: PostedReadbackRow }>) {
+  const { t } = useLanguage();
+  if (row.kind === "PREPAID_EXPENSE") return <> · {t("OpeningPrepaidSource")}</>;
+  return row.partyId ? <> · <bdi className="break-all text-xs text-muted-foreground">{row.partyId}</bdi></> : null;
+}
+
+function postedAllocationStatusKey(status: PostedReadbackRow["allocationStatus"]): string {
+  if (status === "UNALLOCATED") return "OpeningAllocationRecordUnallocated";
+  if (status === "AVAILABLE") return "OpeningAllocationRecordAvailable";
+  return "OpeningAllocationRecordUnavailable";
+}
+
+function PostedAllocationRow({ row, currency }: Readonly<{ row: PostedReadbackRow; currency: string }>) {
+  const { t, locale } = useLanguage();
+  return (
+    <div className="min-w-0 rounded-md border border-border p-2">
+      <p className="font-medium text-foreground"><bdi>{row.accountCode ?? row.accountId}</bdi> · <bdi>{locale === "ar" ? row.accountNameAr || row.accountName : row.accountName}</bdi></p>
+      <p><bdi>{row.partyName || (row.allocationStatus === "UNALLOCATED"
+        ? t("OpeningAllocationRecordUnallocated") : t("OpeningAllocationPartyUnavailable"))}</bdi>
+        <PostedAllocationSource row={row} />
+      </p>
+      <p className="text-xs text-muted-foreground">{t(`OpeningAllocationKind_${row.kind}`)}</p>
+      {row.purpose && <p className="text-xs text-muted-foreground">{t("OpeningAllocationPurpose")}: {t(`OpeningAllocationPurpose_${row.purpose}`)}</p>}
+      {row.title && row.kind !== "PREPAID_EXPENSE" && <p className="text-xs text-muted-foreground">
+        {t(row.kind === "CUSTOMER_RECEIVABLE" ? "OpeningAllocationTitle" : "OpeningAllocationSourceTitle")}: <bdi>{row.title}</bdi>
+      </p>}
+      <p className="tabular-nums"><bdi>{fromMinorUnits(row.amountMinor, currency).toFixed(scaleForCurrency(currency))} {currency}</bdi></p>
+      <p className={row.allocationStatus === "AVAILABLE" ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}>
+        {t(postedAllocationStatusKey(row.allocationStatus))}
+      </p>
+      {row.documentId && row.kind !== "PREPAID_EXPENSE" &&
+        <p className="break-all text-xs text-muted-foreground"><bdi>{row.documentId}</bdi></p>}
+    </div>
+  );
+}
+
+function PostedOpeningAllocations({ readback, currency }: Readonly<{ readback: PostedReadback; currency: string }>) {
+  const { t } = useLanguage();
+  return (
+    <div className="mt-3 space-y-2 text-sm">
+      <p className="font-medium text-foreground">{t("OpeningAllocationPostedReadback")}</p>
+      <p className={readback.journalStatus === "POSTED"
+        ? "text-emerald-700 dark:text-emerald-300"
+        : "text-amber-700 dark:text-amber-300"}>
+        {t("OpeningAllocationJournalStatus")}: {readback.journalStatus === "POSTED"
+          ? t("OpeningJournalPosted") : t("OpeningJournalNeedsReview")}
+      </p>
+      {readback.rows.length === 0 && <p className="text-muted-foreground">{t("OpeningAllocationNoPostedRows")}</p>}
+      <div className="grid gap-2 sm:grid-cols-2">
+        {readback.rows.map((row, index) => row.restricted ? (
+          <div key={`restricted-${index}`} className="rounded-md border border-border p-2 text-muted-foreground">
+            {t("OpeningAllocationRestrictedReadback")}
+          </div>
+        ) : <PostedAllocationRow key={row.rowKey} row={row} currency={readback.currency ?? currency} />)}
+      </div>
+    </div>
+  );
 }
 
 export function OpeningBalanceCard() {
@@ -232,13 +310,7 @@ export function OpeningBalanceCard() {
     if (status?.canPostDirectly && allocations.length > 0) {
       const summary = allocationGroups.map((group) => {
         const members = allocations.filter((row) => row.accountId === group.accountId)
-          .map((row) => row.kind === "PREPAID_EXPENSE"
-            ? `  ${row.title} · ${row.startYearMonth} · ${row.termMonths} ${t("OpeningPrepaidTermMonths")} · ${row.amount} ${currency}`
-            : row.kind === "UNALLOCATED_LIABILITY"
-              ? `  ${t("OpeningAllocationKind_UNALLOCATED_LIABILITY")} · ${t(`OpeningAllocationPurpose_${row.purpose}`)} · ${row.title} · ${row.amount} ${currency}`
-              : row.kind === "SUPPLIER_RECOVERABLE" || row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE"
-                ? `  ${t(`OpeningAllocationKind_${row.kind}`)} · ${row.counterpartyName} · ${row.title} · ${row.amount} ${currency}`
-                : `  ${row.partyLabel} (${row.partyId}) · ${row.amount} ${currency}`);
+          .map((row) => allocationConfirmationLine(row, currency, t));
         return `${group.label} · ${fromMinorUnits(group.journalMinor, currency).toFixed(scaleForCurrency(currency))} ${currency}\n${members.join("\n")}`;
       }).join("\n");
       if (!window.confirm(`${t("OpeningAllocationDirectConfirm")}\n\n${summary}`)) return;
@@ -304,45 +376,7 @@ export function OpeningBalanceCard() {
               </p>
             )}
             {status.posted && postedReadback && (
-              <div className="mt-3 space-y-2 text-sm">
-                <p className="font-medium text-foreground">{t("OpeningAllocationPostedReadback")}</p>
-                <p className={postedReadback.journalStatus === "POSTED"
-                  ? "text-emerald-700 dark:text-emerald-300"
-                  : "text-amber-700 dark:text-amber-300"}>
-                  {t("OpeningAllocationJournalStatus")}: {postedReadback.journalStatus === "POSTED"
-                    ? t("OpeningJournalPosted") : t("OpeningJournalNeedsReview")}
-                </p>
-                {postedReadback.rows.length === 0 && <p className="text-muted-foreground">{t("OpeningAllocationNoPostedRows")}</p>}
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {postedReadback.rows.map((row, index) => row.restricted ? (
-                    <div key={`restricted-${index}`} className="rounded-md border border-border p-2 text-muted-foreground">
-                      {t("OpeningAllocationRestrictedReadback")}
-                    </div>
-                  ) : (
-                    <div key={row.rowKey} className="min-w-0 rounded-md border border-border p-2">
-                      <p className="font-medium text-foreground"><bdi>{row.accountCode ?? row.accountId}</bdi> · <bdi>{locale === "ar" ? row.accountNameAr || row.accountName : row.accountName}</bdi></p>
-                      <p><bdi>{row.partyName || (row.allocationStatus === "UNALLOCATED"
-                        ? t("OpeningAllocationRecordUnallocated") : t("OpeningAllocationPartyUnavailable"))}</bdi>
-                        {row.kind === "PREPAID_EXPENSE" ? <> · {t("OpeningPrepaidSource")}</>
-                          : row.partyId ? <> · <bdi className="break-all text-xs text-muted-foreground">{row.partyId}</bdi></> : null}
-                      </p>
-                      <p className="text-xs text-muted-foreground">{t(`OpeningAllocationKind_${row.kind}`)}</p>
-                      {row.purpose && <p className="text-xs text-muted-foreground">{t("OpeningAllocationPurpose")}: {t(`OpeningAllocationPurpose_${row.purpose}`)}</p>}
-                      {row.title && row.kind !== "PREPAID_EXPENSE" && <p className="text-xs text-muted-foreground">
-                        {t(row.kind === "CUSTOMER_RECEIVABLE" ? "OpeningAllocationTitle" : "OpeningAllocationSourceTitle")}: <bdi>{row.title}</bdi>
-                      </p>}
-                      <p className="tabular-nums"><bdi>{fromMinorUnits(row.amountMinor, postedReadback.currency ?? status.currency).toFixed(scaleForCurrency(postedReadback.currency ?? status.currency))} {postedReadback.currency ?? status.currency}</bdi></p>
-                      <p className={row.allocationStatus === "AVAILABLE" ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}>
-                        {row.allocationStatus === "UNALLOCATED" ? t("OpeningAllocationRecordUnallocated")
-                          : row.allocationStatus === "AVAILABLE" ? t("OpeningAllocationRecordAvailable")
-                          : t("OpeningAllocationRecordUnavailable")}
-                      </p>
-                      {row.documentId && row.kind !== "PREPAID_EXPENSE" &&
-                        <p className="break-all text-xs text-muted-foreground"><bdi>{row.documentId}</bdi></p>}
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <PostedOpeningAllocations readback={postedReadback} currency={status.currency} />
             )}
             {!status.posted && status.pendingExists && (
               <p className="mt-2 flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-300">

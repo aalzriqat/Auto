@@ -1,7 +1,7 @@
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
 import { openingRecoveryBasis, openingPayableBasis } from "./utils/openingSupplierBasis";
 import { resolveOpeningCommissionBasis } from "./utils/openingCommissionBasis";
-import { resolveOpeningSettlementBasis, createOpeningSettlementReader } from "./utils/openingSettlementBasis";
+import { resolveOpeningSettlementBasis, createOpeningSettlementReader, type OpeningSettlementReader } from "./utils/openingSettlementBasis";
 import { isRemainingOpeningKind, openingAccountAllowsFamily, type RemainingOpeningKind, type OpeningPolicy } from "./utils/openingAccountPolicy";
 /**
  * GL Phase 17 — legacy money migration + accountant sign-off.
@@ -748,6 +748,114 @@ async function containsEmployeeAdvanceControl(
   return false;
 }
 
+type OpeningDraftAllocation = NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number];
+function isRemainingOpeningAllocation(
+  allocation: OpeningDraftAllocation,
+): allocation is Extract<OpeningDraftAllocation, { kind: RemainingOpeningKind }> {
+  return isRemainingOpeningKind(allocation.kind);
+}
+
+type PendingOpeningParty = { partyId: string | null; partyName: string | null; partyDetail: string | null; partyAvailable: boolean };
+
+async function pendingOpeningCustomer(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  allocation: Extract<OpeningDraftAllocation, { kind: "CUSTOMER_RECEIVABLE" }>,
+): Promise<PendingOpeningParty> {
+  let partyName: string | null = null;
+  let partyDetail: string | null = null;
+  let partyAvailable = false;
+
+  const partyId = allocation.customerId;
+  const customer = await ctx.db.get(allocation.customerId);
+  if (customer?.orgId === orgId && !customer.isDeleted) {
+    partyName = `${customer.firstName} ${customer.lastName}`.trim();
+    partyDetail = customer.phone ? `•••${customer.phone.slice(-4)}` : (customer.email ?? null);
+    partyAvailable = true;
+  }
+
+  return { partyId, partyName, partyDetail, partyAvailable };
+}
+
+async function pendingOpeningEmployee(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  allocation: Extract<OpeningDraftAllocation, { kind: "EMPLOYEE_ADVANCE" | "EMPLOYEE_COMMISSION" }>,
+): Promise<PendingOpeningParty> {
+  let partyName: string | null = null;
+  let partyDetail: string | null = null;
+  let partyAvailable = false;
+
+  const partyId = allocation.userId;
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", allocation.userId))
+    .unique();
+  const employee = membership ? await ctx.db.get(allocation.userId) : null;
+  if (membership && !membership.offboardingStatus && employee) {
+    partyName = employee.name ?? employee.email;
+    partyDetail = employee.email;
+    partyAvailable = true;
+  }
+
+  return { partyId, partyName, partyDetail, partyAvailable };
+}
+
+async function pendingOpeningStock(
+  ctx: QueryCtx,
+  request: Readonly<{
+    orgId: Id<"organizations">;
+    allocation: Extract<OpeningDraftAllocation, { kind: "VEHICLE_INVENTORY" }>;
+    stockEvidence: Awaited<ReturnType<typeof listOpeningStockEvidence>>;
+    resetGeneration: number;
+    draftCurrency: string | undefined;
+  }>,
+): Promise<PendingOpeningParty> {
+  const { orgId, allocation, stockEvidence, resetGeneration, draftCurrency } = request;
+  let partyName: string | null = null;
+  let partyDetail: string | null = null;
+  let partyAvailable = false;
+
+  const partyId = allocation.vehicleId;
+  const vehicle = await ctx.db.get(allocation.vehicleId);
+  const proof = stockEvidence.find((item) => item.vehicleId === allocation.vehicleId);
+  if (vehicle?.orgId === orgId && !vehicle.isDeleted) {
+    partyName = vehicle.vin ?? null;
+    partyDetail = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
+    partyAvailable =
+      vehicle.sourceType === "STOCK" &&
+      vehicle.openingStockImportId !== undefined &&
+      vehicle.openingStockRowId !== undefined &&
+      proof?.vin === vehicle.vin &&
+      proof?.costMinor === allocation.amountMinor &&
+      proof?.currency === draftCurrency &&
+      proof?.command.resetGeneration === resetGeneration &&
+      proof?.command.idempotencyKey === `${vehicle.openingStockImportId}:${vehicle.openingStockRowId}`;
+  }
+
+  return { partyId, partyName, partyDetail, partyAvailable };
+}
+
+async function pendingOpeningPartner(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  allocation: Extract<OpeningDraftAllocation, { kind: "PARTNER_CAPITAL" }>,
+): Promise<PendingOpeningParty> {
+  let partyName: string | null = null;
+  let partyDetail: string | null = null;
+  let partyAvailable = false;
+
+  const partyId = allocation.partnerId;
+  const partner = await ctx.db.get(allocation.partnerId);
+  if (partner?.orgId === orgId && !partner.isDeleted) {
+    partyName = partner.partnerName;
+    partyDetail = String(partner._id).slice(-6);
+    partyAvailable = true;
+  }
+
+  return { partyId, partyName, partyDetail, partyAvailable };
+}
+
 export const listPendingOpeningBalanceDrafts = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -825,53 +933,22 @@ export const listPendingOpeningBalanceDrafts = query({
           let partyDetail: string | null = null;
           let partyAvailable = false;
           if (allocation.kind === "CUSTOMER_RECEIVABLE") {
-            partyId = allocation.customerId;
-            const customer = await ctx.db.get(allocation.customerId);
-            if (customer?.orgId === args.orgId && !customer.isDeleted) {
-              partyName = `${customer.firstName} ${customer.lastName}`.trim();
-              partyDetail = customer.phone ? `•••${customer.phone.slice(-4)}` : customer.email ?? null;
-              partyAvailable = true;
-            }
+            ({ partyId, partyName, partyDetail, partyAvailable } = await pendingOpeningCustomer(ctx, args.orgId, allocation));
           } else if (isRemainingOpeningKind(allocation.kind) && allocation.kind !== "EMPLOYEE_COMMISSION") {
             partyName = "counterpartyName" in allocation ? allocation.counterpartyName : null;
             partyAvailable = "counterpartyName" in allocation;
             const basis = draft.status === "POSTED" ? await resolveOpeningSettlementBasis(ctx,args.orgId,{draftId:draft._id,rowKey:allocation.rowKey},allocation.kind,openingReader) : null;
-            allocationStatus = basis?.kind === "UNAVAILABLE" ? "UNAVAILABLE" : allocation.kind === "UNALLOCATED_LIABILITY" ? "UNALLOCATED" : "AVAILABLE";
+            allocationStatus = openingAllocationAvailability(allocation.kind, basis?.kind !== "UNAVAILABLE");
           } else if (allocation.kind === "EMPLOYEE_ADVANCE" || allocation.kind === "EMPLOYEE_COMMISSION") {
-            partyId = allocation.userId;
-            const membership = await ctx.db.query("memberships")
-              .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", allocation.userId)).unique();
-            const employee = membership ? await ctx.db.get(allocation.userId) : null;
-            if (membership && !membership.offboardingStatus && employee) {
-              partyName = employee.name ?? employee.email;
-              partyDetail = employee.email;
-              partyAvailable = true;
-            }
+            ({ partyId, partyName, partyDetail, partyAvailable } = await pendingOpeningEmployee(ctx, args.orgId, allocation));
           } else if (allocation.kind === "PREPAID_EXPENSE") {
             partyId = allocation.rowKey;
             partyName = allocation.title;
             partyAvailable = allocation.attestedUnexpiredBenefit === true;
           } else if (allocation.kind === "VEHICLE_INVENTORY") {
-            partyId = allocation.vehicleId;
-            const vehicle = await ctx.db.get(allocation.vehicleId);
-            const proof = stockEvidence.find((item) => item.vehicleId === allocation.vehicleId);
-            if (vehicle?.orgId === args.orgId && !vehicle.isDeleted) {
-              partyName = vehicle.vin ?? null;
-              partyDetail = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
-              partyAvailable = vehicle.sourceType === "STOCK" && vehicle.openingStockImportId !== undefined &&
-                vehicle.openingStockRowId !== undefined && proof?.vin === vehicle.vin &&
-                proof?.costMinor === allocation.amountMinor && proof?.currency === draft.currency &&
-                proof?.command.resetGeneration === resetGeneration &&
-                proof?.command.idempotencyKey === `${vehicle.openingStockImportId}:${vehicle.openingStockRowId}`;
-            }
+            ({ partyId, partyName, partyDetail, partyAvailable } = await pendingOpeningStock(ctx, { orgId: args.orgId, allocation, stockEvidence, resetGeneration, draftCurrency: draft.currency }));
           } else if (allocation.kind === "PARTNER_CAPITAL") {
-            partyId = allocation.partnerId;
-            const partner = await ctx.db.get(allocation.partnerId);
-            if (partner?.orgId === args.orgId && !partner.isDeleted) {
-              partyName = partner.partnerName;
-              partyDetail = String(partner._id).slice(-6);
-              partyAvailable = true;
-            }
+            ({ partyId, partyName, partyDetail, partyAvailable } = await pendingOpeningPartner(ctx, args.orgId, allocation));
           }
           return {
             rowKey: allocation.rowKey,
@@ -1005,6 +1082,56 @@ export const openingBalanceStatus = query({
 /** Server-classified account choices for the once-per-org opening editor.
  * Unsupported controls stay visible so the operator can see why a line is
  * unavailable; no client copy of the financial policy table is authoritative. */
+type OpeningAccountChoicePolicy = OpeningPolicy | "PARTNER_CAPITAL_CANDIDATE" | "UNAVAILABLE";
+
+function openingAccountChoicePolicy(
+  account: Doc<"chartOfAccounts">,
+  currency: string,
+  canonical: ReadonlyArray<Id<"chartOfAccounts"> | null>,
+): OpeningAccountChoicePolicy {
+  const candidate = !account.systemKey && isOpeningPartnerAccount(account);
+  const classified = openingPolicyForAccount(account, candidate);
+  if (!account.active || (account.currencyRestriction && account.currencyRestriction !== currency))
+    return "UNSUPPORTED";
+  if (candidate) return "PARTNER_CAPITAL_CANDIDATE";
+  const canonicalKinds = [
+    "CUSTOMER_RECEIVABLE",
+    "EMPLOYEE_ADVANCE",
+    "PARTNER_CAPITAL",
+    "PREPAID_EXPENSE",
+    "VEHICLE_INVENTORY",
+  ] as const;
+  const index = canonicalKinds.findIndex((kind) => kind === classified);
+  if (classified && index !== -1) {
+    if (canonical[index] === null) return "UNAVAILABLE";
+    return account._id === canonical[index] ? classified : "UNSUPPORTED";
+  }
+  if (
+    classified &&
+    (isRemainingOpeningKind(classified) || classified === "DECLARED_LIABILITY" || classified === "LEDGER_ONLY")
+  )
+    return classified;
+  return "UNSUPPORTED";
+}
+
+function openingAllocationAvailability(kind: string, available: boolean): "AVAILABLE" | "UNALLOCATED" | "UNAVAILABLE" {
+  if (!available) return "UNAVAILABLE";
+  return kind === "UNALLOCATED_LIABILITY" ? "UNALLOCATED" : "AVAILABLE";
+}
+
+function openingCandidateKinds(policy: OpeningAccountChoicePolicy): RemainingOpeningKind[] {
+  if (policy === "DECLARED_LIABILITY") return ["SUPPLIER_PAYABLE", "OTHER_PAYABLE", "EMPLOYEE_COMMISSION", "UNALLOCATED_LIABILITY"];
+  return isRemainingOpeningKind(policy) ? [policy] : [];
+}
+
+function openingAllowedPurposes(
+  account: Doc<"chartOfAccounts">,
+  allowedKinds: readonly RemainingOpeningKind[],
+): string[] | undefined {
+  if (!allowedKinds.includes("UNALLOCATED_LIABILITY")) return undefined;
+  return account.systemKey ? ["CUSTOMER_DEPOSIT"] : ["CUSTOMER_DEPOSIT", "UNIDENTIFIED_RECEIPT"];
+}
+
 export const listOpeningAccountPolicies = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -1029,29 +1156,12 @@ export const listOpeningAccountPolicies = query({
       catch { return null; }
     }));
     return await Promise.all(accounts.map(async (account) => {
-      const candidate = !account.systemKey && isOpeningPartnerAccount(account);
-      const classified = openingPolicyForAccount(account, candidate);
-      let policy: OpeningPolicy | "PARTNER_CAPITAL_CANDIDATE" | "UNAVAILABLE" = "UNSUPPORTED";
-      if (account.active &&
-          (!account.currencyRestriction || account.currencyRestriction === currency)) {
-        if (candidate) policy = "PARTNER_CAPITAL_CANDIDATE";
-        else if (classified === "CUSTOMER_RECEIVABLE") policy = canonical[0] === null ? "UNAVAILABLE"
-          : account._id === canonical[0] ? classified : "UNSUPPORTED";
-        else if (classified === "EMPLOYEE_ADVANCE") policy = canonical[1] === null ? "UNAVAILABLE"
-          : account._id === canonical[1] ? classified : "UNSUPPORTED";
-        else if (classified === "PARTNER_CAPITAL") policy = canonical[2] === null ? "UNAVAILABLE"
-          : account._id === canonical[2] ? classified : "UNSUPPORTED";
-        else if (classified === "PREPAID_EXPENSE") policy = canonical[3] === null ? "UNAVAILABLE"
-          : account._id === canonical[3] ? classified : "UNSUPPORTED";
-        else if (classified === "VEHICLE_INVENTORY") policy = canonical[4] === null ? "UNAVAILABLE"
-          : account._id === canonical[4] ? classified : "UNSUPPORTED";
-        else if (classified && (isRemainingOpeningKind(classified) || classified === "DECLARED_LIABILITY" || classified === "LEDGER_ONLY")) policy = classified;
-      }
-      const candidates:RemainingOpeningKind[] = policy === "DECLARED_LIABILITY" ? ["SUPPLIER_PAYABLE","OTHER_PAYABLE","EMPLOYEE_COMMISSION","UNALLOCATED_LIABILITY"] : isRemainingOpeningKind(policy) ? [policy] : [];
+      let policy = openingAccountChoicePolicy(account, currency, canonical);
+      const candidates:RemainingOpeningKind[] = openingCandidateKinds(policy);
       const allowedKinds:RemainingOpeningKind[]=[];
       for(const kind of candidates)if(await openingAccountAllowsFamily(ctx,args.orgId,account,currency,kind,kind === "UNALLOCATED_LIABILITY" ? "CUSTOMER_DEPOSIT" : undefined))allowedKinds.push(kind);
       if(candidates.length && !allowedKinds.length)policy="UNSUPPORTED";
-      return { accountId:account._id,policy,allowedKinds,allowedPurposes:allowedKinds.includes("UNALLOCATED_LIABILITY") ? account.systemKey ? ["CUSTOMER_DEPOSIT"] : ["CUSTOMER_DEPOSIT","UNIDENTIFIED_RECEIPT"] : undefined };
+      return { accountId:account._id,policy,allowedKinds,allowedPurposes:openingAllowedPurposes(account, allowedKinds) };
     }));
   },
 });
@@ -1100,6 +1210,199 @@ async function selectOpeningReadbackDraft(ctx:QueryCtx,orgId:Id<"organizations">
 
 /** Readback of the immutable opening commitment. Amount and account come
  * from the posted draft, never a mutable outstanding balance. */
+type OpeningDraftResult = NonNullable<Doc<"openingBalanceDrafts">["allocationResults"]>[number];
+type PostedOpeningParty = { partyId: string | null; partyName: string | null; documentId: string | null; recordAvailable: boolean };
+
+type PostedOpeningRequest<Kind extends OpeningDraftAllocation["kind"]> = Readonly<{
+  orgId: Id<"organizations">;
+  draft: Doc<"openingBalanceDrafts">;
+  allocation: Extract<OpeningDraftAllocation, { kind: Kind }>;
+  result: OpeningDraftResult | undefined;
+  openingReader: OpeningSettlementReader;
+}>;
+
+async function postedOpeningCustomerReceivable(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<"CUSTOMER_RECEIVABLE">,
+): Promise<PostedOpeningParty> {
+  const { orgId, draft, allocation, result } = request;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+  let recordAvailable = false;
+
+  const partyId = allocation.customerId;
+  const customer = await ctx.db.get(allocation.customerId);
+  if (customer?.orgId === orgId && !customer.isDeleted) {
+    partyName = `${customer.firstName} ${customer.lastName}`.trim();
+  }
+  if (result?.kind === allocation.kind) {
+    documentId = result.receivableId;
+    const receivable = await ctx.db.get(result.receivableId);
+    const canonical = await ctx.db.get(result.canonicalReceivableDocumentId);
+    recordAvailable =
+      receivable?.orgId === orgId &&
+      receivable.openingBalanceDraftId === draft._id &&
+      receivable.canonicalReceivableDocumentId === result.canonicalReceivableDocumentId &&
+      canonical?.orgId === orgId &&
+      canonical.sourceType === "legacy_receivable" &&
+      canonical.sourceId === result.receivableId &&
+      canonical.customerId === allocation.customerId;
+  }
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+async function postedOpeningRemainingDocument(
+  ctx: QueryCtx,
+  request: Readonly<{ orgId: Id<"organizations">; result: OpeningDraftResult | undefined; openingReader: OpeningSettlementReader; recordAvailable: boolean }>,
+): Promise<{documentId: string | null; recordAvailable: boolean}> {
+  const { orgId, result, openingReader } = request;
+  let { recordAvailable } = request;
+  let documentId: string | null = null;
+  if (result?.kind === "SUPPLIER_RECOVERABLE") {
+    documentId = result.recoveryId;
+    const row = await ctx.db.get(result.recoveryId);
+    try {
+      recordAvailable = recordAvailable && !!row && !!(await openingRecoveryBasis(ctx, orgId, row, openingReader));
+    } catch {
+      recordAvailable = false;
+    }
+  } else if (result?.kind === "SUPPLIER_PAYABLE" || result?.kind === "OTHER_PAYABLE") {
+    documentId = result.payableId;
+    const row = await ctx.db.get(result.payableId);
+    try {
+      recordAvailable = recordAvailable && !!row && !!(await openingPayableBasis(ctx, orgId, row, openingReader));
+    } catch {
+      recordAvailable = false;
+    }
+  } else if (result?.kind === "EMPLOYEE_COMMISSION") {
+    documentId = result.openingCommissionLiabilityId;
+    recordAvailable =
+      recordAvailable &&
+      (await resolveOpeningCommissionBasis(ctx, orgId, result.openingCommissionLiabilityId, openingReader)).kind ===
+        "AVAILABLE";
+  }
+  return { documentId, recordAvailable };
+}
+
+async function postedOpeningRemaining(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<RemainingOpeningKind>,
+): Promise<PostedOpeningParty> {
+  const { orgId, draft, allocation, result, openingReader } = request;
+  let partyId: string | null = null;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+
+  partyName = "counterpartyName" in allocation ? allocation.counterpartyName : null;
+  const basis = await resolveOpeningSettlementBasis(
+    ctx,
+    orgId,
+    { draftId: draft._id, rowKey: allocation.rowKey },
+    allocation.kind,
+    openingReader,
+  );
+  let recordAvailable = basis.kind === "AVAILABLE";
+  if (allocation.kind === "EMPLOYEE_COMMISSION") {
+    partyId = allocation.userId;
+    const employee = await ctx.db.get(allocation.userId);
+    partyName = employee?.name ?? employee?.email ?? null;
+  }
+  ({ documentId, recordAvailable } = await postedOpeningRemainingDocument(ctx, {
+    orgId,
+    result,
+    openingReader,
+    recordAvailable,
+  }));
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+async function postedOpeningEmployeeAdvance(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<"EMPLOYEE_ADVANCE">,
+): Promise<PostedOpeningParty> {
+  const { orgId, draft, allocation, result } = request;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+  let recordAvailable = false;
+
+  const partyId = allocation.userId;
+  const employee = await ctx.db.get(allocation.userId);
+  partyName = employee?.name ?? employee?.email ?? null;
+  if (result?.kind === allocation.kind) {
+    documentId = result.advanceId;
+    const advance = await ctx.db.get(result.advanceId);
+    recordAvailable = advance?.orgId === orgId && advance.openingBalanceDraftId === draft._id && !advance.isDeleted;
+  }
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+async function postedOpeningPrepaidExpense(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<"PREPAID_EXPENSE">,
+): Promise<PostedOpeningParty> {
+  const { orgId, draft, allocation, result } = request;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+  let recordAvailable = false;
+
+  const partyId = allocation.rowKey;
+  partyName = allocation.title;
+  if (result?.kind === allocation.kind) {
+    documentId = result.scheduleId;
+    const basis = await resolvePrepaidScheduleSource(ctx, orgId, result.scheduleId);
+    recordAvailable = basis.kind === "OPENING" && basis.draftId === draft._id && basis.rowKey === allocation.rowKey;
+  }
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+async function postedOpeningVehicleInventory(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<"VEHICLE_INVENTORY">,
+): Promise<PostedOpeningParty> {
+  const { orgId, allocation, result } = request;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+  let recordAvailable = false;
+
+  const partyId = allocation.vehicleId;
+  const vehicle = await ctx.db.get(allocation.vehicleId);
+  if (vehicle?.orgId === orgId) partyName = vehicle.vin ?? null;
+  if (result?.kind === allocation.kind && result.vehicleId === allocation.vehicleId) {
+    documentId = allocation.vehicleId;
+    try {
+      recordAvailable = (await assertOpeningVehicleBasis(ctx, orgId, allocation.vehicleId)) === "POSTED";
+    } catch {
+      recordAvailable = false;
+    }
+  }
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+async function postedOpeningPartnerCapital(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<"PARTNER_CAPITAL">,
+): Promise<PostedOpeningParty> {
+  const { orgId, draft, allocation, result } = request;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+  let recordAvailable = false;
+
+  const partyId = allocation.partnerId;
+  const partner = await ctx.db.get(allocation.partnerId);
+  if (partner?.orgId === orgId && !partner.isDeleted) partyName = partner.partnerName;
+  if (result?.kind === allocation.kind && result.partnerId === allocation.partnerId) {
+    documentId = result.partnerId;
+    recordAvailable = partner?.orgId === orgId && !partner.isDeleted && partner.openingBalanceDraftId === draft._id;
+  }
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
 export const postedOpeningAllocationReadback = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -1130,86 +1433,24 @@ export const postedOpeningAllocationReadback = query({
       let documentId: string | null = null;
       let recordAvailable = false;
       if (allocation.kind === "CUSTOMER_RECEIVABLE") {
-        partyId = allocation.customerId;
-        const customer = await ctx.db.get(allocation.customerId);
-        if (customer?.orgId === args.orgId && !customer.isDeleted) {
-          partyName = `${customer.firstName} ${customer.lastName}`.trim();
-        }
-        if (result?.kind === allocation.kind) {
-          documentId = result.receivableId;
-          const receivable = await ctx.db.get(result.receivableId);
-          const canonical = await ctx.db.get(result.canonicalReceivableDocumentId);
-          recordAvailable = receivable?.orgId === args.orgId && receivable.openingBalanceDraftId === draft._id &&
-            receivable.canonicalReceivableDocumentId === result.canonicalReceivableDocumentId &&
-            canonical?.orgId === args.orgId && canonical.sourceType === "legacy_receivable" &&
-            canonical.sourceId === result.receivableId && canonical.customerId === allocation.customerId;
-        }
-      } else if (isRemainingOpeningKind(allocation.kind)) {
-        partyName = "counterpartyName" in allocation ? allocation.counterpartyName : null;
-        const basis = await resolveOpeningSettlementBasis(ctx,args.orgId,{draftId:draft._id,rowKey:allocation.rowKey},allocation.kind,openingReader);
-        recordAvailable = basis.kind === "AVAILABLE";
-        if (allocation.kind === "EMPLOYEE_COMMISSION") {
-          partyId = allocation.userId;
-          const employee = await ctx.db.get(allocation.userId);
-          partyName = employee?.name ?? employee?.email ?? null;
-        }
-        if (result?.kind === "SUPPLIER_RECOVERABLE") {
-          documentId = result.recoveryId;
-          const row = await ctx.db.get(result.recoveryId);
-          try {recordAvailable = recordAvailable && !!row && !!await openingRecoveryBasis(ctx,args.orgId,row,openingReader);} catch {recordAvailable=false;}
-        }
-        else if (result?.kind === "SUPPLIER_PAYABLE" || result?.kind === "OTHER_PAYABLE") {
-          documentId = result.payableId;
-          const row = await ctx.db.get(result.payableId);
-          try {recordAvailable = recordAvailable && !!row && !!await openingPayableBasis(ctx,args.orgId,row,openingReader);} catch {recordAvailable=false;}
-        }
-        else if (result?.kind === "EMPLOYEE_COMMISSION") {
-          documentId = result.openingCommissionLiabilityId;
-          recordAvailable = recordAvailable && (await resolveOpeningCommissionBasis(ctx,args.orgId,result.openingCommissionLiabilityId,openingReader)).kind === "AVAILABLE";
-        }
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningCustomerReceivable(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
+      } else if (isRemainingOpeningAllocation(allocation)) {
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningRemaining(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
       } else if (allocation.kind === "EMPLOYEE_ADVANCE") {
-        partyId = allocation.userId;
-        const employee = await ctx.db.get(allocation.userId);
-        partyName = employee?.name ?? employee?.email ?? null;
-        if (result?.kind === allocation.kind) {
-          documentId = result.advanceId;
-          const advance = await ctx.db.get(result.advanceId);
-          recordAvailable = advance?.orgId === args.orgId && advance.openingBalanceDraftId === draft._id &&
-            !advance.isDeleted;
-        }
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningEmployeeAdvance(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
       } else if (allocation.kind === "PREPAID_EXPENSE") {
-        partyId = allocation.rowKey;
-        partyName = allocation.title;
-        if (result?.kind === allocation.kind) {
-          documentId = result.scheduleId;
-          const basis = await resolvePrepaidScheduleSource(ctx, args.orgId, result.scheduleId);
-          recordAvailable = basis.kind === "OPENING" && basis.draftId === draft._id && basis.rowKey === allocation.rowKey;
-        }
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningPrepaidExpense(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
       } else if (allocation.kind === "VEHICLE_INVENTORY") {
-        partyId = allocation.vehicleId;
-        const vehicle = await ctx.db.get(allocation.vehicleId);
-        if (vehicle?.orgId === args.orgId) partyName = vehicle.vin ?? null;
-        if (result?.kind === allocation.kind && result.vehicleId === allocation.vehicleId) {
-          documentId = allocation.vehicleId;
-          try { recordAvailable = await assertOpeningVehicleBasis(ctx, args.orgId, allocation.vehicleId) === "POSTED"; }
-          catch { recordAvailable = false; }
-        }
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningVehicleInventory(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
       } else if (allocation.kind === "PARTNER_CAPITAL") {
-        partyId = allocation.partnerId;
-        const partner = await ctx.db.get(allocation.partnerId);
-        if (partner?.orgId === args.orgId && !partner.isDeleted) partyName = partner.partnerName;
-        if (result?.kind === allocation.kind && result.partnerId === allocation.partnerId) {
-          documentId = result.partnerId;
-          recordAvailable = partner?.orgId === args.orgId && !partner.isDeleted &&
-            partner.openingBalanceDraftId === draft._id;
-        }
-      }
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningPartnerCapital(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
+            }
       return { kind: allocation.kind, rowKey: allocation.rowKey, restricted: false as const,
         accountId: allocation.accountId, accountCode: ownedAccount?.code ?? null,
         accountName: ownedAccount?.name ?? null, accountNameAr: ownedAccount?.nameAr,
         amountMinor: allocation.amountMinor, title:"title" in allocation ? allocation.title : undefined, partyId, partyName, documentId, recordAvailable,
         purpose: "purpose" in allocation ? allocation.purpose : undefined,
-        allocationStatus: journalStatus !== "POSTED" || !recordAvailable ? "UNAVAILABLE" as const : allocation.kind === "UNALLOCATED_LIABILITY" ? "UNALLOCATED" as const : "AVAILABLE" as const };
+        allocationStatus: openingAllocationAvailability(allocation.kind, journalStatus === "POSTED" && recordAvailable) };
     }));
     return { draftId: draft._id, journalEntryId: draft.journalEntryId ?? null, journalStatus,
       currency: draft.currency ?? null, asOfDate: draft.asOfDate, rows };

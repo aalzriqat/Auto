@@ -1043,6 +1043,52 @@ async function pendingApDraftState(
   return touchesAp ? "PENDING" : "NONE";
 }
 
+async function supplierPayableOpenBalanceAsOf(
+  ctx: QueryCtx,
+  request: Readonly<{ orgId: Id<"organizations">; payable: Doc<"vehicleSupplierPayables">; cutoff: number }>,
+): Promise<
+  | { status: "AVAILABLE"; openMinor: number | null; accountId?: Id<"chartOfAccounts"> }
+  | { status: "UNAVAILABLE"; reason: "OPENING_SOURCE_UNAVAILABLE" | "OVER_LIMIT" }
+> {
+  const { orgId, payable: p, cutoff } = request;
+  let openMinor: number;
+  let basis;
+  try {
+    basis = await openingPayableBasis(ctx, orgId, p);
+  } catch {
+    return { status: "UNAVAILABLE", reason: "OPENING_SOURCE_UNAVAILABLE" };
+  }
+  if (basis) {
+    if (basis.asOfDate > cutoff) return { status: "AVAILABLE", openMinor: null, accountId: basis.accountId };
+    const payments = await ctx.db
+      .query("openingPayablePayments")
+      .withIndex("by_payable", (q) => q.eq("payableId", p._id))
+      .take(101);
+    if (payments.length > 100) return { status: "UNAVAILABLE", reason: "OVER_LIMIT" };
+    if (
+      payments.some(
+        (payment) =>
+          payment.orgId !== orgId ||
+          payment.openingBalanceDraftId !== basis.draftId ||
+          payment.openingRowKey !== basis.rowKey ||
+          !Number.isSafeInteger(payment.amountMinor) ||
+          payment.amountMinor <= 0 ||
+          payment.currency !== p.currency,
+      )
+    )
+      return { status: "UNAVAILABLE", reason: "OPENING_SOURCE_UNAVAILABLE" };
+    const paid = payments
+      .filter(
+        (payment) =>
+          payment.occurredAt <= cutoff &&
+          (payment.status !== "REVERSED" || (payment.reversedAt !== undefined && payment.reversedAt > cutoff)),
+      )
+      .reduce((sum, payment) => sum + payment.amountMinor, 0);
+    openMinor = basis.amountMinor - paid;
+  } else openMinor = toMinorUnits(p.amountDue, p.currency) - toMinorUnits(settlementView(p).amountPaid, p.currency);
+  return { status: "AVAILABLE", openMinor, accountId: basis?.accountId };
+}
+
 export async function computeSupplierPayablesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
@@ -1108,18 +1154,11 @@ export async function computeSupplierPayablesReconciliation(
   if(canonical)controlAccounts.add(canonical._id);
   const cutoff=toDate ?? Date.now();
   for (const p of rows) {
-    let openMinor:number;
-    let basis;
-    try {basis=await openingPayableBasis(ctx,orgId,p);}catch{return unavailable("OPENING_SOURCE_UNAVAILABLE");}
-    if(basis){
-      controlAccounts.add(basis.accountId);
-      if(basis.asOfDate>cutoff)continue;
-      const payments=await ctx.db.query("openingPayablePayments").withIndex("by_payable",q=>q.eq("payableId",p._id)).take(101);
-      if(payments.length>100)return unavailable("OVER_LIMIT");
-      if(payments.some(payment=>payment.orgId!==orgId || payment.openingBalanceDraftId!==basis.draftId || payment.openingRowKey!==basis.rowKey || !Number.isSafeInteger(payment.amountMinor) || payment.amountMinor<=0 || payment.currency!==p.currency))return unavailable("OPENING_SOURCE_UNAVAILABLE");
-      const paid=payments.filter(payment=>payment.occurredAt<=cutoff && (payment.status!=="REVERSED" || payment.reversedAt!==undefined && payment.reversedAt>cutoff)).reduce((sum,payment)=>sum+payment.amountMinor,0);
-      openMinor=basis.amountMinor-paid;
-    }else openMinor=toMinorUnits(p.amountDue,p.currency)-toMinorUnits(settlementView(p).amountPaid,p.currency);
+    const balance = await supplierPayableOpenBalanceAsOf(ctx, { orgId, payable: p, cutoff });
+    if (balance.status === "UNAVAILABLE") return unavailable(balance.reason);
+    if (balance.accountId) controlAccounts.add(balance.accountId);
+    if (balance.openMinor === null) continue;
+    const openMinor = balance.openMinor;
     subByCurrency.set(p.currency, (subByCurrency.get(p.currency) ?? 0) + openMinor);
   }
   for (const [currency, minor] of subByCurrency) {

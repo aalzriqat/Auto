@@ -154,6 +154,21 @@ export type ApprovalGate = {
   recoveryKey: string | null;
 };
 
+function approvalRecoveryKey(args: {
+  isOwnDraft: boolean;
+  payrollAuthorityMissing: boolean;
+  serverCanReject: boolean;
+  hasBlockingFacts: boolean;
+}): string | null {
+  if (args.isOwnDraft) {
+    return args.hasBlockingFacts
+      ? "OpeningBalanceOwnDraftNeedsAnotherReviewer"
+      : "OpeningBalanceSegregationOfDutiesNotice";
+  }
+  if (args.payrollAuthorityMissing || !args.serverCanReject) return "OpeningAllocationNeedPayrollReviewer";
+  return args.hasBlockingFacts ? "OpeningBalanceRejectAndResubmit" : null;
+}
+
 export function computeApprovalGate(args: {
   isOwnDraft: boolean;
   busy: boolean;
@@ -208,17 +223,9 @@ export function computeApprovalGate(args: {
   const canApprove = canReject && balanced && denominationKnown && !bankIdentityMissing &&
     !allocationIdentityMissing && serverCanApprove && serverBlockerCodes.length === 0;
 
-  let recoveryKey: string | null = null;
-  if (isOwnDraft) {
-    recoveryKey =
-      blockingFacts.length > 0
-        ? "OpeningBalanceOwnDraftNeedsAnotherReviewer"
-        : "OpeningBalanceSegregationOfDutiesNotice";
-  } else if (payrollAuthorityMissing || !serverCanReject) {
-    recoveryKey = "OpeningAllocationNeedPayrollReviewer";
-  } else if (blockingFacts.length > 0) {
-    recoveryKey = "OpeningBalanceRejectAndResubmit";
-  }
+  const recoveryKey = approvalRecoveryKey({
+    isOwnDraft, payrollAuthorityMissing, serverCanReject, hasBlockingFacts: blockingFacts.length > 0,
+  });
 
   return { canApprove, canReject, blockingFacts, recoveryKey };
 }
@@ -230,6 +237,16 @@ type OpeningBalanceApprovalViewProps = {
   onApprove: () => void;
   onReject: (reason: string) => void;
 };
+
+function PendingAllocationSource({ row }: Readonly<{
+  row: NonNullable<PendingOpeningBalanceDraft["allocationDetails"]>[number];
+}>) {
+  const { t } = useLanguage();
+  if (row.kind === "PREPAID_EXPENSE") {
+    return <p className="text-xs text-muted-foreground">{t("OpeningPrepaidSource")}</p>;
+  }
+  return row.partyId ? <p className="text-xs text-muted-foreground"><bdi>{row.partyId}</bdi></p> : null;
+}
 
 /**
  * Presentational half, kept free of Convex so it can be rendered in a test.
@@ -444,9 +461,7 @@ export function OpeningBalanceApprovalView({
                 <p><bdi>{row.partyName ?? (row.kind === "UNALLOCATED_LIABILITY"
                   ? t("OpeningAllocationRecordUnallocated") : t("OpeningAllocationPartyUnavailable"))}</bdi>
                   {row.partyDetail ? <> · <bdi>{row.partyDetail}</bdi></> : null}</p>
-                {row.kind === "PREPAID_EXPENSE"
-                  ? <p className="text-xs text-muted-foreground">{t("OpeningPrepaidSource")}</p>
-                  : row.partyId ? <p className="text-xs text-muted-foreground"><bdi>{row.partyId}</bdi></p> : null}
+                <PendingAllocationSource row={row} />
                 {row.purpose && <p className="text-xs text-muted-foreground">{t("OpeningAllocationPurpose")}: {t(`OpeningAllocationPurpose_${row.purpose}`)}</p>}
                 {row.allocationStatus === "UNALLOCATED" && <p className="text-xs text-amber-700">{t("OpeningAllocationUnallocatedNotice")}</p>}
                 <p className="tabular-nums">{formatMinor(row.amountMinor, draft.currency, draft.denominationKnown)}

@@ -14,11 +14,13 @@ export function isOpeningCommissionAccount(account: Doc<"chartOfAccounts">): boo
     (account.systemKey === SYSTEM_KEYS.COMMISSION_PAYABLE || (!account.systemKey && !reservedCodes.has(account.code)));
 }
 
-export async function validateOpeningCommissions(ctx: QueryCtx | MutationCtx, args: {
+type OpeningCommissionInput = {
   orgId: Id<"organizations">; currency: string;
   lines: readonly { accountId: Id<"chartOfAccounts">; debitMinor: number; creditMinor: number }[];
   allocations: readonly Allocation[];
-}): Promise<void> {
+};
+
+export async function validateOpeningCommissions(ctx: QueryCtx | MutationCtx, args: OpeningCommissionInput): Promise<void> {
   const rows = args.allocations.filter((row): row is OpeningCommissionAllocation => row.kind === "EMPLOYEE_COMMISSION");
   if (rows.length === 0) return;
   if (await ctx.db.query("openingCommissionLiabilities").withIndex("by_org", q => q.eq("orgId", args.orgId)).first()) {
@@ -27,17 +29,7 @@ export async function validateOpeningCommissions(ctx: QueryCtx | MutationCtx, ar
   const totals = new Map<Id<"chartOfAccounts">, number>();
   const employees = new Set<string>();
   for (const row of rows) {
-    if (!Number.isSafeInteger(row.amountMinor) || row.amountMinor <= 0) throw new ConvexError("Opening commission amounts must be positive exact minor units.");
-    const account = await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", row.accountId, "Opening commission account unavailable.");
-    if (!isOpeningCommissionAccount(account) || (account.currencyRestriction && account.currencyRestriction !== args.currency)) {
-      throw new ConvexError("Opening commissions require an active, same-currency commission liability account.");
-    }
-    if (account.systemKey === SYSTEM_KEYS.COMMISSION_PAYABLE && account._id !== await resolveSystemAccount(ctx, args.orgId, SYSTEM_KEYS.COMMISSION_PAYABLE)) {
-      throw new ConvexError("Opening commissions must use the actual native commission control account.");
-    }
-    const user = await ctx.db.get(row.userId);
-    const membership = await ctx.db.query("memberships").withIndex("by_org_user", q => q.eq("orgId", args.orgId).eq("userId", row.userId)).unique();
-    if (!user || !membership || membership.offboardingStatus) throw new ConvexError("Opening commission employee is not an active member of this organization.");
+    await validateOpeningCommissionRow(ctx, args, row);
     const pair = `${row.accountId}:${row.userId}`;
     if (employees.has(pair)) throw new ConvexError("An employee can have only one opening commission per declared account.");
     employees.add(pair);
@@ -52,6 +44,21 @@ export async function validateOpeningCommissions(ctx: QueryCtx | MutationCtx, ar
       throw new ConvexError("Opening commissions must exactly match their declared liability credit.");
     }
   }
+}
+
+async function validateOpeningCommissionRow(ctx: QueryCtx | MutationCtx, args: OpeningCommissionInput,
+  row: OpeningCommissionAllocation): Promise<void> {
+  if (!Number.isSafeInteger(row.amountMinor) || row.amountMinor <= 0) throw new ConvexError("Opening commission amounts must be positive exact minor units.");
+  const account = await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", row.accountId, "Opening commission account unavailable.");
+  if (!isOpeningCommissionAccount(account) || (account.currencyRestriction && account.currencyRestriction !== args.currency)) {
+    throw new ConvexError("Opening commissions require an active, same-currency commission liability account.");
+  }
+  if (account.systemKey === SYSTEM_KEYS.COMMISSION_PAYABLE && account._id !== await resolveSystemAccount(ctx, args.orgId, SYSTEM_KEYS.COMMISSION_PAYABLE)) {
+    throw new ConvexError("Opening commissions must use the actual native commission control account.");
+  }
+  const user = await ctx.db.get(row.userId);
+  const membership = await ctx.db.query("memberships").withIndex("by_org_user", q => q.eq("orgId", args.orgId).eq("userId", row.userId)).unique();
+  if (!user || !membership || membership.offboardingStatus) throw new ConvexError("Opening commission employee is not an active member of this organization.");
 }
 
 /** Central opening materialization only; this creates no new accrual or cash movement. */

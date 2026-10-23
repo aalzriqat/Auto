@@ -27,6 +27,13 @@ function maskPhone(phone: string | undefined): string {
   return phone ? `•••${phone.slice(-4)}` : "";
 }
 
+function partyFieldLabel(kind: OpeningAllocationDraft["kind"]): string {
+  if (kind === "CUSTOMER_RECEIVABLE") return "OpeningAllocationCustomer";
+  if (kind === "EMPLOYEE_ADVANCE" || kind === "EMPLOYEE_COMMISSION") return "OpeningAllocationEmployee";
+  if (kind === "VEHICLE_INVENTORY") return "OpeningAllocationVehicle";
+  return "OpeningAllocationPartner";
+}
+
 type Props = {
   orgId: Id<"organizations">;
   currency: string;
@@ -41,7 +48,7 @@ type Props = {
 /** Party families use existing party read grants; backend posting still
  * re-resolves each selected ID and owns every financial rule. */
 export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChange,
-  canSelectCustomers, canSelectEmployees, canSelectPartners }: Props) {
+  canSelectCustomers, canSelectEmployees, canSelectPartners }: Readonly<Props>) {
   const { t } = useLanguage();
   const [activeCustomerRow, setActiveCustomerRow] = useState<string | null>(null);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -65,6 +72,25 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
     needsPartners && canSelectPartners ? { orgId } : "skip",
     { initialNumItems: 50 },
   );
+  const employeesExhausted = memberStatus === "Exhausted" && members.length === 0;
+  const noEligiblePartyByKind: Partial<Record<OpeningAllocationDraft["kind"], boolean>> = {
+    CUSTOMER_RECEIVABLE: activeCustomerRow !== null && customerOptions !== undefined && customerOptions.length === 0,
+    EMPLOYEE_ADVANCE: employeesExhausted,
+    EMPLOYEE_COMMISSION: employeesExhausted,
+    VEHICLE_INVENTORY: vehicles !== undefined && vehicles.every((vehicle) => !vehicle.available),
+    PARTNER_CAPITAL: partnerStatus === "Exhausted" && partners.length === 0,
+  };
+
+  function selectedPartyLabel(partyId: string): string {
+    const customer = customerOptions?.find((item) => item._id === partyId);
+    if (customer) return `${customer.firstName} ${customer.lastName} ${maskPhone(customer.phone)}`.trim();
+    const member = members?.find((item) => item.userId === partyId);
+    if (member) return `${member.userName} · ${member.userEmail}`;
+    const partner = partners?.find((item) => item._id === partyId);
+    if (partner) return `${partner.partnerName} · ${String(partner._id).slice(-6)}`;
+    const vehicle = vehicles?.find((item) => item.vehicleId === partyId);
+    return vehicle ? `${vehicle.vin ?? ""} · ${vehicle.label ?? ""}` : "";
+  }
 
   function updateRow(rowKey: string, patch: Partial<OpeningAllocationDraft>) {
     onChange(rows.map((row) => row.rowKey === rowKey ? { ...row, ...patch } : row));
@@ -87,15 +113,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
         const groupRows = rows.filter((row) => row.accountId === group.accountId);
         const allocated = groupRows.reduce((sum, row) => sum + (parseOpeningMoneyMinor(row.amount, currency) ?? 0), 0);
         const maySelect = (group.allowedKinds ?? [group.kind]).some(canEditKind);
-        const noEligibleParty = maySelect && (group.kind === "CUSTOMER_RECEIVABLE" ||
-          group.kind === "EMPLOYEE_ADVANCE" || group.kind === "EMPLOYEE_COMMISSION" ||
-          group.kind === "VEHICLE_INVENTORY" || group.kind === "PARTNER_CAPITAL") && (group.kind === "CUSTOMER_RECEIVABLE"
-          ? activeCustomerRow !== null && customerOptions !== undefined && customerOptions.length === 0
-          : group.kind === "EMPLOYEE_ADVANCE" || group.kind === "EMPLOYEE_COMMISSION"
-            ? memberStatus === "Exhausted" && members.length === 0
-            : group.kind === "VEHICLE_INVENTORY"
-              ? vehicles !== undefined && vehicles.every((vehicle) => !vehicle.available)
-            : partnerStatus === "Exhausted" && partners.length === 0);
+        const noEligibleParty = maySelect && (noEligiblePartyByKind[group.kind] ?? false);
         return (
           <div key={group.accountId} className="space-y-3 rounded-md border p-3">
             <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -126,10 +144,8 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                   memberStatus === "Exhausted" && members.length === 0 &&
                   <p className="text-xs text-amber-700" role="status">{t("OpeningAllocationNoEligibleParty")}</p>}
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {(["CUSTOMER_RECEIVABLE", "EMPLOYEE_ADVANCE", "EMPLOYEE_COMMISSION", "PARTNER_CAPITAL", "VEHICLE_INVENTORY"] as const).some((kind) => kind === row.kind) && <div className="space-y-1">
-                    <Label htmlFor={`${row.rowKey}-party`}>{t(row.kind === "CUSTOMER_RECEIVABLE" ? "OpeningAllocationCustomer"
-                      : row.kind === "EMPLOYEE_ADVANCE" || row.kind === "EMPLOYEE_COMMISSION" ? "OpeningAllocationEmployee"
-                      : row.kind === "VEHICLE_INVENTORY" ? "OpeningAllocationVehicle" : "OpeningAllocationPartner")}</Label>
+                  {["CUSTOMER_RECEIVABLE", "EMPLOYEE_ADVANCE", "EMPLOYEE_COMMISSION", "PARTNER_CAPITAL", "VEHICLE_INVENTORY"].includes(row.kind) && <div className="space-y-1">
+                    <Label htmlFor={`${row.rowKey}-party`}>{t(partyFieldLabel(row.kind))}</Label>
                     {row.kind === "CUSTOMER_RECEIVABLE" && (
                       <Input
                         aria-label={t("OpeningAllocationSearchCustomer")}
@@ -151,14 +167,8 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                       disabled={!canEditKind(row.kind)}
                       onChange={(event) => {
                         const partyId = event.target.value;
-                        const customer = customerOptions?.find((item) => item._id === partyId);
-                        const member = members?.find((item) => item.userId === partyId);
-                        const partner = partners?.find((item) => item._id === partyId);
                         const vehicle = vehicles?.find((item) => item.vehicleId === partyId);
-                        const partyLabel = customer ? `${customer.firstName} ${customer.lastName} ${maskPhone(customer.phone)}`.trim()
-                          : member ? `${member.userName} · ${member.userEmail}`
-                          : partner ? `${partner.partnerName} · ${String(partner._id).slice(-6)}`
-                          : vehicle ? `${vehicle.vin ?? ""} · ${vehicle.label ?? ""}` : "";
+                        const partyLabel = selectedPartyLabel(partyId);
                         updateRow(row.rowKey, { partyId, partyLabel,
                           ...(vehicle?.amountMinor != null ? { amount: fromMinorUnits(vehicle.amountMinor, currency).toFixed(scaleForCurrency(currency)) } : {}) });
                       }}

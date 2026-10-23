@@ -1,6 +1,6 @@
 import { openingPayableBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
-import { query } from "./_generated/server";
+import { query, type MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -8,12 +8,49 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { hookSupplierPaymentSettled } from "./accounting/workflowHooks";
 import { fromMinorUnits, toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { getActiveDepositHolds } from "./utils/depositHelpers";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 
 const supplierMethodUsesBank = (method: string) =>
   method === "BANK_TRANSFER" || method === "CARD" || method === "CHEQUE";
+
+async function assertSupplierPaymentBank(
+  ctx: MutationCtx,
+  request: Readonly<{
+    orgId: Id<"organizations">;
+    bankAccountId?: Id<"bankAccounts">;
+    currency: string;
+    paymentMethod: string;
+  }>,
+): Promise<void> {
+  const { orgId, bankAccountId, currency, paymentMethod } = request;
+  if (supplierMethodUsesBank(paymentMethod)) {
+    await requireActiveBankInCurrency(ctx, {
+      orgId: orgId,
+      bankAccountId: bankAccountId,
+      currency: currency,
+      missingMessage: "Choose the bank account this supplier payment leaves.",
+      currencySubject: "supplier payment",
+    });
+  } else if (bankAccountId) {
+    throw new ConvexError("A bank account is only valid for a bank-funded supplier payment.");
+  }
+}
+
+function supplierPayableVehicleDescription(
+  vehicle: Doc<"vehicles"> | null,
+  payable: Doc<"vehicleSupplierPayables">,
+): string {
+  if (!vehicle) return payable.origin === "OPENING" ? payable.title : "Unknown Vehicle";
+  return `${vehicle.year} ${vehicle.make} ${vehicle.model}${vehicle.trim ? ` ${vehicle.trim}` : ""}`;
+}
+
+function assertSupplierPayableSettlementStatus(status: Doc<"vehicleSupplierPayables">["status"], paidMessage: string): void {
+  if (status === "PAID") throw new ConvexError(paidMessage);
+  if (status === "CANCELLED") throw new ConvexError("This payable was cancelled with its sale.");
+  if (status === "DISPUTED") throw new ConvexError("This payable is under dispute. Resolve the dispute before paying against it.");
+}
 
 export const listPaymentBankOptions = query({
   args: { orgId: v.id("organizations"), payableId: v.id("vehicleSupplierPayables") },
@@ -73,9 +110,7 @@ export const list = query({
 
         return {
           ...p,
-          vehicleDesc: safeVehicle
-            ? `${safeVehicle.year} ${safeVehicle.make} ${safeVehicle.model}${safeVehicle.trim ? ` ${safeVehicle.trim}` : ""}`
-            : p.origin === "OPENING" ? p.title : "Unknown Vehicle",
+          vehicleDesc: supplierPayableVehicleDescription(safeVehicle, p),
           vehicleVin: safeVehicle?.vin,
           customerName: safeCustomer
             ? `${safeCustomer.firstName} ${safeCustomer.lastName}`
@@ -252,27 +287,8 @@ export const markPaid = mutation({
       },
       async () => {
         const payable = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierPayables", args.payableId, "Supplier payable not found.");
-        if (supplierMethodUsesBank(paymentMethod)) {
-          await requireActiveBankInCurrency(ctx, {
-            orgId: args.orgId, bankAccountId: args.bankAccountId, currency: payable.currency,
-            missingMessage: "Choose the bank account this supplier payment leaves.", currencySubject: "supplier payment",
-          });
-        } else if (args.bankAccountId) {
-          throw new ConvexError("A bank account is only valid for a bank-funded supplier payment.");
-        }
-        if (payable.status === "PAID") {
-          throw new ConvexError("This payable has already been marked as paid.");
-        }
-        if (payable.status === "CANCELLED") {
-          throw new ConvexError("This payable was cancelled with its sale.");
-        }
-        // setDisputed's contract: payment is refused while a dispute stands
-        // (SCRUM-773). recordPartialPayment already refused it; this did not.
-        if (payable.status === "DISPUTED") {
-          throw new ConvexError(
-            "This payable is under dispute. Resolve the dispute before paying against it."
-          );
-        }
+        await assertSupplierPaymentBank(ctx, { orgId: args.orgId, bankAccountId: args.bankAccountId, currency: payable.currency, paymentMethod });
+        assertSupplierPayableSettlementStatus(payable.status, "This payable has already been marked as paid.");
         if (args.paymentAccountId) {
           await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", args.paymentAccountId, "Payment account not found.");
         }
@@ -407,28 +423,11 @@ export const recordPartialPayment = mutation({
       },
       async () => {
         const payable = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierPayables", args.payableId, "Supplier payable not found.");
-        if (supplierMethodUsesBank(paymentMethod)) {
-          await requireActiveBankInCurrency(ctx, {
-            orgId: args.orgId, bankAccountId: args.bankAccountId, currency: payable.currency,
-            missingMessage: "Choose the bank account this supplier payment leaves.", currencySubject: "supplier payment",
-          });
-        } else if (args.bankAccountId) {
-          throw new ConvexError("A bank account is only valid for a bank-funded supplier payment.");
-        }
+        await assertSupplierPaymentBank(ctx, { orgId: args.orgId, bankAccountId: args.bankAccountId, currency: payable.currency, paymentMethod });
         if (!Number.isFinite(args.amount) || args.amount <= 0) {
           throw new ConvexError("A payment must be greater than zero.");
         }
-        if (payable.status === "CANCELLED") {
-          throw new ConvexError("This payable was cancelled with its sale.");
-        }
-        if (payable.status === "PAID") {
-          throw new ConvexError("This payable is already settled in full.");
-        }
-        if (payable.status === "DISPUTED") {
-          throw new ConvexError(
-            "This payable is under dispute. Resolve the dispute before paying against it."
-          );
-        }
+        assertSupplierPayableSettlementStatus(payable.status, "This payable is already settled in full.");
         if (args.paymentAccountId) {
           await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", args.paymentAccountId, "Payment account not found.");
         }

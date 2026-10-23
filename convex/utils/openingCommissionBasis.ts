@@ -26,17 +26,21 @@ export async function resolveOpeningCommissionBasis(ctx: Ctx, orgId: Id<"organiz
   if (source.result.kind !== "EMPLOYEE_COMMISSION" || source.result.openingCommissionLiabilityId !== liability._id) return unavailable();
   const siblings = await ctx.db.query("openingCommissionLiabilities").withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceKey", liability.sourceKey)).take(2);
   if (siblings.length !== 1 || siblings[0]._id !== liability._id) return unavailable();
-  if (liability.paidMinor === 0) {
-    if (liability.paidAt !== undefined || liability.paidBy !== undefined || liability.paidPayrollItemId !== undefined) return unavailable();
-  } else {
-    if (liability.paidAt === undefined || !Number.isSafeInteger(liability.paidAt) || liability.paidAt < source.asOfDate || !liability.paidBy || !liability.paidPayrollItemId) return unavailable();
-    const item = await ctx.db.get(liability.paidPayrollItemId);
-    if (!item || item.orgId !== orgId || item.userId !== liability.userId || item.currency !== liability.currency ||
-        !(item.openingCommissionLiabilityIds ?? []).includes(liability._id)) return unavailable();
-    const run = await ctx.db.get(item.runId);
-    if (!run || run.orgId !== orgId || (run.status !== "APPROVED" && run.status !== "PAID")) return unavailable();
-  }
+  if (!(await openingCommissionPaymentIsVerified(ctx, orgId, liability, source.asOfDate))) return unavailable();
   return { kind: "AVAILABLE" as const, liability, accountId: source.accountId, basisDate: source.asOfDate };
+}
+
+async function openingCommissionPaymentIsVerified(ctx: Ctx, orgId: Id<"organizations">,
+  liability: Doc<"openingCommissionLiabilities">, basisDate: number): Promise<boolean> {
+  if (liability.paidMinor === 0) {
+    return liability.paidAt === undefined && liability.paidBy === undefined && liability.paidPayrollItemId === undefined;
+  }
+  if (liability.paidAt === undefined || !Number.isSafeInteger(liability.paidAt) || liability.paidAt < basisDate || !liability.paidBy || !liability.paidPayrollItemId) return false;
+  const item = await ctx.db.get(liability.paidPayrollItemId);
+  if (!item || item.orgId !== orgId || item.userId !== liability.userId || item.currency !== liability.currency ||
+      !(item.openingCommissionLiabilityIds ?? []).includes(liability._id)) return false;
+  const run = await ctx.db.get(item.runId);
+  return !!run && run.orgId === orgId && (run.status === "APPROVED" || run.status === "PAID");
 }
 
 export async function requireOpeningCommissionBasis(ctx: Ctx, orgId: Id<"organizations">, liabilityId: Id<"openingCommissionLiabilities">, reader?: OpeningSettlementReader) {
@@ -162,17 +166,24 @@ export async function openingCommissionRemainingAsOf(ctx: Ctx, orgId: Id<"organi
   }
   if (event.status !== "POSTED" && event.status !== "REVERSED") return unavailable();
   if (event.accountingDate > asOfDate) return { ...basis, remainingMinor: liability.amountMinor, settlementPosted: false };
+  if (!(await openingCommissionEventIsVerified(ctx, orgId, liability, itemId, event, asOfDate))) return unavailable();
+  return { ...basis, remainingMinor: 0, settlementPosted: true };
+}
+
+async function openingCommissionEventIsVerified(ctx: Ctx, orgId: Id<"organizations">,
+  liability: Doc<"openingCommissionLiabilities">, itemId: Id<"payrollItems">,
+  event: Doc<"accountingEvents">, asOfDate: number): Promise<boolean> {
   const settlements = settlementsSchema.safeParse(event.payload?.openingCommissionSettlements);
-  if (!settlements.success || settlements.data.filter(row => row.liabilityId === liabilityId && row.draftId === liability.openingDraftId &&
+  if (!settlements.success || settlements.data.filter(row => row.liabilityId === liability._id && row.draftId === liability.openingDraftId &&
       row.rowKey === liability.openingRowKey && row.amountMinor === liability.amountMinor).length !== 1 ||
       event.payload?.itemId !== itemId || event.payload?.userId !== liability.userId || event.currency !== liability.currency ||
-      event.occurredAt !== liability.paidAt || event.createdBy !== liability.paidBy) return unavailable();
+      event.occurredAt !== liability.paidAt || event.createdBy !== liability.paidBy) return false;
   const journal = event.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
   if (!journal || journal.orgId !== orgId || journal.accountingEventId !== event._id || journal.currency !== liability.currency ||
-      (journal.status !== "POSTED" && journal.status !== "REVERSED")) return unavailable();
+      (journal.status !== "POSTED" && journal.status !== "REVERSED")) return false;
   if (event.status === "REVERSED") {
     const reversal = event.reversedByEventId ? await ctx.db.get(event.reversedByEventId) : null;
-    if (!reversal || reversal.orgId !== orgId || reversal.accountingDate <= asOfDate) return unavailable();
+    if (!reversal || reversal.orgId !== orgId || reversal.accountingDate <= asOfDate) return false;
   }
-  return { ...basis, remainingMinor: 0, settlementPosted: true };
+  return true;
 }

@@ -43,14 +43,7 @@ export async function assertOpeningVehicleBasis(ctx: Ctx, orgId: Id<"organizatio
   vehicleId: Id<"vehicles">, effectiveDate?: number): Promise<"ORDINARY" | "POSTED"> {
   const evidence = await openingVehicleEvidence(ctx, orgId, vehicleId);
   if (!evidence) {
-    const vehicle = await ctx.db.get(vehicleId);
-    const parent = await ctx.db.query("openingBalanceDrafts")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "POSTED")).first();
-    if (vehicle?.orgId === orgId &&
-        (vehicle.openingStockImportId !== undefined || vehicle.openingBalanceDraftId !== undefined ||
-          parent?.allocationResults?.some((row) => row.kind === "VEHICLE_INVENTORY" && row.vehicleId === vehicleId))) {
-      throw new ConvexError("Opening stock command proof is unavailable. Ask finance to review it.");
-    }
+    await assertNoUnprovenOpeningStock(ctx, orgId, vehicleId);
     return "ORDINARY";
   }
   const org = await ctx.db.get(orgId);
@@ -106,4 +99,15 @@ export async function assertOpeningVehicleBasis(ctx: Ctx, orgId: Id<"organizatio
     throw new ConvexError("Opening stock inventory journal does not match its allocated vehicles.");
   }
   return "POSTED";
+}
+
+async function assertNoUnprovenOpeningStock(ctx: Ctx, orgId: Id<"organizations">, vehicleId: Id<"vehicles">) {
+  const vehicle = await ctx.db.get(vehicleId);
+  const parent = await ctx.db.query("openingBalanceDrafts")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "POSTED")).first();
+  if (vehicle?.orgId === orgId &&
+      (vehicle.openingStockImportId !== undefined || vehicle.openingBalanceDraftId !== undefined ||
+        parent?.allocationResults?.some((row) => row.kind === "VEHICLE_INVENTORY" && row.vehicleId === vehicleId))) {
+    throw new ConvexError("Opening stock command proof is unavailable. Ask finance to review it.");
+  }
 }

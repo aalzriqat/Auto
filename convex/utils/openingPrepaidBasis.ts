@@ -12,7 +12,7 @@ type PrepaidSource =
 const unavailable = (): PrepaidSource => ({ kind: "UNAVAILABLE", reason: "The prepaid asset source cannot be verified. Ask finance to review it before using this schedule." });
 
 function validYearMonth(value: string): boolean {
-  return /^(?:[0-9]{4})-(?:0[1-9]|1[0-2])$/.test(value);
+  return /^(?:\d{4})-(?:0[1-9]|1[0-2])$/.test(value);
 }
 
 function validOpeningSchedule(schedule: Extract<Doc<"prepaidExpenseSchedules">, { kind: "OPENING" }>): boolean {
@@ -47,17 +47,7 @@ export async function resolvePrepaidScheduleSource(
   if (references.length > 1) return unavailable();
   if (schedule.kind !== "OPENING") {
     if (references.length !== 0) return unavailable();
-    const expense = await ctx.db.get(schedule.expenseId);
-    if (!expense || expense.orgId !== orgId) return unavailable();
-    const posted = await ctx.db.query("accountingEvents")
-      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", schedule.expenseId.toString()))
-      .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
-      .filter((q) => q.eq(q.field("status"), "POSTED"))
-      .take(2);
-    if (posted.length > 1) return unavailable();
-    return { kind: "EXPENSE", expenseId: schedule.expenseId, title: expense.title,
-      basisDate: posted[0]?.accountingDate ?? null,
-      taxMinor: expense.taxAmount ? toMinorUnits(expense.taxAmount, schedule.currency) : 0 };
+    return resolveExpensePrepaidSource(ctx, orgId, schedule);
   }
 
   if (!validOpeningSchedule(schedule) || references.length !== 1) return unavailable();
@@ -89,4 +79,19 @@ export async function resolvePrepaidScheduleSource(
       assetLines.reduce((sum, line) => sum + line.debitMinor, 0) !== total) return unavailable();
   return { kind: "OPENING", draftId: draft._id, rowKey: row.rowKey, title: schedule.title,
     basisDate: journal.accountingDate, taxMinor: 0 };
+}
+
+async function resolveExpensePrepaidSource(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">,
+  schedule: Exclude<Doc<"prepaidExpenseSchedules">, { kind: "OPENING" }>): Promise<PrepaidSource> {
+  const expense = await ctx.db.get(schedule.expenseId);
+  if (!expense || expense.orgId !== orgId) return unavailable();
+  const posted = await ctx.db.query("accountingEvents")
+    .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", schedule.expenseId.toString()))
+    .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+    .filter((q) => q.eq(q.field("status"), "POSTED"))
+    .take(2);
+  if (posted.length > 1) return unavailable();
+  return { kind: "EXPENSE", expenseId: schedule.expenseId, title: expense.title,
+    basisDate: posted[0]?.accountingDate ?? null,
+    taxMinor: expense.taxAmount ? toMinorUnits(expense.taxAmount, schedule.currency) : 0 };
 }

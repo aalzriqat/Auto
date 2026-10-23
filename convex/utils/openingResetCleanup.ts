@@ -1,4 +1,4 @@
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { ConvexError } from "convex/values";
 
@@ -30,35 +30,48 @@ export async function clearOpeningPayablesBatch(
   const drafts = await ctx.db.query("openingBalanceDrafts")
     .withIndex("by_org", q => q.eq("orgId", orgId)).take(101);
   if (drafts.length > 100) throw new ConvexError("Opening payable cleanup requires review.");
+  const ids = openingPayableIds(drafts);
+  let deleted = 0;
+  let remaining = 0;
+  for (const id of ids) {
+    const result = await clearOpeningPayable(ctx, orgId, id, limit, deleted, dryRun);
+    deleted += result.deleted;
+    remaining += result.remaining;
+  }
+  return { deleted, remaining };
+}
+
+function openingPayableIds(drafts: readonly Doc<"openingBalanceDrafts">[]) {
   const ids = new Set<Id<"vehicleSupplierPayables">>();
   for (const draft of drafts) {
     for (const result of draft.allocationResults ?? []) {
       if (result.kind === "SUPPLIER_PAYABLE" || result.kind === "OTHER_PAYABLE") ids.add(result.payableId);
     }
   }
+  return ids;
+}
+
+/** Payment children drain before the source reference and parent can be deleted. */
+async function clearOpeningPayable(ctx: MutationCtx, orgId: Id<"organizations">,
+  id: Id<"vehicleSupplierPayables">, limit: number, used: number, dryRun: boolean) {
+  const row = await ctx.db.get(id);
+  if (!row) return { deleted: 0, remaining: 0 };
+  if (row.orgId !== orgId) throw new ConvexError("Opening payable cleanup requires review.");
+  if (used >= limit) return { deleted: 0, remaining: 1 };
+  const payments = await ctx.db.query("openingPayablePayments")
+    .withIndex("by_payable", q => q.eq("payableId", id)).take(limit + 1);
   let deleted = 0;
-  let remaining = 0;
-  for (const id of ids) {
-    const row = await ctx.db.get(id);
-    if (!row) continue;
-    if (row.orgId !== orgId) throw new ConvexError("Opening payable cleanup requires review.");
-    if (deleted >= limit) { remaining += 1; continue; }
-    const payments = await ctx.db.query("openingPayablePayments")
-      .withIndex("by_payable", q => q.eq("payableId", id)).take(limit + 1);
-    for (const payment of payments.slice(0, limit - deleted)) {
-      if (payment.orgId !== orgId) throw new ConvexError("Opening payable cleanup requires review.");
-      if (!dryRun) await ctx.db.delete(payment._id);
-      deleted += 1;
-    }
-    if (payments.length > 0) { remaining += 1; continue; }
-    if (!dryRun) {
-      await clearNewOpeningResultReference(ctx, orgId, { table: "vehicleSupplierPayables", id: row._id });
-      await ctx.db.delete(row._id);
-    }
+  for (const payment of payments.slice(0, limit - used)) {
+    if (payment.orgId !== orgId) throw new ConvexError("Opening payable cleanup requires review.");
+    if (!dryRun) await ctx.db.delete(payment._id);
     deleted += 1;
-    if (dryRun) remaining += 1;
   }
-  return { deleted, remaining };
+  if (payments.length > 0) return { deleted, remaining: 1 };
+  if (!dryRun) {
+    await clearNewOpeningResultReference(ctx, orgId, { table: "vehicleSupplierPayables", id: row._id });
+    await ctx.db.delete(row._id);
+  }
+  return { deleted: 1, remaining: dryRun ? 1 : 0 };
 }
 
 /** Destructive reset exception only: invalidate new source proof, never change historical economics. */
@@ -73,11 +86,18 @@ export async function clearNewOpeningResultReference(
   if (drafts.length > 100) throw new ConvexError("Opening source cleanup requires review.");
   for (const draft of drafts) {
     const results = draft.allocationResults ?? [];
-    const retained = results.filter(result => !(source.table === "openingCommissionLiabilities"
-      ? result.kind === "EMPLOYEE_COMMISSION" && result.openingCommissionLiabilityId === source.id
-      : source.table === "supplierCostRecoveries"
-        ? result.kind === "SUPPLIER_RECOVERABLE" && result.recoveryId === source.id
-        : (result.kind === "SUPPLIER_PAYABLE" || result.kind === "OTHER_PAYABLE") && result.payableId === source.id));
+    const retained = results.filter(result => !matchesOpeningResult(result, source));
     if (retained.length !== results.length) await ctx.db.patch(draft._id, { allocationResults: retained });
   }
+}
+
+function matchesOpeningResult(result: NonNullable<Doc<"openingBalanceDrafts">["allocationResults"]>[number],
+  source: Parameters<typeof clearNewOpeningResultReference>[2]) {
+  if (source.table === "openingCommissionLiabilities") {
+    return result.kind === "EMPLOYEE_COMMISSION" && result.openingCommissionLiabilityId === source.id;
+  }
+  if (source.table === "supplierCostRecoveries") {
+    return result.kind === "SUPPLIER_RECOVERABLE" && result.recoveryId === source.id;
+  }
+  return (result.kind === "SUPPLIER_PAYABLE" || result.kind === "OTHER_PAYABLE") && result.payableId === source.id;
 }

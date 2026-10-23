@@ -218,7 +218,8 @@ export const list = query({
         const opening = await openingRecoveryBasis(ctx,args.orgId,row);
         const vehicle = row.origin === "OPENING" ? null : await ctx.db.get(row.vehicleId);
         const expense = row.origin === "OPENING" ? null : await ctx.db.get(row.expenseId);
-        const state = opening ? "POSTED" as const : (await postingStateForKey(ctx,args.orgId,row.origin !== "OPENING" ? row.sourceEventKey : "")).state;
+        const sourceEventKey = row.origin !== "OPENING" ? row.sourceEventKey : "";
+        const state = opening ? "POSTED" as const : (await postingStateForKey(ctx,args.orgId,sourceEventKey)).state;
         return {
           _id: row._id,
           vehicleId: row.origin === "OPENING" ? undefined : row.vehicleId,
@@ -386,7 +387,8 @@ export const recordReceipt = mutation({
         // a queued or failed source would leave this credit with nothing to
         // offset, and a reversed one has already been undone.
         const opening = await openingRecoveryBasis(ctx,args.orgId,recovery);
-        const source = opening ? {state:"POSTED",accountingDate:opening.asOfDate} : await postingStateForKey(ctx, args.orgId, recovery.origin !== "OPENING" ? recovery.sourceEventKey : "");
+        const sourceEventKey = recovery.origin !== "OPENING" ? recovery.sourceEventKey : "";
+        const source = opening ? {state:"POSTED",accountingDate:opening.asOfDate} : await postingStateForKey(ctx, args.orgId, sourceEventKey);
         if (source.state !== "POSTED") {
           throw new ConvexError(
             "This cost has not been posted to the ledger yet. Receipts can be recorded once it has."

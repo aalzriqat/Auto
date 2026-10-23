@@ -718,6 +718,24 @@ async function assertAdvanceIssuancePosted(
  * period), driving it negative. Checked against the same outstanding-advance
  * population recoverItemAdvances will draw from.
  */
+async function assertRecoverableAdvanceBasis(
+  ctx: MutationCtx,
+  request: Readonly<{
+    orgId: Id<"organizations">;
+    advanceId: Id<"employeeAdvances">;
+    ordinaryIssuanceRequired: boolean;
+    effectiveDate: number;
+  }>,
+): Promise<void> {
+  const { orgId, advanceId, ordinaryIssuanceRequired, effectiveDate } = request;
+  const basis = await openingAdvanceBasis(ctx, orgId, advanceId);
+  if (basis.kind === "INVALID") throw new ConvexError(basis.reason);
+  if (basis.kind === "OPENING" && !(effectiveDate >= basis.basisDate)) {
+    throw new ConvexError("Payroll cannot recover an advance before its posted opening date. Nothing has changed.");
+  }
+  if (basis.kind === "ORDINARY" && ordinaryIssuanceRequired) await assertAdvanceIssuancePosted(ctx, orgId, advanceId);
+}
+
 async function assertAdvanceIssuancesPosted(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
@@ -737,12 +755,7 @@ async function assertAdvanceIssuancesPosted(
       .collect();
     for (const adv of advances) {
       if (adv.currency !== item.currency) continue;
-      const basis = await openingAdvanceBasis(ctx, orgId, adv._id);
-      if (basis.kind === "INVALID") throw new ConvexError(basis.reason);
-      if (basis.kind === "OPENING" && !(effectiveDate >= basis.basisDate)) {
-        throw new ConvexError("Payroll cannot recover an advance before its posted opening date. Nothing has changed.");
-      }
-      if (basis.kind === "ORDINARY" && ordinaryIssuanceRequired) await assertAdvanceIssuancePosted(ctx, orgId, adv._id);
+      await assertRecoverableAdvanceBasis(ctx, { orgId, advanceId: adv._id, ordinaryIssuanceRequired, effectiveDate });
     }
   }
 }
@@ -1004,43 +1017,64 @@ async function recoverItemAdvances(
  */
 async function payItem(
   ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  item: Doc<"payrollItems">,
-  method: PaymentMethod,
-  bankAccountId: Id<"bankAccounts"> | undefined,
-  actorId: Id<"users">,
-  now: number,
-  openingReader: OpeningSettlementReader
+  payment: Readonly<{
+    orgId: Id<"organizations">;
+    item: Doc<"payrollItems">;
+    method: PaymentMethod;
+    bankAccountId: Id<"bankAccounts"> | undefined;
+    actorId: Id<"users">;
+    now: number;
+    openingReader: OpeningSettlementReader;
+  }>,
 ): Promise<{ grossMinor: number; netMinor: number }> {
+  const { orgId, item, method, bankAccountId, actorId, now, openingReader } = payment;
   const { commissionMinor, saleIdsToSettle, lineIdsToSettle } = await settleItemCommissions(ctx, item);
   const opening = await openingCommissionsForItem(ctx, { ...item, orgId }, openingReader);
   const salaryMinor = item.baseSalaryMinor;
   const grossMinor = salaryMinor + commissionMinor + opening.minor;
-  const advanceRecoveredMinor = await recoverItemAdvances(ctx, orgId, item.userId, item.currency, grossMinor, item._id, actorId, now);
+  const advanceRecoveredMinor = await recoverItemAdvances(
+    ctx,
+    orgId,
+    item.userId,
+    item.currency,
+    grossMinor,
+    item._id,
+    actorId,
+    now,
+  );
   const netMinor = grossMinor - advanceRecoveredMinor;
 
   // Nothing left to pay (e.g. the only commission was settled by another run and
   // there's no salary) → skip the GL post (an all-zero entry) but still zero the
   // item below so reports don't show a phantom.
   for (const settlement of opening.settlements) {
-    await ctx.db.patch(settlement.liabilityId, { paidMinor: settlement.amountMinor, paidAt: now, paidBy: actorId, paidPayrollItemId: item._id });
+    await ctx.db.patch(settlement.liabilityId, {
+      paidMinor: settlement.amountMinor,
+      paidAt: now,
+      paidBy: actorId,
+      paidPayrollItemId: item._id,
+    });
   }
   if (grossMinor > 0) {
-    await hookPayrollPaid(ctx, {
-      orgId,
-      itemId: item._id,
-      userId: item.userId,
-      salaryMinor,
-      commissionMinor,
-      ...(opening.settlements.length ? { openingCommissionSettlements: opening.settlements } : {}),
-      advanceRecoveredMinor,
-      netMinor,
-      currency: item.currency,
-      paymentMethod: method,
-      bankAccountId,
-      actorId,
-      occurredAt: now,
-    }, openingReader);
+    await hookPayrollPaid(
+      ctx,
+      {
+        orgId,
+        itemId: item._id,
+        userId: item.userId,
+        salaryMinor,
+        commissionMinor,
+        ...(opening.settlements.length ? { openingCommissionSettlements: opening.settlements } : {}),
+        advanceRecoveredMinor,
+        netMinor,
+        currency: item.currency,
+        paymentMethod: method,
+        bankAccountId,
+        actorId,
+        occurredAt: now,
+      },
+      openingReader,
+    );
   }
 
   for (const saleId of saleIdsToSettle) {
@@ -1058,7 +1092,12 @@ async function payItem(
 
   await ctx.db.patch(item._id, {
     commissionMinor,
-    ...(item.openingCommissionLiabilityIds !== undefined ? { openingCommissionMinor: opening.minor, openingCommissionLiabilityIds: opening.settlements.map(row => row.liabilityId) } : {}),
+    ...(item.openingCommissionLiabilityIds !== undefined
+      ? {
+          openingCommissionMinor: opening.minor,
+          openingCommissionLiabilityIds: opening.settlements.map((row) => row.liabilityId),
+        }
+      : {}),
     advanceDeductionMinor: advanceRecoveredMinor,
     grossMinor,
     netMinor,
@@ -1628,7 +1667,7 @@ export const payRun = mutation({
       let paidGrossMinor = 0;
       let paidNetMinor = 0;
       for (const item of items) {
-        const paid = await payItem(ctx, args.orgId, item, method, args.bankAccountId, user._id, now, openingReader);
+        const paid = await payItem(ctx, { orgId: args.orgId, item, method, bankAccountId: args.bankAccountId, actorId: user._id, now, openingReader });
         paidGrossMinor += paid.grossMinor;
         paidNetMinor += paid.netMinor;
       }

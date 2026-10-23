@@ -86,6 +86,22 @@ export function createOpeningSettlementReader(
     },
   };
 }
+async function hasCurrentOpeningJournal(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">,
+  journalId: Id<"journalEntries"> | undefined): Promise<boolean> {
+  const postedJournals = await ctx.db.query("journalEntries")
+    .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", "cutover").eq("sourceId", String(orgId)))
+    .take(101);
+  const liveJournals = postedJournals.filter(entry => entry.status === "POSTED" && entry.category === "OPENING_BALANCE");
+  return postedJournals.length <= 100 && liveJournals.length === 1 && liveJournals[0]._id === journalId;
+}
+
+function matchesOpeningSettlementJournal(journal: Doc<"journalEntries"> | null,
+  orgId: Id<"organizations">, draft: Doc<"openingBalanceDrafts">): journal is Doc<"journalEntries"> {
+  return !!journal && journal.orgId === orgId && journal.status === "POSTED" &&
+    journal.category === "OPENING_BALANCE" && journal.sourceType === "cutover" && journal.sourceId === String(orgId) &&
+    journal.currency === draft.currency && journal.accountingDate === draft.asOfDate;
+}
+
 export async function resolveOpeningSettlementBasis(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
@@ -111,25 +127,7 @@ export async function resolveOpeningSettlementBasis(
     !draft.currency
   )
     return unavailable();
-  const postedJournals = await ctx.db
-    .query("journalEntries")
-    .withIndex("by_org_source", (q) =>
-      q
-        .eq("orgId", orgId)
-        .eq("sourceType", "cutover")
-        .eq("sourceId", String(orgId)),
-    )
-    .take(101);
-  const liveJournals = postedJournals.filter(
-    (entry) =>
-      entry.status === "POSTED" && entry.category === "OPENING_BALANCE",
-  );
-  if (
-    postedJournals.length > 100 ||
-    liveJournals.length !== 1 ||
-    liveJournals[0]._id !== draft.journalEntryId
-  )
-    return unavailable();
+  if (!(await hasCurrentOpeningJournal(ctx, orgId, draft.journalEntryId))) return unavailable();
   const rows =
     draft.allocations?.filter((row) => row.rowKey === ref.rowKey) ?? [];
   const results =
@@ -172,17 +170,7 @@ export async function resolveOpeningSettlementBasis(
   const journal = draft.journalEntryId
     ? await ctx.db.get(draft.journalEntryId)
     : null;
-  if (
-    !journal ||
-    journal.orgId !== orgId ||
-    journal.status !== "POSTED" ||
-    journal.category !== "OPENING_BALANCE" ||
-    journal.sourceType !== "cutover" ||
-    journal.sourceId !== String(orgId) ||
-    journal.currency !== draft.currency ||
-    journal.accountingDate !== draft.asOfDate
-  )
-    return unavailable();
+  if (!matchesOpeningSettlementJournal(journal, orgId, draft)) return unavailable();
   const siblings =
     draft.allocations?.filter((row) => row.accountId === account._id) ?? [];
   const total = siblings.reduce((sum, row) => sum + row.amountMinor, 0);

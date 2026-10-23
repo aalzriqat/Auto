@@ -87,15 +87,11 @@ export function openingPolicyForAccount(
   account: Doc<"chartOfAccounts">,
   explicitlyAllocatedCapital: boolean,
 ): OpeningPolicy | undefined {
-  return account.systemKey
-    ? OPENING_POLICIES[account.systemKey]
-    : explicitlyAllocatedCapital && isOpeningPartnerAccount(account)
-      ? "PARTNER_CAPITAL"
-      : account.type === "ASSET"
-        ? "SUPPLIER_RECOVERABLE"
-        : account.type === "LIABILITY"
-          ? "DECLARED_LIABILITY"
-          : undefined;
+  if (account.systemKey) return OPENING_POLICIES[account.systemKey];
+  if (explicitlyAllocatedCapital && isOpeningPartnerAccount(account)) return "PARTNER_CAPITAL";
+  if (account.type === "ASSET") return "SUPPLIER_RECOVERABLE";
+  if (account.type === "LIABILITY") return "DECLARED_LIABILITY";
+  return undefined;
 }
 export type RemainingOpeningKind =
   | "SUPPLIER_RECOVERABLE"
@@ -123,6 +119,16 @@ export async function openingAccountAllowsFamily(
   kind: RemainingOpeningKind,
   purpose?: string,
 ): Promise<boolean> {
+  if (!matchesOpeningAccountShape(account, orgId, currency, kind)) return false;
+  if (!account.systemKey)
+    return !DEFAULT_CHART.some((row) => row.code === account.code);
+  const expected = openingFamilySystemKey(kind, purpose);
+  if (expected === null || account.systemKey !== expected) return false;
+  return (await resolveSystemAccount(ctx, orgId, expected)) === account._id;
+}
+
+function matchesOpeningAccountShape(account: Doc<"chartOfAccounts">,
+  orgId: Doc<"organizations">["_id"], currency: string, kind: RemainingOpeningKind): boolean {
   if (
     account.orgId !== orgId ||
     !account.active ||
@@ -136,18 +142,15 @@ export async function openingAccountAllowsFamily(
     (kind === "SUPPLIER_RECOVERABLE" ? "DEBIT" : "CREDIT")
   )
     return false;
-  if (!account.systemKey)
-    return !DEFAULT_CHART.some((row) => row.code === account.code);
-  const expected =
-    kind === "SUPPLIER_RECOVERABLE"
-      ? SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS
-      : kind === "SUPPLIER_PAYABLE"
-        ? SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS
-        : kind === "EMPLOYEE_COMMISSION"
-          ? SYSTEM_KEYS.COMMISSION_PAYABLE
-          : kind === "UNALLOCATED_LIABILITY" && purpose === "CUSTOMER_DEPOSIT"
-            ? SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY
-            : null;
-  if (expected === null || account.systemKey !== expected) return false;
-  return (await resolveSystemAccount(ctx, orgId, expected)) === account._id;
+  return true;
+}
+
+function openingFamilySystemKey(kind: RemainingOpeningKind, purpose?: string): SystemKey | null {
+  switch (kind) {
+    case "SUPPLIER_RECOVERABLE": return SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS;
+    case "SUPPLIER_PAYABLE": return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
+    case "EMPLOYEE_COMMISSION": return SYSTEM_KEYS.COMMISSION_PAYABLE;
+    case "UNALLOCATED_LIABILITY": return purpose === "CUSTOMER_DEPOSIT" ? SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY : null;
+    default: return null;
+  }
 }

@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 /** Mount only inside the existing VIEW_COMMISSIONS guard; all scope and debt proof are server-owned. */
-export function OpeningCommissionLiabilitiesPanel({ orgId }: { orgId: Id<"organizations"> }) {
+export function OpeningCommissionLiabilitiesPanel({ orgId }: Readonly<{ orgId: Id<"organizations"> }>) {
   const { t, locale } = useLanguage();
   const rows = useQuery(api.openingCommissionLiabilities.list, { orgId });
   if (rows === undefined) return <p role="status">{t("OpeningCommissionLoading")}</p>;

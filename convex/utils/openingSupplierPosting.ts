@@ -23,6 +23,14 @@ export async function assertOpeningSupplierPosting(
     return;
   const p = cmd.payload;
   if (cmd.eventType === "SUPPLIER_PAYMENT_SETTLED") {
+    await assertOpeningPayablePosting(ctx, cmd, p, reader);
+  } else {
+    await assertOpeningRecoveryPosting(ctx, cmd, p, reader);
+  }
+}
+
+async function assertOpeningPayablePosting(ctx: MutationCtx, cmd: PostCommand,
+  p: PostCommand["payload"], reader?: OpeningSettlementReader): Promise<void> {
     const id = ctx.db.normalizeId("vehicleSupplierPayables", cmd.sourceId);
     const row = id ? await ctx.db.get(id) : null;
     if (!row || row.orgId !== cmd.orgId) {
@@ -102,7 +110,10 @@ export async function assertOpeningSupplierPosting(
       (row.paymentSeq ?? 0) < occurrence.seq
     )
       throw fail();
-  } else {
+  }
+
+async function assertOpeningRecoveryPosting(ctx: MutationCtx, cmd: PostCommand,
+  p: PostCommand["payload"], reader?: OpeningSettlementReader): Promise<void> {
     const id = ctx.db.normalizeId("supplierCostRecoveryReceipts", cmd.sourceId);
     const receipt = id ? await ctx.db.get(id) : null;
     if (!receipt || receipt.orgId !== cmd.orgId) {
@@ -180,4 +191,3 @@ export async function assertOpeningSupplierPosting(
     )
       throw fail();
   }
-}

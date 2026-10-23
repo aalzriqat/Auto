@@ -17,7 +17,7 @@ import { computeIncomeStatement } from "./accountingReports";
 const attestation = v.literal("CONSUMED_BEFORE_OPENING_NOT_PREPAID_NOT_CAPITAL");
 async function requireCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">, expected: string) {
   const currency = denominationOf(await getOrgCurrency(ctx, orgId));
-  if (!currency || currency.code !== expected) throw new ConvexError("The management schedule currency is unavailable or has changed.");
+  if (currency?.code !== expected) throw new ConvexError("The management schedule currency is unavailable or has changed.");
   return currency.code;
 }
 
@@ -67,7 +67,7 @@ export const approve = mutation({
     const expected = managementInstallments(plan.totalMinor, first.effectiveMonth);
     if (plan.installments.length !== 7 || !expected.every((row, index) => {
       const stored = plan.installments[index];
-      return stored && stored.sequence === row.sequence && stored.effectiveMonth === row.effectiveMonth &&
+      return stored?.sequence === row.sequence && stored.effectiveMonth === row.effectiveMonth &&
         stored.amountMinor === row.amountMinor && stored.recognitionMonth === undefined;
     })) {
       throw new ConvexError("The management schedule economics are unavailable.");
