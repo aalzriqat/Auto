@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type * as z from "zod";
 import { useMutation, useConvexAuth } from "convex/react";
 import Link from "next/link";
 import { api } from "@/convex/_generated/api";
@@ -143,7 +144,7 @@ export default function MarketplaceSellPage() {
   const [submittedListingId, setSubmittedListingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const form = useForm<ListingFormValues>({
+  const form = useForm<z.input<typeof listingSchema>, unknown, ListingFormValues>({
     resolver: zodResolver(listingSchema),
     defaultValues: {
       sellerKind: "INDIVIDUAL",

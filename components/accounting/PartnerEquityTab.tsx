@@ -5,6 +5,7 @@ import { OpeningManagementSettlementPanel } from "./OpeningManagementSettlementP
 import { PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED, PARTNER_PROFIT_DISTRIBUTION_UNAVAILABLE } from "@/convex/utils/partnerDistributionContainment";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type * as z from "zod";
 import { usePaginatedQuery, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -292,7 +293,7 @@ function AddPartnerDialog({
   const idempotencyKeyRef = useRef<string | null>(null);
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
-  const form = useForm<AddPartnerFormValues>({
+  const form = useForm<z.input<typeof addPartnerSchema>, unknown, AddPartnerFormValues>({
     resolver: zodResolver(addPartnerSchema),
     defaultValues: { name: "", openingContribution: 0, paymentMethod: "CASH", bankAccountId: undefined, notes: "" },
   });
@@ -464,7 +465,7 @@ function MovementDialog({
 
   const meta = MOVEMENT_META[type];
 
-  const form = useForm<MovementFormValues>({
+  const form = useForm<z.input<typeof movementSchema>, unknown, MovementFormValues>({
     resolver: zodResolver(movementSchema),
     defaultValues: { amount: 0, paymentMethod: "CASH", bankAccountId: undefined, notes: "" },
   });

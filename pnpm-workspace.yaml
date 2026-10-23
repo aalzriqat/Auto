@@ -2,6 +2,16 @@ packages:
   - "apps/*"
   - "packages/*"
 overrides:
+  # SCRUM-859: GHSA-27r3-jxmh-p828. Keep Express on the supported 2.x
+  # body-parser API while patching compressed-body decoder error handling.
+  "body-parser@2": 2.4.0
+  # GHSA-mrhx-c7xc-m3w5: patched collection bounds on the supported Zod 4 API.
+  "zod@4": 4.6.6
+  # Expo CLI 57 still declares Zod 3 and has no patched compatible release.
+  # Its two schema modules use the common public API; the migration controls
+  # exercise their exported schemas and MCP registration against Zod 4.
+  # This selective major-range override is required for GHSA-mrhx-c7xc-m3w5.
+  "@expo/cli@57>zod": 4.6.6
   # SCRUM-859: Metro's maintained 0.84 patch line removes image-size and its
   # ICNS/JXL/HEIF parser DoS paths. A direct image-size 2.x override breaks
   # Metro 0.84.4's file-path API. Keep Expo on its existing Metro minor line.

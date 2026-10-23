@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type * as z from "zod";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
@@ -652,7 +653,7 @@ function CorrectScheduleDialog({
     orgId, scheduleId: schedule._id,
   });
 
-  const form = useForm<PrepaidCorrectionFormValues>({
+  const form = useForm<z.input<typeof prepaidCorrectionSchema>, unknown, PrepaidCorrectionFormValues>({
     resolver: zodResolver(prepaidCorrectionSchema),
     defaultValues: {
       refundAmount: 0,
@@ -667,7 +668,7 @@ function CorrectScheduleDialog({
     },
   });
   const changeTerm = form.watch("changeTerm");
-  const refundAmount = form.watch("refundAmount") || 0;
+  const refundAmount = Number(form.watch("refundAmount")) || 0;
   const refundMethod = form.watch("refundPaymentMethod");
   const [refundBankAccountId, setRefundBankAccountId] = useState("");
   const needsRefundBank = refundAmount > 0 &&
@@ -675,7 +676,7 @@ function CorrectScheduleDialog({
   const refundBankOptions = useQuery(api.prepaidExpenses.listRefundBankOptions,
     needsRefundBank ? { orgId, scheduleId: schedule._id } : "skip");
   const selectedRefundBank = refundBankOptions?.banks.find((bank) => bank._id === refundBankAccountId);
-  const writeOffAmount = form.watch("writeOffAmount") || 0;
+  const writeOffAmount = Number(form.watch("writeOffAmount")) || 0;
   const needsApproval = writeOffAmount > 0 && !isOwner;
 
   async function onSubmit(values: PrepaidCorrectionFormValues) {

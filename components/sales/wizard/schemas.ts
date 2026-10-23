@@ -2,10 +2,10 @@ import * as z from "zod";
 
 export const step1Schema = z.object({
   vehicleId: z.string().min(1),
-  vehiclePrice: z.coerce.number().min(1),
-  desiredProfit: z.coerce.number().min(0),
-  downPayment: z.coerce.number().min(0),
-  termMonths: z.coerce.number().int().min(0),
+  vehiclePrice: z.coerce.number<string | number>().min(1),
+  desiredProfit: z.coerce.number<string | number>().min(0),
+  downPayment: z.coerce.number<string | number>().min(0),
+  termMonths: z.coerce.number<string | number>().int().min(0),
   vehicleCondition: z.string().optional(),
 });
 

@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type * as z from "zod";
 import { usePaginatedQuery, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
@@ -297,7 +298,7 @@ function CapitalizeAssetDialog({
   const idempotencyKeyRef = useRef<string | null>(null);
   const bankOptions = useQuery(api.fixedAssets.listBankOptions, open ? { orgId } : "skip");
 
-  const form = useForm<CapitalizeAssetFormValues>({
+  const form = useForm<z.input<typeof capitalizeAssetSchema>, unknown, CapitalizeAssetFormValues>({
     resolver: zodResolver(capitalizeAssetSchema),
     defaultValues: {
       name: "",
@@ -575,7 +576,7 @@ function ImpairAssetDialog({
 
   const netBookMinor = (asset.costMinor ?? 0) - (asset.accumulatedDepreciationMinor ?? 0);
 
-  const form = useForm<ImpairAssetFormValues>({
+  const form = useForm<z.input<typeof impairAssetSchema>, unknown, ImpairAssetFormValues>({
     resolver: zodResolver(impairAssetSchema),
     defaultValues: { amount: 0 },
   });
@@ -660,13 +661,13 @@ function DisposeAssetDialog({
 
   const netBookMinor = (asset.costMinor ?? 0) - (asset.accumulatedDepreciationMinor ?? 0);
 
-  const form = useForm<DisposeAssetFormValues>({
+  const form = useForm<z.input<typeof disposeAssetSchema>, unknown, DisposeAssetFormValues>({
     resolver: zodResolver(disposeAssetSchema),
     // The ledger's calendar is UTC: the server refuses a UTC day that has not begun, so the
     // default is the UTC day (a user ahead of UTC would otherwise default to a refused date).
     defaultValues: { proceeds: 0, bankAccountId: undefined, occurredAt: economicTodayDateInput() },
   });
-  const proceeds = form.watch("proceeds");
+  const proceeds = Number(form.watch("proceeds"));
   const bankSelection = form.watch("bankAccountId");
 
   async function onSubmit(values: DisposeAssetFormValues) {

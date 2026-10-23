@@ -62,8 +62,8 @@ export const listingSchema = z.object({
     .int("Year must be a whole number.")
     .min(MIN_LISTING_YEAR, `Year must be ${MIN_LISTING_YEAR} or later.`)
     .max(MAX_LISTING_YEAR, `Year cannot be later than ${MAX_LISTING_YEAR}.`),
-  mileage: z.coerce.number().min(0, "Mileage cannot be negative."),
-  price: z.coerce.number().gt(0, "Price must be greater than zero."),
+  mileage: z.coerce.number<string | number>().min(0, "Mileage cannot be negative."),
+  price: z.coerce.number<string | number>().gt(0, "Price must be greater than zero."),
   currency: z.enum(ALLOWED_CURRENCIES),
   transmission: z
     .string()

@@ -4,7 +4,7 @@ export const manualJournalLineSchema = z.object({
   id: z.string(),
   accountId: z.string().min(1, "Account is required"),
   side: z.enum(["DEBIT", "CREDIT"]),
-  amount: z.coerce.number().positive("Amount must be greater than zero"),
+  amount: z.coerce.number<string | number>().positive("Amount must be greater than zero"),
 });
 
 export const manualJournalSchema = z.object({
