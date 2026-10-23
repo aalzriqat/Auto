@@ -1,0 +1,68 @@
+{
+  "id": "phone-audit-waits-for-navigation-exit",
+  "fingerprint": "5cc695b824002b7a8baa4b62780e7b9ff6539265166b38d806a2be3b5f10cb0c",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "39818759069",
+    "firstSeen": "2026-10-22"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
+      },
+      "action": "navigation.open",
+      "input": {
+        "viewport": "phone",
+        "boundary": "SYNTHETIC_DOM",
+        "width": 375,
+        "height": 812
+      }
+    },
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
+      },
+      "action": "navigation.dismiss",
+      "input": {
+        "key": "Escape",
+        "exitDelayMs": 300
+      }
+    },
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
+      },
+      "action": "audit.capture",
+      "input": {
+        "requireNavigationGone": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "capture.navigationOverlayCount",
+      "value": 0
+    },
+    {
+      "observable": "capture.accepted",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "08384ec40d4f1a4b54825f8cc7b7a32552b5b8e1a2161e47bc37e0d0a2c8e863"
+    }
+  ],
+  "impl": {
+    "file": "playwright/tests/audit-navigation-dismissal.spec.ts",
+    "testName": "phone capture waits until the closing navigation overlay is gone"
+  }
+}

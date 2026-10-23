@@ -9,7 +9,7 @@ import { mainNavigation, settingsNavigation } from "../../lib/navigation";
 import { USER_AUTH_FILE, authenticatedConvexClient, testDataSuffix } from "../utils";
 import { newContainedContext } from "../containedContext";
 import { probe, TENANT_REFUSAL } from "../../scripts/intelligence/browserSwarmBoundaryOracle";
-import { requireReadyScreen } from "./readiness";
+import { dismissAuditNavigation, requireReadyScreen } from "./readiness";
 import { SCREEN_AUDIT_ROUTES as routes, ROLE_ROUTE_GUARDS as routePermissions, auditDestination } from "../fixtures/screenAuditRoutes";
 import { convexDeploymentOf, servedDeployments } from "../scenarios/formExplorer/attestedPreview";
 
@@ -170,7 +170,7 @@ for (const locale of ["en", "ar"] as const) {
           if (visible) await expect(link.first()).toBeVisible();
           else await expect(link).toHaveCount(0);
         }
-        if (viewport.name === "phone") await page.keyboard.press("Escape");
+        if (viewport.name === "phone") await dismissAuditNavigation(page);
         expect(servedDeployments(sockets)).toContain(expectedDeployment);
         expect(servedDeployments(sockets).filter((deployment) => deployment !== expectedDeployment)).toEqual([]);
         expect(errors).toEqual([]);
