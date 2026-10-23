@@ -13,6 +13,11 @@ const permissionsOf = (role: string) => [
  * nav entry gated on `manage:users` alone left them with no way to the queue.
  */
 describe("the Approvals entry", () => {
+  test("custom queue operators get the same entry authority as the page", () => {
+    expect(navItemPermitted(approvals, ["approve:requests"])).toBe(true);
+    expect(navItemPermitted(approvals, ["confirm:finance_disbursement"])).toBe(true);
+    expect(navItemPermitted(approvals, ["manage:users"])).toBe(false);
+  });
   test.each(["MANAGER", "ACCOUNTANT", "SENIOR_ACCOUNTANT"])("is shown to %s", (role) => {
     expect(navItemPermitted(approvals, permissionsOf(role))).toBe(true);
   });

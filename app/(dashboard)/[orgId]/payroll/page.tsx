@@ -31,6 +31,10 @@ type PayrollMethod = (typeof METHODS)[number];
 const recoveryUsesBank = (method: PayrollMethod) => method === "BANK_TRANSFER" || method === "CARD";
 
 export default function PayrollPage() {
+  return <RoleGuard permissions={["view:payroll"]}><PayrollContent /></RoleGuard>;
+}
+
+function PayrollContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format } = useCurrency();
@@ -88,7 +92,7 @@ export default function PayrollPage() {
   const [runMonth, setRunMonth] = useState(String(new Date().getMonth() + 1));
   const [openRun, setOpenRun] = useState<Id<"payrollRuns"> | null>(null);
 
-  const salaryByUser = new Map((compensation ?? []).map((c) => [c.userId, c.monthlySalary]));
+  const salaryByUser = new Map<Id<"users">, number>((compensation ?? []).map((c) => [c.userId, c.monthlySalary]));
   const bankIsOffered = (id: string) => !!id && !!payrollBanks && !payrollBanks.truncated &&
     payrollBanks.banks.some((bank) => bank._id === id);
 
@@ -244,7 +248,6 @@ export default function PayrollPage() {
   );
 
   return (
-    <RoleGuard permissions={["view:payroll"]}>
       <div className="space-y-6">
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <Wallet className="h-6 w-6" /> {t("Payroll" as any)}
@@ -530,6 +533,5 @@ export default function PayrollPage() {
           </CardContent>
         </Card>
       </div>
-    </RoleGuard>
   );
 }

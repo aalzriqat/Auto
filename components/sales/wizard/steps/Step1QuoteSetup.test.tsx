@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dictionaries } from "@/lib/i18n/dictionaries";
+import { DEFAULT_ROLE_TEMPLATES } from "@/convex/utils/permissions";
 
 const ORG = "org_1" as Id<"organizations">;
 const VEHICLE = "vehicle_1" as Id<"vehicles">;
@@ -16,6 +17,7 @@ const AR_DELETED = "تم حذف هذه السيارة ولم يعد بالإمك
 const stubs = vi.hoisted(() => ({
   locale: "en" as "en" | "ar",
   verdict: undefined as unknown,
+  restrictSettings: false,
   mutation: (async () => null) as (...args: unknown[]) => Promise<unknown>,
 }));
 
@@ -43,6 +45,8 @@ vi.mock("convex/react", async () => {
     useQuery: (reference: never, args: unknown) => {
       if (args === "skip") return undefined;
       const name = getFunctionName(reference);
+      if (name === "orgCustomerStatuses:list" && stubs.restrictSettings) throw new Error("Synthetic wizard settings authority refusal");
+      if (name === "orgCustomerStatuses:listForQuotes" && stubs.restrictSettings) return [{ _id: "status-a", label: "Synthetic eligibility" }];
       if (name === "approvals:profitApprovalStatus") return stubs.verdict;
       if (name === "vehicles:listAll") return [];
       return null;
@@ -77,11 +81,23 @@ function renderStep() {
 }
 
 beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   stubs.locale = "en";
+  stubs.restrictSettings = false;
   stubs.verdict = { status: "VEHICLE_DELETED" };
   stubs.mutation = async () => null;
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+test("accountant wizard reads active quote choices without settings authority", () => {
+  const role = DEFAULT_ROLE_TEMPLATES.find(item => item.name === "ACCOUNTANT");
+  expect(role?.permissions).toContain("view:sales");
+  expect(role?.permissions).not.toContain("view:settings");
+  stubs.restrictSettings = true;
+  stubs.verdict = { status: "NOT_REQUIRED", margin: 1, minimumProfit: 0 };
+  expect(renderStep).not.toThrow();
+  expect(screen.getByText("Synthetic eligibility")).toBeTruthy();
+});
 
 describe("SCRUM-641 R2-F1: the wizard explains a deleted-vehicle block", () => {
   test.each([

@@ -69,6 +69,7 @@ jobs:
           pnpm run test:visual:deal-cockpit
           # The frame census is shared with trusted-main-e2e.yml (SCRUM-489).
           node scripts/assertDealCockpitVisualFrames.mjs test-results/deal-cockpit-visual
+          node scripts/assertRoleAccessVisualFrames.mjs test-results/deal-cockpit-visual
         env:
           CI: true
 

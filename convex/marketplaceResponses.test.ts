@@ -115,6 +115,17 @@ async function seedMatch(
   );
 }
 
+test("a marketplace-only member can reply without gaining inventory visibility", async () => {
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+  const { orgId, asSales } = await seedDealerOrg(t);
+  const requestId = await seedRequest(t);
+  await seedMatch(t, requestId, orgId);
+  await expect(asSales.query(api.vehicles.list, { orgId, status: "AVAILABLE", paginationOpts: { numItems: 10, cursor: null } }))
+    .rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
+  const { responseId } = await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "NOT_AVAILABLE" });
+  expect(await t.run(ctx => ctx.db.get(responseId))).toMatchObject({ orgId, requestId, kind: "NOT_AVAILABLE" });
+});
+
 describe("respond", () => {
   test("records the response but creates NO customer or lead (lead now waits for buyer consent)", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));

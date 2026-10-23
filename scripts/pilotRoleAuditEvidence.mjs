@@ -17,6 +17,13 @@ const SHA = /^[a-f0-9]{40}$/;
 const FINGERPRINT = /^[A-F0-9]{40}$/;
 const MAX_FILES = 1024;
 const MAX_BYTES = 512 * 1024 * 1024;
+const MAX_ROLE_REPORT_BYTES = 16 * 1024 * 1024;
+const ROLE_REGRESSION_TITLES = new Set([
+  "protected role routes render actual authority across audited pages",
+  "lead screen and create dialog respect actual audited role authority",
+  "approval screen renders authorized queue or explicit role refusal",
+  "sales quote picker respects audited role and tenant choice authority",
+]);
 const DEFAULT_GPG = process.platform === "win32" ? "C:/Program Files/Git/usr/bin/gpg.exe" : "/usr/bin/gpg";
 const DEFAULT_TAR = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/tar";
 const POWERSHELL = path.join(process.env.SystemRoot ?? "C:/Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -25,11 +32,68 @@ const PROBE_OPERATIONS = new Set(["foreign organization read", "foreign customer
   "foreign organization update", "foreign customer delete", "foreign row delete under own org"]);
 const runContextSchema = z.object({ runId: z.string().regex(/^\d+$/), attempt: z.string().regex(/^[1-9]\d*$/),
   workflowRef: z.string().regex(/^[\w.-]+\/[\w.-]+\/\.github\/workflows\/pilot-role-audit\.yml@refs\/heads\/main$/) }).strict();
+const roleSuiteSchema = z.object({
+  specs: z.array(z.object({ file: z.string(), title: z.string(), ok: z.boolean(), tests: z.array(z.object({
+    projectName: z.string(), expectedStatus: z.string(), status: z.string(), results: z.array(z.object({ status: z.string() }).passthrough()),
+  }).passthrough()) }).passthrough()),
+  suites: z.array(z.unknown()).optional(),
+}).passthrough();
+const roleReportSchema = z.object({ errors: z.array(z.unknown()), suites: z.array(z.unknown()) }).passthrough();
+/** @typedef {z.infer<typeof roleSuiteSchema>["specs"][number]} RoleSpec */
+/** @typedef {{ title: string, ok: boolean, row: RoleSpec["tests"][number] }} RoleCase */
+
+/** @param {RoleSpec[]} specs @param {RoleCase[]} observed */
+function appendRoleCases(specs, observed) {
+  for (const spec of specs) {
+    if (typeof spec?.file !== "string" || !spec.file.replaceAll("\\", "/").endsWith("/tests/audit-role-access.spec.ts")) continue;
+    for (const row of spec.tests) {
+      if (row?.projectName !== "role-regressions") continue;
+      observed.push({ title: spec.title, ok: spec.ok, row });
+    }
+  }
+}
+
+/** @param {unknown[]} suites */
+function collectRoleCases(suites) {
+  /** @type {RoleCase[]} */
+  const observed = [];
+  const pending = [...suites];
+  let visited = 0;
+  while (pending.length > 0 && visited < 10_000) {
+    visited++;
+    const result = roleSuiteSchema.safeParse(pending.pop());
+    if (!result.success) return null;
+    pending.push(...(result.data.suites ?? []));
+    appendRoleCases(result.data.specs, observed);
+  }
+  if (pending.length > 0) return null;
+  return observed;
+}
 
 /** Bounded codes only: raw process errors and DOM text are private evidence. */
 export class AuditEvidenceError extends Error {
   /** @param {string} code */
   constructor(code) { super(code); this.name = "AuditEvidenceError"; }
+}
+
+/** Measure exact real-role cases from the JSON reporter of this invocation.
+ * @param {unknown} report */
+export function roleRegressionOutcome(report) {
+  const absent = { expected: ROLE_REGRESSION_TITLES.size, observed: 0, verified: false, measurement: "UNAVAILABLE" };
+  const parsed = roleReportSchema.safeParse(report);
+  if (!parsed.success || parsed.data.errors.length !== 0) return absent;
+  const observed = collectRoleCases(parsed.data.suites);
+  if (observed === null) return absent;
+  const titles = new Set(observed.map((item) => item.title));
+  const verified = observed.length === ROLE_REGRESSION_TITLES.size && titles.size === ROLE_REGRESSION_TITLES.size &&
+      [...titles].every((title) => ROLE_REGRESSION_TITLES.has(title)) && observed.every(({ ok, row }) =>
+        ok === true && row.expectedStatus === "passed" && row.status === "expected" &&
+        Array.isArray(row.results) && row.results.length === 1 && row.results[0]?.status === "passed");
+  let measurement = "FAIL";
+  if (verified) measurement = "PASS";
+  else if (observed.length < ROLE_REGRESSION_TITLES.size) measurement = "UNAVAILABLE";
+  return { expected: ROLE_REGRESSION_TITLES.size, observed: observed.length, verified,
+    measurement };
 }
 
 /** @template T @param {() => Promise<T>} operation
@@ -191,7 +255,7 @@ export async function publicAuditSummary(files, role, sha) {
     isolationVerified = true;
   }
   return { schemaVersion: 1, sha, role, expectedCells: SCREEN_AUDIT_ROUTES.length * LOCALES.length * VIEWPORTS.length,
-    observedCells: cells.length, complete: isolationVerified && cells.length === SCREEN_AUDIT_ROUTES.length * LOCALES.length * VIEWPORTS.length,
+    observedCells: cells.length, cellsComplete: isolationVerified && cells.length === SCREEN_AUDIT_ROUTES.length * LOCALES.length * VIEWPORTS.length,
     cells, isolationVerified, isolationScope: "ORGANIZATION_AND_CUSTOMER_RELATIONS_ONLY",
     visualReview: "UNAVAILABLE_UNTIL_LOCAL_DECRYPT_AND_INSPECTION" };
 }
@@ -238,12 +302,12 @@ function completed(child) {
 
 /** Archive only copies made by this invocation, streaming directly into GPG.
  * @param {{resultsRoot: string, privateLog: string, publicRoot: string, role: string, sha: string,
- * publicKey: string, fingerprint: string, gpgBinary?: string, tarBinary?: string,
+ * publicKey: string, fingerprint: string, gpgBinary?: string, tarBinary?: string, roleReportFile?: string,
  * execution?: "SUCCEEDED" | "FAILED" | "UNAVAILABLE",
  * runContext?: {runId: string, attempt: string, workflowRef: string}}} options
  */
 export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot, role, sha, publicKey, fingerprint,
-  gpgBinary = DEFAULT_GPG, tarBinary = DEFAULT_TAR, execution = "UNAVAILABLE", runContext }) {
+  gpgBinary = DEFAULT_GPG, tarBinary = DEFAULT_TAR, execution = "UNAVAILABLE", runContext, roleReportFile }) {
   if (!member(role, ROLES) || !SHA.test(sha) || !member(execution, ["SUCCEEDED", "FAILED", "UNAVAILABLE"]) ||
       (runContext && !runContextSchema.safeParse(runContext).success)) {
     throw new AuditEvidenceError("INVALID_CONTEXT");
@@ -290,7 +354,8 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
       if (logTruncated) validationError ??= new AuditEvidenceError("INVENTORY_LIMIT");
     } catch (error) { validationError ??= error instanceof AuditEvidenceError ? error : new AuditEvidenceError("EVIDENCE_UNAVAILABLE"); }
     const sizes = await Promise.all(files.map(async (file) => (await regularFile(file)).size));
-    if (sizes.reduce((sum, size) => sum + size, 0) + logBytes.length > MAX_BYTES) {
+    const capturedBytes = sizes.reduce((sum, size) => sum + size, 0) + logBytes.length;
+    if (capturedBytes > MAX_BYTES) {
       files = [];
       validationError ??= new AuditEvidenceError("INVENTORY_LIMIT");
     }
@@ -302,11 +367,25 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
     catch (error) {
       validationError = error instanceof AuditEvidenceError ? error : new AuditEvidenceError("EVIDENCE_UNAVAILABLE");
       summary = { schemaVersion: 1, sha, role, expectedCells: SCREEN_AUDIT_ROUTES.length * LOCALES.length * VIEWPORTS.length,
-        observedCells: 0, complete: false, cells: [], isolationVerified: false,
+        observedCells: 0, cellsComplete: false, cells: [], isolationVerified: false,
         isolationScope: "ORGANIZATION_AND_CUSTOMER_RELATIONS_ONLY",
         visualReview: "UNAVAILABLE_UNTIL_LOCAL_DECRYPT_AND_INSPECTION", measurement: "UNAVAILABLE", reason: validationError.message };
     }
-    summary = { ...summary, cellsComplete: summary.complete, complete: execution === "SUCCEEDED" && summary.complete, execution,
+    let roleReportBytes;
+    let roleCases = roleRegressionOutcome(null);
+    try {
+      if (roleReportFile) {
+        const stat = await regularFile(roleReportFile);
+        if (stat.size > 0 && stat.size <= MAX_ROLE_REPORT_BYTES && capturedBytes + stat.size <= MAX_BYTES) {
+          roleReportBytes = await fs.readFile(roleReportFile);
+          roleCases = roleRegressionOutcome(JSON.parse(roleReportBytes.toString("utf8")));
+        }
+      }
+    } catch { roleReportBytes = undefined; }
+    summary = { ...summary,
+      complete: execution === "SUCCEEDED" && summary.cellsComplete && roleCases.verified, execution,
+      roleRegressionsExpected: roleCases.expected, roleRegressionsObserved: roleCases.observed,
+      roleRegressionsVerified: roleCases.verified, roleRegressionsMeasurement: roleCases.measurement,
       runContext: runContext ?? "UNAVAILABLE" };
     await fs.mkdir(path.join(archiveRoot, "captures"), { recursive: true, mode: 0o700 });
     /** @type {{path: string, bytes: number, sha256: string}[]} */
@@ -323,12 +402,18 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
     }
     await fs.writeFile(path.join(archiveRoot, "browser.log"), logBytes, { mode: 0o600 });
     manifest.push({ path: "browser.log", bytes: logBytes.length, sha256: createHash("sha256").update(logBytes).digest("hex") });
+    if (roleReportBytes) {
+      await fs.writeFile(path.join(archiveRoot, "role-results.json"), roleReportBytes, { mode: 0o600 });
+      manifest.push({ path: "role-results.json", bytes: roleReportBytes.length,
+        sha256: createHash("sha256").update(roleReportBytes).digest("hex") });
+    }
     await fs.writeFile(path.join(archiveRoot, "manifest.json"), JSON.stringify({ schemaVersion: 1, sha, role, files: manifest,
       runContext: runContext ?? "UNAVAILABLE", measurement: summary,
       diagnostic: { logTruncated, captureInventoryAccepted: !validationError, refusal: validationError?.message ?? null } }), { mode: 0o600 });
     await fs.mkdir(publication, { mode: 0o700 });
     const diagnostics = createWriteStream(path.join(staging, "encryption.log"), { mode: 0o600 });
-    const tar = spawn(tarBinary, ["-cf", "-", "-C", archiveRoot, "captures", "browser.log", "manifest.json"],
+    const tar = spawn(tarBinary, ["-cf", "-", "-C", archiveRoot, "captures", "browser.log", "manifest.json",
+      ...(roleReportBytes ? ["role-results.json"] : [])],
       { stdio: ["ignore", "pipe", "pipe"], timeout: 120_000, windowsHide: true });
     const gpg = spawn(gpgBinary, ["--homedir", keyHomeArgument, "--batch", "--no-tty", "--trust-model", "always",
       "--recipient", `${recipient.encryptionFingerprint}!`, "--cipher-algo", "AES256", "--output", gpgArgumentPath(gpgBinary, ciphertext), "--encrypt"],
@@ -409,6 +494,7 @@ export async function runRoleAudit({ cwd = process.cwd(), env = process.env, bro
   const invocationRoot = await fs.mkdtemp(path.join(runnerTemp, ".role-evidence-invocation-"));
   const captures = path.join(invocationRoot, "captures");
   const privateLog = path.join(invocationRoot, "browser.log");
+  const roleReportFile = path.join(invocationRoot, "role-results.json");
   const publicRoot = path.join(runnerTemp, "pilot-role-audit-public");
   let homeArgument = "";
   return withEvidenceCleanup(async () => {
@@ -421,7 +507,8 @@ export async function runRoleAudit({ cwd = process.cwd(), env = process.env, bro
     const require = createRequire(import.meta.url);
     const playwright = browserCli ?? require.resolve("@playwright/test/cli");
     const result = captureAuditProcess({ command: process.execPath,
-      args: [playwright, "test", "-c", "playwright.role-audit.config.ts", "--workers=1", `--output=${captures}`], cwd, logFile: privateLog, env });
+      args: [playwright, "test", "-c", "playwright.role-audit.config.ts", "--workers=1", "--reporter=line,json", `--output=${captures}`],
+      cwd, logFile: privateLog, env: { ...env, PLAYWRIGHT_JSON_OUTPUT_FILE: roleReportFile } });
     if (result.execution === "FAILED") {
       // Correlate while the private source log and disposable backend still
       // exist. This bounded diagnostic is encrypted, never printed publicly.
@@ -433,7 +520,7 @@ export async function runRoleAudit({ cwd = process.cwd(), env = process.env, bro
     await fs.mkdir(captures, { recursive: true, mode: 0o700 });
     const summary = await packageAuditEvidence({ resultsRoot: captures, privateLog, publicRoot, role, sha,
       publicKey, fingerprint: recipient.data.fingerprint, gpgBinary, execution: result.execution === "SUCCEEDED" ? "SUCCEEDED" : "FAILED",
-      runContext: reportedRun.success ? reportedRun.data : undefined });
+      roleReportFile, runContext: reportedRun.success ? reportedRun.data : undefined });
     return summary;
   }, async () => {
     if (homeArgument) {

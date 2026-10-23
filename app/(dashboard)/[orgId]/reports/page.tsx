@@ -186,6 +186,10 @@ function OperationalReportNotice({
 }
 
 export default function ReportsPage() {
+  return <RoleGuard permissions={["view:reports"]}><ReportsContent /></RoleGuard>;
+}
+
+function ReportsContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format, formatCompact } = useCurrency();
@@ -243,7 +247,6 @@ export default function ReportsPage() {
   const dateFilterProps = { startDateStr, endDateStr, setStartDateStr, setEndDateStr, selectedSalesperson, setSelectedSalesperson, salespersonOptions };
 
   return (
-    <RoleGuard permissions={["view:reports"]}>
       <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
         <style dangerouslySetInnerHTML={{
           __html: `
@@ -871,6 +874,5 @@ export default function ReportsPage() {
           </TabsContent>
         </Tabs>
       </div>
-    </RoleGuard>
   );
 }

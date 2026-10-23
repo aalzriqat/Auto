@@ -26,6 +26,41 @@ const APPROVER = {
 const CLOUD_URL = "https://the-one-preview.convex.cloud";
 
 describe("SCRUM-616 hunt attestation is separate from scripted finance preflight", () => {
+  test.each(["RECEPTION", "ACCOUNTANT", "SENIOR_ACCOUNTANT"])("%s settings refusal is observed through an independent preview projection", async (roleName) => {
+    const t = await markedDeployment();
+    await bootstrap(t);
+    await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+      seat: "approver", clerkUserId: APPROVER.clerkUserId, role: roleName, expectedCloudUrl: CLOUD_URL,
+    });
+    const args = { primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId,
+      primaryRole: "OWNER", approverRole: roleName, expectedCloudUrl: CLOUD_URL };
+    const before = await t.query(internal.e2eBootstrap.assertHuntSeats, args);
+    expect(before).toHaveProperty("settingsState", expect.any(String));
+    if (!("settingsState" in before) || typeof before.settingsState !== "string") throw new Error("Missing preview settings proof");
+    const owner = t.withIdentity({ subject: PRIMARY.clerkUserId });
+    const caller = t.withIdentity({ subject: APPROVER.clerkUserId });
+    const visible = await owner.query(api.orgSettings.get, { orgId: before.orgId });
+    expect(JSON.parse(before.settingsState)).toEqual(visible);
+    expect(await caller.query(api.orgSettings.get, { orgId: before.orgId })).toBeNull();
+    await expect(caller.mutation(api.orgSettings.upsert, { orgId: before.orgId, dealershipName: "Forbidden synthetic change" }))
+      .rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
+    const refused = await t.query(internal.e2eBootstrap.assertHuntSeats, args);
+    expect(refused).toMatchObject({ settingsState: before.settingsState });
+    await owner.mutation(api.orgSettings.upsert, { orgId: before.orgId, dealershipName: "Authorized synthetic change" });
+    const changed = await t.query(internal.e2eBootstrap.assertHuntSeats, args);
+    expect(changed).not.toMatchObject({ settingsState: before.settingsState });
+    await t.run(async (ctx) => {
+      const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", before.orgId)).unique();
+      if (!settings) throw new Error("Missing synthetic settings");
+      await ctx.db.patch(settings._id, { whatsappApiToken: "SYNTHETIC-PRIVATE-TOKEN-NOT-A-CREDENTIAL" });
+    });
+    expect(JSON.stringify(await t.query(internal.e2eBootstrap.assertHuntSeats, args))).not.toContain("SYNTHETIC-PRIVATE-TOKEN-NOT-A-CREDENTIAL");
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "production");
+    await expect(t.query(internal.e2eBootstrap.assertHuntSeats, args)).rejects.toThrow(
+      /refusing to honour a preview bootstrap marker.*it declares a different class/
+    );
+  });
+
   test("isolates only the seeded approver in a fresh second org and refuses a repeat", async () => {
     const t = await markedDeployment();
     await bootstrap(t);

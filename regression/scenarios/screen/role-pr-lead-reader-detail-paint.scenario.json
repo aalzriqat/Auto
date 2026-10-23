@@ -1,0 +1,47 @@
+{
+  "id": "role-pr-lead-reader-detail-paint",
+  "domain": "screen",
+  "level": "browser",
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_LEAD_READER",
+        "org": "A"
+      },
+      "action": "fixture.paint",
+      "input": {
+        "route": "leads/lead-a",
+        "boundary": "SYNTHETIC_SDK_REAL_COMPONENTS",
+        "locales": "EN_AR",
+        "viewports": "375_1440"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "lead.heading",
+      "value": "SYNTHETIC_BUYER"
+    },
+    {
+      "observable": "edit.dialogCount",
+      "value": 0
+    }
+  ],
+  "impl": {
+    "file": "playwright/tests/role-access.visual.spec.ts",
+    "testName": "PR screen paint opens a lead detail for a reader without edit pickers"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "local-codex-r6-lead-detail",
+    "firstSeen": "2026-10-22"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "6494a388b2542c5f19d835ff4fb40cc90e775eef1264bbe9c8e05cb709c7935a"
+}

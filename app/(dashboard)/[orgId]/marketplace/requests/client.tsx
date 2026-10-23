@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
 import { Car, CheckCircle2, Handshake, MapPin, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { usePermissions } from "@/hooks/use-permissions";
 
 type ResponseKind = "HAVE_MATCH" | "HAVE_SIMILAR" | "CAN_SOURCE" | "NOT_AVAILABLE";
 type InboxView = "requests" | "tradeins";
@@ -51,14 +52,16 @@ function ResponseForm({
   onSaved,
 }: MarketplaceActionFormProps<Id<"marketplaceRequests">>) {
   const { t } = useLanguage();
+  const { hasPermission } = usePermissions();
+  const canViewVehicles = hasPermission("view:vehicles");
   const respond = useMutation(api.marketplaceResponses.respond);
-  const vehiclesPage = useQuery(api.vehicles.list, {
+  const vehiclesPage = useQuery(api.vehicles.list, canViewVehicles ? {
     orgId,
     status: "AVAILABLE",
     paginationOpts: { numItems: 100, cursor: null },
-  });
+  } : "skip");
 
-  const [kind, setKind] = useState<ResponseKind>("HAVE_MATCH");
+  const [kind, setKind] = useState<ResponseKind>(canViewVehicles ? "HAVE_MATCH" : "HAVE_SIMILAR");
   const [vehicleId, setVehicleId] = useState<string>("");
   const [offerPriceJod, setOfferPriceJod] = useState("");
   const [note, setNote] = useState("");
@@ -90,7 +93,7 @@ function ResponseForm({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="HAVE_MATCH">{t("MarketplaceKindHaveMatch" as any)}</SelectItem>
+            {canViewVehicles && <SelectItem value="HAVE_MATCH">{t("MarketplaceKindHaveMatch")}</SelectItem>}
             <SelectItem value="HAVE_SIMILAR">{t("MarketplaceKindHaveSimilar" as any)}</SelectItem>
             <SelectItem value="CAN_SOURCE">{t("MarketplaceKindCanSource" as any)}</SelectItem>
             <SelectItem value="NOT_AVAILABLE">{t("MarketplaceKindNotAvailable" as any)}</SelectItem>
@@ -100,22 +103,22 @@ function ResponseForm({
 
       {kind !== "NOT_AVAILABLE" && (
         <>
-          <div>
-            <p className="text-sm font-medium mb-1">{t("MarketplaceResponseVehicleLabel" as any)}</p>
+          {canViewVehicles && <div>
+            <p className="text-sm font-medium mb-1">{t("MarketplaceResponseVehicleLabel")}</p>
             <Select value={vehicleId || "none"} onValueChange={(v) => setVehicleId(v === "none" ? "" : v)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">{t("MarketplaceResponseVehicleNone" as any)}</SelectItem>
-                {(vehiclesPage?.page ?? []).map((vehicle: any) => (
+                <SelectItem value="none">{t("MarketplaceResponseVehicleNone")}</SelectItem>
+                {(vehiclesPage?.page ?? []).map((vehicle) => (
                   <SelectItem key={vehicle._id} value={vehicle._id}>
                     {vehicle.year} {vehicle.make} {vehicle.model}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          </div>
+          </div>}
 
           <div>
             <p className="text-sm font-medium mb-1">{t("MarketplaceResponseOfferPriceLabel" as any)}</p>

@@ -42,6 +42,8 @@ const egress = browserEgressLaunchOptions(process.env);
 
 export default defineConfig({
   testDir: "./playwright/tests",
+  // This new replay requires the attested, exact-role preview runner.
+  testIgnore: ["**/audit-role-access.spec.ts", "**/role-access.visual.spec.ts"],
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

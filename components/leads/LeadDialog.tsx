@@ -43,6 +43,7 @@ import { LeadActivityTrail } from "./LeadActivityTrail";
 import { LeadCustomerMessages } from "./LeadCustomerMessages";
 import { translateLeadSourceLabel, translatePipelineStageLabel } from "@/lib/i18n/defaultLabels";
 import { getErrorMessage } from "@/lib/errors";
+import { usePermissions } from "@/hooks/use-permissions";
 
 /**
  * Pins a lead's stored value into a dropdown's option list when it isn't
@@ -182,22 +183,27 @@ function useLeadDropdownOptions({
   defaultCustomerId,
 }: Readonly<LeadDropdownOptions>) {
   const { t, locale } = useLanguage();
+  const { hasPermission } = usePermissions();
+  const canViewLeadSources = hasPermission("view:leads");
+  const canViewCustomers = hasPermission("view:customers");
+  const canViewVehicles = hasPermission("view:vehicles");
+  const canViewUsers = hasPermission("view:users");
   const localeCode = locale === "ar" ? "ar-JO" : "en-US";
   const [customerSearch, setCustomerSearch] = useState("");
   const customerSelectorOptions = useQuery(
     api.customers.selectorOptions,
-    activeOrgId ? { orgId: activeOrgId, search: customerSearch } : "skip"
+    activeOrgId && canViewCustomers ? { orgId: activeOrgId, search: customerSearch } : "skip"
   );
   const defaultCustomer = useQuery(
     api.customers.get,
-    activeOrgId && defaultCustomerId && !lead
+    activeOrgId && canViewCustomers && defaultCustomerId && !lead
       ? { orgId: activeOrgId, customerId: defaultCustomerId }
       : "skip"
   );
-  const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip");
+  const vehicles = useQuery(api.vehicles.listAll, activeOrgId && canViewVehicles ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip");
   const dynamicLeadSources = useQuery(
-    api.orgLeadSources.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
+    api.orgLeadSources.listForLeads,
+    activeOrgId && canViewLeadSources ? { orgId: activeOrgId } : "skip"
   );
   const pipelineStages = useQuery(
     api.orgPipelineStages.list,
@@ -205,7 +211,7 @@ function useLeadDropdownOptions({
   );
   const { results: memberships } = usePaginatedQuery(
     api.memberships.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip",
+    activeOrgId && canViewUsers ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 100 }
   );
 
@@ -257,11 +263,9 @@ function useLeadDropdownOptions({
 
   const sourceOptions = useMemo(() => {
     const configured =
-      dynamicLeadSources && dynamicLeadSources.length > 0
-        ? dynamicLeadSources
-            .filter((source: Doc<"orgLeadSources">) => source.isActive)
-            .map((source: Doc<"orgLeadSources">) => source.label)
-        : ["Walk-in", "Website", "Facebook", "Instagram", "Referral", "Phone", "Other"];
+      dynamicLeadSources === null
+        ? ["Walk-in", "Website", "Facebook", "Instagram", "Referral", "Phone", "Other"]
+        : dynamicLeadSources?.map((source) => source.label) ?? [];
 
     return lead?.source && !configured.includes(lead.source)
       ? [lead.source, ...configured]
@@ -284,6 +288,9 @@ function useLeadDropdownOptions({
   return {
     assigneeOptions,
     customerOptions,
+    canViewCustomers,
+    canViewVehicles,
+    canViewUsers,
     pipelineStages,
     setCustomerSearch,
     sourceOptions,
@@ -295,7 +302,8 @@ export function LeadDialog({ open, onOpenChange, lead, defaultCustomerId }: Read
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const router = useRouter();
-  const { assigneeOptions, customerOptions, pipelineStages, setCustomerSearch, sourceOptions, vehicleOptions } =
+  const { assigneeOptions, customerOptions, canViewCustomers, canViewVehicles, canViewUsers,
+    pipelineStages, setCustomerSearch, sourceOptions, vehicleOptions } =
     useLeadDropdownOptions({ activeOrgId, lead, defaultCustomerId });
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
   const { isSubmitting, onSubmit } = useLeadSubmission({ activeOrgId, lead, customFieldValues, onOpenChange });
@@ -377,8 +385,9 @@ export function LeadDialog({ open, onOpenChange, lead, defaultCustomerId }: Read
                         value={field.value}
                         onValueChange={field.onChange}
                         onSearchChange={setCustomerSearch}
-                        placeholder={t("SelectCustomer" as any) || "Select a customer"}
+                        placeholder={canViewCustomers ? t("SelectCustomer") : t("NoAccess")}
                         options={customerOptions}
+                        disabled={!canViewCustomers}
                       />
                     </FormControl>
                     <FormMessage />
@@ -396,9 +405,10 @@ export function LeadDialog({ open, onOpenChange, lead, defaultCustomerId }: Read
                       <SearchableSelect
                         value={field.value}
                         onValueChange={field.onChange}
-                        placeholder={t("SelectVehicle" as any) || "Select a vehicle"}
-                        noneLabel={t("NoSpecificVehicle" as any) || "No specific vehicle yet"}
+                        placeholder={canViewVehicles ? t("SelectVehicle") : t("NoAccess")}
+                        noneLabel={canViewVehicles ? t("NoSpecificVehicle") : t("NoAccess")}
                         options={vehicleOptions}
+                        disabled={!canViewVehicles}
                       />
                     </FormControl>
                     <FormMessage />
@@ -416,9 +426,10 @@ export function LeadDialog({ open, onOpenChange, lead, defaultCustomerId }: Read
                       <SearchableSelect
                         value={field.value}
                         onValueChange={field.onChange}
-                        placeholder={t("NoAssigned" as any) || "Unassigned"}
-                        noneLabel={t("NoAssigned" as any) || "Unassigned"}
+                        placeholder={canViewUsers ? t("NoAssigned") : t("NoAccess")}
+                        noneLabel={canViewUsers ? t("NoAssigned") : t("NoAccess")}
                         options={assigneeOptions}
+                        disabled={!canViewUsers}
                       />
                     </FormControl>
                     <FormMessage />

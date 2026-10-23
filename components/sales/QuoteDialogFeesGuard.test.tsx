@@ -89,12 +89,19 @@ beforeEach(() => {
 
   stubs.queryResults.set("documents:listRules", []);
   stubs.queryResults.set("finance:listValuations", []);
-  stubs.queryResults.set("orgCustomerStatuses:list", [{
-    _id: STATUS, orgId: ORG, label: "Salary Slip", isActive: true, order: 1,
-  }] as unknown as Doc<"orgCustomerStatuses">[]);
+  stubs.queryResults.set("orgCustomerStatuses:listForQuotes", [{
+    _id: STATUS, label: "Salary Slip",
+  }]);
 });
 
 describe("QuoteDialog execution-fee fail-closed rendering", () => {
+  test("loading customer statuses is distinct from an empty configuration", () => {
+    stubs.queryResults.delete("orgCustomerStatuses:listForQuotes");
+    render(<QuoteDialog open onOpenChange={() => {}} />);
+    expect(screen.getByText("CustomerStatusesLoading")).toBeTruthy();
+    expect(screen.queryByText("NoCustomerStatusesConfigured")).toBeNull();
+  });
+
   test("renders the fees-not-configured state without dereferencing absent finance values", async () => {
     render(<QuoteDialog open onOpenChange={() => {}} defaultVehicleId={VEHICLE} defaultCustomerId="cust1" />);
 

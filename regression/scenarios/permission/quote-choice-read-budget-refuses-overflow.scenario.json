@@ -1,0 +1,78 @@
+{
+  "id": "quote-choice-read-budget-refuses-overflow",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_PICKER_READER",
+        "org": "A"
+      },
+      "action": "orgCustomerStatuses.listForQuotes",
+      "input": {
+        "configuredRows": 8192,
+        "activeFinalRow": true
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_PICKER_READER",
+        "org": "A"
+      },
+      "action": "orgCustomerStatuses.listForQuotes",
+      "input": {
+        "configuredRows": 8193,
+        "overflowRowActive": false
+      }
+    },
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "A"
+      },
+      "action": "orgCustomerStatuses.listForQuotes",
+      "input": {
+        "configuredRows": 8193
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "boundary.choices",
+      "value": "FINAL_ACTIVE_ROW_ID_AND_LABEL"
+    },
+    {
+      "observable": "overflow.refusalCode",
+      "value": "CONFIG_CHOICE_LIMIT"
+    },
+    {
+      "observable": "anonymous.refusalCode",
+      "value": "UNAUTHENTICATED"
+    },
+    {
+      "observable": "overflow.localizedMessages",
+      "value": {
+        "en": "REGISTERED_ENGLISH_MESSAGE",
+        "ar": "REGISTERED_ARABIC_MESSAGE"
+      }
+    }
+  ],
+  "matrixRow": "SCRUM760-quote-choice-read-budget",
+  "impl": {
+    "file": "convex/configChoiceReadBudget.test.ts",
+    "testName": "quote choices retain boundary values and refuse an oversized configuration"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "local-picker-bounded-read-review",
+    "firstSeen": "2026-10-22"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "57e626bb09677ab7603c2e2e305957a7ce7024b003d2fe651a1695b9e5ac7fbc"
+}

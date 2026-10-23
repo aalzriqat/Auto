@@ -199,7 +199,7 @@ export function LeadWorkspace({ leadId }: Readonly<LeadWorkspaceProps>) {
         </div>
       </Tabs>
 
-      <LeadDialog open={isEditOpen} onOpenChange={setIsEditOpen} lead={lead} />
+      {canEdit && isEditOpen && <LeadDialog open={isEditOpen} onOpenChange={setIsEditOpen} lead={lead} />}
     </div>
   );
 }

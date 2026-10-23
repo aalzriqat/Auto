@@ -4,6 +4,7 @@ import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import type { Id } from "./_generated/dataModel";
+import { assertConfigChoiceReadBudget, CONFIG_CHOICE_MAX_ROWS } from "./utils/configChoiceLimits";
 
 // ─── Seed data ────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,20 @@ export const list = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
     return statuses.sort((a, b) => a.order - b.order);
+  },
+});
+
+/** Quote creation already requires view:sales; expose only its active picker choices. */
+export const listForQuotes = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.array(v.object({ _id: v.id("orgCustomerStatuses"), label: v.string() })),
+  handler: async (ctx, { orgId }) => {
+    await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_SALES]);
+    const statuses = await ctx.db.query("orgCustomerStatuses")
+      .withIndex("by_org", q => q.eq("orgId", orgId)).take(CONFIG_CHOICE_MAX_ROWS + 1);
+    assertConfigChoiceReadBudget(statuses.length);
+    return statuses.filter(status => status.isActive).sort((a, b) => a.order - b.order)
+      .map(status => ({ _id: status._id, label: status.label }));
   },
 });
 

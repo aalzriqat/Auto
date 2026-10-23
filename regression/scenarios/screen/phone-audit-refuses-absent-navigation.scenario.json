@@ -1,0 +1,35 @@
+{
+  "id": "phone-audit-refuses-absent-navigation",
+  "fingerprint": "b51643c33214625bffe20943eb44f11e284a20af3e82187fcf1411f1ad3aec07",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "local-drawer-absent-self-attack",
+    "firstSeen": "2026-10-23"
+  },
+  "steps": [
+    {
+      "actor": { "role": "ANONYMOUS", "org": "SYNTHETIC" },
+      "action": "navigation.dismiss",
+      "input": { "viewport": "phone", "boundary": "SYNTHETIC_DOM", "drawerState": "ABSENT", "width": 375, "height": 812 }
+    },
+    {
+      "actor": { "role": "ANONYMOUS", "org": "SYNTHETIC" },
+      "action": "audit.capture",
+      "input": { "requireDrawerOpened": true }
+    }
+  ],
+  "expected": [
+    { "observable": "capture.accepted", "value": false },
+    { "observable": "capture.escapePressed", "value": false }
+  ],
+  "rulings": [
+    { "id": "SCRUM-760#description", "digest": "08384ec40d4f1a4b54825f8cc7b7a32552b5b8e1a2161e47bc37e0d0a2c8e863" }
+  ],
+  "impl": {
+    "file": "playwright/tests/audit-navigation-dismissal.spec.ts",
+    "testName": "phone capture refuses an absent navigation drawer before Escape"
+  }
+}

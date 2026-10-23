@@ -43,9 +43,33 @@ import { getLocalizedErrorMessage } from "@/lib/errors";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 
 
+function CustomerStatusChoices({ rows, selectedIds, onToggle }: Readonly<{
+  rows: { _id: Id<"orgCustomerStatuses">; label: string }[] | undefined;
+  selectedIds: Id<"orgCustomerStatuses">[];
+  onToggle: (id: Id<"orgCustomerStatuses">) => void;
+}>) {
+  const { t, locale } = useLanguage();
+  if (rows === undefined) {
+    return <p className="text-sm text-muted-foreground">{t("CustomerStatusesLoading")}</p>;
+  }
+  if (rows.length === 0) {
+    return <p className="text-sm text-muted-foreground">{t("NoCustomerStatusesConfigured")}</p>;
+  }
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
+      {rows.map((status) => (
+        <label key={status._id} className="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm">
+          <Checkbox checked={selectedIds.includes(status._id)} onCheckedChange={() => onToggle(status._id)} />
+          <span>{translateCustomerStatusLabel(status.label, locale)}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCustomerId }: QuoteDialogProps) {
   const { activeOrgId } = useOrg();
-  const { t, locale } = useLanguage();
+  const { t } = useLanguage();
   const money = useMoneyDisplay();
 
   const { results: customers } = usePaginatedQuery(
@@ -59,9 +83,9 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
   );
   const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const documentRules = useQuery(api.documents.listRules, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const customerStatusOptions =
-    useQuery(api.orgCustomerStatuses.list, activeOrgId ? { orgId: activeOrgId } : "skip")
-      ?.filter((status: Doc<"orgCustomerStatuses">) => status.isActive) ?? [];
+  const customerStatusRows =
+    useQuery(api.orgCustomerStatuses.listForQuotes, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const customerStatusOptions = customerStatusRows ?? [];
 
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -369,26 +393,11 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
 
             <div className="space-y-2 rounded-lg border p-3">
               <p className="text-sm font-medium">{t("CustomerStatusReqs" as any)}</p>
-              {customerStatusOptions.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  {t("NoCustomerStatusesConfigured" as any)}
-                </p>
-              ) : (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
-                  {customerStatusOptions.map((status: Doc<"orgCustomerStatuses">) => (
-                    <label
-                      key={status._id}
-                      className="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm"
-                    >
-                      <Checkbox
-                        checked={customerEligibilityStatusIds.includes(status._id)}
-                        onCheckedChange={() => toggleCustomerStatus(status._id)}
-                      />
-                      <span>{translateCustomerStatusLabel(status.label, locale)}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
+              <CustomerStatusChoices
+                rows={customerStatusRows}
+                selectedIds={customerEligibilityStatusIds}
+                onToggle={toggleCustomerStatus}
+              />
               {customerEligibilityStatusIds.length === 0 && customerStatusOptions.length > 0 && (
                 <p className="text-xs text-muted-foreground">{t("SelectStatusFilter" as any)}</p>
               )}

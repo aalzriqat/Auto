@@ -35,6 +35,45 @@ function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
 }
 
 describe("SCRUM-616 role audit trust and coverage contract", () => {
+  test("PR and trusted-main paint the role screens and require their separate exact inventory", () => {
+    const project = visualConfig.projects?.find(item => item.name === "role-page-controls");
+    expect(project?.testDir).toBe("./playwright/tests");
+    expect(String(project?.testMatch)).toBe(String(/role-access\.visual\.spec\.ts/));
+    expect(project?.use?.storageState).toEqual({ cookies: [], origins: [] });
+    const manifest = JSON.parse(readFileSync(path.resolve("package.json"), "utf8"));
+    expect(manifest.scripts["test:visual:deal-cockpit"]).toContain("-c playwright.visual.config.ts");
+    expect(manifest.scripts["test:visual:deal-cockpit"]).not.toContain("--project");
+    for (const name of ["playwright.yml", "trusted-main-e2e.yml"]) {
+      const text = readFileSync(path.resolve(".github/workflows", name), "utf8");
+      expect(text).toMatch(/^\s+pnpm run test:visual:deal-cockpit\s*$/m);
+      const candidate = z.object({ jobs: z.object({ playwright: z.object({ steps: z.array(stepSchema) }) }) }).parse(parse(text));
+      const steps = candidate.jobs.playwright.steps;
+      const gateIndex = steps.findIndex((step) => step.name?.startsWith("Deal cockpit visual gate"));
+      expect(gateIndex).toBeGreaterThanOrEqual(0);
+      const gate = steps[gateIndex];
+      const commands = (gate.run ?? "").split(/\r?\n/).map((line) => line.trim());
+      expect(commands).toContain("pnpm run test:visual:deal-cockpit");
+      expect(commands).toContain("node scripts/assertRoleAccessVisualFrames.mjs test-results/deal-cockpit-visual");
+      expect(commands).toContain("node scripts/assertDealCockpitVisualFrames.mjs test-results/deal-cockpit-visual");
+      expect(JSON.stringify(gate.env ?? {})).not.toContain("secrets.");
+      const previewIndex = steps.findIndex((step) => /preview/i.test(step.name ?? ""));
+      expect(previewIndex).toBeGreaterThan(gateIndex);
+      const deployIndex = steps.findIndex((step) => step.run?.includes("convex deploy"));
+      if (deployIndex !== -1) expect(deployIndex).toBeGreaterThan(gateIndex);
+    }
+  });
+  test("bound role regressions run before the matrix can isolate its audited seat", () => {
+    const project = roleConfig.projects?.find(item => item.name === "role-regressions");
+    expect(project?.testDir).toBe("./playwright/tests");
+    expect(project?.testMatch).toBe("audit-role-access.spec.ts");
+    expect(project?.testIgnore).toEqual([]);
+    expect(project?.dependencies).toEqual(["setup"]);
+    expect(project?.use?.storageState).toBe("playwright/.auth/approver.json");
+    const matrix = roleConfig.projects?.find(item => item.name === "chromium");
+    expect(matrix?.dependencies).toContain("role-regressions");
+    expect(roleConfig.workers).toBe(1);
+    expect(roleConfig.retries).toBe(0);
+  });
   test.each([
     ["PR static browser gate", visualConfig, ["audit-navigation-dismissal.spec.ts", "bill-of-sale-capture.spec.ts"]],
     ["role audit", roleConfig, "audit-navigation-dismissal.spec.ts"],

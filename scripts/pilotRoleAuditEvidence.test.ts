@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { AuditEvidenceError, captureAuditProcess, gpgArgumentPath, importAuditRecipient, packageAuditEvidence, publicAuditSummary, runRoleAudit, withEvidenceCleanup } from "./pilotRoleAuditEvidence.mjs";
+import { AuditEvidenceError, captureAuditProcess, gpgArgumentPath, importAuditRecipient, packageAuditEvidence, publicAuditSummary, roleRegressionOutcome, runRoleAudit, withEvidenceCleanup } from "./pilotRoleAuditEvidence.mjs";
 import { SCREEN_AUDIT_ROUTES } from "../playwright/fixtures/screenAuditRoutes";
 
 // One disposable, synthetic recipient. Never use these test keys for real data.
@@ -337,10 +337,43 @@ test.each([
   expect(readdirSync(runnerTemp)).toEqual([]);
 });
 
-test.each([0, 17])("native orchestration preserves a full synthetic matrix and measures browser exit %s", async (exitCode) => {
-  const repo = path.join(root, `native-orchestration-${exitCode}`);
+const roleTitles = [
+  "protected role routes render actual authority across audited pages",
+  "lead screen and create dialog respect actual audited role authority",
+  "approval screen renders authorized queue or explicit role refusal",
+  "sales quote picker respects audited role and tenant choice authority",
+];
+
+function roleReport(statuses: readonly string[] = roleTitles.map(() => "passed")) {
+  return { errors: [], suites: [{ file: "../tests/audit-role-access.spec.ts", specs: statuses.map((status, index) => ({
+    title: roleTitles[index] ?? roleTitles[0], file: "../tests/audit-role-access.spec.ts", ok: status === "passed",
+    tests: [{ projectName: "role-regressions", status: status === "passed" ? "expected" : status,
+      expectedStatus: "passed", results: status === "skipped" ? [] : [{ status }] }],
+  })) }] };
+}
+
+test.each([
+  ["all four passed", roleReport(), true, "PASS"],
+  ["no cases", { errors: [], suites: [] }, false, "UNAVAILABLE"],
+  ["missing case", roleReport(["passed", "passed", "passed"]), false, "UNAVAILABLE"],
+  ["skipped case", roleReport(["passed", "skipped", "passed", "passed"]), false, "FAIL"],
+  ["duplicate case", { errors: [], suites: [{ ...roleReport().suites[0], specs: [...roleReport().suites[0].specs, roleReport().suites[0].specs[0]] }] }, false, "FAIL"],
+  ["nested duplicate case", { errors: [], suites: [{ ...roleReport().suites[0], suites: [{ specs: [roleReport().suites[0].specs[0]] }] }] }, false, "FAIL"],
+  ["unparseable", null, false, "UNAVAILABLE"],
+] as const)("real-role case census measures %s", (_name, report, verified, measurement) => {
+  expect(roleRegressionOutcome(report)).toMatchObject({ expected: 4, verified, measurement });
+});
+
+test.each([
+  { exitCode: 0, reportMode: "passed", complete: true },
+  { exitCode: 0, reportMode: "missing", complete: false },
+  { exitCode: 0, reportMode: "malformed", complete: false },
+  { exitCode: 0, reportMode: "skipped", complete: false },
+  { exitCode: 17, reportMode: "passed", complete: false },
+] as const)("native audit requires measured real-role cases: process=$exitCode report=$reportMode", async ({ exitCode, reportMode, complete }) => {
+  const repo = path.join(root, `native-orchestration-${exitCode}-${reportMode}`);
   const captures = path.join(repo, "synthetic-inputs");
-  const runnerTemp = path.join(root, `native-orchestration-temp-${exitCode}`);
+  const runnerTemp = path.join(root, `native-orchestration-temp-${exitCode}-${reportMode}`);
   mkdirSync(path.join(repo, ".github"), { recursive: true });
   mkdirSync(captures); mkdirSync(runnerTemp);
   const sharedResults = path.join(repo, "test-results");
@@ -366,7 +399,10 @@ test.each([0, 17])("native orchestration preserves a full synthetic matrix and m
   }
   const stub = path.join(repo, "synthetic-browser.cjs");
   const failureMarker = "\nPreview attestation failed: [Request ID: 42e39a239aecaeb1]\n";
-  writeFileSync(stub, `const fs=require("node:fs"),path=require("node:path");const output=process.argv.find(arg=>arg.startsWith("--output="));fs.cpSync(path.join(process.cwd(),"synthetic-inputs"),output?output.slice(9):path.join(process.cwd(),"test-results"),{recursive:true});process.stdout.write(process.env.AUDIT_CANARY);process.stderr.write(process.env.AUDIT_CANARY.toLowerCase());if(${exitCode}!==0)process.stderr.write(${JSON.stringify(failureMarker)});process.exit(${exitCode});`);
+  const report = reportMode === "skipped" ? roleReport(["passed", "skipped", "passed", "passed"]) : roleReport();
+  const reportBytes = reportMode === "malformed" ? "{invalid report" : JSON.stringify(report);
+  const reportWrite = reportMode === "missing" ? "" : `fs.writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE,${JSON.stringify(reportBytes)});`;
+  writeFileSync(stub, `const fs=require("node:fs"),path=require("node:path");const output=process.argv.find(arg=>arg.startsWith("--output="));fs.cpSync(path.join(process.cwd(),"synthetic-inputs"),output?output.slice(9):path.join(process.cwd(),"test-results"),{recursive:true});${reportWrite}process.stdout.write(process.env.AUDIT_CANARY);process.stderr.write(process.env.AUDIT_CANARY.toLowerCase());if(${exitCode}!==0)process.stderr.write(${JSON.stringify(failureMarker)});process.exit(${exitCode});`);
   let diagnosticCalls = 0;
   const outcome = await runRoleAudit({ cwd: repo, browserCli: stub,
     diagnosticSpawn: () => {
@@ -379,15 +415,21 @@ test.each([0, 17])("native orchestration preserves a full synthetic matrix and m
       CONVEX_PREVIEW_URL: "https://tame-mouse-328.convex.cloud", CONVEX_PREVIEW_CREATED_AT: "1234567" }) });
   expect(diagnosticCalls).toBe(exitCode === 0 ? 0 : 1);
   expect(outcome).toMatchObject({ cellsComplete: true, observedCells: 136, isolationVerified: true,
-    complete: exitCode === 0, execution: exitCode === 0 ? "SUCCEEDED" : "FAILED",
+    complete, execution: exitCode === 0 ? "SUCCEEDED" : "FAILED",
+    roleRegressionsVerified: reportMode === "passed",
+    roleRegressionsMeasurement: reportMode === "passed" ? "PASS" : reportMode === "skipped" ? "FAIL" : "UNAVAILABLE",
     visualReview: "UNAVAILABLE_UNTIL_LOCAL_DECRYPT_AND_INSPECTION" });
   const publication = path.join(runnerTemp, "pilot-role-audit-public");
   expect(JSON.parse(readFileSync(path.join(publication, "results.json"), "utf8"))).toEqual(outcome);
-  const decoded = path.join(root, `native-orchestration-${exitCode}.tar`);
+  const decoded = path.join(root, `native-orchestration-${exitCode}-${reportMode}.tar`);
   runGpg(["--output", decoded, "--decrypt", path.join(publication, "role-evidence.tar.gpg")]);
   const manifest = JSON.parse(execFileSync(tar, ["-xOf", decoded, "manifest.json"], { encoding: "utf8" }));
   expect(manifest.runContext).toEqual(outcome.runContext);
-  expect(manifest.measurement).toMatchObject({ complete: exitCode === 0, execution: outcome.execution, sha, role: "OWNER" });
+  expect(manifest.measurement).toMatchObject({ complete, execution: outcome.execution, sha, role: "OWNER" });
+  expect(manifest.files.some((file: { path: string }) => file.path === "role-results.json")).toBe(reportMode === "passed" || reportMode === "skipped");
+  if (reportMode === "passed" || reportMode === "skipped") {
+    expect(JSON.parse(execFileSync(tar, ["-xOf", decoded, "role-results.json"], { encoding: "utf8" }))).toEqual(report);
+  }
   expect(execFileSync(tar, ["-xOf", decoded, "browser.log"], { encoding: "utf8" })).toBe(canary + canary.toLowerCase() +
     (exitCode === 0 ? "" : failureMarker + "\nAttestation backend failures: request=42e39a239aecaeb1 class=RangeError category=unclassified location=unavailable\n"));
   expect(readFileSync(path.join(publication, "results.json"), "utf8")).not.toMatch(/42e39a239aecaeb1|Synthetic.QA|EXAMPLE.INVALID/);
