@@ -394,7 +394,18 @@ describe("resetOrgFinancialData", () => {
     // 46 -> 47: `dealCommissionLines`, the extra per-deal commission lines. Each names
     // a sale (which the reset deletes) and is paid through a payslip (also
     // deleted), so leaving them would strand rows pointing at nothing.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(47);
+    // 47 -> 50: SCRUM-858 native opening obligations and management artifacts.
+    // Their approved reset lifecycle clears the new obligations and invalidates
+    // exact new result references; this does not add legacy supplier AP or change
+    // inventory/CRM/people/config retention. payrollItems moved, not duplicated.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(50);
+    expect(new Set(RESET_TABLES_FOR_TEST).size).toBe(50);
+    expect(RESET_TABLES_FOR_TEST).toContain("openingCommissionLiabilities");
+    expect(RESET_TABLES_FOR_TEST).toContain("openingPayablePayments");
+    expect(RESET_TABLES_FOR_TEST).toContain("openingManagementSettlementPlans");
+    expect(RESET_TABLES_FOR_TEST.indexOf("payrollItems")).toBeLessThan(
+      RESET_TABLES_FOR_TEST.indexOf("openingCommissionLiabilities"),
+    );
     expect(RESET_TABLES_FOR_TEST).toContain("dashboardExpenseMonths");
     expect(RESET_TABLES_FOR_TEST).toContain("dashboardExpenseSummaryState");
     expect(RESET_TABLES_FOR_TEST.indexOf("dashboardExpenseMonths")).toBeGreaterThan(RESET_TABLES_FOR_TEST.indexOf("expenses"));

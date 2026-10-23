@@ -702,10 +702,14 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // It takes Clerk seat ids, validates the preview and exact seeded memberships,
   // and derives its organization internally. No caller-supplied orgId is added.
   // Measured census: +1 total and skippedNoOrgId; all 368 orgId handlers remain analysed.
+  // SCRUM-858: openingManagementSettlement.{draft,approve,reject} add three
+  // orgId handlers. Actual whole-tree census: 549 -> 552 total, 368 -> 371
+  // analysed; skipped counts unchanged. Draft proves its opening through
+  // requireManagementOpening/requireOwnedRow; approve/reject own the plan.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 549,
-      analysed: 368,
+      totalMutations: 552,
+      analysed: 371,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 166,
     });
