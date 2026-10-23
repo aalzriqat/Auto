@@ -72,7 +72,8 @@ export async function openingCommissionsForItem(ctx: Ctx, item: Pick<Doc<"payrol
   return { minor, settlements };
 }
 
-export async function collectOpeningCommissions(ctx: Ctx, orgId: Id<"organizations">, currency: string, activeMembers: Set<string>, cutoff: number, reader = createOpeningSettlementReader(ctx, orgId)) {
+export async function collectOpeningCommissions(ctx: Ctx, orgId: Id<"organizations">, currency: string, activeMembers: Set<string>, cutoff: number, suppliedReader?: OpeningSettlementReader) {
+  const reader = suppliedReader ?? createOpeningSettlementReader(ctx, orgId);
   const rows = await ctx.db.query("openingCommissionLiabilities").withIndex("by_org", q => q.eq("orgId", orgId)).take(101);
   if (rows.length > 100) throw new ConvexError("Opening commissions require a finance review because their source count is unavailable.");
   const byUser = new Map<string, { minor: number; liabilityIds: Id<"openingCommissionLiabilities">[] }>();

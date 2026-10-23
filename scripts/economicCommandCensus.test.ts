@@ -54,6 +54,9 @@ function realTreeGraph(): ReturnType<typeof buildGraph> {
 }
 
 const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
+  "adminOrgs.approveDeletionRequest": { bucket: "STATE_GUARDED", mechanism: "SCRUM-858: super-admin approval requires PENDING_REVIEW, suspends the org and stores a RUNNING deletion request before scheduling bounded native deletion; the worker rechecks RUNNING and resumes its durable cursor/pre-drain, so retries converge without posting new money" },
+  "adminOrgs.hardDeleteOrg": { bucket: "STATE_GUARDED", mechanism: "SCRUM-858: super-admin deletion requires the actual org name and no active deletion request, then suspends the org and stores RUNNING before scheduling bounded native deletion; RUNNING/cursor/pre-drain guards make retries converge without posting new money" },
+  "chartOfAccounts.confirmSystemAccountAdoption": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-858: MANAGE_FINANCE/accounting-feature guarded candidate adoption reads posted opening drafts to refuse partner-source adoption, then patches only owned chart metadata and audit; the broad money-table patch heuristic over-includes it and no posting call is reachable" },
   "accountingCutover.approveOpeningBalance": { bucket: "STATE_GUARDED", mechanism: "refuses unless the draft is in an approvable state; proven by rehearsal R10-style replay" },
   "accountingCutover.draftOpeningBalance": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "accountingCutover.postOpeningBalanceDirect": { bucket: "STATE_GUARDED", mechanism: "refuses when an opening balance is already posted or awaiting approval" },
@@ -684,7 +687,9 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 150 -> 152: `dealCommissions.addLine` and `.removeLine` (extra deal commission lines), both classified above.
     // 152 -> 153: `orgSettings.setCommissionMode` (SCRUM-853) reads sales to guard
     // the policy change; its settings patch is over-included and posts nothing.
-    expect(population).toHaveLength(153);
+    // 153 -> 156 (SCRUM-858): two state-guarded destructive admin commands and
+    // chart adoption metadata become visible through opening-source cleanup/read guards.
+    expect(population).toHaveLength(156);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

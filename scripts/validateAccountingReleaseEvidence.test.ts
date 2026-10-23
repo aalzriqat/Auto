@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { validateAccountingReleaseEvidence } from "./validateAccountingReleaseEvidence.mjs";
+import { createRequire } from "node:module";
+
+// Load the actual CLI module through Node, preserving its native shebang boundary.
+const { validateAccountingReleaseEvidence } = createRequire(import.meta.url)(
+  "./validateAccountingReleaseEvidence.mjs",
+) as typeof import("./validateAccountingReleaseEvidence.mjs");
 import { REQUIRED_REHEARSAL_CASE_IDS } from "./accountingRehearsalCases.mjs";
 
 const sha = "a".repeat(40);
@@ -18,9 +23,21 @@ const valid = () => ({
   convexUrl: expected.previewUrl,
   workflowRunId: expected.runId,
   workflowRunAttempt: expected.runAttempt,
-  targetVerification: "assertE2EBootstrap agreed: preview marker present, cloud URL matches",
-  cases: [{ id: "A1", status: "PASS" }, { id: "FD1", status: "PASS" }],
-  summary: { total: 2, passed: 2, failed: 0, failedIds: [], unproven: 0, unprovenIds: [], complete: true },
+  targetVerification:
+    "assertE2EBootstrap agreed: preview marker present, cloud URL matches",
+  cases: [
+    { id: "A1", status: "PASS" },
+    { id: "FD1", status: "PASS" },
+  ],
+  summary: {
+    total: 2,
+    passed: 2,
+    failed: 0,
+    failedIds: [],
+    unproven: 0,
+    unprovenIds: [],
+    complete: true,
+  },
 });
 
 describe("exact release cloud accounting evidence", () => {
@@ -29,28 +46,117 @@ describe("exact release cloud accounting evidence", () => {
   });
 
   test("the production validator requires the whole trusted cloud set", () => {
-    const cases = REQUIRED_REHEARSAL_CASE_IDS.map((id) => ({ id, status: "PASS" }));
-    const evidence = { ...valid(), cases, summary: { ...valid().summary, total: cases.length, passed: cases.length } };
+    const cases = REQUIRED_REHEARSAL_CASE_IDS.map((id) => ({
+      id,
+      status: "PASS",
+    }));
+    const evidence = {
+      ...valid(),
+      cases,
+      summary: {
+        ...valid().summary,
+        total: cases.length,
+        passed: cases.length,
+      },
+    };
     const { caseIds: _fixtureOverride, ...productionExpected } = expected;
-    expect(validateAccountingReleaseEvidence(evidence, productionExpected)).toEqual([]);
-    expect(validateAccountingReleaseEvidence(valid(), productionExpected)).not.toEqual([]);
+    expect(
+      validateAccountingReleaseEvidence(evidence, productionExpected),
+    ).toEqual([]);
+    expect(
+      validateAccountingReleaseEvidence(valid(), productionExpected),
+    ).not.toEqual([]);
   });
 
   test.each([
     ["missing", () => null],
     ["wrong SHA", () => ({ ...valid(), testedSha: "b".repeat(40) })],
     ["mock target", () => ({ ...valid(), deploymentType: "harness" })],
-    ["wrong preview", () => ({ ...valid(), convexUrl: "https://other.convex.cloud" })],
+    [
+      "wrong preview",
+      () => ({ ...valid(), convexUrl: "https://other.convex.cloud" }),
+    ],
     ["wrong run", () => ({ ...valid(), workflowRunId: "41" })],
     ["wrong attempt", () => ({ ...valid(), workflowRunAttempt: "2" })],
     ["unattested target", () => ({ ...valid(), targetVerification: null })],
-    ["zero execution", () => ({ ...valid(), cases: [], summary: { ...valid().summary, total: 0, passed: 0 } })],
-    ["skipped scenario", () => ({ ...valid(), cases: [{ id: "A1", status: "PASS" }, { id: "FD1", status: "UNPROVEN" }] })],
-    ["failed scenario", () => ({ ...valid(), cases: [{ id: "A1", status: "PASS" }, { id: "FD1", status: "FAIL" }] })],
-    ["fabricated total", () => ({ ...valid(), summary: { ...valid().summary, total: 3, passed: 3 } })],
-    ["duplicate scenario", () => ({ ...valid(), cases: [{ id: "A1", status: "PASS" }, { id: "A1", status: "PASS" }] })],
-    ["missing required case", () => ({ ...valid(), cases: [{ id: "A1", status: "PASS" }], summary: { ...valid().summary, total: 1, passed: 1 } })],
+    [
+      "zero execution",
+      () => ({
+        ...valid(),
+        cases: [],
+        summary: { ...valid().summary, total: 0, passed: 0 },
+      }),
+    ],
+    [
+      "skipped scenario",
+      () => ({
+        ...valid(),
+        cases: [
+          { id: "A1", status: "PASS" },
+          { id: "FD1", status: "UNPROVEN" },
+        ],
+      }),
+    ],
+    [
+      "failed scenario",
+      () => ({
+        ...valid(),
+        cases: [
+          { id: "A1", status: "PASS" },
+          { id: "FD1", status: "FAIL" },
+        ],
+      }),
+    ],
+    [
+      "fabricated total",
+      () => ({
+        ...valid(),
+        summary: { ...valid().summary, total: 3, passed: 3 },
+      }),
+    ],
+    [
+      "duplicate scenario",
+      () => ({
+        ...valid(),
+        cases: [
+          { id: "A1", status: "PASS" },
+          { id: "A1", status: "PASS" },
+        ],
+      }),
+    ],
+    [
+      "missing required case",
+      () => ({
+        ...valid(),
+        cases: [{ id: "A1", status: "PASS" }],
+        summary: { ...valid().summary, total: 1, passed: 1 },
+      }),
+    ],
   ])("refuses %s", (_label, mutate) => {
-    expect(validateAccountingReleaseEvidence(mutate(), expected)).not.toEqual([]);
+    expect(validateAccountingReleaseEvidence(mutate(), expected)).not.toEqual(
+      [],
+    );
   });
+});
+
+test("opening cutover is a required named cloud gate and an old29-only result cannot certify it", () => {
+  expect(REQUIRED_REHEARSAL_CASE_IDS).toContain("S858-OPENING");
+  expect(REQUIRED_REHEARSAL_CASE_IDS).toContain("S858-CONTAINMENT");
+  expect(REQUIRED_REHEARSAL_CASE_IDS).toHaveLength(31);
+  const old = REQUIRED_REHEARSAL_CASE_IDS.filter(
+    (id) => !id.startsWith("S858-"),
+  );
+  expect(old).toHaveLength(29);
+  const cases = old.map((id) => ({ id, status: "PASS" }));
+  const evidence = {
+    ...valid(),
+    cases,
+    summary: { ...valid().summary, total: cases.length, passed: cases.length },
+  };
+  const { caseIds: _fixtureOverride, ...productionExpected } = expected;
+  expect(
+    validateAccountingReleaseEvidence(evidence, productionExpected),
+  ).toContain(
+    "The required cloud scenario set is incomplete or contains an unexpected case.",
+  );
 });

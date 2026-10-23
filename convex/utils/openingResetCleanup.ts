@@ -2,10 +2,9 @@ import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { ConvexError } from "convex/values";
 
-const PAYROLL_REFERENCE = "paidPayrollItemId" as const;
 /** Runtime-owned optional reference cleared atomically before its target is deleted. */
 export const OPENING_ATOMIC_REFERENCE_CLEARS = [
-  `openingCommissionLiabilities.${PAYROLL_REFERENCE}->payrollItems`,
+  "openingCommissionLiabilities.paidPayrollItemId->payrollItems",
   "openingBalanceDrafts.allocationResults[].openingCommissionLiabilityId->openingCommissionLiabilities",
   "openingBalanceDrafts.allocationResults[].recoveryId->supplierCostRecoveries",
 ] as const;
@@ -17,9 +16,9 @@ export async function clearOpeningPayrollReference(
     .withIndex("by_org_payroll_item", q => q.eq("orgId", orgId).eq("paidPayrollItemId", itemId)).take(101);
   if (rows.length > 100) throw new ConvexError("Opening commission cleanup requires review.");
   for (const row of rows) {
-    if (row[PAYROLL_REFERENCE] === itemId) {
+    if (row.paidPayrollItemId === itemId) {
       // paidMinor remains unchanged: losing historical payment proof must never reopen debt.
-      await ctx.db.patch(row._id, { [PAYROLL_REFERENCE]: undefined });
+      await ctx.db.patch(row._id, { paidPayrollItemId: undefined });
     }
   }
 }

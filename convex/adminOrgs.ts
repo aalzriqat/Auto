@@ -225,7 +225,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "roles", index: "by_org" },
   // Appended to preserve saved currentStepIndex values for in-flight purges.
   // runDeletionRequestBatch drains this child before the frozen parent steps.
-  RECEIPT_APPLICATION_DELETION_STEP,
+  // Keep public purge manifests literal for the receipt-authority structural
+  // scanner. The pre-drain uses the same table/index before frozen parent steps.
+  { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" },
   // SCRUM-571 D-8: held provider payments. Appended last (the order is pinned).
   // Rows with no orgId (UNKNOWN_REFERENCE) belong to no tenant and survive.
   { kind: "orgRows", table: "unmatchedProviderFunds", index: "by_org_review" },
@@ -261,12 +263,12 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "dealCommissionLines", index: "by_org_sale" },
   // Preserve every frozen destructive step index. The pre-drain also covers
   // older requests whose saved cursor already passed this appended position.
-  ADVANCE_RECOVERY_DELETION_STEP,
-  ADVANCE_DELETION_STEP,
-  OPENING_DRAFT_DELETION_STEP,
-  MANAGEMENT_SETTLEMENT_DELETION_STEP,
-  OPENING_PAYABLE_PAYMENT_DELETION_STEP,
-  OPENING_COMMISSION_DELETION_STEP,
+  { kind: "orgRows", table: "employeeAdvanceRecoveries", index: "by_org" },
+  { kind: "orgRows", table: "employeeAdvances", index: "by_org" },
+  { kind: "orgRows", table: "openingBalanceDrafts", index: "by_org" },
+  { kind: "orgRows", table: "openingManagementSettlementPlans", index: "by_org" },
+  { kind: "orgRows", table: "openingPayablePayments", index: "by_org" },
+  { kind: "orgRows", table: "openingCommissionLiabilities", index: "by_org" },
   // Explicit retention marker, not a deletion step: the owner requires task
   // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
   // never purged here. Keep it last; never turn it into a delete.
