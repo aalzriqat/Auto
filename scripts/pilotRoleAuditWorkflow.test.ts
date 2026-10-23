@@ -38,7 +38,9 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
   test("anonymous drawer controls run in the PR static browser gate", () => {
     const project = visualConfig.projects?.find(item => item.name === "audit-controls");
     expect(project?.testDir).toBe("./playwright/tests");
-    expect(project?.testMatch).toBe("audit-navigation-dismissal.spec.ts");
+    expect(project?.testMatch).toEqual([
+      "audit-navigation-dismissal.spec.ts", "bill-of-sale-capture.spec.ts",
+    ]);
     expect(project?.dependencies ?? []).toEqual([]);
     expect(project?.use?.storageState).toEqual({ cookies: [], origins: [] });
     expect(project?.use?.trace).toBe("off");
