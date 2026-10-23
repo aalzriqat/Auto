@@ -25,6 +25,49 @@ export default function SalesHomePage() {
     return <RoleGuard permissions={["view:sales"]}><SalesHomeContent /></RoleGuard>;
 }
 
+type PrefillVehicle = FunctionReturnType<typeof api.vehicles.get>;
+type PrefillCustomer = FunctionReturnType<typeof api.customers.get>;
+
+function buildFreshWizardPrefill({ hasPrefill, vehicleId, leadId, sourceLikeVehicle }: {
+    hasPrefill: boolean;
+    vehicleId: string | null;
+    leadId: string | null;
+    sourceLikeVehicle: PrefillVehicle | undefined;
+}): Partial<WizardData> | undefined {
+    if (!hasPrefill) return undefined;
+    return {
+        vehicleId: vehicleId ?? undefined,
+        leadId: leadId ?? undefined,
+        sourceLikeVehicle: sourceLikeVehicle ? {
+            make: sourceLikeVehicle.make,
+            model: sourceLikeVehicle.model,
+            year: sourceLikeVehicle.year,
+            trim: sourceLikeVehicle.trim,
+            color: sourceLikeVehicle.color,
+            fuelType: sourceLikeVehicle.fuelType,
+            transmission: sourceLikeVehicle.transmission,
+        } : undefined,
+    };
+}
+
+function SalePrefillHint({ sourceLikeVehicleId, sourceLikeVehicle, loading, customer }: {
+    sourceLikeVehicleId: string | null;
+    sourceLikeVehicle: PrefillVehicle | undefined;
+    loading: boolean;
+    customer: PrefillCustomer | undefined;
+}) {
+    const { t } = useLanguage();
+    if (!sourceLikeVehicleId) {
+        const customerName = customer ? `${customer.firstName} ${customer.lastName}` : "this lead";
+        return <>Creating a quote for {customerName} — choose a payment type to continue.</>;
+    }
+    if (loading) return <>{t("LoadingVehicleDetails") ?? "Loading vehicle details…"}</>;
+    const vehicleDescription = sourceLikeVehicle
+        ? `${sourceLikeVehicle.year} ${sourceLikeVehicle.make} ${sourceLikeVehicle.model} — `
+        : "";
+    return <>{vehicleDescription}{t("SourcingVehicleForSaleHint")}</>;
+}
+
 function SalesHomeContent() {
     const { activeOrgId } = useOrg();
     const { t } = useLanguage();
@@ -127,25 +170,12 @@ function SalesHomeContent() {
     }
 
     function openFreshWizard(type: PaymentType) {
-        setWizardInitialDraft(
-            hasPrefill
-                ? {
-                      vehicleId: prefillVehicleId ?? undefined,
-                      leadId: prefillLeadId ?? undefined,
-                      sourceLikeVehicle: sourceLikeVehicle
-                          ? {
-                                make: sourceLikeVehicle.make,
-                                model: sourceLikeVehicle.model,
-                                year: sourceLikeVehicle.year,
-                                trim: sourceLikeVehicle.trim,
-                                color: sourceLikeVehicle.color,
-                                fuelType: sourceLikeVehicle.fuelType,
-                                transmission: sourceLikeVehicle.transmission,
-                            }
-                          : undefined,
-                  }
-                : undefined
-        );
+        setWizardInitialDraft(buildFreshWizardPrefill({
+            hasPrefill,
+            vehicleId: prefillVehicleId,
+            leadId: prefillLeadId,
+            sourceLikeVehicle,
+        }));
         setWizardResumeDraft(undefined);
         setActiveWizard(type);
     }
@@ -170,12 +200,6 @@ function SalesHomeContent() {
         setActiveWizard(draft.paymentType as PaymentType);
     }
 
-    const prefillHintText = prefillSourceLikeVehicleId
-        ? sourceLikeVehicleLoading
-            ? (t("LoadingVehicleDetails" as any) ?? "Loading vehicle details…")
-            : `${sourceLikeVehicle ? `${sourceLikeVehicle.year} ${sourceLikeVehicle.make} ${sourceLikeVehicle.model} — ` : ""}${t("SourcingVehicleForSaleHint" as any)}`
-        : `Creating a quote for ${prefillCustomer ? `${prefillCustomer.firstName} ${prefillCustomer.lastName}` : "this lead"} — choose a payment type to continue.`;
-
     // If wizard is active, render it full-width instead of the hero
     if (activeWizard) {
         return (
@@ -195,7 +219,12 @@ function SalesHomeContent() {
 
                 {hasPrefill && (
                     <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-300">
-                        {prefillHintText}
+                        <SalePrefillHint
+                            sourceLikeVehicleId={prefillSourceLikeVehicleId}
+                            sourceLikeVehicle={sourceLikeVehicle}
+                            loading={sourceLikeVehicleLoading}
+                            customer={prefillCustomer}
+                        />
                     </div>
                 )}
 

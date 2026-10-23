@@ -94,6 +94,26 @@ export default function LeadsPage() {
   return <RoleGuard permissions={["view:leads"]}><LeadsContent /></RoleGuard>;
 }
 
+function LeadViewToggle({ view, onChange }: { view: LeadView; onChange: (view: LeadView) => void }) {
+  const { t } = useLanguage();
+  return (
+    <div className="flex items-center gap-1 rounded-lg border bg-muted/30 p-1 w-fit">
+      <button
+        onClick={() => onChange("table")}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "table" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+      >
+        <LayoutList className="h-3.5 w-3.5" /> {t("LeadListView")}
+      </button>
+      <button
+        onClick={() => onChange("kanban")}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "kanban" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+      >
+        <Kanban className="h-3.5 w-3.5" /> {t("LeadBoardView")}
+      </button>
+    </div>
+  );
+}
+
 function LeadsContent() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
@@ -318,20 +338,7 @@ function LeadsContent() {
       <div className="space-y-6 flex flex-col md:h-full md:overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           {/* View toggle */}
-          <div className="flex items-center gap-1 rounded-lg border bg-muted/30 p-1 w-fit">
-            <button
-              onClick={() => setView("table")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "table" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              <LayoutList className="h-3.5 w-3.5" /> {t("LeadListView")}
-            </button>
-            <button
-              onClick={() => setView("kanban")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "kanban" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              <Kanban className="h-3.5 w-3.5" /> {t("LeadBoardView")}
-            </button>
-          </div>
+          <LeadViewToggle view={view} onChange={setView} />
           {canCreateLeads && (
             <Button onClick={handleAddNew}>
               <Plus className="me-2 h-4 w-4" /> {t("AddLead") || "Add Lead"}

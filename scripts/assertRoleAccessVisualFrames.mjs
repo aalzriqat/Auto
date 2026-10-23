@@ -32,24 +32,35 @@ function filesWithin(directory, depth = 0) {
     return entry.isFile() ? [file] : [];
   });
 }
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+/** Validate actual artifacts under the caller's repository; CLI pins its own root. */
+export function roleArtifactErrors(repositoryPath, args = []) {
+  const relativeRoot = "test-results/deal-cockpit-visual";
+  if (args.length > 1 || (args[0] !== undefined && args[0] !== relativeRoot)) {
+    throw new Error("Only the repository visual artifact directory is allowed");
+  }
+  const repository = realpathSync(repositoryPath);
+  const parent = path.join(repository, "test-results");
+  const root = path.join(parent, "deal-cockpit-visual");
+  for (const directory of [parent, root]) {
+    if (lstatSync(directory).isSymbolicLink()) throw new Error("Symlink is not an owned visual artifact");
+  }
+  if (path.relative(repository, realpathSync(root)) !== path.join("test-results", "deal-cockpit-visual")) {
+    throw new Error("Visual artifacts must remain inside the repository");
+  }
+  return roleFrameErrors(filesWithin(root));
+}
+
+/** Return the real command status; errors and absent evidence always refuse. */
+export function runRoleFrameCheck(repository, args) {
   try {
-    const relativeRoot = "test-results/deal-cockpit-visual";
-    if (process.argv.length > 3 || (process.argv[2] !== undefined && process.argv[2] !== relativeRoot)) {
-      throw new Error("Only the repository visual artifact directory is allowed");
-    }
-    const repository = realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
-    const parent = path.join(repository, "test-results");
-    const root = path.join(parent, "deal-cockpit-visual");
-    for (const directory of [parent, root]) {
-      if (lstatSync(directory).isSymbolicLink()) throw new Error("Symlink is not an owned visual artifact");
-    }
-    if (path.relative(repository, realpathSync(root)) !== path.join("test-results", "deal-cockpit-visual")) {
-      throw new Error("Visual artifacts must remain inside the repository");
-    }
-    const errors = roleFrameErrors(filesWithin(root));
+    const errors = roleArtifactErrors(repository, args);
     for (const error of errors) console.error(error);
     console.log(`role screen frame inventory: expected ${EXPECTED_ROLE_FRAMES.length}; ${errors.length ? "FAIL" : "PASS"}. Inventory only; no authenticated or pixel certification.`);
-    process.exitCode = errors.length ? 1 : 0;
-  } catch (error) { console.error(error instanceof Error ? error.message : "Role frame inventory unavailable"); process.exitCode = 1; }
+    return errors.length ? 1 : 0;
+  } catch (error) { console.error(error instanceof Error ? error.message : "Role frame inventory unavailable"); return 1; }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  process.exitCode = runRoleFrameCheck(repository, process.argv.slice(2));
 }
