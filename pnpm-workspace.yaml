@@ -46,8 +46,10 @@ overrides:
   # auditConfig.ignoreGhsas: a patched, compatible release exists.
   sharp: 0.35.5
   # Pinned exact (not a range) so it can't drift onto a release that trips the
-  # CI minimumReleaseAge (<24h) supply-chain gate; 8.5.22 is patched (>=8.5.18).
-  postcss: 8.5.22
+  # CI minimumReleaseAge (<24h) supply-chain gate. SCRUM-859: shadcn requires
+  # >=8.5.23, which refuses external source maps without an explicit opts.from.
+  # https://github.com/postcss/postcss/releases/tag/8.5.23
+  postcss: 8.5.23
   # GHSA-28wg-ghj8-5hjv (>=3.3.16) and GHSA-2v37-7h3g-55p8: loops in the
   # non-secure and custom generators. The second advisory's affected range was
   # later WIDENED to <3.3.18, so the earlier exact pin of 3.3.17 — correct when
