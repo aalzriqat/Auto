@@ -20,7 +20,7 @@ describe("credential-free static visual browser environment", () => {
   it("uses a preinstalled version-matched image without losing the full gate", () => {
     const workflow: StaticWorkflow = parse(readFileSync(".github/workflows/playwright.yml", "utf8"));
     const job = workflow.jobs.playwright;
-    expect(job.container.image).toMatch(/^mcr\.microsoft\.com\/playwright:v1\.61\.1-noble@sha256:[a-f0-9]{64}$/);
+    expect(job.container.image).toBe("mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48");
     expect(job.container.options).toBe("--user 1001 --init --ipc=host");
     expect(job.defaults.run.shell).toBe("bash");
     expect(job["timeout-minutes"]).toBe(20);
