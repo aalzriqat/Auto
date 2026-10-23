@@ -471,7 +471,7 @@ async function proveNativeSourceReaders(must, fixture) {
   equal(
     rows(recoveries.items)
       .map((value) => value.amountDueMinor)
-      .sort(),
+      .sort((left, right) => left - right),
     [11001, 13001],
     "both native recoverable purposes",
   );
