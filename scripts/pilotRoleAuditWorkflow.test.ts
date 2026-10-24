@@ -7,6 +7,8 @@ import { DEFAULT_ROLE_TEMPLATES } from "../convex/utils/permissions";
 import { auditDestination } from "../playwright/fixtures/screenAuditRoutes";
 import roleConfig from "../playwright.role-audit.config";
 import visualConfig from "../playwright.visual.config";
+import { spawnSync } from "node:child_process";
+import { carriesPreviewIdentity } from "./previewDeploymentLifecycle.mjs";
 
 test.each([
   ["OWNER", "dashboard"], ["MANAGER", "dashboard"], ["SALES", "sales"],
@@ -35,6 +37,26 @@ function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
 }
 
 describe("SCRUM-616 role audit trust and coverage contract", () => {
+  test("role preview name matches the observed canonical identity and missing pin refuses admission", () => {
+    const steps = workflow.jobs.roles.steps;
+    const shell = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "/bin/bash";
+    const naming = stepNamed(steps, "Name the disposable scenarios preview");
+    if (!naming.run) throw new Error("Role naming command unavailable");
+    const named = spawnSync(shell, ["-c", naming.run], { encoding: "utf8", timeout: 30000,
+      env: { NODE_ENV: "test", PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+        GITHUB_REF: "refs/heads/main", AUDIT_ROLE: "SENIOR_ACCOUNTANT", GITHUB_ENV: "/dev/null" } });
+    expect(named.status).toBe(0);
+    const name = /Preview deployment name: ([a-z0-9._-]+)/.exec(named.stdout)?.[1];
+    // Actual run40105175825 control-plane reference; no cloud request or credential is used.
+    expect(carriesPreviewIdentity({ reference: "preview/e2e-main-role-senior-accountant-9a6173934b", previewIdentifier: null }, name)).toBe(true);
+    expect(stepNamed(steps, "Pin the disposable preview for cleanup").run).toBe("node scripts/previewDeploymentLifecycle.mjs pin --strict");
+    const admission = stepNamed(steps, "Refuse an unpinned role audit preview");
+    if (!admission.run) throw new Error("Role pin admission command unavailable");
+    expect(steps.indexOf(admission)).toBeLessThan(steps.indexOf(stepNamed(steps, "Seed the QA dealership")));
+    expect(spawnSync(shell, ["-c", admission.run], { env: { NODE_ENV: "test" }, timeout: 30000 }).status).toBe(1);
+    expect(spawnSync(shell, ["-c", admission.run], { env: { NODE_ENV: "test", CONVEX_PREVIEW_CREATED_AT: "1792857485000" }, timeout: 30000 }).status).toBe(0);
+  });
+
   test("PR and trusted-main paint the role screens and require their separate exact inventory", () => {
     const project = visualConfig.projects?.find(item => item.name === "role-page-controls");
     expect(project?.testDir).toBe("./playwright/tests");

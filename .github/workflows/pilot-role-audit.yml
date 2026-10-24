@@ -52,6 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "${GITHUB_REF}-role-${AUDIT_ROLE}" "")"
+          NAME="${NAME//_/-}"
           echo "CONVEX_PREVIEW_NAME=$NAME" >> "$GITHUB_ENV"
           echo "Preview deployment name: $NAME"
 
@@ -82,9 +83,16 @@ jobs:
 
       - name: Pin the disposable preview for cleanup
         if: always() && env.CONVEX_PREVIEW_URL != ''
-        run: node scripts/previewDeploymentLifecycle.mjs pin
+        run: node scripts/previewDeploymentLifecycle.mjs pin --strict
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      - name: Refuse an unpinned role audit preview
+        run: |
+          if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]; then
+            echo "Disposable role preview has no pinned cleanup identity." >&2
+            exit 1
+          fi
 
       - name: Seed the QA dealership
         run: node scripts/e2ePreviewBootstrap.mjs

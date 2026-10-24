@@ -111,3 +111,7 @@ packages/shared/coverage-sonar/
 .e2e/logs/
 playwright/agentic/.e2e/
 .e2e/videos/
+
+# Generated reports from the isolated opening proof.
+/opening-proof-json/
+/opening-proof-report/

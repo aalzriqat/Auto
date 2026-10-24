@@ -129,6 +129,39 @@ jobs:
           E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
           CI: true
 
+      - name: Execute mandatory terminal opening browser witnesses
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+          node scripts/e2ePreviewBootstrap.mjs --assert-only
+          pnpm exec playwright test -c playwright.opening-proof.config.ts
+          node scripts/verifyOpeningBrowserProof.mjs
+        env:
+          CI: true
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          BASE_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ github.sha }}
+          TESTED_SHA: ${{ github.sha }}
+          CONTROLLER_SHA: ${{ github.workflow_sha }}
+          OPENING_PROOF_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload checked terminal opening evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deal-opening-proof
+          path: opening-proof-public/proof.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload Playwright report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

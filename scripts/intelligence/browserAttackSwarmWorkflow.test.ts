@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, realpathSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -509,9 +510,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     }
   });
 
-  it("builds candidate frontend once with no reusable credentials and reuses only the verified artifact", () => {
+  it.each(["candidate-build", "opening-build"])("%s builds its Preview-bound frontend once without reusable credentials", (buildJob) => {
     const build = step(
-      "candidate-build",
+      buildJob,
       "Build exact tested candidate once in isolated container",
     );
     const buildEnv = build.env ?? {};
@@ -531,7 +532,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(String(build.run ?? "")).toContain("--cap-drop ALL");
     expect(String(build.run ?? "")).not.toContain("actions/cache");
 
-    for (const jobName of ["trusted-e2e", "attack-worker"]) {
+    for (const jobName of ["trusted-e2e", "attack-worker", "opening-proof"]) {
       const start = step(
         jobName,
         "Start verified exact-SHA candidate frontend artifact",
@@ -554,7 +555,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const source = readFileSync(workflowPath, "utf8");
     expect(
       source.match(/Build exact tested candidate once in isolated container/g) ?? [],
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(source).not.toContain("Build exact candidate frontend in isolated container");
   });
 
@@ -1014,6 +1015,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     for (const [jobName, stopName] of [
       ["trusted-e2e", "Stop isolated trusted E2E candidate frontend"],
       ["attack-worker", "Stop isolated candidate frontend"],
+      ["opening-proof", "Stop isolated candidate frontend"],
     ] as const) {
       const startRun = String(
         step(jobName, "Start verified exact-SHA candidate frontend artifact").run ?? "",
@@ -1188,10 +1190,71 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(verdictRun).toContain('if [ "$STATE" != "success" ]');
   });
 
+  it("opening creation retries its identical native invocation within the existing five-attempt bound", () => {
+    const parent = realpathSync(path.resolve(process.cwd(), ".."));
+    const directory = realpathSync(mkdtempSync(path.join(parent, "opening-retry-")));
+    if (path.dirname(directory) !== parent) throw new Error("Retry fixture escaped its workspace");
+    const counter = path.join(directory, "count"), args = path.join(directory, "args"), delays = path.join(directory, "delays");
+    const shell = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "/bin/bash";
+    const run = String(step("opening-prepare", "Recreate disposable opening Preview from trusted main").run);
+    // Only the external CLI and sleep boundaries are replaced; naming and actual workflow control flow run natively.
+    const boundary = `pnpm() {
+      count=0; if [ -f "$COUNTER" ]; then read -r count < "$COUNTER" || true; fi
+      count=$((count + 1)); printf '%s\\n' "$count" > "$COUNTER"
+      printf '%q ' "$@" >> "$ARGS"; printf '\\n' >> "$ARGS"
+      if [ "$count" -lt "$SUCCEED_ON" ]; then return 75; fi
+    }
+    sleep() { printf '%s\\n' "$1" >> "$DELAYS"; }`;
+    try {
+      for (const successOn of [3, 9]) {
+        writeFileSync(counter, "0\n"); writeFileSync(args, ""); writeFileSync(delays, "");
+        const result = spawnSync(shell, ["-c", `${boundary}\n${run}`], { encoding: "utf8", timeout: 30000,
+          env: { NODE_ENV: "test", PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+            COUNTER: counter, ARGS: args, DELAYS: delays, SUCCEED_ON: String(successOn),
+            PR_NUMBER: "672", GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1",
+            GITHUB_ENV: path.join(directory, "env"), GITHUB_OUTPUT: path.join(directory, "output") } });
+        expect(result.status).toBe(successOn === 3 ? 0 : 1);
+        expect(Number(readFileSync(counter, "utf8"))).toBe(Math.min(successOn, 5));
+        const invocations = readFileSync(args, "utf8").trim().split("\n").map(line => line.trimEnd());
+        expect(new Set(invocations).size).toBe(1);
+        expect(invocations[0]).toContain("--preview-create");
+        expect(readFileSync(delays, "utf8").trim().split("\n")).toEqual(successOn === 3 ? ["2", "4"] : ["2", "4", "8", "16"]);
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("terminal opening owns fresh seeded state, a matching baked build and failure-bound cleanup", () => {
+    // B672-2: a successful TENANT_ESCAPE leaves an approver membership on the hunter Preview.
+    expect(step("opening-proof", "Assert seeded preview from trusted control plane").env)
+      .toHaveProperty("CONVEX_PREVIEW_NAME", "${{ needs.opening-prepare.outputs.preview_name }}");
+    const preparation = job("opening-prepare");
+    expect(String(preparation.needs)).toContain("attack-worker");
+    const create = step("opening-prepare", "Recreate disposable opening Preview from trusted main");
+    expect(String(create.run)).toContain('refs/pull/${PR_NUMBER}/merge/opening-proof/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}');
+    expect(String(create.run)).toContain("--preview-create");
+    expect(String(create.run)).toContain('attempted=true');
+    expect(String(step("opening-prepare", "Pin the opening Preview for cleanup").run)).toContain("pin --strict");
+    const build = step("opening-build", "Build exact tested candidate once in isolated container");
+    expect(build.env).toHaveProperty("NEXT_PUBLIC_CONVEX_URL", "${{ needs.opening-prepare.outputs.convex_cloud_url }}");
+    expect(step("opening-build", "Stage and hash exact-SHA candidate runtime artifact").env)
+      .toHaveProperty("NEXT_PUBLIC_CONVEX_URL", "${{ needs.opening-prepare.outputs.convex_cloud_url }}");
+    expect(step("opening-proof", "Download immutable exact-SHA candidate build").with)
+      .toHaveProperty("artifact-ids", "${{ needs.opening-build.outputs.artifact_id }}");
+    const cleanup = job("opening-cleanup");
+    expect(String(cleanup.if)).toContain("always()");
+    expect(String(cleanup.if)).toContain("needs.opening-prepare.outputs.creation_attempted == 'true'");
+    expect(String(cleanup.if)).not.toContain("result == 'success'");
+    expect(String(step("opening-cleanup", "Delete the disposable opening Preview").run)).toContain("delete --strict");
+    expect([job("verdict").needs].flat()).toContain("opening-cleanup");
+    expect(String(step("verdict", "Publish authoritative trusted swarm verdict").run))
+      .toContain('[ "$OPENING_CLEANUP_RESULT" = "success" ]');
+  });
+
   describe("SCRUM-350 G4 offline Clerk candidate", () => {
     const starts = [
       ["trusted-e2e", "Start verified exact-SHA candidate frontend artifact"],
       ["attack-worker", "Start verified exact-SHA candidate frontend artifact"],
+      ["opening-proof", "Start verified exact-SHA candidate frontend artifact"],
     ] as const;
 
     it.each(starts)(
@@ -1240,6 +1303,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const jobs = [
       ["trusted-e2e", "Run full trusted E2E suite against exact candidate"],
       ["attack-worker", "Execute trusted browser missions"],
+      ["opening-proof", "Execute the two terminal opening browser witnesses"],
     ] as const;
 
     // G4-02: GitHub's default `bash -e` has no pipefail, so
@@ -1277,7 +1341,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     // raw log must stay on the runner. It is written under RUNNER_TEMP, read by
     // the startup step and the proof, and never printed or uploaded afterwards.
     const RAW_LOG = "browser-egress-proxy.log";
-    const EGRESS_JOBS = ["trusted-e2e", "attack-worker"] as const;
+    const EGRESS_JOBS = ["trusted-e2e", "attack-worker", "opening-proof"] as const;
 
     it.each(EGRESS_JOBS)("%s keeps the raw proxy log private to the runner", (jobName) => {
       const steps = job(jobName).steps ?? [];

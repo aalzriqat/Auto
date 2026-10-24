@@ -207,18 +207,22 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // the preview, and the scrub step before it changes it, when the preview's
   // cleanup pin was not recorded. No new secret, trigger or candidate path.
   "browser-attack-swarm.yml":
-    "840ddb2a34e70bb15d285ebdc6c49ee348d3c905dcc94bf975d4e7e056550468",
+    // SCRUM-858 B672-2: owner-authorized independent opening Preview, matching
+    // URL-baked build and strict cleanup-gated verdict. Canonical credential
+    // commands and negative controls remain unchanged; final source reviews bind this hash.
+    // Minor closure: existing bounded creation backoff and cancellation-aware opening admission only.
+    "d2d6701e7e24b904ed6cc9975014fbdcc6e285484fcb8630b3eb779526ee6d31",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
     // SCRUM-616/617: the reviewed change opts into the cross-screen oracle.
-    "205f3f79560db95fb0ab12b4dc001cf273bcd4aff96fc27d6566cd4c468e2232",
+    "c9267fa9ae288f774457a1840721f319caef09b91f8846a61a264c35ffa3cbe2",
   // SCRUM-616: main-only, serialized disposable previews; this whole-workflow
   // pin keeps its triggers, credentials, deploy and cleanup inside the review.
   "pilot-role-audit.yml":
     // PR #661: preserve screenshots in public-key encrypted evidence; publish
     // only ciphertext and a fixed-field summary, with private browser logs.
-    "899ae8c3a2d8e3cadb774c315be92f893a38df47973ced0e870c0f017373cc73",
+    "d3fdaa32ecd1da4412a636bf8d0a2b36636fafb13ff96ed0aaa41a947e4bad8d",
   "hunt-preview.yml":
     "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":
@@ -233,7 +237,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // provisioning, with no step secrets. All credential steps, preview targeting,
   // cleanup and canonical-command/tamper controls remain pinned unchanged.
   "trusted-main-e2e.yml":
-    "856e9fc83f4e89f870c35113521e61cf139c6915d739ca964bb124816dffbfc8",
+    "3ff3286a70bdbaffe6a228184f7c1933c4c9c111b08925c9bee2b3412709c437",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {
@@ -514,6 +518,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
   it("deploys the candidate backend in both PR lanes only through the staged, trusted-CLI step", () => {
     const labels = stagedDeploySteps().map(({ label }) => label).sort();
     expect(labels).toEqual([
+      "browser-attack-swarm.yml :: opening-prepare",
       "browser-attack-swarm.yml :: trusted-e2e",
       "trusted-accounting-rehearsal.yml :: rehearsal",
     ]);

@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const RAW = readFileSync(path.join(process.cwd(), ".github", "workflows", "deal-scenarios-e2e.yml"), "utf8");
-type Step = { name?: string; run?: string; if?: string; env?: Record<string, string> };
+type Step = { name?: string; run?: string; if?: string; env?: Record<string, string>; "continue-on-error"?: unknown };
 const WF = parse(RAW) as {
   on: { schedule: unknown[]; workflow_dispatch: { inputs: Record<string, { type: string; default: unknown }> } };
   jobs: { scenarios: { if: string; steps: Step[] } };
@@ -22,20 +22,29 @@ const EXPLORER_ENV = "${{ (github.event_name == 'schedule' || inputs.form_explor
 
 describe("deal-scenarios-e2e runs the form explorer (SCRUM-771)", () => {
   const playwright = STEPS.filter((s) => s.run?.includes("playwright test"));
+  const scenarios = playwright.filter((s) => s.run?.includes("playwright test -c playwright.scenarios.config.ts"));
 
   it("the spec is opted in by exactly JEV_FORM_EXPLORER=1", () => {
     expect(SPEC).toContain('test.skip(process.env.JEV_FORM_EXPLORER !== "1"');
   });
 
-  it("sets JEV_FORM_EXPLORER on the one Playwright step: always on schedule, from the input on dispatch", () => {
-    expect(playwright).toHaveLength(1);
-    expect(playwright[0]!.run).toBe(
+  it("runs the explorer in the original scenario phase before the mandatory isolated opening phase", () => {
+    expect(playwright).toHaveLength(2);
+    expect(scenarios).toHaveLength(1);
+    const [scenario] = scenarios;
+    const opening = playwright.find((s) => s.run?.includes("playwright test -c playwright.opening-proof.config.ts"));
+    if (!scenario || !opening) throw new Error("Required scenario or terminal opening phase unavailable");
+    expect(scenario.run).toBe(
       'set -o pipefail\npnpm exec playwright test -c playwright.scenarios.config.ts 2>&1 | tee "$RUNNER_TEMP/deal-scenarios-output.log"\n'
     );
-    expect(playwright[0]!.env?.JEV_FORM_EXPLORER).toBe(EXPLORER_ENV);
+    expect(scenario.env?.JEV_FORM_EXPLORER).toBe(EXPLORER_ENV);
+    expect(STEPS.indexOf(opening)).toBeGreaterThan(STEPS.indexOf(scenario));
+    expect(opening.env?.JEV_FORM_EXPLORER).toBeUndefined();
     // Nothing may turn the step off or let its failure pass.
-    expect(playwright[0]!.if).toBeUndefined();
-    expect((playwright[0] as Record<string, unknown>)["continue-on-error"]).toBeUndefined();
+    for (const phase of [scenario, opening]) {
+      expect(phase.if).toBeUndefined();
+      expect(phase["continue-on-error"]).toBeUndefined();
+    }
   });
 
   it("leaves room for the library plus one 30-minute explorer attempt", () => {
@@ -60,12 +69,12 @@ describe("deal-scenarios-e2e runs the form explorer (SCRUM-771)", () => {
     expect(WF.jobs.scenarios.if).toBe("github.ref == 'refs/heads/main'");
     const order = (pred: (s: Step) => boolean) => STEPS.findIndex(pred);
     const create = order((s) => !!s.run?.includes('--preview-create "$CONVEX_PREVIEW_NAME"'));
-    const run = order((s) => s === playwright[0]);
+    const run = order((s) => s === scenarios[0]);
     const del = order((s) => s.run === "node scripts/previewDeploymentLifecycle.mjs delete");
     expect(create).toBeGreaterThan(-1);
     expect(create).toBeLessThan(run);
     expect(del).toBeGreaterThan(run);
     expect(STEPS[del]!.if).toBe("always() && env.CONVEX_PREVIEW_CREATED_AT != ''");
-    expect(playwright[0]!.env?.CONVEX_DEPLOY_KEY).toBe("${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}");
+    expect(scenarios[0]!.env?.CONVEX_DEPLOY_KEY).toBe("${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}");
   });
 });
