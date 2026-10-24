@@ -509,9 +509,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     }
   });
 
-  it("builds candidate frontend once with no reusable credentials and reuses only the verified artifact", () => {
+  it.each(["candidate-build", "opening-build"])("%s builds its Preview-bound frontend once without reusable credentials", (buildJob) => {
     const build = step(
-      "candidate-build",
+      buildJob,
       "Build exact tested candidate once in isolated container",
     );
     const buildEnv = build.env ?? {};
@@ -531,7 +531,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(String(build.run ?? "")).toContain("--cap-drop ALL");
     expect(String(build.run ?? "")).not.toContain("actions/cache");
 
-    for (const jobName of ["trusted-e2e", "attack-worker"]) {
+    for (const jobName of ["trusted-e2e", "attack-worker", "opening-proof"]) {
       const start = step(
         jobName,
         "Start verified exact-SHA candidate frontend artifact",
@@ -554,7 +554,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const source = readFileSync(workflowPath, "utf8");
     expect(
       source.match(/Build exact tested candidate once in isolated container/g) ?? [],
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(source).not.toContain("Build exact candidate frontend in isolated container");
   });
 
@@ -1187,6 +1187,33 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(verdictRun).toContain("autoflow/trusted-browser-swarm");
     expect(verdictRun).toContain("Content-Type: application/json");
     expect(verdictRun).toContain('if [ "$STATE" != "success" ]');
+  });
+
+  it("terminal opening owns fresh seeded state, a matching baked build and failure-bound cleanup", () => {
+    // B672-2: a successful TENANT_ESCAPE leaves an approver membership on the hunter Preview.
+    expect(step("opening-proof", "Assert seeded preview from trusted control plane").env)
+      .toHaveProperty("CONVEX_PREVIEW_NAME", "${{ needs.opening-prepare.outputs.preview_name }}");
+    const preparation = job("opening-prepare");
+    expect(String(preparation.needs)).toContain("attack-worker");
+    const create = step("opening-prepare", "Recreate disposable opening Preview from trusted main");
+    expect(String(create.run)).toContain('refs/pull/${PR_NUMBER}/merge/opening-proof/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}');
+    expect(String(create.run)).toContain("--preview-create");
+    expect(String(create.run)).toContain('attempted=true');
+    expect(String(step("opening-prepare", "Pin the opening Preview for cleanup").run)).toContain("pin --strict");
+    const build = step("opening-build", "Build exact tested candidate once in isolated container");
+    expect(build.env).toHaveProperty("NEXT_PUBLIC_CONVEX_URL", "${{ needs.opening-prepare.outputs.convex_cloud_url }}");
+    expect(step("opening-build", "Stage and hash exact-SHA candidate runtime artifact").env)
+      .toHaveProperty("NEXT_PUBLIC_CONVEX_URL", "${{ needs.opening-prepare.outputs.convex_cloud_url }}");
+    expect(step("opening-proof", "Download immutable exact-SHA candidate build").with)
+      .toHaveProperty("artifact-ids", "${{ needs.opening-build.outputs.artifact_id }}");
+    const cleanup = job("opening-cleanup");
+    expect(String(cleanup.if)).toContain("always()");
+    expect(String(cleanup.if)).toContain("needs.opening-prepare.outputs.creation_attempted == 'true'");
+    expect(String(cleanup.if)).not.toContain("result == 'success'");
+    expect(String(step("opening-cleanup", "Delete the disposable opening Preview").run)).toContain("delete --strict");
+    expect([job("verdict").needs].flat()).toContain("opening-cleanup");
+    expect(String(step("verdict", "Publish authoritative trusted swarm verdict").run))
+      .toContain('[ "$OPENING_CLEANUP_RESULT" = "success" ]');
   });
 
   describe("SCRUM-350 G4 offline Clerk candidate", () => {
