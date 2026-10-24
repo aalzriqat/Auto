@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -17,6 +17,50 @@ type StaticWorkflow = {
 };
 
 describe("credential-free static visual browser environment", () => {
+  it("retains visual diagnostics when any invoking workflow fails before the full suite", () => {
+    // Main run 40105113884 lost its capture diagnostic because only full-suite reports were uploaded.
+    const config = readFileSync("playwright.visual.config.ts", "utf8");
+    const output = /outputDir:\s*["']([^"']+)["']/.exec(config)?.[1];
+    if (!output) throw new Error("Visual configuration has no static output directory");
+    function object(value: unknown): value is Record<string, unknown> {
+      return value !== null && typeof value === "object" && !Array.isArray(value);
+    }
+    const invocations: { workflow: string; job: string; covered: boolean }[] = [];
+    for (const file of readdirSync(".github/workflows").filter(name => /\.ya?ml$/.test(name))) {
+      const workflow: unknown = parse(readFileSync(path.join(".github/workflows", file), "utf8"));
+      if (!object(workflow) || !object(workflow.jobs)) throw new Error(`Workflow jobs unavailable: ${file}`);
+      for (const [job, definition] of Object.entries(workflow.jobs)) {
+        if (!object(definition)) throw new Error(`Workflow job unavailable: ${file}/${job}`);
+        if (definition.steps === undefined) continue; // Reusable-workflow jobs have no steps.
+        if (!Array.isArray(definition.steps)) throw new Error(`Workflow steps unavailable: ${file}/${job}`);
+        const steps = definition.steps.map((value: unknown) => {
+          if (!object(value)) throw new Error(`Workflow step unavailable: ${file}/${job}`);
+          const { run, uses, if: condition, with: inputs } = value;
+          if ((run !== undefined && typeof run !== "string") ||
+              (uses !== undefined && typeof uses !== "string") ||
+              (condition !== undefined && typeof condition !== "string" && typeof condition !== "boolean")) {
+            throw new Error(`Workflow command unavailable: ${file}/${job}`);
+          }
+          if (inputs !== undefined && !object(inputs)) throw new Error(`Workflow inputs unavailable: ${file}/${job}`);
+          const outputPath = inputs?.path;
+          if (outputPath !== undefined && typeof outputPath !== "string") throw new Error(`Workflow output path unavailable: ${file}/${job}`);
+          return { run, uses, if: condition, with: { path: outputPath } };
+        });
+        const gate = steps.findIndex(step => /pnpm run test:visual:deal-cockpit|playwright test -c playwright\.visual\.config\.ts/.test(step.run ?? ""));
+        if (gate < 0) continue;
+        const roots = steps.slice(gate + 1)
+          .filter(step => step.uses?.startsWith("actions/upload-artifact@") && step.if === "always()")
+          .flatMap(step => (step.with?.path ?? "").trim().split(/\r?\n/))
+          .map(root => root.trim().replace(/\/$/, ""))
+          .filter(Boolean);
+        invocations.push({ workflow: file, job,
+          covered: roots.some(root => output === root || output.startsWith(`${root}/`)) });
+      }
+    }
+    expect(invocations.length).toBeGreaterThan(0);
+    expect(invocations.filter(invocation => !invocation.covered)).toEqual([]);
+  });
+
   it("uses a preinstalled version-matched image without losing the full gate", () => {
     const workflow: StaticWorkflow = parse(readFileSync(".github/workflows/playwright.yml", "utf8"));
     const job = workflow.jobs.playwright;

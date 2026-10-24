@@ -175,6 +175,7 @@ jobs:
           path: |
             playwright-report/
             playwright-json/
+            test-results/deal-cockpit-visual/artifacts/
           retention-days: 14
 
       - name: Delete the disposable preview
