@@ -194,7 +194,7 @@ describe("money entry points reject NaN", () => {
         sourcedFromName: "العطيوي",
         sourceCost: NaN,
       })
-    ).rejects.toThrow(/sourceCost: Expected number, received nan/i);
+    ).rejects.toThrow(/sourceCost: Invalid input: expected number, received NaN/i);
 
     const rows = await t.run((ctx: any) =>
       ctx.db.query("vehicles").withIndex("by_org", (q: any) => q.eq("orgId", ids.orgId)).collect()

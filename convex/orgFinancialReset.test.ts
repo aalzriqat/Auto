@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
 import { runContinuationBatch } from "../test-utils/orgResetFixtures";
+import { clearNewOpeningResultReference, clearOpeningPayablesBatch } from "./utils/openingResetCleanup";
 
 /**
  * This deletes production rows with no undo, so the tests are about what it
@@ -95,6 +96,114 @@ async function countFor(
 }
 
 describe("resetOrgFinancialData", () => {
+  test.each(["REJECTED", "COMPLETED", "missing", "foreign", "timestamp-only", "purge-only", "pending-started"] as const)(
+    "destructive reset refuses inconsistent or reserved deletion ownership: %s", async ownership => {
+      const t = setup();
+      const orgId = await seedOrg(t, "Deletion ownership");
+      await t.run(async ctx => {
+        const userId = await ctx.db.insert("users", { clerkId: "deletion-owner", email: "delete@example.test" });
+        const requestOrgId = ownership === "foreign"
+          ? await ctx.db.insert("organizations", { name: "Other deletion", createdAt: 1 }) : orgId;
+        const requestId = await ctx.db.insert("organizationDeletionRequests", { orgId: requestOrgId, orgName: "Deletion ownership",
+          requestedBy: userId, requestedAt: 1,
+          status: ownership === "REJECTED" || ownership === "COMPLETED" ? ownership : ownership === "pending-started" ? "PENDING_REVIEW" : "RUNNING",
+          ...(ownership === "pending-started" ? { startedAt: 0 } : {}) });
+        await ctx.db.patch(orgId, { financialResetGeneration: 1, financialResetCompletedGeneration: 0,
+          ...(ownership === "purge-only" ? { destructivePurgeStartedAt: 0 } : { deletionRequestedAt: 1 }),
+          ...(ownership === "timestamp-only" || ownership === "purge-only" ? {} : { deletionRequestId: requestId }) });
+        if (ownership === "missing") await ctx.db.delete(requestId);
+      });
+      const before = await t.run(async ctx => ({ org: await ctx.db.get(orgId), transaction: await ctx.db.query("transactions").first() }));
+      await expect(runContinuationBatch(t, orgId, 1)).rejects.toThrow();
+      expect(await t.run(async ctx => ({ org: await ctx.db.get(orgId), transaction: await ctx.db.query("transactions").first() }))).toEqual(before);
+      expect((await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId })).dryRun).toBe(true);
+    },
+  );
+
+  test.each(["PENDING_REVIEW", "APPROVED"] as const)("an unstarted same-org %s deletion request preserves reset continuation", async status => {
+    const t = setup();
+    const orgId = await seedOrg(t, "Unstarted deletion");
+    const requestId = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { clerkId: "unstarted-owner", email: "unstarted@example.test" });
+      const id = await ctx.db.insert("organizationDeletionRequests", { orgId, orgName: "Unstarted deletion", requestedBy: userId, requestedAt: 1, status });
+      await ctx.db.patch(orgId, { financialResetGeneration: 1, financialResetCompletedGeneration: 0, deletionRequestedAt: 1, deletionRequestId: id });
+      return id;
+    });
+    const result = await runContinuationBatch(t, orgId, 1);
+    expect(result.total).toBe(3);
+    expect(await countFor(t, "transactions", orgId)).toBe(0);
+    expect((await t.run(ctx => ctx.db.get(requestId)))?.status).toBe(status);
+    expect((await t.run(ctx => ctx.db.get(orgId)))?.deletionRequestId).toBe(requestId);
+  });
+
+  async function verifyCleanupPageContract(phase: "discovery" | "reference", pageStatus: "SplitRequired" | "SplitRecommended") {
+    const t = setup();
+    const orgId = await seedOrg(t, "Pagination contract");
+    const ids = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { clerkId: "split-contract", email: "split@example.test" });
+      for (let index = 0; index < 101; index += 1) await ctx.db.insert("openingBalanceDrafts", {
+        orgId, status: "REJECTED", lines: [], asOfDate: 1, createdBy: userId, createdAt: 1,
+      });
+      const draftId = await ctx.db.insert("openingBalanceDrafts", {
+        orgId, status: "POSTED", lines: [], asOfDate: 1, createdBy: userId, createdAt: 1,
+      });
+      const recoveryId = await ctx.db.insert("supplierCostRecoveries", { orgId, origin: "OPENING", openingBalanceDraftId: draftId,
+        openingRowKey: "claim", title: "Opening claim", purpose: "CLAIM", sourcedFromName: "Supplier",
+        amountDueMinor: 100_000, amountRecoveredMinor: 0, currency: "JOD", receiptSeq: 0, status: "OPEN",
+        createdBy: userId, createdAt: 1, updatedAt: 1 });
+      await ctx.db.patch(draftId, { allocationResults: [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "claim", recoveryId }] });
+      await ctx.db.patch(orgId, { financialResetGeneration: 1, financialResetCompletedGeneration: 0,
+        ...(phase === "reference" ? { openingCleanupReferenceScan: { resetGeneration: 1, cursor: null, complete: false,
+          source: { table: "supplierCostRecoveries" as const, id: recoveryId } } } : {}) });
+      return { draftId, recoveryId };
+    });
+    const readState = () => t.run(async ctx => ({ org: await ctx.db.get(orgId),
+      draft: await ctx.db.get(ids.draftId), source: await ctx.db.get(ids.recoveryId) }));
+    const before = await readState();
+    if (!before.draft) throw new Error("Missing opening page fixture");
+    const page = { page: [before.draft], isDone: false, continueCursor: "bounded-page-end", splitCursor: "bounded-page-middle", pageStatus };
+    // Only the external database page result is substituted. This is a contract control, not platform evidence.
+    const refused = await t.run(async ctx => {
+      const query = ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", orgId));
+      const pagination = vi.spyOn(Object.getPrototypeOf(query), "paginate").mockResolvedValue(page);
+      try {
+        if (phase === "discovery") await clearOpeningPayablesBatch(ctx, orgId, 1, false);
+        else await clearNewOpeningResultReference(ctx, orgId, { table: "supplierCostRecoveries", id: ids.recoveryId });
+      } finally {
+        pagination.mockRestore();
+      }
+    }).then(() => false, () => true);
+    const after = await readState();
+    if (pageStatus === "SplitRequired") {
+      expect(after).toEqual(before);
+      expect(refused).toBe(true);
+    } else {
+      expect(refused).toBe(false);
+      expect(after.source).toEqual(before.source);
+      if (phase === "discovery") expect(after.org?.openingCleanupPayableScan?.cursor).toBe("bounded-page-end");
+      else {
+        expect(after.org?.openingCleanupReferenceScan?.cursor).toBe("bounded-page-end");
+        expect(after.draft?.allocationResults).toEqual([]);
+      }
+    }
+  }
+
+  test("opening payable discovery refuses incomplete SplitRequired pages without changing state", async () => {
+    await verifyCleanupPageContract("discovery", "SplitRequired");
+  });
+
+  test("opening reference cleanup refuses incomplete SplitRequired pages without changing state", async () => {
+    await verifyCleanupPageContract("reference", "SplitRequired");
+  });
+
+  test("opening payable discovery advances complete SplitRecommended pages", async () => {
+    await verifyCleanupPageContract("discovery", "SplitRecommended");
+  });
+
+  test("opening reference cleanup advances complete SplitRecommended pages", async () => {
+    await verifyCleanupPageContract("reference", "SplitRecommended");
+  });
+
   test("defaults to a dry run and destroys nothing", async () => {
     // The safe form has to be the default: a caller who forgets the flag gets
     // a report, not a deletion.
@@ -106,6 +215,7 @@ describe("resetOrgFinancialData", () => {
     });
 
     expect(result.dryRun).toBe(true);
+    expect(result.countScope).toBe("RESET_TABLE_BATCH");
     expect(result.orgName).toBe("Dry Run Motors");
     expect(result.total).toBe(3);
     expect(result.perTable).toEqual({ chartOfAccounts: 1, transactions: 1, expenses: 1 });
@@ -114,6 +224,139 @@ describe("resetOrgFinancialData", () => {
     expect(await countFor(t, "chartOfAccounts", orgId)).toBe(1);
     expect(await countFor(t, "transactions", orgId)).toBe(1);
     expect(await countFor(t, "expenses", orgId)).toBe(1);
+  });
+
+  test("dry run identifies opening-only counts while payable cleanup defers reset tables", async () => {
+    const t = setup();
+    const orgId = await seedOrg(t, "Opening cleanup scope");
+    const { draftId, payableId } = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset-count-scope", email: "scope@example.test" });
+      const draftId = await ctx.db.insert("openingBalanceDrafts", {
+        orgId, status: "POSTED", lines: [], asOfDate: 1, createdBy: userId, createdAt: 1,
+      });
+      const payableId = await ctx.db.insert("vehicleSupplierPayables", {
+        orgId, origin: "OPENING", openingBalanceDraftId: draftId, openingRowKey: "ap",
+        openingKind: "OTHER_PAYABLE", title: "Opening debt", sourcedFromName: "Supplier",
+        amountDue: 50, currency: "USD", status: "NOT_YET_DUE", createdBy: userId, createdAt: 1, updatedAt: 1,
+      });
+      await ctx.db.patch(draftId, { allocationResults: [{ kind: "OTHER_PAYABLE", rowKey: "ap", payableId }] });
+      return { draftId, payableId };
+    });
+
+    const result = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId });
+    expect(result.countScope).toBe("OPENING_PAYABLE_CLEANUP");
+    expect(result.perTable).toEqual({ openingPayableCleanup: 1 });
+    expect(result.total).toBe(1);
+    expect(result.remaining).toBe(1);
+    expect(await countFor(t, "transactions", orgId)).toBe(1);
+    expect(await countFor(t, "expenses", orgId)).toBe(1);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(payableId)).not.toBeNull();
+      expect((await ctx.db.get(draftId))?.allocationResults).toHaveLength(1);
+    });
+  });
+
+  test("reset resumes past 101 rejected drafts and clears late and rejected references before deleting opening debt", async () => {
+    const t = setup();
+    const orgId = await seedOrg(t, "Long opening history");
+    const ids = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset-long-history", email: "history@example.test" });
+      const foreignOrgId = await ctx.db.insert("organizations", { name: "Unrelated history", createdAt: 1 });
+      const fields = { lines: [], asOfDate: 1, createdBy: userId, createdAt: 1 };
+      let rejectedId: Id<"openingBalanceDrafts"> | undefined;
+      for (let i = 0; i < 101; i += 1) {
+        const id = await ctx.db.insert("openingBalanceDrafts", { ...fields, orgId, status: "REJECTED" });
+        if (i === 0) rejectedId = id;
+      }
+      if (!rejectedId) throw new Error("Missing rejected opening fixture");
+      const draftId = await ctx.db.insert("openingBalanceDrafts", { ...fields, orgId, status: "POSTED" });
+      const payableId = await ctx.db.insert("vehicleSupplierPayables", {
+        orgId, origin: "OPENING", openingBalanceDraftId: draftId, openingRowKey: "late",
+        openingKind: "OTHER_PAYABLE", title: "Late opening debt", sourcedFromName: "Supplier",
+        amountDue: 50, currency: "USD", status: "NOT_YET_DUE", createdBy: userId, createdAt: 1, updatedAt: 1,
+      });
+      const allocationResults = [{ kind: "OTHER_PAYABLE" as const, rowKey: "late", payableId }];
+      await ctx.db.patch(draftId, { allocationResults });
+      await ctx.db.patch(rejectedId, { allocationResults });
+      const paymentId = await ctx.db.insert("openingPayablePayments", {
+        orgId, payableId, seq: 1, openingBalanceDraftId: draftId, openingRowKey: "late",
+        amountMinor: 10, currency: "USD", method: "CASH", occurredAt: 1, actorId: userId,
+        commandKey: "reset-child", operation: "recordPartialPayment", status: "LIVE",
+      });
+      const foreignDraftId = await ctx.db.insert("openingBalanceDrafts", { ...fields, orgId: foreignOrgId, status: "POSTED", allocationResults });
+      return { draftId, rejectedId, payableId, foreignDraftId, paymentId };
+    });
+
+    let finished = false;
+    let sawChildDrain = false;
+    for (let batch = 0; batch < 30; batch += 1) {
+      const result = await runContinuationBatch(t, orgId, 1);
+      const state = await t.run(async (ctx) => ({
+        payable: await ctx.db.get(ids.payableId),
+        late: await ctx.db.get(ids.draftId),
+        rejected: await ctx.db.get(ids.rejectedId),
+        foreign: await ctx.db.get(ids.foreignDraftId),
+        payment: await ctx.db.get(ids.paymentId),
+        org: await ctx.db.get(orgId),
+      }));
+      expect(state.foreign?.allocationResults).toHaveLength(1);
+      if (!state.payment && !sawChildDrain) {
+        sawChildDrain = true;
+        expect(state.payable).not.toBeNull();
+        expect(state.late?.allocationResults).toHaveLength(1);
+        expect(state.rejected?.allocationResults).toHaveLength(1);
+        expect(state.org?.openingCleanupReferenceScan).toBeUndefined();
+        expect(state.org?.openingCleanupPayableScan?.pendingPayableIds).toEqual([ids.payableId]);
+      }
+      if (!state.payable) {
+        expect(state.late?.allocationResults).toEqual([]);
+        expect(state.rejected?.allocationResults).toEqual([]);
+      }
+      if (result.remaining === 0) { finished = true; break; }
+    }
+    expect(finished).toBe(true);
+    expect(sawChildDrain).toBe(true);
+    expect(await countFor(t, "transactions", orgId)).toBe(0);
+  });
+
+  test.each(["different source", "stale generation"] as const)("reset refuses to reuse a completed reference scan for %s", async (mismatch) => {
+    const t = setup();
+    const orgId = await seedOrg(t, `Checkpoint ${mismatch}`);
+    const ids = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: `checkpoint-${mismatch}`, email: "checkpoint@example.test" });
+      const fields = { orgId, lines: [], asOfDate: 1, createdBy: userId, createdAt: 1 };
+      for (let i = 0; i < 101; i += 1) await ctx.db.insert("openingBalanceDrafts", { ...fields, status: "REJECTED" });
+      const draftId = await ctx.db.insert("openingBalanceDrafts", { ...fields, status: "POSTED" });
+      const first = await ctx.db.insert("openingCommissionLiabilities", { orgId, userId, openingDraftId: draftId,
+        openingRowKey: "first", sourceKey: "first", version: 1, amountMinor: 50, paidMinor: 0, currency: "USD", createdAt: 1 });
+      const second = await ctx.db.insert("openingCommissionLiabilities", { orgId, userId, openingDraftId: draftId,
+        openingRowKey: "second", sourceKey: "second", version: 1, amountMinor: 50, paidMinor: 0, currency: "USD", createdAt: 1 });
+      await ctx.db.patch(draftId, { allocationResults: [
+        { kind: "EMPLOYEE_COMMISSION", rowKey: "first", openingCommissionLiabilityId: first },
+        { kind: "EMPLOYEE_COMMISSION", rowKey: "second", openingCommissionLiabilityId: second },
+      ] });
+      await ctx.db.patch(orgId, { financialResetGeneration: 1, financialResetCompletedGeneration: 0,
+        openingCleanupReferenceScan: { source: { table: "openingCommissionLiabilities", id: mismatch === "different source" ? second : first },
+          resetGeneration: mismatch === "stale generation" ? 0 : 1, cursor: null, complete: true } });
+      return { draftId, first, second };
+    });
+    let finished = false;
+    for (let batch = 0; batch < 30; batch += 1) {
+      const result = await runContinuationBatch(t, orgId, 1);
+      await t.run(async (ctx) => {
+        const parent = await ctx.db.get(ids.draftId);
+        for (const liabilityId of [ids.first, ids.second]) {
+          if (!await ctx.db.get(liabilityId)) {
+            expect(parent?.allocationResults?.some(row =>
+              row.kind === "EMPLOYEE_COMMISSION" && row.openingCommissionLiabilityId === liabilityId)).toBe(false);
+            expect((await ctx.db.get(orgId))?.openingCleanupReferenceScan?.source.id).not.toBe(liabilityId);
+          }
+        }
+      });
+      if (result.remaining === 0) { finished = true; break; }
+    }
+    expect(finished).toBe(true);
+    expect((await t.run(ctx => ctx.db.get(orgId)))?.openingCleanupReferenceScan).toBeUndefined();
   });
 
   test("with dryRun false, removes the listed tables and nothing else", async () => {
@@ -394,7 +637,18 @@ describe("resetOrgFinancialData", () => {
     // 46 -> 47: `dealCommissionLines`, the extra per-deal commission lines. Each names
     // a sale (which the reset deletes) and is paid through a payslip (also
     // deleted), so leaving them would strand rows pointing at nothing.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(47);
+    // 47 -> 50: SCRUM-858 native opening obligations and management artifacts.
+    // Their approved reset lifecycle clears the new obligations and invalidates
+    // exact new result references; this does not add legacy supplier AP or change
+    // inventory/CRM/people/config retention. payrollItems moved, not duplicated.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(50);
+    expect(new Set(RESET_TABLES_FOR_TEST).size).toBe(50);
+    expect(RESET_TABLES_FOR_TEST).toContain("openingCommissionLiabilities");
+    expect(RESET_TABLES_FOR_TEST).toContain("openingPayablePayments");
+    expect(RESET_TABLES_FOR_TEST).toContain("openingManagementSettlementPlans");
+    expect(RESET_TABLES_FOR_TEST.indexOf("payrollItems")).toBeLessThan(
+      RESET_TABLES_FOR_TEST.indexOf("openingCommissionLiabilities"),
+    );
     expect(RESET_TABLES_FOR_TEST).toContain("dashboardExpenseMonths");
     expect(RESET_TABLES_FOR_TEST).toContain("dashboardExpenseSummaryState");
     expect(RESET_TABLES_FOR_TEST.indexOf("dashboardExpenseMonths")).toBeGreaterThan(RESET_TABLES_FOR_TEST.indexOf("expenses"));

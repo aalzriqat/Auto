@@ -80,7 +80,8 @@ export async function postSupplierCostRecoveryReceipt(
     orgId: Id<"organizations">;
     receiptId: Id<"supplierCostRecoveryReceipts">;
     recoveryId: Id<"supplierCostRecoveries">;
-    vehicleId: Id<"vehicles">;
+    vehicleId?: Id<"vehicles">;
+    openingSource?: {draftId:Id<"openingBalanceDrafts">;rowKey:string};
     sourcedFromName: string;
     amountMinor: number;
     currency: string;
@@ -113,7 +114,8 @@ export async function postSupplierCostRecoveryReceipt(
       currency: args.currency,
       paymentMethod: args.paymentMethod,
       bankAccountId: args.bankAccountId?.toString(),
-      vehicleId: args.vehicleId.toString(),
+      vehicleId: args.vehicleId?.toString(),
+      openingSource:args.openingSource,
     },
   });
   const posted = result.eventId ? await ctx.db.get(result.eventId) : null;

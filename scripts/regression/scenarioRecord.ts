@@ -190,11 +190,11 @@ export interface ValidateLibraryOptions {
 const CTX_SKIP = /\b(?:ctx|context|t)\.skip\s*\(/;
 // Conservative, file-wide: any skip/conditional/todo/fails marker anywhere in the check file fails the record.
 const ANY_SKIP = /\b(?:it|test|describe|suite)(?:\.\w+)*\.(?:skip|skipIf|runIf|todo|fails|fixme)\b|\bx(?:it|describe)\(|\{\s*(?:skip|todo|fails|fixme)\s*:\s*(?!false\b)/;
-// This checks eligible source paths, not execution cadence: root Vitest collects
-// *.test.ts(x), while Playwright replays live under tests/ or scenarios/ as
-// *.spec.ts. The authenticated role-fixture file is collected by the scheduled
-// main audit, not the ordinary PR browser config. Runner evidence is separate.
-const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$)|(?:\.test\.tsx?$)/;
+// Eligible source paths only; execution cadence and runner evidence are separate.
+// Root Vitest collects *.test.ts(x); Playwright uses tests/ and scenarios/
+// *.spec.ts plus visual/*.visual.spec.ts. Authenticated role fixtures run in
+// the scheduled main audit, not the ordinary PR browser configuration.
+const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$)|(?:^playwright\/visual\/[^/]+\.visual\.spec\.ts$)|(?:\.test\.tsx?$)/;
 // Mirrors vitest.config.ts `exclude`: those trees are never collected by the root run.
 // Receiver-agnostic skip/expected-fail calls, `{ skip }` option keys (quoted, shorthand, any position), `.only`.
 // Static analysis is best-effort: indirection (options in a variable) can still beat it; the S3 runner census is the binding proof.
@@ -202,7 +202,7 @@ const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.
 // (an unrelated result.fail() or flags.only(3) is not a skipped test).
 const SKIP_CALL = /\.\s*(?:skip|fixme|todo|skipIf|runIf)\s*\(|\bskip\s*\(|\b(?:test|it|describe|suite|ctx|context|testInfo|t|c)(?:\.\w+)*\.(?:fail|fails|only)\b|\binfo\(\)\s*\.\s*(?:fail|fixme|skip)\s*\(/;
 const SKIP_OPTION = /[{,]\s*["']?(?:skip|todo|fails|fail|fixme)["']?\s*(?::\s*(?!false\b)|[,}])/;
-const PLAYWRIGHT_SPEC = /^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$/;
+const PLAYWRIGHT_SPEC = /^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$|^playwright\/visual\/[^/]+\.visual\.spec\.ts$/;
 const NOT_RUN_DIRS = /^(?:(?:apps|packages|\.next|out|build)\/|(?:.*\/)?(?:node_modules|\.claude)\/)/;
 const MATRIX_ROW = /^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$/;
 const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
@@ -416,6 +416,12 @@ export function validateLibrary(
   const ids = new Set<string>();
   const fingerprints = new Map<string, string>();
   const bindings = new Map<string, string>();
+  // One source snapshot per validation; later calls must observe edits/deletions.
+  const implementations = new Map<string, {
+    forHelper: string;
+    registrations: ReturnType<typeof listActiveTestRegistrations>;
+    hasSkip: boolean;
+  }>();
 
   for (const r of records) {
     const label = isObject(r) && typeof r.id === "string" ? r.id : "<no id>";
@@ -484,18 +490,28 @@ export function validateLibrary(
         add("impl", `impl.file ${rel} is not a test/spec file a runner executes`);
       } else if (!existsSync(abs)) add("impl", `impl.file ${rel} does not exist: cannot-run is a failure`);
       else {
-        const text = readFileSync(abs, "utf8");
+        let implementation = implementations.get(abs);
+        if (!implementation) {
+          const text = readFileSync(abs, "utf8");
+          const forHelper = text.replace(/\b(?:test|it)\.describe(?:\.(?:serial|parallel))?(?=\s*\()/g, "describe");
+          implementation = {
+            forHelper,
+            registrations: listActiveTestRegistrations(forHelper, scriptKindFor(rel)),
+            hasSkip: CTX_SKIP.test(text) || ANY_SKIP.test(text) || SKIP_CALL.test(text) || SKIP_OPTION.test(text),
+          };
+          implementations.set(abs, implementation);
+        }
         // Same AST rules as the invariant proof markers: exactly one ACTIVE it/test whose title
         // names the scenario; skip/skipIf/runIf/todo/only/fails or a skipped parent describe all fail.
         // Playwright groups with test.describe(...); the shared AST helper only knows describe(...).
-        const forHelper = text.replace(/\b(?:test|it)\.describe(?:\.(?:serial|parallel))?(?=\s*\()/g, "describe");
+        const { forHelper, registrations, hasSkip } = implementation;
         // Exactly one active, NON-parameterized registration: test.each([]) names a case that never runs.
         const bindKey = `${rel}::${r.impl.testName}`;
         const sharedWith = bindings.get(bindKey);
         if (sharedWith !== undefined) add("impl", `same impl.file + testName as ${sharedWith}: one check cannot stand for two scenarios`);
         else bindings.set(bindKey, r.id);
-        const named = listActiveTestRegistrations(forHelper, scriptKindFor(rel)).filter((t) => t.title === r.impl!.testName);
-        if (named.length !== 1 || named[0].parameterized || CTX_SKIP.test(text) || ANY_SKIP.test(text) || SKIP_CALL.test(text) || SKIP_OPTION.test(text)) {
+        const named = registrations.filter((t) => t.title === r.impl!.testName);
+        if (named.length !== 1 || named[0].parameterized || hasSkip) {
           add("skip", `${rel} has no single active test named "${r.impl.testName}" (skipped, conditional, duplicated or absent): a skip is a failure in the library (R4)`);
         } else if (r.kind === "rule" && typeof r.subject === "string" && !ruleBodyExercisesSubject(forHelper, scriptKindFor(rel), r.impl.testName, r.subject)) {
           add("impl", `${rel} test "${r.impl.testName}" must call ${r.subject}(...) and assert on it (and ${rel} must not vi.mock a module named for it): a rule record is only as true as the check it names`);

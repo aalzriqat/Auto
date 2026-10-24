@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type * as z from "zod";
 import { useMutation, useConvexAuth, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import Link from "next/link";
@@ -140,7 +141,7 @@ function EditListingForm({
   const fieldId = (name: string) => `${listing._id}-${name}`;
   const [isSaving, setIsSaving] = useState(false);
 
-  const form = useForm<ListingUpdateValues>({
+  const form = useForm<z.input<typeof listingUpdateSchema>, unknown, ListingUpdateValues>({
     resolver: zodResolver(listingUpdateSchema),
     defaultValues: {
       sellerDisplayName: listing.sellerDisplayName,

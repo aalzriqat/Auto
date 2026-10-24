@@ -116,7 +116,7 @@ export function getAuthConfigEnv() {
 
   if (!result.success) {
     const errorMsg = "Auth Environment Variable Missing/Invalid: " +
-      result.error.errors.map(e => e.path.join('.')).join(', ');
+      result.error.issues.map(e => e.path.join('.')).join(', ');
     throw new ConvexError(errorMsg);
   }
 
@@ -157,7 +157,7 @@ export function getValidatedEnv() {
   
   if (!result.success) {
     const errorMsg = "Backend Environment Variables Missing/Invalid: " +
-      result.error.errors.map(e => `${e.path.join('.')}`).join(', ');
+      result.error.issues.map(e => `${e.path.join('.')}`).join(', ');
     throw new ConvexError(errorMsg);
   }
   

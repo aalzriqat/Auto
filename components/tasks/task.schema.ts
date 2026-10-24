@@ -4,7 +4,7 @@ import { Doc } from "@/convex/_generated/dataModel";
 export const taskSchema = z.object({
   title: z.string().min(1, "Title is required"),
   description: z.string().optional(),
-  dueDate: z.date({ required_error: "Due date is required" }),
+  dueDate: z.date({ error: (issue) => issue.input === undefined ? "Due date is required" : undefined }),
   assignedTo: z.string().min(1, "Assignee is required"),
   customerId: z.string().optional(),
   vehicleId: z.string().optional(),

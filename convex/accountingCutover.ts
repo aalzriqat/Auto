@@ -1,3 +1,8 @@
+import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { openingRecoveryBasis, openingPayableBasis } from "./utils/openingSupplierBasis";
+import { resolveOpeningCommissionBasis } from "./utils/openingCommissionBasis";
+import { resolveOpeningSettlementBasis, createOpeningSettlementReader, type OpeningSettlementReader } from "./utils/openingSettlementBasis";
+import { isRemainingOpeningKind, openingAccountAllowsFamily, type RemainingOpeningKind, type OpeningPolicy } from "./utils/openingAccountPolicy";
 /**
  * GL Phase 17 — legacy money migration + accountant sign-off.
  *
@@ -23,7 +28,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, QueryCtx, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";
@@ -33,6 +38,14 @@ import { toMinorUnits, denominationOf } from "./utils/money";
 import { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { materializeOpeningAllocations, openingPolicyForAccount, prepareOpeningAllocations } from "./accounting/openingAllocations";
+import type { OpeningAllocationPlan } from "./accounting/openingAllocations";
+import { isOpeningPartnerAccount } from "./accounting/openingPartnerAllocations";
+import { resolveSystemAccount } from "./chartOfAccounts";
+import { openingAllocationValidator } from "./utils/openingAllocationValidators";
+import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
+import { assertOpeningVehicleBasis, listOpeningStockEvidence } from "./utils/openingVehicleBasis";
+import { orgResetState } from "./utils/orgResetGeneration";
 
 /**
  * SCRUM-54: an opening line on the BANK_ACCOUNT control account must name the
@@ -47,16 +60,13 @@ import { SYSTEM_KEYS } from "./utils/defaultChart";
  * existed, cannot post an unattributed bank line.
  */
 async function assertOpeningBankIdentities(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   lines: ReadonlyArray<{ accountId: Id<"chartOfAccounts">; bankAccountId?: Id<"bankAccounts"> }>,
   currency: string
 ): Promise<void> {
   for (const line of lines) {
-    const account = await ctx.db.get(line.accountId);
-    if (!account || account.orgId !== orgId) {
-      throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
-    }
+    const account = await requireOwnedRow(ctx, orgId, "chartOfAccounts", line.accountId, "Opening account not found in this organization.");
     if (account.systemKey !== SYSTEM_KEYS.BANK_ACCOUNT) {
       if (line.bankAccountId) {
         throw new ConvexError("Only a bank account line can name a bank account.");
@@ -66,8 +76,8 @@ async function assertOpeningBankIdentities(
     if (!line.bankAccountId) {
       throw new ConvexError("Select a bank account for every bank opening-balance line.");
     }
-    const bank = await ctx.db.get(line.bankAccountId);
-    if (!bank || bank.orgId !== orgId || bank.isDeleted) {
+    const bank = await requireOwnedRow(ctx, orgId, "bankAccounts", line.bankAccountId, "The selected bank account was not found in this organization.");
+    if (bank.isDeleted) {
       throw new ConvexError("The selected bank account was not found in this organization.");
     }
     if (!bank.isActive) {
@@ -265,6 +275,7 @@ export const draftOpeningBalance = mutation({
     // The exact canonical code the caller converted the entered decimals under.
     // See assertDenominationUnchanged — this binds the integers to a scale.
     expectedCurrency: v.string(),
+    allocations: v.optional(v.array(openingAllocationValidator)),
   },
   handler: async (ctx, args): Promise<{ draftId: string }> => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -297,10 +308,7 @@ export const draftOpeningBalance = mutation({
     // is always a mistake, and (unlike system accounts) a custom account can be
     // deactivated while still technically allowing manual posting.
     for (const line of args.lines) {
-      const account = await ctx.db.get(line.accountId);
-      if (!account || account.orgId !== args.orgId) {
-        throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
-      }
+      const account = await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", line.accountId, "Opening account not found in this organization.");
       if (!account.active) {
         throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
       }
@@ -312,6 +320,8 @@ export const draftOpeningBalance = mutation({
       throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
     }
 
+    await prepareOpeningAllocations(ctx, { ...args, currency: args.expectedCurrency, actorId: user._id });
+
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
       orgId: args.orgId,
@@ -319,6 +329,7 @@ export const draftOpeningBalance = mutation({
       lines: args.lines,
       asOfDate: args.asOfDate,
       memo: args.memo,
+      allocations: args.allocations,
       createdBy: user._id,
       createdAt: now,
       // Snapshot the denomination and the preparer's identity at draft time.
@@ -353,10 +364,7 @@ export const approveOpeningBalance = mutation({
   handler: async (ctx, args): Promise<{ journalId: string }> => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
-    const draft = await ctx.db.get(args.draftId);
-    if (!draft || draft.orgId !== args.orgId) {
-      throw new ConvexError("Opening balance draft not found.");
-    }
+    const draft = await requireOwnedRow(ctx, args.orgId, "openingBalanceDrafts", args.draftId, "Opening balance draft not found.");
     if (draft.status !== "PENDING_APPROVAL") {
       throw new ConvexError("This opening balance draft has already been resolved.");
     }
@@ -410,6 +418,63 @@ export const approveOpeningBalance = mutation({
  * a second person was involved — is decided by the caller before this runs;
  * this function makes no authorization decisions of its own.
  */
+type OpeningPreflightCode = "LEDGER_ACTIVITY" | "LINES" | "ACCOUNT" | "PERIOD" |
+  "DENOMINATION" | "BANK" | "ALLOCATIONS" | "UNAVAILABLE";
+
+class OpeningPreflightError extends Error {
+  constructor(readonly code: OpeningPreflightCode, readonly original: unknown) {
+    super(`Opening preflight ${code}`);
+  }
+}
+
+async function preflightStep<T>(code: OpeningPreflightCode, check: () => Promise<T> | T): Promise<T> {
+  try { return await check(); }
+  catch (error) { throw new OpeningPreflightError(code, error); }
+}
+
+/** Every check here reads only. The pending query and mutation invoke this
+ * same function; the mutation invokes it again in its posting transaction. */
+async function inspectOpeningPreflight(ctx: QueryCtx | MutationCtx, args: {
+  orgId: Id<"organizations">;
+  draft: Doc<"openingBalanceDrafts">;
+  actorId: Id<"users">;
+}): Promise<{
+  totalDebits: number;
+  periodId: Id<"accountingPeriods">;
+  currency: string;
+  scale: number;
+  allocationPlan: OpeningAllocationPlan;
+}> {
+  const { orgId, draft, actorId } = args;
+  await preflightStep("LEDGER_ACTIVITY", async () => {
+    if (await hasPostedLedgerActivity(ctx, orgId)) refuseOpeningAfterLedgerActivity();
+  });
+  const totalDebits = await preflightStep("LINES", () => validateManualJournalLines(draft.lines as ManualJournalLine[]));
+  await preflightStep("ACCOUNT", async () => {
+    for (const line of draft.lines) {
+      const account = await requireOwnedRow(ctx, orgId, "chartOfAccounts", line.accountId, "Opening account not found in this organization.");
+      if (!account.active) throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
+    }
+  });
+  const period = await preflightStep("PERIOD", async () => {
+    const value = await getOpenPeriodForDate(ctx, orgId, draft.asOfDate);
+    if (!value) throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
+    return value;
+  });
+  const denomination = await preflightStep("DENOMINATION", () => {
+    const value = denominationOf(draft.currency);
+    if (value === null) throw new ConvexError(unvouchableDenominationMessage(draft.currency));
+    return value;
+  });
+  await preflightStep("BANK", () => assertOpeningBankIdentities(ctx, orgId, draft.lines, denomination.code));
+  const allocationPlan = await preflightStep("ALLOCATIONS", () => prepareOpeningAllocations(ctx, {
+    orgId, currency: denomination.code, lines: draft.lines, asOfDate: draft.asOfDate,
+    allocations: draft.allocations, actorId,
+  }));
+  return { totalDebits, periodId: period._id, currency: denomination.code,
+    scale: denomination.scale, allocationPlan };
+}
+
 async function postOpeningBalanceDraft(
   ctx: MutationCtx,
   args: {
@@ -421,64 +486,21 @@ async function postOpeningBalanceDraft(
 ): Promise<Id<"journalEntries">> {
   const { orgId, draft, approverId, autoApproved } = args;
 
-  // The chokepoint both routes share, checked in the posting transaction itself
-  // so activity that landed after the draft was prepared is still caught. A
-  // balanced opening journal proves arithmetic, not a cutover basis.
-  if (await hasPostedLedgerActivity(ctx, orgId)) {
-    refuseOpeningAfterLedgerActivity();
+  // The read-only preflight is repeated here in the posting transaction. The
+  // wrapper is unwrapped before any write, preserving the original refusal and
+  // Convex's uncaught-exception rollback behavior.
+  let preflight: Awaited<ReturnType<typeof inspectOpeningPreflight>>;
+  try { preflight = await inspectOpeningPreflight(ctx, { orgId, draft, actorId: approverId }); }
+  catch (error) {
+    if (error instanceof OpeningPreflightError) throw error.original;
+    throw error;
   }
-
-  const totalDebits = validateManualJournalLines(draft.lines as ManualJournalLine[]);
-
-  // Re-validate at approval time — an account may have been deactivated
-  // between draft and approval (mirrors resolveManualJournalCurrency).
-  for (const line of draft.lines) {
-    const account = await ctx.db.get(line.accountId);
-    if (!account || account.orgId !== orgId) {
-      throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
-    }
-    if (!account.active) {
-      throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
-    }
-  }
-
-  const period = await getOpenPeriodForDate(ctx, orgId, draft.asOfDate);
-  if (!period) {
-    throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
-  }
-
-  // The denomination the lines were ENTERED in, never the org's current one.
-  // The two can differ: orgSettings locks the org currency only once a row
-  // exists in one of six financial tables, and openingBalanceDrafts is not among
-  // them — so a fresh org can draft in JOD, switch to USD, then approve. Since
-  // minor-unit scale is per-currency (3 for JOD/KWD/BHD/OMR, 2 otherwise),
-  // posting at the current currency would silently turn 1,000.000 JOD into
-  // 10,000.00 USD across the org's entire starting position.
-  //
-  // And it is resolved through `denominationOf`, the shared fail-closed
-  // authority, rather than by taking the string at its word. `scaleForCurrency`
-  // answers 2 for ANYTHING it does not recognise (`utils/money.ts:110`) — a
-  // deliberate choice for display code that must not crash, and the wrong one
-  // here, where the guess would post the org's entire starting position an
-  // order of magnitude out. `denominationOf` refuses absent, unsupported and
-  // non-canonical spellings alike, and hands back the scale it vouched for.
-  //
-  // This is the CHOKEPOINT both routes share, so neither can post on a guess
-  // even if a future caller forgets the boundary check. There is no fallback to
-  // the org currency: a draft with no recorded denomination cannot have one
-  // re-derived — the org's current setting is a known-wrong answer, not a
-  // conservative one, which is the whole subject of SCRUM-62.
-  const denomination = denominationOf(draft.currency);
-  if (denomination === null) {
-    throw new ConvexError(unvouchableDenominationMessage(draft.currency));
-  }
-  const currency = denomination.code;
-  await assertOpeningBankIdentities(ctx, orgId, draft.lines, currency);
+  const { totalDebits, periodId, currency, scale, allocationPlan } = preflight;
   const now = Date.now();
 
   const journalId = await ctx.db.insert("journalEntries", {
     orgId,
-    periodId: period._id,
+    periodId,
     journalNumber: "OB-pending",
     accountingDate: draft.asOfDate,
     sourceType: "cutover",
@@ -494,9 +516,7 @@ async function postOpeningBalanceDraft(
   const journalNumber = `OB-${journalId.toString().replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()}`;
   await ctx.db.patch(journalId, { journalNumber });
 
-  // The scale the authority vouched for, not a second lookup that could answer
-  // differently from the code above.
-  const scale = denomination.scale;
+  // The scale came from the checked draft denomination above.
   for (let i = 0; i < draft.lines.length; i++) {
     const line = draft.lines[i];
     await ctx.db.insert("journalLines", {
@@ -519,18 +539,20 @@ async function postOpeningBalanceDraft(
       orgId,
       accountId: line.accountId,
       currency,
-      periodId: period._id,
+      periodId,
       debitMinor: line.debitMinor,
       creditMinor: line.creditMinor,
     });
   }
 
+  const allocationResults = await materializeOpeningAllocations(ctx, allocationPlan, draft._id, approverId);
   await ctx.db.patch(draft._id, {
     status: "POSTED",
     reviewedBy: approverId,
     decidedAt: now,
     journalEntryId: journalId,
     autoApproved,
+    allocationResults,
   });
 
   await auditLog(ctx, {
@@ -591,6 +613,7 @@ export const postOpeningBalanceDirect = mutation({
     // The exact canonical code the caller converted the entered decimals under.
     // See assertDenominationUnchanged — this binds the integers to a scale.
     expectedCurrency: v.string(),
+    allocations: v.optional(v.array(openingAllocationValidator)),
   },
   handler: async (ctx, args): Promise<{ journalId: string; draftId: string }> => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -625,6 +648,7 @@ export const postOpeningBalanceDirect = mutation({
     // at the boundary. (The shared poster re-checks vouchability independently
     // as the chokepoint for callers that never came through here.)
     const orgDenomination = await getOrgCurrency(ctx, args.orgId);
+    await prepareOpeningAllocations(ctx, { ...args, currency: orgDenomination, actorId: user._id });
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
@@ -643,6 +667,7 @@ export const postOpeningBalanceDirect = mutation({
       // an identically-shaped record. Vouched for immediately above, so the row
       // cannot be created carrying a denomination the poster would refuse.
       currency: orgDenomination,
+      allocations: args.allocations,
       preparedByName: user.name || user.email || undefined,
     });
 
@@ -677,12 +702,12 @@ export const rejectOpeningBalanceDraft = mutation({
       throw new ConvexError("A rejection reason is required.");
     }
 
-    const draft = await ctx.db.get(args.draftId);
-    if (!draft || draft.orgId !== args.orgId) {
-      throw new ConvexError("Opening balance draft not found.");
-    }
+    const draft = await requireOwnedRow(ctx, args.orgId, "openingBalanceDrafts", args.draftId, "Opening balance draft not found.");
     if (draft.status !== "PENDING_APPROVAL") {
       throw new ConvexError("This opening balance draft has already been resolved.");
+    }
+    if (await containsEmployeeAdvanceControl(ctx, args.orgId, draft)) {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
     }
     if (draft.createdBy === user._id) {
       throw new ConvexError("Opening balance approver cannot be the same as the preparer.");
@@ -708,10 +733,134 @@ export const rejectOpeningBalanceDraft = mutation({
   },
 });
 
+/** Checks both allocations and GL controls. Older drafts may contain the
+ * control line without operational rows; they are still payroll-sensitive. */
+async function containsEmployeeAdvanceControl(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  draft: Doc<"openingBalanceDrafts">,
+): Promise<boolean> {
+  if (draft.allocations?.some((row) => (row.kind === "EMPLOYEE_ADVANCE" || row.kind === "EMPLOYEE_COMMISSION"))) return true;
+  for (const line of draft.lines) {
+    const account = await ctx.db.get(line.accountId);
+    if (account?.orgId === orgId && (account.systemKey === SYSTEM_KEYS.EMPLOYEE_ADVANCES || account.systemKey === SYSTEM_KEYS.COMMISSION_PAYABLE)) return true;
+  }
+  return false;
+}
+
+type OpeningDraftAllocation = NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number];
+function isRemainingOpeningAllocation(
+  allocation: OpeningDraftAllocation,
+): allocation is Extract<OpeningDraftAllocation, { kind: RemainingOpeningKind }> {
+  return isRemainingOpeningKind(allocation.kind);
+}
+
+type PendingOpeningParty = { partyId: string | null; partyName: string | null; partyDetail: string | null; partyAvailable: boolean };
+
+async function pendingOpeningCustomer(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  allocation: Extract<OpeningDraftAllocation, { kind: "CUSTOMER_RECEIVABLE" }>,
+): Promise<PendingOpeningParty> {
+  let partyName: string | null = null;
+  let partyDetail: string | null = null;
+  let partyAvailable = false;
+
+  const partyId = allocation.customerId;
+  const customer = await ctx.db.get(allocation.customerId);
+  if (customer?.orgId === orgId && !customer.isDeleted) {
+    partyName = `${customer.firstName} ${customer.lastName}`.trim();
+    partyDetail = customer.phone ? `•••${customer.phone.slice(-4)}` : (customer.email ?? null);
+    partyAvailable = true;
+  }
+
+  return { partyId, partyName, partyDetail, partyAvailable };
+}
+
+async function pendingOpeningEmployee(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  allocation: Extract<OpeningDraftAllocation, { kind: "EMPLOYEE_ADVANCE" | "EMPLOYEE_COMMISSION" }>,
+): Promise<PendingOpeningParty> {
+  let partyName: string | null = null;
+  let partyDetail: string | null = null;
+  let partyAvailable = false;
+
+  const partyId = allocation.userId;
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", allocation.userId))
+    .unique();
+  const employee = membership ? await ctx.db.get(allocation.userId) : null;
+  if (membership && !membership.offboardingStatus && employee) {
+    partyName = employee.name ?? employee.email;
+    partyDetail = employee.email;
+    partyAvailable = true;
+  }
+
+  return { partyId, partyName, partyDetail, partyAvailable };
+}
+
+async function pendingOpeningStock(
+  ctx: QueryCtx,
+  request: Readonly<{
+    orgId: Id<"organizations">;
+    allocation: Extract<OpeningDraftAllocation, { kind: "VEHICLE_INVENTORY" }>;
+    stockEvidence: Awaited<ReturnType<typeof listOpeningStockEvidence>>;
+    resetGeneration: number;
+    draftCurrency: string | undefined;
+  }>,
+): Promise<PendingOpeningParty> {
+  const { orgId, allocation, stockEvidence, resetGeneration, draftCurrency } = request;
+  let partyName: string | null = null;
+  let partyDetail: string | null = null;
+  let partyAvailable = false;
+
+  const partyId = allocation.vehicleId;
+  const vehicle = await ctx.db.get(allocation.vehicleId);
+  const proof = stockEvidence.find((item) => item.vehicleId === allocation.vehicleId);
+  if (vehicle?.orgId === orgId && !vehicle.isDeleted) {
+    partyName = vehicle.vin ?? null;
+    partyDetail = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
+    partyAvailable =
+      vehicle.sourceType === "STOCK" &&
+      vehicle.openingStockImportId !== undefined &&
+      vehicle.openingStockRowId !== undefined &&
+      proof?.vin === vehicle.vin &&
+      proof?.costMinor === allocation.amountMinor &&
+      proof?.currency === draftCurrency &&
+      proof?.command.resetGeneration === resetGeneration &&
+      proof?.command.idempotencyKey === `${vehicle.openingStockImportId}:${vehicle.openingStockRowId}`;
+  }
+
+  return { partyId, partyName, partyDetail, partyAvailable };
+}
+
+async function pendingOpeningPartner(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  allocation: Extract<OpeningDraftAllocation, { kind: "PARTNER_CAPITAL" }>,
+): Promise<PendingOpeningParty> {
+  let partyName: string | null = null;
+  let partyDetail: string | null = null;
+  let partyAvailable = false;
+
+  const partyId = allocation.partnerId;
+  const partner = await ctx.db.get(allocation.partnerId);
+  if (partner?.orgId === orgId && !partner.isDeleted) {
+    partyName = partner.partnerName;
+    partyDetail = String(partner._id).slice(-6);
+    partyAvailable = true;
+  }
+
+  return { partyId, partyName, partyDetail, partyAvailable };
+}
+
 export const listPendingOpeningBalanceDrafts = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const openingReader=createOpeningSettlementReader(ctx,args.orgId);
+    const { role, user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const drafts = await ctx.db
       .query("openingBalanceDrafts")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
@@ -732,8 +881,14 @@ export const listPendingOpeningBalanceDrafts = query({
     // reasoning as openingBalanceStatus.
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
+    const mayViewPayroll = isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
+      role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
+    const visibleDrafts = [];
+    for (const draft of drafts) {
+      if (mayViewPayroll || !(await containsEmployeeAdvanceControl(ctx, args.orgId, draft))) visibleDrafts.push(draft);
+    }
     return await Promise.all(
-      drafts.map(async (draft) => {
+      visibleDrafts.map(async (draft) => {
         // Snapshot first, live lookup only as a fallback for drafts written
         // before the snapshot existed. The live row is the unreliable one:
         // offboarding hard-deletes users (memberships.ts), which would render
@@ -758,9 +913,78 @@ export const listPendingOpeningBalanceDrafts = query({
             };
           })
         );
+        const payrollSensitive = await containsEmployeeAdvanceControl(ctx, args.orgId, draft);
+        const viewerCanManagePayroll = isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
+        let blockerCodes: Array<OpeningPreflightCode | "PAYROLL_AUTHORITY" | "OWN_DRAFT"> = [];
+        if (draft.createdBy === user._id) blockerCodes = ["OWN_DRAFT"];
+        else if (payrollSensitive && !viewerCanManagePayroll) blockerCodes = ["PAYROLL_AUTHORITY"];
+        else {
+          try { await inspectOpeningPreflight(ctx, { orgId: args.orgId, draft, actorId: user._id }); }
+          catch (error) { blockerCodes = [error instanceof OpeningPreflightError ? error.code : "UNAVAILABLE"]; }
+        }
+        const stockEvidence = (draft.allocations ?? []).some((allocation) => allocation.kind === "VEHICLE_INVENTORY")
+          ? await listOpeningStockEvidence(ctx, args.orgId).catch(() => []) : [];
+        const resetGeneration = orgResetState(await ctx.db.get(args.orgId)).generation;
+        const allocationDetails = await Promise.all((draft.allocations ?? []).map(async (allocation) => {
+          const account = await ctx.db.get(allocation.accountId);
+          let partyId: string | null = null;
+          let allocationStatus: "AVAILABLE" | "UNALLOCATED" | "UNAVAILABLE" = "AVAILABLE";
+          let partyName: string | null = null;
+          let partyDetail: string | null = null;
+          let partyAvailable = false;
+          if (allocation.kind === "CUSTOMER_RECEIVABLE") {
+            ({ partyId, partyName, partyDetail, partyAvailable } = await pendingOpeningCustomer(ctx, args.orgId, allocation));
+          } else if (isRemainingOpeningKind(allocation.kind) && allocation.kind !== "EMPLOYEE_COMMISSION") {
+            partyName = "counterpartyName" in allocation ? allocation.counterpartyName : null;
+            partyAvailable = "counterpartyName" in allocation;
+            const basis = draft.status === "POSTED" ? await resolveOpeningSettlementBasis(ctx,args.orgId,{draftId:draft._id,rowKey:allocation.rowKey},allocation.kind,openingReader) : null;
+            allocationStatus = openingAllocationAvailability(allocation.kind, basis?.kind !== "UNAVAILABLE");
+          } else if (allocation.kind === "EMPLOYEE_ADVANCE" || allocation.kind === "EMPLOYEE_COMMISSION") {
+            ({ partyId, partyName, partyDetail, partyAvailable } = await pendingOpeningEmployee(ctx, args.orgId, allocation));
+          } else if (allocation.kind === "PREPAID_EXPENSE") {
+            partyId = allocation.rowKey;
+            partyName = allocation.title;
+            partyAvailable = allocation.attestedUnexpiredBenefit === true;
+          } else if (allocation.kind === "VEHICLE_INVENTORY") {
+            ({ partyId, partyName, partyDetail, partyAvailable } = await pendingOpeningStock(ctx, { orgId: args.orgId, allocation, stockEvidence, resetGeneration, draftCurrency: draft.currency }));
+          } else if (allocation.kind === "PARTNER_CAPITAL") {
+            ({ partyId, partyName, partyDetail, partyAvailable } = await pendingOpeningPartner(ctx, args.orgId, allocation));
+          }
+          return {
+            rowKey: allocation.rowKey,
+            kind: allocation.kind,
+            allocationStatus,
+            purpose: "purpose" in allocation ? allocation.purpose : undefined,
+            accountId: allocation.accountId,
+            accountCode: account?.orgId === args.orgId ? account.code : null,
+            accountName: account?.orgId === args.orgId ? account.name : null,
+            accountNameAr: account?.orgId === args.orgId ? account.nameAr : undefined,
+            partyId,
+            partyName,
+            partyDetail,
+            partyAvailable,
+            amountMinor: allocation.amountMinor,
+            title: "title" in allocation ? allocation.title : undefined,
+            dueDate: allocation.kind === "CUSTOMER_RECEIVABLE" ? allocation.dueDate : undefined,
+            note: allocation.kind === "EMPLOYEE_ADVANCE" ? allocation.note : undefined,
+            startYearMonth: allocation.kind === "PREPAID_EXPENSE" ? allocation.startYearMonth : undefined,
+            termMonths: allocation.kind === "PREPAID_EXPENSE" ? allocation.termMonths : undefined,
+            expenseSystemKey: allocation.kind === "PREPAID_EXPENSE" ? allocation.expenseSystemKey : undefined,
+            attestedUnexpiredBenefit: allocation.kind === "PREPAID_EXPENSE" ? allocation.attestedUnexpiredBenefit : undefined,
+          };
+        }));
         return {
-          ...draft,
+          _id: draft._id,
+          asOfDate: draft.asOfDate,
+          memo: draft.memo,
+          createdBy: draft.createdBy,
           lines,
+          allocations: draft.allocations,
+          allocationDetails,
+          payrollSensitive,
+          viewerCanManagePayroll,
+          readiness: { blockerCodes, canApprove: blockerCodes.length === 0,
+            canReject: draft.createdBy !== user._id && (!payrollSensitive || viewerCanManagePayroll) },
           // `null`, never an English literal. The client renders this inside a
           // <bdi> on a screen this PR hardened for Arabic bidi — shipping
           // "Unknown" there would put untranslated English in the RTL run.
@@ -796,15 +1020,10 @@ export const hasOpeningBalance = query({
 /**
  * Everything the opening-balance UI needs, in one subscription.
  *
- * `canPostDirectly` is computed here rather than in the client on purpose.
- * `usePermissions` derives ownership from `roleName === "OWNER"`, while the
- * server gate is `isSystemOwnerRole`, which honours an explicit
- * `isSystemOwnerRole` flag first and only then falls back to the name — *and*
- * requires the role to hold every defined permission. Those two rules can
- * disagree: a role flagged as the system owner but named something else passes
- * the server and fails the client, and a role named "OWNER" with the flag off
- * does the reverse. Re-deriving an authorization rule in the browser is how a
- * UI ends up offering a button the server refuses, so the server answers it.
+ * `canPostDirectly` uses the backend's qualified-owner predicate and current
+ * opening constraints. The shared permission hook now consumes that same
+ * server-resolved owner status. This subscription supplies the actual action
+ * capability so opening forms do not reconstruct policy from a display name.
  */
 export const openingBalanceStatus = query({
   args: { orgId: v.id("organizations") },
@@ -813,9 +1032,13 @@ export const openingBalanceStatus = query({
     args,
   ): Promise<{
     posted: boolean;
+    pendingExists: boolean;
     pendingDraftId: string | null;
     canPostDirectly: boolean;
     canManageFinance: boolean;
+    canSelectCustomers: boolean;
+    canSelectEmployees: boolean;
+    canSelectPartners: boolean;
     currency: string;
   }> => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
@@ -831,18 +1054,406 @@ export const openingBalanceStatus = query({
     const isOwner = isSystemOwnerRole(role);
     const canManageFinance =
       isOwner || role.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
+    const canEnter = canManageFinance && postedEntry === null && pending === null;
+
+    const mayViewPayroll = isOwner || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
+      role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
+    const pendingVisible = !pending || mayViewPayroll || !(await containsEmployeeAdvanceControl(ctx, args.orgId, pending));
 
     return {
       posted: postedEntry !== null,
-      pendingDraftId: pending?._id.toString() ?? null,
+      pendingExists: pending !== null,
+      pendingDraftId: pendingVisible ? pending?._id.toString() ?? null : null,
       canPostDirectly: isOwner && canManageFinance,
       canManageFinance,
+      canSelectCustomers: canEnter && (isOwner || role.permissions.includes(PERMISSIONS.VIEW_CUSTOMERS)),
+      canSelectEmployees: canEnter && (isOwner || (role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL) &&
+        role.permissions.includes(PERMISSIONS.VIEW_USERS))),
+      canSelectPartners: canEnter,
       // The form converts entered amounts to minor units, and the scale is
       // per-currency (3 for JOD/KWD/BHD/OMR, 2 otherwise). Returned here so the
       // client uses the org's real currency rather than assuming one — getting
       // this wrong posts amounts off by a factor of ten.
       currency: await getOrgCurrency(ctx, args.orgId),
     };
+  },
+});
+
+/** Server-classified account choices for the once-per-org opening editor.
+ * Unsupported controls stay visible so the operator can see why a line is
+ * unavailable; no client copy of the financial policy table is authoritative. */
+type OpeningAccountChoicePolicy = OpeningPolicy | "PARTNER_CAPITAL_CANDIDATE" | "UNAVAILABLE";
+
+function openingAccountChoicePolicy(
+  account: Doc<"chartOfAccounts">,
+  currency: string,
+  canonical: ReadonlyArray<Id<"chartOfAccounts"> | null>,
+): OpeningAccountChoicePolicy {
+  const candidate = !account.systemKey && isOpeningPartnerAccount(account);
+  const classified = openingPolicyForAccount(account, candidate);
+  if (!account.active || (account.currencyRestriction && account.currencyRestriction !== currency))
+    return "UNSUPPORTED";
+  if (candidate) return "PARTNER_CAPITAL_CANDIDATE";
+  const canonicalKinds = [
+    "CUSTOMER_RECEIVABLE",
+    "EMPLOYEE_ADVANCE",
+    "PARTNER_CAPITAL",
+    "PREPAID_EXPENSE",
+    "VEHICLE_INVENTORY",
+  ] as const;
+  const index = canonicalKinds.findIndex((kind) => kind === classified);
+  if (classified && index !== -1) {
+    if (canonical[index] === null) return "UNAVAILABLE";
+    return account._id === canonical[index] ? classified : "UNSUPPORTED";
+  }
+  if (
+    classified &&
+    (isRemainingOpeningKind(classified) || classified === "DECLARED_LIABILITY" || classified === "LEDGER_ONLY")
+  )
+    return classified;
+  return "UNSUPPORTED";
+}
+
+function openingAllocationAvailability(kind: string, available: boolean): "AVAILABLE" | "UNALLOCATED" | "UNAVAILABLE" {
+  if (!available) return "UNAVAILABLE";
+  return kind === "UNALLOCATED_LIABILITY" ? "UNALLOCATED" : "AVAILABLE";
+}
+
+function openingCandidateKinds(policy: OpeningAccountChoicePolicy): RemainingOpeningKind[] {
+  if (policy === "DECLARED_LIABILITY") return ["SUPPLIER_PAYABLE", "OTHER_PAYABLE", "EMPLOYEE_COMMISSION", "UNALLOCATED_LIABILITY"];
+  return isRemainingOpeningKind(policy) ? [policy] : [];
+}
+
+function openingAllowedPurposes(
+  account: Doc<"chartOfAccounts">,
+  allowedKinds: readonly RemainingOpeningKind[],
+): string[] | undefined {
+  if (!allowedKinds.includes("UNALLOCATED_LIABILITY")) return undefined;
+  return account.systemKey ? ["CUSTOMER_DEPOSIT"] : ["CUSTOMER_DEPOSIT", "UNIDENTIFIED_RECEIPT"];
+}
+
+export const listOpeningAccountPolicies = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    if (await findPostedOpeningBalanceJournal(ctx, args.orgId)) return [];
+    const pending = await ctx.db.query("openingBalanceDrafts")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
+      .first();
+    if (pending) return [];
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    const accounts = await ctx.db.query("chartOfAccounts")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId)).take(201);
+    if (accounts.length > 200) throw new ConvexError("Opening account choices require finance review.");
+    const canonical = await Promise.all([
+      SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS,
+      SYSTEM_KEYS.EMPLOYEE_ADVANCES,
+      SYSTEM_KEYS.PARTNER_CAPITAL,
+      SYSTEM_KEYS.PREPAID_EXPENSES,
+      SYSTEM_KEYS.VEHICLE_INVENTORY,
+    ].map(async (key) => {
+      try { return await resolveSystemAccount(ctx, args.orgId, key); }
+      catch { return null; }
+    }));
+    return await Promise.all(accounts.map(async (account) => {
+      let policy = openingAccountChoicePolicy(account, currency, canonical);
+      const candidates:RemainingOpeningKind[] = openingCandidateKinds(policy);
+      const allowedKinds:RemainingOpeningKind[]=[];
+      for(const kind of candidates)if(await openingAccountAllowsFamily(ctx,args.orgId,account,currency,kind,kind === "UNALLOCATED_LIABILITY" ? "CUSTOMER_DEPOSIT" : undefined))allowedKinds.push(kind);
+      if(candidates.length && !allowedKinds.length)policy="UNSUPPORTED";
+      return { accountId:account._id,policy,allowedKinds,allowedPurposes:openingAllowedPurposes(account, allowedKinds) };
+    }));
+  },
+});
+
+/** Finance-only selector for imported physical opening stock. Command proof,
+ * not mutable vehicle fields, supplies the set that approval must exhaust. */
+export const listOpeningStockChoices = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    const evidence = await listOpeningStockEvidence(ctx, args.orgId);
+    const resetGeneration = orgResetState(await ctx.db.get(args.orgId)).generation;
+    return await Promise.all(evidence.map(async ({ vehicleId, vin, costMinor, currency: basisCurrency, command }) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      const available = !!vehicle && vehicle.orgId === args.orgId && !vehicle.isDeleted &&
+        vehicle.sourceType === "STOCK" && !!vehicle.vin && vehicle.purchasePrice !== undefined &&
+        vehicle.vin === vin && basisCurrency === currency &&
+        toMinorUnits(vehicle.purchasePrice, currency) === costMinor &&
+        command.resetGeneration === resetGeneration &&
+        vehicle.openingStockImportId !== undefined && vehicle.openingStockRowId !== undefined &&
+        command.idempotencyKey === `${vehicle.openingStockImportId}:${vehicle.openingStockRowId}`;
+      return { vehicleId, vin: vehicle?.orgId === args.orgId ? vehicle.vin ?? null : null,
+        label: vehicle?.orgId === args.orgId ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+        amountMinor: available ? costMinor : null,
+        available };
+    }));
+  },
+});
+
+/** Current readback is anchored to its real live source journal, not the age
+ * of a retained historical header. Reset history never lends another source. */
+async function selectOpeningReadbackDraft(ctx:QueryCtx,orgId:Id<"organizations">):Promise<Doc<"openingBalanceDrafts">|null>{
+  const source=await loadOpeningSourceIdentity(ctx,orgId);
+  const drafts=source.headers;
+  const refuse=()=>new ConvexError("Opening allocation readback requires finance review.");
+  if(source.status === "UNAVAILABLE")throw refuse();
+  if(source.status === "AVAILABLE")return source.parent;
+  if(drafts.length===0)return null;
+  if(drafts.length!==1)throw refuse();
+  const historical=drafts[0];
+  const journal=historical.journalEntryId?await ctx.db.get(historical.journalEntryId):null;
+  if(journal && (journal.orgId!==orgId || journal.sourceType!=="cutover" || journal.sourceId!==String(orgId) || journal.category!=="OPENING_BALANCE" || journal.status!=="REVERSED" || journal.accountingDate!==historical.asOfDate || historical.currency!==undefined && journal.currency!==historical.currency))throw refuse();
+  return historical;
+}
+
+/** Readback of the immutable opening commitment. Amount and account come
+ * from the posted draft, never a mutable outstanding balance. */
+type OpeningDraftResult = NonNullable<Doc<"openingBalanceDrafts">["allocationResults"]>[number];
+type PostedOpeningParty = { partyId: string | null; partyName: string | null; documentId: string | null; recordAvailable: boolean };
+
+type PostedOpeningRequest<Kind extends OpeningDraftAllocation["kind"]> = Readonly<{
+  orgId: Id<"organizations">;
+  draft: Doc<"openingBalanceDrafts">;
+  allocation: Extract<OpeningDraftAllocation, { kind: Kind }>;
+  result: OpeningDraftResult | undefined;
+  openingReader: OpeningSettlementReader;
+}>;
+
+async function postedOpeningCustomerReceivable(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<"CUSTOMER_RECEIVABLE">,
+): Promise<PostedOpeningParty> {
+  const { orgId, draft, allocation, result } = request;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+  let recordAvailable = false;
+
+  const partyId = allocation.customerId;
+  const customer = await ctx.db.get(allocation.customerId);
+  if (customer?.orgId === orgId && !customer.isDeleted) {
+    partyName = `${customer.firstName} ${customer.lastName}`.trim();
+  }
+  if (result?.kind === allocation.kind) {
+    documentId = result.receivableId;
+    const receivable = await ctx.db.get(result.receivableId);
+    const canonical = await ctx.db.get(result.canonicalReceivableDocumentId);
+    recordAvailable =
+      receivable?.orgId === orgId &&
+      receivable.openingBalanceDraftId === draft._id &&
+      receivable.canonicalReceivableDocumentId === result.canonicalReceivableDocumentId &&
+      canonical?.orgId === orgId &&
+      canonical.sourceType === "legacy_receivable" &&
+      canonical.sourceId === result.receivableId &&
+      canonical.customerId === allocation.customerId;
+  }
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+async function postedOpeningRemainingDocument(
+  ctx: QueryCtx,
+  request: Readonly<{ orgId: Id<"organizations">; result: OpeningDraftResult | undefined; openingReader: OpeningSettlementReader; recordAvailable: boolean }>,
+): Promise<{documentId: string | null; recordAvailable: boolean}> {
+  const { orgId, result, openingReader } = request;
+  let { recordAvailable } = request;
+  let documentId: string | null = null;
+  if (result?.kind === "SUPPLIER_RECOVERABLE") {
+    documentId = result.recoveryId;
+    const row = await ctx.db.get(result.recoveryId);
+    try {
+      recordAvailable = recordAvailable && !!row && !!(await openingRecoveryBasis(ctx, orgId, row, openingReader));
+    } catch {
+      recordAvailable = false;
+    }
+  } else if (result?.kind === "SUPPLIER_PAYABLE" || result?.kind === "OTHER_PAYABLE") {
+    documentId = result.payableId;
+    const row = await ctx.db.get(result.payableId);
+    try {
+      recordAvailable = recordAvailable && !!row && !!(await openingPayableBasis(ctx, orgId, row, openingReader));
+    } catch {
+      recordAvailable = false;
+    }
+  } else if (result?.kind === "EMPLOYEE_COMMISSION") {
+    documentId = result.openingCommissionLiabilityId;
+    recordAvailable =
+      recordAvailable &&
+      (await resolveOpeningCommissionBasis(ctx, orgId, result.openingCommissionLiabilityId, openingReader)).kind ===
+        "AVAILABLE";
+  }
+  return { documentId, recordAvailable };
+}
+
+async function postedOpeningRemaining(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<RemainingOpeningKind>,
+): Promise<PostedOpeningParty> {
+  const { orgId, draft, allocation, result, openingReader } = request;
+  let partyId: string | null = null;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+
+  partyName = "counterpartyName" in allocation ? allocation.counterpartyName : null;
+  const basis = await resolveOpeningSettlementBasis(
+    ctx,
+    orgId,
+    { draftId: draft._id, rowKey: allocation.rowKey },
+    allocation.kind,
+    openingReader,
+  );
+  let recordAvailable = basis.kind === "AVAILABLE";
+  if (allocation.kind === "EMPLOYEE_COMMISSION") {
+    partyId = allocation.userId;
+    const employee = await ctx.db.get(allocation.userId);
+    partyName = employee?.name ?? employee?.email ?? null;
+  }
+  ({ documentId, recordAvailable } = await postedOpeningRemainingDocument(ctx, {
+    orgId,
+    result,
+    openingReader,
+    recordAvailable,
+  }));
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+async function postedOpeningEmployeeAdvance(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<"EMPLOYEE_ADVANCE">,
+): Promise<PostedOpeningParty> {
+  const { orgId, draft, allocation, result } = request;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+  let recordAvailable = false;
+
+  const partyId = allocation.userId;
+  const employee = await ctx.db.get(allocation.userId);
+  partyName = employee?.name ?? employee?.email ?? null;
+  if (result?.kind === allocation.kind) {
+    documentId = result.advanceId;
+    const advance = await ctx.db.get(result.advanceId);
+    recordAvailable = advance?.orgId === orgId && advance.openingBalanceDraftId === draft._id && !advance.isDeleted;
+  }
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+async function postedOpeningPrepaidExpense(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<"PREPAID_EXPENSE">,
+): Promise<PostedOpeningParty> {
+  const { orgId, draft, allocation, result } = request;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+  let recordAvailable = false;
+
+  const partyId = allocation.rowKey;
+  partyName = allocation.title;
+  if (result?.kind === allocation.kind) {
+    documentId = result.scheduleId;
+    const basis = await resolvePrepaidScheduleSource(ctx, orgId, result.scheduleId);
+    recordAvailable = basis.kind === "OPENING" && basis.draftId === draft._id && basis.rowKey === allocation.rowKey;
+  }
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+async function postedOpeningVehicleInventory(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<"VEHICLE_INVENTORY">,
+): Promise<PostedOpeningParty> {
+  const { orgId, allocation, result } = request;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+  let recordAvailable = false;
+
+  const partyId = allocation.vehicleId;
+  const vehicle = await ctx.db.get(allocation.vehicleId);
+  if (vehicle?.orgId === orgId) partyName = vehicle.vin ?? null;
+  if (result?.kind === allocation.kind && result.vehicleId === allocation.vehicleId) {
+    documentId = allocation.vehicleId;
+    try {
+      recordAvailable = (await assertOpeningVehicleBasis(ctx, orgId, allocation.vehicleId)) === "POSTED";
+    } catch {
+      recordAvailable = false;
+    }
+  }
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+async function postedOpeningPartnerCapital(
+  ctx: QueryCtx,
+  request: PostedOpeningRequest<"PARTNER_CAPITAL">,
+): Promise<PostedOpeningParty> {
+  const { orgId, draft, allocation, result } = request;
+  let partyName: string | null = null;
+  let documentId: string | null = null;
+  let recordAvailable = false;
+
+  const partyId = allocation.partnerId;
+  const partner = await ctx.db.get(allocation.partnerId);
+  if (partner?.orgId === orgId && !partner.isDeleted) partyName = partner.partnerName;
+  if (result?.kind === allocation.kind && result.partnerId === allocation.partnerId) {
+    documentId = result.partnerId;
+    recordAvailable = partner?.orgId === orgId && !partner.isDeleted && partner.openingBalanceDraftId === draft._id;
+  }
+
+  return { partyId, partyName, documentId, recordAvailable };
+}
+
+export const postedOpeningAllocationReadback = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const openingReader=createOpeningSettlementReader(ctx,args.orgId);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const draft=await selectOpeningReadbackDraft(ctx,args.orgId);
+    if(!draft)return null;
+    const journal = draft.journalEntryId ? await ctx.db.get(draft.journalEntryId) : null;
+    const journalStatus = journal?.orgId === args.orgId && journal.category === "OPENING_BALANCE"
+      ? journal.status : "MISSING";
+    const resultCounts = new Map<string, number>();
+    const resultByKey = new Map<string, NonNullable<typeof draft.allocationResults>[number]>();
+    for (const result of draft.allocationResults ?? []) {
+      resultCounts.set(result.rowKey, (resultCounts.get(result.rowKey) ?? 0) + 1);
+      resultByKey.set(result.rowKey, result);
+    }
+    const mayViewPayroll = isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
+      role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
+    const rows = await Promise.all((draft.allocations ?? []).map(async (allocation) => {
+      if ((allocation.kind === "EMPLOYEE_ADVANCE" || allocation.kind === "EMPLOYEE_COMMISSION") && !mayViewPayroll) {
+        return { kind: allocation.kind, restricted: true as const };
+      }
+      const account = await ctx.db.get(allocation.accountId);
+      const ownedAccount = account?.orgId === args.orgId ? account : null;
+      const result = resultCounts.get(allocation.rowKey) === 1 ? resultByKey.get(allocation.rowKey) : undefined;
+      let partyId: string | null = null;
+      let partyName: string | null = null;
+      let documentId: string | null = null;
+      let recordAvailable = false;
+      if (allocation.kind === "CUSTOMER_RECEIVABLE") {
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningCustomerReceivable(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
+      } else if (isRemainingOpeningAllocation(allocation)) {
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningRemaining(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
+      } else if (allocation.kind === "EMPLOYEE_ADVANCE") {
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningEmployeeAdvance(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
+      } else if (allocation.kind === "PREPAID_EXPENSE") {
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningPrepaidExpense(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
+      } else if (allocation.kind === "VEHICLE_INVENTORY") {
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningVehicleInventory(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
+      } else if (allocation.kind === "PARTNER_CAPITAL") {
+        ({ partyId, partyName, documentId, recordAvailable } = await postedOpeningPartnerCapital(ctx, { orgId: args.orgId, draft, allocation, result, openingReader }));
+            }
+      return { kind: allocation.kind, rowKey: allocation.rowKey, restricted: false as const,
+        accountId: allocation.accountId, accountCode: ownedAccount?.code ?? null,
+        accountName: ownedAccount?.name ?? null, accountNameAr: ownedAccount?.nameAr,
+        amountMinor: allocation.amountMinor, title:"title" in allocation ? allocation.title : undefined, partyId, partyName, documentId, recordAvailable,
+        purpose: "purpose" in allocation ? allocation.purpose : undefined,
+        allocationStatus: openingAllocationAvailability(allocation.kind, journalStatus === "POSTED" && recordAvailable) };
+    }));
+    return { draftId: draft._id, journalEntryId: draft.journalEntryId ?? null, journalStatus,
+      currency: draft.currency ?? null, asOfDate: draft.asOfDate, rows };
   },
 });
 

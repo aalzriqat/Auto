@@ -2,13 +2,13 @@ import * as z from "zod";
 
 export const prepaidCorrectionSchema = z
   .object({
-    refundAmount: z.coerce.number().min(0, "Refund cannot be negative").default(0),
-    refundTaxAmount: z.coerce.number().min(0, "VAT portion cannot be negative").default(0),
+    refundAmount: z.coerce.number<string | number>().min(0, "Refund cannot be negative").default(0),
+    refundTaxAmount: z.coerce.number<string | number>().min(0, "VAT portion cannot be negative").default(0),
     refundPaymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"]).optional(),
     reference: z.string().max(100, "Reference is too long").optional(),
-    writeOffAmount: z.coerce.number().min(0, "Write-off cannot be negative").default(0),
+    writeOffAmount: z.coerce.number<string | number>().min(0, "Write-off cannot be negative").default(0),
     changeTerm: z.boolean().default(false),
-    newTermMonths: z.coerce.number().int().min(1).max(600).optional(),
+    newTermMonths: z.coerce.number<string | number>().int().min(1).max(600).optional(),
     reason: z.string().min(1, "A reason is required"),
     // The date the correction happened, if it wasn't today. The server holds
     // the real rules (not future, inside an open period, not before the expense

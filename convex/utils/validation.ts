@@ -6,10 +6,10 @@ import { z } from "zod";
  * Throws a formatted ConvexError if validation fails, which can be
  * safely caught and displayed by the frontend.
  */
-export function validateInput<T>(schema: z.ZodSchema<T>, data: unknown): T {
+export function validateInput<T>(schema: z.ZodType<T>, data: unknown): T {
   const result = schema.safeParse(data);
   if (!result.success) {
-    const errorMessage = result.error.errors
+    const errorMessage = result.error.issues
       .map((e) => `${e.path.join(".")}: ${e.message}`)
       .join(", ");
     throw new ConvexError(`Validation failed: ${errorMessage}`);

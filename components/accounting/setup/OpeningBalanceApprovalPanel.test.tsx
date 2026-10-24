@@ -96,9 +96,42 @@ function draftFixture(
   };
 }
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); language.locale = "en"; });
 
 describe("opening-balance approval panel", () => {
+  test("reviewer sees allocated party, stable ID and amount; missing identity blocks approval", () => {
+    const allocation = { rowKey: "partner-1", kind: "PARTNER_CAPITAL" as const,
+      accountId: "acc_cap", accountCode: "3010", accountName: "Owner Capital",
+      partyId: "partner_1", partyName: "Synthetic partner", partyDetail: "r_1",
+      partyAvailable: true, amountMinor: 100_000 * SCALE };
+    const draft = draftFixture({ allocationDetails: [allocation], viewerCanManagePayroll: true, payrollSensitive: false });
+    const { rerender } = render(<OpeningBalanceApprovalView draft={draft} isOwnDraft={false}
+      busy={false} onApprove={vi.fn()} onReject={vi.fn()} />);
+    expect(screen.getByText("Synthetic partner")).toBeTruthy();
+    expect(screen.getByText("partner_1")).toBeTruthy();
+    expect(screen.getByTestId("opening-balance-approve").hasAttribute("disabled")).toBe(false);
+    rerender(<OpeningBalanceApprovalView draft={{ ...draft, allocationDetails: [{ ...allocation,
+      partyName: null, partyAvailable: false }] }} isOwnDraft={false} busy={false}
+      onApprove={vi.fn()} onReject={vi.fn()} />);
+    expect(screen.getByTestId("opening-balance-approve").hasAttribute("disabled")).toBe(true);
+  });
+
+  test.each(["en", "ar"] as const)("reviewer sees an unknown liability without a fabricated party (%s)", (locale) => {
+    language.locale = locale;
+    const allocation = { rowKey: "unknown-1", kind: "UNALLOCATED_LIABILITY" as const,
+      accountId: "acc_liability", accountCode: "2199", accountName: "Other liabilities",
+      partyId: null, partyName: null, partyDetail: null, partyAvailable: true,
+      allocationStatus: "UNALLOCATED" as const, purpose: "UNIDENTIFIED_RECEIPT" as const,
+      amountMinor: 4_001, title: "Historical unidentified receipts" };
+    render(<OpeningBalanceApprovalView draft={draftFixture({ allocationDetails: [allocation] })}
+      isOwnDraft={false} busy={false} onApprove={vi.fn()} onReject={vi.fn()} />);
+    expect(screen.getByText("OpeningAllocationRecordUnallocated")).toBeTruthy();
+    expect(screen.getByText("OpeningAllocationUnallocatedNotice")).toBeTruthy();
+    expect(screen.getByText(/OpeningAllocationPurpose_UNIDENTIFIED_RECEIPT/)).toBeTruthy();
+    expect(screen.queryByText("OpeningAllocationPartyUnavailable")).toBeNull();
+    expect(screen.getByTestId("opening-balance-approve").hasAttribute("disabled")).toBe(false);
+  });
+
   test("renders nothing when there is no pending draft", () => {
     const { container } = render(
       <OpeningBalanceApprovalView

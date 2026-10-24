@@ -1,0 +1,48 @@
+{
+  "id": "opening-cleanup-discovery-split-required-refusal",
+  "steps": [
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "clearOpeningPayablesBatch",
+      "input": {
+        "retainedDrafts": 102,
+        "databasePageStatus": "SplitRequired",
+        "isDone": false,
+        "externalPageResultSubstitution": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "cleanup.refused",
+      "value": true
+    },
+    {
+      "observable": "organizationCheckpointDraftAndSource.unchanged",
+      "value": true
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialReset.test.ts",
+    "testName": "opening payable discovery refuses incomplete SplitRequired pages without changing state"
+  },
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "opus-0db-r4-pagination-contract-red",
+    "firstSeen": "2026-10-24"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "matrixRow": "SCRUM-50-opening-balance-paths",
+  "fingerprint": "2dff14958ef734d0df875744706a373761e6d3de041226f1af4b5d46cf0beb8b"
+}

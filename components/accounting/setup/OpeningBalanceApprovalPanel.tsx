@@ -13,6 +13,8 @@ import { toast } from "@/components/ui/sonner";
 import { getLocalizedErrorMessage } from "@/lib/errors";
 import { scaleForCurrency } from "../AccountingTabShared";
 import { accountDisplayName } from "../reports/FinancialReportShared";
+import { OPENING_PREPAID_EXPENSE_OPTIONS } from "./openingAllocationForm";
+import type { OpeningAllocationKind } from "./openingAllocationForm";
 
 export type PendingOpeningBalanceLine = {
   accountId: string;
@@ -62,6 +64,35 @@ export type PendingOpeningBalanceDraft = {
    */
   denominationKnown: boolean;
   lines: PendingOpeningBalanceLine[];
+  payrollSensitive?: boolean;
+  viewerCanManagePayroll?: boolean;
+  allocationDetails?: Array<{
+    rowKey: string;
+    kind: OpeningAllocationKind;
+    accountId: string;
+    accountCode: string | null;
+    accountName: string | null;
+    accountNameAr?: string;
+    partyId: string | null;
+    partyName: string | null;
+    partyDetail: string | null;
+    partyAvailable: boolean;
+    allocationStatus?: "AVAILABLE" | "UNALLOCATED" | "UNAVAILABLE";
+    purpose?: "CLAIM" | "REFUNDABLE_DEPOSIT" | "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT";
+    amountMinor: number;
+    title?: string;
+    dueDate?: number;
+    note?: string;
+    startYearMonth?: string;
+    termMonths?: number;
+    expenseSystemKey?: string;
+    attestedUnexpiredBenefit?: boolean;
+  }>;
+  readiness?: {
+    blockerCodes: string[];
+    canApprove: boolean;
+    canReject: boolean;
+  };
 };
 
 /**
@@ -123,6 +154,21 @@ export type ApprovalGate = {
   recoveryKey: string | null;
 };
 
+function approvalRecoveryKey(args: {
+  isOwnDraft: boolean;
+  payrollAuthorityMissing: boolean;
+  serverCanReject: boolean;
+  hasBlockingFacts: boolean;
+}): string | null {
+  if (args.isOwnDraft) {
+    return args.hasBlockingFacts
+      ? "OpeningBalanceOwnDraftNeedsAnotherReviewer"
+      : "OpeningBalanceSegregationOfDutiesNotice";
+  }
+  if (args.payrollAuthorityMissing || !args.serverCanReject) return "OpeningAllocationNeedPayrollReviewer";
+  return args.hasBlockingFacts ? "OpeningBalanceRejectAndResubmit" : null;
+}
+
 export function computeApprovalGate(args: {
   isOwnDraft: boolean;
   busy: boolean;
@@ -130,8 +176,15 @@ export function computeApprovalGate(args: {
   denominationKnown: boolean;
   /** A bank line has no bank the server would accept (SCRUM-54). */
   bankIdentityMissing?: boolean;
+  allocationIdentityMissing?: boolean;
+  payrollAuthorityMissing?: boolean;
+  serverBlockerCodes?: string[];
+  serverCanApprove?: boolean;
+  serverCanReject?: boolean;
 }): ApprovalGate {
-  const { isOwnDraft, busy, balanced, denominationKnown, bankIdentityMissing = false } = args;
+  const { isOwnDraft, busy, balanced, denominationKnown, bankIdentityMissing = false,
+    allocationIdentityMissing = false, payrollAuthorityMissing = false,
+    serverBlockerCodes = [], serverCanApprove = true, serverCanReject = true } = args;
 
   const blockingFacts: ApprovalGate["blockingFacts"] = [];
   if (!balanced) {
@@ -149,24 +202,30 @@ export function computeApprovalGate(args: {
       testId: "opening-balance-bank-missing",
     });
   }
+  if (allocationIdentityMissing) blockingFacts.push({
+    key: "OpeningAllocationIdentityUnavailable", testId: "opening-allocation-identity-unavailable",
+  });
+  if (payrollAuthorityMissing) blockingFacts.push({
+    key: "OpeningAllocationPayrollReviewerNeeded", testId: "opening-allocation-payroll-reviewer-needed",
+  });
+  for (const code of serverBlockerCodes) {
+    if (code === "OWN_DRAFT" && isOwnDraft) continue;
+    if (code === "PAYROLL_AUTHORITY" && payrollAuthorityMissing) continue;
+    blockingFacts.push({ key: `OpeningReadiness_${code}`, testId: `opening-readiness-${code.toLowerCase()}` });
+  }
 
   // Segregation of duties is the server's rule (approveOpeningBalance and
   // rejectOpeningBalanceDraft both refuse preparer === approver), so it gates
   // BOTH actions — which is precisely why the recovery instruction has to
   // change for the preparer instead of telling them to do something they
   // cannot.
-  const canReject = !isOwnDraft && !busy;
-  const canApprove = canReject && balanced && denominationKnown && !bankIdentityMissing;
+  const canReject = !isOwnDraft && !busy && !payrollAuthorityMissing && serverCanReject;
+  const canApprove = canReject && balanced && denominationKnown && !bankIdentityMissing &&
+    !allocationIdentityMissing && serverCanApprove && serverBlockerCodes.length === 0;
 
-  let recoveryKey: string | null = null;
-  if (isOwnDraft) {
-    recoveryKey =
-      blockingFacts.length > 0
-        ? "OpeningBalanceOwnDraftNeedsAnotherReviewer"
-        : "OpeningBalanceSegregationOfDutiesNotice";
-  } else if (blockingFacts.length > 0) {
-    recoveryKey = "OpeningBalanceRejectAndResubmit";
-  }
+  const recoveryKey = approvalRecoveryKey({
+    isOwnDraft, payrollAuthorityMissing, serverCanReject, hasBlockingFacts: blockingFacts.length > 0,
+  });
 
   return { canApprove, canReject, blockingFacts, recoveryKey };
 }
@@ -178,6 +237,16 @@ type OpeningBalanceApprovalViewProps = {
   onApprove: () => void;
   onReject: (reason: string) => void;
 };
+
+function PendingAllocationSource({ row }: Readonly<{
+  row: NonNullable<PendingOpeningBalanceDraft["allocationDetails"]>[number];
+}>) {
+  const { t } = useLanguage();
+  if (row.kind === "PREPAID_EXPENSE") {
+    return <p className="text-xs text-muted-foreground">{t("OpeningPrepaidSource")}</p>;
+  }
+  return row.partyId ? <p className="text-xs text-muted-foreground"><bdi>{row.partyId}</bdi></p> : null;
+}
 
 /**
  * Presentational half, kept free of Convex so it can be rendered in a test.
@@ -212,6 +281,11 @@ export function OpeningBalanceApprovalView({
     balanced,
     denominationKnown: draft.denominationKnown,
     bankIdentityMissing: draft.lines.some((line) => line.requiresBankAccount && !line.bankAccountName),
+    allocationIdentityMissing: draft.allocationDetails?.some((row) => !row.partyAvailable || !row.accountCode) ?? false,
+    payrollAuthorityMissing: draft.payrollSensitive === true && draft.viewerCanManagePayroll === false,
+    serverBlockerCodes: draft.readiness?.blockerCodes,
+    serverCanApprove: draft.readiness?.canApprove,
+    serverCanReject: draft.readiness?.canReject,
   });
 
   return (
@@ -373,6 +447,39 @@ export function OpeningBalanceApprovalView({
           </tbody>
         </table>
       </div>
+
+      {draft.allocationDetails && draft.allocationDetails.length > 0 && (
+        <div aria-label={t("OpeningAllocationSection")} className="space-y-2">
+          <h4 className="text-sm font-semibold">{t("OpeningAllocationSection")}</h4>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {draft.allocationDetails.map((row) => (
+              <div key={row.rowKey} className="rounded-md border border-amber-200 bg-card p-3 text-sm dark:border-amber-800">
+                <p className="font-medium"><bdi>{row.accountCode ?? row.accountId}</bdi>{" — "}
+                  {accountDisplayName({ name: row.accountName ?? t("OpeningBalanceAccountUnavailable"),
+                    nameAr: row.accountNameAr }, locale)}</p>
+                <p className="text-xs text-muted-foreground">{t(`OpeningAllocationKind_${row.kind}`)}</p>
+                <p><bdi>{row.partyName ?? (row.kind === "UNALLOCATED_LIABILITY"
+                  ? t("OpeningAllocationRecordUnallocated") : t("OpeningAllocationPartyUnavailable"))}</bdi>
+                  {row.partyDetail ? <> · <bdi>{row.partyDetail}</bdi></> : null}</p>
+                <PendingAllocationSource row={row} />
+                {row.purpose && <p className="text-xs text-muted-foreground">{t("OpeningAllocationPurpose")}: {t(`OpeningAllocationPurpose_${row.purpose}`)}</p>}
+                {row.allocationStatus === "UNALLOCATED" && <p className="text-xs text-amber-700">{t("OpeningAllocationUnallocatedNotice")}</p>}
+                <p className="tabular-nums">{formatMinor(row.amountMinor, draft.currency, draft.denominationKnown)}
+                  {draft.denominationKnown ? <> <bdi>{draft.currency}</bdi></> : null}</p>
+                {row.title && row.kind !== "PREPAID_EXPENSE" && <p>{t(row.kind === "CUSTOMER_RECEIVABLE" ? "OpeningAllocationTitle" : "OpeningAllocationSourceTitle")}: <bdi>{row.title}</bdi></p>}
+                {row.dueDate && <p>{t("OpeningAllocationDueDate")}: <bdi>{safeDateLabel(row.dueDate) ?? t("OpeningBalanceDateUnavailable")}</bdi></p>}
+                {row.note && <p>{t("OpeningAllocationNote")}: <bdi>{row.note}</bdi></p>}
+                {row.kind === "PREPAID_EXPENSE" && <>
+                  <p>{t("OpeningPrepaidStartMonth")}: <bdi>{row.startYearMonth}</bdi></p>
+                  <p>{t("OpeningPrepaidTermMonths")}: <bdi>{row.termMonths}</bdi></p>
+                  <p>{t("OpeningPrepaidCategory")}: <bdi>{t(OPENING_PREPAID_EXPENSE_OPTIONS.find(([key]) => key === row.expenseSystemKey)?.[1] ?? "OpeningPrepaidChooseCategory")}</bdi></p>
+                  <p>{t("OpeningPrepaidAttestation")}</p>
+                </>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Facts first, then the one instruction for this viewer. Never both a
           "reject it" and a "you cannot reject it" line — see computeApprovalGate. */}

@@ -1,0 +1,61 @@
+{
+  "id": "opening-prepaid-correction-doors-refuse",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-opening-prepaid",
+    "firstSeen": "2026-10-23"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "family": "PREPAID_EXPENSE",
+        "amountMinor": 100001,
+        "unexpiredBenefitAttested": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "prepaidExpenses.correctSchedule",
+      "input": {
+        "change": "refund-writeoff-term"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "prepaidScheduleCorrections.delta",
+      "value": 0
+    },
+    {
+      "observable": "journalEntries.delta",
+      "value": 0
+    },
+    {
+      "observable": "commandIdempotency.delta",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingAllocatedPrepaids.test.ts",
+    "testName": "opening prepaid correction doors refuse before an idempotency identity or financial write"
+  },
+  "matrixRow": "SCRUM-50-opening-balance-paths",
+  "fingerprint": "a22d0c1f4805ebf0baea92d6a114fcb15dddd13be5012a3ac5940f6400592d51"
+}

@@ -2,7 +2,8 @@
  * SCRUM-761 S1: one failing case per truthfulness rule, plus the live library
  * check. Each rule is proven by a record that breaks only that rule.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import fs from "node:fs";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -158,6 +159,55 @@ describe("the committed library", () => {
   });
 });
 
+describe("implementation source snapshots", () => {
+  test("distinct scenarios sharing a file read its real source once per validation", async () => {
+    const workspace = fs.realpathSync(path.resolve(__dirname, "..", "..", ".."));
+    const dir = fs.realpathSync(mkdtempSync(path.join(workspace, "scenario-read-")));
+    if (path.dirname(dir) !== workspace) throw new Error("Fixture escaped its workspace");
+    const file = path.join(dir, "checks.test.ts");
+    writeFileSync(file, 'test("first case", () => {});\ntest("second case", () => {});');
+    const records = ["first case", "second case"].map((testName, index) => base({
+      id: `shared-source-${index}`,
+      steps: [{ actor: { role: "owner", org: "A" }, action: `check${index}`, input: {} }],
+      impl: { file: "checks.test.ts", testName },
+    }));
+    const read = vi.fn(fs.readFileSync);
+    vi.resetModules();
+    vi.doMock("node:fs", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs")>();
+      return { ...actual, default: { ...fs, readFileSync: read }, readFileSync: read };
+    });
+    try {
+      const fresh = await import("./scenarioRecord");
+      expect(fresh.validateLibrary(records, { rulings: RULINGS, repoRoot: dir })).toEqual([]);
+      expect(read.mock.calls.filter(([filename]) => filename === file)).toHaveLength(1);
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("later validations observe changed and deleted implementation files", () => {
+    const workspace = fs.realpathSync(path.resolve(__dirname, "..", "..", ".."));
+    const dir = fs.realpathSync(mkdtempSync(path.join(workspace, "scenario-fresh-")));
+    if (path.dirname(dir) !== workspace) throw new Error("Fixture escaped its workspace");
+    const file = path.join(dir, "checks.test.ts");
+    const record = base({ impl: { file: "checks.test.ts", testName: "named case" } });
+    const check = () => validateLibrary([record], { rulings: RULINGS, repoRoot: dir }).map(problem => problem.rule);
+    try {
+      writeFileSync(file, 'test("named case", () => {});');
+      expect(check()).toEqual([]);
+      writeFileSync(file, 'test.skip("named case", () => {});');
+      expect(check()).toContain("skip");
+      fs.unlinkSync(file);
+      expect(check()).toContain("impl");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("review round 1 (Opus seat, PR #500): failing-first regressions", () => {
   const tmpImpl = (body: string, name = "x.test.ts") => {
     const dir = mkdtempSync(path.join(tmpdir(), "regression-"));
@@ -282,6 +332,7 @@ describe("review round 2 (Codex seat, PR #500): failing-first regressions", () =
     expect(run("scripts/example.spec.ts")).toContain("impl");
     expect(run("scripts/example.test.mjs")).toContain("impl");
     expect(run("playwright/scenarios/example.spec.ts")).toEqual([]);
+    expect(run("playwright/visual/example.visual.spec.ts")).toEqual([]);
     expect(run("convex/example.test.ts")).toEqual([]);
   });
 
@@ -325,6 +376,8 @@ describe("review round 3 (Opus closure, PR #500): failing-first regressions", ()
   test("R3: the runner check uses the normalised path, not the spelling", () => {
     expect(withBody(`test("named case", () => {});`, "apps/mobile/x.test.ts", "scripts/../apps/mobile/x.test.ts")).toContain("impl");
     expect(withBody(`test("named case", () => {});`, "playwright/fixtures/x.spec.ts")).toContain("impl");
+    expect(withBody(`test("named case", () => {});`, "playwright/visual/x.spec.ts")).toContain("impl");
+    expect(withBody(`test("named case", () => {});`, "playwright/visual/x.visual.spec.ts")).toEqual([]);
     expect(withBody(`test("named case", () => {});`, "build/x.test.ts")).toContain("impl");
     expect(withBody(`test("named case", () => {});`, "playwright/tests/x.spec.ts")).toEqual([]);
   });

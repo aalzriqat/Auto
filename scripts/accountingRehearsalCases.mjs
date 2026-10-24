@@ -1,3 +1,4 @@
+import { runOpeningRehearsalCases } from "./accountingOpeningRehearsal.mjs";
 /**
  * The rehearsal's cases, driven ONLY through the real public API of a live
  * preview deployment as two genuine Clerk-authenticated users.
@@ -24,7 +25,7 @@
 // executed IDs, and the real-preview validator uses the same list.
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
-  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "S853", "S811", "P1", "SETUP",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "S853", "S811", "S858-OPENING", "S858-CONTAINMENT", "P1", "SETUP",
 ]);
 
 function fail(message) {
@@ -3484,6 +3485,8 @@ export async function runRehearsalCases(ctx) {
       scope: "pending zero-value metadata; caller owns both organizations; public sale/vehicle/journal readbacks; no completion or historical repair",
       commandsExercised: ["organizations.create", "vehicles.create", "sales.createDraft", "sales.update", "sales.get", "vehicles.get"] };
   });
+
+  await runOpeningRehearsalCases(ctx);
 
   // ── P1 — a CLOSED period holds the posting; it does not half-post it ───────
   //

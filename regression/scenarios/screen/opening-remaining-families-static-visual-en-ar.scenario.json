@@ -1,0 +1,41 @@
+{
+  "id": "opening-remaining-families-static-visual-en-ar",
+  "fingerprint": "451fe5efd5c9c8a3a7a7a24c733fd20187f736fd9e6aa8ecb3104b8afdf1ab80",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-opening-remaining-ui",
+    "firstSeen": "2026-10-23"
+  },
+  "steps": [
+    {
+      "actor": { "role": "finance", "org": "A" },
+      "action": "openingAllocation.staticRender",
+      "input": { "families": "remainingSix", "locales": ["en", "ar"], "widths": [375, 1440], "sdk": "synthetic" }
+    }
+  ],
+  "expected": [
+    { "observable": "opening.frames", "value": 56 },
+    { "observable": "opening.horizontalOverflow", "value": false },
+    { "observable": "opening.unknownLiability", "value": "unallocated" },
+    { "observable": "opening.commissionRedacted", "value": true }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "playwright/visual/opening-allocation.visual.spec.ts",
+    "testName": "opening allocation, review and posted readback paint in EN/AR at phone and desktop widths"
+  },
+  "sourceGlobs": [
+    "components/accounting/setup/OpeningAllocationEditor.tsx",
+    "components/accounting/setup/OpeningBalanceApprovalPanel.tsx",
+    "components/accounting/setup/OpeningBalanceCard.tsx",
+    "lib/i18n/domains/common.ts"
+  ]
+}

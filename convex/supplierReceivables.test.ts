@@ -244,7 +244,7 @@ describe("the claim a direct-settled sale opens", () => {
     const payables = await s.t.run((ctx) =>
       ctx.db.query("vehicleSupplierPayables").collect()
     );
-    expect(payables.filter((p) => p.saleId === saleId)).toHaveLength(1);
+    expect(payables.filter((p) => p.origin !== "OPENING" && p.saleId === saleId)).toHaveLength(1);
   });
 });
 

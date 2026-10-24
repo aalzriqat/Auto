@@ -28,6 +28,7 @@ import { expenseAccountKeyForCategory } from "./accounting/postingRules";
 import { createPrepaidScheduleForExpense, cancelPrepaidScheduleForExpense } from "./prepaidExpenses";
 import { yearMonthIndex } from "./utils/expenseAmortization";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { assertOpeningVehicleBasis } from "./utils/openingVehicleBasis";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -179,6 +180,20 @@ async function recordPaidExpenseSideEffects(
     taxAmount: args.expense.taxAmount,
     amount: args.expense.amount,
   });
+
+  // A paid recon cost may debit Vehicle Inventory. A tracked imported car has
+  // no acquisition event: its opening journal is the sole original cost basis.
+  // Refuse the recon before its transaction, treatment, or GL posting until
+  // that basis is posted. Later legitimate recon expense/reversal changes the
+  // live inventory cost, not the immutable imported purchase price.
+  const mayCapitalize = args.expense.vehicleId &&
+    (args.expense.accountingTreatment === "CAPITALIZED_INVENTORY" ||
+      (args.expense.accountingTreatment === undefined &&
+        CAPITALIZABLE_EXPENSE_CATEGORIES.has(args.expense.category) &&
+        !(args.expense.isPrepaid === true && (args.expense.amortizationMonths ?? 0) > 0)));
+  if (mayCapitalize && args.expense.vehicleId) {
+    await assertOpeningVehicleBasis(ctx, args.expense.orgId, args.expense.vehicleId, args.expense.date);
+  }
 
   const existingTx = await ctx.db
     .query("transactions")

@@ -2,6 +2,16 @@ packages:
   - "apps/*"
   - "packages/*"
 overrides:
+  # SCRUM-859: GHSA-27r3-jxmh-p828. Keep Express on the supported 2.x
+  # body-parser API while patching compressed-body decoder error handling.
+  "body-parser@2": 2.4.0
+  # GHSA-mrhx-c7xc-m3w5: patched collection bounds on the supported Zod 4 API.
+  "zod@4": 4.6.6
+  # Expo CLI 57 still declares Zod 3 and has no patched compatible release.
+  # Its two schema modules use the common public API; the migration controls
+  # exercise their exported schemas and MCP registration against Zod 4.
+  # This selective major-range override is required for GHSA-mrhx-c7xc-m3w5.
+  "@expo/cli@57>zod": 4.6.6
   # SCRUM-859: Metro's maintained 0.84 patch line removes image-size and its
   # ICNS/JXL/HEIF parser DoS paths. A direct image-size 2.x override breaks
   # Metro 0.84.4's file-path API. Keep Expo on its existing Metro minor line.
@@ -12,11 +22,13 @@ overrides:
   # supported major; this release was published 2026-10-12.
   dompurify: 3.4.17
   # GHSA-rfgv-xxqx-mfg5 (DoS) and GHSA-w293-vg96-wgc3 (TLS certificate validation
-  # bypass), both HIGH, published 2026-09-29, patched in 7.29.1 (SCRUM-483). Dev-only
-  # (jsdom). dealer-worker's separate npm tree (wrangler -> miniflare) carries the
-  # same pin in dealer-worker/package.json overrides. Pinned exact; 7.29.1 was published
-  # 2026-09-04, clearing the minimumReleaseAge (<24h) gate.
-  undici: 7.29.1
+  # bypass), both HIGH, published 2026-09-29, patched in 7.29.1 (SCRUM-483).
+  # Used by tooling, jsdom and AI provider clients. dealer-worker's separate
+  # npm tree (wrangler -> miniflare) carries the
+  # same 7.x pin in dealer-worker/package.json overrides. GHSA-xjj6-f33q-929c
+  # (unhandled stream error on excessive encodings) requires 7.30.1, published
+  # 2026-10-15, clearing the minimumReleaseAge (<24h) gate. Preserve other majors.
+  undici@7: 7.30.1
   # Security overrides — force patched transitive deps flagged by `pnpm audit`.
   # GHSA-rgj7-g3m4-5g8c: libheif vulnerabilities (GHSA-g89c-p67h-r497,
   # GHSA-2jg2-4ch7-h545) reachable through sharp's bundled libvips. Patched
@@ -36,8 +48,10 @@ overrides:
   # auditConfig.ignoreGhsas: a patched, compatible release exists.
   sharp: 0.35.5
   # Pinned exact (not a range) so it can't drift onto a release that trips the
-  # CI minimumReleaseAge (<24h) supply-chain gate; 8.5.22 is patched (>=8.5.18).
-  postcss: 8.5.22
+  # CI minimumReleaseAge (<24h) supply-chain gate. SCRUM-859: shadcn requires
+  # >=8.5.23, which refuses external source maps without an explicit opts.from.
+  # https://github.com/postcss/postcss/releases/tag/8.5.23
+  postcss: 8.5.23
   # GHSA-28wg-ghj8-5hjv (>=3.3.16) and GHSA-2v37-7h3g-55p8: loops in the
   # non-secure and custom generators. The second advisory's affected range was
   # later WIDENED to <3.3.18, so the earlier exact pin of 3.3.17 — correct when

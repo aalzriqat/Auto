@@ -1,3 +1,4 @@
+import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -214,7 +215,11 @@ export const outstandingSummary = query({
       .slice(0, OUTSTANDING_SUMMARY_LIMIT)
       .filter((recovery) => recovery.status !== "REVERSED");
     const sourceStates = await Promise.all(
-      liveRecoveries.map((recovery) => postingStateForKey(ctx, args.orgId, recovery.sourceEventKey))
+      liveRecoveries.map(async (recovery) => {
+        const opening = await openingRecoveryBasis(ctx,args.orgId,recovery);
+        const sourceEventKey = recovery.origin !== "OPENING" ? recovery.sourceEventKey : "";
+        return opening ? {state:"POSTED" as const} : postingStateForKey(ctx,args.orgId,sourceEventKey);
+      })
     );
     for (const [i, recovery] of liveRecoveries.entries()) {
       if (sourceStates[i].state !== "POSTED") continue;

@@ -3,9 +3,11 @@
 import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type * as z from "zod";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import type { FunctionReturnType } from "convex/server";
 import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -52,30 +54,7 @@ import { prepaidCorrectionSchema, type PrepaidCorrectionFormValues } from "./pre
 // SCHEDULE's own currency, never a single tab-wide one.
 type CurrencyFormatterInCurrency = (amount: number, currency: string, fractionDigits?: number) => string;
 
-type ScheduleRow = {
-  _id: Id<"prepaidExpenseSchedules">;
-  expenseId: Id<"expenses">;
-  expenseTitle?: string;
-  expenseVendor?: string;
-  currency: string;
-  totalMinor: number;
-  recognizedMinor: number;
-  remainingMinor: number;
-  dueMinor: number;
-  postedMinor: number;
-  pendingMinor: number;
-  failedMinor: number;
-  pendingCorrectionMinor: number;
-  failedCorrectionMinor: number;
-  openFailureCount: number;
-  termMonths: number;
-  monthsRecognized: number;
-  monthsRemaining: number;
-  startYearMonth: string;
-  lastRecognizedYearMonth?: string;
-  status: "ACTIVE" | "FULLY_AMORTIZED" | "CANCELLED";
-  createdAt: number;
-};
+type ScheduleRow = FunctionReturnType<typeof api.prepaidExpenses.listSchedules>[number];
 
 type RunAmortizationNowResult = {
   posted: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; monthsPosted: number }>;
@@ -87,13 +66,16 @@ type RunAmortizationNowResult = {
 
 /** FAILED > PENDING > DUE > CANCELLED/COMPLETE > UP TO DATE — a correction's queued or dead-lettered posting is exactly as urgent as amortization's own, so it carries the same weight in this precedence. */
 function ScheduleStatusBadge({ t, schedule }: Readonly<{ t: (key: any) => string; schedule: ScheduleRow }>) {
+  if (schedule.sourceKind === "UNAVAILABLE") {
+    return <Badge variant="outline">{t("FigureUnavailable")}</Badge>;
+  }
   if (schedule.openFailureCount > 0 || schedule.failedMinor > 0 || schedule.failedCorrectionMinor > 0) {
     return <Badge variant="outline" className="border-rose-500/20 bg-rose-500/10 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">{t("PrepaidGlStatus_FAILED")}</Badge>;
   }
   if (schedule.pendingMinor > 0 || schedule.pendingCorrectionMinor > 0) {
     return <Badge variant="outline" className="border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{t("PrepaidGlStatus_PENDING")}</Badge>;
   }
-  if (schedule.status === "ACTIVE" && schedule.dueMinor > schedule.recognizedMinor) {
+  if (schedule.status === "ACTIVE" && schedule.dueMinor !== null && schedule.dueMinor > schedule.recognizedMinor) {
     return <Badge variant="outline" className="border-blue-500/20 bg-blue-500/10 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">{t("PrepaidGlStatus_DUE")}</Badge>;
   }
   if (schedule.status === "CANCELLED") {
@@ -448,7 +430,7 @@ export function PrepaidExpensesTab() {
   const schedules = useQuery(
     api.prepaidExpenses.listSchedules,
     activeOrgId ? { orgId: activeOrgId } : "skip"
-  ) as ScheduleRow[] | undefined;
+  );
 
   // An action, not a mutation — it orchestrates one mutation call per
   // schedule so a single schedule's failure can't roll back or block the
@@ -495,6 +477,7 @@ export function PrepaidExpensesTab() {
   if (!activeOrgId || schedules === undefined) {
     return <LoadingAccountingState label={t("LoadingPrepaidSchedules" as any)} />;
   }
+  const currentCorrection = schedules.find((schedule) => schedule._id === correctSchedule?._id);
 
   return (
     <div className="p-6 space-y-6">
@@ -538,7 +521,10 @@ export function PrepaidExpensesTab() {
                 return (
                 <TableRow key={schedule._id}>
                   <TableCell className="font-medium">
-                    {schedule.expenseTitle ?? t("GeneralExpense" as any)}
+                    {schedule.sourceTitle ?? schedule.expenseTitle ?? t("GeneralExpense" as any)}
+                    {schedule.sourceKind === "OPENING" && <span className="block text-xs text-muted-foreground">{t("OpeningPrepaidSource")}</span>}
+                    {schedule.sourceKind === "OPENING" && <span className="block text-xs text-muted-foreground">{t("OpeningPrepaidCorrectionsUnavailable")}</span>}
+                    {schedule.sourceKind === "UNAVAILABLE" && <span role="alert" className="block text-xs text-amber-700">{t("FigureUnavailable")}</span>}
                     {schedule.expenseVendor && (
                       <span className="block text-xs text-muted-foreground">{schedule.expenseVendor}</span>
                     )}
@@ -553,7 +539,7 @@ export function PrepaidExpensesTab() {
                     {formatCurrency(schedule.recognizedMinor / factor, schedule.currency, scale)}
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground">
-                    {formatCurrency(schedule.remainingMinor / factor, schedule.currency, scale)}
+                    {schedule.remainingMinor === null ? t("FigureUnavailable") : formatCurrency(schedule.remainingMinor / factor, schedule.currency, scale)}
                   </TableCell>
                   <TableCell>
                     {activeOrgId && (
@@ -583,7 +569,7 @@ export function PrepaidExpensesTab() {
                           )}
                         </Button>
                       )}
-                      {schedule.status === "ACTIVE" && canManage && (
+                      {schedule.status === "ACTIVE" && canManage && schedule.correctionAllowed && (
                         <Button
                           variant="ghost"
                           size="icon"
@@ -617,9 +603,9 @@ export function PrepaidExpensesTab() {
         <RunNowResultsDialog result={runNowResult} onOpenChange={(open) => !open && setRunNowResult(null)} />
       )}
 
-      {activeOrgId && correctSchedule && (
+      {activeOrgId && canManage && currentCorrection?.correctionAllowed && (
         <CorrectScheduleDialog
-          schedule={correctSchedule}
+          schedule={currentCorrection}
           orgId={activeOrgId}
           formatCurrency={formatCurrency}
           onOpenChange={(open) => !open && setCorrectSchedule(null)}
@@ -667,7 +653,7 @@ function CorrectScheduleDialog({
     orgId, scheduleId: schedule._id,
   });
 
-  const form = useForm<PrepaidCorrectionFormValues>({
+  const form = useForm<z.input<typeof prepaidCorrectionSchema>, unknown, PrepaidCorrectionFormValues>({
     resolver: zodResolver(prepaidCorrectionSchema),
     defaultValues: {
       refundAmount: 0,
@@ -682,7 +668,7 @@ function CorrectScheduleDialog({
     },
   });
   const changeTerm = form.watch("changeTerm");
-  const refundAmount = form.watch("refundAmount") || 0;
+  const refundAmount = Number(form.watch("refundAmount")) || 0;
   const refundMethod = form.watch("refundPaymentMethod");
   const [refundBankAccountId, setRefundBankAccountId] = useState("");
   const needsRefundBank = refundAmount > 0 &&
@@ -690,7 +676,7 @@ function CorrectScheduleDialog({
   const refundBankOptions = useQuery(api.prepaidExpenses.listRefundBankOptions,
     needsRefundBank ? { orgId, scheduleId: schedule._id } : "skip");
   const selectedRefundBank = refundBankOptions?.banks.find((bank) => bank._id === refundBankAccountId);
-  const writeOffAmount = form.watch("writeOffAmount") || 0;
+  const writeOffAmount = Number(form.watch("writeOffAmount")) || 0;
   const needsApproval = writeOffAmount > 0 && !isOwner;
 
   async function onSubmit(values: PrepaidCorrectionFormValues) {
@@ -741,7 +727,7 @@ function CorrectScheduleDialog({
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <AmountSummary
               label={t("PrepaidRemainingLabel" as any)}
-              value={formatCurrency(schedule.remainingMinor / factor, schedule.currency, scale)}
+              value={schedule.remainingMinor === null ? t("FigureUnavailable") : formatCurrency(schedule.remainingMinor / factor, schedule.currency, scale)}
             />
 
             <div className="grid grid-cols-2 gap-3">

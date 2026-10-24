@@ -1,5 +1,6 @@
-import { MutationCtx } from "../_generated/server";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { Id } from "../_generated/dataModel";
+import { resolvePrepaidScheduleSource } from "./openingPrepaidBasis";
 
 /**
  * Whether a prepaid schedule's own asset actually exists in the ledger yet, and
@@ -18,18 +19,19 @@ import { Id } from "../_generated/dataModel";
  * GL yet", and nothing may credit it.
  */
 export async function postedSourceExpenseEvent(
-  ctx: MutationCtx,
+  ctx: MutationCtx | QueryCtx,
   orgId: Id<"organizations">,
   expenseId: Id<"expenses">
 ) {
-  return await ctx.db
+  const posted = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_source", (q) =>
       q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
     )
     .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
     .filter((q) => q.eq(q.field("status"), "POSTED"))
-    .first();
+    .take(2);
+  return posted.length === 1 ? posted[0] : null;
 }
 
 /** Prepaid events that move value OUT of the Prepaid Expenses asset. */
@@ -95,12 +97,16 @@ export async function prepaidPostingBlockedReason(
     return "its prepaid schedule is missing or belongs to another organization, so the Prepaid Expenses balance it credits cannot be traced back to an expense that debited it";
   }
 
-  const posted = await postedSourceExpenseEvent(ctx, entry.orgId, schedule.expenseId);
-  if (!posted) {
+  const source = await resolvePrepaidScheduleSource(ctx, entry.orgId, schedule._id);
+  if (source.kind === "UNAVAILABLE") return "its prepaid asset source cannot be verified against a posted entry";
+  if (source.kind === "OPENING" && PREPAID_CORRECTION_EVENT_TYPES.has(entry.eventType)) {
+    return "opening prepaid refunds and write-offs require a separate finance review";
+  }
+  if (source.basisDate === null) {
     return "the prepaid expense behind it has not posted to the ledger yet, so this would credit a Prepaid Expenses balance that was never debited";
   }
-  if (posted.accountingDate > entry.accountingDate) {
-    return "the prepaid expense behind it is recognized on a later date, so this would credit a Prepaid Expenses balance that does not exist yet on this entry's date";
+  if (source.basisDate > entry.accountingDate) {
+    return "the prepaid asset is recognized on a later date, so this would credit a Prepaid Expenses balance that does not exist yet on this entry's date";
   }
   return null;
 }

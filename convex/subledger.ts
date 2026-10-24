@@ -104,6 +104,8 @@ export async function createReceivableDocument(
     currency: string;
     issueDate: number;
     dueDate: number;
+    /** A domain-generated number, e.g. the unique once-per-org opening row. */
+    documentNumber?: string;
     actorId: Id<"users">;
     accountingEventId?: Id<"accountingEvents">;
     branchId?: Id<"branches">;
@@ -114,10 +116,12 @@ export async function createReceivableDocument(
   const currency = args.currency.toUpperCase();
   const scale = scaleForCurrency(currency);
   const now = Date.now();
+  if (args.documentNumber !== undefined && (!args.documentNumber.trim() || args.documentNumber.length > 160)) {
+    throw new ConvexError("The receivable reference is invalid.");
+  }
 
   // Generate document number
-  const countSoFar = (await ctx.db.query("receivableDocuments").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).take(1)).length;
-  const docNumber = `REC-${new Date(now).getFullYear()}-${String(Date.now()).slice(-6)}`;
+  const docNumber = args.documentNumber ?? `REC-${new Date(now).getFullYear()}-${String(Date.now()).slice(-6)}`;
 
   return ctx.db.insert("receivableDocuments", {
     orgId: args.orgId,

@@ -1,4 +1,5 @@
 import { v, ConvexError } from "convex/values";
+import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { query, QueryCtx } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -586,7 +587,14 @@ export const getExpensesReport = query({
       .query("prepaidExpenseSchedules")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
-    const scheduleByExpenseId = new Map(schedules.map((s) => [s.expenseId, s]));
+    const scheduleByExpenseId = new Map(schedules.flatMap((schedule) =>
+      schedule.kind === "OPENING" ? [] : [[schedule.expenseId, schedule] as const]));
+    const openingSources = new Map<string, { title: string; basisDate: number }>();
+    for (const schedule of schedules) {
+      const source = await resolvePrepaidScheduleSource(ctx, args.orgId, schedule._id);
+      if (source.kind === "UNAVAILABLE") throw new ConvexError(source.reason);
+      if (source.kind === "OPENING") openingSources.set(schedule._id, source);
+    }
     const recognitionEvents = await loadOrgPrepaidRecognitionByMonth(ctx, args.orgId, args.startDate, args.endDate);
     const unpostedExpenseDebits = await loadUnpostedExpenseDebitStates(ctx, args.orgId);
 
@@ -613,6 +621,7 @@ export const getExpensesReport = query({
     const priorById = new Map<Id<"expenses">, Doc<"expenses">>();
 
     for (const schedule of schedules) {
+      if (schedule.kind === "OPENING") continue;
       if (inRangeIds.has(schedule.expenseId)) continue;
       // `=== 0`, not `<= 0`: a window holding only this schedule's reversal nets
       // negative and still has to report that credit.
@@ -751,6 +760,7 @@ export const getExpensesReport = query({
 
       return {
         ...exp,
+        sourceKind: "EXPENSE" as const,
         vehicleDesc,
         recognizedAmount,
         postedAmount,
@@ -764,7 +774,31 @@ export const getExpensesReport = query({
       };
     });
 
-    enrichedExpenses.sort((a, b) => b.date - a.date);
+    // Opening recognition has a real schedule/event source, never a fabricated
+    // paid expense. Keep its identity explicit in the shared report row union.
+    const openingExpenses = schedules.flatMap((schedule) => {
+      const source = openingSources.get(schedule._id);
+      if (!source) return [];
+      const recognizedAmount = recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency);
+      const counts = queuedEntryCountsInRange(recognitionEvents, schedule._id, args.startDate, args.endDate);
+      if (recognizedAmount === 0 && counts.pending === 0 && counts.failed === 0) return [];
+      const postedAmount = recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency, "posted");
+      const pendingAmount = recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency, "pending");
+      const failedAmount = recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency, "failed");
+      totalExpenses += recognizedAmount;
+      totalPosted += postedAmount;
+      totalPending += pendingAmount;
+      totalFailed += failedAmount;
+      pendingEntryCount += counts.pending;
+      failedEntryCount += counts.failed;
+      return [{ sourceKind: "OPENING" as const, _id: schedule._id, title: source.title,
+        notes: source.title, category: schedule.expenseSystemKey, date: source.basisDate,
+        currency: schedule.currency, amount: fromMinorUnits(schedule.totalMinor, schedule.currency),
+        vehicleDesc: "General", recognizedAmount, postedAmount, pendingAmount, failedAmount,
+        capitalizedAmount: 0, glState: glStateFor({ postedAmount, capitalizedAmount: 0, pendingCount: counts.pending, failedCount: counts.failed }),
+        amortization: amortizationInfoFromScheduleProgress(schedule) }];
+    });
+    const reportExpenses = [...enrichedExpenses, ...openingExpenses].sort((a, b) => b.date - a.date);
 
     return {
       // The operational figure — what the schedules and expense rows say
@@ -785,7 +819,7 @@ export const getExpensesReport = query({
       pendingEntryCount,
       failedEntryCount,
       hasUnpostedEntries: pendingEntryCount + failedEntryCount > 0,
-      expenses: enrichedExpenses,
+      expenses: reportExpenses,
     };
   },
 });
@@ -1438,6 +1472,25 @@ export const getProfitAndLoss = query({
     // The legacy transactions ledger has no row for a forfeiture.
     const forfeitureIncome = await readDepositForfeitureIncome(ctx, args.orgId, args.startDate, args.endDate);
 
+    // Opening schedules have no historical expense/payment transaction. Their
+    // operational recognition comes from the same event ledger as the expense
+    // report; preserve the legacy transaction treatment for expense-backed rows.
+    const prepaidSchedules = await ctx.db.query("prepaidExpenseSchedules")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect();
+    const prepaidRecognition = await loadOrgPrepaidRecognitionByMonth(ctx, args.orgId, args.startDate, args.endDate);
+    let openingPrepaidPendingEntryCount = 0;
+    let openingPrepaidFailedEntryCount = 0;
+    for (const schedule of prepaidSchedules) {
+      const source = await resolvePrepaidScheduleSource(ctx, args.orgId, schedule._id);
+      if (source.kind === "UNAVAILABLE") throw new ConvexError(source.reason);
+      if (source.kind !== "OPENING") continue;
+      operatingExpenses += recognizedAmountInRangeFromEvents(prepaidRecognition, schedule._id,
+        args.startDate, args.endDate, schedule.currency);
+      const counts = queuedEntryCountsInRange(prepaidRecognition, schedule._id, args.startDate, args.endDate);
+      openingPrepaidPendingEntryCount += counts.pending;
+      openingPrepaidFailedEntryCount += counts.failed;
+    }
+
     const grossProfit = totalRevenue - costOfGoodsSold;
     const netProfit = grossProfit - operatingExpenses + forfeitureIncome.amount;
 
@@ -1448,6 +1501,9 @@ export const getProfitAndLoss = query({
       costOfGoodsSold,
       grossProfit,
       operatingExpenses,
+      openingPrepaidPendingEntryCount,
+      openingPrepaidFailedEntryCount,
+      hasUnpostedOpeningPrepaidEntries: openingPrepaidPendingEntryCount + openingPrepaidFailedEntryCount > 0,
       depositForfeitureIncome: forfeitureIncome.amount,
       depositForfeitureIncomeByCurrency: forfeitureIncome.byCurrency,
       netProfit,

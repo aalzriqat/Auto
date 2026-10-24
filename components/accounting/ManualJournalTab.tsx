@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type * as z from "zod";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -83,7 +84,7 @@ export function ManualJournalTab() {
   }));
   const accountsById = new Map(manualAccounts.map((a) => [a._id as string, a]));
 
-  const form = useForm<ManualJournalFormValues>({
+  const form = useForm<z.input<typeof manualJournalSchema>, unknown, ManualJournalFormValues>({
     resolver: zodResolver(manualJournalSchema),
     defaultValues: { memo: "", accountingDate: today, lines: [emptyLine(), emptyLine()] },
   });

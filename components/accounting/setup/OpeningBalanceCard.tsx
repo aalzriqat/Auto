@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { CheckCircle2, Clock, Plus, Trash2, Wallet } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -27,9 +28,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "@/convex/utils/money";
+import { fromMinorUnits, scaleForCurrency } from "@/convex/utils/money";
 import { getLocalizedErrorMessage } from "@/lib/errors";
 import { accountDisplayName } from "../reports/FinancialReportShared";
+import { parseOpeningMoneyMinor } from "./openingMoneyInput";
+import { OpeningAllocationEditor } from "./OpeningAllocationEditor";
+import { buildOpeningAllocationPayload, groupOpeningAllocations, openingAllocationTotalsMatch, retainOpeningAllocations } from "./openingAllocationForm";
+import type { OpeningAllocationDraft } from "./openingAllocationForm";
 
 /**
  * Opening-balance entry for the accounting Setup tab.
@@ -83,23 +88,110 @@ function dateInputToUtcMs(value: string): number | null {
   return Date.UTC(y, m - 1, d);
 }
 
+function allocationConfirmationLine(row: OpeningAllocationDraft, currency: string, t: ReturnType<typeof useLanguage>["t"]): string {
+  if (row.kind === "PREPAID_EXPENSE") {
+    return `  ${row.title} · ${row.startYearMonth} · ${row.termMonths} ${t("OpeningPrepaidTermMonths")} · ${row.amount} ${currency}`;
+  }
+  if (row.kind === "UNALLOCATED_LIABILITY") {
+    const purposeLabel = t(`OpeningAllocationPurpose_${row.purpose}`);
+    return `  ${t("OpeningAllocationKind_UNALLOCATED_LIABILITY")} · ${purposeLabel} · ${row.title} · ${row.amount} ${currency}`;
+  }
+  if (row.kind === "SUPPLIER_RECOVERABLE" || row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE") {
+    const kindLabel = t(`OpeningAllocationKind_${row.kind}`);
+    return `  ${kindLabel} · ${row.counterpartyName} · ${row.title} · ${row.amount} ${currency}`;
+  }
+  return `  ${row.partyLabel} (${row.partyId}) · ${row.amount} ${currency}`;
+}
+
+type PostedReadback = NonNullable<FunctionReturnType<typeof api.accountingCutover.postedOpeningAllocationReadback>>;
+type PostedReadbackRow = Extract<PostedReadback["rows"][number], { restricted: false }>;
+
+function PostedAllocationSource({ row }: Readonly<{ row: PostedReadbackRow }>) {
+  const { t } = useLanguage();
+  if (row.kind === "PREPAID_EXPENSE") return <> · {t("OpeningPrepaidSource")}</>;
+  return row.partyId ? <> · <bdi className="break-all text-xs text-muted-foreground">{row.partyId}</bdi></> : null;
+}
+
+function postedAllocationStatusKey(status: PostedReadbackRow["allocationStatus"]): string {
+  if (status === "UNALLOCATED") return "OpeningAllocationRecordUnallocated";
+  if (status === "AVAILABLE") return "OpeningAllocationRecordAvailable";
+  return "OpeningAllocationRecordUnavailable";
+}
+
+function PostedAllocationRow({ row, currency }: Readonly<{ row: PostedReadbackRow; currency: string }>) {
+  const { t, locale } = useLanguage();
+  return (
+    <div className="min-w-0 rounded-md border border-border p-2">
+      <p className="font-medium text-foreground"><bdi>{row.accountCode ?? row.accountId}</bdi> · <bdi>{locale === "ar" ? row.accountNameAr || row.accountName : row.accountName}</bdi></p>
+      <p><bdi>{row.partyName || (row.allocationStatus === "UNALLOCATED"
+        ? t("OpeningAllocationRecordUnallocated") : t("OpeningAllocationPartyUnavailable"))}</bdi>
+        <PostedAllocationSource row={row} />
+      </p>
+      <p className="text-xs text-muted-foreground">{t(`OpeningAllocationKind_${row.kind}`)}</p>
+      {row.purpose && <p className="text-xs text-muted-foreground">{t("OpeningAllocationPurpose")}: {t(`OpeningAllocationPurpose_${row.purpose}`)}</p>}
+      {row.title && row.kind !== "PREPAID_EXPENSE" && <p className="text-xs text-muted-foreground">
+        {t(row.kind === "CUSTOMER_RECEIVABLE" ? "OpeningAllocationTitle" : "OpeningAllocationSourceTitle")}: <bdi>{row.title}</bdi>
+      </p>}
+      <p className="tabular-nums"><bdi>{fromMinorUnits(row.amountMinor, currency).toFixed(scaleForCurrency(currency))} {currency}</bdi></p>
+      <p className={row.allocationStatus === "AVAILABLE" ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}>
+        {t(postedAllocationStatusKey(row.allocationStatus))}
+      </p>
+      {row.documentId && row.kind !== "PREPAID_EXPENSE" &&
+        <p className="break-all text-xs text-muted-foreground"><bdi>{row.documentId}</bdi></p>}
+    </div>
+  );
+}
+
+function PostedOpeningAllocations({ readback, currency }: Readonly<{ readback: PostedReadback; currency: string }>) {
+  const { t } = useLanguage();
+  return (
+    <div className="mt-3 space-y-2 text-sm">
+      <p className="font-medium text-foreground">{t("OpeningAllocationPostedReadback")}</p>
+      <p className={readback.journalStatus === "POSTED"
+        ? "text-emerald-700 dark:text-emerald-300"
+        : "text-amber-700 dark:text-amber-300"}>
+        {t("OpeningAllocationJournalStatus")}: {readback.journalStatus === "POSTED"
+          ? t("OpeningJournalPosted") : t("OpeningJournalNeedsReview")}
+      </p>
+      {readback.rows.length === 0 && <p className="text-muted-foreground">{t("OpeningAllocationNoPostedRows")}</p>}
+      <div className="grid gap-2 sm:grid-cols-2">
+        {readback.rows.map((row, index) => row.restricted ? (
+          <div key={`restricted-${index}`} className="rounded-md border border-border p-2 text-muted-foreground">
+            {t("OpeningAllocationRestrictedReadback")}
+          </div>
+        ) : <PostedAllocationRow key={row.rowKey} row={row} currency={readback.currency ?? currency} />)}
+      </div>
+    </div>
+  );
+}
+
 export function OpeningBalanceCard() {
   const { t, locale } = useLanguage();
   const { activeOrgId } = useOrg();
 
   const [open, setOpen] = useState(false);
+  const [entryCurrency, setEntryCurrency] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [asOfDate, setAsOfDate] = useState(() => toDateInputValue(Date.now()));
   const [memo, setMemo] = useState("");
   const [lines, setLines] = useState<DraftLine[]>(() => [emptyLine(), emptyLine()]);
+  const [allocations, setAllocations] = useState<OpeningAllocationDraft[]>([]);
 
   const status = useQuery(
     api.accountingCutover.openingBalanceStatus,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
+  const postedReadback = useQuery(
+    api.accountingCutover.postedOpeningAllocationReadback,
+    activeOrgId && status?.posted ? { orgId: activeOrgId } : "skip"
+  );
   const accounts = useQuery(
     api.chartOfAccounts.list,
     activeOrgId ? { orgId: activeOrgId, activeOnly: true } : "skip"
+  );
+  const accountPolicies = useQuery(
+    api.accountingCutover.listOpeningAccountPolicies,
+    activeOrgId && open ? { orgId: activeOrgId } : "skip"
   );
 
   const bankAccounts = useQuery(
@@ -114,7 +206,8 @@ export function OpeningBalanceCard() {
   // JOD/KWD/BHD/OMR and 2 for everything else, so a hardcoded factor posts
   // amounts off by a factor of ten on any org that is not on a 3-decimal
   // currency.
-  const currency = status?.currency ?? "JOD";
+  const currency = entryCurrency ?? status?.currency ?? "JOD";
+  const currencyChanged = open && entryCurrency !== null && status?.currency !== entryCurrency;
 
   // The bank control account is the one chart account whose line must name a
   // physical bank; the server refuses it otherwise. Only banks the server would
@@ -130,19 +223,40 @@ export function OpeningBalanceCard() {
 
   // Summed in minor units, so the balance check matches exactly what the
   // server validates rather than accumulating float error across lines.
+  const parsedLines = useMemo(() => lines.map((line) => ({
+    ...line,
+    debitMinor: line.debit === "" ? 0 : parseOpeningMoneyMinor(line.debit, currency),
+    creditMinor: line.credit === "" ? 0 : parseOpeningMoneyMinor(line.credit, currency),
+  })), [lines, currency]);
   const totals = useMemo(() => {
     let debitMinor = 0;
     let creditMinor = 0;
-    for (const line of lines) {
-      debitMinor += toMinorUnits(Number(line.debit) || 0, currency);
-      creditMinor += toMinorUnits(Number(line.credit) || 0, currency);
+    let valid = true;
+    for (const line of parsedLines) {
+      if (line.debitMinor === null || line.creditMinor === null) {
+        valid = false;
+        continue;
+      }
+      debitMinor += line.debitMinor;
+      creditMinor += line.creditMinor;
     }
-    return { debitMinor, creditMinor, balanced: debitMinor === creditMinor && debitMinor > 0 };
-  }, [lines, currency]);
+    valid = valid && Number.isSafeInteger(debitMinor) && Number.isSafeInteger(creditMinor);
+    return { debitMinor, creditMinor, valid, balanced: valid && debitMinor === creditMinor && debitMinor > 0 };
+  }, [parsedLines]);
 
-  const filledLines = lines.filter(
-    (line) => line.accountId && (Number(line.debit) > 0 || Number(line.credit) > 0)
+  const filledLines = parsedLines.filter(
+    (line) => line.accountId && ((line.debitMinor ?? 0) > 0 || (line.creditMinor ?? 0) > 0)
   );
+  const policyByAccount = new Map((accountPolicies ?? []).map((option) => [option.accountId as string, option]));
+  const allocationGroups = groupOpeningAllocations(filledLines.map((line) => {
+    const account = accounts?.find((item) => item._id === line.accountId);
+    return { ...line, label: account ? `${account.code} — ${accountDisplayName(account, locale)}` : line.accountId };
+  }), accountPolicies ?? []);
+  const selectedAccountsSupported = accountPolicies !== undefined && filledLines.every((line) => {
+    const policy = policyByAccount.get(line.accountId)?.policy;
+    return policy !== undefined && policy !== "UNSUPPORTED" && policy !== "UNAVAILABLE";
+  });
+  const allocationsReady = openingAllocationTotalsMatch(allocations, allocationGroups, currency);
   // A chosen bank counts only while it is still offered: a bank deactivated, or a currency
   // changed, after the choice leaves a stale id that the server would refuse.
   const selectableBankIds = new Set(selectableBanks.map((bank) => bank._id as string));
@@ -152,17 +266,37 @@ export function OpeningBalanceCard() {
   const canSubmit =
     Boolean(activeOrgId) &&
     totals.balanced &&
+    selectedAccountsSupported &&
+    allocationsReady &&
     filledLines.length >= 2 &&
     bankChosenForEveryBankLine &&
     dateInputToUtcMs(asOfDate) !== null &&
+    !currencyChanged &&
     !submitting;
 
   function updateLine(index: number, patch: Partial<DraftLine>) {
     setLines((current) => current.map((line, i) => (i === index ? { ...line, ...patch } : line)));
   }
 
+  function updateAccount(index: number, accountId: string) {
+    const nextLines = lines.map((line, i) => i === index ? { ...line, accountId, bankAccountId: "" } : line);
+    const retained = retainOpeningAllocations(allocations, new Set(nextLines.map((line) => line.accountId)));
+    if (retained.length !== allocations.length && !window.confirm(t("OpeningAllocationConfirmAccountChange"))) return;
+    setLines(nextLines);
+    setAllocations(retained);
+  }
+
+  function removeLine(index: number) {
+    const nextLines = lines.filter((_, i) => i !== index);
+    const retained = retainOpeningAllocations(allocations, new Set(nextLines.map((line) => line.accountId)));
+    if (retained.length !== allocations.length && !window.confirm(t("OpeningAllocationConfirmAccountChange"))) return;
+    setLines(nextLines);
+    setAllocations(retained);
+  }
+
   function resetForm() {
     setLines([emptyLine(), emptyLine()]);
+    setAllocations([]);
     setMemo("");
     setAsOfDate(toDateInputValue(Date.now()));
   }
@@ -171,6 +305,16 @@ export function OpeningBalanceCard() {
     if (!activeOrgId || !canSubmit) return;
     const asOfMs = dateInputToUtcMs(asOfDate);
     if (asOfMs === null) return;
+    const allocationPayload = buildOpeningAllocationPayload(allocations, currency);
+    if (!allocationPayload || !openingAllocationTotalsMatch(allocations, allocationGroups, currency)) return;
+    if (status?.canPostDirectly && allocations.length > 0) {
+      const summary = allocationGroups.map((group) => {
+        const members = allocations.filter((row) => row.accountId === group.accountId)
+          .map((row) => allocationConfirmationLine(row, currency, t));
+        return `${group.label} · ${fromMinorUnits(group.journalMinor, currency).toFixed(scaleForCurrency(currency))} ${currency}\n${members.join("\n")}`;
+      }).join("\n");
+      if (!window.confirm(`${t("OpeningAllocationDirectConfirm")}\n\n${summary}`)) return;
+    }
 
     setSubmitting(true);
     try {
@@ -180,12 +324,13 @@ export function OpeningBalanceCard() {
         memo: memo.trim() || undefined,
         lines: filledLines.map((line) => ({
           accountId: line.accountId as Id<"chartOfAccounts">,
-          debitMinor: toMinorUnits(Number(line.debit) || 0, currency),
-          creditMinor: toMinorUnits(Number(line.credit) || 0, currency),
+          debitMinor: line.debitMinor ?? 0,
+          creditMinor: line.creditMinor ?? 0,
           ...(bankControlIds.has(line.accountId)
             ? { bankAccountId: line.bankAccountId as Id<"bankAccounts"> }
             : {}),
         })),
+        allocations: allocationPayload,
         // The denomination these integers were converted UNDER, sent so the
         // server can refuse if the org's currency moved while this form was
         // open. `currency` above is what `toMinorUnits` used on the same lines,
@@ -213,7 +358,7 @@ export function OpeningBalanceCard() {
   if (!activeOrgId || status === undefined) return null;
   if (!status.canManageFinance) return null;
 
-  const alreadyResolved = status.posted || status.pendingDraftId !== null;
+  const alreadyResolved = status.posted || status.pendingExists;
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -230,7 +375,10 @@ export function OpeningBalanceCard() {
                 {t("OpeningBalancePosted")}
               </p>
             )}
-            {!status.posted && status.pendingDraftId !== null && (
+            {status.posted && postedReadback && (
+              <PostedOpeningAllocations readback={postedReadback} currency={status.currency} />
+            )}
+            {!status.posted && status.pendingExists && (
               <p className="mt-2 flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-300">
                 <Clock className="h-4 w-4" />
                 {t("OpeningBalancePending")}
@@ -243,7 +391,10 @@ export function OpeningBalanceCard() {
         </div>
 
         {!alreadyResolved && (
-          <Dialog open={open} onOpenChange={setOpen}>
+          <Dialog open={open} onOpenChange={(nextOpen) => {
+            setOpen(nextOpen);
+            setEntryCurrency(nextOpen ? status.currency : null);
+          }}>
             <DialogTrigger asChild>
               <Button size="sm">{t("OpeningBalanceSet")}</Button>
             </DialogTrigger>
@@ -289,11 +440,7 @@ export function OpeningBalanceCard() {
                     <div className="grid gap-2 sm:grid-cols-[1fr_130px_130px_40px]">
                       <Select
                         value={line.accountId}
-                        onValueChange={(value) =>
-                          // A bank identity belongs to the bank control line
-                          // only; switching the account drops a stale choice.
-                          updateLine(index, { accountId: value, bankAccountId: "" })
-                        }
+                        onValueChange={(value) => updateAccount(index, value)}
                       >
                         <SelectTrigger aria-label={t("OpeningBalanceAccount")}>
                           <SelectValue placeholder={t("OpeningBalanceSelectAccount")} />
@@ -307,7 +454,9 @@ export function OpeningBalanceCard() {
                             makes the existing `overflow-y-auto` engage. */}
                         <SelectContent className="max-h-72">
                           {(accounts ?? []).map((acc) => (
-                            <SelectItem key={acc._id} value={acc._id}>
+                            <SelectItem key={acc._id} value={acc._id}
+                              disabled={!accountPolicies || policyByAccount.get(acc._id)?.policy === "UNSUPPORTED" ||
+                                policyByAccount.get(acc._id)?.policy === "UNAVAILABLE"}>
                               {/* Arabic name when the UI is Arabic — the chart
                                   carries nameAr for every seeded account, and
                                   the reports already localize the same way. */}
@@ -324,14 +473,16 @@ export function OpeningBalanceCard() {
                                   ? t("OpeningBalanceDebit")
                                   : t("OpeningBalanceCredit")}
                               </span>
+                              {(policyByAccount.get(acc._id)?.policy === "UNSUPPORTED" ||
+                                policyByAccount.get(acc._id)?.policy === "UNAVAILABLE") &&
+                                <span className="text-xs text-amber-700"> · {t("OpeningAllocationUnsupported")}</span>}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                       <Input
-                        type="number"
-                        min="0"
-                        step="0.001"
+                        type="text"
+                        inputMode="decimal"
                         placeholder={t("OpeningBalanceDebit")}
                         aria-label={t("OpeningBalanceDebit")}
                         value={line.debit}
@@ -340,9 +491,8 @@ export function OpeningBalanceCard() {
                         onChange={(e) => updateLine(index, { debit: e.target.value, credit: "" })}
                       />
                       <Input
-                        type="number"
-                        min="0"
-                        step="0.001"
+                        type="text"
+                        inputMode="decimal"
                         placeholder={t("OpeningBalanceCredit")}
                         aria-label={t("OpeningBalanceCredit")}
                         value={line.credit}
@@ -354,7 +504,7 @@ export function OpeningBalanceCard() {
                         size="icon"
                         aria-label={t("OpeningBalanceRemoveLine")}
                         disabled={lines.length <= 2}
-                        onClick={() => setLines((c) => c.filter((_, i) => i !== index))}
+                        onClick={() => removeLine(index)}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -400,6 +550,19 @@ export function OpeningBalanceCard() {
                   </Button>
                 </div>
 
+                {allocationGroups.length > 0 && (
+                  <OpeningAllocationEditor
+                    orgId={activeOrgId}
+                    currency={currency}
+                    groups={allocationGroups}
+                    rows={allocations}
+                    onChange={setAllocations}
+                    canSelectCustomers={status.canSelectCustomers}
+                    canSelectEmployees={status.canSelectEmployees}
+                    canSelectPartners={status.canSelectPartners}
+                  />
+                )}
+
                 <div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2 text-sm">
                   <span className="text-muted-foreground">{t("OpeningBalanceTotals")}</span>
                   <span className="flex items-center gap-3">
@@ -412,6 +575,11 @@ export function OpeningBalanceCard() {
                     </span>
                   </span>
                 </div>
+                {(!totals.valid || currencyChanged) && (
+                  <p className="text-sm text-amber-700 dark:text-amber-300" role="alert">
+                    {currencyChanged ? t("OpeningBalanceCurrencyChanged") : t("OpeningBalanceInvalidAmount")}
+                  </p>
+                )}
               </div>
 
               <DialogFooter>

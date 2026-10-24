@@ -1,14 +1,43 @@
 /**
  * Phase 5 tests: ledger-backed reporting (trial balance, P&L, balance sheet,
- * AR aging, subledger reconciliation).  All reports are computed from posted
- * journalLines — the GL — not from the legacy transactions table.
+ * AR aging, subledger reconciliation). Reports use the authoritative GL,
+ * including period snapshots, rather than the legacy transactions table.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+/** Direct report fixtures must preserve the same atomic snapshot contract as
+ * postingEngine. New periods certify snapshots; journal-only seeds are invalid. */
+async function completePostedReportingFixture(ctx: MutationCtx, journalEntryId: Id<"journalEntries">) {
+  const journal = await ctx.db.get(journalEntryId);
+  if (!journal || journal.status !== "POSTED") throw new Error("Posted report fixture required");
+  if (journal.periodId) throw new Error("Report fixture already completed");
+  const period = await ctx.db.query("accountingPeriods")
+    .withIndex("by_org", q => q.eq("orgId", journal.orgId))
+    .filter(q => q.and(q.lte(q.field("startDate"), journal.accountingDate), q.gte(q.field("endDate"), journal.accountingDate)))
+    .unique();
+  if (!period) throw new Error("Report fixture period required");
+  const lines = await ctx.db.query("journalLines")
+    .withIndex("by_journal_entry", q => q.eq("journalEntryId", journalEntryId)).collect();
+  if (lines.length === 0 || lines.some(line => line.orgId !== journal.orgId ||
+    line.currency !== journal.currency || line.accountingDate !== journal.accountingDate)) {
+    throw new Error("Matching report fixture lines required");
+  }
+  await ctx.db.patch(journalEntryId, { periodId: period._id });
+  for (const line of lines) {
+    await incrementAccountSnapshot(ctx, {
+      orgId: journal.orgId, accountId: line.accountId, currency: line.currency,
+      periodId: period._id, debitMinor: line.debitMinor, creditMinor: line.creditMinor,
+    });
+  }
+}
 
 async function seedReportingDealer() {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
@@ -194,6 +223,27 @@ describe("Phase 5 — trial balance", () => {
 });
 
 describe("Phase 5 — income statement", () => {
+  test("public P&L refuses foreign organizations and members without finance access", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const foreignOrgId = await t.run(ctx => ctx.db.insert("organizations", {
+      name: "Foreign reporting dealer", createdAt: now,
+    }));
+    await expect(asUser.query(api.accountingReports.incomeStatement, {
+      orgId: foreignOrgId, fromDate: now - 1_000, toDate: now,
+    })).rejects.toThrow(/not a member/i);
+
+    await t.run(async ctx => {
+      const membership = await ctx.db.query("memberships")
+        .withIndex("by_org_user", q => q.eq("orgId", orgId).eq("userId", userId)).unique();
+      if (!membership) throw new Error("Reporting fixture membership required");
+      await ctx.db.patch(membership.roleId, { name: "Sales reader", permissions: ["view:sales"] });
+    });
+    await expect(asUser.query(api.accountingReports.incomeStatement, {
+      orgId, fromDate: now - 1_000, toDate: now,
+    })).rejects.toThrow(/missing required permissions.*view:finance/i);
+  });
+
   test("P&L shows revenue after a sale event", async () => {
     const { t, orgId, asUser } = await seedReportingDealer();
     const now = Date.now();
@@ -524,6 +574,7 @@ describe("Phase 5 — supplier payables reconciliation", () => {
         orgId, journalEntryId, lineNumber: 1, accountId: apAccount!._id, debitMinor: 0, creditMinor: 15_000_000,
         currency: "JOD", scale: 3, accountingDate: now,
       });
+      await completePostedReportingFixture(ctx, journalEntryId);
     });
 
     const recon = await asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId });
@@ -599,6 +650,7 @@ describe("Phase 5 — customer deposits reconciliation", () => {
         orgId, journalEntryId, lineNumber: 1, accountId: liabilityAccount!._id, debitMinor: 0, creditMinor: 1_500_000,
         currency: "JOD", scale: 3, accountingDate: now,
       });
+      await completePostedReportingFixture(ctx, journalEntryId);
     });
 
     const recon = await asUser.query(api.accountingReports.customerDepositsReconciliation, { orgId });
@@ -671,6 +723,7 @@ describe("Phase 5 — commission payable reconciliation", () => {
         orgId, journalEntryId, lineNumber: 1, accountId: payableAccount!._id, debitMinor: 0, creditMinor: 500_000,
         currency: "JOD", scale: 3, accountingDate: now,
       });
+      await completePostedReportingFixture(ctx, journalEntryId);
       // The accrual event that production always writes alongside the journal
       // entry (postAccountingEvent). The subledger side counts recognized
       // commissions, so a fixture that posts the GL half without it is
@@ -785,6 +838,7 @@ describe("Phase 5 — commission payable reconciliation", () => {
         orgId, journalEntryId, lineNumber: 1, accountId: payableAccount!._id,
         debitMinor: 0, creditMinor: 500_000, currency: "JOD", scale: 3, accountingDate: now,
       });
+      await completePostedReportingFixture(ctx, journalEntryId);
       await ctx.db.insert("accountingEvents", {
         orgId, eventType: "COMMISSION_ACCRUED", sourceType: "sales",
         sourceId: `commission_${saleId}`, eventVersion: 1,

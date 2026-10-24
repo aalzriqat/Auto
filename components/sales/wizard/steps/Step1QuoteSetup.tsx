@@ -157,7 +157,7 @@ export default function Step1QuoteSetup({
   }, [allPickerVehicles, otherStatusVehicles]);
   const createSourced = useMutation(api.vehicles.createSourced);
 
-  const form = useForm<Step1Values>({
+  const form = useForm<z.input<typeof step1Schema>, unknown, Step1Values>({
     resolver: zodResolver(step1Schema),
     defaultValues: {
       vehicleId: initialData.vehicleId,

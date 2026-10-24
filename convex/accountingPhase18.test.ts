@@ -24,6 +24,7 @@ import { fromMinorUnits } from "./utils/money";
 
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
+// Retained earnings is a synthetic test offset only; it classifies no real guide amount.
 async function seedSnapshotDealer() {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
@@ -293,7 +294,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
   test("approveOpeningBalance keeps the running snapshot in sync", async () => {
     const ctx = await seedSnapshotDealer();
     const cash = await accountBySystemKey(ctx.t, ctx.orgId, "CASH_ON_HAND");
-    const capital = await accountBySystemKey(ctx.t, ctx.orgId, "PARTNER_CAPITAL");
+    const syntheticOffset = await accountBySystemKey(ctx.t, ctx.orgId, "RETAINED_EARNINGS");
 
     const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
@@ -301,7 +302,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
       asOfDate: Date.UTC(2025, 0, 15),
       lines: [
         { accountId: cash!._id, debitMinor: 500_000, creditMinor: 0 },
-        { accountId: capital!._id, debitMinor: 0, creditMinor: 500_000 },
+        { accountId: syntheticOffset!._id, debitMinor: 0, creditMinor: 500_000 },
       ],
     });
     await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
@@ -313,7 +314,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
       c.db.query("accountBalanceSnapshots").withIndex("by_org_period", (q) => q.eq("orgId", ctx.orgId).eq("periodId", ctx.periodA._id)).collect()
     );
     expect(sumSnapshots(snapshots, cash!._id).debitMinor).toBe(500_000);
-    expect(sumSnapshots(snapshots, capital!._id).creditMinor).toBe(500_000);
+    expect(sumSnapshots(snapshots, syntheticOffset!._id).creditMinor).toBe(500_000);
 
     const bs = await ctx.asOwner.query(api.accountingReports.balanceSheet, { orgId: ctx.orgId, asOfDate: Date.UTC(2025, 5, 30) });
     expect(bs.assetRows.find((r) => r.code === cash!.code)?.netMinor).toBe(500_000);
@@ -338,7 +339,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
     await asOtherOwner.mutation(api.chartOfAccounts.initialize, { orgId: otherOrgId });
     const otherCash = await accountBySystemKey(ctx.t, otherOrgId, "CASH_ON_HAND");
 
-    const capital = await accountBySystemKey(ctx.t, ctx.orgId, "PARTNER_CAPITAL");
+    const syntheticOffset = await accountBySystemKey(ctx.t, ctx.orgId, "RETAINED_EARNINGS");
 
     await expect(
       ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
@@ -347,7 +348,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
         asOfDate: Date.UTC(2025, 0, 15),
         lines: [
           { accountId: otherCash!._id, debitMinor: 100_000, creditMinor: 0 },
-          { accountId: capital!._id, debitMinor: 0, creditMinor: 100_000 },
+          { accountId: syntheticOffset!._id, debitMinor: 0, creditMinor: 100_000 },
         ],
       })
     ).rejects.toThrow(/not found in this organization/i);

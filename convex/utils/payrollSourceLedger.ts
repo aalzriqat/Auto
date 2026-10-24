@@ -1,6 +1,7 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
 import { commissionPrereqUnpostedReason, recognizedCommissionForSale } from "./commissionSourceLedger";
+import { openingAdvanceBasis } from "./openingAdvanceBasis";
 
 /**
  * Outbox posting guard for payroll/advance settlement events, mirroring
@@ -50,6 +51,11 @@ async function advanceRecoveryBlockedReason(
   if (!advanceId) {
     return "it carries no advance reference, so the Employee Advances balance it credits cannot be traced to an issuance";
   }
+  const normalized = ctx.db.normalizeId("employeeAdvances", advanceId);
+  if (!normalized) return "the advance reference cannot be verified in this organization";
+  const basis = await openingAdvanceBasis(ctx, orgId, normalized);
+  if (basis.kind === "INVALID") return basis.reason;
+  if (basis.kind === "OPENING") return null;
   if (!(await prereqPosted(ctx, orgId, `employee_advance_paid_${advanceId}`))) {
     return "the advance issuance behind it has not posted to the ledger yet, so this would credit an Employee Advances balance that was never debited";
   }
@@ -180,6 +186,9 @@ async function payrollPaidBlockedReason(
       if (rec.orgId !== orgId) {
         return "one of its advance-recovery rows belongs to another organization, so the Employee Advances it credits cannot be verified";
       }
+      const basis = await openingAdvanceBasis(ctx, orgId, rec.advanceId);
+      if (basis.kind === "INVALID") return basis.reason;
+      if (basis.kind === "OPENING") continue;
       if (!(await prereqPosted(ctx, orgId, `employee_advance_paid_${rec.advanceId}`))) {
         return "an advance issuance behind it has not posted to the ledger yet, so this would credit an Employee Advances balance that was never debited";
       }

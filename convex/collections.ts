@@ -51,6 +51,7 @@ import {
 } from "./utils/customerCreditPayoutContainment";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { assertNoOpenSaleInvoiceForUnlinkedReceipt } from "./utils/cashSalePilotGate";
+import { openingReceivableBasis } from "./utils/openingReceivableBasis";
 import {
   assertNoSaleIdOnNewReceivable,
   assertReceiptTargetNotSaleLinked,
@@ -156,6 +157,24 @@ function assertRefundableReceivableStatus(status: ReceivableStatus): void {
   }
   if (status === "REFUNDED") {
     throw new ConvexError("This receivable has already been refunded.");
+  }
+}
+
+async function assertOpeningReceivableChangeAllowed(ctx: MutationCtx, receivable: Doc<"receivables">): Promise<void> {
+  const basis = await openingReceivableBasis(ctx, receivable.orgId, receivable._id);
+  if (basis.kind !== "ORDINARY") {
+    throw new ConvexError("Changes and refunds for opening-balance debts require a separate finance review. Nothing has changed.");
+  }
+}
+
+async function assertOpeningReceivableDate(ctx: MutationCtx, orgId: Id<"organizations">,
+  receivableId: Id<"receivables"> | undefined, effectiveDate: number): Promise<void> {
+  if (!receivableId) return;
+  const receivable = await requireOwnedRow(ctx, orgId, "receivables", receivableId, "Receivable not found.");
+  const basis = await openingReceivableBasis(ctx, orgId, receivable._id);
+  if (basis.kind === "INVALID") throw new ConvexError(basis.reason);
+  if (basis.kind === "OPENING" && !(effectiveDate >= basis.basisDate)) {
+    throw new ConvexError("A collection cannot precede this receivable's posted opening date. Nothing has changed.");
   }
 }
 
@@ -366,16 +385,14 @@ async function applyPostedPayment(
  * REFUND and RESCHEDULE approval branches reach it without passing through the
  * cancellation gate's stricter `findCanonicalReceivableForLegacy`.
  *
- * That is safe today for one reason, and it is worth stating because it is a
- * convention rather than a constraint: `receivables.canonicalReceivableDocumentId`
- * has exactly ONE writer whole-tree — the patch at the bottom of this function —
- * and it always stores the document resolved from this receivable's own
- * `legacy_receivable/<id>` source key, so the link is self-consistent by
- * construction. Two independent review seats verified that enumeration.
+ * Link writers must store the document resolved from this receivable's own
+ * `legacy_receivable/<id>` source key. This helper and the atomic opening
+ * allocation materializer both use ensureReceivableDocument for that resolution.
+ * Opening correction/refund/reschedule approvals are separately refused before
+ * reaching this helper. This is a writer convention, not a schema constraint.
  *
- * If a second writer ever appears, or if REFUND/RESCHEDULE grow their own
- * document resolution, this early return becomes a way to act on the wrong
- * document and must adopt the same source-key check.
+ * Any additional writer or independent REFUND/RESCHEDULE resolution must preserve
+ * the source-key check; same-organization ownership alone does not prove the link.
  */
 async function ensureCanonicalReceivableForLegacy(
   ctx: MutationCtx,
@@ -1502,6 +1519,8 @@ export const recordPayment = mutation({
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    assertValidAccountingDate(args.paymentDate, "Payment date");
+    await assertOpeningReceivableDate(ctx, args.orgId, args.receivableId, args.paymentDate);
     const receiptReachesBank = args.method === "BANK_TRANSFER" || args.method === "CARD";
     if (args.bankAccountId && !receiptReachesBank) {
       throw new ConvexError("A bank account applies only to bank transfer or card receipts.");
@@ -1887,6 +1906,7 @@ export const applyRetainedCredit = mutation({
     if (args.appliedAt !== undefined) {
       assertValidAccountingDate(args.appliedAt, "Application date");
     }
+    await assertOpeningReceivableDate(ctx, args.orgId, args.receivableId, args.appliedAt ?? Date.now());
     // SCRUM-571 R2 (D-20): retained credit may not relieve a legacy receivable
     // that carries a saleId. Before the wrapper, so a stored replay is refused.
     await assertReceiptTargetNotSaleLinked(ctx, args.orgId, { receivableId: args.receivableId });
@@ -2359,6 +2379,9 @@ export const clearCheque = mutation({
     // body's own "Cheque not found."
     const chequeToClear = await requireOwnedRow(ctx, args.orgId, "postDatedCheques", args.chequeId, "Cheque not found.");
     if (chequeToClear.isDeleted) throw new ConvexError("Cheque not found.");
+    const effectiveDate = args.clearedAt ?? Date.now();
+    assertValidAccountingDate(effectiveDate, "Clearance date");
+    await assertOpeningReceivableDate(ctx, args.orgId, chequeToClear.receivableId, effectiveDate);
     await assertCustomerChequeNotSaleLinked(ctx, chequeToClear);
     if (chequeToClear.status === "HELD" || chequeToClear.status === "DEPOSITED") {
       await assertChequeInvoiceIntentLive(ctx, chequeToClear);
@@ -3193,8 +3216,8 @@ export const requestApproval = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const receivable = await ctx.db.get(args.receivableId);
-    if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
+    const receivable = await requireOwnedRow(ctx, args.orgId, "receivables", args.receivableId, "Receivable not found.");
+    await assertOpeningReceivableChangeAllowed(ctx, receivable);
     if (!args.reason.trim()) throw new ConvexError("Reason is required.");
     if (args.requestType === "REFUND") {
       assertPositiveAmount(args.requestedAmount ?? 0, "Refund amount");
@@ -3298,6 +3321,11 @@ export const respondToApproval = mutation({
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const request = await requireOwnedRow(ctx, args.orgId, "collectionApprovalRequests", args.requestId, "Approval request not found.");
+    const receivable = await requireOwnedRow(ctx, args.orgId, "receivables", request.receivableId, "Receivable not found.");
+    // This immutable source policy applies even to a retained replay identity.
+    // Rejecting a stale request is still allowed; generic changes are not.
+    if (args.status === "APPROVED") await assertOpeningReceivableChangeAllowed(ctx, receivable);
     return await runWithIdempotency(
       ctx,
       {
@@ -3315,17 +3343,12 @@ export const respondToApproval = mutation({
         }),
       },
       async () => {
-        const request = await ctx.db.get(args.requestId);
-        if (!request || request.orgId !== args.orgId) throw new ConvexError("Approval request not found.");
         if (request.status !== "PENDING") throw new ConvexError("This request has already been resolved.");
         assertDifferentActors(
           user._id,
           request.requestedBy,
           "Requester cannot approve or reject their own collection approval request."
         );
-
-        const receivable = await ctx.db.get(request.receivableId);
-        if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
 
         const currency = await getOrgCurrency(ctx, args.orgId);
         const now = Date.now();

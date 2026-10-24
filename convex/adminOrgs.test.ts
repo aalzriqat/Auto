@@ -1,8 +1,10 @@
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
+import { runContinuationBatch } from "../test-utils/orgResetFixtures";
 
 const ORIGINAL_ALLOWLIST = process.env.SUPER_ADMIN_EMAILS;
 
@@ -40,7 +42,216 @@ async function runDeletionToCompletion(
   throw new Error("Deletion request did not complete within the expected number of batches.");
 }
 
+async function seedResetRecoveryCheckpoint() {
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  registerRateLimiter(t);
+  const { orgId, ownerId } = await seedOrgWithOwner(t);
+  await t.run(async ctx => {
+    await ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: 1, updatedAt: 1 });
+    await ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"] });
+    await ctx.db.insert("users", { clerkId: "recovery-cleanup-admin", email: "admin@autoflow.dev" });
+  });
+  const owner = t.withIdentity({ subject: "owner_1" });
+  await owner.mutation(api.chartOfAccounts.initialize, { orgId });
+  const year = new Date().getUTCFullYear();
+  const periodId = await owner.mutation(api.accountingPeriods.create, { orgId, startDate: Date.UTC(year, 0, 1),
+    endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999), fiscalYear: year, periodNumber: 1 });
+  await owner.mutation(api.accountingPeriods.open, { orgId, periodId });
+  const accountId = await owner.mutation(api.chartOfAccounts.create, { orgId, code: "1999", name: "Opening supplier claims",
+    type: "ASSET", normalBalance: "DEBIT", currencyRestriction: "JOD", isControlAccount: true, allowManualPosting: false });
+  const retained = (await owner.query(api.chartOfAccounts.list, { orgId })).find(account => account.systemKey === "RETAINED_EARNINGS");
+  if (!retained) throw new Error("Missing balancing account");
+  await owner.mutation(api.accountingCutover.postOpeningBalanceDirect, { orgId, expectedCurrency: "JOD", asOfDate: Date.now(),
+    lines: [{ accountId, debitMinor: 100_000, creditMinor: 0 }, { accountId: retained._id, debitMinor: 0, creditMinor: 100_000 }],
+    allocations: [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "claim", accountId, amountMinor: 100_000,
+      counterpartyName: "Synthetic supplier", title: "Opening claim", purpose: "CLAIM" }] });
+  expect((await owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId }))?.rows[0])
+    .toMatchObject({ recordAvailable: true });
+  const recovery = await t.run(ctx => ctx.db.query("supplierCostRecoveries").withIndex("by_org", q => q.eq("orgId", orgId)).unique());
+  if (!recovery) throw new Error("Missing authentic opening recovery");
+  await t.run(async ctx => {
+    for (let index = 0; index < 101; index += 1) await ctx.db.insert("openingBalanceDrafts", {
+      orgId, status: "REJECTED", lines: [], asOfDate: 1, createdBy: ownerId, createdAt: 1,
+    });
+    await ctx.db.patch(orgId, { suspended: true });
+  });
+  let checkpointFound = false;
+  for (let batch = 0; batch < 20; batch += 1) {
+    await runContinuationBatch(t, orgId, 1);
+    const org = await t.run(ctx => ctx.db.get(orgId));
+    if (org?.openingCleanupReferenceScan?.source.id === recovery._id) {
+      expect(org.openingCleanupReferenceScan.resetGeneration).toBe(org.financialResetGeneration);
+      expect(await t.run(ctx => ctx.db.get(recovery._id))).not.toBeNull();
+      checkpointFound = true;
+      break;
+    }
+  }
+  expect(checkpointFound).toBe(true);
+  return { t, orgId, recovery };
+}
+
+async function expectRecoveryDeletedWithoutCheckpoint(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">, recoveryId: Id<"supplierCostRecoveries">, requestId: Id<"organizationDeletionRequests">) {
+  let sourceDeleted = false;
+  for (let batch = 0; batch < 200; batch += 1) {
+    await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: requestId });
+    const state = await t.run(async ctx => ({ org: await ctx.db.get(orgId), source: await ctx.db.get(recoveryId),
+      request: await ctx.db.get(requestId) }));
+    if (!state.source) {
+      expect(state.org).not.toBeNull();
+      expect(state.request?.status).toBe("RUNNING");
+      expect(state.org?.openingCleanupReferenceScan?.source.id).not.toBe(recoveryId);
+      sourceDeleted = true;
+      break;
+    }
+  }
+  expect(sourceDeleted).toBe(true);
+}
+
+async function verifyResetCannotResumeAfterDeletion(admission: "hard-delete" | "approval" | "failed-retry") {
+  const { t, orgId, recovery } = await seedResetRecoveryCheckpoint();
+  const admin = t.withIdentity({ subject: "recovery-cleanup-admin" });
+  let requestId: Id<"organizationDeletionRequests">;
+  if (admission === "approval") {
+    const pendingId = await t.run(async ctx => {
+      const adminUser = await ctx.db.query("users").withIndex("by_clerkId", q => q.eq("clerkId", "recovery-cleanup-admin")).unique();
+      if (!adminUser) throw new Error("Missing admin fixture");
+      return await ctx.db.insert("organizationDeletionRequests", { orgId, orgName: "Acme Motors", requestedBy: adminUser._id, requestedAt: 1, status: "PENDING_REVIEW" });
+    });
+    await admin.mutation(api.adminOrgs.approveDeletionRequest, { requestId: pendingId });
+    requestId = pendingId;
+  } else {
+    requestId = (await admin.mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Acme Motors" })).requestId;
+  }
+  expect((await t.run(ctx => ctx.db.get(orgId)))?.openingCleanupReferenceScan).toBeUndefined();
+  if (admission === "failed-retry") await t.run(ctx => ctx.db.patch(requestId, { status: "FAILED", failedAt: 1 }));
+  const before = await t.run(ctx => ctx.db.get(orgId));
+  expect((await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId }))?.dryRun).toBe(true);
+  expect(await t.run(ctx => ctx.db.get(orgId))).toEqual(before);
+  const refused = await runContinuationBatch(t, orgId, 1).then(() => false, () => true);
+  if (!refused) expect((await t.run(ctx => ctx.db.get(orgId)))?.openingCleanupReferenceScan?.source.id).toBe(recovery._id);
+  if (admission === "failed-retry") requestId = (await admin.mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Acme Motors" })).requestId;
+  await expectRecoveryDeletedWithoutCheckpoint(t, orgId, recovery._id, requestId);
+  expect(refused).toBe(true);
+}
+
 describe("adminOrgs", () => {
+  test("org deletion clears an interrupted reset recovery checkpoint before deleting its source", async () => {
+    const { t, orgId, recovery } = await seedResetRecoveryCheckpoint();
+    const request = await t.withIdentity({ subject: "recovery-cleanup-admin" }).mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId, confirmName: "Acme Motors",
+    });
+    await expectRecoveryDeletedWithoutCheckpoint(t, orgId, recovery._id, request.requestId);
+  });
+
+  test("hard deletion prevents an interleaved reset from recreating a recovery checkpoint", async () => {
+    await verifyResetCannotResumeAfterDeletion("hard-delete");
+  });
+
+  test("approved deletion prevents an interleaved reset from recreating a recovery checkpoint", async () => {
+    await verifyResetCannotResumeAfterDeletion("approval");
+  });
+
+  test("failed deletion retains reset exclusion and permits a new deletion retry", async () => {
+    await verifyResetCannotResumeAfterDeletion("failed-retry");
+  });
+
+  test("org deletion keeps its cursor until every opening reference page is cleared", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "QA TEST paged opening cleanup", createdAt: 1 });
+      const userId = await ctx.db.insert("users", { clerkId: "paged-cleanup-admin", email: "admin@autoflow.dev" });
+      const fields = { orgId, lines: [], asOfDate: 1, createdBy: userId, createdAt: 1 };
+      const rejectedIds: Id<"openingBalanceDrafts">[] = [];
+      for (let i = 0; i < 101; i += 1) rejectedIds.push(await ctx.db.insert("openingBalanceDrafts", { ...fields, status: "REJECTED" }));
+      const draftId = await ctx.db.insert("openingBalanceDrafts", { ...fields, status: "POSTED" });
+      const liabilityId = await ctx.db.insert("openingCommissionLiabilities", { orgId, userId, openingDraftId: draftId,
+        openingRowKey: "late", sourceKey: "late", version: 1, amountMinor: 50, paidMinor: 0, currency: "USD", createdAt: 1 });
+      await ctx.db.patch(draftId, { allocationResults: [{ kind: "EMPLOYEE_COMMISSION", rowKey: "late", openingCommissionLiabilityId: liabilityId }] });
+      const payableId = await ctx.db.insert("vehicleSupplierPayables", { orgId, origin: "OPENING", openingBalanceDraftId: draftId,
+        openingRowKey: "ap", openingKind: "OTHER_PAYABLE", title: "Opening debt", sourcedFromName: "Supplier",
+        amountDue: 50, currency: "USD", status: "NOT_YET_DUE", createdBy: userId, createdAt: 1, updatedAt: 1 });
+      await ctx.db.patch(rejectedIds[0], { allocationResults: [{ kind: "OTHER_PAYABLE", rowKey: "ap", payableId }] });
+      await ctx.db.patch(orgId, { suspended: true });
+      return { orgId, draftId, liabilityId, payableId };
+    });
+    // Two real reset batches leave both a discovered source and unvisited headers.
+    await runContinuationBatch(t, ids.orgId, 1);
+    await runContinuationBatch(t, ids.orgId, 1);
+    const checkpoint = (await t.run(ctx => ctx.db.get(ids.orgId)))?.openingCleanupPayableScan;
+    expect(checkpoint?.pendingPayableIds).toEqual([ids.payableId]);
+    expect(checkpoint?.pendingDraftIds.length).toBeGreaterThan(0);
+    const request = await t.withIdentity({ subject: "paged-cleanup-admin" }).mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId: ids.orgId, confirmName: "QA TEST paged opening cleanup",
+    });
+    const retainedCursor = ORGANIZATION_DELETION_STEPS.length - 1;
+    await t.run(ctx => ctx.db.patch(request.requestId, { currentStepIndex: retainedCursor }));
+    let cleared = false;
+    let suspensionProved = false;
+    for (let batch = 0; batch < 8; batch += 1) {
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: request.requestId });
+      const state = await t.run(async ctx => ({ request: await ctx.db.get(request.requestId),
+        liability: await ctx.db.get(ids.liabilityId), parent: await ctx.db.get(ids.draftId), org: await ctx.db.get(ids.orgId),
+        drafts: await ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", ids.orgId)).take(103) }));
+      expect(state.request?.status).toBe("RUNNING");
+      expect(state.request?.currentStepIndex).toBe(retainedCursor);
+      expect(state.parent).not.toBeNull();
+      if (!await t.run(ctx => ctx.db.get(ids.payableId))) expect(state.org?.openingCleanupPayableScan).toBeUndefined();
+      if (state.org?.openingCleanupReferenceScan?.complete && !suspensionProved) {
+        // Adversarial stored state: normal reactivation is already barred after purge starts.
+        await t.run(ctx => ctx.db.patch(ids.orgId, { suspended: false }));
+        await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: request.requestId });
+        await t.run(async ctx => {
+          expect((await ctx.db.get(request.requestId))?.status).toBe("FAILED");
+          expect(await ctx.db.get(ids.liabilityId)).not.toBeNull();
+          await ctx.db.patch(ids.orgId, { suspended: true });
+          await ctx.db.patch(request.requestId, { status: "RUNNING" });
+        });
+        suspensionProved = true;
+      }
+      if (!state.liability) {
+        expect(state.parent?.allocationResults).toEqual([]);
+        expect(state.request?.deletedCounts?.openingCommissionLiabilities).toBe(1);
+        cleared = true;
+        break;
+      }
+      expect(state.request?.deletedCounts?.openingCommissionLiabilities ?? 0).toBe(0);
+      expect(state.drafts).toHaveLength(102);
+    }
+    expect(cleared).toBe(true);
+    expect(suspensionProved).toBe(true);
+  });
+
+  test("opening provenance is drained even when a retained deletion cursor has already passed its steps", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const fixture = await t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "QA TEST opening cleanup", createdAt: Date.now() });
+      const adminId = await ctx.db.insert("users", { clerkId: "opening-cleanup-admin", email: "admin@autoflow.dev" });
+      // The older manifest already removed the ledger/parties by this cursor.
+      // A retained legacy draft still has to be removed, even without details.
+      const draftId = await ctx.db.insert("openingBalanceDrafts", { orgId, status: "PENDING_APPROVAL", lines: [],
+        asOfDate: Date.now(), currency: "JOD", createdBy: adminId, createdAt: Date.now() });
+      const advanceId = await ctx.db.insert("employeeAdvances", { orgId, userId: adminId, amountMinor: 100_000,
+        recoveredMinor: 40_000, currency: "JOD", date: Date.now(), status: "OUTSTANDING", openingBalanceDraftId: draftId,
+        createdBy: adminId, createdAt: Date.now(), updatedAt: Date.now() });
+      const recoveryId = await ctx.db.insert("employeeAdvanceRecoveries", { orgId, advanceId, userId: adminId,
+        amountMinor: 40_000, currency: "JOD", source: "DIRECT", recoveredAt: Date.now(), recoveredBy: adminId });
+      const otherOrg = await ctx.db.insert("organizations", { name: "QA TEST unrelated purge control", createdAt: Date.now() });
+      const otherAdvance = await ctx.db.insert("employeeAdvances", { orgId: otherOrg, userId: adminId, amountMinor: 20_000,
+        recoveredMinor: 0, currency: "JOD", date: Date.now(), status: "OUTSTANDING", createdAt: Date.now(), updatedAt: Date.now() });
+      return { orgId, draftId, advanceId, recoveryId, otherOrg, otherAdvance };
+    });
+    const admin = t.withIdentity({ subject: "opening-cleanup-admin" });
+    const request = await admin.mutation(api.adminOrgs.hardDeleteOrg, { orgId: fixture.orgId, confirmName: "QA TEST opening cleanup" });
+    await t.run((ctx) => ctx.db.patch(request.requestId, { currentStepIndex: ORGANIZATION_DELETION_STEPS.length - 1 }));
+    expect((await runDeletionToCompletion(t, request.requestId))?.status).toBe("COMPLETED");
+    expect(await t.run((ctx) => ctx.db.get(fixture.draftId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(fixture.recoveryId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(fixture.advanceId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(fixture.otherAdvance))).not.toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(fixture.otherOrg))).not.toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(fixture.orgId))).toBeNull();
+  });
+
   test("event tables are purged in smaller batches than ordinary org rows", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithOwner(t);

@@ -1,3 +1,4 @@
+import { clearOpeningPayrollReference, clearNewOpeningResultReference } from "./utils/openingResetCleanup";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
@@ -36,6 +37,16 @@ type StorageDeletionStep =
   | { kind: "socialPostsWithStorage" };
 type SpecialDeletionStep = StorageDeletionStep | { kind: "dmConversations" } | { kind: "liveChatThreads" } | { kind: "retainTaskAlarmHistory" };
 type DeletionStep = OrgScopedDeletionStep | SpecialDeletionStep;
+const RECEIPT_APPLICATION_DELETION_STEP = { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" } satisfies OrgScopedDeletionStep;
+const PAYROLL_ITEM_DELETION_STEP = { kind: "orgRows", table: "payrollItems", index: "by_org" } satisfies OrgScopedDeletionStep;
+const OPENING_PAYABLE_PAYMENT_DELETION_STEP = { kind: "orgRows", table: "openingPayablePayments", index: "by_org" } satisfies OrgScopedDeletionStep;
+const OPENING_AP_DELETION_STEP = { kind: "orgRows", table: "vehicleSupplierPayables", index: "by_org" } satisfies OrgScopedDeletionStep;
+const OPENING_COMMISSION_DELETION_STEP = { kind: "orgRows", table: "openingCommissionLiabilities", index: "by_org" } satisfies OrgScopedDeletionStep;
+const MANAGEMENT_SETTLEMENT_DELETION_STEP = { kind: "orgRows", table: "openingManagementSettlementPlans", index: "by_org" } satisfies OrgScopedDeletionStep;
+const OPENING_DRAFT_DELETION_STEP = { kind: "orgRows", table: "openingBalanceDrafts", index: "by_org" } satisfies OrgScopedDeletionStep;
+const ADVANCE_RECOVERY_DELETION_STEP = { kind: "orgRows", table: "employeeAdvanceRecoveries", index: "by_org" } satisfies OrgScopedDeletionStep;
+const ADVANCE_DELETION_STEP = { kind: "orgRows", table: "employeeAdvances", index: "by_org" } satisfies OrgScopedDeletionStep;
+const PRE_DRAIN_STEPS = [PAYROLL_ITEM_DELETION_STEP, OPENING_PAYABLE_PAYMENT_DELETION_STEP, OPENING_AP_DELETION_STEP, OPENING_COMMISSION_DELETION_STEP, MANAGEMENT_SETTLEMENT_DELETION_STEP, RECEIPT_APPLICATION_DELETION_STEP, ADVANCE_RECOVERY_DELETION_STEP, ADVANCE_DELETION_STEP, OPENING_DRAFT_DELETION_STEP] as const;
 
 const ACTIVE_DELETION_STATUSES: DeletionRequestStatus[] = ["PENDING_REVIEW", "APPROVED", "RUNNING"];
 
@@ -214,6 +225,8 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "roles", index: "by_org" },
   // Appended to preserve saved currentStepIndex values for in-flight purges.
   // runDeletionRequestBatch drains this child before the frozen parent steps.
+  // Keep public purge manifests literal for the receipt-authority structural
+  // scanner. The pre-drain uses the same table/index before frozen parent steps.
   { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" },
   // SCRUM-571 D-8: held provider payments. Appended last (the order is pinned).
   // Rows with no orgId (UNKNOWN_REFERENCE) belong to no tenant and survive.
@@ -248,6 +261,14 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // because the order is pinned; the index leads with orgId, and nothing
   // references these rows.
   { kind: "orgRows", table: "dealCommissionLines", index: "by_org_sale" },
+  // Preserve every frozen destructive step index. The pre-drain also covers
+  // older requests whose saved cursor already passed this appended position.
+  { kind: "orgRows", table: "employeeAdvanceRecoveries", index: "by_org" },
+  { kind: "orgRows", table: "employeeAdvances", index: "by_org" },
+  { kind: "orgRows", table: "openingBalanceDrafts", index: "by_org" },
+  { kind: "orgRows", table: "openingManagementSettlementPlans", index: "by_org" },
+  { kind: "orgRows", table: "openingPayablePayments", index: "by_org" },
+  { kind: "orgRows", table: "openingCommissionLiabilities", index: "by_org" },
   // Explicit retention marker, not a deletion step: the owner requires task
   // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
   // never purged here. Keep it last; never turn it into a delete.
@@ -430,7 +451,8 @@ async function deleteRowsByOrgBatch(
   ctx: MutationCtx,
   table: TableNames,
   index: string,
-  orgId: Id<"organizations">
+  orgId: Id<"organizations">,
+  openingCleanup: { deferred: boolean },
 ) {
   const batchSize = TRIGGER_HEAVY_DELETION_TABLES.has(table)
     ? TRIGGER_HEAVY_BATCH_SIZE
@@ -438,10 +460,17 @@ async function deleteRowsByOrgBatch(
   const rows: Array<{ _id: Id<TableNames> }> = await (ctx.db.query(table) as any)
     .withIndex(index, (q: any) => q.eq("orgId", orgId))
     .take(batchSize);
+  let deleted = 0;
   for (const row of rows) {
+    if (table === "payrollItems") await clearOpeningPayrollReference(ctx, orgId, row._id as Id<"payrollItems">);
+    if (table === "openingCommissionLiabilities" && !await clearNewOpeningResultReference(ctx, orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> })) {
+      openingCleanup.deferred = true;
+      break;
+    }
     await ctx.db.delete(row._id);
+    deleted += 1;
   }
-  return rows.length > 0 ? { [table]: rows.length } : {};
+  return deleted > 0 ? { [table]: deleted } : {};
 }
 
 async function deleteStorageIds(ctx: MutationCtx, storageIds: Id<"_storage">[]) {
@@ -719,7 +748,7 @@ async function deleteLiveChatThreadBatch(ctx: MutationCtx, orgId: Id<"organizati
   return { liveChatThreads: 1 };
 }
 
-async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"organizations">) {
+async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"organizations">, openingCleanup: { deferred: boolean }) {
   if (step.kind === "retainTaskAlarmHistory") {
     return {};
   }
@@ -753,7 +782,7 @@ async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"
   if (step.kind === "socialPostsWithStorage") {
     return await deleteSocialPostsWithStorageBatch(ctx, orgId);
   }
-  return await deleteRowsByOrgBatch(ctx, step.table, step.index, orgId);
+  return await deleteRowsByOrgBatch(ctx, step.table, step.index, orgId, openingCleanup);
 }
 
 export const listOrgs = query({
@@ -933,6 +962,8 @@ export const approveDeletionRequest = mutation({
       suspendedReason: "Organization deletion approved by platform administration.",
       deletionRequestedAt: org.deletionRequestedAt ?? request.requestedAt,
       deletionRequestId: args.requestId,
+      // This transition abandons reset progress; later batches own their new reference scan.
+      openingCleanupReferenceScan: undefined,
     });
     await ctx.db.patch(args.requestId, {
       status: "RUNNING",
@@ -1063,6 +1094,8 @@ export const hardDeleteOrg = mutation({
       suspendedReason: "Organization deletion approved by platform administration.",
       deletionRequestedAt: now,
       deletionRequestId: requestId,
+      // Clear reset-owned progress once, preserving the deletion runner's subsequent scan.
+      openingCleanupReferenceScan: undefined,
     });
 
     await notifyManagers(ctx, args.orgId, "admin.org_deleted", {});
@@ -1109,26 +1142,27 @@ export const runDeletionRequestBatch = internalMutation({
       // Idempotent by the `undefined` check: re-stamping on every batch would
       // move the timestamp and lose when destruction actually began.
       const org = await ctx.db.get(request.orgId);
-      if (org && org.destructivePurgeStartedAt === undefined) {
-        await ctx.db.patch(request.orgId, { destructivePurgeStartedAt: now });
+      if (org && (org.destructivePurgeStartedAt === undefined || org.openingCleanupPayableScan !== undefined)) {
+        // Org deletion enumerates all AP itself; an interrupted reset's discovery queue is obsolete.
+        // Clear its references before any queued payable/header target is removed.
+        await ctx.db.patch(request.orgId, { destructivePurgeStartedAt: org.destructivePurgeStartedAt ?? now,
+          openingCleanupPayableScan: undefined });
       }
 
-      // The saved step index is a durable cursor, so the new reservation step
-      // must stay appended. Drain its rows before any frozen parent step runs;
-      // this also handles a request already partway through that old manifest.
-      const reservationCounts = await runDeletionStep(
-        ctx,
-        { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" },
-        request.orgId
-      );
-      const reservationsDeleted = countDeletedRows(reservationCounts);
-      if (reservationsDeleted > 0) {
-        await ctx.db.patch(args.requestId, {
-          deletedCounts: mergeDeletedCounts(request.deletedCounts, reservationCounts),
-          lastProcessedAt: now,
-        });
-        await scheduleDeletionBatch(ctx, args.requestId);
-        return { status: "RUNNING" as const, currentStepIndex, deletedInBatch: reservationsDeleted };
+      // Appended steps must cover requests already beyond their new position.
+      // Drain one bounded batch without changing the durable old cursor.
+      const openingCleanup = { deferred: false };
+      for (const preDrainStep of PRE_DRAIN_STEPS) {
+        const counts = await runDeletionStep(ctx, preDrainStep, request.orgId, openingCleanup);
+        const deleted = countDeletedRows(counts);
+        if (deleted > 0 || openingCleanup.deferred) {
+          await ctx.db.patch(args.requestId, {
+            deletedCounts: mergeDeletedCounts(request.deletedCounts, counts),
+            lastProcessedAt: now,
+          });
+          await scheduleDeletionBatch(ctx, args.requestId);
+          return { status: "RUNNING" as const, currentStepIndex, deletedInBatch: deleted };
+        }
       }
 
       if (currentStepIndex >= ORGANIZATION_DELETION_STEPS.length) {
@@ -1145,10 +1179,10 @@ export const runDeletionRequestBatch = internalMutation({
       }
 
       const step = ORGANIZATION_DELETION_STEPS[currentStepIndex];
-      const batchCounts = await runDeletionStep(ctx, step, request.orgId);
+      const batchCounts = await runDeletionStep(ctx, step, request.orgId, openingCleanup);
       const deletedInBatch = countDeletedRows(batchCounts);
 
-      if (deletedInBatch > 0) {
+      if (deletedInBatch > 0 || openingCleanup.deferred) {
         await ctx.db.patch(args.requestId, {
           deletedCounts: mergeDeletedCounts(request.deletedCounts, batchCounts),
           lastProcessedAt: now,

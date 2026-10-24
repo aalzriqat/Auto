@@ -1,3 +1,4 @@
+import {incrementAccountSnapshot} from "./accounting/accountSnapshots";
 /**
  * SCRUM-651 (D-42) - the AP-Suppliers subledger is the signed open balance of
  * every non-CANCELLED supplier payable, whatever its status label, and a sale
@@ -235,6 +236,11 @@ describe("SCRUM-651 - reconciliation counts every non-CANCELLED payable by its o
         orgId: s.orgId, journalEntryId, lineNumber: 1, accountId: account._id, debitMinor: 0, creditMinor: 200_000,
         currency: "USD", scale: 2, accountingDate: now,
       });
+      // Unreachable historical-currency reader fixture: use the balance-sheet's
+      // native snapshot surface as well as its original stored journal line.
+      const period=await ctx.db.query("accountingPeriods").withIndex("by_org",q=>q.eq("orgId",s.orgId)).unique();
+      if(!period)throw new Error("Missing USD reader fixture period");
+      await incrementAccountSnapshot(ctx,{orgId:s.orgId,accountId:account._id,currency:"USD",periodId:period._id,debitMinor:0,creditMinor:200_000});
     });
     const r = await recon(s);
     expect(r.currencies).toEqual(["JOD", "USD"]);

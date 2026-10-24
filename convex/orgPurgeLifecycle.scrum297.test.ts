@@ -175,9 +175,22 @@ describe("SCRUM-297 — organization destructive lifecycle", () => {
     const { orgId, ownerId } = await seedOrg(t);
     const asAdmin = t.withIdentity({ subject: "dev_admin" });
 
-    await executeEconomicCommand(t, orgId, ownerId, "K");
+    // Advances now have a child-first pre-drain. Use a real economic row whose
+    // native deletion step remains after command authority, preserving the
+    // original asymmetric-state control without changing production ordering.
+    const { paymentId } = await t.run((ctx) => runWithIdempotency(ctx, {
+      orgId,
+      operation: "scrum297.paymentProvenanceControl",
+      economic: true,
+      idempotencyKey: "K",
+      fingerprint: JSON.stringify({ direction: "IN", method: "CASH", amountMinor: 40000, currency: "JOD" }),
+    }, async () => ({ paymentId: await ctx.db.insert("canonicalPayments", {
+      orgId, direction: "IN", method: "CASH", amountMinor: 40000,
+      currency: "JOD", scale: 3, status: "SETTLED", idempotencyKey: "K",
+      createdBy: ownerId, createdAt: Date.now(),
+    }) })));
     expect(await countRows(t, "commandIdempotency")).toBe(1);
-    expect(await countRows(t, "employeeAdvances")).toBe(1);
+    expect(await t.run((ctx) => ctx.db.get(paymentId))).toMatchObject({ orgId, amountMinor: 40000, status: "SETTLED" });
 
     const { requestId } = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, {
       orgId,
@@ -187,7 +200,7 @@ describe("SCRUM-297 — organization destructive lifecycle", () => {
 
     // THE CONTROL: authority gone, provenance survives, org row still present.
     expect(await countRows(t, "commandIdempotency")).toBe(0);
-    expect(await countRows(t, "employeeAdvances")).toBe(1);
+    expect(await t.run((ctx) => ctx.db.get(paymentId))).toMatchObject({ orgId, amountMinor: 40000, status: "SETTLED" });
     expect(await t.run(async (ctx) => await ctx.db.get(orgId))).not.toBeNull();
   });
 

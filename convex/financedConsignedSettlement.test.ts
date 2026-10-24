@@ -6626,7 +6626,9 @@ describe("SCRUM-42 — a lost vehicle must not turn an unpaid supplier into a se
 
     // What a half-finished `hardDeleteOrg` leaves behind: the supplier rows
     // removed before the vehicles, and the sale still standing.
-    const sale = await s.t.run(async (ctx) => await ctx.db.get(payable!.saleId!));
+    if(!payable || payable.origin === "OPENING" || !payable.saleId)throw new Error("Expected native consigned sale payable");
+    const nativeSaleId=payable.saleId;
+    const sale = await s.t.run(async (ctx) => await ctx.db.get(nativeSaleId));
     await s.t.run(async (ctx) => {
       await ctx.db.delete(payable!._id);
       await ctx.db.delete(sale!.vehicleId);

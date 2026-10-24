@@ -167,8 +167,7 @@ export const AP_AFFECTING_BY_EVENT_TYPE = {
   JOURNAL_REVERSAL: false,
 } satisfies Record<EventType, boolean>;
 
-export interface LineSpec {
-  accountSystemKey: SystemKey;
+interface LineAmountsAndDimensions {
   debitMinor: number;
   creditMinor: number;
   description?: string;
@@ -182,6 +181,11 @@ export interface LineSpec {
   /** SCRUM-54: the physical bank a BANK_ACCOUNT control line moved money through. */
   bankAccountId?: string;
 }
+
+export type LineSpec = LineAmountsAndDimensions & (
+  {accountSystemKey:SystemKey;openingSource?:never} |
+  {openingSource:{draftId:string;rowKey:string};accountSystemKey?:never}
+);
 
 /**
  * The dimension that says WHICH finance company a line belongs to: the configured
@@ -533,6 +537,8 @@ export interface SaleCompletedPayload {
 }
 
 export interface SupplierPaymentSettledPayload {
+  openingSource?: {draftId:string;rowKey:string};
+  openingPaymentId?: string;
   payableId: string;
   sourcedFromName: string;
   amountMinor: number;
@@ -1739,6 +1745,7 @@ export function ruleConsignedSaleReclassified(p: ConsignedSaleReclassifiedPayloa
 }
 
 export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): RuleResult {
+  if(p.openingSource && p.taxMinor) throw new Error("Opening liability settlement cannot reclassify VAT.");
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
     : cashAccountKey(p.paymentMethod);
@@ -1756,7 +1763,7 @@ export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): Ru
   // VAT_RECEIVABLE as a separate, self-balancing pair rather than touching
   // the AP/cash settlement lines.
   const lines: LineSpec[] = [
-    line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, p.amountMinor, 0, `AP settled — ${p.sourcedFromName}`),
+    p.openingSource ? {openingSource:p.openingSource,debitMinor:p.amountMinor,creditMinor:0,description:`AP settled — ${p.sourcedFromName}`} : line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS,p.amountMinor,0,`AP settled — ${p.sourcedFromName}`),
     line(cashKey, 0, p.amountMinor, "Cash paid to supplier", cashKey === SYSTEM_KEYS.BANK_ACCOUNT ? { bankAccountId: p.bankAccountId } : undefined),
   ];
   if (p.taxMinor && p.taxMinor > 0) {
@@ -1818,6 +1825,7 @@ export function ruleSupplierReceivableCollected(p: SupplierReceivableCollectedPa
 }
 
 export interface SupplierCostRecoveryReceivedPayload {
+  openingSource?: {draftId:string;rowKey:string};
   receiptId: string;
   recoveryId: string;
   sourcedFromName: string;
@@ -1826,7 +1834,7 @@ export interface SupplierCostRecoveryReceivedPayload {
   /** CASH or BANK_TRANSFER only — cheque receipts are SCRUM-400. */
   paymentMethod: string;
   bankAccountId?: string;
-  vehicleId: string;
+  vehicleId?: string;
 }
 
 /**
@@ -1851,7 +1859,7 @@ export function ruleSupplierCostRecoveryReceived(p: SupplierCostRecoveryReceived
   return {
     lines: [
       line(cashKey, p.amountMinor, 0, `Recovered from ${p.sourcedFromName}`, { vehicleId: p.vehicleId, ...(p.bankAccountId ? { bankAccountId: p.bankAccountId } : {}) }),
-      line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, 0, p.amountMinor, `Supplier-borne cost recovered from ${p.sourcedFromName}`, { vehicleId: p.vehicleId }),
+      p.openingSource ? {openingSource:p.openingSource,debitMinor:0,creditMinor:p.amountMinor,description:`Supplier-borne cost recovered from ${p.sourcedFromName}`} : line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS,0,p.amountMinor,`Supplier-borne cost recovered from ${p.sourcedFromName}`,{vehicleId:p.vehicleId}),
     ],
     memo: `Supplier-borne cost recovered — ${p.sourcedFromName}`,
     category: "SYSTEM",
@@ -3142,6 +3150,7 @@ export interface PayrollPaidPayload {
   salaryMinor: number;
   /** Commission portion paid through payroll (clears Commission Payable) — Option A. */
   commissionMinor: number;
+  openingCommissionSettlements?: import("../utils/openingCommissionBasis").OpeningCommissionSettlement[];
   /** Outstanding advance recovered from this payslip (credits Employee Advances). */
   advanceRecoveredMinor: number;
   /** Net cash actually disbursed = salary + commission − advanceRecovered. */
@@ -3166,6 +3175,11 @@ export function rulePayrollPaid(p: PayrollPaidPayload): RuleResult {
   if (p.salaryMinor > 0) lines.push(line(SYSTEM_KEYS.SALARIES_PAYABLE, p.salaryMinor, 0, "Salary settled"));
   if (p.commissionMinor > 0) {
     lines.push(line(SYSTEM_KEYS.COMMISSION_PAYABLE, p.commissionMinor, 0, "Commission settled via payroll"));
+  }
+  for (const settlement of p.openingCommissionSettlements ?? []) {
+    if (!Number.isSafeInteger(settlement.amountMinor) || settlement.amountMinor <= 0) throw new ConvexError("Opening commission settlement amount is unavailable.");
+    lines.push({ openingSource: { draftId: settlement.draftId, rowKey: settlement.rowKey },
+      debitMinor: settlement.amountMinor, creditMinor: 0, description: "Opening employee commission settled via payroll" });
   }
   if (p.advanceRecoveredMinor > 0) {
     lines.push(line(SYSTEM_KEYS.EMPLOYEE_ADVANCES, 0, p.advanceRecoveredMinor, "Advance recovered from payroll"));

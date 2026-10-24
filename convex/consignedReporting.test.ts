@@ -1509,7 +1509,7 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     expect(claims).toHaveLength(0);
 
     const payables = await s.t.run(async (ctx) =>
-      (await ctx.db.query("vehicleSupplierPayables").collect()).filter((p) => p.vehicleId === vehicleId)
+      (await ctx.db.query("vehicleSupplierPayables").collect()).filter((p) => p.origin !== "OPENING" && p.vehicleId === vehicleId)
     );
     expect(payables).toHaveLength(0);
   });
@@ -1584,7 +1584,7 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     });
 
     const payable = await s.t.run(async (ctx) =>
-      (await ctx.db.query("vehicleSupplierPayables").collect()).find((p) => p.vehicleId === vehicleId)
+      (await ctx.db.query("vehicleSupplierPayables").collect()).find((p) => p.origin !== "OPENING" && p.vehicleId === vehicleId)
     );
     expect(payable?.amountDue).toBe(9_500.5);
   });

@@ -1,3 +1,4 @@
+import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -531,6 +532,9 @@ async function computeCloseChecklist(
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
     warnings.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
+  const heldOpeningLiabilities=await readOpeningUnallocatedLiabilities(ctx,orgId,period.endDate);
+  if(heldOpeningLiabilities.status === "UNAVAILABLE")warnings.push("Opening unallocated liability basis is unavailable. Finance must reconcile the source proof.");
+  else if(heldOpeningLiabilities.status === "UNALLOCATED")warnings.push("Opening liabilities include unallocated held pools. Arithmetic reconciliation does not establish beneficial ownership; these pools are not available for customer refunds or credit application.");
   if (!customerDepositsRecon.isReconciled) {
     const badCurrencies = customerDepositsRecon.currencies.filter((c) => !customerDepositsRecon.byCurrency[c].isReconciled);
     warnings.push(`Customer deposits subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);

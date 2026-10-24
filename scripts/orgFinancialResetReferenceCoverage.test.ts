@@ -18,6 +18,7 @@
  * Anything else, and any stale entry in the lists, fails.
  */
 import * as fs from "node:fs";
+import { OPENING_ATOMIC_REFERENCE_CLEARS } from "../convex/utils/openingResetCleanup";
 import * as path from "node:path";
 import ts from "typescript";
 import { describe, expect, test } from "vitest";
@@ -259,6 +260,16 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "openingBalanceDrafts.lines[].accountId->chartOfAccounts":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  // SCRUM-546 c21566 leaves the opening draft outside the reset. The new
+  // allocation references therefore survive with the same documented risk as
+  // its older line/journal references. This is not a cleanup or release pass:
+  // source-basis readers must report UNAVAILABLE after their target is deleted.
+  "openingBalanceDrafts.allocations[].accountId->chartOfAccounts":
+    "OPEN DECISION: opening drafts survive reset while their allocated chart account is deleted; posted basis cannot be reused without the actual journal/account.",
+  "openingBalanceDrafts.allocationResults[].receivableId->receivables":
+    "OPEN DECISION: opening drafts survive reset while their materialized receivable is deleted; collections and readback must refuse unavailable basis.",
+  "openingBalanceDrafts.allocationResults[].canonicalReceivableDocumentId->receivableDocuments":
+    "OPEN DECISION: opening drafts survive reset while their canonical document is deleted; collections and readback must refuse unavailable basis.",
   "partnerEquityTransactions.accountingEventId->accountingEvents":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "paymentIntents.canonicalPaymentId->canonicalPayments":
@@ -311,7 +322,8 @@ function evaluate(
   childTables: Readonly<Record<string, readonly string[]>>,
   accepted: Readonly<Record<string, string>>,
   known: Readonly<Record<string, string>>,
-  refs: Ref[]
+  refs: Ref[],
+  atomicClears: readonly string[] = OPENING_ATOMIC_REFERENCE_CLEARS
 ): Verdict {
   const resetSet = new Set(resetTables);
   const order = new Map(resetTables.map((t, i) => [t, i]));
@@ -323,6 +335,8 @@ function evaluate(
     if (!resetSet.has(ref.target)) continue; // target survives the reset in any case
     const key = pairKey(ref.table, ref.path, ref.target);
     const fromReset = resetSet.has(ref.table);
+    // These exact new edges have destructive-lifecycle read/write controls; no dangling exemption.
+    if (atomicClears.includes(key)) continue;
 
     if (fromReset) {
       const deferred = (childTables[ref.target] ?? []).includes(ref.table);
@@ -385,6 +399,11 @@ describe("organization financial reset covers every reset-to-reset reference", (
       verdict.staleEntries,
       render("Pinned entries that no longer match a schema reference:", verdict.staleEntries)
     ).toEqual([]);
+  });
+
+  test("MUTATION CONTROL: removing measured atomic clears exposes every new cycle/proof edge", () => {
+    const verdict = evaluate(RESET_TABLES_FOR_TEST, CHILD_TABLES_FOR_TEST, ACCEPTED_OPTIONAL_DANGLING, KNOWN_SURVIVING_REFERENCES, allReferences(), []);
+    expect(verdict.unaccounted).toEqual(expect.arrayContaining([...OPENING_ATOMIC_REFERENCE_CLEARS]));
   });
 
   test("MUTATION CONTROL: removing the payrollRuns edge is detected", () => {
@@ -762,7 +781,7 @@ interface CensusPin {
  * swallowed by a Set.
  */
 const WRITER_CENSUS: CensusPin = {
-  sites: { "applications.ts": 1, "collections.ts": 1, "subledger.ts": 3, "utils/saleCompletion.ts": 1 },
+  sites: { "accounting/openingAllocations.ts": 1, "applications.ts": 1, "collections.ts": 1, "subledger.ts": 3, "utils/saleCompletion.ts": 1 },
   unparsed: {
     "subledger.ts": {
       "unresolved sourceType: args.sourceType": 1, // the insert inside createReceivableDocument

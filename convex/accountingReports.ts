@@ -1,10 +1,15 @@
+import { createOpeningSettlementReader } from "./utils/openingSettlementBasis";
+import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
+import { openingPayableBasis } from "./utils/openingSupplierBasis";
+import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
 /**
  * Phase 5 — Ledger-backed financial reports
  *
  * All reports are computed from posted journalLines (the GL), not from the
  * legacy transactions table.  Reports only include POSTED journal entries.
  */
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
+import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { QueryCtx } from "./_generated/server";
@@ -290,16 +295,11 @@ export const trialBalance = query({
 
 // ─── Income Statement (P&L) ───────────────────────────────────────────────────
 
-export const incomeStatement = query({
-  args: {
-    orgId: v.id("organizations"),
-    fromDate: v.number(),
-    toDate: v.number(),
-  },
-  handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    await requireFeature(ctx, args.orgId, "accounting");
-
+/** Shared native GL flow reader for authenticated accounting report handlers.
+ * Closed balance consumers separately use accountSnapshots. */
+export async function computeIncomeStatement(ctx: QueryCtx, args: {
+  orgId: Id<"organizations">; fromDate: number; toDate: number;
+}) {
     const accounts = await ctx.db
       .query("chartOfAccounts")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -384,6 +384,18 @@ export const incomeStatement = query({
       currency: orgCurrency,
       totalsByCurrency,
     };
+}
+
+export const incomeStatement = query({
+  args: {
+    orgId: v.id("organizations"),
+    fromDate: v.number(),
+    toDate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    return computeIncomeStatement(ctx, args);
   },
 });
 
@@ -754,6 +766,8 @@ export const subledgerReconciliation = query({
 // period-close blockers.
 
 export type GlVsSubledgerResult = {
+  attributionStatus?: "ATTRIBUTED" | "UNALLOCATED" | "UNAVAILABLE";
+  heldOpeningMinor?: Record<string,number>;
   currencies: string[];
   byCurrency: Record<
     string,
@@ -861,6 +875,8 @@ export async function computePrepaidExpensesReconciliation(
 
   const subByCurrency = new Map<string, number>();
   for (const s of active) {
+    const source = await resolvePrepaidScheduleSource(ctx, orgId, s._id);
+    if (source.kind === "UNAVAILABLE") throw new ConvexError(source.reason);
     const remaining = Math.max(s.totalMinor - s.recognizedMinor, 0);
     if (remaining > 0) subByCurrency.set(s.currency, (subByCurrency.get(s.currency) ?? 0) + remaining);
   }
@@ -909,6 +925,8 @@ export async function computePrepaidRecognitionShortfall(
   const byCurrency: Record<string, number> = {};
   let scheduleCount = 0;
   for (const s of schedules) {
+    const source = await resolvePrepaidScheduleSource(ctx, orgId, s._id);
+    if (source.kind === "UNAVAILABLE") throw new ConvexError(source.reason);
     if (s.status === "CANCELLED") continue;
     const dueMinor = recognizedDueThroughDateMinor(
       { totalMinor: s.totalMinor, termMonths: s.termMonths, startYearMonth: s.startYearMonth, currency: s.currency },
@@ -935,7 +953,7 @@ export async function computePrepaidRecognitionShortfall(
  */
 export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
   status: "AVAILABLE" | "UNAVAILABLE";
-  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS";
+  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE";
 };
 
 /**
@@ -1025,6 +1043,52 @@ async function pendingApDraftState(
   return touchesAp ? "PENDING" : "NONE";
 }
 
+async function supplierPayableOpenBalanceAsOf(
+  ctx: QueryCtx,
+  request: Readonly<{ orgId: Id<"organizations">; payable: Doc<"vehicleSupplierPayables">; cutoff: number }>,
+): Promise<
+  | { status: "AVAILABLE"; openMinor: number | null; accountId?: Id<"chartOfAccounts"> }
+  | { status: "UNAVAILABLE"; reason: "OPENING_SOURCE_UNAVAILABLE" | "OVER_LIMIT" }
+> {
+  const { orgId, payable: p, cutoff } = request;
+  let openMinor: number;
+  let basis;
+  try {
+    basis = await openingPayableBasis(ctx, orgId, p);
+  } catch {
+    return { status: "UNAVAILABLE", reason: "OPENING_SOURCE_UNAVAILABLE" };
+  }
+  if (basis) {
+    if (basis.asOfDate > cutoff) return { status: "AVAILABLE", openMinor: null, accountId: basis.accountId };
+    const payments = await ctx.db
+      .query("openingPayablePayments")
+      .withIndex("by_payable", (q) => q.eq("payableId", p._id))
+      .take(101);
+    if (payments.length > 100) return { status: "UNAVAILABLE", reason: "OVER_LIMIT" };
+    if (
+      payments.some(
+        (payment) =>
+          payment.orgId !== orgId ||
+          payment.openingBalanceDraftId !== basis.draftId ||
+          payment.openingRowKey !== basis.rowKey ||
+          !Number.isSafeInteger(payment.amountMinor) ||
+          payment.amountMinor <= 0 ||
+          payment.currency !== p.currency,
+      )
+    )
+      return { status: "UNAVAILABLE", reason: "OPENING_SOURCE_UNAVAILABLE" };
+    const paid = payments
+      .filter(
+        (payment) =>
+          payment.occurredAt <= cutoff &&
+          (payment.status !== "REVERSED" || (payment.reversedAt !== undefined && payment.reversedAt > cutoff)),
+      )
+      .reduce((sum, payment) => sum + payment.amountMinor, 0);
+    openMinor = basis.amountMinor - paid;
+  } else openMinor = toMinorUnits(p.amountDue, p.currency) - toMinorUnits(settlementView(p).amountPaid, p.currency);
+  return { status: "AVAILABLE", openMinor, accountId: basis?.accountId };
+}
+
 export async function computeSupplierPayablesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
@@ -1036,7 +1100,7 @@ export async function computeSupplierPayablesReconciliation(
   } = {}
 ): Promise<SupplierPayablesReconciliationResult> {
   const readLimit = opts.readLimit ?? SUPPLIER_PAYABLES_RECON_READ_LIMIT;
-  const unavailable = (unavailableReason: "OVER_LIMIT" | "PENDING_POSTINGS"): SupplierPayablesReconciliationResult => ({
+  const unavailable = (unavailableReason: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE"): SupplierPayablesReconciliationResult => ({
     currencies: [],
     byCurrency: {},
     isReconciled: false,
@@ -1085,15 +1149,27 @@ export async function computeSupplierPayablesReconciliation(
   // settlementView as fully paid (contributes 0). Soft-deleted vehicles do not matter - the
   // liability does not go away with the car.
   const subByCurrency = new Map<string, number>();
+  const controlAccounts = new Set<Id<"chartOfAccounts">>();
+  const canonical = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).unique();
+  if(canonical)controlAccounts.add(canonical._id);
+  const cutoff=toDate ?? Date.now();
   for (const p of rows) {
-    const openMinor = toMinorUnits(p.amountDue, p.currency) - toMinorUnits(settlementView(p).amountPaid, p.currency);
+    const balance = await supplierPayableOpenBalanceAsOf(ctx, { orgId, payable: p, cutoff });
+    if (balance.status === "UNAVAILABLE") return unavailable(balance.reason);
+    if (balance.accountId) controlAccounts.add(balance.accountId);
+    if (balance.openMinor === null) continue;
+    const openMinor = balance.openMinor;
     subByCurrency.set(p.currency, (subByCurrency.get(p.currency) ?? 0) + openMinor);
   }
   for (const [currency, minor] of subByCurrency) {
     if (minor === 0) subByCurrency.delete(currency);
   }
 
-  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, toDate);
+  const glByCurrency=new Map<string,number>();
+  for(const balance of await getCumulativeBalancesAsOf(ctx,orgId,cutoff)){
+    if(!controlAccounts.has(balance.accountId))continue;
+    glByCurrency.set(balance.currency,(glByCurrency.get(balance.currency)??0)+balance.creditMinor-balance.debitMinor);
+  }
   return { ...combineGlAndSubledger(glByCurrency, subByCurrency), status: "AVAILABLE" };
 }
 
@@ -1205,8 +1281,23 @@ export async function computeCustomerDepositsReconciliation(
     subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + outstanding);
   }
 
-  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, toDate);
-  return combineGlAndSubledger(glByCurrency, subByCurrency);
+  const held=await readOpeningUnallocatedLiabilities(ctx,orgId,toDate??Date.now());
+  if(held.status === "UNAVAILABLE")return {currencies:[],byCurrency:{},isReconciled:false,attributionStatus:"UNAVAILABLE"};
+  const controls=new Set<Id<"chartOfAccounts">>();
+  const native=await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY)).unique();
+  if(native)controls.add(native._id);
+  const heldOpeningMinor:Record<string,number>={};
+  for(const row of held.rows){
+    if(row.purpose!=="CUSTOMER_DEPOSIT")continue;
+    controls.add(row.accountId);
+    heldOpeningMinor[row.currency]=(heldOpeningMinor[row.currency]??0)+row.amountMinor;
+    subByCurrency.set(row.currency,(subByCurrency.get(row.currency)??0)+row.amountMinor);
+  }
+  const glByCurrency=new Map<string,number>();
+  for(const balance of await getCumulativeBalancesAsOf(ctx,orgId,toDate??Date.now())){
+    if(controls.has(balance.accountId))glByCurrency.set(balance.currency,(glByCurrency.get(balance.currency)??0)+balance.creditMinor-balance.debitMinor);
+  }
+  return {...combineGlAndSubledger(glByCurrency,subByCurrency),heldOpeningMinor,attributionStatus:Object.keys(heldOpeningMinor).length?"UNALLOCATED":"ATTRIBUTED"};
 }
 
 export const customerDepositsReconciliation = query({
@@ -1227,6 +1318,7 @@ export async function computeCommissionPayableReconciliation(
 ): Promise<GlVsSubledgerResult> {
   // No org-currency read here: the subledger side is keyed by the currency each
   // entry was POSTED in, so today's org currency plays no part.
+  const asOfDate = toDate ?? Date.now();
   const sales =
     provided?.sales ??
     (await ctx.db
@@ -1252,7 +1344,7 @@ export async function computeCommissionPayableReconciliation(
   const { bySale: recognizedBySale, byLine: recognizedByLine } = await computeRecognizedCommissionAsOf(
     ctx,
     orgId,
-    toDate
+    asOfDate
   );
 
   const subledgerMinor = new Map<string, number>();
@@ -1264,7 +1356,7 @@ export async function computeCommissionPayableReconciliation(
     const normalized = ctx.db.normalizeId("dealCommissionLines", lineId);
     const line = normalized ? await ctx.db.get(normalized) : null;
     if (!line || line.orgId !== orgId) continue;
-    if (line.paidAt !== undefined && (toDate === undefined || line.paidAt <= toDate)) continue;
+    if (line.paidAt !== undefined && line.paidAt <= asOfDate) continue;
     for (const [currency, minor] of recognized) {
       subledgerMinor.set(currency, (subledgerMinor.get(currency) ?? 0) + minor);
     }
@@ -1283,7 +1375,7 @@ export async function computeCommissionPayableReconciliation(
     const recognized = recognizedBySale.get(sale._id);
     if (recognized === undefined) continue;
     // Settled at or before the reporting date, so the GL had already cleared it.
-    if (sale.commissionPaidAt != null && (toDate === undefined || sale.commissionPaidAt <= toDate)) {
+    if (sale.commissionPaidAt != null && sale.commissionPaidAt <= asOfDate) {
       continue;
     }
     // Keyed by the currency each entry was POSTED in, not the org's current
@@ -1296,6 +1388,19 @@ export async function computeCommissionPayableReconciliation(
     }
   }
 
+  const openingRows = await ctx.db.query("openingCommissionLiabilities").withIndex("by_org", q => q.eq("orgId", orgId)).take(101);
+  if (openingRows.length > 100) throw new ConvexError("Opening commission reconciliation is unavailable.");
+  const controlAccounts = new Set<Id<"chartOfAccounts">>();
+  const canonical = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.COMMISSION_PAYABLE)).unique();
+  if (canonical) controlAccounts.add(canonical._id);
+  const openingReader = createOpeningSettlementReader(ctx, orgId);
+  for (const row of openingRows) {
+    const source = await openingCommissionRemainingAsOf(ctx, orgId, row._id, asOfDate, openingReader);
+    if (source.kind !== "AVAILABLE") throw new ConvexError(source.reason);
+    controlAccounts.add(source.accountId);
+    subledgerMinor.set(row.currency, (subledgerMinor.get(row.currency) ?? 0) + source.remainingMinor);
+  }
+
   const subByCurrency = new Map<string, number>();
   // `!== 0`, not `> 0`: a negative total is exactly the kind of discrepancy this
   // report exists to surface, and suppressing it reported a clean zero instead.
@@ -1303,7 +1408,17 @@ export async function computeCommissionPayableReconciliation(
     if (minor !== 0) subByCurrency.set(currency, minor);
   }
 
-  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.COMMISSION_PAYABLE, toDate);
+  // Match the actual balance-sheet consumer: closed balances use native snapshots.
+  const glByCurrency = new Map<string, number>();
+  const balances = await getCumulativeBalancesAsOf(ctx, orgId, asOfDate);
+  for (const balance of balances) {
+    if (!controlAccounts.has(balance.accountId)) continue;
+    const account = await ctx.db.get(balance.accountId);
+    if (!account || account.orgId !== orgId) throw new ConvexError("Commission control account is unavailable.");
+    const minor = account.normalBalance === "CREDIT" ? balance.creditMinor - balance.debitMinor : balance.debitMinor - balance.creditMinor;
+    if (!Number.isSafeInteger(minor)) throw new ConvexError("Commission control balance is unavailable.");
+    glByCurrency.set(balance.currency, (glByCurrency.get(balance.currency) ?? 0) + minor);
+  }
   return combineGlAndSubledger(glByCurrency, subByCurrency);
 }
 

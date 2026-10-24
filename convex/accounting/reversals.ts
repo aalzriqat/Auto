@@ -15,6 +15,7 @@ import { scaleForCurrency } from "../utils/money";
 import { simplePayloadHash, validateBalance, LineSpec } from "./postingRules";
 import { auditLog } from "../financialAudit";
 import { incrementAccountSnapshot } from "./accountSnapshots";
+import { resolvePrepaidScheduleSource } from "../utils/openingPrepaidBasis";
 import {
   isReservedReceiptKey,
   isReservedReceiptTuple,
@@ -98,6 +99,23 @@ export async function reverseAccountingEvent(
   const original = await ctx.db.get(cmd.originalEventId);
   if (!original || original.orgId !== cmd.orgId) {
     throw new ConvexError("Accounting event not found in this organization.");
+  }
+  // A journal-only reversal would leave the native movement (and every
+  // partner balance consumer) unchanged. No governed partner reversal exists.
+  // Keep this in the shared engine so internal callers cannot split the books.
+  if (original.sourceType === "partnerEquityTransactions") {
+    throw new ConvexError("Partner movements cannot be reversed through the generic ledger.");
+  }
+  if (original.sourceType === "prepaidExpenseSchedules" &&
+      ["PREPAID_EXPENSE_AMORTIZED", "PREPAID_EXPENSE_REFUNDED", "PREPAID_EXPENSE_WRITTEN_OFF"].includes(original.eventType)) {
+    const rawScheduleId = (original.payload as { scheduleId?: unknown })?.scheduleId;
+    const scheduleId = typeof rawScheduleId === "string" ? ctx.db.normalizeId("prepaidExpenseSchedules", rawScheduleId) : null;
+    if (!scheduleId) throw new ConvexError("The prepaid source cannot be verified for a generic reversal.");
+    const source = await resolvePrepaidScheduleSource(ctx, cmd.orgId, scheduleId);
+    if (source.kind === "OPENING") {
+      throw new ConvexError("Opening prepaid amortization requires a separate finance review before reversal.");
+    }
+    if (source.kind === "UNAVAILABLE") throw new ConvexError("The prepaid source cannot be verified for a generic reversal.");
   }
 
   // ⚠️ SCRUM-515 (S515-R1) — the key-holder lookups run BEFORE every success

@@ -200,7 +200,7 @@ describe("SCRUM-350 CONS-1 v3: a financed consigned sale approved below its pric
 
     // The public, permission-checked list the browser mission reads shows the same single row for this sale.
     const listed = await s.owner.as.query(api.sourcingPayables.list, { orgId: s.orgId });
-    const forSale = listed.filter((row) => row.saleId === saleId);
+    const forSale = listed.filter((row) => row.origin !== "OPENING" && row.saleId === saleId);
     expect(forSale).toHaveLength(1);
     expect(forSale[0]).toMatchObject({ amountDue: 15_000, currency: "JOD", vehicleId: s.vehicleId });
   });

@@ -28,6 +28,10 @@ vi.mock("convex/react", async () => {
       if (name === "organizations:listMine") return [{ _id: "org-a", name: "Synthetic Dealer" }];
       if (name === "memberships:getMyMembership") return { roleName: "CUSTOM", permissions: ["view:org", "view:commissions", "manage:commissions"] };
       if (name === "orgSettings:getCommissionMode") return "MANUAL";
+      if (name === "openingCommissionLiabilities:list") return [{
+        _id: "opening-commission-a", employeeName: "Synthetic opening employee", currency: "JOD",
+        amountMinor: 100003, remainingMinor: 100003, sourceStatus: "AVAILABLE", payrollAvailable: true,
+      }];
       if (name === "memberships:list") return { page: [], isDone: true, continueCursor: "" };
       throw new Error(`Unexpected commission presentation query: ${name}`);
     },
@@ -50,6 +54,9 @@ const mount = () => render(<OrgProvider><LanguageProvider><CommissionsPage /></L
 
 test("commission rows preserve decided, undecided and cancelled status presentation", () => {
   mount();
+  expect(screen.getByText("Opening employee commissions")).toBeTruthy();
+  expect(screen.getByText("Synthetic opening employee")).toBeTruthy();
+  expect(screen.getAllByText("100.003 JOD")).toHaveLength(2);
   for (const [status, label] of [["NOT_SET", "Not set"], ["NO_COMMISSION", "No commission"],
     ["UNPAID", "Unpaid"], ["VOID", "Sale cancelled"], ["PENDING_SALE", "Sale not completed"]]) {
     const row = screen.getByRole("row", { name: new RegExp(`Synthetic ${status}`) });
