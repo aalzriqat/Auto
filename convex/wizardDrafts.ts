@@ -1,23 +1,8 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
-import { requireTenantAuth } from "./utils/tenancy";
-
-const wizardDataValidator = v.object({
-  vehicleId: v.string(),
-  vehiclePrice: v.number(),
-  desiredProfit: v.number(),
-  downPayment: v.number(),
-  termMonths: v.number(),
-  selectedCompanyId: v.optional(v.string()),
-  manualProfitRate: v.optional(v.number()),
-  manualInsuranceRate: v.optional(v.number()),
-  manualExecutionCommission: v.optional(v.number()),
-  manualExecutionFees: v.optional(v.number()),
-  manualIncludesCommissionInDebt: v.optional(v.boolean()),
-  recipientName: v.optional(v.string()),
-  customerStatuses: v.optional(v.array(v.string())),
-});
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { wizardDraftDataValidator } from "./wizardDraftData";
 
 export const getMyDraft = query({
   args: { orgId: v.id("organizations") },
@@ -35,11 +20,38 @@ export const saveDraft = mutation({
     orgId: v.id("organizations"),
     paymentType: v.string(),
     currentStep: v.number(),
-    wizardData: wizardDataValidator,
+    wizardData: wizardDraftDataValidator,
     selectedCustomerId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
+    const vehicleReferences = args.wizardData.vehicleItems?.map(item => item.vehicleId) ?? [];
+    if (args.wizardData.vehicleId) vehicleReferences.push(args.wizardData.vehicleId);
+    for (const reference of vehicleReferences) {
+      const id = ctx.db.normalizeId("vehicles", reference);
+      if (!id) throw new ConvexError("Record not found in this organization.");
+      await requireOwnedRow(ctx, args.orgId, "vehicles", id);
+    }
+    if (args.wizardData.leadId) {
+      const id = ctx.db.normalizeId("leads", args.wizardData.leadId);
+      if (!id) throw new ConvexError("Record not found in this organization.");
+      await requireOwnedRow(ctx, args.orgId, "leads", id);
+    }
+    if (args.selectedCustomerId) {
+      const id = ctx.db.normalizeId("customers", args.selectedCustomerId);
+      if (!id) throw new ConvexError("Record not found in this organization.");
+      await requireOwnedRow(ctx, args.orgId, "customers", id);
+    }
+    if (args.wizardData.selectedCompanyId && args.wizardData.selectedCompanyId !== "OTHER") {
+      const id = ctx.db.normalizeId("financeCompanies", args.wizardData.selectedCompanyId);
+      if (!id) throw new ConvexError("Record not found in this organization.");
+      await requireOwnedRow(ctx, args.orgId, "financeCompanies", id);
+    }
+    for (const reference of args.wizardData.customerStatuses ?? []) {
+      const id = ctx.db.normalizeId("orgCustomerStatuses", reference);
+      if (!id) throw new ConvexError("Record not found in this organization.");
+      await requireOwnedRow(ctx, args.orgId, "orgCustomerStatuses", id);
+    }
     const existing = await ctx.db
       .query("wizardDrafts")
       .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", user._id))

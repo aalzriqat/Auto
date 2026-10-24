@@ -91,7 +91,7 @@ export function useFinanceComparison({
       (company: Doc<"financeCompanies">) =>
         matchingCustomerEligibilityStatusIds(
           customerStatuses,
-          company.acceptedStatuses?.map(String)
+          company.acceptedStatuses?.map((status) => String(status))
         ).length > 0
     );
 

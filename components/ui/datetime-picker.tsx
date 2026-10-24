@@ -37,7 +37,7 @@ export function DateTimePicker({ value, onChange, className }: DateTimePickerPro
   const handleDateSelect = (selectedDate: Date | undefined) => {
     if (selectedDate) {
       // Apply existing time to the newly selected date
-      const [hours, minutes] = time.split(":").map(Number);
+      const [hours, minutes] = time.split(":").map((part) => Number(part));
       selectedDate.setHours(hours || 0);
       selectedDate.setMinutes(minutes || 0);
       selectedDate.setSeconds(0);
@@ -54,7 +54,7 @@ export function DateTimePicker({ value, onChange, className }: DateTimePickerPro
     setTime(newTime);
     
     if (date) {
-      const [hours, minutes] = newTime.split(":").map(Number);
+      const [hours, minutes] = newTime.split(":").map((part) => Number(part));
       const newDate = new Date(date);
       newDate.setHours(hours || 0);
       newDate.setMinutes(minutes || 0);

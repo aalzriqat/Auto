@@ -1,5 +1,26 @@
 import { OTHER_COMPANY_ID, PaymentType, WizardData } from "./types";
 
+/** Autosave transports only the governed durable draft fields. */
+export function buildWizardDraftData(data: WizardData): WizardData {
+  return {
+    vehicleId: data.vehicleId,
+    vehiclePrice: data.vehiclePrice,
+    desiredProfit: data.desiredProfit,
+    downPayment: data.downPayment,
+    termMonths: data.termMonths,
+    selectedCompanyId: data.selectedCompanyId,
+    manualProfitRate: data.manualProfitRate,
+    manualInsuranceRate: data.manualInsuranceRate,
+    manualExecutionCommission: data.manualExecutionCommission,
+    manualExecutionFees: data.manualExecutionFees,
+    manualIncludesCommissionInDebt: data.manualIncludesCommissionInDebt,
+    recipientName: data.recipientName,
+    customerStatuses: data.customerStatuses,
+    leadId: data.leadId,
+    vehicleItems: data.vehicleItems?.map(item => ({ vehicleId: item.vehicleId, unitPrice: item.unitPrice })),
+  };
+}
+
 export type QuoteMode =
   | "CASH"
   | "CONFIGURED_FINANCE_COMPANY"

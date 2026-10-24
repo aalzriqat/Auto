@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 import VehiclePicker from "../components/VehiclePicker";
 import { VehicleLineItemsPicker } from "../components/VehicleLineItemsPicker";
 import { usePickerAvailability } from "../hooks/usePickerAvailability";
-import type { VehicleLineItem } from "../types";
+import type { VehicleLineItem, WizardLaunchSeed } from "../types";
 import { FinancePanel } from "../components/FinancePanel";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -52,7 +52,7 @@ interface Step1QuoteSetupProps {
   paymentType: PaymentType;
   initialData: WizardData;
   /** SCRUM-746: opens the picker's "source a vehicle" form pre-filled (the "source another like this" launch). Not part of the persisted draft. */
-  initialSourceData?: WizardData["sourceLikeVehicle"];
+  initialSourceData?: WizardLaunchSeed["sourceLikeVehicle"];
   onNext: (data: WizardData) => void;
 }
 
@@ -330,7 +330,7 @@ export default function Step1QuoteSetup({
 
         const matchingStatuses = matchingCustomerEligibilityStatusIds(
           customerStatuses,
-          selectedCompany.acceptedStatuses?.map(String)
+          selectedCompany.acceptedStatuses?.map((status) => String(status))
         );
         if (matchingStatuses.length === 0) {
           form.setError("vehicleId", {
@@ -394,6 +394,7 @@ export default function Step1QuoteSetup({
 
     onNext({
       ...values,
+      leadId: initialData.leadId,
       vehicleItems: isCash && vehicleItems.length > 1 ? vehicleItems : undefined,
       selectedCompanyId,
       manualProfitRate,

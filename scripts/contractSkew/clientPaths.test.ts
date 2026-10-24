@@ -5,6 +5,7 @@ import path from "node:path";
 import ts from "typescript";
 import { v } from "convex/values";
 import { createClientProgram, extractClientCalls } from "./clientPaths.mjs";
+import { CLIENT_SURFACES, listSurfaceFiles } from "./clientFiles.mjs";
 import { compareNode, validatorTree } from "./contractTree.mjs";
 import { openingAllocationValidator, openingAllocationResultValidator } from "@/convex/utils/openingAllocationValidators";
 
@@ -621,9 +622,19 @@ describe("SCRUM-711 native request-map proof controls", () => {
 });
 
 describe("SCRUM-711 native primitive declaration provenance", () => {
-  test("both actual opening routes measure their full allocation arrays against their registered native arguments", async () => {
-    const files = ["components/accounting/setup/OpeningBalanceCard.tsx"];
-    const extraction = extractClientCalls(files, "tsconfig.json");
+  test.each([
+    { scope: "focused", wholeProgram: false },
+    { scope: "whole web", wholeProgram: true },
+  ])("both actual opening routes measure their full allocation arrays against their registered native arguments ($scope)", async ({ wholeProgram }) => {
+    const web = CLIENT_SURFACES.find((surface) => surface.name === "web");
+    if (!web) throw new Error("Actual CLI web surface is unavailable");
+    const card = "components/accounting/setup/OpeningBalanceCard.tsx";
+    const files = wholeProgram ? listSurfaceFiles(process.cwd(), web) : [card];
+    if (wholeProgram) {
+      expect(files.map((file) => path.resolve(file))).toContain(path.resolve(card));
+      expect(files.length).toBeGreaterThan(1);
+    }
+    const extraction = extractClientCalls(files, web.tsconfig);
     if (!("json" in openingAllocationValidator)) throw new Error("Native validator rendering is unavailable");
     const nativeArray = validatorTree({ type: "array", value: openingAllocationValidator.json });
     if (!("json" in openingAllocationResultValidator)) throw new Error("Native result-validator rendering is unavailable");
@@ -654,11 +665,12 @@ describe("SCRUM-711 native primitive declaration provenance", () => {
       const compared = compareNode(allocations, registeredArray, "allocations", {
         site,
       });
-      expect(compareNode(allocations, wrongReadbackOracle, "allocations", { site }).findings.some((finding) => finding.severity === "BREAKING")).toBe(true);
-      return { identifier, kind: allocations.kind, findings: compared.findings };
+      const wrongReadback = compareNode(allocations, wrongReadbackOracle, "allocations", { site });
+      return { identifier, kind: allocations.kind, findings: compared.findings, wrongReadback };
     });
     expect(results.map((result) => result.findings)).toEqual([[], []]);
     expect(results.map((result) => result.kind)).toEqual(["array", "array"]);
+    expect(results.every((result) => result.wrongReadback.findings.some((finding) => finding.severity === "BREAKING"))).toBe(true);
   }, 120_000);
 
   const cases = [
