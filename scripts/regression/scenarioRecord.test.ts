@@ -175,7 +175,7 @@ describe("implementation source snapshots", () => {
     vi.resetModules();
     vi.doMock("node:fs", async (importOriginal) => {
       const actual = await importOriginal<typeof import("node:fs")>();
-      return { ...actual, default: { ...actual.default, readFileSync: read }, readFileSync: read };
+      return { ...actual, default: { ...fs, readFileSync: read }, readFileSync: read };
     });
     try {
       const fresh = await import("./scenarioRecord");
