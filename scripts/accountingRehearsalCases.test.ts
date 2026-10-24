@@ -2551,7 +2551,10 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => d.id).sort()).toEqual(["S858-CONTAINMENT","S858-OPENING"]);
     expect(summarize(results)).toMatchObject({total:31,passed:29,failed:0,unproven:2,unprovenIds:["S858-OPENING","S858-CONTAINMENT"],complete:false});
     // And it actually ran the cases rather than finding nothing to do.
-    expect(results.map((r) => r.id).sort()).toEqual([...REQUIRED_REHEARSAL_CASE_IDS].sort());
+    // Cleanup callbacks execute after this original31 driver, in the trusted main entry point.
+    const originalIds = REQUIRED_REHEARSAL_CASE_IDS.filter(id => id !== "S858-CLEANUP-HISTORY" && id !== "S858-CLEANUP-SPLIT");
+    expect(originalIds).toHaveLength(31);
+    expect(results.map((r) => r.id).sort()).toEqual([...originalIds].sort());
   for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }

@@ -7,10 +7,13 @@
  * mock of a Convex deployment would test the mock.
  */
 import { describe, expect, test, vi } from "vitest";
+import { ConvexHttpClient } from "convex/browser";
+import { format } from "node:util";
 import {
   assertRehearsalEnv,
   convexCall,
   convexCallWithRateLimitRetry,
+  createCleanupPreviewCall,
   fd1BankContractInputs,
   rateLimitRetryDelayMs,
   isClerkSessionId,
@@ -35,6 +38,119 @@ const VALID = {
   E2E_LOGIN_USER: "sales@example.test",
   E2E_APPROVER_USER: "approver@example.test",
 };
+
+const RESET = "orgFinancialReset:resetOrgFinancialData";
+const DISCOVERY = "OPENING_CLEANUP_SPLIT_REQUIRED_DISCOVERY";
+const REFERENCE = "OPENING_CLEANUP_SPLIT_REQUIRED_REFERENCE";
+type CleanupSpawn = NonNullable<NonNullable<Parameters<typeof createCleanupPreviewCall>[1]>["spawnCli"]>;
+
+async function failedSdkLogs(logLines: string[]) {
+  const logs: string[] = [];
+  const collect = (...args: unknown[]) => { logs.push(format(...args)); };
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+    status: "error",
+    errorMessage: "Uncaught ConvexError: Opening cleanup could not be verified. Please contact support.",
+    errorData: "Opening cleanup could not be verified. Please contact support.",
+    logLines,
+  }), { status: 560 }));
+  const client = new ConvexHttpClient(VALID.NEXT_PUBLIC_CONVEX_URL, {
+    fetch: fetchImpl,
+    logger: { log: collect, warn: collect, error: collect, logVerbose: () => {} },
+  });
+  // The installed CLI calls this runtime method; public SDK declarations omit it.
+  if (!("function" in client) || typeof client.function !== "function") throw new Error("Installed SDK has no CLI function method");
+  const cliMethod = client.function;
+  const invokeCli: (name: string, componentPath: undefined, args: Record<string, unknown>) => Promise<unknown> = async (name, componentPath, args) => {
+    const result: unknown = Reflect.apply(cliMethod, client, [name, componentPath, args]);
+    return await result;
+  };
+  await expect(invokeCli(RESET, undefined, { orgId: "synthetic", batchSize: 1 })).rejects.toThrow("Opening cleanup could not be verified");
+  expect(fetchImpl).toHaveBeenCalledTimes(1);
+  expect(fetchImpl.mock.calls[0]?.[0]).toBe(`${VALID.NEXT_PUBLIC_CONVEX_URL}/api/function`);
+  expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toMatchObject({ path: RESET, args: { orgId: "synthetic", batchSize: 1 } });
+  return logs.join("\n");
+}
+
+describe("cleanup invocation receipts", () => {
+  const target = () => ({ deployKey: VALID.CONVEX_DEPLOY_KEY, previewName: VALID.CONVEX_PREVIEW_NAME, convexUrl: VALID.NEXT_PUBLIC_CONVEX_URL });
+  const refused = (marker = DISCOVERY, fn = RESET) => `[CONVEX ?(${fn})] [ERROR] '${marker}'\nFailed to run function "${fn}":\nConvexError: Opening cleanup could not be verified. Please contact support.\n`;
+
+  test("the installed SDK forwards failed-response server logs before rejection", async () => {
+    const logs = await failedSdkLogs([`[ERROR] '${DISCOVERY}'`]);
+    expect(logs).toBe(`[CONVEX ?(${RESET})] [ERROR] '${DISCOVERY}'`);
+  });
+
+  test("a single SDK-forwarded phase marker binds a nonzero refusal to the canonical invocation", async () => {
+    const logs = await failedSdkLogs([`[ERROR] '${DISCOVERY}'`]);
+    const spawnCli = vi.fn(() => ({ status: 1, stdout: "", stderr: `${logs}\nFailed to run function "${RESET}":\nConvexError: Opening cleanup could not be verified. Please contact support.` }));
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, spawnCli });
+    expect(await call(RESET, { orgId: "synthetic", batchSize: 1 }, "DISCOVERY")).toEqual({
+      ok: false, refusal: "OPENING_CLEANUP_SPLIT_REQUIRED", phase: "DISCOVERY", exitCode: 1,
+    });
+  });
+
+  test("success parses bounded JSON and preserves the captured explicit preview target", async () => {
+    const config = target();
+    const env = { ...VALID };
+    const spawnCli = vi.fn<CleanupSpawn>(() => ({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" }));
+    const call = createCleanupPreviewCall(config, { env, spawnCli });
+    config.previewName = "caller-changed";
+    config.deployKey = "prod:wrong|secret";
+    env.NEXT_PUBLIC_CONVEX_URL = "https://wrong.convex.cloud";
+    expect(await call("e2eBootstrap:observeOpeningCleanupFixture", { orgId: "synthetic" })).toEqual({ ok: true, value: { phase: "DONE" } });
+    const [, argv, options] = spawnCli.mock.calls[0];
+    expect(argv.slice(-2)).toEqual(["--preview-name", VALID.CONVEX_PREVIEW_NAME]);
+    expect(JSON.parse(argv[4]).expectedCloudUrl).toBe(VALID.NEXT_PUBLIC_CONVEX_URL);
+    expect(options).toMatchObject({ stdio: ["ignore", "pipe", "pipe"], timeout: 60_000, maxBuffer: 262_144,
+      env: { CONVEX_DEPLOY_KEY: VALID.CONVEX_DEPLOY_KEY, NEXT_PUBLIC_CONVEX_URL: VALID.NEXT_PUBLIC_CONVEX_URL } });
+  });
+
+  test.each([
+    ["missing marker", { status: 1, stdout: "", stderr: `Failed to run function "${RESET}":\nServer Error` }],
+    ["duplicate marker", { status: 1, stdout: "", stderr: refused() + refused() }],
+    ["duplicate refused-call header", { status: 1, stdout: "", stderr: refused() + `Failed to run function "${RESET}":` }],
+    ["wrong phase", { status: 1, stdout: "", stderr: refused(REFERENCE) }],
+    ["wrong function", { status: 1, stdout: "", stderr: refused(DISCOVERY, "adminOrgs:runDeletionRequestBatch") }],
+    ["marker without canonical refusal", { status: 1, stdout: "", stderr: `[CONVEX ?(${RESET})] [ERROR] '${DISCOVERY}'\nnetwork failed` }],
+    ["unframed marker", { status: 1, stdout: "", stderr: `${DISCOVERY}\nFailed to run function "${RESET}":\nOpening cleanup could not be verified. Please contact support.` }],
+    ["quoted log record", { status: 1, stdout: "", stderr: JSON.stringify(refused()) }],
+    ["echoed argument", { status: 1, stdout: "", stderr: JSON.stringify({ args: { note: refused() } }) }],
+    ["transport-only marker text", { status: 1, stdout: "", stderr: `Connection refused: ${DISCOVERY}` }],
+    ["transport error", { status: 1, stdout: "", stderr: refused(), error: new Error("private transport detail") }],
+    ["terminated child", { status: null, stdout: "", stderr: refused(), signal: "SIGTERM" }],
+    ["oversized output", { status: 1, stdout: "", stderr: refused() + "x".repeat(262_144) }],
+    ["malformed success", { status: 0, stdout: "not json", stderr: "private response" }],
+    ["empty success", { status: 0, stdout: "", stderr: "" }],
+    ["oversized success", { status: 0, stdout: JSON.stringify("x".repeat(262_144)), stderr: "" }],
+  ])("%s produces sanitized UNAVAILABLE, not a split receipt", async (_label, result) => {
+    const output = captureConsoleOutput();
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, spawnCli: () => result });
+    try {
+      await expect(call(RESET, { orgId: "synthetic" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+      output.expectSilent();
+    } finally { output.restore(); }
+  });
+
+  test("unlisted functions and conflicting fixture targets are refused before any child starts", async () => {
+    const spawnCli = vi.fn();
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, spawnCli });
+    await expect(call("e2eBootstrap:bootstrapE2EOrganization", {})).rejects.toThrow(/UNAVAILABLE/);
+    await expect(call("e2eBootstrap:prepareOpeningCleanupFixture", { expectedCloudUrl: "https://wrong.convex.cloud" })).rejects.toThrow(/UNAVAILABLE/);
+    expect(spawnCli).not.toHaveBeenCalled();
+    expect(() => createCleanupPreviewCall({ ...target(), previewName: "" }, { env: { ...VALID }, spawnCli })).toThrow(/UNAVAILABLE/);
+    expect(() => createCleanupPreviewCall(target(), { env: { ...VALID, CONVEX_DEPLOYMENT: "prod:wrong" }, spawnCli })).toThrow(/UNAVAILABLE/);
+  });
+
+  test("a previous invocation's marker cannot certify a later failed child", async () => {
+    const spawnCli = vi.fn()
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: refused() })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: `Failed to run function "${RESET}":\nServer Error` });
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, spawnCli });
+    expect(await call(RESET, { orgId: "first" }, "DISCOVERY")).toMatchObject({ refusal: "OPENING_CLEANUP_SPLIT_REQUIRED" });
+    await expect(call(RESET, { orgId: "second" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    expect(spawnCli).toHaveBeenCalledTimes(2);
+  });
+});
 
 function captureConsoleOutput() {
   const spies = [
