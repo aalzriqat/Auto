@@ -50,7 +50,7 @@ export function verifyOpeningBrowserProof(value, expected) {
   }
   if (pending.length || observed.length !== 2 || new Set(observed).size !== 2) throw new Error("OPENING_PROOF_CASES_UNAVAILABLE");
   return { schemaVersion: 1, binding, expected: 2, passed: 2, skipped: 0, flaky: 0, unexpected: 0, errors: 0,
-    cases: [...observed].sort(), checked: true };
+    cases: [...observed].sort((left, right) => left.localeCompare(right)), checked: true };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve("scripts/verifyOpeningBrowserProof.mjs")) {
