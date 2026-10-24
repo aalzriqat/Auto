@@ -416,6 +416,12 @@ export function validateLibrary(
   const ids = new Set<string>();
   const fingerprints = new Map<string, string>();
   const bindings = new Map<string, string>();
+  // One source snapshot per validation; later calls must observe edits/deletions.
+  const implementations = new Map<string, {
+    forHelper: string;
+    registrations: ReturnType<typeof listActiveTestRegistrations>;
+    hasSkip: boolean;
+  }>();
 
   for (const r of records) {
     const label = isObject(r) && typeof r.id === "string" ? r.id : "<no id>";
@@ -484,18 +490,28 @@ export function validateLibrary(
         add("impl", `impl.file ${rel} is not a test/spec file a runner executes`);
       } else if (!existsSync(abs)) add("impl", `impl.file ${rel} does not exist: cannot-run is a failure`);
       else {
-        const text = readFileSync(abs, "utf8");
+        let implementation = implementations.get(abs);
+        if (!implementation) {
+          const text = readFileSync(abs, "utf8");
+          const forHelper = text.replace(/\b(?:test|it)\.describe(?:\.(?:serial|parallel))?(?=\s*\()/g, "describe");
+          implementation = {
+            forHelper,
+            registrations: listActiveTestRegistrations(forHelper, scriptKindFor(rel)),
+            hasSkip: CTX_SKIP.test(text) || ANY_SKIP.test(text) || SKIP_CALL.test(text) || SKIP_OPTION.test(text),
+          };
+          implementations.set(abs, implementation);
+        }
         // Same AST rules as the invariant proof markers: exactly one ACTIVE it/test whose title
         // names the scenario; skip/skipIf/runIf/todo/only/fails or a skipped parent describe all fail.
         // Playwright groups with test.describe(...); the shared AST helper only knows describe(...).
-        const forHelper = text.replace(/\b(?:test|it)\.describe(?:\.(?:serial|parallel))?(?=\s*\()/g, "describe");
+        const { forHelper, registrations, hasSkip } = implementation;
         // Exactly one active, NON-parameterized registration: test.each([]) names a case that never runs.
         const bindKey = `${rel}::${r.impl.testName}`;
         const sharedWith = bindings.get(bindKey);
         if (sharedWith !== undefined) add("impl", `same impl.file + testName as ${sharedWith}: one check cannot stand for two scenarios`);
         else bindings.set(bindKey, r.id);
-        const named = listActiveTestRegistrations(forHelper, scriptKindFor(rel)).filter((t) => t.title === r.impl!.testName);
-        if (named.length !== 1 || named[0].parameterized || CTX_SKIP.test(text) || ANY_SKIP.test(text) || SKIP_CALL.test(text) || SKIP_OPTION.test(text)) {
+        const named = registrations.filter((t) => t.title === r.impl!.testName);
+        if (named.length !== 1 || named[0].parameterized || hasSkip) {
           add("skip", `${rel} has no single active test named "${r.impl.testName}" (skipped, conditional, duplicated or absent): a skip is a failure in the library (R4)`);
         } else if (r.kind === "rule" && typeof r.subject === "string" && !ruleBodyExercisesSubject(forHelper, scriptKindFor(rel), r.impl.testName, r.subject)) {
           add("impl", `${rel} test "${r.impl.testName}" must call ${r.subject}(...) and assert on it (and ${rel} must not vi.mock a module named for it): a rule record is only as true as the check it names`);
