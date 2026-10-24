@@ -67,7 +67,10 @@ async function clearLargeOpeningPayablesBatch(ctx: MutationCtx, orgId: Id<"organ
     // Leave scan headroom so a normal full page does not hit the row-read cap.
     const page = await ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", orgId))
       .paginate({ cursor: state?.cursor ?? null, numItems: 50, maximumRowsRead: 100, maximumBytesRead: 512_000 });
-    if (page.pageStatus === "SplitRequired") throw new ConvexError("Opening cleanup could not be verified. Please contact support.");
+    if (page.pageStatus === "SplitRequired") {
+      console.error("OPENING_CLEANUP_SPLIT_REQUIRED_DISCOVERY");
+      throw new ConvexError("Opening cleanup could not be verified. Please contact support.");
+    }
     await ctx.db.patch(orgId, { openingCleanupPayableScan: { resetGeneration: generation,
       cursor: page.continueCursor, complete: page.isDone, pendingDraftIds: page.page.map(draft => draft._id), pendingPayableIds: [] } });
     return cleanupPending;
@@ -139,7 +142,10 @@ export async function clearNewOpeningResultReference(
     }
     const page = await ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", orgId))
       .paginate({ cursor: state.cursor, numItems: 50, maximumRowsRead: 100, maximumBytesRead: 512_000 });
-    if (page.pageStatus === "SplitRequired") throw new ConvexError("Opening cleanup could not be verified. Please contact support.");
+    if (page.pageStatus === "SplitRequired") {
+      console.error("OPENING_CLEANUP_SPLIT_REQUIRED_REFERENCE");
+      throw new ConvexError("Opening cleanup could not be verified. Please contact support.");
+    }
     await removeOpeningReferences(ctx, page.page, source);
     await ctx.db.patch(orgId, { openingCleanupReferenceScan: { ...state, cursor: page.continueCursor, complete: page.isDone } });
     // Even the final page yields, so a caller cannot start another pagination in this invocation.

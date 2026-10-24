@@ -54,7 +54,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
-import { isPreviewDeployKey } from "./e2ePreviewBootstrap.mjs";
+import { stripVTControlCharacters } from "node:util";
+import { assertPreviewTargeting, buildConvexRunArgs, isPreviewDeployKey, runConvex } from "./e2ePreviewBootstrap.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -384,6 +385,111 @@ export async function runPreviewFunction({ functionName, args, previewName, depl
     spawnCli(command, commandArgs, { ...options, stdio: ["inherit", "pipe", "inherit"] }));
 }
 
+/** @typedef {"DISCOVERY" | "REFERENCE"} CleanupSplitPhase */
+/** @typedef {{ok:true,value:unknown} | {ok:false,refusal:"OPENING_CLEANUP_SPLIT_REQUIRED",phase:CleanupSplitPhase,exitCode:number}} CleanupPreviewReceipt */
+/** @typedef {{status:number|null,stdout?:string|Buffer|null,stderr?:string|Buffer|null,error?:Error,signal?:string|null}} CleanupCliResult */
+const CLEANUP_FUNCTIONS = new Set([
+  "e2eBootstrap:prepareOpeningCleanupFixture",
+  "e2eBootstrap:observeOpeningCleanupFixture",
+  "orgFinancialReset:resetOrgFinancialData",
+  "adminOrgs:runDeletionRequestBatch",
+]);
+const CLEANUP_OUTPUT_LIMIT = 262_144;
+const cleanupUnavailable = () => new RehearsalError("Cleanup preview invocation is UNAVAILABLE.");
+
+/** @param {unknown} value */
+function cleanupOutput(value) {
+  if (value === undefined || value === null) return "";
+  if ((!Buffer.isBuffer(value) && typeof value !== "string") || Buffer.byteLength(value) > CLEANUP_OUTPUT_LIMIT) {
+    throw cleanupUnavailable();
+  }
+  return stripVTControlCharacters(value.toString()).trim();
+}
+
+/**
+ * Recognize only this child invocation's fixed server diagnostic and canonical
+ * CLI refusal. A page probe or arbitrary stderr cannot establish a cap refusal.
+ * @param {CleanupCliResult} result
+ * @param {string} functionName
+ * @param {CleanupSplitPhase | undefined} expectedSplitPhase
+ * @returns {CleanupPreviewReceipt}
+ */
+function cleanupReceipt(result, functionName, expectedSplitPhase) {
+  if (!result || result.error || result.signal || !Number.isInteger(result.status) || result.status === null || result.status < 0) {
+    throw cleanupUnavailable();
+  }
+  const stdout = cleanupOutput(result.stdout);
+  const stderr = cleanupOutput(result.stderr);
+  const markers = stderr.match(/OPENING_CLEANUP_SPLIT_REQUIRED_[A-Z_]+/g) ?? [];
+  if (result.status === 0) {
+    if (!stdout || markers.length) throw cleanupUnavailable();
+    try {
+      /** @type {unknown} */
+      const value = JSON.parse(stdout);
+      return { ok: true, value };
+    } catch { throw cleanupUnavailable(); }
+  }
+  if (stdout || functionName !== "orgFinancialReset:resetOrgFinancialData" || !expectedSplitPhase || markers.length !== 1) {
+    throw cleanupUnavailable();
+  }
+  const marker = `OPENING_CLEANUP_SPLIT_REQUIRED_${expectedSplitPhase}`;
+  const lines = stderr.split(/\r?\n/).map(line => line.trim());
+  const loggerPrefix = `[CONVEX ?(${functionName})] [ERROR] `;
+  const serverMarkers = lines.filter(line => [marker, `'${marker}'`, `"${marker}"`].some(value => line === loggerPrefix + value));
+  const refusedCalls = lines.filter(line => line.replace(/^[✖✘] /, "") === `Failed to run function "${functionName}":`);
+  if (markers[0] !== marker || serverMarkers.length !== 1 || refusedCalls.length !== 1 ||
+      !stderr.includes("Opening cleanup could not be verified. Please contact support.")) throw cleanupUnavailable();
+  return { ok: false, refusal: "OPENING_CLEANUP_SPLIT_REQUIRED", phase: expectedSplitPhase, exitCode: result.status };
+}
+
+/**
+ * Trusted closure: callback arguments cannot supply a CLI target or environment.
+ * Both output streams are bounded and retained privately; only typed receipts
+ * cross back into the rehearsal's public evidence document.
+ * @param {{deployKey:string,previewName:string,convexUrl:string}} config
+ * @param {{env?:Record<string,string|undefined>,spawnCli?:(command:string,args:string[],options:object)=>CleanupCliResult}} dependencies
+ */
+export function createCleanupPreviewCall(config, { env = process.env, spawnCli = spawnSync } = {}) {
+  const { deployKey, previewName, convexUrl } = config;
+  const childEnv = { ...env, CONVEX_DEPLOY_KEY: deployKey, CONVEX_PREVIEW_NAME: previewName, NEXT_PUBLIC_CONVEX_URL: convexUrl };
+  try {
+    assertPreviewTargeting({ deployKey, previewName, env: childEnv });
+    if (!isPreviewCloudUrl(convexUrl)) throw cleanupUnavailable();
+  } catch { throw cleanupUnavailable(); }
+
+  /**
+   * @param {string} functionName
+   * @param {Record<string,unknown>} args
+   * @param {CleanupSplitPhase} [expectedSplitPhase]
+   * @returns {Promise<CleanupPreviewReceipt>}
+   */
+  return async (functionName, args, expectedSplitPhase) => {
+    if (!CLEANUP_FUNCTIONS.has(functionName) || !args || typeof args !== "object" || Array.isArray(args) ||
+        (expectedSplitPhase !== undefined && expectedSplitPhase !== "DISCOVERY" && expectedSplitPhase !== "REFERENCE")) {
+      throw cleanupUnavailable();
+    }
+    const fixtureCall = functionName.startsWith("e2eBootstrap:");
+    if (fixtureCall && args.expectedCloudUrl !== undefined && args.expectedCloudUrl !== convexUrl) throw cleanupUnavailable();
+    const payload = fixtureCall ? { ...args, expectedCloudUrl: convexUrl } : args;
+    /** @type {CleanupCliResult | undefined} */
+    let result;
+    try {
+      const argsJson = JSON.stringify(payload);
+      if (Buffer.byteLength(argsJson) > 65_536) throw cleanupUnavailable();
+      const argv = buildConvexRunArgs({ functionName, argsJson, previewName, deployKey, env: childEnv });
+      runConvex(argv, functionName, (command, commandArgs, options) => {
+        result = spawnCli(command, commandArgs, { ...options, env: childEnv, stdio: ["ignore", "pipe", "pipe"],
+          timeout: 60_000, maxBuffer: CLEANUP_OUTPUT_LIMIT, encoding: "utf8", windowsHide: true });
+        return result;
+      });
+    } catch {
+      if (!result || result.status === 0) throw cleanupUnavailable();
+    }
+    if (!result) throw cleanupUnavailable();
+    return cleanupReceipt(result, functionName, expectedSplitPhase);
+  };
+}
+
 /**
  * Fires N release attempts that are genuinely IN FLIGHT TOGETHER.
  *
@@ -582,10 +688,18 @@ export async function main(env = process.env) {
       path: fnPath,
       args,
     });
-  const salesMust = (kind, fnPath, args) =>
-    mustCall({ convexUrl: config.convexUrl, token: sales.jwt, kind, path: fnPath, args });
-  const approverMust = (kind, fnPath, args) =>
-    mustCall({ convexUrl: config.convexUrl, token: approver.jwt, kind, path: fnPath, args });
+  /** @type {Set<string>} */
+  const createdRehearsalOrgIds = new Set();
+  const salesMust = async (kind, fnPath, args) => {
+    const value = await mustCall({ convexUrl: config.convexUrl, token: sales.jwt, kind, path: fnPath, args });
+    if (kind === "mutation" && fnPath === "organizations:create" && typeof value === "string") createdRehearsalOrgIds.add(value);
+    return value;
+  };
+  const approverMust = async (kind, fnPath, args) => {
+    const value = await mustCall({ convexUrl: config.convexUrl, token: approver.jwt, kind, path: fnPath, args });
+    if (kind === "mutation" && fnPath === "organizations:create" && typeof value === "string") createdRehearsalOrgIds.add(value);
+    return value;
+  };
 
   const orgs = await salesMust("query", "organizations:listMine", {});
   if (!Array.isArray(orgs) || orgs.length === 0) {
@@ -599,7 +713,7 @@ export async function main(env = process.env) {
   const results = evidence.cases;
   const { runRehearsalCases, candidateNamesReceiptBank, candidateCommandNamesBank } = await import("./accountingRehearsalCases.mjs");
   const fd1Bank = fd1BankContractInputs({ env, cwd: process.cwd() });
-  await runRehearsalCases({
+  const context = {
     candidateFinanceReceiptNamesBank: candidateNamesReceiptBank(fd1Bank.candidateSource),
     candidateDirectFeeNamesBank: candidateCommandNamesBank(fd1Bank.directFeeSource, "recordDirectFeePayment"),
     candidateChequeClearNamesBank: candidateCommandNamesBank(fd1Bank.chequeSource, "clearCheque"),
@@ -616,6 +730,13 @@ export async function main(env = process.env) {
     recordCase,
     unproven,
     fireConcurrentReleases,
+  };
+  await runRehearsalCases(context);
+  const { runCleanupRehearsalCases } = await import("./accountingCleanupRehearsal.mjs");
+  await runCleanupRehearsalCases({ ...context,
+    previewCall: createCleanupPreviewCall(config, { env }),
+    qaIdentities: { primaryClerkUserId: salesUserId, approverClerkUserId: approverUserId },
+    createdRehearsalOrgIds: [...createdRehearsalOrgIds],
   });
 
   evidence.summary = summarize(results);

@@ -142,7 +142,7 @@ describe("exact release cloud accounting evidence", () => {
 test("opening cutover is a required named cloud gate and an old29-only result cannot certify it", () => {
   expect(REQUIRED_REHEARSAL_CASE_IDS).toContain("S858-OPENING");
   expect(REQUIRED_REHEARSAL_CASE_IDS).toContain("S858-CONTAINMENT");
-  expect(REQUIRED_REHEARSAL_CASE_IDS).toHaveLength(31);
+  expect(REQUIRED_REHEARSAL_CASE_IDS).toHaveLength(33);
   const old = REQUIRED_REHEARSAL_CASE_IDS.filter(
     (id) => !id.startsWith("S858-"),
   );
@@ -159,4 +159,11 @@ test("opening cutover is a required named cloud gate and an old29-only result ca
   ).toContain(
     "The required cloud scenario set is incomplete or contains an unexpected case.",
   );
+});
+
+test.each(["S858-CLEANUP-HISTORY", "S858-CLEANUP-SPLIT"])("cloud evidence refuses the missing cleanup callback %s", missing => {
+  const cases = REQUIRED_REHEARSAL_CASE_IDS.filter(id => id !== missing).map(id => ({ id, status: "PASS" }));
+  const evidence = { ...valid(), cases, summary: { ...valid().summary, total: cases.length, passed: cases.length } };
+  const { caseIds: _fixtureOverride, ...productionExpected } = expected;
+  expect(validateAccountingReleaseEvidence(evidence, productionExpected)).toContain("The required cloud scenario set is incomplete or contains an unexpected case.");
 });

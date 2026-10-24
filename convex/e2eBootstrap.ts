@@ -155,9 +155,171 @@ import { DEFAULT_SETTINGS } from "./orgSettings";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import { DEFAULT_CHART } from "./utils/defaultChart";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
+import { requireOwnedRow } from "./utils/tenancy";
+import { beginResetGenerationPatch, orgResetState } from "./utils/orgResetGeneration";
 
 /** Prefix on every error this module throws, so a CI log names the subsystem. */
 const ERR = "E2E_BOOTSTRAP";
+
+const cleanupFixtureIdentity = {
+  primaryClerkUserId: v.string(), approverClerkUserId: v.string(), expectedCloudUrl: v.string(),
+};
+type CleanupFixtureScope = {
+  orgId: Id<"organizations">; knownOrgIds: Id<"organizations">[];
+  primaryClerkUserId: string; approverClerkUserId: string; expectedCloudUrl: string;
+  deletionRequestId?: Id<"organizationDeletionRequests">;
+};
+
+/** Secondary rehearsal orgs are explicit; baseline describeSeat remains single-org only. */
+async function requireCleanupFixtureScope(ctx: QueryCtx | MutationCtx, args: CleanupFixtureScope) {
+  checkDeploymentIdentity(requireNonBlank(args.expectedCloudUrl, "expectedCloudUrl"));
+  const marker = await requireMarker(ctx);
+  if (!marker.orgId || !marker.bootstrappedAt || args.orgId === marker.orgId || args.knownOrgIds.length > 12) {
+    throw new ConvexError(`${ERR}: invalid cleanup fixture scope.`);
+  }
+  const known = new Set(args.knownOrgIds);
+  if (known.size !== args.knownOrgIds.length || !known.has(marker.orgId) || !known.has(args.orgId)) {
+    throw new ConvexError(`${ERR}: cleanup membership inventory is incomplete.`);
+  }
+  const primary = await findUserByClerkId(ctx, args.primaryClerkUserId);
+  const approver = await findUserByClerkId(ctx, args.approverClerkUserId);
+  if (!primary || !approver || primary._id === approver._id || primary.disabled || approver.disabled) {
+    throw new ConvexError(`${ERR}: cleanup requires the two active QA identities.`);
+  }
+  await requireCleanupMemberships(ctx, primary._id, marker.orgId, known, true);
+  await requireCleanupMemberships(ctx, approver._id, marker.orgId, known, false);
+  const org = await ctx.db.get(args.orgId);
+  const request = args.deletionRequestId
+    ? await requireOwnedRow(ctx, args.orgId, "organizationDeletionRequests", args.deletionRequestId) : null;
+  if (request && (request.requestedBy !== primary._id || !request.orgName.startsWith("QA TEST cleanup "))) {
+    throw new ConvexError(`${ERR}: cleanup deletion fixture belongs to another actor.`);
+  }
+  if (!org) {
+    if (request?.status !== "COMPLETED") throw new ConvexError(`${ERR}: cleanup organization is missing.`);
+    return { org, primary, approver, request };
+  }
+  if (!org.name.startsWith("QA TEST cleanup ") || org.createdAt < marker.bootstrappedAt) {
+    throw new ConvexError(`${ERR}: cleanup requires a newly created QA fixture.`);
+  }
+  if (!request) {
+    await requireCleanupOrgSeats(ctx, org._id, primary._id, approver._id);
+  } else if (org.deletionRequestId !== request._id || !org.suspended) {
+    throw new ConvexError(`${ERR}: cleanup deletion ownership is unavailable.`);
+  }
+  return { org, primary, approver, request };
+}
+
+async function requireCleanupOrgSeats(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">,
+  primaryId: Id<"users">, approverId: Id<"users">) {
+  const seats = await ctx.db.query("memberships").withIndex("by_org", q => q.eq("orgId", orgId)).take(3);
+  if (seats.length !== 2 || !seats.some(seat => seat.userId === primaryId) || !seats.some(seat => seat.userId === approverId)) {
+    throw new ConvexError(`${ERR}: cleanup fixture seats are not exact.`);
+  }
+  const owner = seats.find(seat => seat.userId === primaryId);
+  const role = owner ? await ctx.db.get(owner.roleId) : null;
+  if (!role?.isSystemOwnerRole || role.orgId !== orgId) throw new ConvexError(`${ERR}: cleanup fixture owner is unavailable.`);
+  const finance = seats.find(seat => seat.userId === approverId);
+  const financeRole = finance ? await ctx.db.get(finance.roleId) : null;
+  if (financeRole?.name !== "SENIOR_ACCOUNTANT" || financeRole.orgId !== orgId) throw new ConvexError(`${ERR}: cleanup fixture finance seat is unavailable.`);
+}
+
+async function cleanupFixtureDrafts(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
+  const drafts = await ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", orgId)).take(103);
+  if (drafts.length > 102) throw new ConvexError(`${ERR}: cleanup fixture history exceeds its bound.`);
+  return drafts;
+}
+
+async function requireAuthenticCleanupOpening(ctx: MutationCtx, orgId: Id<"organizations">, primaryId: Id<"users">) {
+  const drafts = await cleanupFixtureDrafts(ctx, orgId);
+  const posted = drafts.filter(draft => draft.status === "POSTED");
+  if (drafts.length !== 102 || posted.length !== 1 || drafts.slice(0, 101).some(draft => draft.status !== "REJECTED") || posted[0]._id !== drafts[101]._id || posted[0].createdBy !== primaryId) {
+    throw new ConvexError(`${ERR}: cleanup requires a late authentic opening after 101 rejected headers.`);
+  }
+  const journal = posted[0].journalEntryId ? await requireOwnedRow(ctx, orgId, "journalEntries", posted[0].journalEntryId) : null;
+  if (journal?.status !== "POSTED" || journal.category !== "OPENING_BALANCE") throw new ConvexError(`${ERR}: cleanup opening journal is unavailable.`);
+  const commission = await ctx.db.query("openingCommissionLiabilities").withIndex("by_org", q => q.eq("orgId", orgId)).take(2);
+  const recovery = await ctx.db.query("supplierCostRecoveries").withIndex("by_org", q => q.eq("orgId", orgId)).take(2);
+  if (commission.length !== 1 || recovery.length !== 1 || recovery[0].origin !== "OPENING" || commission[0].openingDraftId !== posted[0]._id || recovery[0].openingBalanceDraftId !== posted[0]._id) {
+    throw new ConvexError(`${ERR}: cleanup native sources are unavailable.`);
+  }
+  const results = posted[0].allocationResults ?? [];
+  if (commission[0].amountMinor !== 50000 || commission[0].paidMinor !== 0 || recovery[0].amountDueMinor !== 100000 || recovery[0].amountRecoveredMinor !== 0 ||
+      !results.some(result => result.kind === "EMPLOYEE_COMMISSION" && result.openingCommissionLiabilityId === commission[0]._id) ||
+      !results.some(result => result.kind === "SUPPLIER_RECOVERABLE" && result.recoveryId === recovery[0]._id)) {
+    throw new ConvexError(`${ERR}: cleanup native opening source identity or amount changed.`);
+  }
+  return drafts;
+}
+
+/** Fixed historical preconditions only; never a general database editing surface. */
+export const prepareOpeningCleanupFixture = internalMutation({
+  args: { orgId: v.id("organizations"), knownOrgIds: v.array(v.id("organizations")),
+    deletionRequestId: v.optional(v.id("organizationDeletionRequests")), ...cleanupFixtureIdentity,
+    stage: v.union(v.literal("SEED_HISTORY"), v.literal("BEGIN_RESET"), v.literal("BEGIN_DELETION"), v.literal("ENLARGE_REFERENCE")), large: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const { org, primary } = await requireCleanupFixtureScope(ctx, args);
+    if (!org) throw new ConvexError(`${ERR}: cleanup fixture was already removed.`);
+    if (args.stage === "SEED_HISTORY") {
+      if ((await cleanupFixtureDrafts(ctx, org._id)).length || org.deletionRequestId || orgResetState(org).inProgress) throw new ConvexError(`${ERR}: cleanup fixture cannot be reused.`);
+      for (let index = 0; index < 101; index += 1) await ctx.db.insert("openingBalanceDrafts", {
+        orgId: org._id, status: "REJECTED", lines: [], asOfDate: Date.now(), createdBy: primary._id, createdAt: Date.now(),
+        memo: args.large ? "x".repeat(32 * 1024) : "Synthetic retained rejected header",
+      });
+      return { seededRejectedHeaders: 101 };
+    }
+    const drafts = await requireAuthenticCleanupOpening(ctx, org._id, primary._id);
+    if (args.stage === "ENLARGE_REFERENCE") {
+      if (!org.suspended || !orgResetState(org).inProgress || !org.openingCleanupReferenceScan || org.openingCleanupReferenceScan.complete || org.openingCleanupPayableScan?.complete !== true) throw new ConvexError(`${ERR}: cleanup reference scan is not ready.`);
+      for (const draft of drafts.filter(draft => draft.status === "REJECTED")) await ctx.db.patch(draft._id, { memo: "x".repeat(32 * 1024) });
+      return { enlargedRejectedHeaders: 101 };
+    }
+    if (org.deletionRequestId || orgResetState(org).inProgress) throw new ConvexError(`${ERR}: cleanup fixture already has a lifecycle owner.`);
+    // Historical adverse reference, using only the native source IDs just verified above.
+    await ctx.db.patch(drafts[0]._id, { allocationResults: drafts[101].allocationResults });
+    if (args.stage === "BEGIN_RESET") {
+      await ctx.db.patch(org._id, { suspended: true, ...beginResetGenerationPatch(org) });
+      return { historicalResetPrepared: true };
+    }
+    const requestId = await ctx.db.insert("organizationDeletionRequests", { orgId: org._id, orgName: org.name,
+      requestedBy: primary._id, requestedAt: Date.now(), status: "RUNNING", startedAt: Date.now(), currentStepIndex: 0, deletedCounts: {} });
+    await ctx.db.patch(org._id, { suspended: true, deletionRequestedAt: Date.now(), deletionRequestId: requestId });
+    return { requestId, admission: "SYNTHETIC_HISTORICAL_RUNNING_REQUEST" };
+  },
+});
+
+/** Bounded snapshots omit volume padding and never probe a different pagination invocation. */
+export const observeOpeningCleanupFixture = internalQuery({
+  args: { orgId: v.id("organizations"), knownOrgIds: v.array(v.id("organizations")),
+    deletionRequestId: v.optional(v.id("organizationDeletionRequests")), ...cleanupFixtureIdentity },
+  handler: async (ctx, args) => {
+    const { org, request } = await requireCleanupFixtureScope(ctx, args);
+    const drafts = await cleanupFixtureDrafts(ctx, args.orgId);
+    const commissions = await ctx.db.query("openingCommissionLiabilities").withIndex("by_org", q => q.eq("orgId", args.orgId)).take(2);
+    const recoveries = await ctx.db.query("supplierCostRecoveries").withIndex("by_org", q => q.eq("orgId", args.orgId)).take(2);
+    if (commissions.length > 1 || recoveries.length > 1) throw new ConvexError(`${ERR}: cleanup source inventory exceeds its bound.`);
+    return { org: org ? { resetGeneration: org.financialResetGeneration, completedGeneration: org.financialResetCompletedGeneration,
+      payableScan: org.openingCleanupPayableScan, referenceScan: org.openingCleanupReferenceScan } : null,
+      request: request ? { id: request._id, status: request.status, step: request.currentStepIndex } : null,
+      drafts: drafts.map(draft => ({ id: draft._id, status: draft.status, results: draft.allocationResults ?? [] })),
+      commissions: commissions.map(row => ({ id: row._id, amountMinor: row.amountMinor, paidMinor: row.paidMinor })),
+      recoveries: recoveries.map(row => ({ id: row._id, amountMinor: row.amountDueMinor, paidMinor: row.amountRecoveredMinor })) };
+  },
+});
+
+async function requireCleanupMemberships(ctx: QueryCtx | MutationCtx, userId: Id<"users">,
+  baselineOrgId: Id<"organizations">, known: Set<Id<"organizations">>, primary: boolean) {
+  const seats = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(13);
+  if (seats.length > 12 || !seats.some(seat => seat.orgId === baselineOrgId)) throw new ConvexError(`${ERR}: cleanup QA baseline is unavailable.`);
+  for (const seat of seats) {
+    const role = await ctx.db.get(seat.roleId);
+    const owner = role?.name === SYSTEM_OWNER_ROLE_NAME && role.isSystemOwnerRole === true;
+    const expected = primary ? owner : seat.orgId === baselineOrgId ? role?.name === E2E_APPROVER_ROLE_NAME
+      : owner || role?.name === "SENIOR_ACCOUNTANT";
+    if (!known.has(seat.orgId) || !role || role.orgId !== seat.orgId || role.isDeleted || !expected) {
+      throw new ConvexError(`${ERR}: unexpected cleanup QA membership.`);
+    }
+  }
+}
 
 export const E2E_ORGANIZATION_NAME = "AutoFlow E2E QA Dealership";
 

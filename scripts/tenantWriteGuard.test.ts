@@ -706,10 +706,14 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // orgId handlers. Actual whole-tree census: 549 -> 552 total, 368 -> 371
   // analysed; skipped counts unchanged. Draft proves its opening through
   // requireManagementOpening/requireOwnedRow; approve/reject own the plan.
+  // SCRUM-762 cleanup rehearsal: +prepareOpeningCleanupFixture, one internal org-scoped mutation.
+  // Its three caller-ID validators are explicit; the private Preview/QA scope guard uses
+  // requireOwnedRow for the optional deletion request, and source rows are derived by org.
+  // Actual analyser measurement: +1 total, +1 analysed; all skipped counts unchanged.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 552,
-      analysed: 371,
+      totalMutations: 553,
+      analysed: 372,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 166,
     });
