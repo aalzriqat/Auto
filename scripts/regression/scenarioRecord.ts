@@ -203,6 +203,8 @@ const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.
 const SKIP_CALL = /\.\s*(?:skip|fixme|todo|skipIf|runIf)\s*\(|\bskip\s*\(|\b(?:test|it|describe|suite|ctx|context|testInfo|t|c)(?:\.\w+)*\.(?:fail|fails|only)\b|\binfo\(\)\s*\.\s*(?:fail|fixme|skip)\s*\(/;
 const SKIP_OPTION = /[{,]\s*["']?(?:skip|todo|fails|fail|fixme)["']?\s*(?::\s*(?!false\b)|[,}])/;
 const PLAYWRIGHT_SPEC = /^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$|^playwright\/visual\/[^/]+\.visual\.spec\.ts$/;
+// Explicit terminal runner; its disjoint config/selection is checked by openingBrowserProofContract.test.ts.
+const TERMINAL_OPENING_SPEC = "playwright/opening-proof/opening-onboarding.spec.ts";
 const NOT_RUN_DIRS = /^(?:(?:apps|packages|\.next|out|build)\/|(?:.*\/)?(?:node_modules|\.claude)\/)/;
 const MATRIX_ROW = /^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$/;
 const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
@@ -486,7 +488,8 @@ export function validateLibrary(
       // Classify the NORMALISED repo-relative path: "scripts/../apps/x.test.ts" is apps/.
       const rel = path.relative(path.resolve(repoRoot), abs).replace(/\\/g, "/");
       if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) add("impl", "impl.file must stay inside the repository");
-      else if (!RUNNER_FILE.test(rel) || NOT_RUN_DIRS.test(rel) || PLAYWRIGHT_SPEC.test(rel) !== (r.level === "browser")) {
+      else if ((!RUNNER_FILE.test(rel) && rel !== TERMINAL_OPENING_SPEC) || NOT_RUN_DIRS.test(rel) ||
+          (PLAYWRIGHT_SPEC.test(rel) || rel === TERMINAL_OPENING_SPEC) !== (r.level === "browser")) {
         add("impl", `impl.file ${rel} is not a test/spec file a runner executes`);
       } else if (!existsSync(abs)) add("impl", `impl.file ${rel} does not exist: cannot-run is a failure`);
       else {

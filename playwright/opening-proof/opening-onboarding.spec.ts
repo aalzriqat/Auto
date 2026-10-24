@@ -11,8 +11,10 @@ import {
  * The trusted workflow already created/attested/seeded the disposable Preview;
  * the test checks its actual browser URL binding, not a new marker attestation.
  * Backend Preview egress sinks remain inherited. Only the PR trusted lane has
- * its extra browser proxy. Newly added tests first execute after merge into
- * trusted main; old-controller PR runs cannot certify this file.
+ * its extra browser proxy. The isolated batch runs after the other consumers
+ * of the strict seeded memberships, with one pre-batch attestation and no new
+ * marker assertion between its two fresh organizations. New tests first run
+ * after merge; old-controller PR runs cannot certify candidate-only tests.
  */
 test.describe("opening onboarding against the attested workflow Preview", () => {
   test.describe.configure({ retries: 0 });
@@ -33,10 +35,11 @@ test.describe("opening onboarding against the attested workflow Preview", () => 
       await expect(actors.owner.getByText("Opening balance recorded.", { exact: true })).toBeVisible();
       const before = await assertNativeOpening(actors, fixture, receipt.result);
       await actors.owner.reload(); await actors.ownerWire.guard();
+      await expect(actors.owner.getByText("Opening balance recorded.", { exact: true })).toBeVisible();
       await expect(actors.owner.getByRole("button", { name: "Set opening balance", exact: true })).toHaveCount(0);
       // Explicit API replay is separate from the browser-origin opening above.
       await expect(actors.ownerClient.mutation(makeFunctionReference<"mutation">(openingFunctions.direct), receipt.args))
-        .rejects.toThrow(/opening balance has already been posted|opening balance has already been recorded/i);
+        .rejects.toThrow(/opening balance has already been posted/i);
       expect(await assertNativeOpening(actors, fixture, receipt.result)).toEqual(before);
       await info.attach("opening-owner-native-proof.json", { contentType: "application/json",
         body: Buffer.from(JSON.stringify({ scope: "three synthetic allocation families; browser direct post plus API replay refusal",
@@ -68,6 +71,11 @@ test.describe("opening onboarding against the attested workflow Preview", () => 
       expect(entries.isDone).toBe(true); expect(entries.page).toHaveLength(0);
       expect(await actors.ownerClient.query(api.subledger.listReceivables, { orgId: fixture.orgId, limit: 10 })).toHaveLength(0);
       expect(await actors.ownerClient.query(api.prepaidExpenses.listSchedules, { orgId: fixture.orgId })).toHaveLength(0);
+      const pendingPartners = await actors.ownerClient.query(api.partnerEquity.list, {
+        orgId: fixture.orgId, paginationOpts: { cursor: null, numItems: 10 },
+      });
+      expect(pendingPartners.isDone).toBe(true); expect(pendingPartners.page).toHaveLength(1);
+      expect(pendingPartners.page[0]._id).toBe(fixture.partnerId); expect(pendingPartners.page[0].balanceMinor).toBe(0);
       await expect(actors.finance.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
       await actors.owner.goto(`/${fixture.orgId}/accounting?section=settings`);
       await actors.ownerWire.guard();

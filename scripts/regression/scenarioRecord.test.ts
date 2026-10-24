@@ -153,6 +153,17 @@ describe("ruling snapshot (public repo: ids, digests, dates only)", () => {
 });
 
 describe("the committed library", () => {
+  test("terminal opening browser records retain real file and exact test-name enforcement", () => {
+    const { records, rulings } = loadLibrary(REPO_ROOT);
+    const opening = records.filter(record => record.impl?.file === "playwright/opening-proof/opening-onboarding.spec.ts");
+    expect(opening).toHaveLength(2);
+    expect(validateLibrary(opening, { rulings, repoRoot: REPO_ROOT })).toEqual([]);
+    const first = opening[0];
+    if (!first.impl) throw new Error("Opening replay binding unavailable");
+    const missingName = { ...first, impl: { ...first.impl, testName: "not an actual opening case" } };
+    expect(validateLibrary([missingName], { rulings, repoRoot: REPO_ROOT }).map(problem => problem.rule)).toContain("skip");
+  });
+
   test("loads the committed library and it has no problems", () => {
     const { records, rulings, problems } = loadLibrary(REPO_ROOT);
     expect([...problems, ...validateLibrary(records, { rulings, repoRoot: REPO_ROOT })]).toEqual([]);
@@ -320,7 +331,9 @@ describe("review round 2 (Codex seat, PR #500): failing-first regressions", () =
 
   test("C2: only files a configured runner collects count as the executable check", () => {
     const run = (file: string) => {
-      const dir = mkdtempSync(path.join(tmpdir(), "regression-"));
+      const parent = fs.realpathSync(tmpdir());
+      const dir = fs.realpathSync(mkdtempSync(path.join(parent, "regression-")));
+      if (path.dirname(dir) !== parent) throw new Error("Fixture escaped its temporary parent");
       try {
         mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
         writeFileSync(path.join(dir, file), `test("named case", () => {});`);
@@ -333,6 +346,8 @@ describe("review round 2 (Codex seat, PR #500): failing-first regressions", () =
     expect(run("scripts/example.test.mjs")).toContain("impl");
     expect(run("playwright/scenarios/example.spec.ts")).toEqual([]);
     expect(run("playwright/visual/example.visual.spec.ts")).toEqual([]);
+    expect(run("playwright/opening-proof/unknown.spec.ts")).toContain("impl");
+    expect(run("playwright/unconfigured/opening-onboarding.spec.ts")).toContain("impl");
     expect(run("convex/example.test.ts")).toEqual([]);
   });
 

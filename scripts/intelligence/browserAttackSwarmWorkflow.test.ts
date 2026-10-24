@@ -1014,6 +1014,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     for (const [jobName, stopName] of [
       ["trusted-e2e", "Stop isolated trusted E2E candidate frontend"],
       ["attack-worker", "Stop isolated candidate frontend"],
+      ["opening-proof", "Stop isolated candidate frontend"],
     ] as const) {
       const startRun = String(
         step(jobName, "Start verified exact-SHA candidate frontend artifact").run ?? "",
@@ -1192,6 +1193,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const starts = [
       ["trusted-e2e", "Start verified exact-SHA candidate frontend artifact"],
       ["attack-worker", "Start verified exact-SHA candidate frontend artifact"],
+      ["opening-proof", "Start verified exact-SHA candidate frontend artifact"],
     ] as const;
 
     it.each(starts)(
@@ -1240,6 +1242,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const jobs = [
       ["trusted-e2e", "Run full trusted E2E suite against exact candidate"],
       ["attack-worker", "Execute trusted browser missions"],
+      ["opening-proof", "Execute the two terminal opening browser witnesses"],
     ] as const;
 
     // G4-02: GitHub's default `bash -e` has no pipefail, so
@@ -1277,7 +1280,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     // raw log must stay on the runner. It is written under RUNNER_TEMP, read by
     // the startup step and the proof, and never printed or uploaded afterwards.
     const RAW_LOG = "browser-egress-proxy.log";
-    const EGRESS_JOBS = ["trusted-e2e", "attack-worker"] as const;
+    const EGRESS_JOBS = ["trusted-e2e", "attack-worker", "opening-proof"] as const;
 
     it.each(EGRESS_JOBS)("%s keeps the raw proxy log private to the runner", (jobName) => {
       const steps = job(jobName).steps ?? [];

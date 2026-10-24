@@ -75,7 +75,7 @@
     }
   ],
   "impl": {
-    "file": "playwright/tests/opening-onboarding.spec.ts",
+    "file": "playwright/opening-proof/opening-onboarding.spec.ts",
     "testName": "finance opening form drafts for a different reviewer and posts once"
   },
   "sourceGlobs": [

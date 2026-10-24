@@ -1346,9 +1346,342 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  opening-proof:
+    name: terminal-opening-proof
+    needs: [prepare, candidate-build, trusted-e2e, attack-worker]
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' && needs.candidate-build.result == 'success' &&
+      needs.trusted-e2e.result == 'success' &&
+      ((needs.prepare.outputs.should_run == 'true' && needs.attack-worker.result == 'success') ||
+       (needs.prepare.outputs.should_run == 'false' && needs.attack-worker.result == 'skipped')) &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    outputs:
+      checked: ${{ steps.proof.outputs.checked }}
+
+    steps:
+      - name: Checkout trusted browser controller from immutable workflow revision
+        if: ${{ github.event.workflow_run.head_repository.full_name == github.repository }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+
+      - name: Install trusted controller dependencies
+        working-directory: trusted
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install trusted Chromium
+        working-directory: trusted
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Resolve test-only Clerk public JWT verification key
+        working-directory: trusted
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          case "$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" in
+            pk_test_*) ;;
+            *)
+              echo "Trusted browser swarm refuses a non-test Clerk publishable key." >&2
+              exit 1
+              ;;
+          esac
+
+          JWT_KEY_PATH="$RUNNER_TEMP/clerk-jwt-key.pem"
+          node scripts/intelligence/clerkPublicJwtKey.mjs > "$JWT_KEY_PATH"
+          chmod 600 "$JWT_KEY_PATH"
+          {
+            echo 'CLERK_JWT_KEY<<__AUTOFLOW_CLERK_JWT_KEY__'
+            cat "$JWT_KEY_PATH"
+            echo '__AUTOFLOW_CLERK_JWT_KEY__'
+          } >> "$GITHUB_ENV"
+          rm -f "$JWT_KEY_PATH"
+
+      - name: Download immutable exact-SHA candidate build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.candidate-build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/browser-swarm-candidate-build
+          merge-multiple: true
+
+      - name: Independently verify exact-SHA candidate build
+        run: node trusted/scripts/intelligence/browserSwarmBuildArtifact.mjs verify
+        env:
+          BROWSER_SWARM_BUILD_ARTIFACT_ROOT: ${{ runner.temp }}/browser-swarm-candidate-build
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+          CONTROLLER_SHA: ${{ github.workflow_sha }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          BROWSER_SWARM_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+
+      - name: Assert seeded preview from trusted control plane
+        working-directory: trusted
+        run: |
+          set -euo pipefail
+          CURRENT_URL="$(
+            node --input-type=module <<'NODE'
+          import { resolveConvexPreviewAuthority } from "./scripts/intelligence/convexPreviewAuthority.mjs";
+          const authority = await resolveConvexPreviewAuthority({
+            deployKey: process.env.CONVEX_DEPLOY_KEY,
+            previewName: process.env.CONVEX_PREVIEW_NAME,
+            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
+          });
+          process.stdout.write(authority.convexCloudUrl);
+          NODE
+          )"
+          if [ "$CURRENT_URL" != "$NEXT_PUBLIC_CONVEX_URL" ]; then
+            echo "Named preview was recreated underneath this swarm; refusing stale execution." >&2
+            exit 1
+          fi
+          node scripts/e2ePreviewBootstrap.mjs --assert-only
+          echo "BROWSER_SWARM_PREVIEW_ATTESTED=1" >> "$GITHUB_ENV"
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - name: Authenticate E2E seats on trusted main frontend
+        working-directory: trusted
+        run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
+        env:
+          CI: true
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
+
+      - name: Start verified exact-SHA candidate frontend artifact
+        run: |
+          set -euo pipefail
+          CANDIDATE_CONTAINER="autoflow-swarm-candidate-opening-proof"
+          CANDIDATE_NETWORK="autoflow-swarm-net-opening-proof"
+          echo "CANDIDATE_CONTAINER=$CANDIDATE_CONTAINER" >> "$GITHUB_ENV"
+          echo "CANDIDATE_NETWORK=$CANDIDATE_NETWORK" >> "$GITHUB_ENV"
+
+          # Runtime candidate code gets no default route to the Internet.
+          docker network create --internal "$CANDIDATE_NETWORK" >/dev/null
+
+          docker run --detach \
+            --name "$CANDIDATE_CONTAINER" \
+            --network "$CANDIDATE_NETWORK" \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            --env HOSTNAME=0.0.0.0 \
+            --env PORT=3000 \
+            --env NEXT_PUBLIC_CONVEX_URL \
+            --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
+            --env CLERK_JWT_KEY \
+            --env AUTOFLOW_OFFLINE_SWARM_CLERK=1 \
+            --env CLERK_SECRET_KEY=sk_test_autoflow_offline_swarm_placeholder_nonfunctional \
+            --env NEXT_PUBLIC_TURNSTILE_SITE_KEY \
+            --env NEXT_PUBLIC_APP_URL \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            node server.js
+
+          CANDIDATE_IP="$(docker inspect --format "{{(index .NetworkSettings.Networks \"$CANDIDATE_NETWORK\").IPAddress}}" "$CANDIDATE_CONTAINER")"
+
+          # Fail closed if anything already holds port 3000 on loopback: a
+          # non-candidate listener would answer /api/health while the relay
+          # died of EADDRINUSE, and the swarm would attack the wrong app.
+          if (exec 3<>/dev/tcp/127.0.0.1/3000) 2>/dev/null \
+            || (exec 3<>/dev/tcp/::1/3000) 2>/dev/null \
+            || [ -n "$(ss -Hltn 'sport = :3000' 2>/dev/null)" ]; then
+            echo "::error::Port 3000 is already in use on the runner; refusing to test a non-candidate app"
+            exit 1
+          fi
+
+          CANDIDATE_DOCKER_IP="$CANDIDATE_IP" node trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs > "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 &
+          CANDIDATE_RELAY_PID=$!
+          echo "CANDIDATE_RELAY_PID=$CANDIDATE_RELAY_PID" >> "$GITHUB_ENV"
+
+          # The health probe runs only after our own relay process is alive AND has printed
+          # its readiness line from the server 'listening' event.
+          RELAY_READY=0
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$CANDIDATE_RELAY_PID" 2>/dev/null; then
+              echo "::error::Trusted loopback relay exited before /api/health"
+              break
+            fi
+            if [ "$RELAY_READY" != "1" ] && grep -Fxq 'relay-listening 127.0.0.1:3000' "$RUNNER_TEMP/browser-swarm-relay.log"; then
+              RELAY_READY=1
+            fi
+            if [ "$RELAY_READY" = "1" ] && curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
+              # /api/health is outside the Clerk proxy matcher, so it stays green
+              # even when every page 500s (the SCRUM-350 G4 failure). Require a
+              # page that runs through the proxy to answer below 500 as well.
+              PAGE_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/sign-in || true)"
+              if [ "${PAGE_STATUS:-000}" -ge 200 ] && [ "${PAGE_STATUS:-000}" -lt 500 ]; then
+                exit 0
+              fi
+              echo "::warning::/api/health is up but a Clerk-proxied page answered HTTP ${PAGE_STATUS:-000}"
+            fi
+            if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
+              echo "::error::Candidate container exited before answering /api/health"
+              break
+            fi
+            sleep 2
+          done
+
+          # No --rm above: keep a dead candidate's exit code and stderr readable.
+          # Only public NEXT_PUBLIC_* values reach the container; the text is still
+          # candidate-controlled, so print its last 20000 bytes inside a random
+          # stop-commands fence so it cannot be read as runner commands.
+          LOG_FENCE="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$LOG_FENCE"
+          docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$CANDIDATE_CONTAINER" 2>&1 || true
+          docker logs --tail 200 "$CANDIDATE_CONTAINER" 2>&1 | tail -c 20000 || true
+          tail -c 2000 "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 || true
+          echo "::$LOG_FENCE::"
+          echo "Exact candidate frontend did not become healthy on isolated loopback." >&2
+          exit 1
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+
+      # SCRUM-784: see the matching step in trusted-e2e.
+      - name: Start trusted browser egress proxy
+        working-directory: trusted
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p egress-evidence
+          # The raw proxy log never leaves the runner: the order of its lines is a
+          # candidate-selectable channel (G4R2-01), so it lives under RUNNER_TEMP,
+          # is read only by this step and by the proof, and is never uploaded.
+          node scripts/intelligence/browserEgressContainment.mjs > "$RUNNER_TEMP/browser-egress-proxy.log" 2>&1 &
+          EGRESS_PID=$!
+          echo "BROWSER_EGRESS_PROXY_PID=$EGRESS_PID" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 40); do
+            if ! kill -0 "$EGRESS_PID" 2>/dev/null; then
+              echo "::error::Trusted egress proxy exited before listening"
+              cat "$RUNNER_TEMP/browser-egress-proxy.log" >&2 || true
+              exit 1
+            fi
+            if grep -Fxq 'egress-proxy-listening 127.0.0.1:3129' "$RUNNER_TEMP/browser-egress-proxy.log"; then
+              echo "BROWSER_EGRESS_PROXY_SERVER=http://127.0.0.1:3129" >> "$GITHUB_ENV"
+              echo "BROWSER_EGRESS_REQUIRED=1" >> "$GITHUB_ENV"
+              grep -F 'egress-allowlist' "$RUNNER_TEMP/browser-egress-proxy.log"
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::Trusted egress proxy did not report listening"
+          exit 1
+
+      - name: Prove browser egress containment before authenticated traffic
+        working-directory: trusted
+        env:
+          BROWSER_EGRESS_PROXY_LOG: ${{ runner.temp }}/browser-egress-proxy.log
+        run: |
+          # pipefail: a failing proof must fail this step, not be masked by tee.
+          set -euo pipefail
+          node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
+          node scripts/intelligence/browserEgressProofVerify.mjs egress-evidence/browser-egress-proof.json
+
+      # SCRUM-777: the last trusted boundary before candidate code is attacked.
+      - name: Refuse a superseded PR head before attacking
+        working-directory: trusted
+        run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          EXPECTED_TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+
+      - name: Execute the two terminal opening browser witnesses
+        working-directory: trusted
+        run: pnpm exec playwright test -c playwright.opening-proof.config.ts
+        env:
+          CI: true
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          BROWSER_EGRESS_REQUIRED: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+          CONTROLLER_SHA: ${{ github.workflow_sha }}
+          OPENING_PROOF_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Verify exact terminal opening evidence
+        id: proof
+        working-directory: trusted
+        run: node scripts/verifyOpeningBrowserProof.mjs
+        env:
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+          CONTROLLER_SHA: ${{ github.workflow_sha }}
+          OPENING_PROOF_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Stop isolated candidate frontend
+        if: always()
+        run: |
+          if [ -n "${CANDIDATE_RELAY_PID:-}" ] && ps -p "$CANDIDATE_RELAY_PID" -o args= | grep -Fq 'browserSwarmLoopbackRelay.mjs'; then
+            kill "$CANDIDATE_RELAY_PID" >/dev/null 2>&1 || true
+          fi
+          if [ -n "${BROWSER_EGRESS_PROXY_PID:-}" ] && ps -p "$BROWSER_EGRESS_PROXY_PID" -o args= | grep -Fq 'browserEgressContainment.mjs'; then
+            kill "$BROWSER_EGRESS_PROXY_PID" >/dev/null 2>&1 || true
+          fi
+          if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
+            docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
+          fi
+          if [ -n "${CANDIDATE_NETWORK:-}" ]; then
+            docker network rm "$CANDIDATE_NETWORK" >/dev/null 2>&1 || true
+          fi
+
+      - name: Upload checked terminal opening evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-opening-proof
+          path: |
+            trusted/opening-proof-public/proof.json
+            trusted/egress-evidence/browser-egress-proof.json
+          if-no-files-found: error
+          retention-days: 14
+
   verdict:
     name: trusted-browser-swarm-verdict
-    needs: [prepare, candidate-build, trusted-e2e, attack-worker]
+    needs: [prepare, candidate-build, trusted-e2e, attack-worker, opening-proof]
     if: >-
       always() &&
       needs.prepare.outputs.tested_sha != '' &&
@@ -1398,6 +1731,8 @@ jobs:
           PREPARE_RESULT: ${{ needs.prepare.result }}
           TRUSTED_E2E_RESULT: ${{ needs.trusted-e2e.result }}
           ATTACK_RESULT: ${{ needs.attack-worker.result }}
+          OPENING_RESULT: ${{ needs.opening-proof.result }}
+          OPENING_CHECKED: ${{ needs.opening-proof.outputs.checked }}
           SHOULD_RUN: ${{ needs.prepare.outputs.should_run }}
           FRESH_CURRENT: ${{ steps.freshness.outputs.fresh }}
         run: |
@@ -1406,13 +1741,13 @@ jobs:
           STATE=failure
           DESCRIPTION="Trusted browser swarm did not complete successfully."
 
-          if [ "$FRESH_CURRENT" = "true" ] && [ "$PREPARE_RESULT" = "success" ] && [ "$TRUSTED_E2E_RESULT" = "success" ]; then
+          if [ "$FRESH_CURRENT" = "true" ] && [ "$PREPARE_RESULT" = "success" ] && [ "$TRUSTED_E2E_RESULT" = "success" ] && [ "$OPENING_RESULT" = "success" ] && [ "$OPENING_CHECKED" = "true" ]; then
             if [ "$SHOULD_RUN" = "false" ]; then
               STATE=success
-              DESCRIPTION="Trusted E2E passed; no mandatory browser-swarm invariant impact."
+              DESCRIPTION="Trusted E2E and terminal opening proof passed; no mandatory swarm missions."
             elif [ "$SHOULD_RUN" = "true" ] && [ "$ATTACK_RESULT" = "success" ]; then
               STATE=success
-              DESCRIPTION="Trusted E2E and browser swarm passed on this exact PR merge."
+              DESCRIPTION="Trusted E2E, browser swarm and terminal opening proof passed on this exact PR merge."
             fi
           fi
 
@@ -1431,7 +1766,7 @@ jobs:
   # only after all of them — whatever their outcome — have finished with it.
   preview-cleanup:
     name: disposable-preview-cleanup
-    needs: [prepare, candidate-build, trusted-e2e, attack-worker, verdict]
+    needs: [prepare, candidate-build, trusted-e2e, attack-worker, opening-proof, verdict]
     # The same-repository conditions repeat `prepare`'s own: only such a run can
     # have created a preview, and they keep fork-triggered runs out of a job
     # that holds the preview deploy key.

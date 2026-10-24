@@ -29,11 +29,11 @@ function frame(payload: string | Buffer): Record<string, unknown> | null {
 function decode(value: unknown): unknown { return jsonToConvex(JSON.parse(JSON.stringify(value))); }
 
 function workflowTarget(baseURL: string | undefined): URL {
-  const main = process.env.GITHUB_WORKFLOW === "Trusted Main E2E (Playwright)" &&
-    ["push", "workflow_dispatch"].includes(process.env.GITHUB_EVENT_NAME ?? "");
+  const main = process.env.GITHUB_WORKFLOW === "Deal Scenarios E2E (Playwright, GL-checked)" &&
+    ["schedule", "workflow_dispatch"].includes(process.env.GITHUB_EVENT_NAME ?? "");
   const candidate = process.env.GITHUB_WORKFLOW === "Trusted Browser Attack Swarm" && process.env.GITHUB_EVENT_NAME === "workflow_run";
   if (process.env.GITHUB_ACTIONS !== "true" || process.env.CI !== "true" || (!main && !candidate)) {
-    throw new Error("Opening browser proof requires an existing trusted Preview workflow");
+    throw new Error("Opening browser proof requires an isolated trusted terminal Preview workflow");
   }
   const app = new URL(baseURL ?? "http://localhost:3000");
   const target = new URL(process.env.NEXT_PUBLIC_CONVEX_URL ?? "");
@@ -135,7 +135,9 @@ export async function freshOpening(actors: Actors, label: string) {
   await client.mutation(api.accountingPeriods.create, { orgId, fiscalYear: year, periodNumber: 1,
     startDate: Date.UTC(year, 0, 1), endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999), openImmediately: true });
   const customerId = await client.mutation(api.customers.create, { orgId, firstName: "QA TEST", lastName: "Opening UI customer" });
-  const partnerId = await client.mutation(api.partnerEquity.add, { orgId, partnerName: "QA TEST opening UI partner", idempotencyKey: crypto.randomUUID() });
+  // One partner intent per fresh org; retries of that intent reuse its identity.
+  const partnerOperationId = `${orgId}:scrum858:opening-partner`;
+  const partnerId = await client.mutation(api.partnerEquity.add, { orgId, partnerName: "QA TEST opening UI partner", idempotencyKey: partnerOperationId });
   const accounts = await client.query(api.chartOfAccounts.list, { orgId });
   const account = (key: string) => {
     const found = accounts.find(item => item.systemKey === key);
@@ -231,13 +233,17 @@ export async function assertNativeOpening(actors: Actors, fixture: Fixture, resu
     ]));
   const receivables = await client.query(api.subledger.listReceivables, { orgId: fixture.orgId, limit: 10 });
   expect(receivables).toHaveLength(1); expect(receivables[0].customerId).toBe(fixture.customerId);
+  expect(receivables[0]).toMatchObject({ sourceType: "legacy_receivable", originalAmountMinor: MINOR.receivable, currency: "JOD" });
+  const legacyReceivableId = text(receivables[0].sourceId);
   const balance = await client.query(api.subledger.getReceivableBalance, { orgId: fixture.orgId, receivableDocumentId: receivables[0]._id });
   if (!balance) throw new Error("Native opening receivable balance unavailable");
+  expect(balance.doc._id).toBe(receivables[0]._id);
   expect(balance.outstandingMinor).toBe(MINOR.receivable);
   const schedules = await client.query(api.prepaidExpenses.listSchedules, { orgId: fixture.orgId });
   expect(schedules).toHaveLength(1); expect(schedules[0].totalMinor).toBe(MINOR.prepaid); expect(schedules[0].recognizedMinor).toBe(0);
   expect(readback.rows).toEqual(expect.arrayContaining([
-    expect.objectContaining({ kind: "CUSTOMER_RECEIVABLE", documentId: receivables[0]._id, amountMinor: MINOR.receivable }),
+    expect.objectContaining({ kind: "CUSTOMER_RECEIVABLE", documentId: legacyReceivableId,
+      accountId: fixture.ar._id, partyId: fixture.customerId, amountMinor: MINOR.receivable }),
     expect.objectContaining({ kind: "PREPAID_EXPENSE", documentId: schedules[0]._id, amountMinor: MINOR.prepaid }),
     expect.objectContaining({ kind: "PARTNER_CAPITAL", documentId: fixture.partnerId, amountMinor: MINOR.capital }),
   ]));
