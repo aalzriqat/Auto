@@ -277,7 +277,7 @@ export const prepareOpeningCleanupFixture = internalMutation({
     // Historical adverse reference, using only the native source IDs just verified above.
     await ctx.db.patch(drafts[0]._id, { allocationResults: drafts[101].allocationResults });
     if (args.stage === "BEGIN_RESET") {
-      await ctx.db.patch(org._id, { suspended: true, ...beginResetGenerationPatch(org) });
+      await ctx.db.patch(org._id, { ...beginResetGenerationPatch(org), suspended: true });
       return { historicalResetPrepared: true };
     }
     const requestId = await ctx.db.insert("organizationDeletionRequests", { orgId: org._id, orgName: org.name,
