@@ -2,6 +2,7 @@
 // @ts-nocheck
 /** `useQueries` request-map shapes: several entries, an empty branch, a dynamic map. */
 import { useQueries } from "convex/react";
+import { useMemo } from "react";
 import { api } from "@/convex/_generated/api";
 
 export function SeveralEntries(orgId: string, vehicleId: string) {
@@ -25,4 +26,21 @@ export function DynamicMap(requests: Record<string, never>) {
 
 export function DynamicEntry(orgId: string, name: string) {
   return useQueries({ x: { query: api.vehicles[name], args: { orgId } } });
+}
+
+function freshChunks(ids: string[]) {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += 50) chunks.push(ids.slice(i, i + 50));
+  return chunks;
+}
+
+export function NativeMappedRequests(orgId: string, ids: string[]) {
+  const chunks = useMemo(() => freshChunks(ids), [ids]);
+  const requests = useMemo(() => !orgId ? {} : Object.fromEntries(
+    chunks.map((chunk, index) => [`chunk${index}`, {
+      query: api.vehicleAvailability.pickerAvailability,
+      args: { orgId, vehicleIds: chunk },
+    }]),
+  ), [orgId, chunks]);
+  return useQueries(requests);
 }

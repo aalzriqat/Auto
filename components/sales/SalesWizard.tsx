@@ -18,7 +18,8 @@ import { quoteWizardStepCounter } from "@/components/sales/wizard/stepCounter";
 import { X, Banknote, CreditCard, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-import type { WizardData, PaymentType } from "@/components/sales/wizard/types";
+import type { WizardData, PaymentType, WizardLaunchSeed } from "@/components/sales/wizard/types";
+import { buildWizardDraftData } from "@/components/sales/wizard/quotePayload";
 
 export interface WizardDraft {
   paymentType: PaymentType;
@@ -38,7 +39,7 @@ export function SalesWizard({
   paymentType: PaymentType;
   onClose: () => void;
   /** Pre-filled from an approval snapshot — starts at step 1 */
-  initialDraft?: Partial<WizardData>;
+  initialDraft?: Partial<WizardData> & WizardLaunchSeed;
   /** Direct resume from the sales page draft card — restores step + customer */
   resumeDraft?: WizardDraft;
   /** Pre-selected customer when launching from a lead's context */
@@ -139,7 +140,7 @@ export function SalesWizard({
         orgId: activeOrgId as Id<"organizations">,
         paymentType,
         currentStep,
-        wizardData,
+        wizardData: buildWizardDraftData(wizardData),
         selectedCustomerId: selectedCustomer?._id,
       });
     }, 1500);

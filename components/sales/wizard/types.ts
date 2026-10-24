@@ -1,26 +1,11 @@
-export interface VehicleLineItem {
-  vehicleId: string;
-  unitPrice: number;
-}
+import type { Infer } from "convex/values";
+import type { wizardDraftDataValidator } from "../../../convex/wizardDraftData";
 
-export interface WizardData {
-  vehicleId: string;
-  vehiclePrice: number;
-  /** Multiple vehicles (or several units of the same model) on one CASH quote. Undefined for the common single-vehicle case and for all INSTALLMENT quotes. */
-  vehicleItems?: VehicleLineItem[];
-  desiredProfit: number;
-  downPayment: number;
-  termMonths: number;
-  selectedCompanyId?: string;
-  manualProfitRate?: number;
-  manualInsuranceRate?: number;
-  manualExecutionCommission?: number;
-  manualExecutionFees?: number;
-  manualIncludesCommissionInDebt?: boolean;
-  recipientName?: string;
-  customerStatuses?: string[];
-  /** Set when the wizard was launched from a lead's context, so the resulting quote links back to it. */
-  leadId?: string;
+export type VehicleLineItem = NonNullable<Infer<typeof wizardDraftDataValidator>["vehicleItems"]>[number];
+
+export type WizardData = Infer<typeof wizardDraftDataValidator>;
+
+export interface WizardLaunchSeed {
   /** Seeds the vehicle picker's "source a vehicle" form when launched via a SOLD vehicle's "Source another like this" action. */
   sourceLikeVehicle?: {
     make: string;

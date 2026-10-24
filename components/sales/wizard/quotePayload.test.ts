@@ -1,6 +1,25 @@
 import { describe, expect, test } from "vitest";
-import { buildWizardQuotePayload } from "./quotePayload";
+import { buildWizardDraftData, buildWizardQuotePayload } from "./quotePayload";
+import { convexToJson, jsonToConvex } from "convex/values";
+import { wizardDraftDataValidator } from "@/convex/wizardDraftData";
 import { OTHER_COMPANY_ID, WizardData } from "./types";
+
+test("SCRUM-862: draft DTO keeps all durable values and canonical rows through the native codec", () => {
+  const durable: WizardData = { vehicleId: "vehicle-a", vehiclePrice: 0, desiredProfit: 0, downPayment: 0, termMonths: 0,
+    selectedCompanyId: "OTHER", manualProfitRate: 0, manualInsuranceRate: 0, manualExecutionCommission: 0,
+    manualExecutionFees: 0, manualIncludesCommissionInDebt: false, recipientName: "", customerStatuses: [],
+    leadId: "lead-a", vehicleItems: [{ vehicleId: "vehicle-a", unitPrice: 0 }, { vehicleId: "vehicle-a", unitPrice: 0 }] };
+  const source = { ...durable, sourceLikeVehicle: { make: "Synthetic seed" }, unrelated: true,
+    vehicleItems: durable.vehicleItems?.map(item => ({ ...item, unrelated: true })) };
+  const dto = buildWizardDraftData(source);
+  expect(Object.keys(dto).sort()).toEqual(Object.keys(wizardDraftDataValidator.fields).sort());
+  const wire = jsonToConvex(JSON.parse(JSON.stringify(convexToJson(dto))));
+  expect(wire).toEqual(durable);
+  expect(source).toHaveProperty("sourceLikeVehicle");
+  const partial = buildWizardDraftData({ vehicleId: "", vehiclePrice: 0, desiredProfit: 0, downPayment: 0, termMonths: 0 });
+  expect(jsonToConvex(JSON.parse(JSON.stringify(convexToJson(partial))))).toEqual({
+    vehicleId: "", vehiclePrice: 0, desiredProfit: 0, downPayment: 0, termMonths: 0 });
+});
 
 describe("buildWizardQuotePayload", () => {
   test("preserves manual finance mode and manual snapshot fields", () => {

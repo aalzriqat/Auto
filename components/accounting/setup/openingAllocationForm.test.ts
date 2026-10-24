@@ -1,19 +1,27 @@
+import type { Id } from "@/convex/_generated/dataModel";
 import { expect, test } from "vitest";
 import { buildOpeningAllocationPayload, groupOpeningAllocations, openingAllocationTotalsMatch, retainOpeningAllocations } from "./openingAllocationForm";
 import type { OpeningAllocationDraft, OpeningAllocationGroup } from "./openingAllocationForm";
 
 const groups: OpeningAllocationGroup[] = [
-  { accountId: "ar", kind: "CUSTOMER_RECEIVABLE", journalMinor: 75_000, label: "AR" },
-  { accountId: "capital", kind: "PARTNER_CAPITAL", journalMinor: 75_000, label: "Capital" },
+  { accountId: "ar" as Id<"chartOfAccounts">, kind: "CUSTOMER_RECEIVABLE", journalMinor: 75_000, label: "AR" },
+  { accountId: "capital" as Id<"chartOfAccounts">, kind: "PARTNER_CAPITAL", journalMinor: 75_000, label: "Capital" },
 ];
 const rows: OpeningAllocationDraft[] = [
-  { rowKey: "ar-1", kind: "CUSTOMER_RECEIVABLE", accountId: "ar", partyId: "customer-1",
+  { rowKey: "ar-1", kind: "CUSTOMER_RECEIVABLE", accountId: "ar" as Id<"chartOfAccounts">, partyId: "customer-1" as Id<"customers">,
     partyLabel: "Synthetic customer", amount: "25.000", title: "Historical invoice", dueDate: "2026-12-31", note: "" },
-  { rowKey: "ar-2", kind: "CUSTOMER_RECEIVABLE", accountId: "ar", partyId: "customer-2",
+  { rowKey: "ar-2", kind: "CUSTOMER_RECEIVABLE", accountId: "ar" as Id<"chartOfAccounts">, partyId: "customer-2" as Id<"customers">,
     partyLabel: "Synthetic customer 2", amount: "50.000", title: "Historical invoice 2", dueDate: "2026-12-31", note: "" },
-  { rowKey: "partner-1", kind: "PARTNER_CAPITAL", accountId: "capital", partyId: "partner-1",
+  { rowKey: "partner-1", kind: "PARTNER_CAPITAL", accountId: "capital" as Id<"chartOfAccounts">, partyId: "partner-1" as Id<"partnerEquity">,
     partyLabel: "Synthetic partner", amount: "75.000", title: "", dueDate: "", note: "" },
 ];
+
+test("an unavailable account policy preserves the original lines while producing no allocation group", () => {
+  const lines = [{ accountId: groups[0].accountId, debitMinor: 75000, creditMinor: 0, label: "AR" }];
+  const before = structuredClone(lines);
+  expect(groupOpeningAllocations(lines, [])).toEqual([]);
+  expect(lines).toEqual(before);
+});
 
 test("opening allocation rows reconcile by account and preserve stable party identities", () => {
   expect(openingAllocationTotalsMatch(rows, groups, "JOD")).toBe(true);
@@ -38,11 +46,11 @@ test("missing identity, excess precision and account mismatches block opening al
 });
 
 test("prepaid opening requires a named unexpired benefit and native schedule fields", () => {
-  const prepaid: OpeningAllocationDraft = { rowKey: "prepaid-1", kind: "PREPAID_EXPENSE", accountId: "prepaid",
+  const prepaid: OpeningAllocationDraft = { rowKey: "prepaid-1", kind: "PREPAID_EXPENSE", accountId: "prepaid" as Id<"chartOfAccounts">,
     partyId: "", partyLabel: "", amount: "100.001", title: "Synthetic unexpired service",
     dueDate: "", note: "", startYearMonth: "2026-01", termMonths: "3",
     expenseSystemKey: "RENT_EXPENSE", attestedUnexpiredBenefit: true };
-  const target: OpeningAllocationGroup[] = [{ accountId: "prepaid", kind: "PREPAID_EXPENSE", journalMinor: 100_001,
+  const target: OpeningAllocationGroup[] = [{ accountId: "prepaid" as Id<"chartOfAccounts">, kind: "PREPAID_EXPENSE", journalMinor: 100_001,
     label: "Prepaid asset" }];
   expect(buildOpeningAllocationPayload([prepaid], "JOD")).toEqual([{ kind: "PREPAID_EXPENSE",
     rowKey: "prepaid-1", accountId: "prepaid", amountMinor: 100_001,
@@ -96,10 +104,10 @@ test("custom liability groups use the server allowlist and sum credit lines on o
     { accountId: "custom-liability", debitMinor: 0, creditMinor: 4_001, label: "2199 · Historical liabilities" },
     { accountId: "recoverable", debitMinor: 4_001, creditMinor: 0, label: "1360 · Supplier recoverable" },
   ], [
-    { accountId: "custom-liability", policy: "DECLARED_LIABILITY",
+    { accountId: "custom-liability" as Id<"chartOfAccounts">, policy: "DECLARED_LIABILITY",
       allowedKinds: ["SUPPLIER_PAYABLE", "OTHER_PAYABLE", "EMPLOYEE_COMMISSION", "UNALLOCATED_LIABILITY"],
       allowedPurposes: ["UNIDENTIFIED_RECEIPT"] },
-    { accountId: "recoverable", policy: "SUPPLIER_RECOVERABLE", allowedKinds: ["SUPPLIER_RECOVERABLE"] },
+    { accountId: "recoverable" as Id<"chartOfAccounts">, policy: "SUPPLIER_RECOVERABLE", allowedKinds: ["SUPPLIER_RECOVERABLE"] },
   ]);
   expect(groups).toEqual([
     { accountId: "custom-liability", kind: "SUPPLIER_PAYABLE", journalMinor: 8_002,
@@ -108,7 +116,7 @@ test("custom liability groups use the server allowlist and sum credit lines on o
     { accountId: "recoverable", kind: "SUPPLIER_RECOVERABLE", journalMinor: 4_001,
       label: "1360 · Supplier recoverable", allowedKinds: ["SUPPLIER_RECOVERABLE"], allowedPurposes: undefined },
   ]);
-  const row: OpeningAllocationDraft = { rowKey: "unknown", accountId: "custom-liability",
+  const row: OpeningAllocationDraft = { rowKey: "unknown", accountId: "custom-liability" as Id<"chartOfAccounts">,
     kind: "UNALLOCATED_LIABILITY", partyId: "", partyLabel: "", amount: "8.002", title: "Prior unidentified receipts",
     purpose: "UNIDENTIFIED_RECEIPT", dueDate: "", note: "" };
   expect(openingAllocationTotalsMatch([row], groups.slice(0, 1), "JOD")).toBe(true);

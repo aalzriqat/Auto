@@ -9,6 +9,7 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { SalesWizard, WizardDraft } from "@/components/sales/SalesWizard";
 import { PaymentType, WizardData } from "@/components/sales/wizard/types";
+import type { WizardLaunchSeed } from "@/components/sales/wizard/types";
 import { Banknote, CreditCard, TrendingUp, ArrowRight, Clock, CheckCircle2, RotateCcw, FileEdit, X } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
@@ -33,7 +34,7 @@ function buildFreshWizardPrefill({ hasPrefill, vehicleId, leadId, sourceLikeVehi
     vehicleId: string | null;
     leadId: string | null;
     sourceLikeVehicle: PrefillVehicle | undefined;
-}): Partial<WizardData> | undefined {
+}): (Partial<WizardData> & WizardLaunchSeed) | undefined {
     if (!hasPrefill) return undefined;
     return {
         vehicleId: vehicleId ?? undefined,

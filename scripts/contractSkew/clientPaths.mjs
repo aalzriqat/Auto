@@ -150,6 +150,7 @@ function calleeName(expression) {
 }
 
 const MAX_DEPTH = 12;
+const NATIVE_DATA_CONSTRUCTORS = new Set(["Number", "String", "BigInt", "Set", "Date", "Object"]);
 
 /**
  * ⚠️ THIS ANNOTATION WAS WRONG FOR AS LONG AS NOBODY CHECKED IT. It still
@@ -579,7 +580,7 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
         ? prop.name.text
         : null;
 
-    const entry = (entryNode) => {
+    const entry = (entryNode, opaqueSymbols = new Set()) => {
       const literal = unwrapReferenceExpression(entryNode);
       if (!ts.isObjectLiteralExpression(literal)) {
         unresolved(entryNode, "DYNAMIC_REQUEST_ENTRY", "a useQueries entry is not an object literal");
@@ -621,6 +622,7 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
             evidence,
             expressionSeen: new Set(),
             refinements: createFlowRefinements(),
+            opaqueSymbols,
           })
         : EMPTY_PAYLOAD;
       calls.push({
@@ -634,6 +636,148 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
         siteId: siteOf(sourceFile, queryNode),
         mapSiteId,
       });
+    };
+
+    // This proof assumes unmodified standard intrinsics and React's implementation.
+    // Library declarations identify calls; local writes/escapes still withdraw proof.
+    // It proves the outer array's construction only. Its element values stay opaque.
+    const nativeMethod = (call, name) => {
+      if (!ts.isCallExpression(call) || !ts.isPropertyAccessExpression(call.expression) || call.expression.name.text !== name) return false;
+      return isDefaultLibrarySymbol(program, checker.getSymbolAtLocation(call.expression.name));
+    };
+    const reactMemo = (call) => {
+      if (!ts.isCallExpression(call) || !ts.isIdentifier(call.expression) || evidence.isWrittenSymbol(checker.getSymbolAtLocation(call.expression))) return false;
+      const declarations = checker.getSymbolAtLocation(call.expression)?.declarations ?? [];
+      return declarations.length === 1 && declarations.every((decl) =>
+        ts.isImportSpecifier(decl) && (decl.propertyName ?? decl.name).text === "useMemo" &&
+        ts.isImportDeclaration(decl.parent.parent.parent) &&
+        ts.isStringLiteral(decl.parent.parent.parent.moduleSpecifier) &&
+        decl.parent.parent.parent.moduleSpecifier.text === "react",
+      );
+    };
+    const constInitializer = (identifier) => {
+      if (!ts.isIdentifier(identifier)) return null;
+      const symbol = resolveSymbol(checker, identifier);
+      const decl = symbol?.valueDeclaration;
+      return symbol && !evidence.isWrittenSymbol(symbol) && decl && ts.isVariableDeclaration(decl) &&
+        ts.isVariableDeclarationList(decl.parent) && decl.parent.flags & ts.NodeFlags.Const
+        ? decl.initializer ?? null : null;
+    };
+    const everyReference = (symbol, declarationName, accepts) => {
+      let valid = true;
+      const scan = (node) => {
+        if (!valid) return;
+        if (ts.isIdentifier(node) && node !== declarationName) {
+          const referenced = isShorthandName(node) ? checker.getShorthandAssignmentValueSymbol(node.parent) : resolveSymbol(checker, node);
+          if (referenced === symbol && !accepts(node)) valid = false;
+        }
+        ts.forEachChild(node, scan);
+      };
+      scan(sourceFile);
+      return valid;
+    };
+    const localFunction = (call) => {
+      if (!ts.isCallExpression(call) || !ts.isIdentifier(call.expression)) return null;
+      const symbol = resolveSymbol(checker, call.expression);
+      const decl = symbol?.valueDeclaration;
+      return decl && ts.isFunctionDeclaration(decl) && decl.body && decl.getSourceFile() === sourceFile &&
+        !decl.asteriskToken && !decl.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) &&
+        !evidence.isWrittenSymbol(symbol) && !referencesArguments(decl) ? decl : null;
+    };
+    const safeCallback = (callback) => callback && ts.isArrowFunction(callback) && callback.parameters.length <= 2 &&
+      !callback.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) &&
+      callback.parameters.every((parameter) => ts.isIdentifier(parameter.name) && !parameter.dotDotDotToken && !parameter.initializer);
+    const hasUnsafeNativeUse = () => {
+      let found = false;
+      const scan = (node) => {
+        if (found) return;
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "eval") {
+          const declarations = resolveSymbol(checker, node.expression)?.declarations ?? [];
+          if (declarations.some((decl) => program.isSourceFileDefaultLibrary(decl.getSourceFile()))) found = true;
+        }
+        if (ts.isIdentifier(node) && (node.text === "Array" || node.text === "Object")) {
+          const declarations = resolveSymbol(checker, node)?.declarations ?? [];
+          if (declarations.some((decl) => program.isSourceFileDefaultLibrary(decl.getSourceFile()))) {
+            const access = node.parent;
+            const method = node.text === "Array" ? "isArray" : "fromEntries";
+            if (!ts.isPropertyAccessExpression(access) || access.expression !== node ||
+              !ts.isCallExpression(access.parent) || access.parent.expression !== access || !nativeMethod(access.parent, method)) found = true;
+          }
+        }
+        ts.forEachChild(node, scan);
+      };
+      scan(sourceFile);
+      return found;
+    };
+    const directMethod = (reference, name) => {
+      const access = reference.parent;
+      return ts.isPropertyAccessExpression(access) && access.expression === reference &&
+        ts.isCallExpression(access.parent) && access.parent.expression === access && nativeMethod(access.parent, name)
+        ? access.parent : null;
+    };
+    const readOnlyConsumer = (reference) => {
+      const call = reference.parent;
+      const fn = localFunction(call);
+      if (!fn || !ts.isCallExpression(call)) return false;
+      const parameter = fn.parameters[call.arguments.indexOf(reference)];
+      if (!parameter || !ts.isIdentifier(parameter.name) || parameter.dotDotDotToken || parameter.initializer) return false;
+      const symbol = resolveSymbol(checker, parameter.name);
+      return symbol && !evidence.isWrittenSymbol(symbol) && everyReference(symbol, parameter.name, (use) => {
+        const each = directMethod(use, "forEach");
+        return enclosingFunctionLike(use) === fn && each && each.arguments.length === 1 && safeCallback(each.arguments[0]);
+      });
+    };
+    const freshProducer = (call) => {
+      const fn = localFunction(call);
+      if (!fn?.body) return false;
+      const returns = returnedExpressions(fn);
+      const last = fn.body.statements.at(-1);
+      if (!last || !ts.isReturnStatement(last) || !returns.length || !returns.every(ts.isIdentifier)) return false;
+      const array = returns[0];
+      const initializer = constInitializer(array);
+      const symbol = resolveSymbol(checker, array);
+      const declaration = symbol?.valueDeclaration;
+      if (!symbol || !declaration || !ts.isVariableDeclaration(declaration) || enclosingFunctionLike(declaration) !== fn ||
+        !initializer || !ts.isArrayLiteralExpression(initializer) || initializer.elements.length ||
+        !returns.every((returned) => resolveSymbol(checker, returned) === symbol)) return false;
+      return everyReference(symbol, declaration.name, (use) => {
+        if (enclosingFunctionLike(use) !== fn) return false;
+        if (ts.isReturnStatement(use.parent) && use.parent.expression === use) return true;
+        const push = directMethod(use, "push");
+        return push && push.arguments.length === 1 && !ts.isSpreadElement(push.arguments[0]) && ts.isExpressionStatement(push.parent);
+      });
+    };
+    const freshMemoReceiver = (receiver) => {
+      const initializer = constInitializer(receiver);
+      if (!initializer || !ts.isCallExpression(initializer) || !reactMemo(initializer)) return false;
+      const factory = initializer.arguments[0];
+      if (!factory || !ts.isArrowFunction(factory) || !safeCallback(factory) || factory.parameters.length || !freshProducer(factory.body)) return false;
+      const symbol = resolveSymbol(checker, receiver);
+      const declaration = symbol?.valueDeclaration;
+      if (!symbol || !declaration || !ts.isVariableDeclaration(declaration)) return false;
+      return everyReference(symbol, declaration.name, (use) => {
+        const map = directMethod(use, "map");
+        if (map) return map.arguments.length === 1 && safeCallback(map.arguments[0]);
+        const deps = use.parent;
+        if (ts.isArrayLiteralExpression(deps) && ts.isCallExpression(deps.parent) && deps.parent.arguments[1] === deps && reactMemo(deps.parent)) return true;
+        return readOnlyConsumer(use);
+      });
+    };
+    const mappedEntry = (node) => {
+      if (!nativeMethod(node, "fromEntries") || node.arguments.length !== 1 || hasUnsafeNativeUse()) return false;
+      const object = node.expression.expression;
+      const objectSymbol = ts.isIdentifier(object) ? resolveSymbol(checker, object) : null;
+      if (!objectSymbol || evidence.isWrittenSymbol(objectSymbol) || !isDefaultLibrarySymbol(program, objectSymbol)) return false;
+      const mapped = node.arguments[0];
+      if (!nativeMethod(mapped, "map") || mapped.arguments.length !== 1 || !freshMemoReceiver(mapped.expression.expression)) return false;
+      const callback = mapped.arguments[0];
+      if (!safeCallback(callback) || callback.parameters.length < 1 || !ts.isArrayLiteralExpression(callback.body) || callback.body.elements.length !== 2) return false;
+      const [key, request] = callback.body.elements;
+      if ((!ts.isStringLiteral(key) && !ts.isTemplateExpression(key)) || !ts.isObjectLiteralExpression(request)) return false;
+      if (ts.isTemplateExpression(key) && !key.templateSpans.every((span) => ts.isIdentifier(span.expression) &&
+        callback.parameters[1] && resolveSymbol(checker, span.expression) === resolveSymbol(checker, callback.parameters[1].name))) return false;
+      entry(request, new Set(callback.parameters.map((parameter) => resolveSymbol(checker, parameter.name)).filter(Boolean)));
+      return true;
     };
 
     const walk = (expression, depth, seen) => {
@@ -687,12 +831,14 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
         return;
       }
       if (ts.isCallExpression(node)) {
-        const callee = node.expression;
-        const isUseMemo =
-          (ts.isIdentifier(callee) && callee.text === "useMemo") ||
-          (ts.isPropertyAccessExpression(callee) && callee.name.text === "useMemo");
+        if (mappedEntry(node)) return;
+        const isUseMemo = reactMemo(node);
         const factory = node.arguments[0] ? unwrapReferenceExpression(node.arguments[0]) : null;
         if (isUseMemo && factory && (ts.isArrowFunction(factory) || ts.isFunctionExpression(factory))) {
+          if (factory.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)) {
+            unresolved(node, "DYNAMIC_REQUEST_MAP", "an async useMemo factory returns a promise rather than a request map");
+            return;
+          }
           const returned = returnedExpressions(factory);
           if (returned.length === 0) {
             unresolved(node, "DYNAMIC_REQUEST_MAP", "the useMemo factory returns no request map");
@@ -754,7 +900,8 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
  *   seen: Set<string>,
  *   evidence: ReturnType<typeof createEvidenceAnalysis>,
  *   expressionSeen: Set<import("typescript").Symbol>,
- *   refinements: ReturnType<typeof createFlowRefinements>
+ *   refinements: ReturnType<typeof createFlowRefinements>,
+ *   opaqueSymbols?: Set<import("typescript").Symbol>
  * }} ExpressionContext
  */
 
@@ -776,6 +923,8 @@ function collectFromExpression(expr, context) {
   }
 
   const node = expr;
+  const mappedPayloadRoot = Boolean(context.opaqueSymbols?.size) && prefix === "";
+  if (mappedPayloadRoot && isUndefinedExpression(checker, node)) return clientNode.literal(new Set([undefined]));
 
   if (ts.isParenthesizedExpression(node)) {
     return collectFromExpression(node.expression, nested());
@@ -907,10 +1056,10 @@ function collectFromExpression(expr, context) {
     // `undefined` means no transmitted value. Preserve the other alternative
     // directly so a query's `cond ? undefined : "skip"` can still normalize to
     // the known empty-payload state after the sentinel is removed.
-    if (isUndefinedExpression(checker, node.whenTrue)) {
+    if (!mappedPayloadRoot && isUndefinedExpression(checker, node.whenTrue)) {
       return collectFromExpression(node.whenFalse, nested());
     }
-    if (isUndefinedExpression(checker, node.whenFalse)) {
+    if (!mappedPayloadRoot && isUndefinedExpression(checker, node.whenFalse)) {
       return collectFromExpression(node.whenTrue, nested());
     }
     const whenTrueRefinements = truthyRefinementsForCondition(
@@ -925,10 +1074,27 @@ function collectFromExpression(expr, context) {
       refinements,
       evidence,
     );
-    return mergeClientNodes(
-      collectFromExpression(node.whenTrue, nested(prefix, whenTrueRefinements)),
-      collectFromExpression(node.whenFalse, nested(prefix, whenFalseRefinements))
-    );
+    const whenTrue = collectFromExpression(node.whenTrue, nested(prefix, whenTrueRefinements));
+    const whenFalse = collectFromExpression(node.whenFalse, nested(prefix, whenFalseRefinements));
+    return context.opaqueSymbols?.size ? clientNode.variants([whenTrue, whenFalse]) : mergeClientNodes(whenTrue, whenFalse);
+  }
+
+  // A derived expression cannot manufacture evidence for an opaque map element.
+  if (context.opaqueSymbols?.size) {
+    let opaque = false;
+    const scan = (child) => {
+      if (opaque) return;
+      if (ts.isIdentifier(child)) {
+        const symbol = resolveSymbol(checker, child);
+        if (symbol && context.opaqueSymbols?.has(symbol)) opaque = true;
+      }
+      ts.forEachChild(child, scan);
+    };
+    scan(node);
+    if (opaque) {
+      acc.unknowns.push(`${prefix || "<root>"} (derived request-map element value is unproven)`);
+      return clientNode.opaqueValue();
+    }
   }
 
   // An assertion hidden in an argument, property chain, alias, or local callee
@@ -960,6 +1126,10 @@ function collectFromExpression(expr, context) {
 
 function collectIdentifierFromSymbol(node, symbol, context) {
   const { checker, prefix, acc, depth, seen, evidence, expressionSeen, refinements } = context;
+  if (symbol && context.opaqueSymbols?.has(symbol)) {
+    acc.unknowns.push(`${prefix || "<root>"} (request-map element value is unproven)`);
+    return clientNode.opaqueValue();
+  }
   const refinement = refinementForExpression(checker, node, refinements, symbol);
   const routeParam = routeParamRuntimeNode(node, checker, evidence, new Set(), symbol);
   const mayBeUndefined = declaredTypeAdmitsUndefined(checker, symbol);
@@ -1917,6 +2087,24 @@ export function unaliasSymbol(checker, symbol) {
  * bindings fail closed because their current runtime source is not statically
  * attributable to a single initializer.
  */
+function isDefaultLibrarySymbol(program, symbol) {
+  const declarations = symbol?.declarations ?? [];
+  return declarations.length > 0 && declarations.every((declaration) => program.isSourceFileDefaultLibrary(declaration.getSourceFile()));
+}
+
+function isNativeDataConstructor(program, symbol) {
+  return symbol && NATIVE_DATA_CONSTRUCTORS.has(symbol.name) && isDefaultLibrarySymbol(program, symbol) &&
+    symbol.declarations.some(ts.isVariableDeclaration);
+}
+
+function isNativeFailureConstructor(program, symbol) {
+  return symbol?.name === "Error" && isDefaultLibrarySymbol(program, symbol) && symbol.declarations.some(ts.isVariableDeclaration);
+}
+
+function isTrackedNativeConstructor(program, symbol) {
+  return isNativeDataConstructor(program, symbol) || isNativeFailureConstructor(program, symbol);
+}
+
 function createEvidenceAnalysis(program, checker) {
   const written = indexWrittenSymbols(program, checker);
   /** @type {Map<import("typescript").Symbol, boolean>} */
@@ -1924,8 +2112,30 @@ function createEvidenceAnalysis(program, checker) {
   /** @type {Set<import("typescript").Symbol>} */
   const visitingSymbols = new Set();
 
+  function isPureUncaughtFailure(node) {
+    if (!ts.isThrowStatement(node) || !ts.isNewExpression(node.expression) || !ts.isIdentifier(node.expression.expression)) return false;
+    const constructor = node.expression;
+    const symbol = resolveSymbol(checker, constructor.expression);
+    if (!symbol || !isNativeFailureConstructor(program, symbol) || written.has(symbol) || constructor.typeArguments?.length) return false;
+    const argumentsList = constructor.arguments ?? [];
+    if (argumentsList.length > 1 || argumentsList.some((argument) => !ts.isStringLiteralLike(argument))) return false;
+    let ancestor = node.parent;
+    while (ancestor && !ts.isFunctionLike(ancestor)) {
+      if (ts.isTryStatement(ancestor)) return false;
+      ancestor = ancestor.parent;
+    }
+    return Boolean(ancestor);
+  }
+
   function symbolHasAssertionOrigin(symbol) {
+    // The actual global undefined is immutable; assigning a local alias cannot
+    // mutate it. A local binding with the same spelling is a different symbol.
+    if (checker.isUndefinedSymbol(symbol)) return false;
     if (written.has(symbol)) return true;
+    // Standard constructors are ambient `var`s, not source-level casts or mutable
+    // payload producers. Assume unmodified native intrinsics; measured writes
+    // (including property/alias writes) still invalidate that assumption above.
+    if (isNativeDataConstructor(program, symbol)) return false;
     const memoized = symbolMemo.get(symbol);
     if (memoized !== undefined) return memoized;
     if (visitingSymbols.has(symbol)) return false;
@@ -1945,6 +2155,12 @@ function createEvidenceAnalysis(program, checker) {
 
   function hasAssertionOrigin(node) {
     if (ts.isAssertionExpression(node) && !ts.isConstTypeReference(node.type)) return true;
+    // Type references are erased; runtime heritage expressions and assertion
+    // operands must still be traversed, so do not skip every TypeNode.
+    if (ts.isTypeReferenceNode(node) && !program.getCompilerOptions().emitDecoratorMetadata) return false;
+    // Only an effect-free native literal failure outside resumable frames can
+    // never produce successful return data. The writer index still reads it.
+    if (isPureUncaughtFailure(node)) return false;
     if (ts.isIdentifier(node)) {
       const symbol = resolveSymbol(checker, node);
       if (symbol && symbolHasAssertionOrigin(symbol)) return true;
@@ -1978,17 +2194,24 @@ function indexWrittenSymbols(program, checker) {
   /** @type {Set<import("typescript").Symbol>} */
   const written = new Set();
   const visit = (node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "eval" &&
+      resolveSymbol(checker, node.expression)?.declarations?.some((decl) => program.isSourceFileDefaultLibrary(decl.getSourceFile()))) {
+      for (const name of [...NATIVE_DATA_CONSTRUCTORS, "Error"]) {
+        const symbol = checker.resolveName(name, undefined, ts.SymbolFlags.Value, false);
+        if (isTrackedNativeConstructor(program, symbol)) written.add(symbol);
+      }
+    }
     if (
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
       node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
     ) {
-      recordWrittenTarget(checker, written, node.left);
+      recordWrittenTarget(checker, written, node.left, program);
     } else if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
     ) {
-      recordWrittenTarget(checker, written, node.operand);
+      recordWrittenTarget(checker, written, node.operand, program);
     }
     ts.forEachChild(node, visit);
   };
@@ -1999,7 +2222,7 @@ function indexWrittenSymbols(program, checker) {
   return written;
 }
 
-function recordWrittenTarget(checker, written, target) {
+function recordWrittenTarget(checker, written, target, program) {
   const unwrapped = unwrapAliasExpression(target);
   if (ts.isIdentifier(unwrapped)) {
     const symbol = resolveSymbol(checker, unwrapped);
@@ -2007,23 +2230,25 @@ function recordWrittenTarget(checker, written, target) {
     return;
   }
   if (ts.isPropertyAccessExpression(unwrapped) || ts.isElementAccessExpression(unwrapped)) {
-    recordWrittenTarget(checker, written, unwrapped.expression);
+    const property = accessSymbol(checker, unwrapped);
+    if (isTrackedNativeConstructor(program, property)) written.add(property);
+    recordWrittenTarget(checker, written, unwrapped.expression, program);
     return;
   }
   if (ts.isArrayLiteralExpression(unwrapped)) {
     for (const element of unwrapped.elements) {
-      if (!ts.isOmittedExpression(element)) recordWrittenTarget(checker, written, element);
+      if (!ts.isOmittedExpression(element)) recordWrittenTarget(checker, written, element, program);
     }
     return;
   }
   if (ts.isObjectLiteralExpression(unwrapped)) {
     for (const property of unwrapped.properties) {
       if (ts.isPropertyAssignment(property)) {
-        recordWrittenTarget(checker, written, property.initializer);
+        recordWrittenTarget(checker, written, property.initializer, program);
       } else if (ts.isShorthandPropertyAssignment(property)) {
-        recordWrittenTarget(checker, written, property.name);
+        recordWrittenTarget(checker, written, property.name, program);
       } else if (ts.isSpreadAssignment(property)) {
-        recordWrittenTarget(checker, written, property.expression);
+        recordWrittenTarget(checker, written, property.expression, program);
       }
     }
   }
@@ -2032,6 +2257,7 @@ function recordWrittenTarget(checker, written, target) {
 function propagateWrittenAliases(program, checker, written) {
   /** @type {Map<import("typescript").Symbol, Set<import("typescript").Symbol>>} */
   const aliases = new Map();
+  const passed = new Set();
   const connect = (left, right) => {
     const leftEdges = aliases.get(left) ?? new Set();
     leftEdges.add(right);
@@ -2041,12 +2267,30 @@ function propagateWrittenAliases(program, checker, written) {
     aliases.set(right, rightEdges);
   };
   const visit = (node) => {
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+      for (const argument of node.arguments ?? []) {
+        const source = unwrapAliasExpression(argument);
+        const symbol = ts.isIdentifier(source) ? resolveSymbol(checker, source) :
+          ts.isPropertyAccessExpression(source) || ts.isElementAccessExpression(source) ? accessSymbol(checker, source) : null;
+        if (symbol) passed.add(symbol);
+      }
+    }
+    if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer) {
+      const sourceType = checker.getTypeAtLocation(node.initializer);
+      for (const element of node.name.elements) {
+        const key = element.propertyName ?? element.name;
+        if (!ts.isIdentifier(element.name) || (!ts.isIdentifier(key) && !ts.isStringLiteral(key))) continue;
+        const sourceSymbol = sourceType.getProperty(key.text);
+        const targetSymbol = resolveSymbol(checker, element.name);
+        if (targetSymbol && isTrackedNativeConstructor(program, sourceSymbol)) connect(targetSymbol, sourceSymbol);
+      }
+    }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
       const source = unwrapAliasExpression(node.initializer);
-      if (ts.isIdentifier(source)) {
+      if (ts.isIdentifier(source) || ts.isPropertyAccessExpression(source) || ts.isElementAccessExpression(source)) {
         const targetSymbol = resolveSymbol(checker, node.name);
-        const sourceSymbol = resolveSymbol(checker, source);
-        if (targetSymbol && sourceSymbol) connect(targetSymbol, sourceSymbol);
+        const sourceSymbol = ts.isIdentifier(source) ? resolveSymbol(checker, source) : accessSymbol(checker, source);
+        if (targetSymbol && sourceSymbol && (ts.isIdentifier(source) || isTrackedNativeConstructor(program, sourceSymbol))) connect(targetSymbol, sourceSymbol);
       }
     }
     ts.forEachChild(node, visit);
@@ -2055,6 +2299,14 @@ function propagateWrittenAliases(program, checker, written) {
     if (!sourceFile.isDeclarationFile) visit(sourceFile);
   }
 
+  const nativeAliases = new Set([...aliases.keys(), ...passed].filter((symbol) => isTrackedNativeConstructor(program, symbol)));
+  const nativeQueue = [...nativeAliases];
+  for (let index = 0; index < nativeQueue.length; index += 1) {
+    for (const alias of aliases.get(nativeQueue[index]) ?? []) {
+      if (!nativeAliases.has(alias)) { nativeAliases.add(alias); nativeQueue.push(alias); }
+    }
+  }
+  for (const symbol of passed) if (nativeAliases.has(symbol)) written.add(symbol);
   const queue = [...written];
   for (let index = 0; index < queue.length; index += 1) {
     for (const alias of aliases.get(queue[index]) ?? []) {
@@ -2209,7 +2461,7 @@ function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERA
   // so it compared clean against `v.literal("A")`. Preserving union branches is
   // the whole point of the tree; silently dropping one contradicts it.
   if (type.isUnion()) {
-    let merged = null;
+    const alternatives = [];
     for (const branch of type.types) {
       // ⚠️ LOAD-BEARING. REMOVING THIS LINE BREAKS EVERY OPTIONAL FIELD IN THE
       // REPOSITORY. Do not "simplify" it.
@@ -2235,12 +2487,13 @@ function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERA
       // the neighbouring proof — the module header's own warning, that an
       // annotation which drifts is a lie the toolchain repeats, aimed at itself.
       if (branch.getFlags() & ts.TypeFlags.Undefined) continue;
-      merged = mergeClientNodes(
-        merged,
-        collectPaths(checker, branch, path, acc, depth + 1, seen, inherited)
-      );
+      alternatives.push(collectPaths(checker, branch, path, acc, depth + 1, seen, inherited));
     }
-    return merged ?? clientNode.unresolved();
+    if (!alternatives.length) return clientNode.unresolved();
+    // Object alternatives correlate their discriminants and fields. A fieldwise
+    // merge invents combinations the source cannot send and hides bad siblings.
+    if (alternatives.some((alternative) => alternative.kind === "object")) return clientNode.variants(alternatives);
+    return alternatives.reduce(mergeClientNodes);
   }
 
   // Arrays / tuples -> descend into the element TYPE. The element is a node in

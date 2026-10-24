@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { wizardDraftDataValidator } from "./wizardDraftData";
 import { openingAllocationResultValidator, openingAllocationValidator } from "./utils/openingAllocationValidators";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator } from "./utils/paymentMethods";
 import { costBearerValidator } from "./utils/costBearer";
@@ -6069,21 +6070,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     userId: v.id("users"),
     paymentType: v.string(),
     currentStep: v.number(),
-    wizardData: v.object({
-      vehicleId: v.string(),
-      vehiclePrice: v.number(),
-      desiredProfit: v.number(),
-      downPayment: v.number(),
-      termMonths: v.number(),
-      selectedCompanyId: v.optional(v.string()),
-      manualProfitRate: v.optional(v.number()),
-      manualInsuranceRate: v.optional(v.number()),
-      manualExecutionCommission: v.optional(v.number()),
-      manualExecutionFees: v.optional(v.number()),
-      manualIncludesCommissionInDebt: v.optional(v.boolean()),
-      recipientName: v.optional(v.string()),
-      customerStatuses: v.optional(v.array(v.string())),
-    }),
+    wizardData: wizardDraftDataValidator,
     selectedCustomerId: v.optional(v.string()),
     savedAt: v.number(),
   })

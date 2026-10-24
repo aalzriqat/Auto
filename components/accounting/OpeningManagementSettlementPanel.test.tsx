@@ -58,6 +58,7 @@ test("a different finance approver submits only the stored plan identity", async
   await waitFor(() => expect(fixture.mutation).toHaveBeenCalledWith({
     name: "openingManagementSettlement:approve", args: { orgId: "org-a", planId: "plan-a" },
   }));
+  expect(fixture.mutation).toHaveBeenCalledTimes(1);
 });
 
 test("draft sends exact currency minor units and retries the same economic intent", async () => {
@@ -85,4 +86,5 @@ test("reject sends only the stored plan identity to the reject mutation", async 
   await waitFor(() => expect(fixture.mutation).toHaveBeenCalledWith({
     name: "openingManagementSettlement:reject", args: { orgId: "org-a", planId: "plan-a" },
   }));
+  expect(fixture.mutation).toHaveBeenCalledTimes(1);
 });

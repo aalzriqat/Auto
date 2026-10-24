@@ -10,7 +10,7 @@ import { newContainedContext } from "../containedContext";
 const ROOT = resolve(__dirname, "../..");
 const STATES = ["entry", "review", "readback", "redacted", "prepaid-entry", "prepaid-review", "prepaid-readback",
   "stock-entry", "stock-review", "stock-readback", "remaining-entry", "remaining-review",
-  "remaining-readback", "remaining-redacted"] as const;
+  "remaining-readback", "remaining-redacted", "choice-loading", "choice-empty", "choice-stale"] as const;
 let fixtureDirectory = "";
 let css = "";
 
@@ -36,6 +36,9 @@ test.beforeAll(async () => {
 });
 
 const COPY = {
+  "choice-loading": { en: "Party unavailable", ar: "الطرف غير متاح" },
+  "choice-empty": { en: "Party unavailable", ar: "الطرف غير متاح" },
+  "choice-stale": { en: "Party unavailable", ar: "الطرف غير متاح" },
   entry: { en: "Historical allocations", ar: "التوزيعات الافتتاحية التاريخية" },
   review: { en: "Opening balance awaiting your approval", ar: "رصيد افتتاحي بانتظار موافقتك" },
   readback: { en: "Posted allocation readback", ar: "مراجعة التوزيعات المرحلة" },
@@ -71,6 +74,13 @@ test("opening allocation, review and posted readback paint in EN/AR at phone and
             await expect(page.getByText(state === "redacted" ? "40.000" : "7.777")).toHaveCount(0);
           }
           if (state === "entry") await expect(page.getByRole("combobox")).toHaveCount(3);
+          if (state === "choice-loading" || state === "choice-empty" || state === "choice-stale") {
+            await expect(page.getByRole("alert")).toHaveText(COPY[state][locale]);
+            await expect(page.getByRole("combobox")).toHaveValue("customer-a");
+            await expect(page.getByRole("combobox").locator("option:checked")).toHaveText("Synthetic Customer · •••7890");
+            await expect(page.locator('input[value="100.000"]')).toBeVisible();
+            await expect(page.locator('input[value="Prior receivable"]')).toBeVisible();
+          }
           if (state === "stock-entry") await expect(page.getByRole("combobox", { name: COPY[state][locale] })).toHaveValue("vehicle-a");
           if (state === "remaining-readback" || state === "remaining-redacted") {
             await expect(page.getByText("Unassigned deposits", { exact: true })).toBeVisible();
