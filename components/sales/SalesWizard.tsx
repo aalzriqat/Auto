@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useEffectEvent, useRef } from "react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -17,6 +17,7 @@ import { quoteWizardStepCounter } from "@/components/sales/wizard/stepCounter";
 
 import { X, Banknote, CreditCard, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/sonner";
 
 import type { WizardData, PaymentType, WizardLaunchSeed } from "@/components/sales/wizard/types";
 import { buildWizardDraftData } from "@/components/sales/wizard/quotePayload";
@@ -112,6 +113,7 @@ export function SalesWizard({
   const [storedDraft, setStoredDraft] = useState<WizardDraft | null>(null);
   const [showResumePrompt, setShowResumePrompt] = useState(false);
   const hasCheckedDraft = useRef(false);
+  const reportAutosaveFailure = useEffectEvent(() => toast.error(t("FailedToSave")));
 
   useEffect(() => {
     if (hasCheckedDraft.current) return;
@@ -135,17 +137,20 @@ export function SalesWizard({
     if (!activeOrgId || showResumePrompt) return;
     if (currentStep === 4) return;
 
+    let active = true;
     const timer = setTimeout(() => {
-      saveDraftMutation({
+      void saveDraftMutation({
         orgId: activeOrgId as Id<"organizations">,
         paymentType,
         currentStep,
         wizardData: buildWizardDraftData(wizardData),
         selectedCustomerId: selectedCustomer?._id,
+      }).catch(() => {
+        if (active) reportAutosaveFailure();
       });
     }, 1500);
 
-    return () => clearTimeout(timer);
+    return () => { active = false; clearTimeout(timer); };
     // saveDraftMutation is stable; omitting it avoids a spurious extra save
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeOrgId, paymentType, currentStep, wizardData, selectedCustomer, showResumePrompt]);
@@ -163,7 +168,7 @@ export function SalesWizard({
   }
 
   function handleClose() {
-    // Draft already saved to DB — user can resume next time
+    // Closing does not wait for an in-flight autosave.
     onClose();
   }
 

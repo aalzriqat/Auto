@@ -17,13 +17,7 @@ import type { OpeningAllocationDraft, OpeningAllocationGroup } from "./openingAl
 let allocationSeq = 0;
 function emptyParty(fields: Omit<OpeningAllocationDraft, "kind" | "partyId">,
   kind: OpeningAllocationDraft["kind"]): OpeningAllocationDraft {
-  switch (kind) {
-    case "CUSTOMER_RECEIVABLE": return { ...fields, kind, partyId: "" };
-    case "EMPLOYEE_ADVANCE": case "EMPLOYEE_COMMISSION": return { ...fields, kind, partyId: "" };
-    case "VEHICLE_INVENTORY": return { ...fields, kind, partyId: "" };
-    case "PARTNER_CAPITAL": return { ...fields, kind, partyId: "" };
-    default: return { ...fields, kind, partyId: "" };
-  }
+  return { ...fields, kind, partyId: "" };
 }
 function newRow(group: OpeningAllocationGroup): OpeningAllocationDraft {
   allocationSeq += 1;

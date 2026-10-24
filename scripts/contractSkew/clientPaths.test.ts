@@ -529,7 +529,7 @@ describe("SCRUM-711 native request-map proof controls", () => {
   };
   const cases = [
     { name: "native", source: picker, extracts: true },
-    { name: "native imported alias", source: picker.replace('import { useMemo }', 'import { useMemo as nativeMemo }').replaceAll('useMemo(', 'nativeMemo('), extracts: true },
+    { name: "native imported alias", source: replace('import { useMemo }', 'import { useMemo as nativeMemo }').replaceAll('useMemo(', 'nativeMemo('), extracts: true },
     { name: "shadowed request factory", source: replace('  const queries = useMemo', '  const other = { useMemo: (_factory: unknown, _deps: unknown) => ({}) };\n  const queries = other.useMemo').replace('}, [orgId, chunks]);', '}, []);'), extracts: false },
     { name: "async request factory", source: replace('const queries = useMemo((): RequestForQueries =>', 'const queries = useMemo(async (): Promise<RequestForQueries> =>'), extracts: false },
     { name: "async producer factory", source: replace('useMemo(() => chunkVehicleIds(vehicleIds)', 'useMemo(async () => chunkVehicleIds(vehicleIds)'), extracts: false },
@@ -590,7 +590,18 @@ describe("SCRUM-711 native request-map proof controls", () => {
     const calls = extraction.calls.filter((call) => inFile(call.file) && call.identifier === "vehicleAvailability:pickerAvailability");
     expect(calls).toHaveLength(control.extracts ? 1 : 0);
     if (!control.extracts) {
-      expect(extraction.unresolvedBinders.some((binder) => inFile(binder.file))).toBe(true);
+      const source = ts.createSourceFile(files[control.index], control.source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+      const requestMap = ts.forEachChild(source, function find(node): ts.Expression | undefined {
+        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "useQueries") {
+          return node.arguments[0];
+        }
+        return ts.forEachChild(node, find);
+      });
+      if (!requestMap) throw new Error("Actual useQueries request map is unavailable");
+      const at = source.getLineAndCharacterOfPosition(requestMap.getStart(source));
+      const mapSiteId = `${path.relative(process.cwd(), files[control.index]).replaceAll("\\", "/")}:${at.line + 1}:${at.character + 1}`;
+      expect(extraction.unresolvedBinders.filter((binder) => inFile(binder.file)).map(({ cause, mapSiteId }) => ({ cause, mapSiteId })))
+        .toEqual([{ cause: "DYNAMIC_REQUEST_MAP", mapSiteId }]);
       return;
     }
     const payload = calls[0].payload;
@@ -631,7 +642,11 @@ describe("SCRUM-711 native primitive declaration provenance", () => {
     const card = "components/accounting/setup/OpeningBalanceCard.tsx";
     const files = wholeProgram ? listSurfaceFiles(process.cwd(), web) : [card];
     if (wholeProgram) {
-      expect(files.map((file) => path.resolve(file))).toContain(path.resolve(card));
+      const roots = files.map((file) => path.resolve(file));
+      for (const required of [card, "components/sales/wizard/hooks/useFinanceComparison.ts",
+        "components/sales/wizard/steps/Step1QuoteSetup.tsx", "components/ui/datetime-picker.tsx"]) {
+        expect(roots).toContain(path.resolve(required));
+      }
       expect(files.length).toBeGreaterThan(1);
     }
     const extraction = extractClientCalls(files, web.tsconfig);

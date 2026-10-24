@@ -67,18 +67,18 @@ export function groupOpeningAllocations(
   for (const line of lines) {
     const choice = byAccount.get(line.accountId);
     if (!choice) continue;
-    const allowedKinds = choice?.allowedKinds?.filter(isOpeningAllocationKind) ?? [];
-    if (allowedKinds.length === 0 && choice?.policy === "PARTNER_CAPITAL_CANDIDATE") allowedKinds.push("PARTNER_CAPITAL");
-    if (allowedKinds.length === 0 && choice && isOpeningAllocationKind(choice.policy)) allowedKinds.push(choice.policy);
+    const allowedKinds = choice.allowedKinds?.filter(isOpeningAllocationKind) ?? [];
+    if (allowedKinds.length === 0 && choice.policy === "PARTNER_CAPITAL_CANDIDATE") allowedKinds.push("PARTNER_CAPITAL");
+    if (allowedKinds.length === 0 && isOpeningAllocationKind(choice.policy)) allowedKinds.push(choice.policy);
     if (allowedKinds.length === 0) continue;
     const kind = allowedKinds[0];
-    const creditNormal = choice?.policy === "DECLARED_LIABILITY" || kind === "PARTNER_CAPITAL" ||
+    const creditNormal = choice.policy === "DECLARED_LIABILITY" || kind === "PARTNER_CAPITAL" ||
       kind === "SUPPLIER_PAYABLE" || kind === "OTHER_PAYABLE" || kind === "EMPLOYEE_COMMISSION" ||
       kind === "UNALLOCATED_LIABILITY";
     const prior = groups.get(line.accountId);
     groups.set(line.accountId, {
       accountId: choice.accountId, kind, allowedKinds,
-      allowedPurposes: choice?.allowedPurposes?.filter((purpose): purpose is "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT" =>
+      allowedPurposes: choice.allowedPurposes?.filter((purpose): purpose is "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT" =>
         purpose === "CUSTOMER_DEPOSIT" || purpose === "UNIDENTIFIED_RECEIPT"),
       journalMinor: (prior?.journalMinor ?? 0) + (creditNormal ? line.creditMinor ?? 0 : line.debitMinor ?? 0),
       label: line.label,
