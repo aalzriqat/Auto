@@ -1,9 +1,12 @@
-import { describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { extractClientCalls } from "./clientPaths.mjs";
+import ts from "typescript";
+import { v } from "convex/values";
+import { createClientProgram, extractClientCalls } from "./clientPaths.mjs";
 import { compareNode, validatorTree } from "./contractTree.mjs";
+import { openingAllocationValidator, openingAllocationResultValidator } from "@/convex/utils/openingAllocationValidators";
 
 /**
  * Direct tests for the extractor.
@@ -514,6 +517,290 @@ describe("clientPaths extractor", () => {
     // Blunt on purpose. A syntax error in clientPaths.mjs once survived a fully
     // green suite because nothing imported it.
     expect(calls().length).toBeGreaterThan(0);
+  });
+});
+
+describe("SCRUM-711 native request-map proof controls", () => {
+  const picker = readFileSync("components/sales/wizard/hooks/usePickerAvailability.ts", "utf8").replace(/\r\n/g, "\n");
+  const replace = (from: string, to: string) => {
+    expect(picker).toContain(from);
+    return picker.replace(from, to);
+  };
+  const cases = [
+    { name: "native", source: picker, extracts: true },
+    { name: "native imported alias", source: picker.replace('import { useMemo }', 'import { useMemo as nativeMemo }').replaceAll('useMemo(', 'nativeMemo('), extracts: true },
+    { name: "shadowed request factory", source: replace('  const queries = useMemo', '  const other = { useMemo: (_factory: unknown, _deps: unknown) => ({}) };\n  const queries = other.useMemo').replace('}, [orgId, chunks]);', '}, []);'), extracts: false },
+    { name: "async request factory", source: replace('const queries = useMemo((): RequestForQueries =>', 'const queries = useMemo(async (): Promise<RequestForQueries> =>'), extracts: false },
+    { name: "async producer factory", source: replace('useMemo(() => chunkVehicleIds(vehicleIds)', 'useMemo(async () => chunkVehicleIds(vehicleIds)'), extracts: false },
+    { name: "async tuple callback", source: replace('chunks.map((chunk, index) => [', 'chunks.map(async (chunk, index) => ['), extracts: false },
+    { name: "spoofed default library", source: 'import { Object } from "./lib.spoof";\n' + picker, extracts: false },
+    { name: "direct eval writer", source: replace('  const queries = useMemo', '  eval("chunks.map = () => []");\n  const queries = useMemo'), extracts: false },
+    ...["map", "push", "slice"].map((method) => ({ name: `explicit prototype ${method} writer`, source: replace('  const queries = useMemo', `  Array.prototype.${method} = () => [];\n  const queries = useMemo`), extracts: false })),
+    { name: "shadowed Object", source: replace('  const idsKey = vehicleIds.join', '  const Object = { fromEntries: (_entries: unknown) => ({}) };\n  const idsKey = vehicleIds.join'), extracts: false },
+    { name: "claimed Object binding", source: replace('  const idsKey = vehicleIds.join', '  const Object = globalThis.injected as ObjectConstructor;\n  const idsKey = vehicleIds.join'), extracts: false },
+    { name: "overridden map", source: replace('  const queries = useMemo', '  chunks.map = () => [];\n  const queries = useMemo'), extracts: false },
+    { name: "overridden push", source: replace('  for (let i = 0;', '  chunks.push = () => 0;\n  for (let i = 0;'), extracts: false },
+    { name: "extra writer", source: replace('  return chunks;', '  chunks[0] = [];\n  return chunks;'), extracts: false },
+    { name: "array alias", source: replace('  return chunks;', '  const alias = chunks;\n  return alias;'), extracts: false },
+    { name: "shorthand escape", source: replace('  return chunks;', '  globalThis.escapedChunks = { chunks };\n  return chunks;'), extracts: false },
+    { name: "escaped closure", source: replace('  return chunks;', '  globalThis.releaseChunks = () => chunks;\n  return chunks;'), extracts: false },
+    { name: "unknown return", source: replace('  return chunks;', '  return ids.length ? chunks : ids;'), extracts: false },
+    { name: "unknown map callee", source: replace('      chunks.map((chunk, index)', '      chunks.flatMap((chunk, index)'), extracts: false },
+    { name: "claimed receiver", source: replace('  const chunks = useMemo(() => chunkVehicleIds(vehicleIds), [idsKey]);', '  const chunks = vehicleIds as unknown as string[][];'), extracts: false },
+    { name: "shadowed useMemo", source: replace('  const idsKey = vehicleIds.join', '  const useMemo = (_factory: unknown, _deps: unknown) => [];\n  const idsKey = vehicleIds.join'), extracts: false },
+    { name: "consumer array callback parameter", source: replace('chunks.forEach((chunk, index) => {', 'chunks.forEach((chunk, index, whole) => { whole.length = 0;'), extracts: false },
+    { name: "consumer outer capture", source: replace('chunks.forEach((chunk, index) => {', 'chunks.forEach((chunk, index) => { chunks.length = 0;'), extracts: false },
+    { name: "opaque slice value", source: replace('chunks.push(unique.slice(i, i + size))', 'chunks.push((unique.slice = () => undefined, unique.slice(i, i + size)))'), extracts: true },
+    { name: "opaque element projection", source: replace('vehicleIds: chunk as Id<"vehicles">[]', 'vehicleIds: chunk.slice(0) as Id<"vehicles">[]'), extracts: true },
+    { name: "invalid literal neighbor", source: replace('args: { orgId, vehicleIds:', 'args: { unexpectedField: 7, orgId, vehicleIds:'), extracts: true },
+    { name: "undefined args alternative", source: replace('args: { orgId, vehicleIds:', 'args: index ? undefined : { orgId, vehicleIds:'), extracts: true },
+    { name: "invalid args alternative", source: replace('args: { orgId, vehicleIds:', 'args: index ? 42 : { orgId, vehicleIds:'), extracts: true },
+    { name: "undefined tuple value", source: replace('        {\n          query:', '        index ? undefined : {\n          query:'), extracts: false },
+  ];
+  const parent = path.resolve("scripts/contractSkew/__fixtures__");
+  let dir: string | undefined;
+  let files: string[] = [];
+  afterAll(() => {
+    if (!dir) return;
+    if (path.dirname(dir) !== parent) throw new Error("Unexpected fixture directory");
+    rmSync(dir, { recursive: true, force: true });
+  });
+  let extracted: ReturnType<typeof extractClientCalls> | undefined;
+  let evalExtraction: ReturnType<typeof extractClientCalls> | undefined;
+  const controls = () => {
+    if (extracted) return extracted;
+    dir = mkdtempSync(path.join(parent, "picker-proof-"));
+    writeFileSync(path.join(dir, "lib.spoof.d.ts"), "export declare const Object: ObjectConstructor;\n");
+    const fixtureDir = dir;
+    files = cases.map((control, index) => {
+      const file = path.join(fixtureDir, `control${index}.tsx`);
+      writeFileSync(file, control.source);
+      return file;
+    });
+    const sharedFiles = files.filter((_file, index) => cases[index].name !== "direct eval writer");
+    return extracted = extractClientCalls(sharedFiles, "tsconfig.json", { program: createClientProgram(sharedFiles, "tsconfig.json") });
+  };
+  test.each(cases.map((control, index) => ({ ...control, index })))("$name preserves proof or refusal", (control) => {
+    controls();
+    const extraction = control.name === "direct eval writer"
+      ? evalExtraction ??= extractClientCalls([files[control.index]], "tsconfig.json")
+      : controls();
+    const inFile = (file: string) => path.resolve(file) === files[control.index];
+    const calls = extraction.calls.filter((call) => inFile(call.file) && call.identifier === "vehicleAvailability:pickerAvailability");
+    expect(calls).toHaveLength(control.extracts ? 1 : 0);
+    if (!control.extracts) {
+      expect(extraction.unresolvedBinders.some((binder) => inFile(binder.file))).toBe(true);
+      return;
+    }
+    const payload = calls[0].payload;
+    if (!payload) throw new Error("Request payload not measured");
+    const compared = compareNode(payload, validatorTree({ type: "object", value: {
+      orgId: { fieldType: { type: "any" }, optional: false },
+      vehicleIds: { fieldType: { type: "array", value: { type: "id", tableName: "vehicles" } }, optional: false },
+    } }), "", { site: { identifier: calls[0].identifier, file: calls[0].file, line: calls[0].line } });
+    if (control.name.endsWith("args alternative")) {
+      expect(payload.kind).toBe("variants");
+      if (payload.kind !== "variants") throw new Error("Invalid payload alternative was erased");
+      const expected = control.name.startsWith("undefined") ? undefined : 42;
+      expect(payload.nodes.some((node) => node.kind === "literal" && node.values.has(expected))).toBe(true);
+      expect(compared.findings.some((finding) => finding.severity === "BREAKING")).toBe(true);
+      return;
+    }
+    expect(payload?.kind).toBe("object");
+    if (payload?.kind !== "object") throw new Error("Request payload not measured");
+    const vehicles = payload.fields.get("vehicleIds")?.node;
+    expect(vehicles?.kind).toBe("assertion");
+    if (vehicles?.kind !== "assertion") throw new Error("Actual picker assertion was erased");
+    expect(vehicles.node.kind).toBe("opaqueValue");
+    expect(compared.findings.some((finding) => finding.severity === "SHAPE_UNKNOWN" && finding.path === "vehicleIds")).toBe(true);
+    if (control.name === "invalid literal neighbor") {
+      expect(payload.fields.get("unexpectedField")?.node).toMatchObject({ kind: "literal", values: new Set([7]) });
+      expect(compared.findings.some((finding) => finding.severity === "BREAKING" && finding.path === "unexpectedField")).toBe(true);
+    }
+  }, 120_000);
+});
+
+describe("SCRUM-711 native primitive declaration provenance", () => {
+  test("both actual opening routes measure their full allocation arrays against their registered native arguments", async () => {
+    const files = ["components/accounting/setup/OpeningBalanceCard.tsx"];
+    const extraction = extractClientCalls(files, "tsconfig.json");
+    if (!("json" in openingAllocationValidator)) throw new Error("Native validator rendering is unavailable");
+    const nativeArray = validatorTree({ type: "array", value: openingAllocationValidator.json });
+    if (!("json" in openingAllocationResultValidator)) throw new Error("Native result-validator rendering is unavailable");
+    const wrongReadbackOracle = validatorTree({ type: "array", value: openingAllocationResultValidator.json });
+    const modulePath = path.resolve("convex/accountingCutover.ts");
+    const registrations: unknown = await import(modulePath);
+    if (!registrations || typeof registrations !== "object") throw new Error("Native registrations unavailable");
+    const results = ["postOpeningBalanceDirect", "draftOpeningBalance"].map((name) => {
+      const registration: unknown = Reflect.get(registrations, name);
+      if (typeof registration !== "function" || !("exportArgs" in registration) || typeof registration.exportArgs !== "function") {
+        throw new Error("Native registered argument export unavailable");
+      }
+      const rendered: unknown = registration.exportArgs();
+      if (typeof rendered !== "string") throw new Error("Native argument export is not JSON text");
+      const argumentTree = validatorTree(JSON.parse(rendered));
+      if (argumentTree.kind !== "object") throw new Error("Native arguments are not an object validator");
+      const registeredArray = argumentTree.fields.get("allocations")?.node;
+      if (!registeredArray || registeredArray.kind !== "array") throw new Error("Native allocation argument unavailable");
+      expect(registeredArray).toEqual(nativeArray);
+      const identifier = `accountingCutover:${name}`;
+      const calls = extraction.calls.filter((call) => call.identifier === identifier);
+      expect(calls).toHaveLength(1);
+      const call = calls[0];
+      if (call.payload?.kind !== "object") throw new Error("Opening payload was not measured");
+      const allocations = call.payload.fields.get("allocations")?.node;
+      if (!allocations) throw new Error("Actual allocation field was not measured");
+      const site = { identifier, file: call.file, line: call.line };
+      const compared = compareNode(allocations, registeredArray, "allocations", {
+        site,
+      });
+      expect(compareNode(allocations, wrongReadbackOracle, "allocations", { site }).findings.some((finding) => finding.severity === "BREAKING")).toBe(true);
+      return { identifier, kind: allocations.kind, findings: compared.findings };
+    });
+    expect(results.map((result) => result.findings)).toEqual([[], []]);
+    expect(results.map((result) => result.kind)).toEqual(["array", "array"]);
+  }, 120_000);
+
+  const cases = [
+    { name: "Number", prefix: "", expression: "Number(input)", proven: true },
+    { name: "String", prefix: "", expression: "String(input).length", proven: true },
+    { name: "BigInt", prefix: "", expression: "Number(BigInt(input))", proven: true },
+    { name: "Set", prefix: "", expression: "new Set([input]).size", proven: true },
+    { name: "Date", prefix: "", expression: "new Date(Number(input)).getTime()", proven: true },
+    { name: "Date global writer", prefix: "globalThis.Date = (() => ({})) as unknown as DateConstructor;", expression: "new Date(Number(input)).getTime()", proven: false },
+    { name: "native Object freeze", prefix: "", expression: "Object.freeze({ amount: Number(input) }).amount", proven: true },
+    { name: "Object global writer", prefix: "globalThis.Object = (() => ({})) as unknown as ObjectConstructor;", expression: "Object.freeze({ amount: Number(input) }).amount", proven: false },
+    { name: "Object freeze writer", prefix: "Object.freeze = ((value: unknown) => value) as typeof Object.freeze;", expression: "Object.freeze({ amount: Number(input) }).amount", proven: false },
+    { name: "erased Promise type annotation", prefix: "const typed = (): Promise<number> | number => 1;", expression: "Number(typed())", proven: true },
+    { name: "metadata mode remains unproven", prefix: "const typed = (): Promise<number> | number => 1;", expression: "Number(typed())", proven: false },
+    { name: "asserted helper result", prefix: 'const typed = (): number => ("bad" as unknown as number);', expression: "typed()", proven: false },
+    { name: "runtime class heritage", prefix: 'const Ctor = ("bad" as unknown as new () => object); const typed = () => class extends Ctor {};', expression: "new (typed())() ? Number(input) : 0", proven: false },
+    { name: "runtime parameter initializer", prefix: 'const typed = (amount = ("bad" as unknown as number)) => amount;', expression: "typed()", proven: false },
+    { name: "satisfies operand", prefix: 'const typed = (() => ("bad" as unknown as number)) satisfies (() => number);', expression: "typed()", proven: false },
+    { name: "nonnull operand", prefix: 'const typed = (() => ("bad" as unknown as number))!;', expression: "typed()", proven: false },
+    { name: "uncaught literal Error guard", prefix: 'const typed = (input: string) => { if (!input) throw new Error("Missing context"); return Number(input); };', expression: "typed(input)", proven: true },
+    { name: "caught Error guard", prefix: 'const typed = (input: string) => { try { throw new Error("Missing context"); } catch { return ("bad" as unknown as number); } };', expression: "typed(input)", proven: false },
+    { name: "finally returns claimed data", prefix: 'const typed = (input: string) => { try { throw new Error("Missing context"); } finally { return ("bad" as unknown as number); } };', expression: "typed(input)", proven: false },
+    { name: "assertion on successful return", prefix: 'const typed = (input: string) => { if (!input) throw new Error("Missing context"); return ("bad" as unknown as number); };', expression: "typed(input)", proven: false },
+    { name: "throw operand mutates returned state", prefix: 'const state = { amount: 0 }; const typed = () => { try { throw new Error((state.amount = "bad" as unknown as number, "failure")); } catch {} return state.amount; };', expression: "typed()", proven: false },
+    { name: "caller catches aliased throw mutation", prefix: 'const state = { amount: 0 }; function fail(box: { amount: number }) { throw new Error((box.amount = "bad" as unknown as number, "failure")); } const typed = () => { try { fail(state); } catch {} return state.amount; };', expression: "typed()", proven: false },
+    { name: "Error global writer guard", prefix: 'globalThis.Error = (function () {}) as unknown as ErrorConstructor; const typed = (input: string) => { if (!input) throw new Error("Missing context"); return Number(input); };', expression: "typed(input)", proven: false },
+    { name: "Error aliased global writer guard", prefix: 'const globals = globalThis; globals.Error = (function () {}) as unknown as ErrorConstructor; const typed = (input: string) => { if (!input) throw new Error("Missing context"); return Number(input); };', expression: "typed(input)", proven: false },
+    { name: "nonliteral Error guard", prefix: 'const message = "Missing context"; const typed = (input: string) => { if (!input) throw new Error(message); return Number(input); };', expression: "typed(input)", proven: false },
+    { name: "Error data value remains unproven", prefix: "", expression: "new Error(input).message.length", proven: false },
+    { name: "Set global writer", prefix: "globalThis.Set = (() => ({})) as unknown as SetConstructor;", expression: "new Set([input]).size", proven: false },
+    { name: "immutable undefined alias reset", prefix: 'let pending: string | undefined = undefined; pending = "changed";', expression: "input === undefined ? 0 : Number(input)", proven: true },
+    { name: "shadowed mutable undefined", prefix: 'let undefined: unknown = "shadow"; undefined = 42;', expression: "undefined === null ? 0 : Number(input)", proven: false },
+    { name: "shadowed mutable Number", prefix: "let Number = (_input: string): number => 0;", expression: "Number(input)", proven: false },
+    { name: "reassigned Number", prefix: "Number = ((input: unknown) => input) as NumberConstructor;", expression: "Number(input)", proven: false },
+    { name: "Number method writer", prefix: "Number.isSafeInteger = () => true;", expression: "Number(input)", proven: false },
+    { name: "globalThis Number writer", prefix: "globalThis.Number = ((input: unknown) => input) as NumberConstructor;", expression: "Number(input)", proven: false },
+    { name: "globalThis alias writer", prefix: "const globals = globalThis; globals.Number = ((input: unknown) => input) as NumberConstructor;", expression: "Number(input)", proven: false },
+    { name: "constructor property alias writer", prefix: "const ctor = globalThis.Number; ctor.isSafeInteger = () => true;", expression: "Number(input)", proven: false },
+    { name: "computed global Number writer", prefix: 'globalThis["Number"] = ((input: unknown) => input) as NumberConstructor;', expression: "Number(input)", proven: false },
+    { name: "destructured constructor writer", prefix: "const { Number: ctor } = globalThis; ctor.isSafeInteger = () => true;", expression: "Number(input)", proven: false },
+    { name: "direct eval native writer", prefix: 'eval("Number.isSafeInteger = () => true");', expression: "Number(input)", proven: false },
+    { name: "constructor passed to writer", prefix: "function corrupt(ctor: NumberConstructor) { ctor.isSafeInteger = () => true; } corrupt(Number);", expression: "Number(input)", proven: false },
+    { name: "spoofed native declaration", prefix: 'import { Number } from "./lib.spoof";', expression: "Number(input)", proven: false },
+    { name: "asserted argument", prefix: "", expression: "Number(input as any)", proven: false },
+  ];
+  const parent = path.resolve("scripts/contractSkew/__fixtures__");
+  let dir: string | undefined;
+  const fixtureDirectory = () => {
+    if (dir) return dir;
+    dir = mkdtempSync(path.join(parent, "native-proof-"));
+    writeFileSync(path.join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { target: "ES2022", module: "esnext", lib: ["ES2022"], types: [], strict: true }, include: ["*.ts"] }));
+    writeFileSync(path.join(dir, "lib.spoof.d.ts"), "export declare var Number: NumberConstructor;\n");
+    return dir;
+  };
+  afterAll(() => {
+    if (!dir) return;
+    if (path.dirname(dir) !== parent) throw new Error("Unexpected native fixture directory");
+    rmSync(dir, { recursive: true, force: true });
+  });
+  test.each(cases)("$name retains native proof or source uncertainty", (control) => {
+    if (control.name === "runtime class heritage") {
+      expect(ts.transpileModule(control.prefix, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText).toContain("class extends Ctor");
+    }
+    const fixtureDir = fixtureDirectory();
+    const file = path.join(fixtureDir, `${control.name.replaceAll(/[^a-zA-Z]/g, "")}.ts`);
+    writeFileSync(file, `export {};\n${control.prefix}\n
+      declare function useMutation(fn: unknown): (args: unknown) => unknown;
+      declare const api: Record<string, Record<string, unknown>>;
+      function parse(input: string): number { return ${control.expression}; }
+      export function send(input: string) {
+        const mutate = useMutation(api.nativeProof.send);
+        const amount = parse(input);
+        return mutate({ amount, knownBad: null });
+      }`);
+    let config = path.join(fixtureDir, "tsconfig.json");
+    if (control.name === "metadata mode remains unproven") {
+      config = path.join(fixtureDir, "metadata-tsconfig.json");
+      writeFileSync(config, JSON.stringify({ extends: "./tsconfig.json", compilerOptions: { experimentalDecorators: true, emitDecoratorMetadata: true } }));
+    }
+    const extraction = extractClientCalls([file], config);
+    expect(extraction.calls).toHaveLength(1);
+    const call = extraction.calls[0];
+    const payload = call.payload;
+    if (payload?.kind !== "object") throw new Error("Literal payload shape was lost");
+    expect(payload.fields.get("amount")?.node.kind).toBe(control.proven ? "scalar" : "assertion");
+    const compared = compareNode(payload, validatorTree({ type: "object", value: {
+      amount: { fieldType: { type: "number" }, optional: false },
+    } }), "", { site: { identifier: call.identifier, file: call.file, line: call.line } });
+    expect(compared.findings.some((finding) => finding.severity === "BREAKING" && finding.path === "knownBad")).toBe(true);
+    expect(compared.findings.some((finding) => finding.severity === "TYPE_UNKNOWN" && finding.path === "amount")).toBe(!control.proven);
+  }, 120_000);
+});
+
+describe("SCRUM-711 object-union correlations", () => {
+  const cases = [
+    { name: "two valid shapes", type: "Good", breaking: false, unknown: false },
+    { name: "wrong discriminator sibling", type: 'Good | { kind: "C"; amount: number }', breaking: true, unknown: false },
+    { name: "crossed fields sibling", type: 'Good | { kind: "A"; label: string }', breaking: true, unknown: false },
+    { name: "extra key sibling", type: 'Good | { kind: "A"; amount: number; extra: number }', breaking: true, unknown: false },
+    { name: "null sibling", type: "Good | null", breaking: true, unknown: false },
+    { name: "nullable required value sibling", type: 'Good | { kind: "A"; amount: number | null }', breaking: true, unknown: false },
+    { name: "unknown sibling", type: "Good | T", breaking: false, unknown: true },
+    { name: "unknown does not hide invalid sibling", type: 'Good | T | { kind: "C"; amount: number }', breaking: true, unknown: true },
+  ];
+  const native = v.object({ rows: v.array(v.union(
+    v.object({ kind: v.literal("A"), amount: v.number() }),
+    v.object({ kind: v.literal("B"), label: v.string() }),
+  )) });
+  if (!("json" in native)) throw new Error("Native closed union metadata unavailable");
+  const validator = validatorTree(native.json);
+  const parent = path.resolve("scripts/contractSkew/__fixtures__");
+  let dir: string | undefined;
+  let extracted: ReturnType<typeof extractClientCalls> | undefined;
+  const controls = () => {
+    if (extracted) return extracted;
+    dir = mkdtempSync(path.join(parent, "union-proof-"));
+    const config = path.join(dir, "tsconfig.json");
+    writeFileSync(config, JSON.stringify({ compilerOptions: { target: "ES2022", module: "esnext", lib: ["ES2022"], types: [], strict: true }, include: ["*.ts"] }));
+    const file = path.join(dir, "cases.ts");
+    writeFileSync(file, `export {};
+      declare function useMutation(fn: unknown): (args: unknown) => unknown;
+      declare const api: Record<string, Record<string, unknown>>;
+      type Good = { kind: "A"; amount: number } | { kind: "B"; label: string };
+      ${cases.map((control, index) => `export function send${index}<T>(rows: (${control.type})[]) {
+        const send = useMutation(api.unionProof.case${index}); return send({ rows });
+      }`).join("\n")}`);
+    return extracted = extractClientCalls([file], config);
+  };
+  afterAll(() => {
+    if (!dir) return;
+    if (path.dirname(dir) !== parent) throw new Error("Unexpected union fixture directory");
+    rmSync(dir, { recursive: true, force: true });
+  });
+  test.each(cases.map((control, index) => ({ ...control, index })))("$name preserves every closed-union obligation", (control) => {
+    const calls = controls().calls.filter((call) => call.identifier === `unionProof:case${control.index}`);
+    expect(calls).toHaveLength(1);
+    const call = calls[0];
+    if (!call.payload) throw new Error("Union payload not measured");
+    const compared = compareNode(call.payload, validator, "", { site: { identifier: call.identifier, file: call.file, line: call.line } });
+    expect(compared.findings.some((finding) => finding.severity === "BREAKING")).toBe(control.breaking);
+    expect(compared.findings.some((finding) => finding.severity.endsWith("UNKNOWN"))).toBe(control.unknown);
+    if (!control.breaking && !control.unknown) expect(compared.findings).toEqual([]);
   });
 });
 

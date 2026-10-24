@@ -91,6 +91,41 @@ describe("the entry-point inventory is derived from the pinned convex package", 
 });
 
 describe("census reconciliation, by site identity", () => {
+  test("SCRUM-711: the mounted picker request map reconciles its real query and map sites", () => {
+    const picker = "components/sales/wizard/hooks/usePickerAvailability.ts";
+    const files = [picker];
+    const program = createClientProgram(files, "tsconfig.json");
+    const extraction = extractClientCalls(files, "tsconfig.json", { program });
+    const calls = extraction.calls.filter((call) => call.identifier === "vehicleAvailability:pickerAvailability");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].via).toBe("useQueries");
+    expect(calls[0].siteId).not.toBe(calls[0].mapSiteId);
+    expect(calls[0].payload?.kind).toBe("object");
+    if (calls[0].payload?.kind !== "object") throw new Error("Picker payload was not measured");
+    expect(calls[0].payload.fields.get("vehicleIds")?.node.kind).toBe("assertion");
+    const census = runCensus({ program, files, extraction });
+    for (const siteId of [calls[0].siteId, calls[0].mapSiteId]) {
+      expect(census.candidates.filter((candidate) => candidate.siteId === siteId).map((candidate) => candidate.disposition))
+        .toEqual(["TRANSMISSION"]);
+    }
+    expect(census.unresolved).toEqual([]);
+    expect(census.unaccounted).toEqual([]);
+    expect(census.orphans).toEqual([]);
+  });
+
+  test("SCRUM-711: both management decisions reconcile their actual invocation sites", () => {
+    const files = ["components/accounting/OpeningManagementSettlementPanel.tsx"];
+    const program = createClientProgram(files, "tsconfig.json");
+    const extraction = extractClientCalls(files, "tsconfig.json", { program });
+    for (const identifier of ["openingManagementSettlement:approve", "openingManagementSettlement:reject"]) {
+      expect(extraction.calls.filter((call) => call.identifier === identifier)).toHaveLength(1);
+    }
+    const census = runCensus({ program, files, extraction });
+    expect(census.unresolved).toEqual([]);
+    expect(census.unaccounted).toEqual([]);
+    expect(census.orphans).toEqual([]);
+  });
+
   test("the two shipped forms reconcile to extractor transmission records", () => {
     const census = censusOf(["realForms"]);
     const map = at(census, "realForms", "return useQueries(queries)");

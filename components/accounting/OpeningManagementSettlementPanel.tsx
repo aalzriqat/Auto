@@ -68,7 +68,10 @@ export function OpeningManagementSettlementPanel({ orgId }: Readonly<{ orgId: Id
 
   async function decide(planId: Id<"openingManagementSettlementPlans">, accepted: boolean) {
     setBusy(true); setError("");
-    try { await (accepted ? approve : reject)({ orgId, planId }); }
+    try {
+      if (accepted) await approve({ orgId, planId });
+      else await reject({ orgId, planId });
+    }
     catch { setError(text.failed); }
     finally { setBusy(false); }
   }

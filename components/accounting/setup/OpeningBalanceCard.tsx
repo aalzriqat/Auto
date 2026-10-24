@@ -82,7 +82,7 @@ function toDateInputValue(ms: number): string {
  * fail deep in period lookup with something unrelated to the real cause.
  */
 function dateInputToUtcMs(value: string): number | null {
-  const parts = value.split("-").map(Number);
+  const parts = value.split("-").map((part) => Number(part));
   if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
   const [y, m, d] = parts;
   return Date.UTC(y, m - 1, d);

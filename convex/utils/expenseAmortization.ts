@@ -46,7 +46,7 @@ export function yearMonthIndex(timestamp: number): number {
 
 /** Absolute month index for a "YYYY-MM" string, comparable to yearMonthIndex. */
 export function yearMonthStringIndex(ym: string): number {
-  const [year, month] = ym.split("-").map(Number);
+  const [year, month] = ym.split("-").map((part) => Number(part));
   return year * 12 + (month - 1);
 }
 

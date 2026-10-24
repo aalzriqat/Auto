@@ -19,7 +19,7 @@
  */
 
 function utcPartsOf(value: string): [number, number, number] | null {
-  const parts = value.split("-").map(Number);
+  const parts = value.split("-").map((part) => Number(part));
   if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
   return [parts[0], parts[1], parts[2]];
 }
