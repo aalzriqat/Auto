@@ -121,6 +121,13 @@ describe("terminal opening evidence admission", () => {
     expect(admitted("opening-cleanup")).toBe(true);
     context.cancelled = () => true;
     expect(admitted("opening-build")).toBe(false);
+    if (runs) {
+      context.needs["opening-prepare"].result = "success";
+      context.needs["opening-build"].result = "success";
+      expect(admitted("opening-prepare")).toBe(false);
+      expect(admitted("opening-proof")).toBe(false);
+      expect(admitted("opening-cleanup")).toBe(true);
+    }
     context.needs["opening-prepare"].outputs.creation_attempted = "false";
     expect(admitted("opening-cleanup")).toBe(false);
   });

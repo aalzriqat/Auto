@@ -1350,7 +1350,7 @@ jobs:
     name: fresh-opening-preview
     needs: [prepare, candidate-build, trusted-e2e, attack-worker]
     if: >-
-      always() &&
+      !cancelled() &&
       needs.prepare.result == 'success' && needs.candidate-build.result == 'success' &&
       needs.trusted-e2e.result == 'success' &&
       ((needs.prepare.outputs.should_run == 'true' && needs.attack-worker.result == 'success') ||
@@ -1415,7 +1415,18 @@ jobs:
           PREVIEW_NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "refs/pull/${PR_NUMBER}/merge/opening-proof/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" "$PR_NUMBER")"
           echo "OPENING_PREVIEW_NAME=$PREVIEW_NAME" >> "$GITHUB_ENV"
           echo "attempted=true" >> "$GITHUB_OUTPUT"
-          pnpm exec convex deploy \
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              if [ "$attempt" = "5" ]; then return 1; fi
+              echo "Trusted preview recreation failed on attempt $attempt/5; retrying in ${delay}s..." >&2
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+          retry_convex pnpm exec convex deploy \
             --typecheck enable \
             --preview-create "$PREVIEW_NAME" \
             --preview-run e2eBootstrap:markPreviewDeployment \
@@ -1762,7 +1773,7 @@ jobs:
     name: terminal-opening-proof
     needs: [prepare, candidate-build, trusted-e2e, attack-worker, opening-prepare, opening-build]
     if: >-
-      always() &&
+      !cancelled() &&
       needs.prepare.result == 'success' && needs.candidate-build.result == 'success' &&
       needs.trusted-e2e.result == 'success' &&
       needs.opening-prepare.result == 'success' && needs.opening-build.result == 'success' &&

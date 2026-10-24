@@ -8,8 +8,10 @@ import {
 
 /**
  * SCRUM-858: these are real form -> browser wire -> native backend witnesses.
- * The trusted workflow already created/attested/seeded the disposable Preview;
- * the test checks its actual browser URL binding, not a new marker attestation.
+ * The PR terminal lane owns a separately pinned/seeded Preview and a frontend
+ * built for that exact URL. Main Deal Scenarios uses its own workflow Preview
+ * after the original matrix. Both attest before the batch; the test then checks
+ * its actual browser URL binding rather than inserting another marker assertion.
  * Backend Preview egress sinks remain inherited. Only the PR trusted lane has
  * its extra browser proxy. The isolated batch runs after the other consumers
  * of the strict seeded memberships, with one pre-batch attestation and no new

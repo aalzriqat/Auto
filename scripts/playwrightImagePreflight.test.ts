@@ -16,7 +16,30 @@ type StaticWorkflow = {
   } };
 };
 
+type VisualStep = { run?: string; uses?: string; if?: string | boolean; with?: { path?: string } };
+function visualUploadCoverage(steps: readonly VisualStep[], output: string) {
+  const coverage: { gate: number; covered: boolean }[] = [];
+  for (let gate = 0; gate < steps.length; gate += 1) {
+    if (!/pnpm run test:visual:deal-cockpit|playwright test -c playwright\.visual\.config\.ts/.test(steps[gate].run ?? "")) continue;
+    const roots = steps.slice(gate + 1)
+      .filter(step => step.uses?.startsWith("actions/upload-artifact@") && step.if === "always()")
+      .flatMap(step => (step.with?.path ?? "").trim().split(/\r?\n/))
+      .map(root => root.trim().replace(/\/$/, ""))
+      .filter(Boolean);
+    coverage.push({ gate, covered: roots.some(root => output === root || output.startsWith(`${root}/`)) });
+  }
+  return coverage;
+}
+
 describe("credential-free static visual browser environment", () => {
+  it("requires an upload after the last visual invocation, not just after its predecessor", () => {
+    const output = /outputDir:\s*["']([^"']+)["']/.exec(readFileSync("playwright.visual.config.ts", "utf8"))?.[1];
+    if (!output) throw new Error("Visual output directory unavailable");
+    const gate = { run: "pnpm run test:visual:deal-cockpit" };
+    const upload = { uses: "actions/upload-artifact@pinned", if: "always()", with: { path: output } };
+    expect(visualUploadCoverage([gate, upload, gate], output).filter(item => !item.covered).map(item => item.gate)).toEqual([2]);
+    expect(visualUploadCoverage([gate, upload, gate, upload], output).every(item => item.covered)).toBe(true);
+  });
   it("retains visual diagnostics when any invoking workflow fails before the full suite", () => {
     // Main run 40105113884 lost its capture diagnostic because only full-suite reports were uploaded.
     const config = readFileSync("playwright.visual.config.ts", "utf8");
@@ -46,15 +69,9 @@ describe("credential-free static visual browser environment", () => {
           if (outputPath !== undefined && typeof outputPath !== "string") throw new Error(`Workflow output path unavailable: ${file}/${job}`);
           return { run, uses, if: condition, with: { path: outputPath } };
         });
-        const gate = steps.findIndex(step => /pnpm run test:visual:deal-cockpit|playwright test -c playwright\.visual\.config\.ts/.test(step.run ?? ""));
-        if (gate < 0) continue;
-        const roots = steps.slice(gate + 1)
-          .filter(step => step.uses?.startsWith("actions/upload-artifact@") && step.if === "always()")
-          .flatMap(step => (step.with?.path ?? "").trim().split(/\r?\n/))
-          .map(root => root.trim().replace(/\/$/, ""))
-          .filter(Boolean);
-        invocations.push({ workflow: file, job,
-          covered: roots.some(root => output === root || output.startsWith(`${root}/`)) });
+        for (const invocation of visualUploadCoverage(steps, output)) {
+          invocations.push({ workflow: file, job, covered: invocation.covered });
+        }
       }
     }
     expect(invocations.length).toBeGreaterThan(0);

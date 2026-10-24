@@ -210,7 +210,8 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // SCRUM-858 B672-2: owner-authorized independent opening Preview, matching
     // URL-baked build and strict cleanup-gated verdict. Canonical credential
     // commands and negative controls remain unchanged; final source reviews bind this hash.
-    "1bfad479c9f069701b9a188352a4bafe42b769d190689e3ee0cc20d6ffd2cb37",
+    // Minor closure: existing bounded creation backoff and cancellation-aware opening admission only.
+    "d2d6701e7e24b904ed6cc9975014fbdcc6e285484fcb8630b3eb779526ee6d31",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":

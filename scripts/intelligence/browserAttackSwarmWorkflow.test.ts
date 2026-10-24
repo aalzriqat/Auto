@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, realpathSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -1187,6 +1188,39 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(verdictRun).toContain("autoflow/trusted-browser-swarm");
     expect(verdictRun).toContain("Content-Type: application/json");
     expect(verdictRun).toContain('if [ "$STATE" != "success" ]');
+  });
+
+  it("opening creation retries its identical native invocation within the existing five-attempt bound", () => {
+    const parent = realpathSync(path.resolve(process.cwd(), ".."));
+    const directory = realpathSync(mkdtempSync(path.join(parent, "opening-retry-")));
+    if (path.dirname(directory) !== parent) throw new Error("Retry fixture escaped its workspace");
+    const counter = path.join(directory, "count"), args = path.join(directory, "args"), delays = path.join(directory, "delays");
+    const shell = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "/bin/bash";
+    const run = String(step("opening-prepare", "Recreate disposable opening Preview from trusted main").run);
+    // Only the external CLI and sleep boundaries are replaced; naming and actual workflow control flow run natively.
+    const boundary = `pnpm() {
+      count=0; if [ -f "$COUNTER" ]; then read -r count < "$COUNTER" || true; fi
+      count=$((count + 1)); printf '%s\\n' "$count" > "$COUNTER"
+      printf '%q ' "$@" >> "$ARGS"; printf '\\n' >> "$ARGS"
+      if [ "$count" -lt "$SUCCEED_ON" ]; then return 75; fi
+    }
+    sleep() { printf '%s\\n' "$1" >> "$DELAYS"; }`;
+    try {
+      for (const successOn of [3, 9]) {
+        writeFileSync(counter, "0\n"); writeFileSync(args, ""); writeFileSync(delays, "");
+        const result = spawnSync(shell, ["-c", `${boundary}\n${run}`], { encoding: "utf8", timeout: 30000,
+          env: { NODE_ENV: "test", PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
+            COUNTER: counter, ARGS: args, DELAYS: delays, SUCCEED_ON: String(successOn),
+            PR_NUMBER: "672", GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1",
+            GITHUB_ENV: path.join(directory, "env"), GITHUB_OUTPUT: path.join(directory, "output") } });
+        expect(result.status).toBe(successOn === 3 ? 0 : 1);
+        expect(Number(readFileSync(counter, "utf8"))).toBe(Math.min(successOn, 5));
+        const invocations = readFileSync(args, "utf8").trim().split("\n").map(line => line.trimEnd());
+        expect(new Set(invocations).size).toBe(1);
+        expect(invocations[0]).toContain("--preview-create");
+        expect(readFileSync(delays, "utf8").trim().split("\n")).toEqual(successOn === 3 ? ["2", "4"] : ["2", "4", "8", "16"]);
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
   it("terminal opening owns fresh seeded state, a matching baked build and failure-bound cleanup", () => {

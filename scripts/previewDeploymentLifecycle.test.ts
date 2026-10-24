@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { z } from "zod";
 import {
   PIN_TTL_MS,
   carriesPreviewIdentity,
@@ -333,13 +334,14 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
   });
 });
 
-type Step = { name?: string; id?: string; if?: string; run?: string; env?: Record<string, string> };
-type Job = {
-  needs?: string | string[];
-  if?: string;
-  steps?: Step[];
-  outputs?: Record<string, string>;
-};
+const stepSchema = z.object({ name: z.string().optional(), id: z.string().optional(), if: z.string().optional(),
+  run: z.string().optional(), env: z.record(z.string(), z.unknown()).optional(),
+  "continue-on-error": z.unknown().optional() }).passthrough();
+const jobSchema = z.object({ needs: z.union([z.string(), z.array(z.string())]).optional(), if: z.string().optional(),
+  steps: z.array(stepSchema).optional(), outputs: z.record(z.string(), z.string()).optional() }).passthrough();
+const workflowSchema = z.object({ jobs: z.record(z.string(), jobSchema) }).passthrough();
+type Step = z.infer<typeof stepSchema>;
+type Job = z.infer<typeof jobSchema>;
 const KEY = "${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}";
 
 /**
@@ -375,11 +377,36 @@ describe("inlineResolverCalls", () => {
 });
 
 describe("SCRUM-377 every preview-creating workflow retires its preview", () => {
+  // Recognize the literal direct commands used by these workflows. Quoted
+  // argument text is one shell word, so discussing a flag is not invoking it.
+  function executable(step: Step) {
+    return (step.run ?? "").split("\n")
+      .map(line => line.replace(/(^|\s)#.*$/, ""))
+      .filter(line => !/^\s*:(\s|$)/.test(line)).join("\n");
+  }
+  function invocation(step: Step, kind: "create" | "pin" | "delete") {
+    return executable(step).replace(/\\\r?\n/g, " ").split("\n").some(line => {
+      const words = (line.match(/(?:[^\s"'\\]|\\.|'[^']*'|"(?:\\.|[^"\\])*")+/g) ?? [])
+        .map(word => word.replace(/^(['"])(.*)\1$/s, "$2"));
+      if (words[0] === "retry_convex") words.shift();
+      if (kind === "create") {
+        if (!words.includes("--preview-create")) return false;
+        if (words.slice(0, 4).join(" ") === "pnpm exec convex deploy") return true;
+        // Unknown executable wrappers must not vanish from the ownership census.
+        // Text commands may discuss this flag; other argv shapes are unavailable.
+        if (!["echo", "printf", "grep", "egrep", "fgrep", "rg"].includes(words[0])) {
+          throw new Error("Unrecognized Preview creation invocation requires lifecycle review");
+        }
+        return false;
+      }
+      return words.slice(0, 3).join(" ") === `node scripts/previewDeploymentLifecycle.mjs ${kind}`;
+    });
+  }
   const dir = path.join(process.cwd(), ".github", "workflows");
   const creators = readdirSync(dir)
     .filter((f) => f.endsWith(".yml"))
     .map((f) => ({ file: f, text: readFileSync(path.join(dir, f), "utf8") }))
-    .filter((w) => w.text.includes("--preview-create"));
+    .filter(w => Object.values(workflowSchema.parse(parse(w.text)).jobs).some(job => job.steps?.some(step => invocation(step, "create"))));
 
   it("finds the known creators", () => {
     expect(creators.map((w) => w.file).sort()).toEqual([
@@ -398,104 +425,181 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
   // teardown dispatch — is pinned in scripts/huntPreviewWorkflow.test.ts.
   const RUN_SCOPED_EXEMPT = new Set(["hunt-preview.yml"]);
 
-  it.each(creators.filter((w) => !RUN_SCOPED_EXEMPT.has(w.file)).map((w) => [w.file, w.text]))("%s pins what it created and deletes last", (_file, text) => {
-    const jobs = (parse(text) as { jobs: Record<string, Job> }).jobs;
+  function assertLifecycles(file: string, jobs: Record<string, Job>) {
     const steps = Object.entries(jobs).flatMap(([id, job]) => (job.steps ?? []).map((s) => ({ id, s })));
-    // Shell comments do not execute, and neither do the arguments of the `:`
-    // no-op, so a commented-out or `: `-prefixed command is no command.
-    const executable = (s: Step) =>
-      (s.run ?? "")
-        .split("\n")
-        .map((line) => line.replace(/(^|\s)#.*$/, ""))
-        .filter((line) => !/^\s*:(\s|$)/.test(line))
-        .join("\n");
-    const only = (needle: string) => {
-      const hits = steps.flatMap(({ s }, i) => (executable(s).includes(needle) ? [i] : []));
-      expect(hits, needle).toHaveLength(1);
-      return hits[0];
+    const hits = (kind: "create" | "pin" | "delete", job?: string) =>
+      steps.flatMap(({ id, s }, i) => ((!job || id === job) && invocation(s, kind) ? [i] : []));
+    const only = (kind: "create" | "pin" | "delete", job?: string) => {
+      const found = hits(kind, job);
+      expect(found, `${file} ${job ?? "workflow"} ${kind}`).toHaveLength(1);
+      return found[0];
     };
-    const creates = only("--preview-create");
-    const pin = only("previewDeploymentLifecycle.mjs pin");
-    const del = only("previewDeploymentLifecycle.mjs delete");
-    const creator = steps[creates].s;
-    const pinStep = steps[pin].s;
-    const delStep = steps[del].s;
-
-    // The identity comes from the creating command's own --cmd, and the pin
-    // runs directly after it, even when that command failed.
-    // ...and it is the variable the CLI actually fills with that URL.
-    const urlVars = [...executable(creator).matchAll(/--cmd-url-env-var-name (\w+)/g)];
-    expect(urlVars, "exactly one --cmd-url-env-var-name").toHaveLength(1);
-    const urlVar = urlVars[0][1];
-    const cmds = [...executable(creator).matchAll(/--cmd '([^']*)'/g)];
-    expect(cmds, "exactly one --cmd").toHaveLength(1);
-    const cmd = cmds[0][1];
-    expect(cmd).toContain(`echo "CONVEX_PREVIEW_URL=$${urlVar}" >> "$GITHUB_ENV"`);
-    expect(steps[pin].id).toBe(steps[creates].id);
-    expect(pin).toBe(creates + 1);
-    expect(pinStep.if ?? "").toMatch(/^always\(\) && /);
-    expect(pinStep.if).toContain("env.CONVEX_PREVIEW_URL != ''");
-    // No disjunction, and no literal `false` operand that could disable it.
-    expect(pinStep.if).not.toMatch(/\|\||(^|&&|\()\s*(false|0)\s*(&&|\)|$)/);
-    expect(pinStep.env?.CONVEX_PREVIEW_DEPLOY_KEY).toBe(KEY);
-    expect(delStep.env?.CONVEX_PREVIEW_DEPLOY_KEY).toBe(KEY);
-
-    // Every lookup by preview name, in any job, can return a newer run's
-    // replacement, so each one must name the deployment this run created.
-    // (The resolver also refuses a call without it at runtime; this catches a
-    // miswired variable before a run does.)
-    for (const { s } of steps) {
-      const run = executable(s);
-      const inline = inlineResolverCalls(run);
-      for (const call of inline) {
-        const named = [...call.matchAll(/expectedConvexCloudUrl\s*:\s*([^,}\n]+)/g)].map((m) => m[1].trim());
-        expect(named, s.name).toHaveLength(1);
-        expect(named[0], s.name).toMatch(/^process\.env\.(CONVEX_PREVIEW_URL|NEXT_PUBLIC_CONVEX_URL)$/);
-      }
-      if (run.includes("scripts/intelligence/convexPreviewAuthority.mjs") && inline.length === 0) {
-        expect(s.env?.CONVEX_PREVIEW_URL, s.name).toBe("${{ env.CONVEX_PREVIEW_URL }}");
-      }
-    }
-
-    const delJobId = steps[del].id;
-    if (delJobId === steps[creates].id) {
-      // Same job: the delete is its final step and runs whatever came before.
-      expect(del).toBeGreaterThan(pin);
-      expect(delStep.if).toBe("always() && env.CONVEX_PREVIEW_CREATED_AT != ''");
-      expect(jobs[delJobId].steps?.at(-1)).toBe(delStep);
+    const creationSteps = hits("create");
+    if (file === "browser-attack-swarm.yml") {
+      expect(creationSteps.map(index => steps[index].id)).toEqual(["prepare", "opening-prepare"]);
     } else {
-      // Separate job: it waits for every other job, whatever their outcome,
-      // and receives exactly what the pin step published.
-      const delJob = jobs[delJobId];
-      const pinJob = jobs[steps[pin].id];
-      // `always()` first, the created-preview guard present, and nothing else
-      // beyond conditions the pin job itself ran under: whenever a preview was
-      // created those all held, so no extra clause can skip its deletion.
-      const conjuncts = (text: unknown) =>
-        String(text ?? "").split("&&").map((part) => part.trim()).filter(Boolean);
-      const delConjuncts = conjuncts(delJob.if);
-      const pinConjuncts = new Set(conjuncts(pinJob.if));
-      const createdGuard = `needs.${steps[pin].id}.outputs.cleanup_preview_created_at != ''`;
-      expect(delConjuncts[0]).toBe("always()");
-      expect(delConjuncts).toContain(createdGuard);
-      expect(
-        delConjuncts.filter((c) => c !== "always()" && c !== createdGuard && !pinConjuncts.has(c)),
-      ).toEqual([]);
-      expect(delJob.steps?.at(-1)).toBe(delStep);
-      const needs = [delJob.needs ?? []].flat().sort();
-      expect(needs).toEqual(Object.keys(jobs).filter((id) => id !== delJobId).sort());
-      expect(pinJob.outputs).toMatchObject({
-        cleanup_preview_name: `\${{ steps.${pinStep.id}.outputs.preview_name }}`,
-        cleanup_convex_url: `\${{ steps.${pinStep.id}.outputs.convex_cloud_url }}`,
-        cleanup_preview_created_at: `\${{ steps.${pinStep.id}.outputs.preview_created_at }}`,
-      });
-      const from = `needs.${steps[pin].id}.outputs`;
-      expect(delStep.env).toMatchObject({
-        CONVEX_PREVIEW_NAME: `\${{ ${from}.cleanup_preview_name }}`,
-        CONVEX_PREVIEW_URL: `\${{ ${from}.cleanup_convex_url }}`,
-        CONVEX_PREVIEW_CREATED_AT: `\${{ ${from}.cleanup_preview_created_at }}`,
-      });
+      expect(creationSteps, file).toHaveLength(1);
     }
+    expect(hits("pin"), `${file} every creator has one pin`).toHaveLength(creationSteps.length);
+    expect(hits("delete"), `${file} every creator has one cleanup`).toHaveLength(creationSteps.length);
+    for (const creates of creationSteps) {
+      const creatorJobId = steps[creates].id;
+      const opening = file === "browser-attack-swarm.yml" && creatorJobId === "opening-prepare";
+      const cleanupJobId = file === "browser-attack-swarm.yml"
+        ? opening ? "opening-cleanup" : "preview-cleanup"
+        : steps[only("delete")].id;
+      const pin = only("pin", creatorJobId);
+      const del = only("delete", cleanupJobId);
+      const creator = steps[creates].s;
+      const pinStep = steps[pin].s;
+      const delStep = steps[del].s;
+
+      // The identity comes from the creating command's own --cmd, and the pin
+      // runs directly after it, even when that command failed.
+      // ...and it is the variable the CLI actually fills with that URL.
+      const urlVars = [...executable(creator).matchAll(/--cmd-url-env-var-name (\w+)/g)];
+      expect(urlVars, "exactly one --cmd-url-env-var-name").toHaveLength(1);
+      const urlVar = urlVars[0][1];
+      const cmds = [...executable(creator).matchAll(/--cmd '([^']*)'/g)];
+      expect(cmds, "exactly one --cmd").toHaveLength(1);
+      const cmd = cmds[0][1];
+      expect(cmd).toContain(`echo "CONVEX_PREVIEW_URL=$${urlVar}" >> "$GITHUB_ENV"`);
+      expect(steps[pin].id).toBe(steps[creates].id);
+      expect(pin).toBe(creates + 1);
+      expect(pinStep.if ?? "").toMatch(/^always\(\) && /);
+      expect(pinStep.if).toContain("env.CONVEX_PREVIEW_URL != ''");
+      // No disjunction, and no literal `false` operand that could disable it.
+      expect(pinStep.if).not.toMatch(/\|\||(^|&&|\()\s*(false|0)\s*(&&|\)|$)/);
+      expect(pinStep.env?.CONVEX_PREVIEW_DEPLOY_KEY).toBe(KEY);
+      expect(delStep.env?.CONVEX_PREVIEW_DEPLOY_KEY).toBe(KEY);
+
+      // Every lookup by preview name, in any job, can return a newer run's
+      // replacement, so each one must name the deployment this run created.
+      // (The resolver also refuses a call without it at runtime; this catches a
+      // miswired variable before a run does.)
+      for (const { s } of steps) {
+        const run = executable(s);
+        const inline = inlineResolverCalls(run);
+        for (const call of inline) {
+          const named = [...call.matchAll(/expectedConvexCloudUrl\s*:\s*([^,}\n]+)/g)].map((m) => m[1].trim());
+          expect(named, s.name).toHaveLength(1);
+          expect(named[0], s.name).toMatch(/^process\.env\.(CONVEX_PREVIEW_URL|NEXT_PUBLIC_CONVEX_URL)$/);
+        }
+        if (run.includes("scripts/intelligence/convexPreviewAuthority.mjs") && inline.length === 0) {
+          expect(s.env?.CONVEX_PREVIEW_URL, s.name).toBe("${{ env.CONVEX_PREVIEW_URL }}");
+        }
+      }
+
+      const delJobId = steps[del].id;
+      if (opening) {
+        const pinJob = jobs[creatorJobId], delJob = jobs[delJobId];
+        expect(pinJob.outputs).toMatchObject({
+          creation_attempted: "${{ steps.create.outputs.attempted }}",
+          preview_name: "${{ steps.pin.outputs.preview_name }}",
+          convex_cloud_url: "${{ steps.pin.outputs.convex_cloud_url }}",
+          cleanup_preview_created_at: "${{ steps.pin.outputs.preview_created_at }}",
+        });
+        const attempt = executable(creator).indexOf('echo "attempted=true" >> "$GITHUB_OUTPUT"');
+        expect(attempt).toBeGreaterThanOrEqual(0);
+        expect(attempt).toBeLessThan(executable(creator).indexOf("pnpm exec convex deploy"));
+        expect(executable(pinStep)).toMatch(/^\s*node scripts\/previewDeploymentLifecycle\.mjs pin --strict\s*$/m);
+        expect(delJob.needs).toEqual(["prepare", "opening-prepare", "opening-build", "opening-proof"]);
+        expect(delJob.if?.split("&&").map(value => value.trim())).toEqual([
+          "always()",
+          "github.event.workflow_run.event == 'pull_request'",
+          "github.event.workflow_run.head_repository.full_name == github.repository",
+          "needs.opening-prepare.outputs.creation_attempted == 'true'",
+        ]);
+        const ownedIdentity = {
+          CONVEX_PREVIEW_NAME: "${{ needs.opening-prepare.outputs.preview_name }}",
+          CONVEX_PREVIEW_URL: "${{ needs.opening-prepare.outputs.convex_cloud_url }}",
+          CONVEX_PREVIEW_CREATED_AT: "${{ needs.opening-prepare.outputs.cleanup_preview_created_at }}",
+        };
+        expect(delStep.env).toMatchObject(ownedIdentity);
+        expect(delStep.run).toBe("node scripts/previewDeploymentLifecycle.mjs delete --strict");
+        expect(delJob.steps?.at(-1)).toBe(delStep);
+        const refusals = delJob.steps?.filter(step => step.name === "Refuse missing opening cleanup identity") ?? [];
+        expect(refusals).toHaveLength(1);
+        const refusal = refusals[0];
+        expect(refusal.env).toEqual(ownedIdentity);
+        expect(refusal.if).toBeUndefined();
+        expect(refusal["continue-on-error"]).toBeUndefined();
+        expect(refusal.run?.trim()).toBe('if [ -z "$CONVEX_PREVIEW_NAME" ] || [ -z "$CONVEX_PREVIEW_URL" ] || [ -z "$CONVEX_PREVIEW_CREATED_AT" ]; then\n  echo "Opening cleanup ownership is unavailable after creation was attempted." >&2\n  exit 1\nfi');
+        expect(delJob.steps?.indexOf(refusal)).toBeLessThan(delJob.steps?.indexOf(delStep) ?? -1);
+      } else if (delJobId === steps[creates].id) {
+        // Same job: the delete is its final step and runs whatever came before.
+        expect(del).toBeGreaterThan(pin);
+        expect(delStep.if).toBe("always() && env.CONVEX_PREVIEW_CREATED_AT != ''");
+        expect(jobs[delJobId].steps?.at(-1)).toBe(delStep);
+      } else {
+        // Separate job: it waits for every other job, whatever their outcome,
+        // and receives exactly what the pin step published.
+        const delJob = jobs[delJobId];
+        const pinJob = jobs[steps[pin].id];
+        // `always()` first, the created-preview guard present, and nothing else
+        // beyond conditions the pin job itself ran under: whenever a preview was
+        // created those all held, so no extra clause can skip its deletion.
+        const conjuncts = (text: unknown) =>
+          String(text ?? "").split("&&").map((part) => part.trim()).filter(Boolean);
+        const delConjuncts = conjuncts(delJob.if);
+        const pinConjuncts = new Set(conjuncts(pinJob.if));
+        const createdGuard = `needs.${steps[pin].id}.outputs.cleanup_preview_created_at != ''`;
+        expect(delConjuncts[0]).toBe("always()");
+        expect(delConjuncts).toContain(createdGuard);
+        expect(
+          delConjuncts.filter((c) => c !== "always()" && c !== createdGuard && !pinConjuncts.has(c)),
+        ).toEqual([]);
+        expect(delJob.steps?.at(-1)).toBe(delStep);
+        const needs = [delJob.needs ?? []].flat().sort();
+        expect(needs).toEqual(Object.keys(jobs).filter((id) => id !== delJobId).sort());
+        expect(pinJob.outputs).toMatchObject({
+          cleanup_preview_name: `\${{ steps.${pinStep.id}.outputs.preview_name }}`,
+          cleanup_convex_url: `\${{ steps.${pinStep.id}.outputs.convex_cloud_url }}`,
+          cleanup_preview_created_at: `\${{ steps.${pinStep.id}.outputs.preview_created_at }}`,
+        });
+        const from = `needs.${steps[pin].id}.outputs`;
+        expect(delStep.env).toMatchObject({
+          CONVEX_PREVIEW_NAME: `\${{ ${from}.cleanup_preview_name }}`,
+          CONVEX_PREVIEW_URL: `\${{ ${from}.cleanup_convex_url }}`,
+          CONVEX_PREVIEW_CREATED_AT: `\${{ ${from}.cleanup_preview_created_at }}`,
+        });
+      }
+    }
+  }
+
+  it.each(creators.filter((w) => !RUN_SCOPED_EXEMPT.has(w.file)).map((w) => [w.file, w.text]))("%s pins each owned Preview and deletes after its consumers", (file, text) => {
+    assertLifecycles(file, workflowSchema.parse(parse(text)).jobs);
+  });
+
+  it("allows comments and quoted command examples without inventing another Preview owner", () => {
+    const swarm = creators.find(workflow => workflow.file === "browser-attack-swarm.yml");
+    if (!swarm) throw new Error("Actual swarm lifecycle unavailable");
+    const jobs = workflowSchema.parse(parse(swarm.text)).jobs;
+    jobs["opening-prepare"].steps?.push({ run: '# pnpm exec convex deploy --preview-create example\n: node scripts/previewDeploymentLifecycle.mjs delete\necho "pnpm exec convex deploy --preview-create example"\necho --preview-create\nprintf "%s\\n" --preview-create' });
+    expect(() => assertLifecycles(swarm.file, jobs)).not.toThrow();
+  });
+
+  it.each(["missing pin", "wrong cleanup identity", "unpaired creator", "missing consumer", "warn-only opening deletion", "missing cleanup identity check", "wrapped unpaired creator"])("refuses an actual swarm lifecycle with %s", mutation => {
+    const swarm = creators.find(workflow => workflow.file === "browser-attack-swarm.yml");
+    if (!swarm) throw new Error("Actual swarm lifecycle unavailable");
+    const jobs = workflowSchema.parse(parse(swarm.text)).jobs;
+    const opening = jobs["opening-prepare"], cleanup = jobs["opening-cleanup"];
+    const pinIndex = opening.steps?.findIndex(step => step.id === "pin");
+    const deletion = cleanup.steps?.find(step => step.run === "node scripts/previewDeploymentLifecycle.mjs delete --strict");
+    if (pinIndex === undefined || pinIndex < 0 || !opening.steps || !deletion?.env) throw new Error("Actual opening lifecycle incomplete");
+    if (mutation === "missing pin") opening.steps.splice(pinIndex, 1);
+    if (mutation === "wrong cleanup identity") deletion.env.CONVEX_PREVIEW_URL = "${{ needs.prepare.outputs.cleanup_convex_url }}";
+    if (mutation === "unpaired creator") jobs["unpaired-creator"] = structuredClone(opening);
+    if (mutation === "wrapped unpaired creator") {
+      jobs["unpaired-creator"] = { steps: [{ run: 'env SOME_FLAG=x pnpm exec convex deploy --preview-create "$OTHER"' }] };
+      const originalCleanup = jobs["preview-cleanup"];
+      if (!Array.isArray(originalCleanup.needs)) throw new Error("Actual cleanup dependency inventory unavailable");
+      originalCleanup.needs.push("unpaired-creator");
+    }
+    if (mutation === "missing consumer") cleanup.needs = ["prepare", "opening-prepare", "opening-build"];
+    if (mutation === "warn-only opening deletion") deletion.run = "node scripts/previewDeploymentLifecycle.mjs delete";
+    if (mutation === "missing cleanup identity check") cleanup.steps = cleanup.steps?.filter(step => step.name !== "Refuse missing opening cleanup identity");
+    expect(() => assertLifecycles(swarm.file, jobs)).toThrow();
   });
 });
 
