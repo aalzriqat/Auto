@@ -96,6 +96,46 @@ async function countFor(
 }
 
 describe("resetOrgFinancialData", () => {
+  test.each(["REJECTED", "COMPLETED", "missing", "foreign", "timestamp-only", "purge-only", "pending-started"] as const)(
+    "destructive reset refuses inconsistent or reserved deletion ownership: %s", async ownership => {
+      const t = setup();
+      const orgId = await seedOrg(t, "Deletion ownership");
+      await t.run(async ctx => {
+        const userId = await ctx.db.insert("users", { clerkId: "deletion-owner", email: "delete@example.test" });
+        const requestOrgId = ownership === "foreign"
+          ? await ctx.db.insert("organizations", { name: "Other deletion", createdAt: 1 }) : orgId;
+        const requestId = await ctx.db.insert("organizationDeletionRequests", { orgId: requestOrgId, orgName: "Deletion ownership",
+          requestedBy: userId, requestedAt: 1,
+          status: ownership === "REJECTED" || ownership === "COMPLETED" ? ownership : ownership === "pending-started" ? "PENDING_REVIEW" : "RUNNING",
+          ...(ownership === "pending-started" ? { startedAt: 0 } : {}) });
+        await ctx.db.patch(orgId, { financialResetGeneration: 1, financialResetCompletedGeneration: 0,
+          ...(ownership === "purge-only" ? { destructivePurgeStartedAt: 0 } : { deletionRequestedAt: 1 }),
+          ...(ownership === "timestamp-only" || ownership === "purge-only" ? {} : { deletionRequestId: requestId }) });
+        if (ownership === "missing") await ctx.db.delete(requestId);
+      });
+      const before = await t.run(async ctx => ({ org: await ctx.db.get(orgId), transaction: await ctx.db.query("transactions").first() }));
+      await expect(runContinuationBatch(t, orgId, 1)).rejects.toThrow();
+      expect(await t.run(async ctx => ({ org: await ctx.db.get(orgId), transaction: await ctx.db.query("transactions").first() }))).toEqual(before);
+      expect((await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId })).dryRun).toBe(true);
+    },
+  );
+
+  test.each(["PENDING_REVIEW", "APPROVED"] as const)("an unstarted same-org %s deletion request preserves reset continuation", async status => {
+    const t = setup();
+    const orgId = await seedOrg(t, "Unstarted deletion");
+    const requestId = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { clerkId: "unstarted-owner", email: "unstarted@example.test" });
+      const id = await ctx.db.insert("organizationDeletionRequests", { orgId, orgName: "Unstarted deletion", requestedBy: userId, requestedAt: 1, status });
+      await ctx.db.patch(orgId, { financialResetGeneration: 1, financialResetCompletedGeneration: 0, deletionRequestedAt: 1, deletionRequestId: id });
+      return id;
+    });
+    const result = await runContinuationBatch(t, orgId, 1);
+    expect(result.total).toBe(3);
+    expect(await countFor(t, "transactions", orgId)).toBe(0);
+    expect((await t.run(ctx => ctx.db.get(requestId)))?.status).toBe(status);
+    expect((await t.run(ctx => ctx.db.get(orgId)))?.deletionRequestId).toBe(requestId);
+  });
+
   async function verifyCleanupPageContract(phase: "discovery" | "reference", pageStatus: "SplitRequired" | "SplitRecommended") {
     const t = setup();
     const orgId = await seedOrg(t, "Pagination contract");

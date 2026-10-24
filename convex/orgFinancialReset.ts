@@ -545,6 +545,18 @@ export const resetOrgFinancialData = internalMutation({
       );
     }
 
+    // Deletion owns destructive progress across invocations, including failed purges awaiting retry.
+    if (!dryRun && org && (org.deletionRequestId !== undefined || org.deletionRequestedAt !== undefined || org.destructivePurgeStartedAt !== undefined)) {
+      const deletion = org.deletionRequestId ? await ctx.db.get(org.deletionRequestId) : null;
+      if (!deletion || deletion.orgId !== org._id || deletion.status === "REJECTED" || deletion.status === "COMPLETED") {
+        throw new ConvexError("Organization deletion state could not be verified. Please contact support.");
+      }
+      if (deletion.status === "RUNNING" || deletion.status === "FAILED" || deletion.startedAt !== undefined || org.destructivePurgeStartedAt !== undefined) {
+        throw new ConvexError("Financial reset is unavailable while organization deletion is awaiting completion.");
+      }
+      // A review request that has not started destruction must not strand an existing reset.
+    }
+
     // ⚠️ FAIL-CLOSED PREFLIGHT, TAKEN BEFORE ANY DELETE OR STORAGE WRITE.
     // (SCRUM-208 c15892, Option C.)
     //
