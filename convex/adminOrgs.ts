@@ -962,6 +962,8 @@ export const approveDeletionRequest = mutation({
       suspendedReason: "Organization deletion approved by platform administration.",
       deletionRequestedAt: org.deletionRequestedAt ?? request.requestedAt,
       deletionRequestId: args.requestId,
+      // This transition abandons reset progress; later batches own their new reference scan.
+      openingCleanupReferenceScan: undefined,
     });
     await ctx.db.patch(args.requestId, {
       status: "RUNNING",
@@ -1092,6 +1094,8 @@ export const hardDeleteOrg = mutation({
       suspendedReason: "Organization deletion approved by platform administration.",
       deletionRequestedAt: now,
       deletionRequestId: requestId,
+      // Clear reset-owned progress once, preserving the deletion runner's subsequent scan.
+      openingCleanupReferenceScan: undefined,
     });
 
     await notifyManagers(ctx, args.orgId, "admin.org_deleted", {});

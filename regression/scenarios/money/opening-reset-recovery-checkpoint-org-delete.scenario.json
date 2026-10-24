@@ -1,0 +1,88 @@
+{
+  "id": "opening-reset-recovery-checkpoint-org-delete",
+  "steps": [
+    {
+      "actor": {
+        "role": "system-owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "kind": "SUPPLIER_RECOVERABLE",
+        "amountMinor": 100000,
+        "currency": "JOD"
+      }
+    },
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "continuation": true,
+        "batchSize": 1,
+        "retainedRejectedDrafts": 101,
+        "stopAtRecoveryReferenceCheckpoint": true
+      }
+    },
+    {
+      "actor": {
+        "role": "super-admin",
+        "org": "A"
+      },
+      "action": "adminOrgs.hardDeleteOrg",
+      "input": {
+        "confirmedOrganizationName": true
+      }
+    },
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "adminOrgs.runDeletionRequestBatch",
+      "input": {
+        "naturalCursorProgressionUntilRecoveryDeleted": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "authenticOpeningRecovery.availableBeforeReset",
+      "value": true
+    },
+    {
+      "observable": "resetReferenceCheckpoint.matchesLiveRecoveryAndGeneration",
+      "value": true
+    },
+    {
+      "observable": "org.noDeletedRecoveryReference",
+      "value": true
+    },
+    {
+      "observable": "deletion.runningAfterRecoveryRemoved",
+      "value": true
+    }
+  ],
+  "impl": {
+    "file": "convex/adminOrgs.test.ts",
+    "testName": "org deletion clears an interrupted reset recovery checkpoint before deleting its source"
+  },
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "opus-0db-c2-checkpoint-red",
+    "firstSeen": "2026-10-24"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "matrixRow": "SCRUM-50-opening-balance-paths",
+  "fingerprint": "4e123bc02bc70130a1a11d6aca88fcb254e2f99d9b0634e9bdde7ffe6bda0bc8"
+}

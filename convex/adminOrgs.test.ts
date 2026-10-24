@@ -1,4 +1,4 @@
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { expect, test, describe, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -43,6 +43,70 @@ async function runDeletionToCompletion(
 }
 
 describe("adminOrgs", () => {
+  test("org deletion clears an interrupted reset recovery checkpoint before deleting its source", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    registerRateLimiter(t);
+    const { orgId, ownerId } = await seedOrgWithOwner(t);
+    await t.run(async ctx => {
+      await ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: 1, updatedAt: 1 });
+      await ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"] });
+      await ctx.db.insert("users", { clerkId: "recovery-cleanup-admin", email: "admin@autoflow.dev" });
+    });
+    const owner = t.withIdentity({ subject: "owner_1" });
+    await owner.mutation(api.chartOfAccounts.initialize, { orgId });
+    const year = new Date().getUTCFullYear();
+    const periodId = await owner.mutation(api.accountingPeriods.create, { orgId, startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999), fiscalYear: year, periodNumber: 1 });
+    await owner.mutation(api.accountingPeriods.open, { orgId, periodId });
+    const accountId = await owner.mutation(api.chartOfAccounts.create, { orgId, code: "1999", name: "Opening supplier claims",
+      type: "ASSET", normalBalance: "DEBIT", currencyRestriction: "JOD", isControlAccount: true, allowManualPosting: false });
+    const retained = (await owner.query(api.chartOfAccounts.list, { orgId })).find(account => account.systemKey === "RETAINED_EARNINGS");
+    if (!retained) throw new Error("Missing balancing account");
+    await owner.mutation(api.accountingCutover.postOpeningBalanceDirect, { orgId, expectedCurrency: "JOD", asOfDate: Date.now(),
+      lines: [{ accountId, debitMinor: 100_000, creditMinor: 0 }, { accountId: retained._id, debitMinor: 0, creditMinor: 100_000 }],
+      allocations: [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "claim", accountId, amountMinor: 100_000,
+        counterpartyName: "Synthetic supplier", title: "Opening claim", purpose: "CLAIM" }] });
+    expect((await owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId }))?.rows[0])
+      .toMatchObject({ recordAvailable: true });
+    const recovery = await t.run(ctx => ctx.db.query("supplierCostRecoveries").withIndex("by_org", q => q.eq("orgId", orgId)).unique());
+    if (!recovery) throw new Error("Missing authentic opening recovery");
+    await t.run(async ctx => {
+      for (let index = 0; index < 101; index += 1) await ctx.db.insert("openingBalanceDrafts", {
+        orgId, status: "REJECTED", lines: [], asOfDate: 1, createdBy: ownerId, createdAt: 1,
+      });
+      await ctx.db.patch(orgId, { suspended: true });
+    });
+    let checkpointFound = false;
+    for (let batch = 0; batch < 20; batch += 1) {
+      await runContinuationBatch(t, orgId, 1);
+      const org = await t.run(ctx => ctx.db.get(orgId));
+      if (org?.openingCleanupReferenceScan?.source.id === recovery._id) {
+        expect(org.openingCleanupReferenceScan.resetGeneration).toBe(org.financialResetGeneration);
+        expect(await t.run(ctx => ctx.db.get(recovery._id))).not.toBeNull();
+        checkpointFound = true;
+        break;
+      }
+    }
+    expect(checkpointFound).toBe(true);
+    const request = await t.withIdentity({ subject: "recovery-cleanup-admin" }).mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId, confirmName: "Acme Motors",
+    });
+    let sourceDeleted = false;
+    for (let batch = 0; batch < 200; batch += 1) {
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: request.requestId });
+      const state = await t.run(async ctx => ({ org: await ctx.db.get(orgId), source: await ctx.db.get(recovery._id),
+        request: await ctx.db.get(request.requestId) }));
+      if (!state.source) {
+        expect(state.org).not.toBeNull();
+        expect(state.request?.status).toBe("RUNNING");
+        expect(state.org?.openingCleanupReferenceScan?.source.id).not.toBe(recovery._id);
+        sourceDeleted = true;
+        break;
+      }
+    }
+    expect(sourceDeleted).toBe(true);
+  });
+
   test("org deletion keeps its cursor until every opening reference page is cleared", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await t.run(async (ctx) => {

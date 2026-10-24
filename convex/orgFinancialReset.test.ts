@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
 import { runContinuationBatch } from "../test-utils/orgResetFixtures";
+import { clearNewOpeningResultReference, clearOpeningPayablesBatch } from "./utils/openingResetCleanup";
 
 /**
  * This deletes production rows with no undo, so the tests are about what it
@@ -95,6 +96,74 @@ async function countFor(
 }
 
 describe("resetOrgFinancialData", () => {
+  async function verifyCleanupPageContract(phase: "discovery" | "reference", pageStatus: "SplitRequired" | "SplitRecommended") {
+    const t = setup();
+    const orgId = await seedOrg(t, "Pagination contract");
+    const ids = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { clerkId: "split-contract", email: "split@example.test" });
+      for (let index = 0; index < 101; index += 1) await ctx.db.insert("openingBalanceDrafts", {
+        orgId, status: "REJECTED", lines: [], asOfDate: 1, createdBy: userId, createdAt: 1,
+      });
+      const draftId = await ctx.db.insert("openingBalanceDrafts", {
+        orgId, status: "POSTED", lines: [], asOfDate: 1, createdBy: userId, createdAt: 1,
+      });
+      const recoveryId = await ctx.db.insert("supplierCostRecoveries", { orgId, origin: "OPENING", openingBalanceDraftId: draftId,
+        openingRowKey: "claim", title: "Opening claim", purpose: "CLAIM", sourcedFromName: "Supplier",
+        amountDueMinor: 100_000, amountRecoveredMinor: 0, currency: "JOD", receiptSeq: 0, status: "OPEN",
+        createdBy: userId, createdAt: 1, updatedAt: 1 });
+      await ctx.db.patch(draftId, { allocationResults: [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "claim", recoveryId }] });
+      await ctx.db.patch(orgId, { financialResetGeneration: 1, financialResetCompletedGeneration: 0,
+        ...(phase === "reference" ? { openingCleanupReferenceScan: { resetGeneration: 1, cursor: null, complete: false,
+          source: { table: "supplierCostRecoveries" as const, id: recoveryId } } } : {}) });
+      return { draftId, recoveryId };
+    });
+    const readState = () => t.run(async ctx => ({ org: await ctx.db.get(orgId),
+      draft: await ctx.db.get(ids.draftId), source: await ctx.db.get(ids.recoveryId) }));
+    const before = await readState();
+    if (!before.draft) throw new Error("Missing opening page fixture");
+    const page = { page: [before.draft], isDone: false, continueCursor: "bounded-page-end", splitCursor: "bounded-page-middle", pageStatus };
+    // Only the external database page result is substituted. This is a contract control, not platform evidence.
+    const refused = await t.run(async ctx => {
+      const query = ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", orgId));
+      const pagination = vi.spyOn(Object.getPrototypeOf(query), "paginate").mockResolvedValue(page);
+      try {
+        if (phase === "discovery") await clearOpeningPayablesBatch(ctx, orgId, 1, false);
+        else await clearNewOpeningResultReference(ctx, orgId, { table: "supplierCostRecoveries", id: ids.recoveryId });
+      } finally {
+        pagination.mockRestore();
+      }
+    }).then(() => false, () => true);
+    const after = await readState();
+    if (pageStatus === "SplitRequired") {
+      expect(after).toEqual(before);
+      expect(refused).toBe(true);
+    } else {
+      expect(refused).toBe(false);
+      expect(after.source).toEqual(before.source);
+      if (phase === "discovery") expect(after.org?.openingCleanupPayableScan?.cursor).toBe("bounded-page-end");
+      else {
+        expect(after.org?.openingCleanupReferenceScan?.cursor).toBe("bounded-page-end");
+        expect(after.draft?.allocationResults).toEqual([]);
+      }
+    }
+  }
+
+  test("opening payable discovery refuses incomplete SplitRequired pages without changing state", async () => {
+    await verifyCleanupPageContract("discovery", "SplitRequired");
+  });
+
+  test("opening reference cleanup refuses incomplete SplitRequired pages without changing state", async () => {
+    await verifyCleanupPageContract("reference", "SplitRequired");
+  });
+
+  test("opening payable discovery advances complete SplitRecommended pages", async () => {
+    await verifyCleanupPageContract("discovery", "SplitRecommended");
+  });
+
+  test("opening reference cleanup advances complete SplitRecommended pages", async () => {
+    await verifyCleanupPageContract("reference", "SplitRecommended");
+  });
+
   test("defaults to a dry run and destroys nothing", async () => {
     // The safe form has to be the default: a caller who forgets the flag gets
     // a report, not a deletion.
