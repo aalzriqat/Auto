@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
-import { makeFunctionReference, type FunctionArgs } from "convex/server";
+import { makeFunctionReference } from "convex/server";
 import { runCleanupRehearsalCases } from "../scripts/accountingCleanupRehearsal.mjs";
 import { recordCase, unproven } from "../scripts/accountingPreviewRehearsal.mjs";
 
@@ -96,14 +96,14 @@ async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "gene
   const errors = vi.spyOn(console, "error");
   let capRefused = false;
   const previewCall = async (name: string, args: Record<string, unknown>, phase?: "DISCOVERY" | "REFERENCE") => {
-    if (name === "e2eBootstrap:prepareOpeningCleanupFixture") return { ok: true, value: await t.mutation(internal.e2eBootstrap.prepareOpeningCleanupFixture, args as FunctionArgs<typeof internal.e2eBootstrap.prepareOpeningCleanupFixture>) };
+    if (name === "e2eBootstrap:prepareOpeningCleanupFixture") return { ok: true, value: await t.mutation(makeFunctionReference<"mutation">(name), args) };
     if (name === "e2eBootstrap:observeOpeningCleanupFixture") {
       if (args.deletionRequestId) {
         // Advance the due zero-delay worker chain, without draining far-future component GC timers.
         await vi.advanceTimersByTimeAsync(1);
         await t.finishInProgressScheduledFunctions();
       }
-      const value = await t.query(internal.e2eBootstrap.observeOpeningCleanupFixture, args as FunctionArgs<typeof internal.e2eBootstrap.observeOpeningCleanupFixture>);
+      const value = await t.query(makeFunctionReference<"query">(name), args);
       if (defect === "state" && capRefused && value.commissions[0]) value.commissions[0].paidMinor += 1;
       if (defect === "generation" && value.org?.resetGeneration === 1 && value.org.completedGeneration === 1) {
         delete value.org.resetGeneration;
@@ -111,11 +111,11 @@ async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "gene
       }
       return { ok: true, value };
     }
-    if (name === "adminOrgs:runDeletionRequestBatch") return { ok: true, value: await t.mutation(internal.adminOrgs.runDeletionRequestBatch, args as FunctionArgs<typeof internal.adminOrgs.runDeletionRequestBatch>) };
+    if (name === "adminOrgs:runDeletionRequestBatch") return { ok: true, value: await t.mutation(makeFunctionReference<"mutation">(name), args) };
     if (name !== "orgFinancialReset:resetOrgFinancialData") throw new Error("Unsupported native test call");
     const beforeErrors = errors.mock.calls.length;
     try {
-      return { ok: true, value: await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, args as FunctionArgs<typeof internal.orgFinancialReset.resetOrgFinancialData>) };
+      return { ok: true, value: await t.mutation(makeFunctionReference<"mutation">(name), args) };
     } catch (error) {
       const markers = errors.mock.calls.slice(beforeErrors).flat().filter(value => value === `OPENING_CLEANUP_SPLIT_REQUIRED_${phase}`);
       if (phase && markers.length === 1 && String(error).includes("Opening cleanup could not be verified")) {
