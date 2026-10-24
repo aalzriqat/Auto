@@ -3,6 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { toMinorUnits } from "./money";
 import { orgResetState } from "./orgResetGeneration";
+import { loadOpeningSourceIdentity } from "./openingSourceIdentity";
 
 export const OPENING_STOCK_IMPORT_OPERATION = "vehicles.importBulk.openingStock";
 type Ctx = QueryCtx | MutationCtx;
@@ -59,13 +60,13 @@ export async function assertOpeningVehicleBasis(ctx: Ctx, orgId: Id<"organizatio
   if (evidence.command.idempotencyKey !== key || evidence.vin !== vehicle.vin) {
     throw new ConvexError("Opening stock import proof conflicts with the vehicle. Ask finance to review it.");
   }
-  const parents = await ctx.db.query("openingBalanceDrafts")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "POSTED")).take(2);
-  if (parents.length === 0) {
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  if (source.status === "ABSENT" && source.headers.length === 0) {
     throw new ConvexError("Opening stock cannot change or sell before its opening balance is posted.");
   }
-  if (parents.length !== 1) throw new ConvexError("Opening stock has ambiguous opening balance proof.");
-  const parent = parents[0];
+  if (source.status === "ABSENT") throw new ConvexError("Opening stock journal proof is unavailable.");
+  if (source.status !== "AVAILABLE") throw new ConvexError("Opening stock has ambiguous opening balance proof.");
+  const parent = source.parent;
   const results = parent.allocationResults?.filter((row) => row.kind === "VEHICLE_INVENTORY" && row.vehicleId === vehicleId) ?? [];
   if (results.length !== 1 || results[0].kind !== "VEHICLE_INVENTORY" ||
       vehicle.openingBalanceDraftId !== parent._id || !parent.currency) {
@@ -78,7 +79,7 @@ export async function assertOpeningVehicleBasis(ctx: Ctx, orgId: Id<"organizatio
       toMinorUnits(vehicle.purchasePrice ?? 0, parent.currency) !== allocations[0].amountMinor) {
     throw new ConvexError("Opening stock cost no longer agrees with its posted basis.");
   }
-  const journal = parent.journalEntryId ? await ctx.db.get(parent.journalEntryId) : null;
+  const journal = source.journal;
   if (!journal || journal.orgId !== orgId || journal.category !== "OPENING_BALANCE" ||
       journal.status !== "POSTED" || journal.sourceType !== "cutover" || journal.sourceId !== String(orgId) ||
       journal.accountingDate !== parent.asOfDate || journal.currency !== parent.currency) {
@@ -103,11 +104,11 @@ export async function assertOpeningVehicleBasis(ctx: Ctx, orgId: Id<"organizatio
 
 async function assertNoUnprovenOpeningStock(ctx: Ctx, orgId: Id<"organizations">, vehicleId: Id<"vehicles">) {
   const vehicle = await ctx.db.get(vehicleId);
-  const parent = await ctx.db.query("openingBalanceDrafts")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "POSTED")).first();
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
   if (vehicle?.orgId === orgId &&
-      (vehicle.openingStockImportId !== undefined || vehicle.openingBalanceDraftId !== undefined ||
-        parent?.allocationResults?.some((row) => row.kind === "VEHICLE_INVENTORY" && row.vehicleId === vehicleId))) {
+      (source.status === "UNAVAILABLE" || vehicle.openingStockImportId !== undefined || vehicle.openingBalanceDraftId !== undefined ||
+        source.headers.some((parent) => parent.allocationResults?.some((row) =>
+          row.kind === "VEHICLE_INVENTORY" && row.vehicleId === vehicleId)))) {
     throw new ConvexError("Opening stock command proof is unavailable. Ask finance to review it.");
   }
 }

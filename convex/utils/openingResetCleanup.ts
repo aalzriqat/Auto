@@ -1,12 +1,18 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { ConvexError } from "convex/values";
+import { orgResetState } from "./orgResetGeneration";
+
+type OpeningCleanupSource = NonNullable<Doc<"organizations">["openingCleanupReferenceScan"]>["source"];
+const cleanupPending = { deleted: 0, remaining: 1 };
 
 /** Runtime-owned optional reference cleared atomically before its target is deleted. */
 export const OPENING_ATOMIC_REFERENCE_CLEARS = [
   "openingCommissionLiabilities.paidPayrollItemId->payrollItems",
   "openingBalanceDrafts.allocationResults[].openingCommissionLiabilityId->openingCommissionLiabilities",
   "openingBalanceDrafts.allocationResults[].recoveryId->supplierCostRecoveries",
+  "organizations.openingCleanupReferenceScan.source.id->openingCommissionLiabilities",
+  "organizations.openingCleanupReferenceScan.source.id->supplierCostRecoveries",
 ] as const;
 
 export async function clearOpeningPayrollReference(
@@ -29,7 +35,7 @@ export async function clearOpeningPayablesBatch(
 ): Promise<{ deleted: number; remaining: number }> {
   const drafts = await ctx.db.query("openingBalanceDrafts")
     .withIndex("by_org", q => q.eq("orgId", orgId)).take(101);
-  if (drafts.length > 100) throw new ConvexError("Opening payable cleanup requires review.");
+  if (drafts.length > 100) return clearLargeOpeningPayablesBatch(ctx, orgId, limit, dryRun);
   const ids = openingPayableIds(drafts);
   let deleted = 0;
   let remaining = 0;
@@ -39,6 +45,43 @@ export async function clearOpeningPayablesBatch(
     remaining += result.remaining;
   }
   return { deleted, remaining };
+}
+
+/** Discovery and reference scans occupy separate invocations: at most one pagination per mutation. */
+async function clearLargeOpeningPayablesBatch(ctx: MutationCtx, orgId: Id<"organizations">,
+  limit: number, dryRun: boolean) {
+  // A dry run cannot persist a continuation. Report a partial scope, never an empty inventory.
+  if (dryRun) return cleanupPending;
+  const org = await requireSuspendedCleanupOrg(ctx, orgId);
+  const generation = orgResetState(org).generation;
+  const stored = org.openingCleanupPayableScan;
+  const state = stored?.resetGeneration === generation ? stored : undefined;
+  if (state?.pendingPayableIds.length) {
+    const result = await clearOpeningPayable(ctx, orgId, state.pendingPayableIds[0], limit, 0, false);
+    if (result.remaining === 0) await ctx.db.patch(orgId, {
+      openingCleanupPayableScan: { ...state, pendingPayableIds: state.pendingPayableIds.slice(1) },
+    });
+    return { deleted: result.deleted, remaining: 1 };
+  }
+  if (!state || (state.pendingDraftIds.length === 0 && !state.complete)) {
+    const page = await ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", orgId))
+      .paginate({ cursor: state?.cursor ?? null, numItems: 100, maximumRowsRead: 100, maximumBytesRead: 512_000 });
+    await ctx.db.patch(orgId, { openingCleanupPayableScan: { resetGeneration: generation,
+      cursor: page.continueCursor, complete: page.isDone, pendingDraftIds: page.page.map(draft => draft._id), pendingPayableIds: [] } });
+    return cleanupPending;
+  }
+  for (const [index, draftId] of state.pendingDraftIds.entries()) {
+    const draft = await ctx.db.get(draftId);
+    if (draft && draft.orgId !== orgId) throw new ConvexError("Opening payable cleanup requires review.");
+    const ids = [...openingPayableIds(draft ? [draft] : [])];
+    if (ids.length > 0) {
+      await ctx.db.patch(orgId, { openingCleanupPayableScan: { ...state,
+        pendingDraftIds: state.pendingDraftIds.slice(index + 1), pendingPayableIds: ids } });
+      return cleanupPending;
+    }
+  }
+  await ctx.db.patch(orgId, { openingCleanupPayableScan: { ...state, pendingDraftIds: [] } });
+  return { deleted: 0, remaining: state.complete ? 0 : 1 };
 }
 
 function openingPayableIds(drafts: readonly Doc<"openingBalanceDrafts">[]) {
@@ -68,7 +111,7 @@ async function clearOpeningPayable(ctx: MutationCtx, orgId: Id<"organizations">,
   }
   if (payments.length > 0) return { deleted, remaining: 1 };
   if (!dryRun) {
-    await clearNewOpeningResultReference(ctx, orgId, { table: "vehicleSupplierPayables", id: row._id });
+    if (!await clearNewOpeningResultReference(ctx, orgId, { table: "vehicleSupplierPayables", id: row._id })) return cleanupPending;
     await ctx.db.delete(row._id);
   }
   return { deleted: 1, remaining: dryRun ? 1 : 0 };
@@ -77,13 +120,46 @@ async function clearOpeningPayable(ctx: MutationCtx, orgId: Id<"organizations">,
 /** Destructive reset exception only: invalidate new source proof, never change historical economics. */
 export async function clearNewOpeningResultReference(
   ctx: MutationCtx, orgId: Id<"organizations">,
-  source: { table: "openingCommissionLiabilities"; id: Id<"openingCommissionLiabilities"> } |
-    { table: "supplierCostRecoveries"; id: Id<"supplierCostRecoveries"> } |
-    { table: "vehicleSupplierPayables"; id: Id<"vehicleSupplierPayables"> }
+  source: OpeningCleanupSource
 ) {
+  const target = await ctx.db.get(source.id);
+  if (!target || target.orgId !== orgId) throw new ConvexError("Opening source cleanup requires review.");
+  const org = await ctx.db.get(orgId);
+  const generation = orgResetState(org).generation;
+  const stored = org?.openingCleanupReferenceScan;
+  const state = stored?.resetGeneration === generation && stored.source.table === source.table &&
+    stored.source.id === source.id ? stored : undefined;
+  if (state) {
+    await requireSuspendedCleanupOrg(ctx, orgId);
+    if (state.complete) {
+      await ctx.db.patch(orgId, { openingCleanupReferenceScan: undefined });
+      return true;
+    }
+    const page = await ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", orgId))
+      .paginate({ cursor: state.cursor, numItems: 100, maximumRowsRead: 100, maximumBytesRead: 512_000 });
+    await removeOpeningReferences(ctx, page.page, source);
+    await ctx.db.patch(orgId, { openingCleanupReferenceScan: { ...state, cursor: page.continueCursor, complete: page.isDone } });
+    // Even the final page yields, so a caller cannot start another pagination in this invocation.
+    return false;
+  }
   const drafts = await ctx.db.query("openingBalanceDrafts")
     .withIndex("by_org", q => q.eq("orgId", orgId)).take(101);
-  if (drafts.length > 100) throw new ConvexError("Opening source cleanup requires review.");
+  if (drafts.length > 100) {
+    await requireSuspendedCleanupOrg(ctx, orgId);
+    await ctx.db.patch(orgId, { openingCleanupReferenceScan: { resetGeneration: generation, source, cursor: null, complete: false } });
+    return false;
+  }
+  await removeOpeningReferences(ctx, drafts, source);
+  return true;
+}
+
+async function requireSuspendedCleanupOrg(ctx: MutationCtx, orgId: Id<"organizations">) {
+  const org = await ctx.db.get(orgId);
+  if (!org?.suspended) throw new ConvexError("Opening cleanup requires a suspended organization.");
+  return org;
+}
+
+async function removeOpeningReferences(ctx: MutationCtx, drafts: readonly Doc<"openingBalanceDrafts">[], source: OpeningCleanupSource) {
   for (const draft of drafts) {
     const results = draft.allocationResults ?? [];
     const retained = results.filter(result => !matchesOpeningResult(result, source));

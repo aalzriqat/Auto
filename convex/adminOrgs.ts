@@ -451,7 +451,8 @@ async function deleteRowsByOrgBatch(
   ctx: MutationCtx,
   table: TableNames,
   index: string,
-  orgId: Id<"organizations">
+  orgId: Id<"organizations">,
+  openingCleanup: { deferred: boolean },
 ) {
   const batchSize = TRIGGER_HEAVY_DELETION_TABLES.has(table)
     ? TRIGGER_HEAVY_BATCH_SIZE
@@ -459,12 +460,17 @@ async function deleteRowsByOrgBatch(
   const rows: Array<{ _id: Id<TableNames> }> = await (ctx.db.query(table) as any)
     .withIndex(index, (q: any) => q.eq("orgId", orgId))
     .take(batchSize);
+  let deleted = 0;
   for (const row of rows) {
     if (table === "payrollItems") await clearOpeningPayrollReference(ctx, orgId, row._id as Id<"payrollItems">);
-    if (table === "openingCommissionLiabilities") await clearNewOpeningResultReference(ctx, orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> });
+    if (table === "openingCommissionLiabilities" && !await clearNewOpeningResultReference(ctx, orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> })) {
+      openingCleanup.deferred = true;
+      break;
+    }
     await ctx.db.delete(row._id);
+    deleted += 1;
   }
-  return rows.length > 0 ? { [table]: rows.length } : {};
+  return deleted > 0 ? { [table]: deleted } : {};
 }
 
 async function deleteStorageIds(ctx: MutationCtx, storageIds: Id<"_storage">[]) {
@@ -742,7 +748,7 @@ async function deleteLiveChatThreadBatch(ctx: MutationCtx, orgId: Id<"organizati
   return { liveChatThreads: 1 };
 }
 
-async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"organizations">) {
+async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"organizations">, openingCleanup: { deferred: boolean }) {
   if (step.kind === "retainTaskAlarmHistory") {
     return {};
   }
@@ -776,7 +782,7 @@ async function runDeletionStep(ctx: MutationCtx, step: DeletionStep, orgId: Id<"
   if (step.kind === "socialPostsWithStorage") {
     return await deleteSocialPostsWithStorageBatch(ctx, orgId);
   }
-  return await deleteRowsByOrgBatch(ctx, step.table, step.index, orgId);
+  return await deleteRowsByOrgBatch(ctx, step.table, step.index, orgId, openingCleanup);
 }
 
 export const listOrgs = query({
@@ -1132,16 +1138,20 @@ export const runDeletionRequestBatch = internalMutation({
       // Idempotent by the `undefined` check: re-stamping on every batch would
       // move the timestamp and lose when destruction actually began.
       const org = await ctx.db.get(request.orgId);
-      if (org && org.destructivePurgeStartedAt === undefined) {
-        await ctx.db.patch(request.orgId, { destructivePurgeStartedAt: now });
+      if (org && (org.destructivePurgeStartedAt === undefined || org.openingCleanupPayableScan !== undefined)) {
+        // Org deletion enumerates all AP itself; an interrupted reset's discovery queue is obsolete.
+        // Clear its references before any queued payable/header target is removed.
+        await ctx.db.patch(request.orgId, { destructivePurgeStartedAt: org.destructivePurgeStartedAt ?? now,
+          openingCleanupPayableScan: undefined });
       }
 
       // Appended steps must cover requests already beyond their new position.
       // Drain one bounded batch without changing the durable old cursor.
+      const openingCleanup = { deferred: false };
       for (const preDrainStep of PRE_DRAIN_STEPS) {
-        const counts = await runDeletionStep(ctx, preDrainStep, request.orgId);
+        const counts = await runDeletionStep(ctx, preDrainStep, request.orgId, openingCleanup);
         const deleted = countDeletedRows(counts);
-        if (deleted > 0) {
+        if (deleted > 0 || openingCleanup.deferred) {
           await ctx.db.patch(args.requestId, {
             deletedCounts: mergeDeletedCounts(request.deletedCounts, counts),
             lastProcessedAt: now,
@@ -1165,10 +1175,10 @@ export const runDeletionRequestBatch = internalMutation({
       }
 
       const step = ORGANIZATION_DELETION_STEPS[currentStepIndex];
-      const batchCounts = await runDeletionStep(ctx, step, request.orgId);
+      const batchCounts = await runDeletionStep(ctx, step, request.orgId, openingCleanup);
       const deletedInBatch = countDeletedRows(batchCounts);
 
-      if (deletedInBatch > 0) {
+      if (deletedInBatch > 0 || openingCleanup.deferred) {
         await ctx.db.patch(args.requestId, {
           deletedCounts: mergeDeletedCounts(request.deletedCounts, batchCounts),
           lastProcessedAt: now,

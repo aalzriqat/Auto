@@ -4,6 +4,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
+import { runContinuationBatch } from "../test-utils/orgResetFixtures";
 
 const ORIGINAL_ALLOWLIST = process.env.SUPER_ADMIN_EMAILS;
 
@@ -42,6 +43,72 @@ async function runDeletionToCompletion(
 }
 
 describe("adminOrgs", () => {
+  test("org deletion keeps its cursor until every opening reference page is cleared", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "QA TEST paged opening cleanup", createdAt: 1 });
+      const userId = await ctx.db.insert("users", { clerkId: "paged-cleanup-admin", email: "admin@autoflow.dev" });
+      const fields = { orgId, lines: [], asOfDate: 1, createdBy: userId, createdAt: 1 };
+      const rejectedIds: Id<"openingBalanceDrafts">[] = [];
+      for (let i = 0; i < 101; i += 1) rejectedIds.push(await ctx.db.insert("openingBalanceDrafts", { ...fields, status: "REJECTED" }));
+      const draftId = await ctx.db.insert("openingBalanceDrafts", { ...fields, status: "POSTED" });
+      const liabilityId = await ctx.db.insert("openingCommissionLiabilities", { orgId, userId, openingDraftId: draftId,
+        openingRowKey: "late", sourceKey: "late", version: 1, amountMinor: 50, paidMinor: 0, currency: "USD", createdAt: 1 });
+      await ctx.db.patch(draftId, { allocationResults: [{ kind: "EMPLOYEE_COMMISSION", rowKey: "late", openingCommissionLiabilityId: liabilityId }] });
+      const payableId = await ctx.db.insert("vehicleSupplierPayables", { orgId, origin: "OPENING", openingBalanceDraftId: draftId,
+        openingRowKey: "ap", openingKind: "OTHER_PAYABLE", title: "Opening debt", sourcedFromName: "Supplier",
+        amountDue: 50, currency: "USD", status: "NOT_YET_DUE", createdBy: userId, createdAt: 1, updatedAt: 1 });
+      await ctx.db.patch(rejectedIds[0], { allocationResults: [{ kind: "OTHER_PAYABLE", rowKey: "ap", payableId }] });
+      await ctx.db.patch(orgId, { suspended: true });
+      return { orgId, draftId, liabilityId, payableId };
+    });
+    // Two real reset batches leave both a discovered source and unvisited headers.
+    await runContinuationBatch(t, ids.orgId, 1);
+    await runContinuationBatch(t, ids.orgId, 1);
+    const checkpoint = (await t.run(ctx => ctx.db.get(ids.orgId)))?.openingCleanupPayableScan;
+    expect(checkpoint?.pendingPayableIds).toEqual([ids.payableId]);
+    expect(checkpoint?.pendingDraftIds.length).toBeGreaterThan(0);
+    const request = await t.withIdentity({ subject: "paged-cleanup-admin" }).mutation(api.adminOrgs.hardDeleteOrg, {
+      orgId: ids.orgId, confirmName: "QA TEST paged opening cleanup",
+    });
+    const retainedCursor = ORGANIZATION_DELETION_STEPS.length - 1;
+    await t.run(ctx => ctx.db.patch(request.requestId, { currentStepIndex: retainedCursor }));
+    let cleared = false;
+    let suspensionProved = false;
+    for (let batch = 0; batch < 8; batch += 1) {
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: request.requestId });
+      const state = await t.run(async ctx => ({ request: await ctx.db.get(request.requestId),
+        liability: await ctx.db.get(ids.liabilityId), parent: await ctx.db.get(ids.draftId), org: await ctx.db.get(ids.orgId),
+        drafts: await ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", ids.orgId)).take(103) }));
+      expect(state.request?.status).toBe("RUNNING");
+      expect(state.request?.currentStepIndex).toBe(retainedCursor);
+      expect(state.parent).not.toBeNull();
+      if (!await t.run(ctx => ctx.db.get(ids.payableId))) expect(state.org?.openingCleanupPayableScan).toBeUndefined();
+      if (state.org?.openingCleanupReferenceScan?.complete && !suspensionProved) {
+        // Adversarial stored state: normal reactivation is already barred after purge starts.
+        await t.run(ctx => ctx.db.patch(ids.orgId, { suspended: false }));
+        await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId: request.requestId });
+        await t.run(async ctx => {
+          expect((await ctx.db.get(request.requestId))?.status).toBe("FAILED");
+          expect(await ctx.db.get(ids.liabilityId)).not.toBeNull();
+          await ctx.db.patch(ids.orgId, { suspended: true });
+          await ctx.db.patch(request.requestId, { status: "RUNNING" });
+        });
+        suspensionProved = true;
+      }
+      if (!state.liability) {
+        expect(state.parent?.allocationResults).toEqual([]);
+        expect(state.request?.deletedCounts?.openingCommissionLiabilities).toBe(1);
+        cleared = true;
+        break;
+      }
+      expect(state.request?.deletedCounts?.openingCommissionLiabilities ?? 0).toBe(0);
+      expect(state.drafts).toHaveLength(102);
+    }
+    expect(cleared).toBe(true);
+    expect(suspensionProved).toBe(true);
+  });
+
   test("opening provenance is drained even when a retained deletion cursor has already passed its steps", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const fixture = await t.run(async (ctx) => {

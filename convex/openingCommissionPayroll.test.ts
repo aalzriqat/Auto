@@ -72,8 +72,63 @@ async function postedFixture() {
   return { ...seed, liability, parent };
 }
 async function financialState(seed: Awaited<ReturnType<typeof fixture>>) {
-  return seed.t.run(async ctx => Promise.all((["openingCommissionLiabilities", "payrollItems", "payrollRuns", "accountingEvents", "pendingAccountingEvents", "journalEntries", "journalLines", "accountBalanceSnapshots"] as const).map(table => ctx.db.query(table).collect())));
+  return seed.t.run(async ctx => Promise.all((["openingBalanceDrafts", "openingCommissionLiabilities", "payrollItems", "payrollRuns", "accountingEvents", "pendingAccountingEvents", "journalEntries", "journalLines", "accountBalanceSnapshots"] as const).map(table => ctx.db.query(table).collect())));
 }
+
+async function assertBeneficiaryRefused(stage: "DRAFT" | "APPROVE") {
+  const seed = await fixture();
+  await seed.t.run(async ctx => {
+    const membership = await ctx.db.get(seed.membershipId);
+    if (!membership) throw new Error("Missing synthetic employee membership");
+    await ctx.db.patch(membership.roleId, { name: "FINANCE_PAYROLL", permissions: ["manage:finance", "manage:payroll", "view:finance", "view:payroll", "view:commissions"] });
+  });
+  const draft = stage === "APPROVE" ? await (async () => {
+    await seed.owner.mutation(api.accountingCutover.draftOpeningBalance, seed.opening);
+    return seed.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
+  })() : null;
+  if (stage === "APPROVE" && !draft) throw new Error("Missing synthetic commission draft");
+  const before = await financialState(seed);
+  await expect(draft ? seed.employee.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id }) :
+    seed.employee.mutation(api.accountingCutover.draftOpeningBalance, seed.opening))
+    .rejects.toThrow("An independent actor must prepare or approve your opening commission.");
+  expect(await financialState(seed)).toEqual(before);
+  if (draft) {
+    const pending = await seed.employee.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: seed.orgId });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].readiness).toMatchObject({ canApprove: false, blockerCodes: expect.arrayContaining(["ALLOCATIONS"]) });
+  }
+}
+
+test("non-owner opening commission beneficiary cannot draft their own obligation", async () => {
+  await assertBeneficiaryRefused("DRAFT");
+});
+
+test("non-owner opening commission beneficiary cannot approve their own obligation", async () => {
+  await assertBeneficiaryRefused("APPROVE");
+});
+
+test("the system owner can post an opening commission owed to themselves", async () => {
+  const seed = await fixture();
+  await seed.owner.mutation(postOpening, { ...seed.opening, allocations: [{ ...seed.opening.allocations[0], userId: seed.ownerId }] });
+  const liability = await seed.t.run(ctx => ctx.db.query("openingCommissionLiabilities").unique());
+  expect(liability).toMatchObject({ userId: seed.ownerId, amountMinor: 100003, paidMinor: 0 });
+});
+
+test("an independent non-owner can prepare another employee's opening commission", async () => {
+  const seed = await fixture();
+  await seed.t.run(async ctx => {
+    const userId = await ctx.db.insert("users", { clerkId: "opening-independent-finance", email: "finance@example.test" });
+    const roleId = await ctx.db.insert("roles", { orgId: seed.orgId, name: "FINANCE_PAYROLL", permissions: ["manage:finance", "manage:payroll"] });
+    await ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId });
+  });
+  const finance = seed.t.withIdentity({ subject: "opening-independent-finance" });
+  await finance.mutation(api.accountingCutover.draftOpeningBalance, seed.opening);
+  const draft = await seed.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
+  if (!draft) throw new Error("Missing synthetic independent draft");
+  await seed.owner.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id });
+  const liability = await seed.t.run(ctx => ctx.db.query("openingCommissionLiabilities").unique());
+  expect(liability).toMatchObject({ userId: seed.employeeId, amountMinor: 100003, paidMinor: 0 });
+});
 
 test.each(["RESULT", "SOURCE_KEY", "OPENING_JOURNAL", "ACCOUNT_BALANCE", "CURRENCY", "EMPLOYEE"] as const)("lost %s proof refuses approval and payment before financial writes", async (damage) => {
   for (const stage of ["APPROVAL", "PAYMENT"] as const) {

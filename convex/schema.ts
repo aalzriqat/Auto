@@ -271,6 +271,20 @@ export default defineSchema({
     /** SCRUM-563 — financial reset counters; absent means 0. Protocol: `convex/utils/orgResetGeneration.ts`. */
     financialResetGeneration: v.optional(v.number()),
     financialResetCompletedGeneration: v.optional(v.number()),
+    /** Bounded destructive-cleanup continuations; usable only while suspended. */
+    openingCleanupPayableScan: v.optional(v.object({
+      resetGeneration: v.number(), cursor: v.union(v.string(), v.null()), complete: v.boolean(),
+      pendingDraftIds: v.array(v.id("openingBalanceDrafts")),
+      pendingPayableIds: v.array(v.id("vehicleSupplierPayables")),
+    })),
+    openingCleanupReferenceScan: v.optional(v.object({
+      resetGeneration: v.number(), cursor: v.union(v.string(), v.null()), complete: v.boolean(),
+      source: v.union(
+        v.object({ table: v.literal("openingCommissionLiabilities"), id: v.id("openingCommissionLiabilities") }),
+        v.object({ table: v.literal("supplierCostRecoveries"), id: v.id("supplierCostRecoveries") }),
+        v.object({ table: v.literal("vehicleSupplierPayables"), id: v.id("vehicleSupplierPayables") }),
+      ),
+    })),
     /** Incremented whenever journal/period facts or BANK_ACCOUNT mapping change. */
     bankAggregateMappingGeneration: v.optional(v.number()),
   }),

@@ -26,6 +26,7 @@ import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePay
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
 import { findCommandUnit, recordCommandUnit } from "./utils/idempotency";
 import { assertOpeningVehicleBasis, listOpeningStockEvidence, openingVehicleEvidence, OPENING_STOCK_IMPORT_OPERATION } from "./utils/openingVehicleBasis";
+import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
 import { simplePayloadHash } from "./accounting/postingRules";
 import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "./utils/vin";
 import { throwAppError, AppErrorCode } from "./utils/errors";
@@ -3733,8 +3734,10 @@ export const importBulk = mutation({
       }
       const seenRows = new Set<number>();
       const seenVins = new Set<string>();
-      const postedOpening = await ctx.db.query("openingBalanceDrafts")
-        .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "POSTED")).first();
+      const openingSource = await loadOpeningSourceIdentity(ctx, args.orgId);
+      if (openingSource.status === "UNAVAILABLE") {
+        throw new ConvexError("Opening stock has ambiguous opening balance proof.");
+      }
       for (const row of args.vehicles) {
         if (parseVehicleSourceType(row.sourceType) === "SOURCED") continue;
         if (row.rowId === undefined || !Number.isSafeInteger(row.rowId) || row.rowId < 0 || seenRows.has(row.rowId)) {
@@ -3769,7 +3772,7 @@ export const importBulk = mutation({
           provenOpeningRetries.add(row.rowId);
           continue;
         }
-        if (postedOpening) throw new ConvexError("New opening stock cannot be imported after the opening balance posted.");
+        if (openingSource.status === "AVAILABLE") throw new ConvexError("New opening stock cannot be imported after the opening balance posted.");
         const existing = await ctx.db.query("vehicles")
           .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", vin)).unique();
         if (existing) throw new ConvexError("An opening stock VIN already exists without this import's proof.");

@@ -4,6 +4,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { DEFAULT_CHART, SYSTEM_KEYS } from "./defaultChart";
 import { requireOwnedRow } from "./tenancy";
 import { resolveSystemAccount } from "../chartOfAccounts";
+import { isSystemOwnerRole } from "./permissions";
 
 type Allocation = NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number];
 export type OpeningCommissionAllocation = Extract<Allocation, { kind: "EMPLOYEE_COMMISSION" }>;
@@ -15,7 +16,7 @@ export function isOpeningCommissionAccount(account: Doc<"chartOfAccounts">): boo
 }
 
 type OpeningCommissionInput = {
-  orgId: Id<"organizations">; currency: string;
+  orgId: Id<"organizations">; currency: string; actorId: Id<"users">;
   lines: readonly { accountId: Id<"chartOfAccounts">; debitMinor: number; creditMinor: number }[];
   allocations: readonly Allocation[];
 };
@@ -59,6 +60,12 @@ async function validateOpeningCommissionRow(ctx: QueryCtx | MutationCtx, args: O
   const user = await ctx.db.get(row.userId);
   const membership = await ctx.db.query("memberships").withIndex("by_org_user", q => q.eq("orgId", args.orgId).eq("userId", row.userId)).unique();
   if (!user || !membership || membership.offboardingStatus) throw new ConvexError("Opening commission employee is not an active member of this organization.");
+  if (row.userId === args.actorId) {
+    const role = await ctx.db.get(membership.roleId);
+    if (!role || role.orgId !== args.orgId || role.isDeleted || !isSystemOwnerRole(role)) {
+      throw new ConvexError("An independent actor must prepare or approve your opening commission.");
+    }
+  }
 }
 
 /** Central opening materialization only; this creates no new accrual or cash movement. */

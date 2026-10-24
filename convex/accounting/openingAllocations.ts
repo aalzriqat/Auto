@@ -792,6 +792,7 @@ async function assertNoExistingOpeningSources(
   await validateOpeningCommissions(ctx, {
     orgId: args.orgId,
     currency: args.currency,
+    actorId: args.actorId,
     lines: args.lines,
     allocations: rows,
   });

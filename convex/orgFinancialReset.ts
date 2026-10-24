@@ -486,6 +486,8 @@ export const resetOrgFinancialData = internalMutation({
   ): Promise<{
     dryRun: boolean;
     orgName: string | null;
+    /** All counts describe this batch and scope, never a complete organization inventory. */
+    countScope: "OPENING_PAYABLE_CLEANUP" | "RESET_TABLE_BATCH";
     perTable: Record<string, number>;
     total: number;
     remaining: number;
@@ -697,7 +699,7 @@ export const resetOrgFinancialData = internalMutation({
     // Tables that still hold rows for this org after their own batch ran.
     const stillPopulated = new Set<string>();
 
-    for (const table of openingCleanup.remaining > 0 ? [] : RESET_TABLES) {
+    resetTables: for (const table of openingCleanup.remaining > 0 ? [] : RESET_TABLES) {
       // One past the limit, so `remaining` reports honestly whether another
       // run is needed instead of silently stopping at a full batch.
       const rows = await orgRows(ctx.db, table, args.orgId, limit + 1);
@@ -746,7 +748,7 @@ export const resetOrgFinancialData = internalMutation({
       if (dryRun && rows.length > 0) stillPopulated.add(table);
 
       if (!dryRun) {
-        for (const row of batch) {
+        for (const [index, row] of batch.entries()) {
           // `financeAppraisals` is the first table in this list that carries
           // storage ids. Deleting the row alone would leave the finance
           // company's appraisal report on a customer's vehicle in storage with
@@ -762,11 +764,17 @@ export const resetOrgFinancialData = internalMutation({
           if (table === "payrollItems") {
             await clearOpeningPayrollReference(ctx, args.orgId, row._id as Id<"payrollItems">);
           }
-          if (table === "openingCommissionLiabilities") {
-            await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> });
-          }
-          if (table === "supplierCostRecoveries") {
-            await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"supplierCostRecoveries"> });
+          const referencesCleared = table === "openingCommissionLiabilities"
+            ? await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> })
+            : table === "supplierCostRecoveries"
+              ? await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"supplierCostRecoveries"> })
+              : true;
+          if (!referencesCleared) {
+            total -= batch.length - index;
+            if (index > 0) perTable[table] = index;
+            else delete perTable[table];
+            remaining += batch.length - index;
+            break resetTables;
           }
           await ctx.db.delete(row._id);
         }
@@ -775,7 +783,8 @@ export const resetOrgFinancialData = internalMutation({
 
     // SCRUM-563: a destructive run that leaves nothing behind completes the reset.
     if (!dryRun && org !== null && remaining === 0) {
-      await ctx.db.patch(args.orgId, { financialResetCompletedGeneration: resetGeneration });
+      await ctx.db.patch(args.orgId, { financialResetCompletedGeneration: resetGeneration,
+        openingCleanupPayableScan: undefined, openingCleanupReferenceScan: undefined });
     }
 
     // Reported truthfully on a dry run so an operator sees the precondition
@@ -783,6 +792,7 @@ export const resetOrgFinancialData = internalMutation({
     return {
       dryRun,
       orgName,
+      countScope: openingCleanup.remaining > 0 ? "OPENING_PAYABLE_CLEANUP" : "RESET_TABLE_BATCH",
       perTable,
       total,
       remaining,

@@ -62,6 +62,70 @@ async function seed() {
 }
 
 describe("guide-required opening stock, bank, and cash replay", () => {
+  test("fresh opening stock imports and sells against its current header after retained financial reset", async () => {
+    const { t, orgId, owner, accountId } = await seed();
+    await owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId, expectedCurrency: "JOD", asOfDate: Date.now(),
+      lines: [
+        { accountId: accountId("CASH_ON_HAND"), debitMinor: 100_000, creditMinor: 0 },
+        { accountId: accountId("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 100_000 },
+      ],
+    });
+    await t.run((ctx) => ctx.db.patch(orgId, { suspended: true }));
+    await resetOrgToCompletion(t, orgId, 50);
+    await t.run((ctx) => ctx.db.patch(orgId, { suspended: false }));
+    expect(await t.run(async (ctx) => ({
+      retained: (await ctx.db.query("openingBalanceDrafts").collect()).map((row) => row.status),
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }))).toEqual({ retained: ["POSTED"], journals: 0 });
+
+    await owner.mutation(api.chartOfAccounts.initialize, { orgId });
+    const accounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
+    const inventory = accounts.find((row) => row.systemKey === "VEHICLE_INVENTORY");
+    const retainedEarnings = accounts.find((row) => row.systemKey === "RETAINED_EARNINGS");
+    if (!inventory || !retainedEarnings) throw new Error("Missing replacement synthetic chart");
+    const imported = await owner.mutation(api.vehicles.importBulk, {
+      orgId, acquisitionPosting: "OPENING_STOCK", importId: "fresh-stock-after-reset",
+      vehicles: [{ rowId: 1, vin: "FRESHRESETSTOCK001", make: "Example", model: "Stock", year: 2024,
+        color: "Blue", fuelType: "Petrol", transmission: "Automatic",
+        sellingPrice: 15_000, purchasePrice: 8_000, sourceType: "STOCK" }],
+    });
+    expect(imported).toMatchObject({ inserted: 1, skipped: 0 });
+    const stock = await owner.query(api.accountingCutover.listOpeningStockChoices, { orgId });
+    expect(stock).toMatchObject([{ available: true, amountMinor: 8_000_000 }]);
+    const vehicleId = stock[0].vehicleId;
+    await owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId, expectedCurrency: "JOD", asOfDate: Date.now(),
+      lines: [
+        { accountId: inventory._id, debitMinor: 8_000_000, creditMinor: 0 },
+        { accountId: retainedEarnings._id, debitMinor: 0, creditMinor: 8_000_000 },
+      ],
+      allocations: [{ kind: "VEHICLE_INVENTORY", rowKey: "fresh-stock-1",
+        accountId: inventory._id, vehicleId, amountMinor: 8_000_000 }],
+    });
+    expect(await owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId }))
+      .toMatchObject({ journalStatus: "POSTED", rows: [{ kind: "VEHICLE_INVENTORY", recordAvailable: true }] });
+    const customerId = await t.run((ctx) => ctx.db.insert("customers", {
+      orgId, firstName: "Synthetic", lastName: "Reset buyer",
+    }));
+    const quoteId = await owner.mutation(api.quotes.saveQuote, {
+      orgId, customerId, vehicleId, vehiclePrice: 15_000, downPayment: 0, termMonths: 0,
+    });
+    await owner.mutation(api.deposits.create, { orgId, quoteId, method: "CASH", amount: 15_000,
+      idempotencyKey: "fresh-stock-full-payment" });
+    const saleIds = await owner.mutation(api.sales.completeFromQuote, { orgId, quoteId,
+      idempotencyKey: "fresh-stock-sale", depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" } });
+    expect(saleIds).toHaveLength(1);
+    expect(await owner.query(api.sales.get, { orgId, saleId: saleIds[0] })).toMatchObject({ status: "COMPLETED" });
+    expect(await t.run(async (ctx) => ({
+      headers: (await ctx.db.query("openingBalanceDrafts").collect()).map((row) => row.status),
+      inventoryNetMinor: (await ctx.db.query("journalLines")
+        .withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", inventory._id)).collect())
+        .reduce((sum, line) => sum + line.debitMinor - line.creditMinor, 0),
+      vehicleStatus: (await ctx.db.get(vehicleId))?.status,
+    }))).toEqual({ headers: ["POSTED", "POSTED"], inventoryNetMinor: 0, vehicleStatus: "SOLD" });
+  });
+
   test("an import without command identity cannot certify an opening inventory line", async () => {
     const { t, orgId, owner, accountId } = await seed();
     await owner.mutation(api.vehicles.importBulk, {
