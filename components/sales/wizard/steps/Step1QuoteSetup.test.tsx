@@ -70,6 +70,17 @@ vi.mock("../components/VehicleCostBar", () => ({ VehicleCostBar: () => null }));
 
 import Step1QuoteSetup from "./Step1QuoteSetup";
 
+test("SCRUM-862: CASH Next retains the initial lead and both vehicle rows", async () => {
+  stubs.verdict = { status: "NOT_REQUIRED", margin: 1, minimumProfit: 0 };
+  const onNext = vi.fn();
+  const vehicleItems = [{ vehicleId: VEHICLE, unitPrice: 11100 }, { vehicleId: "vehicle_2", unitPrice: 12000 }];
+  render(<Step1QuoteSetup paymentType="CASH" initialData={{ vehicleId: VEHICLE, vehiclePrice: 23100,
+    desiredProfit: 0, downPayment: 0, termMonths: 0, leadId: "lead_fixture", vehicleItems }} onNext={onNext} />);
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: dictionaries.en.Next })); });
+  expect(onNext).toHaveBeenCalledOnce();
+  expect(onNext.mock.calls[0][0]).toMatchObject({ leadId: "lead_fixture", vehicleItems });
+});
+
 function renderStep() {
   return render(
     <Step1QuoteSetup

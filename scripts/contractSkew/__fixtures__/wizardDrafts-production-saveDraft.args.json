@@ -1,0 +1,127 @@
+{
+  "provenance": {
+    "capture": "Official Convex function-spec, production metadata only; no deployed source SHA measured",
+    "capturedAt": "2026-10-24T23:35:12.492Z",
+    "nativeSpecSha256": "8e9b1589bab4467d3ac2c121d36d4007467611dac4f9e7ac90d27b00a38c28be",
+    "identifier": "wizardDrafts.js:saveDraft"
+  },
+  "args": {
+    "type": "object",
+    "value": {
+      "currentStep": {
+        "fieldType": {
+          "type": "number"
+        },
+        "optional": false
+      },
+      "orgId": {
+        "fieldType": {
+          "tableName": "organizations",
+          "type": "id"
+        },
+        "optional": false
+      },
+      "paymentType": {
+        "fieldType": {
+          "type": "string"
+        },
+        "optional": false
+      },
+      "selectedCustomerId": {
+        "fieldType": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "wizardData": {
+        "fieldType": {
+          "type": "object",
+          "value": {
+            "customerStatuses": {
+              "fieldType": {
+                "type": "array",
+                "value": {
+                  "type": "string"
+                }
+              },
+              "optional": true
+            },
+            "desiredProfit": {
+              "fieldType": {
+                "type": "number"
+              },
+              "optional": false
+            },
+            "downPayment": {
+              "fieldType": {
+                "type": "number"
+              },
+              "optional": false
+            },
+            "manualExecutionCommission": {
+              "fieldType": {
+                "type": "number"
+              },
+              "optional": true
+            },
+            "manualExecutionFees": {
+              "fieldType": {
+                "type": "number"
+              },
+              "optional": true
+            },
+            "manualIncludesCommissionInDebt": {
+              "fieldType": {
+                "type": "boolean"
+              },
+              "optional": true
+            },
+            "manualInsuranceRate": {
+              "fieldType": {
+                "type": "number"
+              },
+              "optional": true
+            },
+            "manualProfitRate": {
+              "fieldType": {
+                "type": "number"
+              },
+              "optional": true
+            },
+            "recipientName": {
+              "fieldType": {
+                "type": "string"
+              },
+              "optional": true
+            },
+            "selectedCompanyId": {
+              "fieldType": {
+                "type": "string"
+              },
+              "optional": true
+            },
+            "termMonths": {
+              "fieldType": {
+                "type": "number"
+              },
+              "optional": false
+            },
+            "vehicleId": {
+              "fieldType": {
+                "type": "string"
+              },
+              "optional": false
+            },
+            "vehiclePrice": {
+              "fieldType": {
+                "type": "number"
+              },
+              "optional": false
+            }
+          }
+        },
+        "optional": false
+      }
+    }
+  }
+}

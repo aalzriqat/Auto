@@ -10,7 +10,7 @@
  */
 /* eslint-disable react-hooks/immutability -- the reassigned-to-null NEGATIVE case is the subject of the fixture */
 declare function useMutation(fn: unknown): (args: unknown) => Promise<unknown>;
-declare function useState<T>(initial: T): [T, (next: T) => void];
+import { useState } from "react";
 declare function run(fn: () => Promise<void>): void;
 declare const api: Record<string, Record<string, unknown>>;
 

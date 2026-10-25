@@ -15,12 +15,16 @@ import { OPENING_PREPAID_EXPENSE_OPTIONS } from "./openingAllocationForm";
 import type { OpeningAllocationDraft, OpeningAllocationGroup } from "./openingAllocationForm";
 
 let allocationSeq = 0;
+function emptyParty(fields: Omit<OpeningAllocationDraft, "kind" | "partyId">,
+  kind: OpeningAllocationDraft["kind"]): OpeningAllocationDraft {
+  return { ...fields, kind, partyId: "" };
+}
 function newRow(group: OpeningAllocationGroup): OpeningAllocationDraft {
   allocationSeq += 1;
-  return { rowKey: `oballoc-${allocationSeq}`, accountId: group.accountId, kind: group.kind,
-    partyId: "", partyLabel: "", amount: "", title: "", dueDate: "", note: "",
+  return emptyParty({ rowKey: `oballoc-${allocationSeq}`, accountId: group.accountId,
+    partyLabel: "", amount: "", title: "", dueDate: "", note: "",
     startYearMonth: "", termMonths: "", expenseSystemKey: "", attestedUnexpiredBenefit: false,
-    counterpartyName: "", purpose: undefined };
+    counterpartyName: "", purpose: undefined }, group.kind);
 }
 
 function maskPhone(phone: string | undefined): string {
@@ -52,6 +56,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
   const { t } = useLanguage();
   const [activeCustomerRow, setActiveCustomerRow] = useState<string | null>(null);
   const [customerSearch, setCustomerSearch] = useState("");
+  const [selectionError, setSelectionError] = useState<string | null>(null);
   const needsCustomers = groups.some((group) => (group.allowedKinds ?? [group.kind]).includes("CUSTOMER_RECEIVABLE"));
   const needsEmployees = groups.some((group) => (group.allowedKinds ?? [group.kind]).some((kind) =>
     kind === "EMPLOYEE_ADVANCE" || kind === "EMPLOYEE_COMMISSION"));
@@ -92,8 +97,43 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
     return vehicle ? `${vehicle.vin ?? ""} · ${vehicle.label ?? ""}` : "";
   }
 
-  function updateRow(rowKey: string, patch: Partial<OpeningAllocationDraft>) {
+  function updateRow(rowKey: string, patch: Partial<Omit<OpeningAllocationDraft, "kind" | "partyId">>) {
     onChange(rows.map((row) => row.rowKey === rowKey ? { ...row, ...patch } : row));
+  }
+
+  function replaceRow(next: OpeningAllocationDraft) {
+    setSelectionError(null);
+    onChange(rows.map(row => row.rowKey === next.rowKey ? next : row));
+  }
+
+  function selectParty(row: OpeningAllocationDraft, value: string) {
+    if (value === row.partyId) { setSelectionError(null); return; }
+    if (!value) { replaceRow({ ...row, partyId: "", partyLabel: "" }); return; }
+    const partyLabel = selectedPartyLabel(value);
+    switch (row.kind) {
+      case "CUSTOMER_RECEIVABLE": {
+        const choice = customerOptions?.find(item => item._id === value);
+        if (choice) { replaceRow({ ...row, partyId: choice._id, partyLabel }); return; }
+        break;
+      }
+      case "EMPLOYEE_ADVANCE": case "EMPLOYEE_COMMISSION": {
+        const choice = members.find(item => item.userId === value);
+        if (choice) { replaceRow({ ...row, partyId: choice.userId, partyLabel }); return; }
+        break;
+      }
+      case "PARTNER_CAPITAL": {
+        const choice = partners.find(item => item._id === value);
+        if (choice) { replaceRow({ ...row, partyId: choice._id, partyLabel }); return; }
+        break;
+      }
+      case "VEHICLE_INVENTORY": {
+        const choice = vehicles?.find(item => item.vehicleId === value && item.available);
+        if (choice) { replaceRow({ ...row, partyId: choice.vehicleId, partyLabel,
+          ...(choice.amountMinor != null ? { amount: fromMinorUnits(choice.amountMinor, currency).toFixed(scaleForCurrency(currency)) } : {}) }); return; }
+        break;
+      }
+    }
+    setSelectionError(t("OpeningAllocationPartyUnavailable"));
   }
 
   function canEditKind(kind: OpeningAllocationDraft["kind"]): boolean {
@@ -109,6 +149,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
         <h4 className="text-sm font-semibold">{t("OpeningAllocationSection")}</h4>
         <p className="text-xs text-muted-foreground">{t("OpeningAllocationHelp")}</p>
       </div>
+      {selectionError && <p role="alert" className="text-xs text-amber-700">{selectionError}</p>}
       {groups.map((group) => {
         const groupRows = rows.filter((row) => row.accountId === group.accountId);
         const allocated = groupRows.reduce((sum, row) => sum + (parseOpeningMoneyMinor(row.amount, currency) ?? 0), 0);
@@ -130,8 +171,11 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                 {group.allowedKinds && group.allowedKinds.length > 1 && <div className="space-y-1">
                   <Label htmlFor={`${row.rowKey}-kind`}>{t("OpeningAllocationKind")}</Label>
                   <select id={`${row.rowKey}-kind`} value={row.kind}
-                    onChange={(event) => updateRow(row.rowKey, { kind: event.target.value as OpeningAllocationDraft["kind"],
-                      partyId: "", partyLabel: "", counterpartyName: "", title: "", purpose: undefined })}
+                    onChange={(event) => {
+                      const kind = group.allowedKinds?.find(kind => kind === event.target.value && canEditKind(kind));
+                      if (!kind) { setSelectionError(t("OpeningAllocationPartyUnavailable")); return; }
+                      replaceRow(emptyParty({ ...row, partyLabel: "", counterpartyName: "", title: "", purpose: undefined }, kind));
+                    }}
                     className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
                     {group.allowedKinds.map((kind) => <option key={kind} value={kind} disabled={!canEditKind(kind)}>
                       {t(`OpeningAllocationKind_${kind}`)}</option>)}
@@ -155,7 +199,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                         onChange={(event) => {
                           setActiveCustomerRow(row.rowKey);
                           setCustomerSearch(event.target.value);
-                          if (row.partyId) updateRow(row.rowKey, { partyId: "", partyLabel: "" });
+                          if (row.partyId) replaceRow({ ...row, partyId: "", partyLabel: "" });
                         }}
                         disabled={!canEditKind(row.kind)}
                       />
@@ -165,13 +209,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                       className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
                       value={row.partyId}
                       disabled={!canEditKind(row.kind)}
-                      onChange={(event) => {
-                        const partyId = event.target.value;
-                        const vehicle = vehicles?.find((item) => item.vehicleId === partyId);
-                        const partyLabel = selectedPartyLabel(partyId);
-                        updateRow(row.rowKey, { partyId, partyLabel,
-                          ...(vehicle?.amountMinor != null ? { amount: fromMinorUnits(vehicle.amountMinor, currency).toFixed(scaleForCurrency(currency)) } : {}) });
-                      }}
+                      onChange={(event) => selectParty(row, event.target.value)}
                     >
                       <option value="">{t("OpeningAllocationSelectParty")}</option>
                       {row.partyId && !customerOptions?.some((item) => item._id === row.partyId) &&

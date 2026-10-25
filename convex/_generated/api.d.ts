@@ -324,6 +324,7 @@ import type * as websiteProjection from "../websiteProjection.js";
 import type * as websites from "../websites.js";
 import type * as whatsapp from "../whatsapp.js";
 import type * as whatsappSend from "../whatsappSend.js";
+import type * as wizardDraftData from "../wizardDraftData.js";
 import type * as wizardDrafts from "../wizardDrafts.js";
 import type * as workOrders from "../workOrders.js";
 
@@ -650,6 +651,7 @@ declare const fullApi: ApiFromModules<{
   websites: typeof websites;
   whatsapp: typeof whatsapp;
   whatsappSend: typeof whatsappSend;
+  wizardDraftData: typeof wizardDraftData;
   wizardDrafts: typeof wizardDrafts;
   workOrders: typeof workOrders;
 }>;

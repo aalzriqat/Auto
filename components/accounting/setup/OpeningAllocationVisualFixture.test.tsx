@@ -2,7 +2,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Id } from "@/convex/_generated/dataModel";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
 import { OpeningAllocationEditor } from "./OpeningAllocationEditor";
@@ -33,14 +33,14 @@ vi.mock("convex/react", async () => {
 
 const orgId = "org-a" as Id<"organizations">;
 const groups: OpeningAllocationGroup[] = [
-  { accountId: "ar", kind: "CUSTOMER_RECEIVABLE", journalMinor: 100_000, label: "1200 · Accounts Receivable" },
-  { accountId: "advance", kind: "EMPLOYEE_ADVANCE", journalMinor: 40_000, label: "1250 · Employee Advances" },
-  { accountId: "capital", kind: "PARTNER_CAPITAL", journalMinor: 140_000, label: "3010 · Partner Capital" },
+  { accountId: "ar" as Id<"chartOfAccounts">, kind: "CUSTOMER_RECEIVABLE", journalMinor: 100_000, label: "1200 · Accounts Receivable" },
+  { accountId: "advance" as Id<"chartOfAccounts">, kind: "EMPLOYEE_ADVANCE", journalMinor: 40_000, label: "1250 · Employee Advances" },
+  { accountId: "capital" as Id<"chartOfAccounts">, kind: "PARTNER_CAPITAL", journalMinor: 140_000, label: "3010 · Partner Capital" },
 ];
 const rows: OpeningAllocationDraft[] = [
-  { rowKey: "ar-row", accountId: "ar", kind: "CUSTOMER_RECEIVABLE", partyId: "customer-a", partyLabel: "Synthetic Customer · •••7890", amount: "100.000", title: "Prior receivable", dueDate: "2026-01-01", note: "" },
-  { rowKey: "advance-row", accountId: "advance", kind: "EMPLOYEE_ADVANCE", partyId: "employee-a", partyLabel: "Synthetic Employee · employee@example.test", amount: "40.000", title: "", dueDate: "", note: "Prior advance" },
-  { rowKey: "capital-row", accountId: "capital", kind: "PARTNER_CAPITAL", partyId: "partner-a", partyLabel: "Synthetic Partner · tner-a", amount: "140.000", title: "", dueDate: "", note: "" },
+  { rowKey: "ar-row", accountId: "ar" as Id<"chartOfAccounts">, kind: "CUSTOMER_RECEIVABLE", partyId: "customer-a" as Id<"customers">, partyLabel: "Synthetic Customer · •••7890", amount: "100.000", title: "Prior receivable", dueDate: "2026-01-01", note: "" },
+  { rowKey: "advance-row", accountId: "advance" as Id<"chartOfAccounts">, kind: "EMPLOYEE_ADVANCE", partyId: "employee-a" as Id<"users">, partyLabel: "Synthetic Employee · employee@example.test", amount: "40.000", title: "", dueDate: "", note: "Prior advance" },
+  { rowKey: "capital-row", accountId: "capital" as Id<"chartOfAccounts">, kind: "PARTNER_CAPITAL", partyId: "partner-a" as Id<"partnerEquity">, partyLabel: "Synthetic Partner · tner-a", amount: "140.000", title: "", dueDate: "", note: "" },
 ];
 const review: PendingOpeningBalanceDraft = {
   _id: "draft-a", asOfDate: Date.UTC(2026, 0, 1), createdBy: "preparer-a",
@@ -90,6 +90,33 @@ test.each(["en", "ar"] as const)("opening allocation visual fixtures %s", (local
   expect(screen.getAllByText("Synthetic Customer · •••7890")).toHaveLength(2);
   capture("entry");
 
+  for (const state of ["loading", "empty", "stale"] as const) {
+    fixture.values.set("customers:selectorOptions", state === "loading" ? undefined : state === "empty" ? []
+      : [{ _id: "customer-next", firstName: "Synthetic", lastName: "Next" }]);
+    const onChange = vi.fn();
+    mount(<div className="mx-auto max-w-5xl p-4"><OpeningAllocationEditor orgId={orgId} currency="JOD"
+      groups={[entryGroups[0]]} rows={[rows[0]]} onChange={onChange}
+      canSelectCustomers canSelectEmployees={false} canSelectPartners={false} /></div>);
+    fireEvent.focus(screen.getByRole("textbox", { name: locale === "ar"
+      ? "ابحث عن العميل بالاسم أو بيانات الاتصال" : "Search customers by name or contact" }));
+    const select = screen.getByRole<HTMLSelectElement>("combobox");
+    expect(select.options.length).toBe(state === "stale" ? 3 : 2);
+    // Represent a delayed choice from an earlier SDK option page, not a valid current query row.
+    const staleOption = document.createElement("option");
+    staleOption.value = "customer-unavailable";
+    staleOption.text = "Synthetic unavailable choice";
+    select.append(staleOption);
+    fireEvent.change(select, { target: { value: staleOption.value } });
+    staleOption.remove();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toBe(locale === "ar"
+      ? "الطرف غير متاح" : "Party unavailable");
+    expect(select.value).toBe("customer-a");
+    expect(screen.getByDisplayValue("100.000")).toBeTruthy();
+    expect(screen.getByDisplayValue("Prior receivable")).toBeTruthy();
+    capture(`choice-${state}`);
+  }
+
   mount(<div className="mx-auto max-w-5xl p-4"><OpeningBalanceApprovalView draft={review}
     isOwnDraft={false} busy={false} onApprove={vi.fn()} onReject={vi.fn()} /></div>);
   expect(screen.getByTestId("opening-balance-approval")).toBeTruthy();
@@ -120,9 +147,9 @@ test.each(["en", "ar"] as const)("opening allocation visual fixtures %s", (local
   expect(screen.queryByText("Synthetic Employee")).toBeNull();
   capture("redacted");
 
-  const prepaidGroup: OpeningAllocationGroup = { accountId: "prepaid", kind: "PREPAID_EXPENSE",
+  const prepaidGroup: OpeningAllocationGroup = { accountId: "prepaid" as Id<"chartOfAccounts">, kind: "PREPAID_EXPENSE",
     journalMinor: 60_000, label: locale === "ar" ? "1450 · مصروفات مدفوعة مقدمًا" : "1450 · Prepaid Expenses" };
-  const prepaidRow: OpeningAllocationDraft = { rowKey: "prepaid-row", accountId: "prepaid", kind: "PREPAID_EXPENSE",
+  const prepaidRow: OpeningAllocationDraft = { rowKey: "prepaid-row", accountId: "prepaid" as Id<"chartOfAccounts">, kind: "PREPAID_EXPENSE",
     partyId: "", partyLabel: "", amount: "60.000", title: "Synthetic unexpired service",
     dueDate: "", note: "", startYearMonth: "2026-01", termMonths: "3",
     expenseSystemKey: "RENT_EXPENSE", attestedUnexpiredBenefit: true };
@@ -160,10 +187,10 @@ test.each(["en", "ar"] as const)("opening allocation visual fixtures %s", (local
   expect(screen.getByText("Synthetic unexpired service")).toBeTruthy();
   capture("prepaid-readback");
 
-  const stockGroup: OpeningAllocationGroup = { accountId: "stock", kind: "VEHICLE_INVENTORY",
+  const stockGroup: OpeningAllocationGroup = { accountId: "stock" as Id<"chartOfAccounts">, kind: "VEHICLE_INVENTORY",
     journalMinor: 8_000_000, label: locale === "ar" ? "1300 · مخزون المركبات" : "1300 · Vehicle Inventory" };
-  const stockRow: OpeningAllocationDraft = { rowKey: "stock-row", accountId: "stock",
-    kind: "VEHICLE_INVENTORY", partyId: "vehicle-a",
+  const stockRow: OpeningAllocationDraft = { rowKey: "stock-row", accountId: "stock" as Id<"chartOfAccounts">,
+    kind: "VEHICLE_INVENTORY", partyId: "vehicle-a" as Id<"vehicles">,
     partyLabel: "SYNTHSTOCKVIN001 · 2024 Example Stock", amount: "8000.000", title: "", dueDate: "", note: "" };
   fixture.values.set("accountingCutover:listOpeningStockChoices", [{ vehicleId: "vehicle-a",
     vin: "SYNTHSTOCKVIN001", label: "2024 Example Stock", amountMinor: 8_000_000, available: true }]);
@@ -202,12 +229,12 @@ test.each(["en", "ar"] as const)("opening allocation visual fixtures %s", (local
   // Each positive review uses an admissible declared control: the backend
   // forbids mixed families and mixed unknown purposes on one account.
   const remainingControls = [
-    { accountId: "recoverable", code: "1360", name: "Supplier recoverable", nameAr: "مستحق من مورد", kind: "SUPPLIER_RECOVERABLE", amountMinor: 4_001 },
-    { accountId: "supplier-payable", code: "2391", name: "Opening supplier payable", nameAr: "التزام افتتاحي لمورد", kind: "SUPPLIER_PAYABLE", amountMinor: 4_001 },
-    { accountId: "other-payable", code: "2392", name: "Opening other payable", nameAr: "التزام افتتاحي آخر", kind: "OTHER_PAYABLE", amountMinor: 4_001 },
-    { accountId: "commission", code: "2393", name: "Opening employee commission", nameAr: "عمولة موظف افتتاحية", kind: "EMPLOYEE_COMMISSION", amountMinor: 7_777 },
-    { accountId: "deposit", code: "2100", name: "Customer deposits", nameAr: "عربون العملاء", kind: "UNALLOCATED_LIABILITY", amountMinor: 4_001 },
-    { accountId: "receipt", code: "2394", name: "Opening unidentified receipt control", nameAr: "حساب المقبوضات الافتتاحية غير المحددة", kind: "UNALLOCATED_LIABILITY", amountMinor: 4_001 },
+    { accountId: "recoverable" as Id<"chartOfAccounts">, code: "1360", name: "Supplier recoverable", nameAr: "مستحق من مورد", kind: "SUPPLIER_RECOVERABLE", amountMinor: 4_001 },
+    { accountId: "supplier-payable" as Id<"chartOfAccounts">, code: "2391", name: "Opening supplier payable", nameAr: "التزام افتتاحي لمورد", kind: "SUPPLIER_PAYABLE", amountMinor: 4_001 },
+    { accountId: "other-payable" as Id<"chartOfAccounts">, code: "2392", name: "Opening other payable", nameAr: "التزام افتتاحي آخر", kind: "OTHER_PAYABLE", amountMinor: 4_001 },
+    { accountId: "commission" as Id<"chartOfAccounts">, code: "2393", name: "Opening employee commission", nameAr: "عمولة موظف افتتاحية", kind: "EMPLOYEE_COMMISSION", amountMinor: 7_777 },
+    { accountId: "deposit" as Id<"chartOfAccounts">, code: "2100", name: "Customer deposits", nameAr: "عربون العملاء", kind: "UNALLOCATED_LIABILITY", amountMinor: 4_001 },
+    { accountId: "receipt" as Id<"chartOfAccounts">, code: "2394", name: "Opening unidentified receipt control", nameAr: "حساب المقبوضات الافتتاحية غير المحددة", kind: "UNALLOCATED_LIABILITY", amountMinor: 4_001 },
   ] as const;
   const customLiabilityKinds: OpeningAllocationGroup["kind"][] = ["SUPPLIER_PAYABLE", "OTHER_PAYABLE", "EMPLOYEE_COMMISSION", "UNALLOCATED_LIABILITY"];
   const remainingGroups: OpeningAllocationGroup[] = remainingControls.map(control => ({
@@ -219,17 +246,17 @@ test.each(["en", "ar"] as const)("opening allocation visual fixtures %s", (local
     label: `${control.code} · ${locale === "ar" ? control.nameAr : control.name}`,
   }));
   const remainingRows: OpeningAllocationDraft[] = [
-    { rowKey: "recoverable", accountId: "recoverable", kind: "SUPPLIER_RECOVERABLE", partyId: "", partyLabel: "",
+    { rowKey: "recoverable", accountId: "recoverable" as Id<"chartOfAccounts">, kind: "SUPPLIER_RECOVERABLE", partyId: "", partyLabel: "",
       counterpartyName: "Synthetic Supplier", purpose: "CLAIM", amount: "4.001", title: "Prior claim", dueDate: "", note: "" },
-    { rowKey: "supplier-payable", accountId: "supplier-payable", kind: "SUPPLIER_PAYABLE", partyId: "", partyLabel: "",
+    { rowKey: "supplier-payable", accountId: "supplier-payable" as Id<"chartOfAccounts">, kind: "SUPPLIER_PAYABLE", partyId: "", partyLabel: "",
       counterpartyName: "Synthetic Supplier", amount: "4.001", title: "Prior supplier debt", dueDate: "", note: "" },
-    { rowKey: "other-payable", accountId: "other-payable", kind: "OTHER_PAYABLE", partyId: "", partyLabel: "",
+    { rowKey: "other-payable", accountId: "other-payable" as Id<"chartOfAccounts">, kind: "OTHER_PAYABLE", partyId: "", partyLabel: "",
       counterpartyName: "Synthetic Creditor", amount: "4.001", title: "Prior other debt", dueDate: "", note: "" },
-    { rowKey: "commission", accountId: "commission", kind: "EMPLOYEE_COMMISSION", partyId: "employee-a",
+    { rowKey: "commission", accountId: "commission" as Id<"chartOfAccounts">, kind: "EMPLOYEE_COMMISSION", partyId: "employee-a" as Id<"users">,
       partyLabel: "Synthetic Employee", amount: "7.777", title: "", dueDate: "", note: "" },
-    { rowKey: "deposit", accountId: "deposit", kind: "UNALLOCATED_LIABILITY", partyId: "", partyLabel: "",
+    { rowKey: "deposit", accountId: "deposit" as Id<"chartOfAccounts">, kind: "UNALLOCATED_LIABILITY", partyId: "", partyLabel: "",
       purpose: "CUSTOMER_DEPOSIT", amount: "4.001", title: "Unassigned deposits", dueDate: "", note: "" },
-    { rowKey: "receipt", accountId: "receipt", kind: "UNALLOCATED_LIABILITY", partyId: "", partyLabel: "",
+    { rowKey: "receipt", accountId: "receipt" as Id<"chartOfAccounts">, kind: "UNALLOCATED_LIABILITY", partyId: "", partyLabel: "",
       purpose: "UNIDENTIFIED_RECEIPT", amount: "4.001", title: "Unidentified receipts", dueDate: "", note: "" },
   ];
   mount(<div className="mx-auto max-w-5xl p-4"><OpeningAllocationEditor orgId={orgId} currency="JOD"

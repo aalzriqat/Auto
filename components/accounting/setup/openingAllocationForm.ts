@@ -23,11 +23,9 @@ export const OPENING_PREPAID_EXPENSE_OPTIONS = [
   ["GENERAL_EXPENSE", "OpeningPrepaidCategoryGeneral"],
 ] as const;
 
-export type OpeningAllocationDraft = {
+type OpeningAllocationFields = {
   rowKey: string;
-  kind: OpeningAllocationKind;
-  accountId: string;
-  partyId: string;
+  accountId: Id<"chartOfAccounts">;
   /** Display snapshot only. The server resolves the actual owned party. */
   partyLabel: string;
   amount: string;
@@ -42,8 +40,16 @@ export type OpeningAllocationDraft = {
   purpose?: "CLAIM" | "REFUNDABLE_DEPOSIT" | "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT";
 };
 
+export type OpeningAllocationDraft = OpeningAllocationFields & (
+  | { kind: "CUSTOMER_RECEIVABLE"; partyId: Id<"customers"> | "" }
+  | { kind: "EMPLOYEE_ADVANCE" | "EMPLOYEE_COMMISSION"; partyId: Id<"users"> | "" }
+  | { kind: "VEHICLE_INVENTORY"; partyId: Id<"vehicles"> | "" }
+  | { kind: "PARTNER_CAPITAL"; partyId: Id<"partnerEquity"> | "" }
+  | { kind: "PREPAID_EXPENSE" | "SUPPLIER_RECOVERABLE" | "SUPPLIER_PAYABLE" | "OTHER_PAYABLE" | "UNALLOCATED_LIABILITY"; partyId: "" }
+);
+
 export type OpeningAllocationGroup = {
-  accountId: string;
+  accountId: Id<"chartOfAccounts">;
   kind: OpeningAllocationKind;
   allowedKinds?: OpeningAllocationKind[];
   allowedPurposes?: Array<"CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT">;
@@ -54,24 +60,25 @@ export type OpeningAllocationGroup = {
 /** Group the server's account choices by their actual journal account. */
 export function groupOpeningAllocations(
   lines: Array<{ accountId: string; debitMinor: number | null; creditMinor: number | null; label: string }>,
-  choices: Array<{ accountId: string; policy: string; allowedKinds?: string[]; allowedPurposes?: string[] }>,
+  choices: Array<{ accountId: Id<"chartOfAccounts">; policy: string; allowedKinds?: string[]; allowedPurposes?: string[] }>,
 ): OpeningAllocationGroup[] {
-  const byAccount = new Map(choices.map((choice) => [choice.accountId, choice]));
+  const byAccount = new Map<string, typeof choices[number]>(choices.map((choice) => [choice.accountId, choice]));
   const groups = new Map<string, OpeningAllocationGroup>();
   for (const line of lines) {
     const choice = byAccount.get(line.accountId);
-    const allowedKinds = choice?.allowedKinds?.filter(isOpeningAllocationKind) ?? [];
-    if (allowedKinds.length === 0 && choice?.policy === "PARTNER_CAPITAL_CANDIDATE") allowedKinds.push("PARTNER_CAPITAL");
-    if (allowedKinds.length === 0 && choice && isOpeningAllocationKind(choice.policy)) allowedKinds.push(choice.policy);
+    if (!choice) continue;
+    const allowedKinds = choice.allowedKinds?.filter(isOpeningAllocationKind) ?? [];
+    if (allowedKinds.length === 0 && choice.policy === "PARTNER_CAPITAL_CANDIDATE") allowedKinds.push("PARTNER_CAPITAL");
+    if (allowedKinds.length === 0 && isOpeningAllocationKind(choice.policy)) allowedKinds.push(choice.policy);
     if (allowedKinds.length === 0) continue;
     const kind = allowedKinds[0];
-    const creditNormal = choice?.policy === "DECLARED_LIABILITY" || kind === "PARTNER_CAPITAL" ||
+    const creditNormal = choice.policy === "DECLARED_LIABILITY" || kind === "PARTNER_CAPITAL" ||
       kind === "SUPPLIER_PAYABLE" || kind === "OTHER_PAYABLE" || kind === "EMPLOYEE_COMMISSION" ||
       kind === "UNALLOCATED_LIABILITY";
     const prior = groups.get(line.accountId);
     groups.set(line.accountId, {
-      accountId: line.accountId, kind, allowedKinds,
-      allowedPurposes: choice?.allowedPurposes?.filter((purpose): purpose is "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT" =>
+      accountId: choice.accountId, kind, allowedKinds,
+      allowedPurposes: choice.allowedPurposes?.filter((purpose): purpose is "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT" =>
         purpose === "CUSTOMER_DEPOSIT" || purpose === "UNIDENTIFIED_RECEIPT"),
       journalMinor: (prior?.journalMinor ?? 0) + (creditNormal ? line.creditMinor ?? 0 : line.debitMinor ?? 0),
       label: line.label,
@@ -101,10 +108,11 @@ export function retainOpeningAllocations(rows: OpeningAllocationDraft[], account
 }
 
 function customerReceivablePayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
+  if (row.kind !== "CUSTOMER_RECEIVABLE" || !row.partyId) return null;
   const title = row.title.trim();
   const dueDate = dateInputToUtcMs(row.dueDate);
   if (!title || title.length > 200 || dueDate === null) return null;
-  return { ...base, kind: "CUSTOMER_RECEIVABLE", customerId: row.partyId as Id<"customers">, title, dueDate };
+  return { ...base, kind: "CUSTOMER_RECEIVABLE", customerId: row.partyId, title, dueDate };
 }
 
 function prepaidExpensePayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
@@ -145,19 +153,23 @@ function openingAllocationRowPayload(row: OpeningAllocationDraft, base: Allocati
   switch (row.kind) {
     case "CUSTOMER_RECEIVABLE": return customerReceivablePayload(row, base);
     case "EMPLOYEE_ADVANCE":
+      if (!row.partyId) return null;
       if (row.note.length > 500) return null;
-      return { ...base, kind: row.kind, userId: row.partyId as Id<"users">, note: row.note.trim() || undefined };
+      return { ...base, kind: row.kind, userId: row.partyId, note: row.note.trim() || undefined };
     case "VEHICLE_INVENTORY":
-      return { ...base, kind: row.kind, vehicleId: row.partyId as Id<"vehicles"> };
+      if (!row.partyId) return null;
+      return { ...base, kind: row.kind, vehicleId: row.partyId };
     case "PREPAID_EXPENSE": return prepaidExpensePayload(row, base);
     case "SUPPLIER_RECOVERABLE":
     case "SUPPLIER_PAYABLE":
     case "OTHER_PAYABLE": return counterpartyPayload(row, base);
     case "EMPLOYEE_COMMISSION":
-      return { ...base, kind: row.kind, userId: row.partyId as Id<"users"> };
+      if (!row.partyId) return null;
+      return { ...base, kind: row.kind, userId: row.partyId };
     case "UNALLOCATED_LIABILITY": return unallocatedLiabilityPayload(row, base);
     case "PARTNER_CAPITAL":
-      return { ...base, kind: row.kind, partnerId: row.partyId as Id<"partnerEquity"> };
+      if (!row.partyId) return null;
+      return { ...base, kind: row.kind, partnerId: row.partyId };
     default: return null;
   }
 }
@@ -180,7 +192,7 @@ export function buildOpeningAllocationPayload(rows: OpeningAllocationDraft[], cu
       partnerPairs.add(pair);
     }
     const allocation = openingAllocationRowPayload(row, {
-      rowKey: row.rowKey, accountId: row.accountId as Id<"chartOfAccounts">, amountMinor,
+      rowKey: row.rowKey, accountId: row.accountId, amountMinor,
     });
     if (!allocation) return null;
     payload.push(allocation);

@@ -11,11 +11,17 @@ export function SingularRouteCase() {
   useQuery(api.routes.singular, { requestId: requestId as RequestId });
 }
 
-export function ShadowedRouteCase(
+export function ShadowedRouteCase() {
+  const useParams = () => ({ id: ["a", "b"] });
+  const params = useParams();
+  useQuery(api.routes.shadowed, { requestId: params.id });
+}
+
+export function UnimplementedShadowedRouteCase(
   useParams: () => { id: string | string[] },
 ) {
   const params = useParams();
-  useQuery(api.routes.shadowed, { requestId: params.id });
+  useQuery(api.routes.unimplementedShadowed, { requestId: params.id });
 }
 
 export function MutableRouteCase(rewrite: boolean) {
