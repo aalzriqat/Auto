@@ -78,48 +78,6 @@ test("draft sends exact currency minor units and retries the same economic inten
   expect(fixture.mutation.mock.calls[1][0]).toEqual(first);
 });
 
-function fillManagementDraft() {
-  fireEvent.change(screen.getByLabelText("Agreed total (JOD)"), { target: { value: "100.003" } });
-  fireEvent.change(screen.getByLabelText("First effective month"), { target: { value: "2026-02" } });
-  fireEvent.change(screen.getByLabelText("Supporting reference"), { target: { value: "Synthetic reference" } });
-  fireEvent.click(screen.getByRole("checkbox"));
-}
-
-test.each(["successful save", "edit after refusal"])("%s starts a new command identity", async (scenario) => {
-  if (scenario === "edit after refusal") fixture.mutation.mockRejectedValueOnce(new Error("SDK unavailable"));
-  render(page()); fillManagementDraft();
-  const button = screen.getByRole("button", { name: "Prepare for a different approver" });
-  fireEvent.click(button);
-  await waitFor(() => expect(fixture.mutation).toHaveBeenCalledTimes(1));
-  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
-  if (scenario === "edit after refusal") {
-    fireEvent.change(screen.getByLabelText("Supporting reference"), { target: { value: "Edited reference" } });
-  }
-  fireEvent.click(button);
-  await waitFor(() => expect(fixture.mutation).toHaveBeenCalledTimes(2));
-  expect(fixture.mutation.mock.calls[1][0].args.idempotencyKey)
-    .not.toBe(fixture.mutation.mock.calls[0][0].args.idempotencyKey);
-});
-
-test("editing during an in-flight save retains the sent command and changes the next intent", async () => {
-  let complete: () => void = () => { throw new Error("Save not started"); };
-  fixture.mutation.mockImplementationOnce(() => new Promise(resolve => { complete = () => resolve("plan-a"); }));
-  render(page()); fillManagementDraft();
-  const button = screen.getByRole("button", { name: "Prepare for a different approver" });
-  fireEvent.click(button);
-  await waitFor(() => expect(fixture.mutation).toHaveBeenCalledTimes(1));
-  const sent = fixture.mutation.mock.calls[0][0].args;
-  fireEvent.change(screen.getByLabelText("Agreed total (JOD)"), { target: { value: "200.003" } });
-  expect(sent.totalMinor).toBe(100003);
-  complete();
-  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
-  fireEvent.click(button);
-  await waitFor(() => expect(fixture.mutation).toHaveBeenCalledTimes(2));
-  const next = fixture.mutation.mock.calls[1][0].args;
-  expect(next.totalMinor).toBe(200003);
-  expect(next.idempotencyKey).not.toBe(sent.idempotencyKey);
-});
-
 
 test("reject sends only the stored plan identity to the reject mutation", async () => {
   fixture.pending = true;

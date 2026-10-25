@@ -56,12 +56,11 @@ export function OpeningManagementSettlementPanel({ orgId }: Readonly<{ orgId: Id
       setError(text.invalid); return;
     }
     setBusy(true); setError("");
-    const key = command.current ?? `opening-management:${crypto.randomUUID()}`;
-    command.current = key;
+    command.current ??= `opening-management:${crypto.randomUUID()}`;
     try {
       await prepare({ orgId, openingDraftId: opening.id, totalMinor, firstEffectiveMonth,
         supportingReference: reference, classificationAttestation: "CONSUMED_BEFORE_OPENING_NOT_PREPAID_NOT_CAPITAL",
-        expectedCurrency: currency, idempotencyKey: key });
+        expectedCurrency: currency, idempotencyKey: command.current });
       command.current = null;
     } catch { setError(text.failed); }
     finally { setBusy(false); }

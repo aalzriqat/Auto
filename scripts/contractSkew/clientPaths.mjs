@@ -1131,7 +1131,6 @@ function collectIdentifierFromSymbol(node, symbol, context) {
     return clientNode.opaqueValue();
   }
   const refinement = refinementForExpression(checker, node, refinements, symbol);
-  if (evidence.ownedRefStringSnapshot(symbol)) return clientNode.scalar("string");
   const routeParam = routeParamRuntimeNode(node, checker, evidence, new Set(), symbol);
   const mayBeUndefined = declaredTypeAdmitsUndefined(checker, symbol);
   if (routeParam) return applyUseSiteRefinement(routeParam, refinement, mayBeUndefined);
@@ -2146,134 +2145,6 @@ function createEvidenceAnalysis(program, checker, projectRoot) {
     return trusted;
   }
 
-  /** A closed native ref invariant discharges this snapshot only, never its written ref symbol.
-   * @param {import("typescript").Symbol | undefined | null} symbol */
-  function ownedRefStringSnapshot(symbol) {
-    if (!symbol || written.has(symbol) || symbol.declarations?.length !== 1 ||
-        program.getCompilerOptions().emitDecoratorMetadata) return false;
-    const snapshot = symbol.declarations[0];
-    if (!ts.isVariableDeclaration(snapshot) || !snapshot.initializer ||
-        !(snapshot.parent.flags & ts.NodeFlags.Const)) return false;
-    const initial = snapshot.initializer;
-    if (!ts.isBinaryExpression(initial) || initial.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken ||
-        !ts.isPropertyAccessExpression(initial.left) || initial.left.name.text !== "current" ||
-        !ts.isIdentifier(initial.left.expression) || !isStringExpression(initial.right)) return false;
-    const cell = resolveSymbol(checker, initial.left.expression);
-    if (!cell || cell.declarations?.length !== 1) return false;
-    const declaration = cell.declarations[0];
-    if (!ts.isVariableDeclaration(declaration) || !(declaration.parent.flags & ts.NodeFlags.Const) ||
-        !declaration.initializer || !ts.isCallExpression(declaration.initializer)) return false;
-    const hook = declaration.initializer;
-    if (!ts.isIdentifier(hook.expression) || hook.arguments.length !== 1 ||
-        hook.arguments[0].kind !== ts.SyntaxKind.NullKeyword) return false;
-    const imported = checker.getSymbolAtLocation(hook.expression)?.declarations;
-    if (imported?.length !== 1 || !ts.isImportSpecifier(imported[0]) ||
-        (imported[0].propertyName ?? imported[0].name).text !== "useRef") return false;
-    const importDeclaration = imported[0].parent.parent.parent;
-    const hookSymbol = resolveSymbol(checker, hook.expression);
-    if (!ts.isImportDeclaration(importDeclaration) || !ts.isStringLiteral(importDeclaration.moduleSpecifier) ||
-        importDeclaration.moduleSpecifier.text !== "react" || !hookSymbol || written.has(hookSymbol) ||
-        !hookSymbol.declarations?.every(d => isInstalledDependencyDeclaration(d.getSourceFile()))) return false;
-    const moduleSymbol = checker.getSymbolAtLocation(importDeclaration.moduleSpecifier);
-    if (!moduleSymbol) return false;
-    /** @type {import("typescript").Node | undefined} */
-    let owner = declaration.parent;
-    while (owner && !ts.isFunctionLike(owner)) owner = owner.parent;
-    if (!owner || !ts.isFunctionDeclaration(owner) || !owner.body) return false;
-    const ownerBody = owner.body;
-    const cellName = declaration.name;
-    const initialRead = initial.left;
-    const statement = snapshot.parent.parent;
-    if (!ts.isVariableStatement(statement) || !ts.isBlock(statement.parent)) return false;
-    const store = statement.parent.statements[statement.parent.statements.indexOf(statement) + 1];
-    if (!store || !ts.isExpressionStatement(store) || !ts.isBinaryExpression(store.expression) ||
-        store.expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
-        !isCurrent(store.expression.left) || !ts.isIdentifier(store.expression.right) ||
-        resolveSymbol(checker, store.expression.right) !== symbol) return false;
-    let valid = true;
-    /** @param {import("typescript").Node} node */
-    function inspect(node) {
-      if (!valid || (ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node))) return;
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "eval") valid = false;
-      if (ts.isIdentifier(node) && referenceSymbol(node) === cell && node !== cellName) {
-        const access = node.parent;
-        if (!ts.isPropertyAccessExpression(access) || access.expression !== node || access.name.text !== "current") valid = false;
-        else if (ts.isBinaryExpression(access.parent) && access.parent.left === access &&
-          access.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-          const rhs = access.parent.right;
-          if (rhs.kind !== ts.SyntaxKind.NullKeyword && !isStringExpression(rhs) &&
-              !(ts.isIdentifier(rhs) && resolveSymbol(checker, rhs) === symbol)) valid = false;
-        } else if (access !== initialRead) valid = false;
-      }
-      ts.forEachChild(node, inspect);
-    }
-    inspect(ownerBody);
-    // Imported hook/module objects can also be changed outside this component.
-    for (const sf of program.getSourceFiles()) {
-      if (sf.isDeclarationFile || program.isSourceFileFromExternalLibrary(sf)) continue;
-      const namespaces = new Set();
-      for (const item of sf.statements) {
-        if (ts.isImportDeclaration(item) && ts.isStringLiteral(item.moduleSpecifier) &&
-            ["module", "node:module"].includes(item.moduleSpecifier.text) && !item.importClause?.isTypeOnly) valid = false;
-        if (ts.isExportDeclaration(item) && !item.isTypeOnly && item.moduleSpecifier &&
-            ts.isStringLiteral(item.moduleSpecifier) && item.moduleSpecifier.text === "react") valid = false;
-        if (ts.isImportDeclaration(item) && checker.getSymbolAtLocation(item.moduleSpecifier) === moduleSymbol) {
-          const clause = item.importClause;
-          if (clause?.name) namespaces.add(resolveSymbol(checker, clause.name));
-          if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) namespaces.add(resolveSymbol(checker, clause.namedBindings.name));
-        }
-      }
-      /** @param {import("typescript").Node} node */
-      function inspectHook(node) {
-        if (!valid || (ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node)) || ts.isImportDeclaration(node)) return;
-        // These loaders are outside the import-binding census. Never certify a
-        // shared hook export while an unmodeled loader can expose its module.
-        if (ts.isImportEqualsDeclaration(node)) valid = false;
-        if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-          const specifier = node.arguments[0];
-          if (!specifier || !ts.isStringLiteralLike(specifier) || specifier.text === "react") valid = false;
-        }
-        if (ts.isElementAccessExpression(node) && node.argumentExpression &&
-            ts.isStringLiteralLike(node.argumentExpression) && node.argumentExpression.text === "require") valid = false;
-        if (ts.isIdentifier(node) && node.text === "require") {
-          const parent = node.parent;
-          const declarationName = (ts.isVariableDeclaration(parent) || ts.isFunctionDeclaration(parent) ||
-            ts.isParameter(parent) || ts.isPropertyAssignment(parent) || ts.isMethodDeclaration(parent)) && parent.name === node;
-          if (!declarationName) valid = false;
-        }
-        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "eval") valid = false;
-        if (ts.isIdentifier(node)) {
-          const referenced = referenceSymbol(node);
-          if (referenced === hookSymbol) {
-            const callee = ts.isPropertyAccessExpression(node.parent) && node.parent.name === node ? node.parent : node;
-            if (!ts.isCallExpression(callee.parent) || callee.parent.expression !== callee) valid = false;
-          } else if (referenced && namespaces.has(referenced)) {
-            if (written.has(referenced) || !ts.isPropertyAccessExpression(node.parent) || node.parent.expression !== node) valid = false;
-          }
-        }
-        ts.forEachChild(node, inspectHook);
-      }
-      inspectHook(sf);
-    }
-    return valid;
-    /** Shorthand property names have a separate property symbol, not their value binding.
-     * @param {import("typescript").Identifier} node */
-    function referenceSymbol(node) {
-      return ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
-        ? unaliasSymbol(checker, checker.getShorthandAssignmentValueSymbol(node.parent) ?? checker.getSymbolAtLocation(node))
-        : resolveSymbol(checker, node);
-    }
-    /** @param {import("typescript").Node} node */
-    function isCurrent(node) {
-      return ts.isPropertyAccessExpression(node) && node.name.text === "current" &&
-        ts.isIdentifier(node.expression) && resolveSymbol(checker, node.expression) === cell;
-    }
-  }
-  /** @param {import("typescript").Node} node */
-  function isStringExpression(node) {
-    return ts.isStringLiteralLike(node) || ts.isTemplateExpression(node);
-  }
-
   const hasImplementationBody = (declaration) =>
     (ts.isFunctionDeclaration(declaration) || ts.isFunctionExpression(declaration) ||
       ts.isArrowFunction(declaration) || ts.isMethodDeclaration(declaration) ||
@@ -2542,7 +2413,6 @@ function createEvidenceAnalysis(program, checker, projectRoot) {
 
   return {
     hasTypeAssertionOrigin: hasAssertionOrigin,
-    ownedRefStringSnapshot,
     hasAssertionOriginForSymbol: (symbol) => Boolean(symbol && symbolHasAssertionOrigin(symbol)),
     isWrittenSymbol: (symbol) => Boolean(symbol && written.has(symbol)),
     assertionInitializerForSymbol(symbol) {
