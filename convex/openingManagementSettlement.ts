@@ -53,7 +53,7 @@ async function prepareDraft(ctx: MutationCtx, args: Infer<typeof draftArguments>
 }
 
 export const draft = mutation({
-  args: draftArguments.fields,
+  args: { ...draftArguments.fields, orgId: v.id("organizations"), openingDraftId: v.id("openingBalanceDrafts") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
@@ -63,7 +63,7 @@ export const draft = mutation({
 });
 
 export const draftFromObservation = mutation({
-  args: { ...draftArguments.omit("openingDraftId").fields, expectedOpeningVersion: v.string() },
+  args: { ...draftArguments.omit("openingDraftId").fields, orgId: v.id("organizations"), expectedOpeningVersion: v.string() },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");

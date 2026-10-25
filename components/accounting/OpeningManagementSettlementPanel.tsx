@@ -112,10 +112,10 @@ function ManagementDraftForm({ orgId, observationVersion, currency }: Readonly<{
 
   return <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
     {error && <p role="alert">{error}</p>}
-    <label>{text.amount} ({currency})<Input inputMode="decimal" value={amount} onChange={(event) => { setAmount(event.target.value); command.current = null; }} /></label>
-    <label>{text.month}<Input type="month" value={month} onChange={(event) => { setMonth(event.target.value); command.current = null; }} /></label>
-    <label>{text.reference}<Input maxLength={200} value={reference} onChange={(event) => { setReference(event.target.value); command.current = null; }} /></label>
-    <label className="flex gap-2"><input type="checkbox" checked={attested} onChange={(event) => { setAttested(event.target.checked); command.current = null; }} />{text.attest}</label>
+    <label>{text.amount} ({currency})<Input name="amount" inputMode="decimal" value={amount} onChange={(event) => { setAmount(event.target.value); command.current = null; }} /></label>
+    <label>{text.month}<Input name="firstEffectiveMonth" type="month" value={month} onChange={(event) => { setMonth(event.target.value); command.current = null; }} /></label>
+    <label>{text.reference}<Input name="supportingReference" maxLength={200} value={reference} onChange={(event) => { setReference(event.target.value); command.current = null; }} /></label>
+    <label className="flex gap-2"><input name="classificationAttested" type="checkbox" checked={attested} onChange={(event) => { setAttested(event.target.checked); command.current = null; }} />{text.attest}</label>
     <Button disabled={busy} type="submit">{text.prepare}</Button>
   </form>;
 }
