@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { digestRulingText, scenarioFingerprint, type ScenarioRecord } from "./scenarioRecord";
@@ -67,6 +67,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  const link = path.join(root, "dangling-link");
+  if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(link);
   for (const target of [root, evidence]) {
     const absolute = path.resolve(target), parent = path.resolve(tmpdir());
     if (!absolute.startsWith(`${parent}${path.sep}s3-`)) throw new Error("Unsafe fixture cleanup path");
@@ -82,6 +84,28 @@ test("actual native execution joins one record without trusting GitHub environme
   expect(receipt.native?.cases[0]).toMatchObject({ name: title, project: "", state: "passed", expectedFailure: false,
     retryCount: 0, repeatCount: 0, flaky: false });
   expect(receipt.native?.cases[0].id).toEqual(expect.any(String));
+}, 70000);
+
+test("Git-listed dangling source link refuses before native execution", () => {
+  const target = path.join(root, "absent-target"), link = path.join(root, "dangling-link");
+  // Windows measures a real dangling junction; POSIX measures a real file symlink.
+  symlinkSync(target, link, process.platform === "win32" ? "junction" : "file");
+  expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(existsSync(link)).toBe(false);
+  const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: root, input: target, encoding: "utf8" }).trim();
+  git(["update-index", "--add", "--cacheinfo", `120000,${blob},dangling-link`]);
+  expect(git(["ls-files", "--stage", "--", "dangling-link"])).toMatch(/^120000 /);
+  const receipt = run("dangling-link");
+  expect(receipt.verdict).toBe("UNAVAILABLE");
+  expect(receipt.issues).toContain("SOURCE_SYMLINK_UNAVAILABLE");
+  expect(receipt.native).toBeNull();
+}, 70000);
+
+test("ordinary Git-listed missing file retains the missing census state", () => {
+  unlinkSync(path.join(root, "marker.txt"));
+  const receipt = run("ordinary-missing");
+  expect(receipt.verdict).toBe("PASS");
+  expect(receipt.source.before).toEqual(receipt.source.after);
 }, 70000);
 
 test.each(["forbidden-output.json", "..receipt.json"])("refused source output %s is never created", filename => {

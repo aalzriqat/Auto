@@ -21,8 +21,9 @@ function observeSource() {
   const digest = createHash("sha256");
   for (const file of files) {
     const target = path.resolve(root, file);
-    if (existsSync(target) && lstatSync(target).isSymbolicLink()) throw new Error("SOURCE_SYMLINK_UNAVAILABLE");
-    const bytes = !existsSync(target) ? "MISSING" : hash(readFileSync(target));
+    const entry = lstatSync(target, { throwIfNoEntry: false });
+    if (entry?.isSymbolicLink()) throw new Error("SOURCE_SYMLINK_UNAVAILABLE");
+    const bytes = entry ? hash(readFileSync(target)) : "MISSING";
     digest.update(file).update("\0").update(bytes).update("\0");
   }
   return { head: git(["rev-parse", "HEAD"]).trim(), tree: git(["rev-parse", "HEAD^{tree}"]).trim(),
