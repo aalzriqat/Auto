@@ -444,6 +444,16 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
     if (unresolved) {
       return record(sf, node, role, "UNRESOLVED", `${unresolved.cause}: ${unresolved.reason}`);
     }
+    // A reference inside a request map that the extractor rejected is still
+    // accounted for as UNKNOWN. For example, a locally shadowed
+    // Object.fromEntries may contain a literal api.* entry, but its return
+    // value cannot be trusted as a useQueries map. Keep the reference visible
+    // without reporting a second, spurious UNACCOUNTED gap.
+    for (let parent = node.parent; parent && !ts.isSourceFile(parent); parent = parent.parent) {
+      if (unresolvedByMap.has(siteOf(sf, parent))) {
+        return record(sf, node, role, "UNRESOLVED", `${what}: enclosing request map cannot be followed`);
+      }
+    }
     return record(sf, node, role, "UNACCOUNTED", `${what}: the extractor holds no record for this site`);
   };
 

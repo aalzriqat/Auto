@@ -126,6 +126,24 @@ describe("useQueries request maps", () => {
     const line = at("api.vehicles[name]");
     expect(out.unresolvedBinders.some((u) => u.line === line)).toBe(true);
   });
+
+  test("a mapped request with a literal query is accounted for", () => {
+    const line = at("query: api.vehicleAvailability.pickerAvailability");
+    const call = out.calls.find((c) => c.line === line);
+    expect(call?.identifier).toBe("vehicleAvailability:pickerAvailability");
+    expect(pathsOf(call!.payload)).toEqual(expect.arrayContaining(["orgId", "vehicleIds"]));
+    expect(out.unresolvedBinders.some((u) => u.line === at("return Object.fromEntries"))).toBe(false);
+  });
+
+  test("a mapped request with a dynamic query remains unresolved", () => {
+    const line = at("query: api.organizations[name]");
+    expect(out.unresolvedBinders.some((u) => u.line === line)).toBe(true);
+  });
+
+  test("a shadowed Object.fromEntries is not trusted as the built-in map", () => {
+    const line = at("return useQueries(Object.fromEntries(chunks.map");
+    expect(out.unresolvedBinders.some((u) => u.line === line)).toBe(true);
+  });
 });
 
 describe("a binder bound to a simple name never suppresses an unresolved reference", () => {
