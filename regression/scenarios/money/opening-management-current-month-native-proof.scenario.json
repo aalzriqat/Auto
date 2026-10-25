@@ -1,6 +1,6 @@
 {
   "id": "opening-management-current-month-native-proof",
-  "fingerprint": "1aabd674739b793584b01ab4d6cd3703ab3661b0e44d882c361f5c2c78fa0d20",
+  "fingerprint": "acf304aef27ab461627ae70d3c1847e8b27d11cdc47444a0000096b834bc98fc",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -24,7 +24,7 @@
     },
     {
       "actor": {
-        "role": "finance_preparer",
+        "role": "owner",
         "org": "DISPOSABLE_SYNTHETIC"
       },
       "action": "openingManagementSettlement.draft",
@@ -35,7 +35,7 @@
     },
     {
       "actor": {
-        "role": "different_finance_approver",
+        "role": "senior_accountant",
         "org": "DISPOSABLE_SYNTHETIC"
       },
       "action": "openingManagementSettlement.approve",

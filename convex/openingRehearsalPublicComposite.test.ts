@@ -242,7 +242,7 @@ test("current-month opening management recognition preserves native books", asyn
   });
 }, 30000);
 
-test("current recognition accepts unchanged bank economics with cached same-argument results", async () => {
+test("current recognition requests the approval cutoff instead of replaying same arguments", async () => {
   const { results } = await execute("current-bank-cache");
   expect(results.find(value => value.id === "S858-CONTAINMENT"), JSON.stringify(results)).toMatchObject({
     status: "PASS", detail: { currentManagement: { recognisedMinor: 14286, managementProfitMinor: -14286 } },
