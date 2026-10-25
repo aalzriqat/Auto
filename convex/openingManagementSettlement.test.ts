@@ -4,6 +4,7 @@ import { api, internal } from "./_generated/api";
 import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
 import { resetOrgToCompletion } from "../test-utils/orgResetFixtures";
 import schema from "./schema";
+import { context as registeredContext } from "./openingManagementSettlement";
 
 const draft = api.openingManagementSettlement.draft;
 const approve = api.openingManagementSettlement.approve;
@@ -31,7 +32,7 @@ async function fixture() {
     await ctx.db.insert("memberships", { orgId: otherOrg, userId: outsiderId, roleId: outsiderRole });
     await ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() });
     await ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"] });
-    return { orgId, otherOrg, financeId };
+    return { orgId, otherOrg, financeId, ownerId };
   });
   const owner = t.withIdentity({ subject: "management-owner" });
   const approver = t.withIdentity({ subject: "management-approver" });
@@ -251,3 +252,65 @@ test("a representable first month cannot store unrepresentable later installment
   await expect(seed.owner.mutation(draft, { ...seed.args, firstEffectiveMonth: Date.UTC(275760, 7, 1) })).rejects.toThrow("date");
   expect(await seed.owner.query(list, { orgId: seed.orgId })).toEqual([]);
 });
+
+
+test("registered management context returns the complete posted-opening shape without writing books", async () => {
+  const seed = await fixture();
+  const before = await books(seed);
+  expect(await seed.owner.query(api.openingManagementSettlement.context, { orgId: seed.orgId })).toEqual({
+    actorId: seed.ownerId,
+    postedOpening: { id: seed.parent._id, asOfDate: seed.parent.asOfDate, currency: "JOD" },
+  });
+  expect(await books(seed)).toEqual(before);
+});
+
+test.each(["NO_LIVE_JOURNAL", "RESET_IN_PROGRESS"] as const)(
+  "registered management context retains its null shape for %s", async (damage) => {
+    const seed = await fixture();
+    await seed.t.run(async (ctx) => {
+      if (damage === "NO_LIVE_JOURNAL") {
+        if (!seed.parent.journalEntryId) throw new Error("Synthetic posted opening has no journal");
+        await ctx.db.patch(seed.parent.journalEntryId, { status: "REVERSED" });
+      } else {
+        await ctx.db.patch(seed.orgId, { financialResetGeneration: 1, financialResetCompletedGeneration: 0 });
+      }
+    });
+    const before = await books(seed);
+    expect(await seed.owner.query(api.openingManagementSettlement.context, { orgId: seed.orgId })).toEqual({
+      actorId: seed.ownerId, postedOpening: null,
+    });
+    expect(await books(seed)).toEqual(before);
+  },
+);
+
+test("registered management context still refuses missing identity, foreign membership and lost view permission", async () => {
+  const seed = await fixture();
+  await expect(seed.t.query(api.openingManagementSettlement.context, { orgId: seed.orgId })).rejects.toThrow();
+  await expect(seed.outsider.query(api.openingManagementSettlement.context, { orgId: seed.orgId })).rejects.toThrow();
+  await seed.t.run((ctx) => ctx.db.patch(seed.financeId, { permissions: [] }));
+  await expect(seed.approver.query(api.openingManagementSettlement.context, { orgId: seed.orgId })).rejects.toThrow();
+});
+
+test.each(["WRONG_ACTOR_TABLE", "WRONG_OPENING_TABLE", "WRONG_PRIMITIVE", "EXTRA_KEY"] as const)(
+  "actual registered context return validator refuses %s", async (damage) => {
+    const seed = await fixture();
+    const valid = await seed.owner.query(api.openingManagementSettlement.context, { orgId: seed.orgId });
+    if (!valid.postedOpening) throw new Error("Synthetic opening context unavailable");
+    const invalid = {
+      WRONG_ACTOR_TABLE: { ...valid, actorId: seed.orgId },
+      WRONG_OPENING_TABLE: { ...valid, postedOpening: { ...valid.postedOpening, id: seed.orgId } },
+      WRONG_PRIMITIVE: { ...valid, postedOpening: { ...valid.postedOpening, asOfDate: "invalid" } },
+      EXTRA_KEY: { ...valid, postedOpening: { ...valid.postedOpening, unexpected: true } },
+    }[damage];
+    // Fault-inject only the producer result; retain the actual registered query's exportReturns.
+    const original = Reflect.get(registeredContext, "_handler");
+    if (typeof original !== "function") throw new Error("Native registered handler seam unavailable");
+    expect(Reflect.set(registeredContext, "_handler", async () => invalid)).toBe(true);
+    try {
+      await expect(seed.owner.query(api.openingManagementSettlement.context, { orgId: seed.orgId }))
+        .rejects.toThrow("Return value validation failed");
+    } finally {
+      if (!Reflect.set(registeredContext, "_handler", original)) throw new Error("Native handler restoration failed");
+    }
+  },
+);

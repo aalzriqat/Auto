@@ -151,6 +151,14 @@ export const report = query({
 });
 export const context = query({
   args: { orgId: v.id("organizations") },
+  returns: v.object({
+    actorId: v.id("users"),
+    postedOpening: v.union(v.null(), v.object({
+      id: v.id("openingBalanceDrafts"),
+      asOfDate: v.number(),
+      currency: v.string(),
+    })),
+  }),
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
