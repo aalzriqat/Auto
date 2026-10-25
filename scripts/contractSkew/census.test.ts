@@ -7,6 +7,7 @@ import { createClientProgram, extractClientCalls } from "./clientPaths.mjs";
 import { CLIENT_SURFACES, listSurfaceFiles } from "./clientFiles.mjs";
 import { ENTRY_TABLE, runCensus, unclassifiedEntryPoints } from "./census.mjs";
 import { inventoryConvexEntryPoints } from "./convexInventory.mjs";
+import { assertRegisteredOpeningProof } from "../../test-utils/contractSkew/registeredOpeningProof";
 
 /**
  * SCRUM-178 v2, D-24 CS-1(e): an independent census reconciled to the extractor
@@ -286,8 +287,9 @@ describe("tests, backend and generated code are outside the scanned set", () => 
 });
 
 describe("the whole tree", () => {
-  test("every candidate carries exactly one disposition and every extractor record is a candidate", () => {
+  test("every candidate carries exactly one disposition and every extractor record is a candidate", async () => {
     let total = 0;
+    let completedWebProofs = 0;
     for (const surface of CLIENT_SURFACES) {
       const files = listSurfaceFiles(process.cwd(), surface) as string[];
       if (!files.length) continue;
@@ -301,8 +303,13 @@ describe("the whole tree", () => {
       }
       // By identity, not by count: every extractor record has a census candidate.
       expect(census.orphans, `${surface.name}: extractor records with no census candidate`).toEqual([]);
+      if (surface.name === "web") {
+        await assertRegisteredOpeningProof(extraction, files, true);
+        completedWebProofs += 1;
+      }
       total += census.candidates.length;
     }
     expect(total).toBeGreaterThan(0);
+    expect(completedWebProofs, "exactly one complete whole-web native proof must run").toBe(1);
   }, 600_000);
 });
