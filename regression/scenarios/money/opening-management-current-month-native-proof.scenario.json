@@ -1,6 +1,6 @@
 {
   "id": "opening-management-current-month-native-proof",
-  "fingerprint": "acf304aef27ab461627ae70d3c1847e8b27d11cdc47444a0000096b834bc98fc",
+  "fingerprint": "74b7590a82eba65ae9f6272c49de29f0f3422444d8391fcb3e0e528874505b6a",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -27,10 +27,11 @@
         "role": "owner",
         "org": "DISPOSABLE_SYNTHETIC"
       },
-      "action": "openingManagementSettlement.draft",
+      "action": "openingManagementSettlement.draftFromObservation",
       "input": {
         "totalMinor": 100003,
-        "firstEffectiveMonth": "CURRENT_UTC_MONTH"
+        "firstEffectiveMonth": "CURRENT_UTC_MONTH",
+        "expectedOpeningVersion": "SERVER_OBSERVED_CANONICAL_BASIS"
       }
     },
     {

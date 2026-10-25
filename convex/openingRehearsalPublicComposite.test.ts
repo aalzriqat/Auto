@@ -87,7 +87,7 @@ async function execute(defect?: Defect) {
         return structuredClone(firstBankResponse);
       if (modelCache && name === "bankAccounts:getBookBalance" && bankCache.has(bankCacheKey))
         return structuredClone(bankCache.get(bankCacheKey));
-      if (modelCache && name === "openingManagementSettlement:draft" && args.supportingReference === "QA TEST current management classification")
+      if (modelCache && name === "openingManagementSettlement:draftFromObservation" && args.supportingReference === "QA TEST current management classification")
         modeledTime += 1;
       if (
         defect === "refusal" &&
@@ -104,7 +104,7 @@ async function execute(defect?: Defect) {
         bankCache.set(bankCacheKey, structuredClone(result));
         firstBankResponse ??= structuredClone(result);
       }
-      if (name === "openingManagementSettlement:draft" && args.supportingReference === "QA TEST current management classification") {
+      if (name === "openingManagementSettlement:draftFromObservation" && args.supportingReference === "QA TEST current management classification") {
         currentOrg = args.orgId;
         currentPlan = result;
       }

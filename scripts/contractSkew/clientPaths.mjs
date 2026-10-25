@@ -1130,6 +1130,8 @@ function collectIdentifierFromSymbol(node, symbol, context) {
     acc.unknowns.push(`${prefix || "<root>"} (request-map element value is unproven)`);
     return clientNode.opaqueValue();
   }
+  const primitive = localConstPrimitiveAtTransmission(checker, node, symbol, evidence);
+  if (primitive) return clientNode.scalar(primitive);
   const refinement = refinementForExpression(checker, node, refinements, symbol);
   const routeParam = routeParamRuntimeNode(node, checker, evidence, new Set(), symbol);
   const mayBeUndefined = declaredTypeAdmitsUndefined(checker, symbol);
@@ -1178,6 +1180,91 @@ function collectIdentifierFromSymbol(node, symbol, context) {
     refinement,
     mayBeUndefined,
   );
+}
+
+/** Only the identifier occurrence in a direct, unaliased transmitted literal qualifies. */
+function directTransmissionStatement(node) {
+  const property = node.parent;
+  if (!(ts.isPropertyAssignment(property) && property.initializer === node) &&
+      !(ts.isShorthandPropertyAssignment(property) && property.name === node)) return null;
+  const payload = property.parent;
+  if (!ts.isObjectLiteralExpression(payload) || !ts.isCallExpression(payload.parent) ||
+      !payload.parent.arguments.includes(payload)) return null;
+  const names = new Set();
+  for (const entry of payload.properties) {
+    if (!(ts.isPropertyAssignment(entry) || ts.isShorthandPropertyAssignment(entry)) ||
+        ts.isComputedPropertyName(entry.name)) return null;
+    const name = propertyName(entry);
+    if (name === null || names.has(name)) return null;
+    names.add(name);
+  }
+  const call = payload.parent;
+  const expression = ts.isAwaitExpression(call.parent) && call.parent.expression === call ? call.parent : call;
+  return ts.isExpressionStatement(expression.parent) && expression.parent.expression === expression ? expression.parent : null;
+}
+
+function primitiveGuardReturns(statement) {
+  if (ts.isReturnStatement(statement)) return true;
+  if (!ts.isBlock(statement) || !statement.statements.length) return false;
+  const last = statement.statements.at(-1);
+  return Boolean(last && ts.isReturnStatement(last)) && statement.statements.slice(0, -1).every(ts.isExpressionStatement);
+}
+
+/** OR fallthrough falsifies every leaf; other conditions supply no primitive fact. */
+function negativePrimitiveFacts(checker, condition, symbol, facts) {
+  if (ts.isParenthesizedExpression(condition)) return negativePrimitiveFacts(checker, condition.expression, symbol, facts);
+  if (!ts.isBinaryExpression(condition)) return;
+  if (condition.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+    negativePrimitiveFacts(checker, condition.left, symbol, facts);
+    negativePrimitiveFacts(checker, condition.right, symbol, facts);
+    return;
+  }
+  if (condition.operatorToken.kind !== ts.SyntaxKind.ExclamationEqualsEqualsToken) return;
+  const { left, right } = condition;
+  if (ts.isTypeOfExpression(left) && ts.isIdentifier(left.expression) && resolveSymbol(checker, left.expression) === symbol &&
+      ts.isStringLiteral(right) && (right.text === "string" || right.text === "number")) facts.add(right.text);
+}
+
+function hasUnsupportedPrimitiveLookup(node) {
+  if (ts.isAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isWithStatement(node) ||
+      (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "eval")) return true;
+  return Boolean(ts.forEachChild(node, hasUnsupportedPrimitiveLookup));
+}
+
+/** A lexical const primitive cannot change through object aliases or intervening effects.
+ * This proves only typeof string/number, never an ID, enumeration or economic validity. */
+function localConstPrimitiveAtTransmission(checker, node, symbol, evidence) {
+  const statement = directTransmissionStatement(node);
+  const fn = enclosingFunctionLike(node);
+  const body = fn && "body" in fn ? fn.body : null;
+  const declaration = symbol?.declarations?.length === 1 ? symbol.declarations[0] : null;
+  if (!statement || !body || !ts.isBlock(body) || !declaration || !ts.isVariableDeclaration(declaration) ||
+      !ts.isIdentifier(declaration.name) || !declaration.initializer || resolveSymbol(checker, declaration.name) !== symbol ||
+      !ts.isVariableDeclarationList(declaration.parent) || !(declaration.parent.flags & ts.NodeFlags.Const) ||
+      declaration.parent.declarations.length !== 1 || !ts.isVariableStatement(declaration.parent.parent) ||
+      declaration.parent.parent.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ||
+      declaration.parent.parent.parent !== body || evidence.isWrittenSymbol(symbol) ||
+      hasUnsupportedPrimitiveLookup(declaration.initializer)) return null;
+  /** @type {import("typescript").Statement} */
+  let direct = statement;
+  if (statement.parent !== body) {
+    const block = statement.parent;
+    if (!ts.isBlock(block) || !ts.isTryStatement(block.parent) || block.parent.tryBlock !== block ||
+        block.statements[0] !== statement || block.parent.parent !== body) return null;
+    direct = block.parent;
+  }
+  // Dynamic lexical lookup can invalidate the checker's symbol identity.
+  for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) if (ts.isWithStatement(ancestor)) return null;
+  if (hasUnsupportedPrimitiveLookup(body)) return null;
+  const start = body.statements.indexOf(declaration.parent.parent);
+  const end = body.statements.indexOf(direct);
+  const facts = new Set();
+  for (const guard of body.statements.slice(start + 1, end)) {
+    if (ts.isIfStatement(guard) && !guard.elseStatement && primitiveGuardReturns(guard.thenStatement)) {
+      negativePrimitiveFacts(checker, guard.expression, symbol, facts);
+    }
+  }
+  return start >= 0 && end > start && facts.size === 1 ? [...facts][0] : null;
 }
 
 function isShorthandName(node) {
