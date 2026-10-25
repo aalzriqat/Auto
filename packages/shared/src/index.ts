@@ -1,4 +1,5 @@
 export * from "./convexError";
+export * from "./expenseCategories";
 export * from "./financing";
 export * from "./financingEconomics";
 export * from "./i18n";

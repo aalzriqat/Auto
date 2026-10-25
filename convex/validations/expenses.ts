@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EXPENSE_CATEGORIES } from "@autoflow/shared";
 
 export const CreateExpenseSchema = z.object({
   orgId: z.string().min(1, "Organization ID is required"),
@@ -8,20 +9,7 @@ export const CreateExpenseSchema = z.object({
   amount: z.number().positive("Amount must be greater than zero"),
   taxAmount: z.number().min(0, "VAT amount cannot be negative").optional(),
   date: z.number(),
-  category: z.enum([
-    "REPAIR",
-    "MAINTENANCE",
-    "DETAILING",
-    "TRANSPORT",
-    "MARKETING",
-    "OFFICE",
-    "SALARIES",
-    "RENT",
-    "UTILITIES",
-    "FEES",
-    "PREPAID",
-    "OTHER",
-  ]),
+  category: z.enum(EXPENSE_CATEGORIES),
   isPrepaid: z.boolean().optional(),
   amortizationMonths: z.number().min(1).optional(),
   amortizationStartDate: z.number().optional(),

@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { NON_PREPAID_EXPENSE_CATEGORIES } from "@autoflow/shared";
 import { Doc } from "@/convex/_generated/dataModel";
 
 export const expenseSchema = z
@@ -7,19 +8,7 @@ export const expenseSchema = z
     amount: z.coerce.number().min(0, "Amount must be positive"),
     taxAmount: z.coerce.number().min(0, "VAT amount cannot be negative").optional(),
     date: z.string().min(1, "Date is required"),
-    category: z.enum([
-      "REPAIR",
-      "MAINTENANCE",
-      "DETAILING",
-      "TRANSPORT",
-      "MARKETING",
-      "OFFICE",
-      "RENT",
-      "UTILITIES",
-      "SALARIES",
-      "FEES",
-      "OTHER",
-    ]),
+    category: z.enum(NON_PREPAID_EXPENSE_CATEGORIES),
     vehicleId: z.string().optional(),
     status: z.enum(["PENDING", "PAID"]),
     vendor: z.string().optional(),

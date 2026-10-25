@@ -29,23 +29,9 @@ import { createPrepaidScheduleForExpense, cancelPrepaidScheduleForExpense } from
 import { yearMonthIndex } from "./utils/expenseAmortization";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { assertOpeningVehicleBasis } from "./utils/openingVehicleBasis";
+import { expenseCategoryValidator as expenseCategory } from "./utils/expenseCategories";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
-
-const expenseCategory = v.union(
-  v.literal("REPAIR"),
-  v.literal("MAINTENANCE"),
-  v.literal("DETAILING"),
-  v.literal("TRANSPORT"),
-  v.literal("MARKETING"),
-  v.literal("OFFICE"),
-  v.literal("SALARIES"),
-  v.literal("RENT"),
-  v.literal("UTILITIES"),
-  v.literal("FEES"),
-  v.literal("PREPAID"),
-  v.literal("OTHER")
-);
 
 /**
  * Validates and normalizes the prepaid trio: a prepaid expense must specify a
