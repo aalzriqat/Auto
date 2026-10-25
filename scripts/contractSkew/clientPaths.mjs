@@ -732,7 +732,7 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
       if (!fn?.body) return false;
       const returns = returnedExpressions(fn);
       const last = fn.body.statements.at(-1);
-      if (!last || !ts.isReturnStatement(last) || !returns.length || !returns.every(ts.isIdentifier)) return false;
+      if (!last || !ts.isReturnStatement(last) || !returns.length || !returns.every((returned) => ts.isIdentifier(returned))) return false;
       const array = returns[0];
       const initializer = constInitializer(array);
       const symbol = resolveSymbol(checker, array);
