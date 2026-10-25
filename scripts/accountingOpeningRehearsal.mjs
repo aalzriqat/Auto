@@ -1071,6 +1071,8 @@ async function proveIdentifiedCredit(must, fixture) {
  * @param {Must} must @param {ProvenOpening} fixture */
 async function nativeUseBooks(must, fixture) {
   const { orgId, partnerId } = fixture;
+  const stock = fixture.sources.find(source => source.rowKey === "stock");
+  if (!stock) throw new Error("Native-use stock source unavailable");
   const entries = await journals(must, orgId);
   equal(new Set(entries.map(value => id(value._id))).size, entries.length, "native-use unique journal inventory");
   const details = [];
@@ -1089,7 +1091,56 @@ async function nativeUseBooks(must, fixture) {
     expenses: await must("query", "expenses:list", { orgId, paginationOpts }),
     banks: await must("query", "bankAccounts:list", { orgId }),
     cash: await must("query", "cashDrawer:list", { orgId }),
+    payables: await must("query", "sourcingPayables:list", { orgId }),
+    supplierReconciliation: await must("query", "accountingReports:supplierPayablesReconciliation", { orgId }),
+    deposits: await must("query", "deposits:listByVehicle", { orgId, vehicleId: id(stock.partyId) }),
+    depositReconciliation: await must("query", "accountingReports:customerDepositsReconciliation", { orgId }),
   };
+}
+/** @typedef {(name:string,args:Row,permission:string)=>Promise<void>} DenyNativeUse */
+/** Assign only this synthetic membership and restore it even when its evidence fails.
+ * @param {Context} ctx @param {ProvenOpening} fixture
+ * @param {(deny:DenyNativeUse)=>Promise<Row>} operation */
+async function withDeniedNativeRole(ctx, fixture, operation) {
+  const { orgId } = fixture, must = ctx.salesMust;
+  const original = row(await ctx.approverMust("query", "memberships:getMyMembership", { orgId }));
+  const roles = rows(await must("query", "roles:list", { orgId }));
+  const sales = roles.find(role => role.name === "SALES");
+  if (!sales) return ctx.unproven("Native least-privileged SALES role unavailable");
+  let outcome, deniedRole, restoredRole, primaryFailure;
+  let wrongRoleRefusals = 0;
+  try {
+    await must("mutation", "memberships:updateRole", { orgId, membershipId: id(original._id), newRoleId: id(sales._id) });
+    deniedRole = row(await ctx.approverMust("query", "memberships:getMyMembership", { orgId }));
+    equal(deniedRole.userId, original.userId, "native-use same QA identity");
+    equal(deniedRole._id, original._id, "native-use same synthetic membership");
+    equal(deniedRole.roleId, sales._id, "native-use actual denied role");
+    equal(deniedRole.isSystemOwnerRole, false, "native-use denied actor is not owner");
+    if (!Array.isArray(deniedRole.permissions)) throw new Error("Native-use permissions unavailable");
+    for (const permission of ["manage:finance", "confirm:finance_disbursement", "create:sales"])
+      equal(deniedRole.permissions.includes(permission), false, `native-use denied role lacks ${permission}`);
+    /** @type {DenyNativeUse} */
+    const deny = async (name, args, permission) => {
+      equal(args.orgId, orgId, "native-use refusal owns valid source organization");
+      const before = await nativeUseBooks(must, fixture);
+      await refuses(() => ctx.approverMust("mutation", name, args), `Forbidden: Missing required permissions: ${permission}`);
+      equal(await nativeUseBooks(must, fixture), before, "native-use wrong-role refusal preserves books");
+      wrongRoleRefusals += 1;
+    };
+    outcome = await operation(deny);
+    equal(wrongRoleRefusals, 7, "native-use all money doors refused");
+  } catch (error) { primaryFailure = error; }
+  try {
+    await must("mutation", "memberships:updateRole", { orgId, membershipId: id(original._id), newRoleId: id(original.roleId) });
+    restoredRole = row(await ctx.approverMust("query", "memberships:getMyMembership", { orgId }));
+    equal(restoredRole, original, "native-use original finance membership restored");
+  } catch (restoreFailure) {
+    if (primaryFailure !== undefined) throw new AggregateError([primaryFailure, restoreFailure],
+      `${primaryFailure instanceof Error ? primaryFailure.message : "Native-use evidence failed"}; native-use membership restoration also failed`);
+    throw restoreFailure;
+  }
+  if (primaryFailure !== undefined) throw primaryFailure;
+  return { ...row(outcome), wrongRoleRefusals, roleAttestation: { original, denied: deniedRole, restored: restoredRole } };
 }
 /** Six existing public capabilities on their own opening: no new registry, clock or product switch.
  * @param {Context} ctx */
@@ -1104,6 +1155,7 @@ async function proveNativeUse(ctx) {
     if (!found) throw new Error("Native-use opening source unavailable");
     return found;
   };
+  return withDeniedNativeRole(ctx, fixture, async deny => {
   const before = await nativeUseBooks(must, fixture);
   const historical = await must("query", "accountingReports:balanceSheet", { orgId, asOfDate: periodEnd });
   const openingJournal = await must("query", "accountingLedger:getJournalEntry", {
@@ -1132,6 +1184,7 @@ async function proveNativeUse(ctx) {
   equal(await nativeUseBooks(must, fixture), before, "native-use foreign refusals preserve source books");
   equal(await journals(must, ctx.orgId), sharedBefore, "native-use foreign refusals preserve other ledger");
   for (const [endpoint, args] of commands) {
+    await deny(id(endpoint), row(args), "manage:finance");
     await must("mutation", id(endpoint), row(args));
     const once = await nativeUseBooks(must, fixture);
     await must("mutation", id(endpoint), row(args));
@@ -1140,11 +1193,13 @@ async function proveNativeUse(ctx) {
   const quoteId = id(await must("mutation", "quotes:saveQuote", { orgId, customerId,
     vehicleId: id(source("stock").partyId), vehiclePrice: 300, downPayment: 0, termMonths: 0 }));
   const deposit = { orgId, quoteId, method: "CASH", amount: 300, idempotencyKey: key() };
+  await deny("deposits:create", deposit, "confirm:finance_disbursement");
   await must("mutation", "deposits:create", deposit);
   const depositOnce = await nativeUseBooks(must, fixture);
   await must("mutation", "deposits:create", deposit);
   equal(await nativeUseBooks(must, fixture), depositOnce, "native-use cash deposit retry");
   const sale = { orgId, quoteId, idempotencyKey: key(), depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" } };
+  await deny("sales:completeFromQuote", sale, "create:sales");
   const saleIds = await must("mutation", "sales:completeFromQuote", sale);
   equal(Array.isArray(saleIds) && saleIds.length, 1, "native-use one sale");
   const after = await nativeUseBooks(must, fixture);
@@ -1172,8 +1227,42 @@ async function proveNativeUse(ctx) {
   equal(recovery?.remainingMinor, 0, "native-use refundable deposit remaining");
   const payable = row(await must("query", "sourcingPayables:get", { orgId, payableId: id(source("supplier").documentId) }));
   equal(payable.status, "PAID", "native-use supplier paid");
+  equal(payable.amountDue, 100.001, "native-use supplier exact obligation");
   equal(payable.amountPaid, 100.001, "native-use supplier exact payment");
+  const listedPayable = rows(after.payables).find(value => value._id === source("supplier").documentId);
+  if (!listedPayable) throw new Error("Opening assertion refused: native-use payable list source");
+  equal(listedPayable.status, "PAID", "native-use payable list status");
+  equal(listedPayable.amountPaid, 100.001, "native-use payable list payment");
+  const supplierBefore = row(before.supplierReconciliation), supplierAfter = row(after.supplierReconciliation);
+  equal(supplierBefore.status, "AVAILABLE", "native-use supplier consumer before available");
+  equal(supplierBefore.isReconciled, true, "native-use supplier before reconciled");
+  equal(row(row(supplierBefore.byCurrency).JOD).subledgerBalanceMinor, 100001, "native-use supplier before balance");
+  equal(supplierAfter.status, "AVAILABLE", "native-use supplier consumer available");
+  equal(supplierAfter.isReconciled, true, "native-use supplier reconciled");
+  const supplierAmounts = row(row(supplierAfter.byCurrency).JOD);
+  equal(supplierAmounts.subledgerBalanceMinor, 0, "native-use supplier consumer balance");
+  equal(supplierAmounts.glBalanceMinor, 0, "native-use supplier consumer GL");
+  const saleDeposits = rows(after.deposits);
+  equal(saleDeposits.length, 1, "native-use one sale deposit");
+  equal(saleDeposits[0].quoteId, quoteId, "native-use exact sale deposit quote");
+  equal(saleDeposits[0].amount, 300, "native-use sale deposit amount");
+  equal(saleDeposits[0].status, "APPLIED", "native-use deposit applied");
+  const depositAfter = row(after.depositReconciliation);
+  equal(depositAfter.isReconciled, true, "native-use deposit consumer reconciled");
+  equal(depositAfter.attributionStatus, "UNALLOCATED", "native-use unknown attribution retained");
+  const customerDepositHeldMinor = minor(row(depositAfter.heldOpeningMinor).JOD);
+  equal(customerDepositHeldMinor, 20001, "native-use held pool consumer");
+  const depositAmounts = row(row(depositAfter.byCurrency).JOD);
+  equal(depositAmounts.glBalanceMinor, 20001, "native-use deposit consumer GL");
+  equal(depositAmounts.subledgerBalanceMinor, 20001, "native-use deposit consumer balance");
+  const unknownSources = rows(row(after.opening).rows).filter(value => value.kind === "UNALLOCATED_LIABILITY");
+  equal(unknownSources.map(value => minor(value.amountMinor)).sort((left, right) => left - right),
+    [20001, 23001], "native-use distinct held pools");
   const trialRows = rows(row(after.trial).rows), beforeRows = rows(row(before.trial).rows);
+  const unknownReceiptHeldMinor = Number(trialRows.find(value => value.accountId === source("unknown-receipt").accountId)?.netMinor);
+  equal(unknownReceiptHeldMinor, 23001, "native-use separate unidentified receipt control");
+  const heldUnknownPoolsMinor = unknownSources.reduce((sum, value) => sum + minor(value.amountMinor), 0);
+  equal(heldUnknownPoolsMinor, 43002, "native-use combined distinct held sources");
   equal(row(after.trial).isBalanced, true, "native-use balanced trial");
   for (const [selected, delta] of [
     [account("CASH_ON_HAND"), 303003], [account("ACCOUNTS_RECEIVABLE_CUSTOMERS"), -100003],
@@ -1224,13 +1313,24 @@ async function proveNativeUse(ctx) {
   equal(await must("query", "accountingLedger:getJournalEntry", { orgId,
     journalEntryId: id(fixture.posted.journalId) }), openingJournal, "native-use original journal unchanged");
   equal(after.opening, before.opening, "native-use immutable source readback");
-  equal(await must("query", "accountingReports:balanceSheet", { orgId, asOfDate: periodEnd }),
-    historical, "native-use closed snapshot unchanged");
-  return { families: 6, arRemainingMinor: 0, inventoryRemainingMinor: 0,
-    prepaidRecognisedMinor: 23334, partnerBalanceMinor: 990000,
-    refundableDepositRemainingMinor: 0, supplierPayableRemainingMinor: 0,
-    cashDeltaMinor: 303003, closedSnapshotUnchanged: true,
+  const closedAfter = await must("query", "accountingReports:balanceSheet", { orgId, asOfDate: periodEnd });
+  equal(closedAfter, historical, "native-use closed snapshot unchanged");
+  return { families: new Set(sources.filter(value =>
+      ["ar", "stock", "prepaid", "capital", "deposit", "supplier"].includes(id(value.rowKey))).map(value => value.kind)).size,
+    arRemainingMinor: minor(balance.outstandingMinor),
+    inventoryRemainingMinor: Number(trialRows.find(value => value.accountId === account("VEHICLE_INVENTORY"))?.netMinor ?? 0),
+    prepaidRecognisedMinor: minor(prepaid?.recognizedMinor), partnerBalanceMinor: minor(partners[0].balanceMinor),
+    refundableDepositRemainingMinor: minor(recovery?.remainingMinor),
+    supplierPayableRemainingMinor: Math.round((Number(payable.amountDue) - Number(payable.amountPaid)) * 1000),
+    supplierReconciliationMinor: minor(supplierAmounts.subledgerBalanceMinor), heldUnknownPoolsMinor,
+    customerDepositHeldMinor, unknownReceiptHeldMinor,
+    customerDepositRemainingMinor: minor(depositAmounts.subledgerBalanceMinor) - customerDepositHeldMinor,
+    officialIncomeMinor: minor(official.netIncome),
+    cashDeltaMinor: Number(trialRows.find(value => value.accountId === account("CASH_ON_HAND"))?.netMinor ?? 0) -
+      Number(beforeRows.find(value => value.accountId === account("CASH_ON_HAND"))?.netMinor ?? 0),
+    closedSnapshotUnchanged: JSON.stringify(closedAfter) === JSON.stringify(historical),
     scope: "synthetic public commands; current month only; no platform or OCC proof" };
+  });
 }
 /** Execute named callbacks through the caller's existing evidence owner. @param {Context} ctx */
 export async function runOpeningRehearsalCases(ctx) {
@@ -1244,8 +1344,8 @@ export async function runOpeningRehearsalCases(ctx) {
       const opening = await prepareOpening(ctx);
       const proven = await proveOpeningSources(ctx.salesMust, opening);
       const detail = await settleOpening(ctx.salesMust, proven);
-      const nativeUse = await proveNativeUse(ctx);
       fixture = proven;
+      const nativeUse = await proveNativeUse(ctx);
       return { ...detail, nativeUse };
     },
   );

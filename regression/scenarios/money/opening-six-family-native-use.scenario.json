@@ -1,6 +1,6 @@
 {
   "id": "opening-six-family-native-use",
-  "fingerprint": "425fdb02ecff0edf4fe64e6c3161f2a23882d96374e4071ae4fe81978929617c",
+  "fingerprint": "cc51c0f6d6dfcb096fd2b7223d7ad342301cab4ed66853d9af9e312f6b63e0fe",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -27,12 +27,50 @@
         "role": "owner",
         "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
       },
+      "action": "memberships.updateRole",
+      "input": {
+        "existingQaMembership": true,
+        "newNativeRole": "SALES",
+        "scope": "THIS_ORGANIZATION_ONLY"
+      }
+    },
+    {
+      "actor": {
+        "role": "SALES",
+        "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
+      },
+      "action": "collections.recordPayment",
+      "input": {
+        "openingReceivableMinor": 100003,
+        "method": "CASH",
+        "expected": "MISSING_REQUIRED_PERMISSION",
+        "beforeAllowedOwnerCommand": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
+      },
       "action": "collections.recordPayment",
       "input": {
         "openingReceivableMinor": 100003,
         "method": "CASH",
         "replay": true,
         "foreignOrg": "REFUSED"
+      }
+    },
+    {
+      "actor": {
+        "role": "SALES",
+        "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "purpose": "REFUNDABLE_DEPOSIT",
+        "amountMinor": 13001,
+        "expected": "MISSING_REQUIRED_PERMISSION",
+        "beforeAllowedOwnerCommand": true
       }
     },
     {
@@ -50,6 +88,19 @@
     },
     {
       "actor": {
+        "role": "SALES",
+        "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "openingSupplierPayableMinor": 100001,
+        "method": "CASH",
+        "expected": "MISSING_REQUIRED_PERMISSION",
+        "beforeAllowedOwnerCommand": true
+      }
+    },
+    {
+      "actor": {
         "role": "owner",
         "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
       },
@@ -59,6 +110,20 @@
         "method": "CASH",
         "replay": true,
         "foreignOrg": "REFUSED"
+      }
+    },
+    {
+      "actor": {
+        "role": "SALES",
+        "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
+      },
+      "action": "partnerEquity.recordEquityMovement",
+      "input": {
+        "type": "DRAW",
+        "amountMinor": 10000,
+        "method": "CASH",
+        "expected": "MISSING_REQUIRED_PERMISSION",
+        "beforeAllowedOwnerCommand": true
       }
     },
     {
@@ -73,6 +138,19 @@
         "method": "CASH",
         "replay": true,
         "foreignOrg": "REFUSED"
+      }
+    },
+    {
+      "actor": {
+        "role": "SALES",
+        "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
+      },
+      "action": "prepaidExpenses.retryAmortizationFailure",
+      "input": {
+        "currentMonth": true,
+        "fabricatedFailure": false,
+        "expected": "MISSING_REQUIRED_PERMISSION",
+        "beforeAllowedOwnerCommand": true
       }
     },
     {
@@ -102,6 +180,19 @@
     },
     {
       "actor": {
+        "role": "SALES",
+        "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
+      },
+      "action": "deposits.create",
+      "input": {
+        "method": "CASH",
+        "fullPriceMinor": 300000,
+        "expected": "MISSING_REQUIRED_PERMISSION",
+        "beforeAllowedOwnerCommand": true
+      }
+    },
+    {
+      "actor": {
         "role": "owner",
         "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
       },
@@ -114,6 +205,18 @@
     },
     {
       "actor": {
+        "role": "SALES",
+        "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "depositTreatment": "APPLY_TO_DEALER_AMOUNT",
+        "expected": "MISSING_REQUIRED_PERMISSION",
+        "beforeAllowedOwnerCommand": true
+      }
+    },
+    {
+      "actor": {
         "role": "owner",
         "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
       },
@@ -122,21 +225,31 @@
         "depositTreatment": "APPLY_TO_DEALER_AMOUNT",
         "replay": true
       }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC_SECOND_OPENING"
+      },
+      "action": "memberships.updateRole",
+      "input": {
+        "restoreOriginalNativeRole": "SENIOR_ACCOUNTANT",
+        "attestUnchangedOriginalIdentityAndPermissions": true
+      }
     }
   ],
   "expected": [
     {
-      "observable": "nativeUse.cashDeltaMinor",
-      "value": 303003
+      "observable": "nativeUse.families",
+      "value": 6
     },
     {
-      "observable": "nativeUse.remainingArInventoryDepositPayableMinor",
-      "value": [
-        0,
-        0,
-        0,
-        0
-      ]
+      "observable": "nativeUse.arRemainingMinor",
+      "value": 0
+    },
+    {
+      "observable": "nativeUse.inventoryRemainingMinor",
+      "value": 0
     },
     {
       "observable": "nativeUse.prepaidRecognisedMinor",
@@ -147,20 +260,56 @@
       "value": 990000
     },
     {
+      "observable": "nativeUse.refundableDepositRemainingMinor",
+      "value": 0
+    },
+    {
+      "observable": "nativeUse.supplierPayableRemainingMinor",
+      "value": 0
+    },
+    {
+      "observable": "nativeUse.cashDeltaMinor",
+      "value": 303003
+    },
+    {
       "observable": "nativeUse.officialIncomeMinor",
       "value": 76659
     },
     {
-      "observable": "nativeUse.openingJournalAndClosedSnapshotChanged",
-      "value": false
+      "observable": "nativeUse.closedSnapshotUnchanged",
+      "value": true
     },
     {
-      "observable": "nativeUse.preexistingJournalRemovedOrRewritten",
-      "value": false
+      "observable": "nativeUse.wrongRoleRefusals",
+      "value": 7
     },
     {
-      "observable": "nativeUse.missingDuplicateMisallocatedSdkJournals",
-      "value": "FAIL"
+      "observable": "nativeUse.supplierReconciliationMinor",
+      "value": 0
+    },
+    {
+      "observable": "nativeUse.customerDepositRemainingMinor",
+      "value": 0
+    },
+    {
+      "observable": "nativeUse.customerDepositHeldMinor",
+      "value": 20001
+    },
+    {
+      "observable": "nativeUse.unknownReceiptHeldMinor",
+      "value": 23001
+    },
+    {
+      "observable": "nativeUse.heldUnknownPoolsMinor",
+      "value": 43002
+    },
+    {
+      "observable": "nativeUse.roleAttestation.denied.roleName",
+      "value": "SALES"
+    },
+    {
+      "observable": "nativeUse.roleAttestation.restored.roleName",
+      "value": "SENIOR_ACCOUNTANT"
     }
   ],
   "rulings": [
