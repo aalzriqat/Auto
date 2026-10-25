@@ -2732,7 +2732,7 @@ function collectPaths(checker, type, path, acc, depth, seen, inherited = "LITERA
     // Object alternatives correlate their discriminants and fields. A fieldwise
     // merge invents combinations the source cannot send and hides bad siblings.
     if (alternatives.some((alternative) => alternative.kind === "object")) return clientNode.variants(alternatives);
-    return alternatives.reduce(mergeClientNodes);
+    return alternatives.slice(1).reduce((merged, alternative) => mergeClientNodes(merged, alternative), alternatives[0]);
   }
 
   // Arrays / tuples -> descend into the element TYPE. The element is a node in
