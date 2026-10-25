@@ -65,6 +65,132 @@ async function books(seed: Awaited<ReturnType<typeof fixture>>) {
     prepaid: await ctx.db.query("prepaidExpenseSchedules").collect() }));
 }
 
+async function managementState(seed: Awaited<ReturnType<typeof fixture>>) {
+  return { books: await books(seed), records: await seed.t.run(async ctx => ({
+    plans: await ctx.db.query("openingManagementSettlementPlans").collect(),
+    commands: await ctx.db.query("commandIdempotency").collect(),
+    bankAccounts: await ctx.db.query("bankAccounts").collect(),
+    cashSessions: await ctx.db.query("cashDrawerSessions").collect(),
+    cashMovements: await ctx.db.query("cashMovements").collect(),
+    partnerBalances: await ctx.db.query("partnerEquity").collect(),
+  })) };
+}
+
+async function observationArgs(seed: Awaited<ReturnType<typeof fixture>>) {
+  const context = await seed.owner.query(api.openingManagementSettlement.context, { orgId: seed.orgId });
+  if (!context.postedOpening) throw new Error("Synthetic opening observation unavailable");
+  const { openingDraftId: _opening, ...economic } = seed.args;
+  return { ...economic, expectedOpeningVersion: context.postedOpening.observationVersion };
+}
+
+test.each(["LEGACY_FIRST", "OBSERVATION_FIRST"] as const)("valid %s replay shares exactly one management operation", async order => {
+  const seed = await fixture();
+  const observed = await observationArgs(seed);
+  const legacy = () => seed.owner.mutation(draft, seed.args);
+  const adapter = () => seed.owner.mutation(api.openingManagementSettlement.draftFromObservation, observed);
+  const first = await (order === "LEGACY_FIRST" ? legacy() : adapter());
+  const after = await managementState(seed);
+  expect(await (order === "LEGACY_FIRST" ? adapter() : legacy())).toBe(first);
+  expect(await managementState(seed)).toEqual(after);
+  expect(after.records.plans).toHaveLength(1);
+  await expect(seed.owner.mutation(api.openingManagementSettlement.draftFromObservation, { ...observed, totalMinor: 100_004 })).rejects.toThrow();
+  expect(await managementState(seed)).toEqual(after);
+});
+
+test.each(["WRONG", "FOREIGN", "MISSING_JOURNAL", "LINE_MISMATCH", "RESET", "PERMISSION", "FEATURE", "CURRENCY", "FOREIGN_ACTOR"] as const)(
+  "%s observation refuses before command, plan or measured book writes", async damage => {
+    const seed = await fixture();
+    const observed = await observationArgs(seed);
+    if (damage === "WRONG") observed.expectedOpeningVersion = "not-an-observation";
+    if (damage === "CURRENCY") observed.expectedCurrency = "USD";
+    if (damage === "FOREIGN") {
+      await seed.t.run(async ctx => {
+        await ctx.db.insert("subscriptions", { orgId: seed.otherOrg, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() });
+        await ctx.db.insert("orgSettings", { orgId: seed.otherOrg, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"] });
+      });
+      await seed.outsider.mutation(api.chartOfAccounts.initialize, { orgId: seed.otherOrg });
+      const periodId = await seed.outsider.mutation(api.accountingPeriods.create, { orgId: seed.otherOrg, fiscalYear: 2026, periodNumber: 1,
+        startDate: Date.UTC(2026, 0, 1), endDate: Date.UTC(2026, 11, 31, 23, 59, 59, 999) });
+      await seed.outsider.mutation(api.accountingPeriods.open, { orgId: seed.otherOrg, periodId });
+      const accounts = await seed.outsider.query(api.chartOfAccounts.list, { orgId: seed.otherOrg });
+      const cash = accounts.find(value => value.systemKey === "CASH_ON_HAND");
+      const retained = accounts.find(value => value.systemKey === "RETAINED_EARNINGS");
+      if (!cash || !retained) throw new Error("Missing foreign chart");
+      await seed.outsider.mutation(api.accountingCutover.postOpeningBalanceDirect, { orgId: seed.otherOrg, expectedCurrency: "JOD", asOfDate: seed.parent.asOfDate,
+        lines: [{ accountId: cash._id, debitMinor: 200_000, creditMinor: 0 }, { accountId: retained._id, debitMinor: 0, creditMinor: 200_000 }] });
+      const foreign = await seed.outsider.query(api.openingManagementSettlement.context, { orgId: seed.otherOrg });
+      if (!foreign.postedOpening) throw new Error("Foreign opening observation unavailable");
+      observed.expectedOpeningVersion = foreign.postedOpening.observationVersion;
+    }
+    if (damage === "MISSING_JOURNAL") await seed.t.run(async ctx => {
+      if (!seed.parent.journalEntryId) throw new Error("Missing synthetic journal");
+      await ctx.db.delete(seed.parent.journalEntryId);
+    });
+    if (damage === "LINE_MISMATCH") await seed.t.run(async ctx => {
+      const line = await ctx.db.query("journalLines").first();
+      if (!line) throw new Error("Missing synthetic line");
+      await ctx.db.patch(line._id, { debitMinor: line.debitMinor + 1 });
+    });
+    if (damage === "RESET") await seed.t.run(ctx => ctx.db.patch(seed.orgId, { financialResetGeneration: 1, financialResetCompletedGeneration: 0 }));
+    if (damage === "PERMISSION") await seed.t.run(ctx => ctx.db.patch(seed.financeId, { permissions: ["view:finance"] }));
+    if (damage === "FEATURE") await seed.t.run(async ctx => {
+      const subscription = await ctx.db.query("subscriptions").unique();
+      if (!subscription) throw new Error("Missing synthetic subscription");
+      await ctx.db.patch(subscription._id, { plan: "free" });
+    });
+    const before = await managementState(seed);
+    const actor = damage === "PERMISSION" ? seed.approver : damage === "FOREIGN_ACTOR" ? seed.outsider : seed.owner;
+    await expect(actor.mutation(api.openingManagementSettlement.draftFromObservation, observed)).rejects.toThrow();
+    expect(await managementState(seed)).toEqual(before);
+  },
+);
+
+test("adapter refuses missing-basis completed replay while legacy replay behavior stays unchanged", async () => {
+  const seed = await fixture();
+  const observed = await observationArgs(seed);
+  const planId = await seed.owner.mutation(draft, seed.args);
+  await seed.t.run(async ctx => {
+    if (!seed.parent.journalEntryId) throw new Error("Missing synthetic journal");
+    await ctx.db.delete(seed.parent.journalEntryId);
+  });
+  const before = await managementState(seed);
+  await expect(seed.owner.mutation(api.openingManagementSettlement.draftFromObservation, observed)).rejects.toThrow();
+  expect(await managementState(seed)).toEqual(before);
+  expect(await seed.owner.mutation(draft, seed.args)).toBe(planId);
+  expect(await managementState(seed)).toEqual(before);
+});
+
+async function assertStaleObservationRefusal(completedKey: boolean) {
+  const seed = await fixture();
+  const observed = await observationArgs(seed);
+  if (completedKey) await seed.owner.mutation(draft, seed.args);
+  await seed.t.run(ctx => ctx.db.patch(seed.orgId, { suspended: true }));
+  await resetOrgToCompletion(seed.t, seed.orgId, 100);
+  await seed.t.run(ctx => ctx.db.patch(seed.orgId, { suspended: false }));
+  await seed.owner.mutation(api.chartOfAccounts.initialize, { orgId: seed.orgId });
+  const accounts = await seed.owner.query(api.chartOfAccounts.list, { orgId: seed.orgId });
+  const cash = accounts.find(value => value.systemKey === "CASH_ON_HAND");
+  const retained = accounts.find(value => value.systemKey === "RETAINED_EARNINGS");
+  if (!cash || !retained) throw new Error("Missing replacement chart");
+  const posted = await seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+    orgId: seed.orgId, expectedCurrency: "JOD", asOfDate: seed.parent.asOfDate,
+    lines: [{ accountId: cash._id, debitMinor: 200_000, creditMinor: 0 }, { accountId: retained._id, debitMinor: 0, creditMinor: 200_000 }],
+  });
+  expect(posted.draftId).not.toBe(seed.parent._id);
+  const fresh = await observationArgs(seed);
+  expect(fresh.expectedOpeningVersion).not.toBe(observed.expectedOpeningVersion);
+  const before = await managementState(seed);
+  if (completedKey) expect(before.records.commands).toContainEqual(expect.objectContaining({
+    operation: "openingManagementSettlement.draft", idempotencyKey: observed.idempotencyKey, status: "COMPLETED",
+  }));
+  await expect(seed.owner.mutation(api.openingManagementSettlement.draftFromObservation, observed)).rejects.toThrow("opening observation");
+  expect(await managementState(seed)).toEqual(before);
+  await seed.owner.mutation(api.openingManagementSettlement.draftFromObservation, { ...fresh, idempotencyKey: "fresh-replacement-intent" });
+}
+
+test("stale opening observation refuses replacement before writes", async () => { await assertStaleObservationRefusal(false); });
+test("completed key cannot bypass stale opening observation", async () => { await assertStaleObservationRefusal(true); });
+
 test("approved exact seven-part plan has no financial side effects and reads scheduled then recognised", async () => {
   const seed = await fixture();
   const before = await books(seed);
@@ -259,7 +385,8 @@ test("registered management context returns the complete posted-opening shape wi
   const before = await books(seed);
   expect(await seed.owner.query(api.openingManagementSettlement.context, { orgId: seed.orgId })).toEqual({
     actorId: seed.ownerId,
-    postedOpening: { id: seed.parent._id, asOfDate: seed.parent.asOfDate, currency: "JOD" },
+    postedOpening: { id: seed.parent._id, asOfDate: seed.parent.asOfDate, currency: "JOD",
+      observationVersion: JSON.stringify([seed.parent._id, 0]) },
   });
   expect(await books(seed)).toEqual(before);
 });
@@ -291,7 +418,7 @@ test("registered management context still refuses missing identity, foreign memb
   await expect(seed.approver.query(api.openingManagementSettlement.context, { orgId: seed.orgId })).rejects.toThrow();
 });
 
-test.each(["WRONG_ACTOR_TABLE", "WRONG_OPENING_TABLE", "WRONG_PRIMITIVE", "EXTRA_KEY"] as const)(
+test.each(["WRONG_ACTOR_TABLE", "WRONG_OPENING_TABLE", "WRONG_PRIMITIVE", "WRONG_VERSION_PRIMITIVE", "EXTRA_KEY"] as const)(
   "actual registered context return validator refuses %s", async (damage) => {
     const seed = await fixture();
     const valid = await seed.owner.query(api.openingManagementSettlement.context, { orgId: seed.orgId });
@@ -300,6 +427,7 @@ test.each(["WRONG_ACTOR_TABLE", "WRONG_OPENING_TABLE", "WRONG_PRIMITIVE", "EXTRA
       WRONG_ACTOR_TABLE: { ...valid, actorId: seed.orgId },
       WRONG_OPENING_TABLE: { ...valid, postedOpening: { ...valid.postedOpening, id: seed.orgId } },
       WRONG_PRIMITIVE: { ...valid, postedOpening: { ...valid.postedOpening, asOfDate: "invalid" } },
+      WRONG_VERSION_PRIMITIVE: { ...valid, postedOpening: { ...valid.postedOpening, observationVersion: 1 } },
       EXTRA_KEY: { ...valid, postedOpening: { ...valid.postedOpening, unexpected: true } },
     }[damage];
     // Fault-inject only the producer result; retain the actual registered query's exportReturns.

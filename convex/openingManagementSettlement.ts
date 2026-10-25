@@ -1,5 +1,6 @@
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
 import { ConvexError, v } from "convex/values";
+import type { Infer } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -21,19 +22,20 @@ async function requireCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizat
   return currency.code;
 }
 
-export const draft = mutation({
-  args: { orgId: v.id("organizations"), openingDraftId: v.id("openingBalanceDrafts"), totalMinor: v.number(),
+const draftArguments = v.object({ orgId: v.id("organizations"), openingDraftId: v.id("openingBalanceDrafts"), totalMinor: v.number(),
     firstEffectiveMonth: v.number(), supportingReference: v.string(), classificationAttestation: attestation,
-    expectedCurrency: v.string(), idempotencyKey: v.string() },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    await requireFeature(ctx, args.orgId, "accounting");
-    const currency = await requireCurrency(ctx, args.orgId, args.expectedCurrency);
+    expectedCurrency: v.string(), idempotencyKey: v.string() });
+
+function openingObservationVersion(basis: Awaited<ReturnType<typeof requireManagementOpening>>) {
+  return JSON.stringify([basis.parent._id, basis.resetGeneration]);
+}
+
+async function prepareDraft(ctx: MutationCtx, args: Infer<typeof draftArguments>, actorId: Id<"users">, currency: string) {
     const reference = args.supportingReference.trim();
     if (!reference || reference.length > 200) throw new ConvexError("Enter a bounded supporting reference for this management schedule.");
     const installments = managementInstallments(args.totalMinor, args.firstEffectiveMonth);
     return runWithIdempotency(ctx, { orgId: args.orgId, operation: "openingManagementSettlement.draft", economic: true,
-      idempotencyKey: args.idempotencyKey, actorId: user._id,
+      idempotencyKey: args.idempotencyKey, actorId,
       fingerprint: JSON.stringify({ openingDraftId: args.openingDraftId, totalMinor: args.totalMinor,
         firstEffectiveMonth: args.firstEffectiveMonth, supportingReference: reference,
         classificationAttestation: args.classificationAttestation, currency }) }, async () => {
@@ -46,8 +48,34 @@ export const draft = mutation({
       }
       return ctx.db.insert("openingManagementSettlementPlans", { orgId: args.orgId, openingDraftId: args.openingDraftId,
         status: "PENDING_APPROVAL", currency, totalMinor: args.totalMinor, supportingReference: reference,
-        classificationAttestation: args.classificationAttestation, installments, createdBy: user._id, createdAt: Date.now(), resetGeneration });
+        classificationAttestation: args.classificationAttestation, installments, createdBy: actorId, createdAt: Date.now(), resetGeneration });
     });
+}
+
+export const draft = mutation({
+  args: { ...draftArguments.fields, orgId: v.id("organizations"), openingDraftId: v.id("openingBalanceDrafts") },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    const currency = await requireCurrency(ctx, args.orgId, args.expectedCurrency);
+    return prepareDraft(ctx, args, user._id, currency);
+  },
+});
+
+export const draftFromObservation = mutation({
+  args: { ...draftArguments.omit("openingDraftId").fields, orgId: v.id("organizations"), expectedOpeningVersion: v.string() },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    const currency = await requireCurrency(ctx, args.orgId, args.expectedCurrency);
+    const source = await loadOpeningSourceIdentity(ctx, args.orgId);
+    if (source.status !== "AVAILABLE") throw new ConvexError("The posted opening basis is unavailable for this management schedule.");
+    const basis = await requireManagementOpening(ctx, args.orgId, source.parent._id, currency);
+    // An observation precondition, never a parsed document selector or authorization token.
+    if (args.expectedOpeningVersion !== openingObservationVersion(basis)) {
+      throw new ConvexError("The opening observation has changed. Refresh the supporting data and try again.");
+    }
+    return prepareDraft(ctx, { ...args, openingDraftId: basis.parent._id }, user._id, currency);
   },
 });
 
@@ -157,6 +185,7 @@ export const context = query({
       id: v.id("openingBalanceDrafts"),
       asOfDate: v.number(),
       currency: v.string(),
+      observationVersion: v.string(),
     })),
   }),
   handler: async (ctx, args) => {
@@ -167,8 +196,9 @@ export const context = query({
     const currency = denominationOf(parent?.currency);
     if (!parent || !currency) return { actorId: user._id, postedOpening: null };
     try {
-      await requireManagementOpening(ctx, args.orgId, parent._id, currency.code);
-      return { actorId: user._id, postedOpening: { id: parent._id, asOfDate: parent.asOfDate, currency: currency.code } };
+      const basis = await requireManagementOpening(ctx, args.orgId, parent._id, currency.code);
+      return { actorId: user._id, postedOpening: { id: parent._id, asOfDate: parent.asOfDate, currency: currency.code,
+        observationVersion: openingObservationVersion(basis) } };
     } catch {
       // This query makes no writes. Missing proof is unavailable, never an opening certificate.
       return { actorId: user._id, postedOpening: null };

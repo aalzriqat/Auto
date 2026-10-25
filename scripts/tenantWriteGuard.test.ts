@@ -14,9 +14,58 @@
  */
 import { describe, expect, test } from "vitest";
 import path from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import ts from "typescript";
 import { auditConvexBackend, findUnguardedTenantWrites, summarizeCoverage } from "./tenantWriteGuard";
 
 const CONVEX_ROOT = path.resolve(__dirname, "..", "convex");
+
+function managementMutation(name: string) {
+  const file = path.join(CONVEX_ROOT, "openingManagementSettlement.ts");
+  const source = readFileSync(file, "utf8");
+  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+  for (const statement of parsed.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.name.text === name && declaration.initializer && ts.isCallExpression(declaration.initializer)) {
+        const options = declaration.initializer.arguments[0];
+        if (!options || !ts.isObjectLiteralExpression(options)) throw new Error("Management mutation options unavailable");
+        const handler = options.properties.find(property => ts.isPropertyAssignment(property) && property.name.getText(parsed) === "handler");
+        if (!handler || !ts.isPropertyAssignment(handler) || !ts.isArrowFunction(handler.initializer) || !ts.isBlock(handler.initializer.body)) {
+          throw new Error("Management handler body unavailable");
+        }
+        return { source, parsed, statement, body: handler.initializer.body };
+      }
+    }
+  }
+  throw new Error(`Management mutation ${name} unavailable`);
+}
+
+describe("management mutation tenant coverage", () => {
+  test.each(["draft", "draftFromObservation", "approve", "reject"])("%s is actually inside the analysed org-scoped surface", name => {
+    const actual = managementMutation(name);
+    const directory = mkdtempSync(path.join(tmpdir(), "autoflow-management-tenant-"));
+    try {
+      writeFileSync(path.join(directory, "management.ts"), `\n${actual.statement.getText(actual.parsed)}\n`);
+      expect(summarizeCoverage(directory)).toEqual({ totalMutations: 1, analysed: 1, skippedNoArgsBlock: 0, skippedNoOrgId: 0 });
+    } finally {
+      // The cleanup target is the bounded temporary directory this test created.
+      expect(path.dirname(path.resolve(directory))).toBe(path.resolve(tmpdir()));
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy draft caller id remains visible to the actual write detector", () => {
+    const actual = managementMutation("draft");
+    const insertion = actual.body.getStart(actual.parsed) + 1;
+    // A future unchecked patch must not hide behind shared validators or shared operation code.
+    const mutant = actual.source.slice(0, insertion) + '\nawait ctx.db.patch(args.openingDraftId, { status: "POSTED" });\n' + actual.source.slice(insertion);
+    expect(findUnguardedTenantWrites(mutant, "openingManagementSettlement.ts")).toEqual([{
+      file: "openingManagementSettlement.ts", functionName: "draft", kind: "mutation", writes: ["patch(args.openingDraftId)"],
+    }]);
+  });
+});
 
 /** Verbatim shape of `orgPipelineStages.update` as it shipped, pre-fix. */
 const VULNERABLE = `
@@ -710,10 +759,14 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // Its three caller-ID validators are explicit; the private Preview/QA scope guard uses
   // requireOwnedRow for the optional deletion request, and source rows are derived by org.
   // Actual analyser measurement: +1 total, +1 analysed; all skipped counts unchanged.
+  // SCRUM-711 observation adapter: +1 total and analysed. Both draft routes retain
+  // explicit native orgId declarations; legacy also exposes its caller-supplied opening id.
+  // Source-driven handler controls and an unchecked-patch mutant above prove the
+  // shared validator spreads do not silently withdraw either coverage property.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 553,
-      analysed: 372,
+      totalMutations: 554,
+      analysed: 373,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 166,
     });
