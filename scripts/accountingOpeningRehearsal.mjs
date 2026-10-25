@@ -470,7 +470,7 @@ async function proveNativeSourceReaders(must, fixture) {
   );
   equal(
     rows(recoveries.items)
-      .map((value) => value.amountDueMinor)
+      .map((value) => minor(value.amountDueMinor))
       .sort((left, right) => left - right),
     [11001, 13001],
     "both native recoverable purposes",
@@ -844,6 +844,136 @@ async function proveManagement(ctx, fixture, before) {
     "management never writes formal GL",
   );
 }
+/** Complete native reader witnesses around management commands, not inferred from journal counts.
+ * @param {Must} must @param {Opening} fixture @param {string} sessionId @param {number} [balanceAsOf] */
+async function managementBooks(must, fixture, sessionId, balanceAsOf) {
+  const { orgId, partnerId, account } = fixture;
+  const entries = await journals(must, orgId);
+  const details = [];
+  for (const entry of entries) {
+    const detail = row(await must("query", "accountingLedger:getJournalEntry", {
+      orgId, journalEntryId: id(entry._id),
+    }));
+    rows(detail.lines);
+    details.push(detail);
+  }
+  const trial = await balances(must, orgId);
+  equal(trial.isBalanced, true, "management witness trial balanced");
+  const trialRows = rows(trial.rows);
+  for (const [systemKey, expected] of [
+    ["CASH_ON_HAND", 1000000], ["BANK_ACCOUNT", 500000], ["PREPAID_EXPENSES", 70003],
+  ]) equal(trialRows.find(value => value.accountId === account(String(systemKey)))?.netMinor,
+    expected, `management witness ${systemKey}`);
+  const bank = row(await must("query", "bankAccounts:getBookBalance", {
+    orgId, ...(balanceAsOf === undefined ? {} : { asOf: balanceAsOf }),
+  }));
+  equal(bank.status, "OK", "management physical bank available");
+  equal(bank.balanceMinor, 500000, "management physical bank balance");
+  // asOf is a balance cutoff, not evidence that a cached query physically ran again.
+  const { asOf, ...bankBalance } = bank;
+  const bankBalanceAsOf = minor(asOf);
+  if (balanceAsOf !== undefined)
+    equal(bankBalanceAsOf, balanceAsOf, "management bank cutoff matches request");
+  const cash = rows(await must("query", "cashDrawer:list", { orgId }));
+  equal(cash.length, 1, "complete single cash session witness");
+  equal(cash[0]._id, sessionId, "actual cash session witness");
+  equal(cash[0].openingFloatMinor, 1000000, "management physical cash float");
+  const cashMovements = rows(await must("query", "cashDrawer:listMovements", { orgId, sessionId }));
+  const prepaid = rows(await must("query", "prepaidExpenses:listSchedules", { orgId }));
+  equal(prepaid.length, 1, "actual prepaid witness");
+  const partners = row(await must("query", "partnerEquity:list", { orgId, paginationOpts }));
+  equal(partners.isDone, true, "complete partner witness");
+  const partnerRows = rows(partners.page);
+  equal(partnerRows.length, 1, "actual single partner witness");
+  equal(partnerRows[0]._id, partnerId, "actual partner identity witness");
+  equal(partnerRows[0].balanceStatus, "VERIFIED", "partner witness available");
+  equal(partnerRows[0].balanceMinor, 1000000, "management partner balance");
+  const partnerMovements = rows(await must("query", "partnerEquity:listTransactions", { orgId, partnerId }));
+  return { bankBalanceAsOf, books: {
+    entries, details, trial, bankBalance,
+    banks: rows(await must("query", "bankAccounts:list", { orgId })),
+    cash, cashMovements, prepaid, partners: partnerRows, partnerMovements,
+  } };
+}
+/** Preserve the future-zero proof above; a separate governed opening owns this current-month proof.
+ * @param {Context} ctx */
+async function proveCurrentManagement(ctx) {
+  const must = ctx.salesMust;
+  const fixture = await prepareOpening(ctx);
+  await proveOpeningSources(must, fixture);
+  const { orgId, posted, year, month } = fixture;
+  const firstMonth = Date.UTC(year, month, 1);
+  const banks = rows(await must("query", "bankAccounts:list", { orgId }));
+  equal(banks.length, 1, "single physical bank setup");
+  await must("mutation", "bankAccounts:setReconciliationTarget", { orgId, bankAccountId: id(banks[0]._id) });
+  const sessionId = id(await must("mutation", "cashDrawer:open", { orgId, openingFloatMinor: 1000000 }));
+  const before = await managementBooks(must, fixture, sessionId);
+  const preparer = row(await must("query", "users:getMe", {}));
+  const approver = row(await ctx.approverMust("query", "users:getMe", {}));
+  if (id(preparer._id) === id(approver._id)) throw new Error("Current management requires distinct actual actors");
+  const planId = id(await must("mutation", "openingManagementSettlement:draft", {
+    orgId, openingDraftId: id(posted.draftId), totalMinor: 100003,
+    firstEffectiveMonth: firstMonth, supportingReference: "QA TEST current management classification",
+    classificationAttestation: "CONSUMED_BEFORE_OPENING_NOT_PREPAID_NOT_CAPITAL",
+    expectedCurrency: "JOD", idempotencyKey: key(),
+  }));
+  await ctx.approverMust("mutation", "openingManagementSettlement:approve", { orgId, planId });
+  const plans = rows(await must("query", "openingManagementSettlement:list", { orgId }));
+  equal(plans.length, 1, "one native current management plan");
+  const plan = plans[0];
+  equal(plan._id, planId, "native current management identity");
+  equal(plan.status, "APPROVED", "native current management approved");
+  equal(plan.createdBy, preparer._id, "native current management preparer");
+  equal(plan.approvedBy, approver._id, "native current management approver");
+  const approvedAt = minor(plan.approvedAt);
+  const approval = new Date(approvedAt);
+  equal(Date.UTC(approval.getUTCFullYear(), approval.getUTCMonth(), 1), firstMonth,
+    "current management approval month, no rollover or clock mismatch");
+  const periods = rows(await must("query", "accountingPeriods:list", { orgId }));
+  const current = periods.filter(value => value.startDate === firstMonth);
+  equal(current.length, 1, "native current management period identity");
+  equal(current[0].status, "OPEN", "native current management period open");
+  equal(current[0].endDate, Date.UTC(year, month + 1, 1) - 1, "native current management period end");
+  if (approvedAt < firstMonth || approvedAt > Number(current[0].endDate))
+    throw new Error("Current management approval outside its measured period");
+  const expectedMonths = Array.from({ length: 7 }, (_, index) => Date.UTC(year, month + index, 1));
+  const expectedAmounts = [14286, 14286, 14286, 14286, 14286, 14286, 14287];
+  const installments = rows(plan.installments);
+  equal(plan.totalMinor, 100003, "native current management total");
+  equal(installments.map(value => value.amountMinor), expectedAmounts, "native current management literal split");
+  equal(installments.map(value => value.effectiveMonth), expectedMonths, "native current management effective months");
+  equal(installments.map(value => value.recognitionMonth), expectedMonths, "native current management recognition months");
+  // approvedAt comes from the server's stored plan, never a future client-clock cutoff.
+  const report = row(await must("query", "openingManagementSettlement:report", { orgId, planId, throughDate: approvedAt }));
+  equal(report.throughDate, approvedAt, "server-derived management report date");
+  const reported = rows(report.installments);
+  equal(reported.map(value => value.amountMinor), expectedAmounts, "reported current management literal split");
+  equal(reported.map(value => value.recognitionMonth), expectedMonths, "reported current management recognition months");
+  equal(reported.map(value => value.recognition),
+    ["RECOGNISED", "SCHEDULED", "SCHEDULED", "SCHEDULED", "SCHEDULED", "SCHEDULED", "SCHEDULED"],
+    "exact first management recognition");
+  equal(report.recognisedMinor, 14286, "current management recognised amount");
+  const official = row(await must("query", "accountingReports:incomeStatement", {
+    orgId, fromDate: fixture.opening.asOfDate, toDate: approvedAt,
+  }));
+  equal(official.netIncome, 0, "independent native current income");
+  equal(report.officialNetIncomeMinor, 0, "current management official income");
+  equal(report.managementProfitMinor, -14286, "current management profit");
+  equal(report.distributionAvailable, false, "current management cannot distribute");
+  const after = await managementBooks(must, fixture, sessionId, approvedAt);
+  for (const witness of [before, after]) {
+    const cutoff = new Date(witness.bankBalanceAsOf);
+    equal(Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth(), 1), firstMonth,
+      "current management witness month, no rollover");
+  }
+  if (approvedAt < before.bankBalanceAsOf)
+    throw new Error("Current management bank cutoff is later than approval");
+  equal(after.books, before.books, "current management native books unchanged");
+  await proveNoFakeBusinessRows(must, orgId);
+  return { recognisedMinor: report.recognisedMinor, managementProfitMinor: report.managementProfitMinor,
+    distributionAvailable: report.distributionAvailable, plan, report, currentPeriod: current[0], official,
+    witnesses: { before, after }, scope: "one current-month installment; no elapsed-seven-month, OCC or production-data proof" };
+}
 /** @param {Must} must @param {ProvenOpening} fixture */
 async function proveIdentifiedCredit(must, fixture) {
   const { orgId } = fixture;
@@ -962,6 +1092,7 @@ export async function runOpeningRehearsalCases(ctx) {
       await proveManagement(ctx, fixture, before);
       await proveIdentifiedCredit(ctx.salesMust, fixture);
       await proveNoFakeBusinessRows(ctx.salesMust, fixture.orgId);
+      const currentManagement = await proveCurrentManagement(ctx);
       return {
         duplicateRefused: true,
         foreignRefused: true,
@@ -972,6 +1103,7 @@ export async function runOpeningRehearsalCases(ctx) {
         managementLedgerUnchanged: true,
         refusedCommandsLedgerUnchanged: true,
         unknownPools: "UNALLOCATED",
+        currentManagement,
         scope:
           "current supported refusals; no payout activation or fake expense",
       };

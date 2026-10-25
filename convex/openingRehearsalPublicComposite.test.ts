@@ -19,17 +19,34 @@ type Defect =
   | "source"
   | "target"
   | "amount"
+  | "recoverable-amount"
   | "expense"
   | "payroll"
   | "management"
   | "credit"
   | "identity"
+  | "current-scheduled"
+  | "current-total"
+  | "current-month"
+  | "current-journal"
+  | "current-cash"
+  | "current-bank"
+  | "current-bank-cache"
+  | "current-bank-cutoff"
+  | "current-prepaid"
+  | "current-partner"
   | "refusal";
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 async function execute(defect?: Defect) {
+  // Only this SDK-cache control models elapsed time in the serial harness. It is not platform caching proof.
+  const modelCache = defect === "current-bank-cache" || defect === "current-bank-cutoff";
+  const now = new Date();
+  let modeledTime = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 15, 12);
+  if (modelCache) vi.spyOn(Date, "now").mockImplementation(() => modeledTime);
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
   registerRateLimiter(t);
   await t.run(async (ctx) => {
@@ -50,6 +67,10 @@ async function execute(defect?: Defect) {
   >;
   type Row = Record<string, unknown>;
   const calls: string[] = [];
+  let currentOrg: unknown, currentPlan: unknown;
+  let currentApproved = false;
+  const bankCache = new Map<string, unknown>();
+  let firstBankResponse: unknown;
   const adapter =
     (actor: typeof primary) =>
     async (
@@ -60,6 +81,14 @@ async function execute(defect?: Defect) {
       const [module, method] = name.split(":");
       const reference = refs[module][method];
       calls.push(name);
+      const bankCacheKey = JSON.stringify([name, args]);
+      if (defect === "current-bank-cutoff" && name === "bankAccounts:getBookBalance" &&
+        typeof args.asOf === "number" && firstBankResponse !== undefined)
+        return structuredClone(firstBankResponse);
+      if (modelCache && name === "bankAccounts:getBookBalance" && bankCache.has(bankCacheKey))
+        return structuredClone(bankCache.get(bankCacheKey));
+      if (modelCache && name === "openingManagementSettlement:draft" && args.supportingReference === "QA TEST current management classification")
+        modeledTime += 1;
       if (
         defect === "refusal" &&
         name === "payroll:payRun" &&
@@ -71,6 +100,48 @@ async function execute(defect?: Defect) {
       const result: unknown = await (kind === "query"
         ? actor.query(reference as FunctionReference<"query">, args)
         : actor.mutation(reference as FunctionReference<"mutation">, args));
+      if (modelCache && name === "bankAccounts:getBookBalance") {
+        bankCache.set(bankCacheKey, structuredClone(result));
+        firstBankResponse ??= structuredClone(result);
+      }
+      if (name === "openingManagementSettlement:draft" && args.supportingReference === "QA TEST current management classification") {
+        currentOrg = args.orgId;
+        currentPlan = result;
+      }
+      if (name === "openingManagementSettlement:approve" && args.planId === currentPlan)
+        currentApproved = true;
+      if (currentApproved && args.orgId === currentOrg) {
+        const value = structuredClone(result) as Row;
+        if (name === "openingManagementSettlement:report") {
+          if (defect === "current-scheduled") return { ...value,
+            installments: (value.installments as Row[]).map(item => ({ ...item, recognition: "SCHEDULED" })) };
+          if (defect === "current-total") return { ...value, recognisedMinor: 14287 };
+        }
+        if (defect === "current-month" && name === "openingManagementSettlement:list") {
+          const plans = value as unknown as Row[];
+          plans[0].approvedAt = Date.UTC(2020, 0, 1);
+          return plans;
+        }
+        if (defect === "current-journal" && name === "accountingLedger:getJournalEntry") {
+          (value.lines as Row[])[0].debitMinor = Number((value.lines as Row[])[0].debitMinor) + 1;
+          return value;
+        }
+        if (defect === "current-cash" && name === "cashDrawer:list") {
+          const sessions = value as unknown as Row[];
+          sessions[0].openingFloatMinor = 1000001;
+          return sessions;
+        }
+        if (defect === "current-bank" && name === "bankAccounts:getBookBalance") return { ...value, balanceMinor: 500001 };
+        if (defect === "current-prepaid" && name === "prepaidExpenses:listSchedules") {
+          const schedules = value as unknown as Row[];
+          schedules[0].totalMinor = 70004;
+          return schedules;
+        }
+        if (defect === "current-partner" && name === "partnerEquity:list") {
+          (value.page as Row[])[0].balanceMinor = 1000001;
+          return value;
+        }
+      }
       // Corrupt only the SDK response boundary. Actual handlers and economic writes
       // remain unchanged: these controls prove the cloud assertions detect defects.
       if (defect === "identity" && name === "users:getMe") return null;
@@ -93,6 +164,11 @@ async function execute(defect?: Defect) {
       }
       if (defect === "expense" && name === "expenses:list")
         return { page: [{ _id: "fake-expense" }], isDone: true };
+      if (defect === "recoverable-amount" && name === "supplierCostRecoveries:list") {
+        const value = structuredClone(result) as { items: Row[] };
+        value.items[0].amountDueMinor = "11001";
+        return value;
+      }
       if (defect === "payroll" && name === "payroll:listRunItems") {
         const value = structuredClone(result) as Row[];
         value[0].netMinor = 20003;
@@ -155,11 +231,30 @@ test("registered opening cloud callbacks execute all native public handlers and 
   ]);
 }, 30000);
 
+test("current-month opening management recognition preserves native books", async () => {
+  const { results } = await execute();
+  expect(results.find(value => value.id === "S858-CONTAINMENT")).toMatchObject({
+    status: "PASS", detail: {
+      currentManagement: {
+        recognisedMinor: 14286, managementProfitMinor: -14286, distributionAvailable: false,
+      },
+    },
+  });
+}, 30000);
+
+test("current recognition accepts unchanged bank economics with cached same-argument results", async () => {
+  const { results } = await execute("current-bank-cache");
+  expect(results.find(value => value.id === "S858-CONTAINMENT"), JSON.stringify(results)).toMatchObject({
+    status: "PASS", detail: { currentManagement: { recognisedMinor: 14286, managementProfitMinor: -14286 } },
+  });
+}, 30000);
+
 test.each([
   ["source", "S858-OPENING", "actual source available"],
   ["refusal", "S858-OPENING", "unexpected refusal"],
   ["target", "S858-OPENING", "one exact selected control line"],
   ["amount", "S858-OPENING", "opening debit"],
+  ["recoverable-amount", "S858-OPENING", "Opening minor-unit readback unavailable"],
   ["expense", "S858-OPENING", "no fake sale or expense"],
   ["payroll", "S858-OPENING", "native payroll netMinor"],
   ["management", "S858-CONTAINMENT", "future management recognition zero"],
@@ -176,6 +271,24 @@ test.each([
   },
   30000,
 );
+
+test.each([
+  ["current-scheduled", "exact first management recognition"],
+  ["current-total", "current management recognised amount"],
+  ["current-month", "no rollover or clock mismatch"],
+  ["current-journal", "current management native books unchanged"],
+  ["current-cash", "management physical cash float"],
+  ["current-bank", "management physical bank balance"],
+  ["current-bank-cutoff", "management bank cutoff matches request"],
+  ["current-prepaid", "current management native books unchanged"],
+  ["current-partner", "management partner balance"],
+] as const)("current recognition refuses SDK %s corruption", async (defect, reason) => {
+  const { results } = await execute(defect);
+  expect(results.find(value => value.id === "S858-CONTAINMENT")).toMatchObject({
+    status: "FAIL", detail: expect.stringContaining(reason),
+  });
+  expect(summarize(results).complete).toBe(false);
+}, 30000);
 
 test("missing authentic QA identity fails before fixture writes and leaves containment UNPROVEN", async () => {
   const { results, calls } = await execute("identity");
