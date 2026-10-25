@@ -221,11 +221,14 @@ for (const locale of LOCALES) {
           );
           expect(overflow, "sideways scroll").toBeLessThanOrEqual(0);
 
-          await captureWithDiagnostics(page, {
+          const image = await captureWithDiagnostics(page, {
             path: resolve(OUT_DIR, `shot-${state.name}-${locale}-${viewport.name}.png`),
             fullPage: true,
           }, () => testInfo.outputPath("capture-failure.json"),
           () => testInfo.outputPath("capture-document.json"));
+          const retainedImage = testInfo.outputPath("native-deal-capture.png");
+          writeFileSync(retainedImage, image, { flag: "wx" });
+          await testInfo.attach("native-deal-capture", { path: retainedImage, contentType: "image/png" });
         } finally {
           await context.close();
         }
