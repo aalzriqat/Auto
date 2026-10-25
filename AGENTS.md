@@ -20,6 +20,14 @@ When evidence shows the same agent mistake has occurred twice in this repo, invo
 
 Invocation is enforced, not optional. A session hook (`.claude/settings.json`) blocks commit, push and PR creation until the skills required for the touched paths have been invoked, and the required `skill-evidence` PR check fails a money, permission or gate PR whose body lacks a filled `## Skill evidence` section (red run, `/simplify` output, Seat 1 session and model, Seat 2 model and effort). See the Enforcement section of `.claude/skills/README.md`. These checks never write `review-evidence/*.json`.
 
+### Issue tracker
+
+User-invoked `to-spec` and `to-tickets` use this project's existing Jira workflow. See `docs/agents/issue-tracker.md`. This setup does not adopt other upstream workflows or change the rules and gates above or below this section.
+
+### Domain docs
+
+Use one shared AutoFlow glossary and root ADR directory (single-context). See `docs/agents/domain.md`.
+
 ## Pilot release gate (owner standard, 2026-10-07)
 
 The pilot release, which happens before the repository transfer, is gated by Jira epic
