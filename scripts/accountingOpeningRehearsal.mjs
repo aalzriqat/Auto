@@ -74,8 +74,8 @@ async function custom(must, orgId, name, type, code) {
     }),
   );
 }
-/** @param {Context} ctx */
-async function prepareOpening(ctx) {
+/** @param {Context} ctx @param {boolean} [currentPrepaid] */
+async function prepareOpening(ctx, currentPrepaid = false) {
   const must = ctx.salesMust;
   const primary = row(await must("query", "users:getMe", {}));
   const approver = row(await ctx.approverMust("query", "users:getMe", {}));
@@ -274,7 +274,7 @@ async function prepareOpening(ctx) {
       amountMinor: 70003,
       title: "QA TEST future benefit",
       expenseSystemKey: "GENERAL_EXPENSE",
-      startYearMonth: new Date(nextMonth).toISOString().slice(0, 7),
+      startYearMonth: new Date(currentPrepaid ? Date.UTC(year, month, 1) : nextMonth).toISOString().slice(0, 7),
       termMonths: 3,
       attestedUnexpiredBenefit: true,
     },
@@ -1067,6 +1067,171 @@ async function proveIdentifiedCredit(must, fixture) {
     equal(source.documentId, null, "unknown pool not spendable");
   }
 }
+/** Full bounded native economic witness for retry and refusal comparisons.
+ * @param {Must} must @param {ProvenOpening} fixture */
+async function nativeUseBooks(must, fixture) {
+  const { orgId, partnerId } = fixture;
+  const entries = await journals(must, orgId);
+  equal(new Set(entries.map(value => id(value._id))).size, entries.length, "native-use unique journal inventory");
+  const details = [];
+  for (const entry of entries) details.push(await must("query", "accountingLedger:getJournalEntry", {
+    orgId, journalEntryId: id(entry._id),
+  }));
+  return {
+    entries, details, trial: await balances(must, orgId),
+    opening: await must("query", "accountingCutover:postedOpeningAllocationReadback", { orgId }),
+    receivables: await must("query", "subledger:listReceivables", { orgId, limit: 100 }),
+    payments: await must("query", "collections:listPayments", { orgId, paginationOpts }),
+    prepaid: await must("query", "prepaidExpenses:listSchedules", { orgId }),
+    partners: await must("query", "partnerEquity:list", { orgId, paginationOpts }),
+    movements: await must("query", "partnerEquity:listTransactions", { orgId, partnerId }),
+    recoveries: await must("query", "supplierCostRecoveries:list", { orgId }),
+    expenses: await must("query", "expenses:list", { orgId, paginationOpts }),
+    banks: await must("query", "bankAccounts:list", { orgId }),
+    cash: await must("query", "cashDrawer:list", { orgId }),
+  };
+}
+/** Six existing public capabilities on their own opening: no new registry, clock or product switch.
+ * @param {Context} ctx */
+async function proveNativeUse(ctx) {
+  const must = ctx.salesMust;
+  const fixture = await proveOpeningSources(must, await prepareOpening(ctx, true));
+  const { orgId, account, partnerId, customerId, sources, prepaidId, periodEnd } = fixture;
+  // This existing flow closes the historical period, and supplies the native payroll/claim witnesses.
+  await settleOpening(must, fixture);
+  const source = /** @param {string} key */ (key) => {
+    const found = sources.find(value => value.rowKey === key);
+    if (!found) throw new Error("Native-use opening source unavailable");
+    return found;
+  };
+  const before = await nativeUseBooks(must, fixture);
+  const historical = await must("query", "accountingReports:balanceSheet", { orgId, asOfDate: periodEnd });
+  const openingJournal = await must("query", "accountingLedger:getJournalEntry", {
+    orgId, journalEntryId: id(fixture.posted.journalId),
+  });
+  // Public retry does not require a fabricated failure record; it catches up this ACTIVE schedule.
+  // Independent literal: 70,003 over three fair-share months begins 23,334 (then 23,334/23,335).
+  const commands = [
+    ["collections:recordPayment", { orgId, receivableId: id(source("ar").documentId), customerId,
+      amount: 100.003, method: "CASH", paymentDate: Date.now(), idempotencyKey: key() }],
+    ["supplierCostRecoveries:recordReceipt", { orgId, recoveryId: id(source("deposit").documentId),
+      amountMinor: 13001, method: "CASH", receivedDate: Date.now(), idempotencyKey: key() }],
+    ["sourcingPayables:markPaid", { orgId, payableId: id(source("supplier").documentId),
+      paymentMethod: "CASH", idempotencyKey: key() }],
+    ["partnerEquity:recordEquityMovement", { orgId, partnerId, type: "DRAW", amountMinor: 10000,
+      paymentMethod: "CASH", occurredAt: Date.now(), idempotencyKey: key() }],
+    ["prepaidExpenses:retryAmortizationFailure", { orgId, scheduleId: prepaidId }],
+  ];
+  const foreignMessages = ["Receivable not found", "Supplier cost recovery not found",
+    "Supplier payable not found", "Partner not found in this organization", "Prepaid schedule not found in this organization"];
+  const sharedBefore = await journals(must, ctx.orgId);
+  for (let index = 0; index < commands.length; index += 1) {
+    const [endpoint, args] = commands[index];
+    await refuses(() => must("mutation", id(endpoint), { ...row(args), orgId: ctx.orgId }), foreignMessages[index]);
+  }
+  equal(await nativeUseBooks(must, fixture), before, "native-use foreign refusals preserve source books");
+  equal(await journals(must, ctx.orgId), sharedBefore, "native-use foreign refusals preserve other ledger");
+  for (const [endpoint, args] of commands) {
+    await must("mutation", id(endpoint), row(args));
+    const once = await nativeUseBooks(must, fixture);
+    await must("mutation", id(endpoint), row(args));
+    equal(await nativeUseBooks(must, fixture), once, `native-use retry ${endpoint}`);
+  }
+  const quoteId = id(await must("mutation", "quotes:saveQuote", { orgId, customerId,
+    vehicleId: id(source("stock").partyId), vehiclePrice: 300, downPayment: 0, termMonths: 0 }));
+  const deposit = { orgId, quoteId, method: "CASH", amount: 300, idempotencyKey: key() };
+  await must("mutation", "deposits:create", deposit);
+  const depositOnce = await nativeUseBooks(must, fixture);
+  await must("mutation", "deposits:create", deposit);
+  equal(await nativeUseBooks(must, fixture), depositOnce, "native-use cash deposit retry");
+  const sale = { orgId, quoteId, idempotencyKey: key(), depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" } };
+  const saleIds = await must("mutation", "sales:completeFromQuote", sale);
+  equal(Array.isArray(saleIds) && saleIds.length, 1, "native-use one sale");
+  const after = await nativeUseBooks(must, fixture);
+  for (const prior of rows(before.details)) {
+    const priorId = id(row(prior.entry)._id);
+    equal(after.entries.some(entry => entry._id === priorId), true,
+      "native-use preexisting journal retained");
+    const current = rows(after.details).find(detail => row(detail.entry)._id === priorId);
+    equal(current, prior, "native-use preexisting journal unchanged");
+  }
+  await must("mutation", "sales:completeFromQuote", sale);
+  equal(await nativeUseBooks(must, fixture), after, "native-use sale retry");
+  const balance = row(await must("query", "subledger:getReceivableBalance", { orgId,
+    receivableDocumentId: id(rows(after.receivables).find(value => value.sourceId === source("ar").documentId)?._id) }));
+  equal(balance.outstandingMinor, 0, "native-use AR remaining");
+  const prepaid = rows(after.prepaid).find(value => value._id === prepaidId);
+  equal(prepaid?.recognizedMinor, 23334, "native-use prepaid recognised");
+  equal(prepaid?.monthsRecognized, 1, "native-use one real prepaid month");
+  const partners = rows(row(after.partners).page);
+  equal(partners.length, 1, "native-use exact partner inventory");
+  equal(partners[0].balanceMinor, 990000, "native-use partner remaining");
+  equal(rows(after.movements).length, 1, "native-use one draw");
+  const recovery = rows(row(after.recoveries).items).find(value => value._id === source("deposit").documentId);
+  equal(recovery?.amountRecoveredMinor, 13001, "native-use refundable deposit receipt");
+  equal(recovery?.remainingMinor, 0, "native-use refundable deposit remaining");
+  const payable = row(await must("query", "sourcingPayables:get", { orgId, payableId: id(source("supplier").documentId) }));
+  equal(payable.status, "PAID", "native-use supplier paid");
+  equal(payable.amountPaid, 100.001, "native-use supplier exact payment");
+  const trialRows = rows(row(after.trial).rows), beforeRows = rows(row(before.trial).rows);
+  equal(row(after.trial).isBalanced, true, "native-use balanced trial");
+  for (const [selected, delta] of [
+    [account("CASH_ON_HAND"), 303003], [account("ACCOUNTS_RECEIVABLE_CUSTOMERS"), -100003],
+    [account("VEHICLE_INVENTORY"), -200007], [account("PREPAID_EXPENSES"), -23334],
+    [account("PARTNER_DRAWINGS"), 10000], [id(source("deposit").accountId), -13001],
+    [account("ACCOUNTS_PAYABLE_SUPPLIERS"), -100001],
+  ]) {
+    const actual = Number(trialRows.find(value => value.accountId === selected)?.netMinor ?? 0) -
+      Number(beforeRows.find(value => value.accountId === selected)?.netMinor ?? 0);
+    equal(actual, delta, `native-use exact control ${selected}`);
+  }
+  const addedDetails = rows(after.details).filter(value =>
+    !before.entries.some(entry => entry._id === row(value.entry)._id));
+  const deltaByAccount = new Map();
+  for (const detail of addedDetails) {
+    const lines = rows(detail.lines);
+    equal(lines.reduce((sum, value) => sum + minor(value.debitMinor) - minor(value.creditMinor), 0),
+      0, "native-use balanced new journal");
+    for (const line of lines) {
+      const selected = id(line.accountId);
+      deltaByAccount.set(selected, (deltaByAccount.get(selected) ?? 0) + minor(line.debitMinor) - minor(line.creditMinor));
+    }
+  }
+  const expectedDelta = [
+    [account("CASH_ON_HAND"), 303003], [account("ACCOUNTS_RECEIVABLE_CUSTOMERS"), -100003],
+    [account("VEHICLE_INVENTORY"), -200007], [account("PREPAID_EXPENSES"), -23334],
+    [account("GENERAL_EXPENSE"), 23334], [account("PARTNER_DRAWINGS"), 10000],
+    [id(source("deposit").accountId), -13001], [account("ACCOUNTS_PAYABLE_SUPPLIERS"), 100001],
+    [account("SALES_REVENUE"), -300000], [account("COST_OF_VEHICLES_SOLD"), 200007],
+  ];
+  const canonical = /** @param {unknown[][]} values */ (values) => values
+    .filter(value => value[1] !== 0).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+  equal(canonical([...deltaByAccount]), canonical(expectedDelta), "native-use exact journal delta");
+  equal(after.expenses, before.expenses, "native-use no fake expense origination");
+  equal(after.banks, before.banks, "native-use physical banks unchanged");
+  equal(after.cash, before.cash, "native-use cash sessions unchanged");
+  const soldVehicle = row(await must("query", "vehicles:get", { orgId, vehicleId: id(source("stock").partyId) }));
+  equal(soldVehicle.status, "SOLD", "native-use stock sold");
+  const completedSale = row(await must("query", "sales:get", { orgId, saleId: id(saleIds[0]) }));
+  equal(completedSale.status, "COMPLETED", "native-use completed cash sale");
+  const official = row(await must("query", "accountingReports:incomeStatement", {
+    orgId, fromDate: periodEnd + 1, toDate: Date.now(),
+  }));
+  equal(minor(official.totalRevenue), 300000, "native-use official revenue");
+  equal(minor(official.totalCogs), 200007, "native-use official COGS");
+  equal(minor(official.totalExpenses), 23334, "native-use official prepaid expense");
+  equal(minor(official.netIncome), 76659, "native-use official income");
+  equal(await must("query", "accountingLedger:getJournalEntry", { orgId,
+    journalEntryId: id(fixture.posted.journalId) }), openingJournal, "native-use original journal unchanged");
+  equal(after.opening, before.opening, "native-use immutable source readback");
+  equal(await must("query", "accountingReports:balanceSheet", { orgId, asOfDate: periodEnd }),
+    historical, "native-use closed snapshot unchanged");
+  return { families: 6, arRemainingMinor: 0, inventoryRemainingMinor: 0,
+    prepaidRecognisedMinor: 23334, partnerBalanceMinor: 990000,
+    refundableDepositRemainingMinor: 0, supplierPayableRemainingMinor: 0,
+    cashDeltaMinor: 303003, closedSnapshotUnchanged: true,
+    scope: "synthetic public commands; current month only; no platform or OCC proof" };
+}
 /** Execute named callbacks through the caller's existing evidence owner. @param {Context} ctx */
 export async function runOpeningRehearsalCases(ctx) {
   /** @type {ProvenOpening|undefined} */
@@ -1079,8 +1244,9 @@ export async function runOpeningRehearsalCases(ctx) {
       const opening = await prepareOpening(ctx);
       const proven = await proveOpeningSources(ctx.salesMust, opening);
       const detail = await settleOpening(ctx.salesMust, proven);
+      const nativeUse = await proveNativeUse(ctx);
       fixture = proven;
-      return detail;
+      return { ...detail, nativeUse };
     },
   );
   await ctx.recordCase(

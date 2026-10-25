@@ -25,6 +25,11 @@ type Defect =
   | "management"
   | "credit"
   | "identity"
+  | "native-missing"
+  | "native-duplicate"
+  | "native-misallocated"
+  | "native-before-missing"
+  | "native-before-rewritten"
   | "current-scheduled"
   | "current-total"
   | "current-month"
@@ -69,6 +74,11 @@ async function execute(defect?: Defect) {
   const calls: string[] = [];
   let currentOrg: unknown, currentPlan: unknown;
   let currentApproved = false;
+  let nativeUseOrg: unknown;
+  const openingJournalByOrg = new Map<unknown, unknown>();
+  const preexistingJournalByOrg = new Map<unknown, unknown>();
+  const journalInventoryByOrg = new Map<unknown, Set<unknown>>();
+  let nativePriorJournalIds = new Set<unknown>();
   const bankCache = new Map<string, unknown>();
   let firstBankResponse: unknown;
   const adapter =
@@ -100,6 +110,45 @@ async function execute(defect?: Defect) {
       const result: unknown = await (kind === "query"
         ? actor.query(reference as FunctionReference<"query">, args)
         : actor.mutation(reference as FunctionReference<"mutation">, args));
+      if (name === "accountingCutover:postOpeningBalanceDirect")
+        openingJournalByOrg.set(args.orgId, (result as Row).journalId);
+      if (name === "accountingLedger:listJournalEntries" && !preexistingJournalByOrg.has(args.orgId)) {
+        const preexisting = (result as { page: Row[] }).page.find(entry =>
+          entry._id !== openingJournalByOrg.get(args.orgId));
+        if (preexisting) preexistingJournalByOrg.set(args.orgId, preexisting._id);
+      }
+      if (name === "accountingLedger:listJournalEntries")
+        journalInventoryByOrg.set(args.orgId, new Set((result as { page: Row[] }).page.map(entry => entry._id)));
+      if (name === "prepaidExpenses:retryAmortizationFailure" && nativeUseOrg === undefined) {
+        nativeUseOrg = args.orgId;
+        nativePriorJournalIds = journalInventoryByOrg.get(args.orgId) ?? new Set();
+      }
+      if (args.orgId === nativeUseOrg && kind === "query") {
+        if (defect === "native-before-missing" && name === "accountingLedger:listJournalEntries") {
+          const value = structuredClone(result) as { page: Row[] };
+          value.page = value.page.filter(entry => entry._id !== openingJournalByOrg.get(args.orgId));
+          return value;
+        }
+        if (defect === "native-before-rewritten" && name === "accountingLedger:getJournalEntry" &&
+          args.journalEntryId === preexistingJournalByOrg.get(args.orgId)) {
+          const value = structuredClone(result) as { lines: Row[] };
+          value.lines[0].debitMinor = Number(value.lines[0].debitMinor) + 1;
+          value.lines[0].creditMinor = Number(value.lines[0].creditMinor) + 1;
+          return value;
+        }
+        if (name === "accountingLedger:listJournalEntries" &&
+          (defect === "native-missing" || defect === "native-duplicate")) {
+          const value = structuredClone(result) as { page: Row[] };
+          value.page = defect === "native-missing" ? value.page.slice(1) : [...value.page, value.page[0]];
+          return value;
+        }
+        if (defect === "native-misallocated" && name === "accountingLedger:getJournalEntry" &&
+          !nativePriorJournalIds.has(args.journalEntryId)) {
+          const value = structuredClone(result) as { lines: Row[] };
+          value.lines[0].accountId = "wrong-sdk-native-use-control";
+          return value;
+        }
+      }
       if (modelCache && name === "bankAccounts:getBookBalance") {
         bankCache.set(bankCacheKey, structuredClone(result));
         firstBankResponse ??= structuredClone(result);
@@ -240,6 +289,41 @@ test("current-month opening management recognition preserves native books", asyn
       },
     },
   });
+}, 30000);
+
+test("opening native subsequent use consumes the six selected sources once", async () => {
+  const { results } = await execute();
+  expect(results.find(value => value.id === "S858-OPENING"), JSON.stringify(results)).toMatchObject({
+    status: "PASS", detail: { nativeUse: {
+      families: 6, arRemainingMinor: 0, inventoryRemainingMinor: 0,
+      prepaidRecognisedMinor: 23334, partnerBalanceMinor: 990000,
+      refundableDepositRemainingMinor: 0, supplierPayableRemainingMinor: 0,
+      cashDeltaMinor: 303003, closedSnapshotUnchanged: true,
+    } },
+  });
+}, 30000);
+
+test.each([
+  ["native-missing", "native-use exact journal delta"],
+  ["native-duplicate", "native-use unique journal inventory"],
+  ["native-misallocated", "native-use exact journal delta"],
+] as const)("six-family native-use assertions refuse SDK %s results", async (defect, reason) => {
+  const { results } = await execute(defect);
+  expect(results.find(value => value.id === "S858-OPENING"), JSON.stringify(results)).toMatchObject({
+    status: "FAIL", detail: expect.stringContaining(reason),
+  });
+  expect(summarize(results).complete).toBe(false);
+}, 30000);
+
+test.each([
+  ["native-before-missing", "native-use preexisting journal retained"],
+  ["native-before-rewritten", "native-use preexisting journal unchanged"],
+] as const)("six-family native-use preserves prior journals under SDK %s corruption", async (defect, reason) => {
+  const { results } = await execute(defect);
+  expect(results.find(value => value.id === "S858-OPENING"), JSON.stringify(results)).toMatchObject({
+    status: "FAIL", detail: expect.stringContaining(reason),
+  });
+  expect(summarize(results).complete).toBe(false);
 }, 30000);
 
 test("current recognition requests the approval cutoff instead of replaying same arguments", async () => {
