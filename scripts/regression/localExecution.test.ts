@@ -1,11 +1,13 @@
 // @vitest-environment node
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { startVitest } from "vitest/node";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { digestRulingText, scenarioFingerprint, type ScenarioRecord } from "./scenarioRecord";
-import type { LocalExecutionReport } from "./localExecutionReporter";
+import LocalExecutionReporter, { type LocalExecutionReport } from "./localExecutionReporter";
+import { main as executeLocal } from "./runLocalExecution.mjs";
 
 const cli = path.resolve(__dirname, "runLocalExecution.mjs");
 const title = "selected fixture execution";
@@ -67,6 +69,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   const link = path.join(root, "dangling-link");
   if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(link);
   for (const target of [root, evidence]) {
@@ -76,6 +79,65 @@ afterEach(() => {
     rmSync(absolute, { recursive: true, force: true });
   }
 });
+
+test("imported CLI entry executes real Git, child process and receipt I/O", () => {
+  const output = path.join(evidence, "imported-entry.json");
+  const result = executeLocal(["--root", root, "--scenario", record.id, "--output", output]);
+  const receipt: Receipt = JSON.parse(readFileSync(output, "utf8"));
+  expect(receipt.verdict).toBe("PASS");
+  expect(receipt).toEqual(result);
+  expect(receipt.process?.exit).toBe(0);
+}, 70000);
+
+test.each(["wrong-head", "binding-deleted", "foreign-path", "source-mutation", "native-failed"] as const)(
+  "imported CLI retains the actual %s refusal", mode => {
+    if (mode === "binding-deleted") { delete record.impl; saveRecord(); }
+    if (mode === "foreign-path" && record.impl) { record.impl.file = "../foreign.test.ts"; saveRecord(); }
+    if (mode === "source-mutation") writeFileSync(path.join(root, "selected.test.ts"),
+      `import { writeFileSync } from "node:fs"; test("${title}", () => { writeFileSync("marker.txt", "after"); expect(4).toBe(4); });`);
+    if (mode === "native-failed") writeFileSync(path.join(root, "selected.test.ts"), `test("${title}", () => { expect(3).toBe(4); });`);
+    const output = path.join(evidence, `imported-${mode}.json`);
+    executeLocal(["--root", root, "--scenario", record.id, "--output", output,
+      ...(mode === "wrong-head" ? ["--expect-head", "0".repeat(40)] : [])]);
+    const receipt: Receipt = JSON.parse(readFileSync(output, "utf8"));
+    expect(receipt.verdict).not.toBe("PASS");
+    const expected = { "wrong-head": "EXPECTED_HEAD_MISMATCH", "binding-deleted": "SINGLE_RECORD_BINDING_REQUIRED",
+      "foreign-path": "BACKEND_TEST_PATH_REQUIRED", "source-mutation": "SOURCE_CHANGED_DURING_EXECUTION", "native-failed": "CHILD_PROCESS_NOT_CLEAN" };
+    expect(receipt.issues).toContain(expected[mode]);
+  }, 70000);
+
+test.each(["positive", "runtime-skip", "expected-failure", "zero", "duplicate", "failed"] as const)(
+  "native Vitest API delivers measured %s events to the reporter", async mode => {
+    if (mode === "runtime-skip") writeFileSync(path.join(root, "selected.test.ts"),
+      `const method = "sk" + "ip"; test("${title}", execution => execution[method]());`);
+    if (mode === "expected-failure") writeFileSync(path.join(root, "selected.test.ts"),
+      `const options = Object.fromEntries([["fa" + "ils", true]]); test("${title}", options, () => { throw new Error("Synthetic expected failure"); });`);
+    if (mode === "zero") writeFileSync(path.join(root, "vitest.config.mjs"), config('exclude: ["**/*"], passWithNoTests: true,'));
+    if (mode === "duplicate") writeFileSync(path.join(root, "vitest.config.mjs"),
+      `export default { test: { projects: ["one", "two"].map(name => ({ test: { name, globals: true, environment: "node", include: ["selected.test.ts"] } })) } };`);
+    if (mode === "failed") writeFileSync(path.join(root, "selected.test.ts"), `test("${title}", () => { expect(3).toBe(4); });`);
+    const output = path.join(evidence, `api-${mode}.json`);
+    vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_EVENTS", output);
+    vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_ID", record.id);
+    vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_BASE", head);
+    const previousExit = process.exitCode;
+    let native: Awaited<ReturnType<typeof startVitest>> | undefined;
+    try {
+      native = await startVitest("test", ["selected.test.ts"], { root, watch: false, maxWorkers: 1,
+        fileParallelism: false, reporters: [new LocalExecutionReporter()], coverage: { enabled: false } });
+      const receipt: LocalExecutionReport = JSON.parse(readFileSync(output, "utf8"));
+      expect(receipt.complete).toBe(true);
+      expect(receipt.verdict).toBe(mode === "positive" ? "PASS" : "FAIL");
+      if (mode === "expected-failure") expect(receipt.issues).toContain("EXPECTED_FAILURE_IS_NOT_PASS");
+      if (mode === "runtime-skip") expect(receipt.cases[0].state).toBe("skipped");
+      if (mode === "zero") expect(receipt.cases).toHaveLength(0);
+      if (mode === "duplicate") expect(receipt.cases).toHaveLength(2);
+      if (mode === "failed") expect(receipt.runReason).toBe("failed");
+    } finally {
+      await native?.close();
+      process.exitCode = previousExit;
+    }
+  }, 30000);
 
 test("actual native execution joins one record without trusting GitHub environment labels", () => {
   const receipt = run("positive");
