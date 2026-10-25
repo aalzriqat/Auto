@@ -3,6 +3,68 @@ import { join } from "node:path";
 import { test, expect } from "@playwright/test";
 import { captureWithDiagnostics } from "../visual/browserCaptureDiagnostics";
 
+for (const outcome of ["success", "rejection"] as const) {
+  test(`document receipt preserves one full-page capture and ${outcome}`, async ({ page }, testInfo) => {
+    await page.setContent("<main>private-text-must-not-appear-in-receipt</main>");
+    const original = page.screenshot;
+    const sentinel = new Error("private-error-must-not-appear-in-receipt");
+    const expected = Buffer.from("synthetic-sdk-bytes");
+    let calls = 0;
+    page.screenshot = async options => {
+      calls += 1;
+      expect(options?.fullPage).toBe(true);
+      if (outcome === "rejection") throw sentinel;
+      return expected;
+    };
+    const receipt = testInfo.outputPath("document-receipt.json");
+    let result: unknown;
+    try {
+      result = await captureWithDiagnostics(page, { fullPage: true },
+        () => testInfo.outputPath("failure.json"), () => receipt).catch((error: unknown) => error);
+    } finally { page.screenshot = original; }
+    expect(calls).toBe(1);
+    expect(result).toBe(outcome === "rejection" ? sentinel : expected);
+    const raw = readFileSync(receipt, "utf8");
+    expect(raw).not.toContain("private-");
+    const evidence = JSON.parse(raw);
+    expect(evidence.status).toBe(outcome === "rejection" ? "CAPTURE_FAILED" : "CAPTURE_SUCCEEDED");
+    expect(evidence.before.document.status).toBe("AVAILABLE");
+    expect(evidence.after.document.status).toBe("AVAILABLE");
+    expect(existsSync(testInfo.outputPath("failure.json"))).toBe(outcome === "rejection");
+  });
+}
+
+for (const fault of ["invalid", "null-dimensions", "unresponsive"] as const) {
+  test(`document receipt marks ${fault} SDK facts unavailable without preventing capture`, async ({ page }, testInfo) => {
+    test.setTimeout(5_000);
+    const evaluate = page.evaluate, screenshot = page.screenshot;
+    page.evaluate = fault === "unresponsive" ? () => new Promise<never>(() => {}) :
+      fault === "null-dimensions" ? async () => ({
+        observedAt: 0, documentComplete: 1, visible: 1, fontsLoaded: null, fontCount: null,
+        width: null, height: null, documentWidth: null, documentHeight: null, devicePixelRatio: null,
+        firstPaint: null, firstContentfulPaint: null,
+      }) as never : async () => ({ width: "private-sdk-marker" }) as never;
+    let calls = 0;
+    const image = Buffer.from("synthetic-sdk-bytes");
+    page.screenshot = async () => { calls += 1; return image; };
+    const output = testInfo.outputPath("unavailable-document.json");
+    let result: Buffer;
+    try {
+      result = await captureWithDiagnostics(page, { fullPage: true },
+        () => testInfo.outputPath("unused-failure.json"), () => output);
+    } finally { page.evaluate = evaluate; page.screenshot = screenshot; }
+    expect(result).toBe(image);
+    expect(calls).toBe(1);
+    const raw = readFileSync(output, "utf8");
+    expect(raw).not.toContain("private-sdk-marker");
+    expect(raw.length).toBeLessThan(16_384);
+    const receipt = JSON.parse(raw);
+    expect(receipt.status).toBe("CAPTURE_SUCCEEDED");
+    expect(receipt.before.document.status).toBe("UNAVAILABLE");
+    expect(receipt.after.document.status).toBe("UNAVAILABLE");
+  });
+}
+
 // Playwright's runtime emitter exposes this Node diagnostic capability, but its
 // public Page/Browser types omit it. Validate rather than casting those types.
 function countListeners(emitter: object, event: string): number {
@@ -48,7 +110,8 @@ test("diagnostic publication failure cannot replace Chromium capture rejection",
   const blocker = testInfo.outputPath("diagnostic-blocker");
   writeFileSync(blocker, "not a directory");
   let rejected: unknown;
-  try { await captureWithDiagnostics(page, { fullPage: true }, () => join(blocker, "failure.json")); }
+  try { await captureWithDiagnostics(page, { fullPage: true }, () => join(blocker, "failure.json"),
+    () => join(blocker, "document.json")); }
   catch (error) { rejected = error; }
   finally { page.screenshot = original; }
   expect(rejected).toBe(sentinel);

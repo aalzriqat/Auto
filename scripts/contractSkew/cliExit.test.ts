@@ -573,7 +573,7 @@ describe("the needs-evidence baseline", () => {
     run(dir, ["--mode", "production", "--spec", "spec.json", "--json", "report.json"], {}, true);
     expect(reportOf(dir).baseline.path).toBe(baseline);
     expect(fs.readFileSync(baseline)).toEqual(before);
-  });
+  }, 300_000); // Full CLI subprocess, with the same bounded budget as adjacent CLI cases.
 });
 
 describe("CS2-3 / D-26: baseline drift blocks a RELEASE too (exit 10, never a warning)", () => {
