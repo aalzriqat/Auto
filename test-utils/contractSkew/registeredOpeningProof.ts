@@ -2,7 +2,7 @@ import { expect } from "vitest";
 import path from "node:path";
 import { compareNode, validatorTree } from "../../scripts/contractSkew/contractTree.mjs";
 import type { ClientNode } from "../../scripts/contractSkew/contractTree.mjs";
-import { openingAllocationValidator, openingAllocationResultValidator } from "@/convex/utils/openingAllocationValidators";
+import { openingAllocationValidator, openingAllocationResultValidator } from "../../convex/utils/openingAllocationValidators";
 import historicalDraftArgs from "../../scripts/contractSkew/__fixtures__/wizardDrafts-production-saveDraft.args.json";
 
 type ProofExtraction = Readonly<{ calls: readonly {
