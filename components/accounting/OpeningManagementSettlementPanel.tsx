@@ -33,38 +33,16 @@ export function OpeningManagementSettlementPanel({ orgId }: Readonly<{ orgId: Id
   const canManage = hasPermission(PERMISSIONS.MANAGE_FINANCE);
   const context = useQuery(api.openingManagementSettlement.context, canView ? { orgId } : "skip");
   const plans = useQuery(api.openingManagementSettlement.list, canView ? { orgId } : "skip");
-  const prepare = useMutation(api.openingManagementSettlement.draft);
   const approve = useMutation(api.openingManagementSettlement.approve);
   const reject = useMutation(api.openingManagementSettlement.reject);
-  const [amount, setAmount] = useState("");
-  const [month, setMonth] = useState("");
-  const [reference, setReference] = useState("");
-  const [attested, setAttested] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const command = useRef<string | null>(null);
   if (!canView) return null;
   if (!context || !plans) return <p role="status">{text.loading}</p>;
   const opening = context.postedOpening;
   const active = plans.find((plan) => plan.status !== "REJECTED");
   const currency = opening?.currency;
-
-  async function submit() {
-    const totalMinor = currency ? parseOpeningMoneyMinor(amount, currency) : null;
-    const firstEffectiveMonth = Date.parse(`${month}-01T00:00:00.000Z`);
-    if (!opening || !currency || totalMinor === null || totalMinor <= 0 || !Number.isSafeInteger(firstEffectiveMonth) || !reference.trim() || !attested) {
-      setError(text.invalid); return;
-    }
-    setBusy(true); setError("");
-    command.current ??= `opening-management:${crypto.randomUUID()}`;
-    try {
-      await prepare({ orgId, openingDraftId: opening.id, totalMinor, firstEffectiveMonth,
-        supportingReference: reference, classificationAttestation: "CONSUMED_BEFORE_OPENING_NOT_PREPAID_NOT_CAPITAL",
-        expectedCurrency: currency, idempotencyKey: command.current });
-      command.current = null;
-    } catch { setError(text.failed); }
-    finally { setBusy(false); }
-  }
+  const observationVersion = opening?.observationVersion;
 
   async function decide(planId: Id<"openingManagementSettlementPlans">, accepted: boolean) {
     setBusy(true); setError("");
@@ -89,15 +67,57 @@ export function OpeningManagementSettlementPanel({ orgId }: Readonly<{ orgId: Id
         <Button variant="outline" disabled={busy} onClick={() => void decide(active._id, false)}>{text.reject}</Button>
       </div>}
     </div>}
-    {canManage && !active && (!opening || !currency ? <p role="status">{text.unavailable}</p> :
-      <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-        <label>{text.amount} ({currency})<Input inputMode="decimal" value={amount} onChange={(event) => { setAmount(event.target.value); command.current = null; }} /></label>
-        <label>{text.month}<Input type="month" value={month} onChange={(event) => { setMonth(event.target.value); command.current = null; }} /></label>
-        <label>{text.reference}<Input maxLength={200} value={reference} onChange={(event) => { setReference(event.target.value); command.current = null; }} /></label>
-        <label className="flex gap-2"><input type="checkbox" checked={attested} onChange={(event) => { setAttested(event.target.checked); command.current = null; }} />{text.attest}</label>
-        <Button disabled={busy} type="submit">{text.prepare}</Button>
-      </form>)}
+    {canManage && !active && (!opening || typeof currency !== "string" || typeof observationVersion !== "string" ? <output>{text.unavailable}</output> :
+      <ManagementDraftForm key={JSON.stringify([orgId, observationVersion])} orgId={orgId}
+        observationVersion={observationVersion} currency={currency} />)}
   </section>;
+}
+
+function ManagementDraftForm({ orgId, observationVersion, currency }: Readonly<{
+  orgId: Id<"organizations">; observationVersion: string; currency: string;
+}>) {
+  const { locale } = useLanguage();
+  const text = copy[locale];
+  const prepare = useMutation(api.openingManagementSettlement.draftFromObservation);
+  const [amount, setAmount] = useState("");
+  const [month, setMonth] = useState("");
+  const [reference, setReference] = useState("");
+  const [attested, setAttested] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const command = useRef<string | null>(null);
+
+  async function submit() {
+    const expectedOpeningVersion = observationVersion;
+    const expectedCurrency = currency;
+    if (typeof expectedOpeningVersion !== "string" || typeof expectedCurrency !== "string") { setError(text.invalid); return; }
+    const totalMinor = parseOpeningMoneyMinor(amount, expectedCurrency);
+    const firstEffectiveMonth = Date.parse(`${month}-01T00:00:00.000Z`);
+    if (typeof totalMinor !== "number" ||
+        totalMinor <= 0 || !Number.isSafeInteger(firstEffectiveMonth) || !reference.trim() || !attested) {
+      setError(text.invalid); return;
+    }
+    command.current ??= `opening-management:${crypto.randomUUID()}`;
+    const idempotencyKey = command.current;
+    if (typeof idempotencyKey !== "string") { setError(text.invalid); return; }
+    setBusy(true); setError("");
+    try {
+      await prepare({ orgId, expectedOpeningVersion, totalMinor, firstEffectiveMonth,
+        supportingReference: reference, classificationAttestation: "CONSUMED_BEFORE_OPENING_NOT_PREPAID_NOT_CAPITAL",
+        expectedCurrency, idempotencyKey });
+      command.current = null;
+    } catch { setError(text.failed); }
+    finally { setBusy(false); }
+  }
+
+  return <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+    {error && <p role="alert">{error}</p>}
+    <label>{text.amount} ({currency})<Input name="amount" inputMode="decimal" value={amount} onChange={(event) => { setAmount(event.target.value); command.current = null; }} /></label>
+    <label>{text.month}<Input name="firstEffectiveMonth" type="month" value={month} onChange={(event) => { setMonth(event.target.value); command.current = null; }} /></label>
+    <label>{text.reference}<Input name="supportingReference" maxLength={200} value={reference} onChange={(event) => { setReference(event.target.value); command.current = null; }} /></label>
+    <label className="flex gap-2"><input name="classificationAttested" type="checkbox" checked={attested} onChange={(event) => { setAttested(event.target.checked); command.current = null; }} />{text.attest}</label>
+    <Button disabled={busy} type="submit">{text.prepare}</Button>
+  </form>;
 }
 
 function ManagementReport({ orgId, planId }: Readonly<{ orgId: Id<"organizations">; planId: Id<"openingManagementSettlementPlans"> }>) {

@@ -56,6 +56,113 @@ const isolatedCompilerOptions: ts.CompilerOptions = {
   lib: ["lib.es2022.d.ts"], types: [], strict: true,
 };
 
+describe("local const primitive fallthrough proof", () => {
+  test("a direct negative typeof guard proves the transmitted primitive against native metadata", () => {
+    const file = path.resolve("components/__virtual_contract_controls__/typeof/direct.ts");
+    const source = `declare function useMutation(fn: unknown): (args: unknown) => unknown;
+      declare const api: Record<string, Record<string, unknown>>;
+      declare function read(): unknown;
+      const send = useMutation(api.guardProof.direct);
+      export async function run() {
+        const value = read();
+        if (typeof value !== "string") { return; }
+        await send({ value });
+      }`;
+    const extracted = extractClientCalls([file], "tsconfig.json", {
+      program: virtualProgram(new Map([[file, source]]), isolatedCompilerOptions),
+    });
+    expect(extracted.calls).toHaveLength(1);
+    const call = extracted.calls[0];
+    if (!call.payload) throw new Error("Primitive payload not extracted");
+    const native = v.object({ value: v.string() });
+    if (!("json" in native)) throw new Error("Native validator metadata unavailable");
+    const compared = compareNode(call.payload, validatorTree(native.json), "", { site: { identifier: call.identifier, file: call.file, line: call.line } });
+    expect(compared.findings).toEqual([]);
+  });
+
+  const cases = [
+    { name: "explicit property and returning message block", clean: true, body: 'const value = read(); if (typeof value !== "string") { note(); return; } send({ value: value });' },
+    { name: "OR leaves and first awaited try call", clean: true, body: 'const value = read(); const other = read(); if ((typeof value !== "string") || typeof other !== "number" || false) return; try { await send({ value }); } catch {}' },
+    { name: "number is broad only", clean: true, number: true, body: 'const value = read(); if (typeof value !== "number") return; await send({ value });' },
+    { name: "intervening unknown effects cannot change const", clean: true, body: 'const value = read(); if (typeof value !== "string") return; await note(); try { await send({ value }); } catch {}' },
+    { name: "OR ignores unrelated non-type leaves", clean: true, body: 'const value = read(); if (typeof value !== "string" || !value.length || (false && true)) return; try { await send({ value }); } catch {}' },
+    { name: "caught guard cannot resume into proof", wrong: true, values: [17], body: 'const value = read(); try { if (typeof value !== "string") { throw new Error("bad"); } } catch {} await send({ value });' },
+    { name: "caught return expression", wrong: true, values: [17], body: 'const value = read(); try { if (typeof value !== "string") return fail(); } catch {} await send({ value });' },
+    { name: "finally overrides guard return", wrong: true, values: [17], body: 'const value = read(); try { if (typeof value !== "string") return; } finally { await send({ value }); }' },
+    { name: "call in catch", body: 'const value = read(); if (typeof value !== "string") return; try { fail(); } catch { await send({ value }); }' },
+    { name: "call in finally", body: 'const value = read(); if (typeof value !== "string") return; try {} finally { await send({ value }); }' },
+    { name: "shadowed value", wrong: true, values: ["safe", 17], body: 'const value = read(); if (typeof value !== "string") return; { const value = read(); await send({ value }); }' },
+    { name: "let reassignment", wrong: true, values: ["safe", 17], body: 'let value = read(); if (typeof value !== "string") return; value = read(); await send({ value });' },
+    { name: "imported binding", body: 'if (typeof foreign !== "string") return; await send({ value: foreign });' },
+    { name: "repeated getter", wrong: true, values: ["safe", 17], body: 'const box = { get value() { return read(); } }; if (typeof box.value !== "string") return; await send({ value: box.value });' },
+    { name: "copied earlier payload", wrong: true, values: ["safe", 17], body: 'const value = read(); const payload = { value: read() }; if (typeof value !== "string") return; await send(payload);' },
+    { name: "overwritten payload", wrong: true, values: ["safe", 17], body: 'const value = read(); const payload = { value }; if (typeof value !== "string") return; payload.value = read(); await send(payload);' },
+    { name: "nested transmitted call", body: 'const value = read(); if (typeof value !== "string") return; await wrap(send({ value }));' },
+    { name: "AND is not OR fallthrough", wrong: true, values: [17], body: 'const value = read(); if (typeof value !== "string" && false) return; await send({ value });' },
+    { name: "nested callback", body: 'const value = read(); if (typeof value !== "string") return; await wrap(async () => { await send({ value }); });' },
+    { name: "nonfirst try call", body: 'const value = read(); if (typeof value !== "string") return; try { note(); await send({ value }); } catch {}' },
+    { name: "asserted initializer", body: 'const value = read() as string; if (typeof value !== "string") return; await send({ value });' },
+    { name: "non-null asserted initializer", body: 'const value = read()!; if (typeof value !== "string") return; await send({ value });' },
+    { name: "ambient declaration is not a runtime const", wrong: true, body: 'declare const value: unknown = read(); if (typeof value !== "string") return; erase(); await send({ value });' },
+    { name: "asserted transmitted expression", body: 'const value = read(); if (typeof value !== "string") return; await send({ value: value as string });' },
+    { name: "duplicate property", wrong: true, values: ["safe", 17], body: 'const value = read(); if (typeof value !== "string") return; await send({ value, value: read() });' },
+    { name: "spread literal", body: 'const value = read(); if (typeof value !== "string") return; await send({ value, ...extra() });' },
+    { name: "computed property", body: 'const value = read(); if (typeof value !== "string") return; await send({ ["value"]: value });' },
+    { name: "literal getter", wrong: true, values: ["safe", 17], body: 'const value = read(); if (typeof value !== "string") return; await send({ get value() { return read(); } });' },
+    { name: "nonexiting guard", wrong: true, values: [17], body: 'const value = read(); if (typeof value !== "string") { note(); } await send({ value });' },
+    { name: "conflicting primitive facts", body: 'const value = read(); if (typeof value !== "string" || typeof value !== "number") return; await send({ value });' },
+    { name: "dynamic eval", body: 'const value = read(); if (typeof value !== "string") return; eval(""); await send({ value });' },
+    { name: "guard checks a different value symbol", wrong: true, values: [17, "safe"], body: 'const value = read(); const other = read(); if (typeof other !== "string") return; await send({ value });' },
+    { name: "negated positive condition", body: 'const value = read(); if (!(typeof value === "string")) return; await send({ value });' },
+  ];
+  const file = path.resolve("components/__virtual_contract_controls__/typeof/adversarial.ts");
+  const foreignFile = path.resolve("components/__virtual_contract_controls__/typeof/foreign.ts");
+  const source = `import { foreign } from "./foreign";
+    declare function useMutation(fn: unknown): (args: unknown) => unknown;
+    declare const api: Record<string, Record<string, unknown>>;
+    declare function read(): unknown;
+    declare function note(): void;
+    declare function fail(): never;
+    declare function wrap(value: unknown): unknown;
+    declare function extra(): Record<string, unknown>;
+    declare function erase(): void;
+    ${cases.map((control, index) => `const send${index} = useMutation(api.guardProof.case${index});
+      export async function run${index}() { ${control.body.replaceAll('send(', `send${index}(`)} }`).join("\n")}`;
+  let observed: ReturnType<typeof extractClientCalls> | undefined;
+  const calls = () => observed ??= extractClientCalls([file], "tsconfig.json", {
+    program: virtualProgram(new Map([[file, source], [foreignFile, 'declare function read(): unknown; export const foreign = read();']]), isolatedCompilerOptions),
+  });
+  test.each(cases.map((control, index) => ({ ...control, index })))("$name retains the exact primitive boundary", control => {
+    const matches = calls().calls.filter(call => call.identifier === `guardProof:case${control.index}`);
+    expect(matches).toHaveLength(1);
+    const call = matches[0];
+    if (!call.payload) throw new Error("Adversarial payload not measured");
+    const native = v.object({ value: control.number ? v.number() : v.string() });
+    if (!("json" in native)) throw new Error("Native primitive metadata unavailable");
+    const findings = compareNode(call.payload, validatorTree(native.json), "", { site: { identifier: call.identifier, file: call.file, line: call.line } }).findings;
+    if (control.clean) expect(findings).toEqual([]);
+    else expect(findings.some(finding => finding.severity.endsWith("UNKNOWN") || finding.severity === "BREAKING")).toBe(true);
+    if (control.clean && !control.number) {
+      for (const stronger of [v.id("users"), v.literal("ONLY_ALLOWED")]) {
+        const domain = v.object({ value: stronger });
+        if (!("json" in domain)) throw new Error("Native stronger metadata unavailable");
+        expect(compareNode(call.payload, validatorTree(domain.json), "", { site: { identifier: call.identifier, file: call.file, line: call.line } }).findings.length).toBeGreaterThan(0);
+      }
+    }
+  });
+  test.each(cases.filter(control => control.wrong))("$name actually transmits a wrong runtime primitive", async control => {
+    const sent: Array<{ value: unknown }> = [];
+    const values = [...(control.values ?? [])];
+    let ambientValue: unknown = "safe";
+    const code = ts.transpileModule(`(async () => { ${control.body} })()`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    await runInNewContext(code, { read: () => values.shift(), send: (value: { value: unknown }) => { sent.push(value); },
+      note: () => {}, fail: () => { throw new Error("Caught failure"); }, wrap: (value: unknown) => value,
+      get value() { return ambientValue; }, erase: () => { ambientValue = 17; } });
+    expect(sent).toHaveLength(1);
+    expect(typeof sent[0].value).not.toBe("string");
+  });
+});
+
 /**
  * Direct tests for the extractor.
  *

@@ -911,8 +911,12 @@ async function proveCurrentManagement(ctx) {
   const preparer = row(await must("query", "users:getMe", {}));
   const approver = row(await ctx.approverMust("query", "users:getMe", {}));
   if (id(preparer._id) === id(approver._id)) throw new Error("Current management requires distinct actual actors");
-  const planId = id(await must("mutation", "openingManagementSettlement:draft", {
-    orgId, openingDraftId: id(posted.draftId), totalMinor: 100003,
+  const observation = row(row(await must("query", "openingManagementSettlement:context", { orgId })).postedOpening);
+  equal(observation.id, posted.draftId, "current management observed native opening");
+  const expectedOpeningVersion = observation.observationVersion;
+  if (typeof expectedOpeningVersion !== "string" || !expectedOpeningVersion) throw new Error("Opening observation unavailable");
+  const planId = id(await must("mutation", "openingManagementSettlement:draftFromObservation", {
+    orgId, expectedOpeningVersion, totalMinor: 100003,
     firstEffectiveMonth: firstMonth, supportingReference: "QA TEST current management classification",
     classificationAttestation: "CONSUMED_BEFORE_OPENING_NOT_PREPAID_NOT_CAPITAL",
     expectedCurrency: "JOD", idempotencyKey: key(),
