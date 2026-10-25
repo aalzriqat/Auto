@@ -7,7 +7,7 @@ AutoFlow work lives in Jira project `SCRUM` on `https://autoflowdealer.atlassian
 - Read the relevant Jira issue, its comments, linked blockers and parent before material work. Search for an existing issue before creating one; reuse the existing issue when it describes the same work.
 - Jira is authoritative for current issue state and owner rulings. The pilot gate is SCRUM-760; current contract-repair lineage includes SCRUM-711 and SCRUM-862. Fetch these live when that scope applies rather than treating this note as current completion evidence.
 - Prefix Codex issue descriptions and progress comments with `[Codex Update]`, or `[Codex Review]` for reviews. Preserve the session's ownership and coordination rules.
-- Skill invocation and its required draft approval govern publishing the spec or tickets. Planning completeness does not authorize implementation, merge, deployment, purchases, new credentials or a human review claim.
+- Follow each invoked skill's actual publishing prerequisites. For decisions it requires, use the invoking user's approval or an applicable existing [documented owner decision-rule delegation](../../.claude/skills/README.md#precedence). Before publishing, record the draft scope and actual user approval or delegated decision in the task/Jira context; reuse existing authorization rather than adding an approval gate. An automated decision is never a human review. Planning completeness does not authorize implementation, merge, deployment, purchases or new credentials.
 - Keep all repository financial, tenancy, review, CI and human deployment gates. Merged, deployed and production-verified are distinct states. Do not mark Done merely because a spec or ticket has been published.
 
 ## Native operations
@@ -20,6 +20,6 @@ AutoFlow work lives in Jira project `SCRUM` on `https://autoflowdealer.atlassian
 
 ## Labels and request surfaces
 
-The `triage` skill is not installed, so this setup does not provision a triage-label vocabulary or create any labels. Preserve existing Jira statuses and labels. A skill's `ready-for-agent` planning label is not an implementation or merge authorization; use it only within the approved publishing operation and do not invent broader status mappings.
+The `triage` skill is not installed, so this setup does not provision a triage-label vocabulary or create any labels. Preserve existing Jira statuses and labels. Apply `ready-for-agent` only if it already exists in SCRUM and the approved publishing scope includes applying it. If the label is absent, omit it and report its absence. Do not create the label or invent status mappings. The label never authorizes implementation or merge.
 
 GitHub remains the code/PR/CI surface, not a second issue tracker. This setup adds no Slack messages or new posting automation. Existing project communication rules remain authoritative.
