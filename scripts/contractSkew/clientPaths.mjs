@@ -235,7 +235,7 @@ export function createClientProgram(rootFiles, tsconfigPath) {
 export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
   const program = options.program ?? createClientProgram(rootFiles, tsconfigPath);
   const checker = program.getTypeChecker();
-  const evidence = createEvidenceAnalysis(program, checker);
+  const evidence = createEvidenceAnalysis(program, checker, path.dirname(path.resolve(tsconfigPath)));
 
   const calls = [];
   const unresolvedBinders = [];
@@ -2105,12 +2105,244 @@ function isTrackedNativeConstructor(program, symbol) {
   return isNativeDataConstructor(program, symbol) || isNativeFailureConstructor(program, symbol);
 }
 
-function createEvidenceAnalysis(program, checker) {
+function createEvidenceAnalysis(program, checker, projectRoot) {
   const written = indexWrittenSymbols(program, checker);
   /** @type {Map<import("typescript").Symbol, boolean>} */
   const symbolMemo = new Map();
   /** @type {Set<import("typescript").Symbol>} */
   const visitingSymbols = new Set();
+  // Keep the preexisting installed-dependency contract assumption distinct from
+  // intrinsic identity. Semantic "external" alone also includes workspace links.
+  // Static dependency API contracts are assumed here, not runtime-certified.
+  const dependencyRoots = [];
+  let directory = projectRoot;
+  for (;;) {
+    const modules = path.join(directory, "node_modules");
+    try {
+      if (ts.sys.directoryExists(modules) && ts.sys.realpath) {
+        const real = ts.sys.realpath(modules);
+        if (path.basename(real) === "node_modules") dependencyRoots.push(real);
+      }
+    } catch { /* Unmeasured filesystem ownership cannot establish dependency trust. */ }
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  const dependencyOwnership = new Map();
+  function isInstalledDependencyDeclaration(sourceFile) {
+    if (dependencyOwnership.has(sourceFile)) return dependencyOwnership.get(sourceFile);
+    let trusted = false;
+    try {
+      if (program.isSourceFileFromExternalLibrary(sourceFile) && ts.sys.fileExists(sourceFile.fileName) && ts.sys.realpath) {
+        const real = ts.sys.realpath(sourceFile.fileName);
+        trusted = dependencyRoots.some((root) => {
+          const relative = path.relative(root, real);
+          return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+        });
+      }
+    } catch { /* Virtual, linked-workspace or unavailable ownership stays source-controlled. */ }
+    dependencyOwnership.set(sourceFile, trusted);
+    return trusted;
+  }
+
+  const hasImplementationBody = (declaration) =>
+    (ts.isFunctionDeclaration(declaration) || ts.isFunctionExpression(declaration) ||
+      ts.isArrowFunction(declaration) || ts.isMethodDeclaration(declaration) ||
+      ts.isGetAccessorDeclaration(declaration) || ts.isConstructorDeclaration(declaration)) && Boolean(declaration.body);
+
+  const runtimeAliases = new Map();
+  function pureRuntimeAliases(sourceFile) {
+    if (runtimeAliases.has(sourceFile)) return runtimeAliases.get(sourceFile);
+    runtimeAliases.set(sourceFile, null);
+    const runtimeFile = sourceFile.fileName.replace(/\.d\.ts$/, ".js").replace(/\.d\.mts$/, ".mjs").replace(/\.d\.cts$/, ".cjs");
+    if (runtimeFile === sourceFile.fileName) return null;
+    const present = program.getSourceFile(runtimeFile);
+    const text = present?.text ?? ts.sys.readFile(runtimeFile);
+    if (text === undefined) return null;
+    const runtime = present ?? ts.createSourceFile(runtimeFile, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    const imports = new Map(), exports = new Map();
+    for (const statement of runtime.statements) {
+      if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) &&
+        statement.importClause && !statement.importClause.isTypeOnly &&
+        statement.importClause.namedBindings && ts.isNamedImports(statement.importClause.namedBindings) &&
+        !statement.importClause.name && !statement.attributes) {
+        const resolved = ts.resolveModuleName(statement.moduleSpecifier.text, runtimeFile, program.getCompilerOptions(), ts.sys).resolvedModule;
+        const dependency = resolved && program.getSourceFile(resolved.resolvedFileName);
+        if (!dependency || !isInstalledDependencyDeclaration(dependency)) return null;
+        const dependencyModule = checker.getSymbolAtLocation(dependency);
+        if (!dependencyModule) return null;
+        for (const element of statement.importClause.namedBindings.elements) {
+          if (element.isTypeOnly) return null;
+          const name = (element.propertyName ?? element.name).text;
+          const imported = checker.getExportsOfModule(dependencyModule).find((item) => item.name === name);
+          if (!imported || imports.has(element.name.text)) return null;
+          imports.set(element.name.text, unaliasSymbol(checker, imported));
+        }
+      } else if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const &&
+        statement.modifiers?.length === 1 && statement.modifiers[0].kind === ts.SyntaxKind.ExportKeyword) {
+        for (const declaration of statement.declarationList.declarations) {
+          if (!ts.isIdentifier(declaration.name) || !declaration.initializer || !ts.isIdentifier(declaration.initializer) ||
+            declaration.type || exports.has(declaration.name.text)) return null;
+          exports.set(declaration.name.text, declaration.initializer.text);
+        }
+      } else return null;
+    }
+    const aliases = new Map();
+    for (const [name, importedName] of exports) {
+      const imported = imports.get(importedName);
+      if (!imported || written.has(imported)) return null;
+      aliases.set(name, imported);
+    }
+    runtimeAliases.set(sourceFile, aliases);
+    return aliases;
+  }
+
+  function outputParameterIsClosed(symbol, scope, seen = new Set()) {
+    if (seen.has(symbol)) return true;
+    seen.add(symbol);
+    return Boolean(symbol?.declarations?.length) && symbol.declarations.every((declaration) => {
+      if (!ts.isTypeParameterDeclaration(declaration) || declaration.parent !== scope) return false;
+      return [declaration.constraint, declaration.default].every((type) => {
+        if (!type) return true;
+        let closed = true;
+        const visit = (node) => {
+          if (ts.isTypeQueryNode(node) || node.kind === ts.SyntaxKind.ThisType) { closed = false; return; }
+          if (ts.isIdentifier(node)) {
+            const referenced = resolveSymbol(checker, node);
+            if (referenced && referenced.flags & ts.SymbolFlags.TypeParameter && !outputParameterIsClosed(referenced, scope, seen)) closed = false;
+          }
+          if (closed) ts.forEachChild(node, visit);
+        };
+        visit(type);
+        return closed;
+      });
+    });
+  }
+
+  function sameOutputContract(left, right, scope, seen = new Map()) {
+    if (left === right) return true;
+    if (!left || !right || left.flags !== right.flags) return false;
+    const visited = seen.get(left) ?? new Set();
+    if (visited.has(right)) return true;
+    visited.add(right); seen.set(left, visited);
+    if (left.flags & ts.TypeFlags.TypeParameter) {
+      // Only signature-local constraints/defaults are invariant under an
+      // enclosing interface's input specialization. An outer C in T extends C
+      // or T=C could narrow any/unknown, even with the same signature node.
+      return Boolean(left.getSymbol()) && left.getSymbol() === right.getSymbol() &&
+        outputParameterIsClosed(left.getSymbol(), scope);
+    }
+    if (left.aliasSymbol && left.aliasSymbol === right.aliasSymbol) {
+      const a = left.aliasTypeArguments ?? [], b = right.aliasTypeArguments ?? [];
+      return a.length === b.length && a.every((type, index) => sameOutputContract(type, b[index], scope, seen));
+    }
+    if (left.flags & ts.TypeFlags.Object && right.flags & ts.TypeFlags.Object &&
+      left.objectFlags & ts.ObjectFlags.Reference && right.objectFlags & ts.ObjectFlags.Reference && left.target === right.target) {
+      const a = checker.getTypeArguments(left), b = checker.getTypeArguments(right);
+      return a.length === b.length && a.every((type, index) => sameOutputContract(type, b[index], scope, seen));
+    }
+    return false;
+  }
+
+  function hasMeasuredRuntimeAlias(sourceFile, name, signatureDeclaration, construct) {
+    const imported = pureRuntimeAliases(sourceFile)?.get(name);
+    if (!imported) return false;
+    const declarationModule = checker.getSymbolAtLocation(sourceFile);
+    const exported = declarationModule && checker.getExportsOfModule(declarationModule).find((item) => item.name === name);
+    if (!exported) return false;
+    const declared = unaliasSymbol(checker, exported);
+    if (!declared) return false;
+    const declaredType = checker.getTypeOfSymbolAtLocation(declared, declared.valueDeclaration ?? sourceFile);
+    const declaredSignatures = construct ? declaredType.getConstructSignatures() : declaredType.getCallSignatures();
+    const expected = declaredSignatures.find((signature) => signature.getDeclaration() === signatureDeclaration);
+    if (!expected) return false;
+    const type = checker.getTypeOfSymbolAtLocation(imported, imported.valueDeclaration ?? sourceFile);
+    const signatures = construct ? type.getConstructSignatures() : type.getCallSignatures();
+    return signatures.some((signature) => signature.getDeclaration() === signatureDeclaration &&
+      sameOutputContract(checker.getReturnTypeOfSignature(signature), checker.getReturnTypeOfSignature(expected), signatureDeclaration));
+  }
+
+  function importedCallableBoundaries(expression, seen = new Set()) {
+    const node = unwrapAliasExpression(expression);
+    const symbol = ts.isIdentifier(node) ? checker.getSymbolAtLocation(node) :
+      ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) ? accessSymbol(checker, node) : null;
+    if (!symbol || seen.has(symbol)) return [];
+    seen.add(symbol);
+    const boundaries = [];
+    const addImport = (declaration, name) => {
+      if (!ts.isImportDeclaration(declaration) || !ts.isStringLiteral(declaration.moduleSpecifier)) return;
+      const importedModule = checker.getSymbolAtLocation(declaration.moduleSpecifier);
+      for (const candidate of importedModule?.declarations ?? []) {
+        if (ts.isSourceFile(candidate)) {
+          const literal = declaration.moduleSpecifier.text;
+          const target = path.resolve(path.dirname(declaration.getSourceFile().fileName), literal).replace(/\.[cm]?js$/, "");
+          const stem = path.resolve(candidate.fileName).replace(/\.d\.(?:ts|mts|cts)$/, "");
+          const canonical = (file) => ts.sys.useCaseSensitiveFileNames ? file : file.toLowerCase();
+          boundaries.push({ sourceFile: candidate, name, relativeLeaf:
+            (literal.startsWith("./") || literal.startsWith("../")) && canonical(target) === canonical(stem) });
+        }
+      }
+    };
+    for (const declaration of symbol.declarations ?? []) {
+      if (ts.isImportSpecifier(declaration)) {
+        addImport(declaration.parent.parent.parent, (declaration.propertyName ?? declaration.name).text);
+      } else if ((ts.isVariableDeclaration(declaration) || ts.isPropertyAssignment(declaration)) && declaration.initializer) {
+        boundaries.push(...importedCallableBoundaries(declaration.initializer, seen));
+      }
+    }
+    if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && ts.isIdentifier(node.expression)) {
+      const receiver = checker.getSymbolAtLocation(node.expression);
+      for (const declaration of receiver?.declarations ?? []) {
+        if (ts.isNamespaceImport(declaration)) addImport(declaration.parent.parent,
+          ts.isPropertyAccessExpression(node) ? node.name.text :
+            node.argumentExpression && ts.isStringLiteral(node.argumentExpression) ? node.argumentExpression.text : "");
+      }
+    }
+    return boundaries;
+  }
+
+  function hasDeclarationOnlyReturn(node) {
+    const declaration = checker.getResolvedSignature(node)?.getDeclaration();
+    if (!declaration || hasImplementationBody(declaration)) return false;
+    const callee = unwrapAliasExpression(node.expression);
+    const symbol = ts.isIdentifier(callee) ? resolveSymbol(checker, callee) :
+      ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee) ? accessSymbol(checker, callee) : null;
+    // An overload's selected declaration has no body; its actual implementation
+    // may be another declaration of the same symbol.
+    const declarations = symbol?.declarations ?? [];
+    if (declarations.some((candidate) => hasImplementationBody(candidate) ||
+      ((ts.isVariableDeclaration(candidate) || ts.isPropertyAssignment(candidate)) &&
+        candidate.initializer && hasImplementationBody(unwrapAliasExpression(candidate.initializer))))) return false;
+    const construct = ts.isNewExpression(node);
+    const boundaries = importedCallableBoundaries(callee);
+    const measured = (sourceFile, name) => boundaries.some((boundary) => boundary.sourceFile === sourceFile && boundary.name === name && boundary.relativeLeaf) &&
+      hasMeasuredRuntimeAlias(sourceFile, name, declaration, construct);
+    if (boundaries.some(({ sourceFile, name }) => !isInstalledDependencyDeclaration(sourceFile) && !measured(sourceFile, name))) return true;
+    // A source-owned augmentation must not inherit a dependency's ownership.
+    const owned = (candidate) => !evidenceSourceOfDeclaration(candidate).node &&
+      !program.isSourceFileDefaultLibrary(candidate.getSourceFile()) &&
+      !isInstalledDependencyDeclaration(candidate.getSourceFile()) &&
+      !(ts.isVariableDeclaration(candidate) && ts.isIdentifier(candidate.name) &&
+        measured(candidate.getSourceFile(), candidate.name.text));
+    return owned(declaration) || declarations.some(owned);
+  }
+
+  function hasDeclarationOnlyCallableValue(node, symbol) {
+    const declarations = symbol?.declarations ?? [];
+    if (!declarations.length || declarations.some(hasImplementationBody)) return false;
+    const type = checker.getNonNullableType(checker.getTypeOfSymbolAtLocation(symbol, node));
+    const signatures = [...type.getCallSignatures(), ...type.getConstructSignatures()];
+    if (!signatures.length) return false;
+    const boundaries = importedCallableBoundaries(node);
+    const measured = (sourceFile, name) => boundaries.some((boundary) => boundary.sourceFile === sourceFile && boundary.name === name && boundary.relativeLeaf) &&
+      type.getCallSignatures().every((signature) =>
+      hasMeasuredRuntimeAlias(sourceFile, name, signature.getDeclaration(), false)) &&
+      type.getConstructSignatures().every((signature) => hasMeasuredRuntimeAlias(sourceFile, name, signature.getDeclaration(), true));
+    if (boundaries.some(({ sourceFile, name }) => !isInstalledDependencyDeclaration(sourceFile) && !measured(sourceFile, name))) return true;
+    return declarations.some((declaration) => !evidenceSourceOfDeclaration(declaration).node &&
+      !program.isSourceFileDefaultLibrary(declaration.getSourceFile()) && !isInstalledDependencyDeclaration(declaration.getSourceFile()) &&
+      !(ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name) && measured(declaration.getSourceFile(), declaration.name.text)));
+  }
 
   function isPureUncaughtFailure(node) {
     if (!ts.isThrowStatement(node) || !ts.isNewExpression(node.expression) || !ts.isIdentifier(node.expression.expression)) return false;
@@ -2161,8 +2393,16 @@ function createEvidenceAnalysis(program, checker) {
     // Only an effect-free native literal failure outside resumable frames can
     // never produce successful return data. The writer index still reads it.
     if (isPureUncaughtFailure(node)) return false;
+    // A callable signature declares an output type; it does not measure the
+    // implementation that produces the runtime value.
+    if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && hasDeclarationOnlyReturn(node)) return true;
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const symbol = accessSymbol(checker, node);
+      if (symbol && hasDeclarationOnlyCallableValue(node, symbol)) return true;
+    }
     if (ts.isIdentifier(node)) {
       const symbol = resolveSymbol(checker, node);
+      if (symbol && hasDeclarationOnlyCallableValue(node, symbol)) return true;
       if (symbol && symbolHasAssertionOrigin(symbol)) return true;
     }
     let found = false;

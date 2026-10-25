@@ -1,7 +1,7 @@
 import { OTHER_COMPANY_ID, PaymentType, WizardData } from "./types";
 
 /** Autosave transports only the governed durable draft fields. */
-export function buildWizardDraftData(data: WizardData): WizardData {
+export function buildWizardDraftData(data: WizardData) {
   return {
     vehicleId: data.vehicleId,
     vehiclePrice: data.vehiclePrice,
