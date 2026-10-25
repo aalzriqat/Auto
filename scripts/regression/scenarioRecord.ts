@@ -533,7 +533,7 @@ export function validateLibrary(
  * a reason and a ruling. Demoting it to candidate, or deleting its record, would
  * turn a red library green without anyone ruling on it (R4).
  */
-export function validateTransitions(base: ScenarioRecord[], head: ScenarioRecord[]): LibraryProblem[] {
+export function validateTransitions(base: ReadonlyArray<Pick<ScenarioRecord, "id" | "status">>, head: ReadonlyArray<Pick<ScenarioRecord, "id" | "status">>): LibraryProblem[] {
   const problems: LibraryProblem[] = [];
   const headById = new Map(head.filter(isObject).map((r) => [r.id, r]));
   for (const before of base) {
