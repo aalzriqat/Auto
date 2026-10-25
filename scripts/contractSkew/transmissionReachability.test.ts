@@ -146,6 +146,7 @@ describe("transmission reachability through the real TypeChecker and comparator"
     const spec = functionSpec({
       "routes:singular": objectValidator({ requestId: idValidator("requests") }),
       "routes:shadowed": objectValidator({ requestId: idValidator("requests") }),
+      "routes:unimplementedShadowed": objectValidator({ requestId: idValidator("requests") }),
       "routes:catchAll": objectValidator({ requestId: idValidator("requests") }),
       "routes:optionalCatchAll": objectValidator({ requestId: idValidator("requests") }),
     });
@@ -170,6 +171,20 @@ describe("transmission reachability through the real TypeChecker and comparator"
         expect.objectContaining({ identifier, path: "requestId" }),
       );
     }
+
+    // A source-owned callback signature supplies no implementation evidence.
+    // Keep this distinct from the concrete shadowed array producer above.
+    const unimplemented = compareContracts(
+      [callFor(calls, "routes:unimplementedShadowed")], spec,
+    );
+    expect(unimplemented.breaking).toEqual([]);
+    expect(unimplemented.needsEvidence).toContainEqual(
+      expect.objectContaining({
+        identifier: "routes:unimplementedShadowed",
+        path: "requestId",
+        severity: SEVERITY.TYPE_UNKNOWN,
+      }),
+    );
 
     const mutable = compareContracts(
       [callFor(calls, "routes:mutable")],

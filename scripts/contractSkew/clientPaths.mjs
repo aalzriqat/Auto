@@ -2277,9 +2277,8 @@ function createEvidenceAnalysis(program, checker, projectRoot) {
           const literal = declaration.moduleSpecifier.text;
           const target = path.resolve(path.dirname(declaration.getSourceFile().fileName), literal).replace(/\.[cm]?js$/, "");
           const stem = path.resolve(candidate.fileName).replace(/\.d\.(?:ts|mts|cts)$/, "");
-          const canonical = (file) => ts.sys.useCaseSensitiveFileNames ? file : file.toLowerCase();
           boundaries.push({ sourceFile: candidate, name, relativeLeaf:
-            (literal.startsWith("./") || literal.startsWith("../")) && canonical(target) === canonical(stem) });
+            (literal.startsWith("./") || literal.startsWith("../")) && normalizeSurfacePath(target) === normalizeSurfacePath(stem) });
         }
       }
     };
