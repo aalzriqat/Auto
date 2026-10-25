@@ -1,0 +1,120 @@
+{
+  "id": "opening-management-current-month-native-proof",
+  "fingerprint": "acf304aef27ab461627ae70d3c1847e8b27d11cdc47444a0000096b834bc98fc",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-current-recognition-proof",
+    "firstSeen": "2026-10-25"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "allocations": 12,
+        "debitMinor": 1924016,
+        "creditMinor": 1924016
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "openingManagementSettlement.draft",
+      "input": {
+        "totalMinor": 100003,
+        "firstEffectiveMonth": "CURRENT_UTC_MONTH"
+      }
+    },
+    {
+      "actor": {
+        "role": "senior_accountant",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "openingManagementSettlement.approve",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "openingManagementSettlement.report",
+      "input": {
+        "throughDate": "NATIVE_APPROVED_AT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bankBalance.afterAsOfEqualsApprovedAt",
+      "value": true
+    },
+    {
+      "observable": "bankBalance.beforeAsOfNoLaterThanApprovedAt",
+      "value": true
+    },
+    {
+      "observable": "installments.amountMinor",
+      "value": [
+        14286,
+        14286,
+        14286,
+        14286,
+        14286,
+        14286,
+        14287
+      ]
+    },
+    {
+      "observable": "installments.recognition",
+      "value": [
+        "RECOGNISED",
+        "SCHEDULED",
+        "SCHEDULED",
+        "SCHEDULED",
+        "SCHEDULED",
+        "SCHEDULED",
+        "SCHEDULED"
+      ]
+    },
+    {
+      "observable": "management.recognisedMinor",
+      "value": 14286
+    },
+    {
+      "observable": "management.officialNetIncomeMinor",
+      "value": 0
+    },
+    {
+      "observable": "management.managementProfitMinor",
+      "value": -14286
+    },
+    {
+      "observable": "management.distributionAvailable",
+      "value": false
+    },
+    {
+      "observable": "nativeJournalTrialCashBankPrepaidPartnerWitness.delta",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingRehearsalPublicComposite.test.ts",
+    "testName": "current-month opening management recognition preserves native books"
+  },
+  "matrixRow": "SCRUM-858-management-settlement"
+}
