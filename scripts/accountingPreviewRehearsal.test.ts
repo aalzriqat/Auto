@@ -75,6 +75,49 @@ describe("cleanup invocation receipts", () => {
   const target = () => ({ deployKey: VALID.CONVEX_DEPLOY_KEY, previewName: VALID.CONVEX_PREVIEW_NAME, convexUrl: VALID.NEXT_PUBLIC_CONVEX_URL });
   const refused = (marker = DISCOVERY, fn = RESET) => `[CONVEX ?(${fn})] [ERROR] '${marker}'\nFailed to run function "${fn}":\nConvexError: Opening cleanup could not be verified. Please contact support.\n`;
 
+  test("unavailable cleanup retains anonymous invocation diagnostics in failed rehearsal evidence", async () => {
+    const evidence = { cases: [] as Array<Record<string, unknown>>,
+      cleanupInvocations: { records: [] as unknown[], truncated: false } };
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics: evidence.cleanupInvocations,
+      spawnCli: () => ({ status: 1, stdout: "", stderr: "private-child-output" }) });
+    await recordCase(evidence.cases, "S858-CLEANUP-SPLIT", "cleanup diagnostic control", () =>
+      call(RESET, { orgId: "private-argument" }, "DISCOVERY"));
+    const retained = JSON.parse(JSON.stringify(evidence));
+    expect(retained.cases[0]).toMatchObject({ status: "FAIL", detail: "Cleanup preview invocation is UNAVAILABLE." });
+    expect(retained.cleanupInvocations.records).toHaveLength(1);
+    expect(retained.cleanupInvocations.records[0]).toMatchObject({
+      functionName: RESET, phase: "DISCOVERY", status: 1, reason: "REFUSAL_PREREQUISITES", stage: "PARSER",
+      stdout: { bytes: 0 }, stderr: { bytes: 20 },
+    });
+    expect(JSON.stringify(retained)).not.toMatch(/private-child-output|private-argument/);
+    expect(exitCodeForSummary(summarize(retained.cases))).toBe(1);
+  });
+
+  test("a broken diagnostic sink cannot replace the original cleanup refusal", async () => {
+    const diagnostics = { records: [] as unknown[], truncated: false };
+    Object.freeze(diagnostics.records);
+    Object.freeze(diagnostics);
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics,
+      spawnCli: () => ({ status: 1, stdout: "", stderr: "private failure" }) });
+    await expect(call(RESET, { orgId: "synthetic" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+  });
+
+  test.each([
+    ["ETIMEDOUT", "SIGTERM", "ETIMEDOUT", "SIGTERM"],
+    ["private-code", "private-signal", "UNAVAILABLE", "UNAVAILABLE"],
+  ])("child metadata %s is bounded and cannot certify cleanup", async (code, signal, expectedCode, expectedSignal) => {
+    const diagnostics = { records: [] as unknown[], truncated: false };
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics,
+      spawnCli: () => ({ status: null, error: Object.assign(new Error("private-error"), { code }), signal,
+        stdout: "", stderr: "private-child-output" }) });
+    await expect(call(RESET, { orgId: "private-argument" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    expect(diagnostics.records[0]).toMatchObject({
+      status: null, errorCode: expectedCode, signal: expectedSignal, reason: "CHILD_RESULT_UNAVAILABLE",
+      stderr: { bytes: 20, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("private-");
+  });
+
   test("the installed SDK forwards failed-response server logs before rejection", async () => {
     const logs = await failedSdkLogs([`[ERROR] '${DISCOVERY}'`]);
     expect(logs).toBe(`[CONVEX ?(${RESET})] [ERROR] '${DISCOVERY}'`);
@@ -149,6 +192,48 @@ describe("cleanup invocation receipts", () => {
     expect(await call(RESET, { orgId: "first" }, "DISCOVERY")).toMatchObject({ refusal: "OPENING_CLEANUP_SPLIT_REQUIRED" });
     await expect(call(RESET, { orgId: "second" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
     expect(spawnCli).toHaveBeenCalledTimes(2);
+  });
+
+  test("diagnostics preserve same-invocation receipts and bound collection without changing acceptance", async () => {
+    const diagnostics = { records: [] as unknown[], truncated: false };
+    const spawnCli = vi.fn()
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: refused() })
+      .mockReturnValueOnce({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" });
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli });
+    expect(await call(RESET, { orgId: "synthetic" }, "DISCOVERY")).toMatchObject({ ok: false, phase: "DISCOVERY" });
+    expect(await call("e2eBootstrap:observeOpeningCleanupFixture", {})).toEqual({ ok: true, value: { phase: "DONE" } });
+    expect(diagnostics.records).toEqual([
+      expect.objectContaining({ reason: "SPLIT_REFUSAL", stage: "COMPLETE" }),
+      expect.objectContaining({ reason: "SUCCESS", stage: "COMPLETE" }),
+    ]);
+    diagnostics.records.length = 256;
+    spawnCli.mockReturnValue({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" });
+    expect(await call("e2eBootstrap:observeOpeningCleanupFixture", {})).toEqual({ ok: true, value: { phase: "DONE" } });
+    expect(diagnostics.records).toHaveLength(256);
+    expect(diagnostics.truncated).toBe(true);
+  });
+
+  test("a late unavailable invocation survives the 256-record prefix and subsequent successful refusals", async () => {
+    const diagnostics: { records: unknown[]; truncated: boolean; terminal?: unknown; lastUnavailable?: unknown } =
+      { records: [], truncated: false };
+    const spawnCli = vi.fn(() => ({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" }));
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli });
+    for (let index = 0; index < 256; index += 1)
+      await call("e2eBootstrap:observeOpeningCleanupFixture", {});
+    spawnCli.mockReturnValue({ status: 1, stdout: "", stderr: "private late failure" });
+    await expect(call(RESET, { orgId: "private-argument" }, "REFERENCE")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    expect(diagnostics.records).toHaveLength(256);
+    expect(diagnostics.truncated).toBe(true);
+    expect(diagnostics.terminal).toMatchObject({ functionName: RESET, phase: "REFERENCE", status: 1, reason: "REFUSAL_PREREQUISITES" });
+    expect(diagnostics.lastUnavailable).toEqual(diagnostics.terminal);
+    const failure = diagnostics.lastUnavailable;
+    spawnCli.mockReturnValue({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" });
+    await call("e2eBootstrap:observeOpeningCleanupFixture", {});
+    spawnCli.mockReturnValue({ status: 1, stdout: "", stderr: refused() });
+    expect(await call(RESET, { orgId: "synthetic" }, "DISCOVERY")).toMatchObject({ ok: false, phase: "DISCOVERY" });
+    expect(diagnostics.terminal).toMatchObject({ status: 1, reason: "SPLIT_REFUSAL" });
+    expect(diagnostics.lastUnavailable).toBe(failure);
+    expect(JSON.stringify(diagnostics)).not.toContain("private");
   });
 });
 
