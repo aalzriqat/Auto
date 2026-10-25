@@ -1231,6 +1231,17 @@ function hasUnsupportedPrimitiveLookup(node) {
   return Boolean(ts.forEachChild(node, hasUnsupportedPrimitiveLookup));
 }
 
+/** @param {import("typescript").Statement} statement
+ * @param {import("typescript").Block} body
+ * @returns {import("typescript").Statement | null} */
+function directStatementInFunctionBody(statement, body) {
+  if (statement.parent === body) return statement;
+  const block = statement.parent;
+  if (!ts.isBlock(block) || !ts.isTryStatement(block.parent) || block.parent.tryBlock !== block ||
+      block.statements[0] !== statement || block.parent.parent !== body) return null;
+  return block.parent;
+}
+
 /** A lexical const primitive cannot change through object aliases or intervening effects.
  * This proves only typeof string/number, never an ID, enumeration or economic validity. */
 function localConstPrimitiveAtTransmission(checker, node, symbol, evidence) {
@@ -1245,14 +1256,8 @@ function localConstPrimitiveAtTransmission(checker, node, symbol, evidence) {
       declaration.parent.parent.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ||
       declaration.parent.parent.parent !== body || evidence.isWrittenSymbol(symbol) ||
       hasUnsupportedPrimitiveLookup(declaration.initializer)) return null;
-  /** @type {import("typescript").Statement} */
-  let direct = statement;
-  if (statement.parent !== body) {
-    const block = statement.parent;
-    if (!ts.isBlock(block) || !ts.isTryStatement(block.parent) || block.parent.tryBlock !== block ||
-        block.statements[0] !== statement || block.parent.parent !== body) return null;
-    direct = block.parent;
-  }
+  const direct = directStatementInFunctionBody(statement, body);
+  if (!direct) return null;
   // Dynamic lexical lookup can invalidate the checker's symbol identity.
   for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) if (ts.isWithStatement(ancestor)) return null;
   if (hasUnsupportedPrimitiveLookup(body)) return null;

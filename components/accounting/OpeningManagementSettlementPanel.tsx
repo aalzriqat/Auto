@@ -67,7 +67,7 @@ export function OpeningManagementSettlementPanel({ orgId }: Readonly<{ orgId: Id
         <Button variant="outline" disabled={busy} onClick={() => void decide(active._id, false)}>{text.reject}</Button>
       </div>}
     </div>}
-    {canManage && !active && (!opening || typeof currency !== "string" || typeof observationVersion !== "string" ? <p role="status">{text.unavailable}</p> :
+    {canManage && !active && (!opening || typeof currency !== "string" || typeof observationVersion !== "string" ? <output>{text.unavailable}</output> :
       <ManagementDraftForm key={JSON.stringify([orgId, observationVersion])} orgId={orgId}
         observationVersion={observationVersion} currency={currency} />)}
   </section>;
