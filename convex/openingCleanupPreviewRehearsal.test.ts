@@ -87,7 +87,9 @@ test("cleanup observation refuses a foreign deletion request before returning ev
   await expect(t.query(internal.e2eBootstrap.observeOpeningCleanupFixture, { ...scopeArgs, deletionRequestId: requestId })).rejects.toThrow();
 });
 
-async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "generation") {
+let listPrimaryOrgNames: () => Promise<string[]> = async () => [];
+
+async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "generation" | "deletion-throws", priorOrgs = 0) {
   const { t, baseline, primary, approver } = await setup();
   const sdk = (actor: typeof primary) => async (kind: "query" | "mutation", name: string, args: Record<string, unknown>) =>
     kind === "query" ? await actor.query(makeFunctionReference<"query">(name), args)
@@ -111,6 +113,7 @@ async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "gene
       }
       return { ok: true, value };
     }
+    if (name === "adminOrgs:runDeletionRequestBatch" && defect === "deletion-throws") throw new Error("Synthetic deletion worker failure");
     if (name === "adminOrgs:runDeletionRequestBatch") return { ok: true, value: await t.mutation(makeFunctionReference<"mutation">(name), args) };
     if (name !== "orgFinancialReset:resetOrgFinancialData") throw new Error("Unsupported native test call");
     const beforeErrors = errors.mock.calls.length;
@@ -126,8 +129,13 @@ async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "gene
     }
   };
   if (defect === "inventory") await primary.mutation(api.organizations.create, { name: "Unexpected unrecorded QA membership" });
+  listPrimaryOrgNames = async () => (await primary.query(api.organizations.listMine, {})).flatMap(org => (org ? [org.name] : []));
+  // Earlier rehearsal cases leave their organizations behind; the 12-organization fixture bound counts them.
+  const createdRehearsalOrgIds: string[] = [];
+  for (let index = 0; index < priorOrgs; index += 1)
+    createdRehearsalOrgIds.push(await primary.mutation(api.organizations.create, { name: `Prior rehearsal org ${index}` }));
   await runCleanupRehearsalCases({ orgId: baseline.orgId, results, config: { convexUrl: CLOUD },
-    createdRehearsalOrgIds: [], qaIdentities: { primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId },
+    createdRehearsalOrgIds, qaIdentities: { primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId },
     salesMust: sdk(primary), approverMust: sdk(approver), previewCall, recordCase, unproven });
   return results;
 }
@@ -138,6 +146,46 @@ test("cleanup cloud callbacks execute real fixture, reset and scheduled worker h
     expect.objectContaining({ id: "S858-CLEANUP-HISTORY", status: "PASS" }),
     expect.objectContaining({ id: "S858-CLEANUP-SPLIT", status: "PASS" }),
   ]);
+});
+
+test("cleanup cases stay inside the 12-organization fixture bound after eight earlier rehearsal organizations", async () => {
+  // Production rehearsal shape: 8 prior orgs + baseline + 4 cleanup fixtures would be 13 without releasing the deleted one.
+  const results = await executeCallbacks(undefined, 8);
+  expect(results, JSON.stringify(results)).toEqual([
+    expect.objectContaining({ id: "S858-CLEANUP-HISTORY", status: "PASS" }),
+    expect.objectContaining({ id: "S858-CLEANUP-SPLIT", status: "PASS" }),
+  ]);
+});
+
+test("with nine earlier organizations the driver refuses before creating the fixture that would exceed the bound", async () => {
+  const results = await executeCallbacks(undefined, 9);
+  expect(results[0], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-HISTORY", status: "PASS" });
+  expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "FAIL", detail: expect.stringMatching(/12-organization/) });
+  // Only the refused SPLIT-REFERENCE fixture is proven absent: it was never created, so the server bound was not crossed.
+  expect(await listPrimaryOrgNames()).not.toContain("QA TEST cleanup SPLIT-REFERENCE");
+});
+
+test("a HISTORY case that fails after its deletion fixture exists keeps that slot, and SPLIT stops at the bound", async () => {
+  // 8 prior + baseline + RESET + DELETION = 11 known (the failed deletion is not released); DISCOVERY reaches 12; REFERENCE would be 13.
+  const results = await executeCallbacks("deletion-throws", 8);
+  expect(results[0], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-HISTORY", status: "FAIL" });
+  expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "FAIL", detail: expect.stringMatching(/12-organization/) });
+  const names = await listPrimaryOrgNames();
+  expect(names).toContain("QA TEST cleanup HISTORY-DELETION");
+  expect(names).not.toContain("QA TEST cleanup SPLIT-REFERENCE");
+});
+
+test("a failing HISTORY case does not stop SPLIT from running inside the bound", async () => {
+  const results = await executeCallbacks("generation", 8);
+  expect(results[0], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-HISTORY", status: "FAIL" });
+  expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "PASS" });
+});
+
+test("a deletion that throws keeps its organization in the inventory so later fixtures still pass the server scope", async () => {
+  // Releasing before success would drop a live QA membership from the known set, and the next fixture would be refused.
+  const results = await executeCallbacks("deletion-throws");
+  expect(results[0], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-HISTORY", status: "FAIL" });
+  expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "PASS" });
 });
 
 test.each(["phase", "state", "generation"] as const)("cleanup cloud assertions reject corrupted SDK %s evidence", async defect => {

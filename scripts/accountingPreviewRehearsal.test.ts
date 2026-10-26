@@ -9,6 +9,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { ConvexHttpClient } from "convex/browser";
 import { format } from "node:util";
+import { spawnSync } from "node:child_process";
 import {
   assertRehearsalEnv,
   convexCall,
@@ -74,6 +75,156 @@ async function failedSdkLogs(logLines: string[]) {
 describe("cleanup invocation receipts", () => {
   const target = () => ({ deployKey: VALID.CONVEX_DEPLOY_KEY, previewName: VALID.CONVEX_PREVIEW_NAME, convexUrl: VALID.NEXT_PUBLIC_CONVEX_URL });
   const refused = (marker = DISCOVERY, fn = RESET) => `[CONVEX ?(${fn})] [ERROR] '${marker}'\nFailed to run function "${fn}":\nConvexError: Opening cleanup could not be verified. Please contact support.\n`;
+
+  test("unavailable cleanup retains anonymous invocation diagnostics in failed rehearsal evidence", async () => {
+    const evidence = { cases: [] as Array<Record<string, unknown>>,
+      cleanupInvocations: { records: [] as unknown[], truncated: false } };
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics: evidence.cleanupInvocations,
+      spawnCli: () => ({ status: 1, stdout: "", stderr: "private-child-output" }) });
+    await recordCase(evidence.cases, "S858-CLEANUP-SPLIT", "cleanup diagnostic control", () =>
+      call(RESET, { orgId: "private-argument" }, "DISCOVERY"));
+    const retained = JSON.parse(JSON.stringify(evidence));
+    expect(retained.cases[0]).toMatchObject({ status: "FAIL", detail: "Cleanup preview invocation is UNAVAILABLE." });
+    expect(retained.cleanupInvocations.records).toHaveLength(1);
+    expect(retained.cleanupInvocations.records[0]).toMatchObject({
+      functionName: RESET, phase: "DISCOVERY", status: 1, reason: "REFUSAL_PREREQUISITES", stage: "PARSER",
+      stdout: { bytes: 0 }, stderr: { bytes: 20 },
+    });
+    expect(JSON.stringify(retained)).not.toMatch(/private-child-output|private-argument/);
+    expect(exitCodeForSummary(summarize(retained.cases))).toBe(1);
+  });
+
+  test("a fixed fixture refusal is named by an allowlisted code, never by raw stderr", async () => {
+    const diagnostics: { records: Array<Record<string, unknown>>; truncated: boolean } = { records: [], truncated: false };
+    const prepare = "e2eBootstrap:prepareOpeningCleanupFixture";
+    const stderr = (message: string) => `[CONVEX M(${prepare})] [ERROR] 'private-detail'\nConvexError: E2E_BOOTSTRAP: ${message}\n`;
+    const spawnCli = vi.fn(() => ({ status: 1, stdout: "", stderr: stderr("invalid cleanup fixture scope.") }));
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli });
+    await expect(call(prepare, { orgId: "private-argument" })).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    spawnCli.mockReturnValue({ status: 1, stdout: "", stderr: stderr("something not in the allowlist private-text") });
+    await expect(call(prepare, { orgId: "private-argument" })).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    expect(diagnostics.records[0]).toMatchObject({ reason: "REFUSAL_PREREQUISITES", serverRefusal: "INVALID_SCOPE" });
+    expect(diagnostics.records[1]).toMatchObject({ reason: "REFUSAL_PREREQUISITES", serverRefusal: null });
+    expect(JSON.stringify(diagnostics)).not.toMatch(/private/);
+  });
+
+  describe("the allowlisted server refusal code is anchored, counted and tied to a complete failed child", () => {
+    const prepare = "e2eBootstrap:prepareOpeningCleanupFixture";
+    const message = "invalid cleanup fixture scope.";
+    const anchored = `ConvexError: E2E_BOOTSTRAP: ${message}`;
+    const codeFor = async (result: { status: number | null; stdout: string; stderr: string; signal?: string }) => {
+      const diagnostics: { records: Array<Record<string, unknown>>; truncated: boolean } = { records: [], truncated: false };
+      const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli: () => result });
+      await call(prepare, { orgId: "synthetic" }).catch(() => undefined);
+      return diagnostics.records[0]?.serverRefusal;
+    };
+
+    test("the real CLI shape (captured from a dev deployment) names the code", async () => {
+      const real = `✖ Failed to run function "e2eBootstrap:prepareOpeningCleanupFixture":\nConvexError: [Request ID: 3336c979b5510e7d] Server Error\nUncaught ConvexError: E2E_BOOTSTRAP: ${message}\n    at requireCleanupFixtureScope (../convex/e2eBootstrap.ts:178:10)\n`;
+      expect(await codeFor({ status: 1, stdout: "", stderr: real })).toBe("INVALID_SCOPE");
+    });
+
+    test("one anchored message on a failed complete child is named", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `Failed to run function\n${anchored}\n` })).toBe("INVALID_SCOPE");
+    });
+    test("text echoed inside another line is not a refusal", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `arguments echo: {"note":"E2E_BOOTSTRAP: ${message}"}\n` })).toBeNull();
+    });
+    test("a duplicated message is ambiguous", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `${anchored}\n${anchored}\n` })).toBeNull();
+    });
+    test("two different fixed messages are ambiguous", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `${anchored}\nConvexError: E2E_BOOTSTRAP: cleanup fixture cannot be reused.\n` })).toBeNull();
+    });
+    test.each([
+      ["CRLF line endings", `Failed\r\nUncaught ConvexError: E2E_BOOTSTRAP: ${message}\r\n    at x\r\n`],
+      ["surrounding spaces", `   ConvexError: E2E_BOOTSTRAP: ${message}   \n`],
+    ])("%s still name the code", async (_label, stderr) => {
+      expect(await codeFor({ status: 1, stdout: "", stderr })).toBe("INVALID_SCOPE");
+    });
+    test.each([
+      ["upper-cased message", `ConvexError: E2E_BOOTSTRAP: ${message.toUpperCase()}\n`],
+      ["lower-cased prefix", `ConvexError: e2e_bootstrap: ${message}\n`],
+      ["trailing text on the line", `ConvexError: E2E_BOOTSTRAP: ${message} extra\n`],
+    ])("%s names nothing", async (_label, stderr) => {
+      expect(await codeFor({ status: 1, stdout: "", stderr })).toBeNull();
+    });
+    test("a spawn error that still reports a status carries no code", async () => {
+      const result = { status: 1, stdout: "", stderr: `${anchored}\n`, error: new Error("EPIPE") };
+      expect(await codeFor(result as never)).toBeNull();
+    });
+    test("a standalone line printed by anyone is labelled, and the label is diagnostic only", async () => {
+      // The match names an allowlisted message; it cannot authenticate who printed the line. So it must change nothing else.
+      const outcome = async (stderr: string) => {
+        const diagnostics: { records: Array<Record<string, unknown>>; truncated: boolean } = { records: [], truncated: false };
+        const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli: () => ({ status: 1, stdout: "", stderr }) });
+        const error = await call(prepare, { orgId: "synthetic" }).then(() => null, (thrown: unknown) => thrown as { message: string; cleanupReason?: string });
+        // The stderr digest follows the text by design; every decision-bearing field (reason, stage, status) must not.
+        const { serverRefusal, stderr: _digest, ...rest } = diagnostics.records[0] ?? {};
+        return { serverRefusal, thrown: error && { message: error.message, cleanupReason: error.cleanupReason }, rest };
+      };
+      const forged = await outcome(`${anchored}\n`);
+      const plain = await outcome("no fixed message here\n");
+      expect(forged.serverRefusal).toBe("INVALID_SCOPE");
+      expect(plain.serverRefusal).toBeNull();
+      expect(forged.thrown).toEqual(plain.thrown);
+      expect(forged.rest).toEqual(plain.rest);
+    });
+    test("an exit 0 child never carries a refusal code", async () => {
+      expect(await codeFor({ status: 0, stdout: '{"phase":"DONE"}', stderr: `${anchored}\n` })).toBeNull();
+    });
+    test("a killed child is incomplete and carries no code", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `${anchored}\n`, signal: "SIGTERM" })).toBeNull();
+    });
+    test("an oversize stream carries no code", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `${anchored}\n${"x".repeat(262_145)}` })).toBeNull();
+    });
+  });
+
+  test("a broken diagnostic sink cannot replace the original cleanup refusal", async () => {
+    const diagnostics = { records: [] as unknown[], truncated: false };
+    Object.freeze(diagnostics.records);
+    Object.freeze(diagnostics);
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics,
+      spawnCli: () => ({ status: 1, stdout: "", stderr: "private failure" }) });
+    await expect(call(RESET, { orgId: "synthetic" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+  });
+
+  test("maxBuffer termination cannot label its bounded captured fragments complete", async () => {
+    // Actual bounded Node child; no Convex CLI, target, identity or cloud call.
+    const child = spawnSync(process.execPath, ["-e",
+      'process.stdout.write("x".repeat(196608));process.stderr.write("y".repeat(196608));'],
+    { maxBuffer: 262144, timeout: 3000, encoding: "utf8" });
+    expect(child.error).toMatchObject({ code: "ENOBUFS" });
+    expect(Buffer.byteLength(child.stdout)).toBeGreaterThan(0);
+    expect(Buffer.byteLength(child.stdout)).toBeLessThanOrEqual(262144);
+    expect(Buffer.byteLength(child.stderr)).toBeGreaterThan(0);
+    expect(Buffer.byteLength(child.stderr)).toBeLessThanOrEqual(262144);
+    const diagnostics = { records: [] as unknown[], truncated: false };
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli: () => child });
+    await expect(call(RESET, { orgId: "synthetic" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    expect(diagnostics.records[0]).toMatchObject({
+      reason: "CHILD_RESULT_UNAVAILABLE", errorCode: "ENOBUFS",
+      stdout: { bytes: Buffer.byteLength(child.stdout), sha256: null, digestScope: "UNAVAILABLE_INCOMPLETE" },
+      stderr: { bytes: Buffer.byteLength(child.stderr), sha256: null, digestScope: "UNAVAILABLE_INCOMPLETE" },
+    });
+  });
+
+  test.each([
+    ["ETIMEDOUT", "SIGTERM", "ETIMEDOUT", "SIGTERM"],
+    ["private-code", "private-signal", "UNAVAILABLE", "UNAVAILABLE"],
+  ])("child metadata %s is bounded and cannot certify cleanup", async (code, signal, expectedCode, expectedSignal) => {
+    const diagnostics = { records: [] as unknown[], truncated: false };
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics,
+      spawnCli: () => ({ status: null, error: Object.assign(new Error("private-error"), { code }), signal,
+        stdout: "", stderr: "private-child-output" }) });
+    await expect(call(RESET, { orgId: "private-argument" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    expect(diagnostics.records[0]).toMatchObject({
+      status: null, errorCode: expectedCode, signal: expectedSignal, reason: "CHILD_RESULT_UNAVAILABLE",
+      stderr: { bytes: 20, sha256: null, digestScope: "UNAVAILABLE_INCOMPLETE" },
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("private-");
+  });
 
   test("the installed SDK forwards failed-response server logs before rejection", async () => {
     const logs = await failedSdkLogs([`[ERROR] '${DISCOVERY}'`]);
@@ -149,6 +300,50 @@ describe("cleanup invocation receipts", () => {
     expect(await call(RESET, { orgId: "first" }, "DISCOVERY")).toMatchObject({ refusal: "OPENING_CLEANUP_SPLIT_REQUIRED" });
     await expect(call(RESET, { orgId: "second" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
     expect(spawnCli).toHaveBeenCalledTimes(2);
+  });
+
+  test("diagnostics preserve same-invocation receipts and bound collection without changing acceptance", async () => {
+    const diagnostics = { records: [] as unknown[], truncated: false };
+    const spawnCli = vi.fn()
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: refused() })
+      .mockReturnValueOnce({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" });
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli });
+    expect(await call(RESET, { orgId: "synthetic" }, "DISCOVERY")).toMatchObject({ ok: false, phase: "DISCOVERY" });
+    expect(await call("e2eBootstrap:observeOpeningCleanupFixture", {})).toEqual({ ok: true, value: { phase: "DONE" } });
+    expect(diagnostics.records).toEqual([
+      expect.objectContaining({ reason: "SPLIT_REFUSAL", stage: "COMPLETE",
+        stderr: expect.objectContaining({ digestScope: "COMPLETE", sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }) }),
+      expect.objectContaining({ reason: "SUCCESS", stage: "COMPLETE",
+        stdout: expect.objectContaining({ digestScope: "COMPLETE", sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }) }),
+    ]);
+    diagnostics.records.length = 256;
+    spawnCli.mockReturnValue({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" });
+    expect(await call("e2eBootstrap:observeOpeningCleanupFixture", {})).toEqual({ ok: true, value: { phase: "DONE" } });
+    expect(diagnostics.records).toHaveLength(256);
+    expect(diagnostics.truncated).toBe(true);
+  });
+
+  test("a late unavailable invocation survives the 256-record prefix and subsequent successful refusals", async () => {
+    const diagnostics: { records: unknown[]; truncated: boolean; terminal?: unknown; lastUnavailable?: unknown } =
+      { records: [], truncated: false };
+    const spawnCli = vi.fn(() => ({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" }));
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli });
+    for (let index = 0; index < 256; index += 1)
+      await call("e2eBootstrap:observeOpeningCleanupFixture", {});
+    spawnCli.mockReturnValue({ status: 1, stdout: "", stderr: "private late failure" });
+    await expect(call(RESET, { orgId: "private-argument" }, "REFERENCE")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    expect(diagnostics.records).toHaveLength(256);
+    expect(diagnostics.truncated).toBe(true);
+    expect(diagnostics.terminal).toMatchObject({ functionName: RESET, phase: "REFERENCE", status: 1, reason: "REFUSAL_PREREQUISITES" });
+    expect(diagnostics.lastUnavailable).toEqual(diagnostics.terminal);
+    const failure = diagnostics.lastUnavailable;
+    spawnCli.mockReturnValue({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" });
+    await call("e2eBootstrap:observeOpeningCleanupFixture", {});
+    spawnCli.mockReturnValue({ status: 1, stdout: "", stderr: refused() });
+    expect(await call(RESET, { orgId: "synthetic" }, "DISCOVERY")).toMatchObject({ ok: false, phase: "DISCOVERY" });
+    expect(diagnostics.terminal).toMatchObject({ status: 1, reason: "SPLIT_REFUSAL" });
+    expect(diagnostics.lastUnavailable).toBe(failure);
+    expect(JSON.stringify(diagnostics)).not.toContain("private");
   });
 });
 

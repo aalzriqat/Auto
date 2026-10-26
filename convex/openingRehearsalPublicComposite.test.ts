@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { FunctionArgs, FunctionReference } from "convex/server";
 import {
   convexTestWithComponents,
@@ -13,6 +13,9 @@ import {
 } from "../scripts/accountingPreviewRehearsal.mjs";
 import { runOpeningRehearsalCases } from "../scripts/accountingOpeningRehearsal.mjs";
 
+const harnessDate = Date.UTC(2026, 9, 15, 12);
+const realSchedulerTimers = { setTimeout, setInterval };
+
 // Only authentication identities are inserted. Every organization, authority seat,
 // chart, period, source, opening and settlement uses its actual public handler.
 type Defect =
@@ -25,6 +28,19 @@ type Defect =
   | "management"
   | "credit"
   | "identity"
+  | "native-missing"
+  | "native-duplicate"
+  | "native-misallocated"
+  | "native-before-missing"
+  | "native-before-rewritten"
+  | "native-role-allowed"
+  | "native-role-restore"
+  | "native-role-allowed-and-restore"
+  | "native-role-overgrant"
+  | "native-consumer-ap"
+  | "native-consumer-deposit"
+  | "native-consumer-payables"
+  | "native-consumer-deposit-list"
   | "current-scheduled"
   | "current-total"
   | "current-month"
@@ -36,8 +52,14 @@ type Defect =
   | "current-prepaid"
   | "current-partner"
   | "refusal";
+beforeEach(() => {
+  // Every execute caller includes current-month native use; scheduler timers must stay real.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(harnessDate);
+});
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -69,6 +91,12 @@ async function execute(defect?: Defect) {
   const calls: string[] = [];
   let currentOrg: unknown, currentPlan: unknown;
   let currentApproved = false;
+  let nativeUseOrg: unknown;
+  const openingJournalByOrg = new Map<unknown, unknown>();
+  const preexistingJournalByOrg = new Map<unknown, unknown>();
+  const journalInventoryByOrg = new Map<unknown, Set<unknown>>();
+  let nativePriorJournalIds = new Set<unknown>();
+  const roleUpdatesByOrg = new Map<unknown, number>();
   const bankCache = new Map<string, unknown>();
   let firstBankResponse: unknown;
   const adapter =
@@ -97,9 +125,76 @@ async function execute(defect?: Defect) {
         throw new Error(
           "Synthetic transport failure, not the required business refusal",
         );
-      const result: unknown = await (kind === "query"
-        ? actor.query(reference as FunctionReference<"query">, args)
-        : actor.mutation(reference as FunctionReference<"mutation">, args));
+      let result: unknown;
+      if ((defect === "native-role-restore" || defect === "native-role-allowed-and-restore") &&
+        name === "memberships:updateRole" && roleUpdatesByOrg.get(args.orgId) === 1)
+        throw new Error("Synthetic native membership restoration transport failure");
+      try {
+        result = await (kind === "query"
+          ? actor.query(reference as FunctionReference<"query">, args)
+          : actor.mutation(reference as FunctionReference<"mutation">, args));
+      } catch (error) {
+        if ((defect === "native-role-allowed" || defect === "native-role-allowed-and-restore") && actor === approver && kind === "mutation" &&
+          error instanceof Error && error.message.includes("Missing required permissions"))
+          return "synthetic-sdk-accepted";
+        throw error;
+      }
+      if (name === "memberships:updateRole")
+        roleUpdatesByOrg.set(args.orgId, (roleUpdatesByOrg.get(args.orgId) ?? 0) + 1);
+      if (defect === "native-role-overgrant" && name === "memberships:getMyMembership" &&
+        (result as Row).roleName === "SALES")
+        return { ...(result as Row), permissions: [...((result as Row).permissions as string[]), "manage:finance"] };
+      if (name === "accountingCutover:postOpeningBalanceDirect")
+        openingJournalByOrg.set(args.orgId, (result as Row).journalId);
+      if (name === "accountingLedger:listJournalEntries" && !preexistingJournalByOrg.has(args.orgId)) {
+        const preexisting = (result as { page: Row[] }).page.find(entry =>
+          entry._id !== openingJournalByOrg.get(args.orgId));
+        if (preexisting) preexistingJournalByOrg.set(args.orgId, preexisting._id);
+      }
+      if (name === "accountingLedger:listJournalEntries")
+        journalInventoryByOrg.set(args.orgId, new Set((result as { page: Row[] }).page.map(entry => entry._id)));
+      if (name === "prepaidExpenses:retryAmortizationFailure" && nativeUseOrg === undefined) {
+        nativeUseOrg = args.orgId;
+        nativePriorJournalIds = journalInventoryByOrg.get(args.orgId) ?? new Set();
+      }
+      if (args.orgId === nativeUseOrg && kind === "query") {
+        if (defect === "native-consumer-ap" && name === "accountingReports:supplierPayablesReconciliation") {
+          const value = structuredClone(result) as { byCurrency: { JOD: Row } };
+          value.byCurrency.JOD.subledgerBalanceMinor = 1;
+          return value;
+        }
+        if (defect === "native-consumer-deposit" && name === "accountingReports:customerDepositsReconciliation") {
+          const value = structuredClone(result) as { heldOpeningMinor: Row };
+          value.heldOpeningMinor.JOD = 20002;
+          return value;
+        }
+        if (defect === "native-consumer-payables" && name === "sourcingPayables:list") return [];
+        if (defect === "native-consumer-deposit-list" && name === "deposits:listByVehicle") return [];
+        if (defect === "native-before-missing" && name === "accountingLedger:listJournalEntries") {
+          const value = structuredClone(result) as { page: Row[] };
+          value.page = value.page.filter(entry => entry._id !== openingJournalByOrg.get(args.orgId));
+          return value;
+        }
+        if (defect === "native-before-rewritten" && name === "accountingLedger:getJournalEntry" &&
+          args.journalEntryId === preexistingJournalByOrg.get(args.orgId)) {
+          const value = structuredClone(result) as { lines: Row[] };
+          value.lines[0].debitMinor = Number(value.lines[0].debitMinor) + 1;
+          value.lines[0].creditMinor = Number(value.lines[0].creditMinor) + 1;
+          return value;
+        }
+        if (name === "accountingLedger:listJournalEntries" &&
+          (defect === "native-missing" || defect === "native-duplicate")) {
+          const value = structuredClone(result) as { page: Row[] };
+          value.page = defect === "native-missing" ? value.page.slice(1) : [...value.page, value.page[0]];
+          return value;
+        }
+        if (defect === "native-misallocated" && name === "accountingLedger:getJournalEntry" &&
+          !nativePriorJournalIds.has(args.journalEntryId)) {
+          const value = structuredClone(result) as { lines: Row[] };
+          value.lines[0].accountId = "wrong-sdk-native-use-control";
+          return value;
+        }
+      }
       if (modelCache && name === "bankAccounts:getBookBalance") {
         bankCache.set(bankCacheKey, structuredClone(result));
         firstBankResponse ??= structuredClone(result);
@@ -208,6 +303,27 @@ async function execute(defect?: Defect) {
   return { t, results, calls };
 }
 
+test("opening composite fixes Date while scheduler callbacks remain real", async () => {
+  expect(Date.now()).toBe(harnessDate);
+  expect(new Date().toISOString()).toBe("2026-10-15T12:00:00.000Z");
+  expect(setTimeout).toBe(realSchedulerTimers.setTimeout);
+  expect(setInterval).toBe(realSchedulerTimers.setInterval);
+  await new Promise<void>(resolve => setTimeout(resolve, 0));
+  expect(Date.now()).toBe(harnessDate);
+}, 1000);
+
+test("independent opening containment executes when subsequent native use fails", async () => {
+  const { results } = await execute("native-consumer-ap");
+  expect(results.find(result => result.id === "S858-OPENING")).toMatchObject({
+    status: "FAIL", detail: expect.stringContaining("native-use supplier consumer balance"),
+  });
+  expect(results.find(result => result.id === "S858-CONTAINMENT"), JSON.stringify(results)).toMatchObject({
+    status: "PASS", detail: { duplicateRefused: true, foreignRefused: true, payoutRefused: true,
+      twoPersonApproval: true, unknownPools: "UNALLOCATED", currentManagement: { recognisedMinor: 14286 } },
+  });
+  expect(summarize(results)).toMatchObject({ passed: 1, failed: 1, unproven: 0, complete: false });
+}, 30000);
+
 test("registered opening cloud callbacks execute all native public handlers and containment", async () => {
   const { results } = await execute();
   expect(results, JSON.stringify(results)).toEqual([
@@ -240,6 +356,66 @@ test("current-month opening management recognition preserves native books", asyn
       },
     },
   });
+}, 30000);
+
+test("opening native subsequent use consumes the six selected sources once", async () => {
+  const { results } = await execute();
+  expect(results.find(value => value.id === "S858-OPENING"), JSON.stringify(results)).toMatchObject({
+    status: "PASS", detail: { nativeUse: {
+      families: 6, arRemainingMinor: 0, inventoryRemainingMinor: 0,
+      prepaidRecognisedMinor: 23334, partnerBalanceMinor: 990000,
+      refundableDepositRemainingMinor: 0, supplierPayableRemainingMinor: 0,
+      cashDeltaMinor: 303003, closedSnapshotUnchanged: true,
+      wrongRoleRefusals: 7, supplierReconciliationMinor: 0,
+      heldUnknownPoolsMinor: 43002, customerDepositRemainingMinor: 0,
+      customerDepositHeldMinor: 20001, unknownReceiptHeldMinor: 23001,
+      roleAttestation: {
+        original: { roleName: "SENIOR_ACCOUNTANT" },
+        denied: { roleName: "SALES", isSystemOwnerRole: false },
+        restored: { roleName: "SENIOR_ACCOUNTANT" },
+      },
+    } },
+  });
+}, 30000);
+
+test.each([
+  ["native-role-allowed", "Opening containment did not refuse"],
+  ["native-role-restore", "Synthetic native membership restoration transport failure"],
+  ["native-role-allowed-and-restore", "Opening containment did not refuse; native-use membership restoration also failed"],
+  ["native-role-overgrant", "native-use denied role lacks manage:finance"],
+  ["native-consumer-ap", "native-use supplier consumer balance"],
+  ["native-consumer-deposit", "native-use held pool consumer"],
+  ["native-consumer-payables", "native-use payable list source"],
+  ["native-consumer-deposit-list", "native-use one sale deposit"],
+] as const)("native role and consumer assertions refuse SDK %s corruption", async (defect, reason) => {
+  const { results } = await execute(defect);
+  expect(results.find(value => value.id === "S858-OPENING"), JSON.stringify(results)).toMatchObject({
+    status: "FAIL", detail: expect.stringContaining(reason),
+  });
+  expect(summarize(results).complete).toBe(false);
+}, 30000);
+
+test.each([
+  ["native-missing", "native-use exact journal delta"],
+  ["native-duplicate", "native-use unique journal inventory"],
+  ["native-misallocated", "native-use exact journal delta"],
+] as const)("six-family native-use assertions refuse SDK %s results", async (defect, reason) => {
+  const { results } = await execute(defect);
+  expect(results.find(value => value.id === "S858-OPENING"), JSON.stringify(results)).toMatchObject({
+    status: "FAIL", detail: expect.stringContaining(reason),
+  });
+  expect(summarize(results).complete).toBe(false);
+}, 30000);
+
+test.each([
+  ["native-before-missing", "native-use preexisting journal retained"],
+  ["native-before-rewritten", "native-use preexisting journal unchanged"],
+] as const)("six-family native-use preserves prior journals under SDK %s corruption", async (defect, reason) => {
+  const { results } = await execute(defect);
+  expect(results.find(value => value.id === "S858-OPENING"), JSON.stringify(results)).toMatchObject({
+    status: "FAIL", detail: expect.stringContaining(reason),
+  });
+  expect(summarize(results).complete).toBe(false);
 }, 30000);
 
 test("current recognition requests the approval cutoff instead of replaying same arguments", async () => {
