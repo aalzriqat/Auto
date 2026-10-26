@@ -487,7 +487,7 @@ export function validateLibrary(
       const abs = path.resolve(repoRoot, r.impl.file.replace(/\\/g, "/"));
       // Classify the NORMALISED repo-relative path: "scripts/../apps/x.test.ts" is apps/.
       const rel = path.relative(path.resolve(repoRoot), abs).replace(/\\/g, "/");
-      if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) add("impl", "impl.file must stay inside the repository");
+      if (rel === "" || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) add("impl", "impl.file must stay inside the repository");
       else if ((!RUNNER_FILE.test(rel) && rel !== TERMINAL_OPENING_SPEC) || NOT_RUN_DIRS.test(rel) ||
           (PLAYWRIGHT_SPEC.test(rel) || rel === TERMINAL_OPENING_SPEC) !== (r.level === "browser")) {
         add("impl", `impl.file ${rel} is not a test/spec file a runner executes`);
@@ -533,7 +533,7 @@ export function validateLibrary(
  * a reason and a ruling. Demoting it to candidate, or deleting its record, would
  * turn a red library green without anyone ruling on it (R4).
  */
-export function validateTransitions(base: ScenarioRecord[], head: ScenarioRecord[]): LibraryProblem[] {
+export function validateTransitions(base: ReadonlyArray<Pick<ScenarioRecord, "id" | "status">>, head: ReadonlyArray<Pick<ScenarioRecord, "id" | "status">>): LibraryProblem[] {
   const problems: LibraryProblem[] = [];
   const headById = new Map(head.filter(isObject).map((r) => [r.id, r]));
   for (const before of base) {
