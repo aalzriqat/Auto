@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { startVitest } from "vitest/node";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -20,6 +20,10 @@ const config = (extra = "") => `export default { test: { globals: true, environm
 const source = () => `test("${title}", () => { expect(2 + 2).toBe(4); });`;
 /** Trusted embedding caller: the host selects the source root and evidence directory, never argv. */
 const host = () => ({ root, evidenceDirectory: evidence });
+const commitAll = (message: string) => {
+  git(["add", "."]);
+  git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", message]);
+};
 const saveRecord = () =>writeFileSync(scenarioPath(), JSON.stringify(record));
 
 interface Receipt {
@@ -135,7 +139,8 @@ test.each(["positive", "runtime-skip", "expected-failure", "zero", "duplicate", 
       `export default { test: { projects: ["one", "two"].map(name => ({ test: { name, globals: true, environment: "node", include: ["selected.test.ts"] } })) } };`);
     if (mode === "failed") writeFileSync(path.join(root, "selected.test.ts"), `test("${title}", () => { expect(3).toBe(4); });`);
     const output = path.join(evidence, `api-${mode}.json`);
-    vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_EVENTS", output);
+    const channel = openSync(output, "wx");
+    vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_FD", String(channel));
     vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_ID", record.id);
     vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_BASE", head);
     const previousExit = process.exitCode;
@@ -153,6 +158,7 @@ test.each(["positive", "runtime-skip", "expected-failure", "zero", "duplicate", 
       if (mode === "failed") expect(receipt.runReason).toBe("failed");
     } finally {
       await native?.close();
+      closeSync(channel);
       process.exitCode = previousExit;
     }
   }, 30000);
@@ -247,21 +253,90 @@ test.each(["equal", "inside"])("an evidence directory %s the checkout refuses", 
     readdirSync(directory).filter(name => name.startsWith(".git")));
 });
 
-test.each(["result.json", ".native-events.json"])("an existing %s in the evidence directory refuses without following or replacing it", name => {
-  writeFileSync(path.join(evidence, name), "PRIOR");
+test("an existing result.json in the evidence directory refuses without following or replacing it", () => {
+  writeFileSync(path.join(evidence, "result.json"), "PRIOR");
   const receipt = executeLocal(["--scenario", record.id], host());
   expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["OUTPUT_ALREADY_EXISTS"], native: null, process: null });
-  expect(readFileSync(path.join(evidence, name), "utf8")).toBe("PRIOR");
+  expect(readFileSync(path.join(evidence, "result.json"), "utf8")).toBe("PRIOR");
 });
 
-test("the native reporter alone never overwrites an existing events file", () => {
-  const output = path.join(evidence, "existing-events.json");
-  writeFileSync(output, "PRIOR");
-  vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_EVENTS", output);
+/** A forged native report: what a candidate config would write if it could reach the reporter's channel. */
+const forgedReportSource = `const events = process.env.AUTOFLOW_LOCAL_SCENARIO_EVENTS;
+if (events) process.getBuiltinModule("node:fs").writeFileSync(events, JSON.stringify({ schemaVersion: 1, root: process.cwd(), scenarioId: process.env.AUTOFLOW_LOCAL_SCENARIO_ID,
+  complete: true, verdict: "PASS", issues: [], cases: [], unhandledErrors: 0, runReason: "passed", baseRevision: process.env.AUTOFLOW_LOCAL_SCENARIO_BASE, selection: null }));
+process.exit(0);`;
+
+test.each(["modified-config", "untracked-config"])("a vitest config that is not the committed one is refused before any candidate code runs (%s)", mode => {
+  if (mode === "modified-config") writeFileSync(path.join(root, "vitest.config.mjs"), forgedReportSource);
+  else writeFileSync(path.join(root, "vitest.config.cjs"), forgedReportSource);
+  const receipt = executeLocal(["--scenario", record.id], host());
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["TRUSTED_CONFIG_REQUIRED"], native: null, process: null });
+  expect(readdirSync(evidence).sort()).toEqual(["result.json"]);
+}, 30000);
+
+test("a committed config that exits before the reporter runs leaves no report and fails", () => {
+  writeFileSync(path.join(root, "vitest.config.mjs"), "process.exit(0);");
+  git(["add", "."]);
+  git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "exit before reporter"]);
+  const receipt = executeLocal(["--scenario", record.id], host());
+  expect(receipt.verdict).toBe("FAIL");
+  expect(receipt.issues).toContain("NATIVE_REPORT_UNAVAILABLE");
+  expect(receipt.native).toBeNull();
+}, 70000);
+
+test("a failing test that writes a forged PASS report to every descriptor it can reach still fails", () => {
+  const forged = JSON.stringify({ schemaVersion: 1, root, scenarioId: record.id, complete: true, verdict: "PASS", issues: [], cases: [],
+    unhandledErrors: 0, runReason: "passed", baseRevision: head, selection: null });
+  writeFileSync(path.join(root, "selected.test.ts"),
+    `import { writeSync } from "node:fs";
+    test("${title}", () => { for (const fd of [1, 2, 3, 4]) { try { writeSync(fd, ${JSON.stringify(forged)}); } catch { /* not open here */ } } expect(3).toBe(4); });`);
+  commitAll("worker forges the report");
+  const receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt;
+  expect(receipt.verdict).toBe("FAIL");
+  expect(receipt.native?.verdict).not.toBe("PASS");
+  expect(receipt.issues).toContain("CHILD_PROCESS_NOT_CLEAN");
+}, 70000);
+
+test("swapping the evidence directory while the child runs cannot redirect the receipt", () => {
+  const sibling = mkdtempSync(path.join(tmpdir(), "s3-swap-target-"));
+  const moved = `${evidence}-moved`;
+  try {
+    writeFileSync(path.join(root, "selected.test.ts"),
+      `import { renameSync, symlinkSync } from "node:fs";
+      test("${title}", () => {
+        try { renameSync(${JSON.stringify(evidence)}, ${JSON.stringify(moved)}); symlinkSync(${JSON.stringify(sibling)}, ${JSON.stringify(evidence)}, "junction"); } catch { /* an open handle may forbid the swap; that is also safe */ }
+        expect(2 + 2).toBe(4);
+      });`);
+    git(["add", "."]);
+    git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "swap evidence directory"]);
+    executeLocal(["--scenario", record.id], host());
+    expect(readdirSync(sibling)).toEqual([]);
+    const written = [path.join(evidence, "result.json"), path.join(moved, "result.json")].filter(file => existsSync(file));
+    expect(written).toHaveLength(1);
+    expect(JSON.parse(readFileSync(written[0], "utf8")).verdict).toBe("PASS");
+  } finally {
+    const link = lstatSync(evidence, { throwIfNoEntry: false });
+    if (link?.isSymbolicLink()) unlinkSync(evidence);
+    if (existsSync(moved)) renameSync(moved, evidence);
+    rmSync(sibling, { recursive: true, force: true });
+  }
+}, 70000);
+
+test("the native reporter writes one record to its channel and refuses a second or a missing channel", () => {
   vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_ID", record.id);
   vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_BASE", head);
-  expect(() => new LocalExecutionReporter().onTestRunEnd([], [], "passed")).toThrow(/EEXIST/);
-  expect(readFileSync(output, "utf8")).toBe("PRIOR");
+  expect(() => new LocalExecutionReporter().onTestRunEnd([], [], "passed")).toThrow("LOCAL_EVENT_CHANNEL_REQUIRED");
+  const output = path.join(evidence, "one-record.json");
+  const channel = openSync(output, "wx");
+  try {
+    vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_FD", String(channel));
+    const reporter = new LocalExecutionReporter();
+    reporter.onTestRunEnd([], [], "passed");
+    expect(() => reporter.onTestRunEnd([], [], "passed")).toThrow("LOCAL_EVENT_ALREADY_WRITTEN");
+  } finally {
+    closeSync(channel);
+  }
+  expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({ complete: true, scenarioId: record.id });
 });
 
 test("invalid scenario id, missing root and malformed revisions refuse before native execution", () => {
@@ -336,6 +411,8 @@ test.each(["runtime-skip", "expected-failure", "zero", "duplicate", "source-muta
       `export default { test: { projects: ["one", "two"].map(name => ({ test: { name, globals: true, environment: "node", include: ["selected.test.ts"] } })) } };`);
     if (mode === "source-mutation") writeFileSync(path.join(root, "selected.test.ts"),
       `import { writeFileSync } from "node:fs"; test("${title}", () => { writeFileSync("marker.txt", "after"); expect(4).toBe(4); });`);
+    // The harness only runs a config that is committed, so a config variant is committed before the run.
+    if (mode === "zero" || mode === "duplicate") commitAll("config variant");
     const receipt = run(mode);
     expect(receipt.verdict).toBe("FAIL");
     if (mode === "runtime-skip") expect(receipt.native?.cases[0].state).toBe("skipped");
@@ -405,6 +482,7 @@ test.each(["..x.test.ts", "--help.test.ts"])("literal in-root filename %s execut
   saveRecord();
   writeFileSync(path.join(root, filename), source());
   writeFileSync(path.join(root, "vitest.config.mjs"), config().replace("selected.test.ts", filename));
+  commitAll("literal filename config");
   const receipt = run("dot-prefixed");
   expect(receipt.verdict).toBe("PASS");
   expect(receipt.native?.cases[0].file).toBe(filename);

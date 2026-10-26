@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { writeSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import type { Reporter, TestModule, Vitest } from "vitest/node";
@@ -51,7 +51,8 @@ function baseRecords(root: string, revision: string): Array<Pick<ScenarioRecord,
 
 /** Local advisory only: actual native Reporter events, no trusted producer attestation. */
 export default class LocalExecutionReporter implements Reporter {
-  private readonly output = process.env.AUTOFLOW_LOCAL_SCENARIO_EVENTS ?? "";
+  /** A descriptor the host opened for this process only (never a file path); workers do not inherit it. */
+  private readonly channel = Number(process.env.AUTOFLOW_LOCAL_SCENARIO_FD ?? "");
   private selected: ScenarioRecord | undefined;
   private readonly report: LocalExecutionReport = {
     schemaVersion: 1, root: "", scenarioId: process.env.AUTOFLOW_LOCAL_SCENARIO_ID ?? "",
@@ -59,10 +60,14 @@ export default class LocalExecutionReporter implements Reporter {
     baseRevision: process.env.AUTOFLOW_LOCAL_SCENARIO_BASE ?? "", selection: null,
   };
 
+  private saved = false;
+
   private save(): void {
-    if (!this.output) throw new Error("LOCAL_EVENT_OUTPUT_REQUIRED");
-    // "wx": never follow or replace a file that already exists at the events path.
-    writeFileSync(this.output, `${JSON.stringify(this.report, null, 2)}\n`, { flag: "wx" });
+    if (!Number.isInteger(this.channel) || this.channel < 3) throw new Error("LOCAL_EVENT_CHANNEL_REQUIRED");
+    // One record per run: a second write would make the host's single-document parse fail rather than overwrite.
+    if (this.saved) throw new Error("LOCAL_EVENT_ALREADY_WRITTEN");
+    this.saved = true;
+    writeSync(this.channel, JSON.stringify(this.report));
   }
 
   onInit(vitest: Vitest): void {

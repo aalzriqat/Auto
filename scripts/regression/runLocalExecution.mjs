@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -43,18 +43,48 @@ function selectBinding(root, scenarioId) {
   return { binding, testFile };
 }
 
-function measureExecution({ root, scenarioId, base, events }, receipt) {
+const CONFIG_NAME = /^(vite|vitest)\.(config|workspace|projects)\.[cm]?[jt]s$|^vitest\.workspace\.json$/;
+
+/**
+ * A Vitest config executes in the same process as the reporter, so it could forge the report. Only a config that is
+ * byte-identical to the one committed at the observed HEAD is run; a modified, untracked or ambiguous one refuses.
+ * @returns {string | null} the one committed config file name, or null when the checkout has none
+ */
+function trustedConfig(root, head) {
+  try {
+    const present = readdirSync(root).filter(name => CONFIG_NAME.test(name));
+    if (present.length > 1) throw new Error("TRUSTED_CONFIG_REQUIRED");
+    for (const name of present) {
+      if (!lstatSync(path.join(root, name)).isFile()) throw new Error("TRUSTED_CONFIG_REQUIRED");
+      const committed = git(root, ["rev-parse", "--verify", "--quiet", `${head}:${name}`]).trim();
+      if (committed !== git(root, ["hash-object", "--no-filters", "--", name]).trim()) throw new Error("TRUSTED_CONFIG_REQUIRED");
+    }
+    return present[0] ?? null;
+  } catch {
+    throw new Error("TRUSTED_CONFIG_REQUIRED");
+  }
+}
+
+function measureExecution({ root, scenarioId, base }, receipt) {
   const { binding, testFile } = selectBinding(root, scenarioId);
+  const config = trustedConfig(root, receipt.source.before.head);
   const escapedName = binding.testName.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
   const pattern = `^${escapedName}$`;
+  // The report returns on an extra pipe (fd 3) that only the Vitest main process holds. Forked workers, where the
+  // candidate's tests run, do not inherit it, and no file path is trusted: nothing the child can write on disk is read.
   const child = spawnSync(process.execPath, [path.join(implementationRoot, "node_modules/vitest/vitest.mjs"), "run", testFile,
-    "--root", root, "--maxWorkers=1", "--no-file-parallelism", "--retry=0", "-t", pattern,
+    "--root", root, ...(config ? ["--config", path.join(root, config)] : []), "--pool=forks", "--maxWorkers=1", "--no-file-parallelism", "--retry=0", "-t", pattern,
     "--reporter", path.join(implementationRoot, "scripts/regression/localExecutionReporter.ts")],
-  { cwd: root, timeout: 60000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", env: { ...cleanEnv(),
-    AUTOFLOW_LOCAL_SCENARIO_EVENTS: events, AUTOFLOW_LOCAL_SCENARIO_ID: scenarioId, AUTOFLOW_LOCAL_SCENARIO_BASE: base } });
+  { cwd: root, timeout: 60000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", "pipe"], env: { ...cleanEnv(),
+    AUTOFLOW_LOCAL_SCENARIO_FD: "3", AUTOFLOW_LOCAL_SCENARIO_ID: scenarioId, AUTOFLOW_LOCAL_SCENARIO_BASE: base } });
   receipt.process = { exit: child.status, signal: child.signal, error: child.error?.name ?? null };
-  if (existsSync(events)) receipt.native = JSON.parse(readFileSync(events, "utf8"));
-  else receipt.issues.push("NATIVE_REPORT_UNAVAILABLE");
+  const channel = child.output?.[3];
+  try {
+    if (typeof channel === "string" && channel) receipt.native = JSON.parse(channel);
+    else receipt.issues.push("NATIVE_REPORT_UNAVAILABLE");
+  } catch {
+    receipt.issues.push("NATIVE_REPORT_UNAVAILABLE");
+  }
   const after = observeSource(root);
   receipt.source.after = after;
   if (JSON.stringify(receipt.source.before) !== JSON.stringify(after)) receipt.issues.push("SOURCE_CHANGED_DURING_EXECUTION");
@@ -80,7 +110,6 @@ function parseOptions(argv) {
   return parsed.values;
 }
 
-const EVENTS_FILE = ".native-events.json";
 const isOutside = (root, candidate) => {
   const relative = path.relative(root, candidate);
   return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
@@ -113,12 +142,18 @@ function prepareInvocation(options, context) {
   const evidenceDirectory = realpathSync(context.evidenceDirectory ?? mkdtempSync(path.join(realpathSync(tmpdir()), "autoflow-local-execution-")));
   if (!isOutside(root, evidenceDirectory)) throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
   const output = path.join(evidenceDirectory, RECEIPT_FILE);
-  const events = path.join(evidenceDirectory, EVENTS_FILE);
   // lstat, not exists: a dangling link in the evidence directory must also refuse.
-  for (const reserved of [output, events]) {
-    if (lstatSync(reserved, { throwIfNoEntry: false })) throw new Error("OUTPUT_ALREADY_EXISTS");
+  if (lstatSync(output, { throwIfNoEntry: false })) throw new Error("OUTPUT_ALREADY_EXISTS");
+  // Create the receipt now and keep the handle: the final write goes through this descriptor, never back through the
+  // path, so replacing the directory (or a parent link) while the child runs cannot redirect it. "wx" is O_EXCL.
+  const outputFd = openSync(output, "wx");
+  try {
+    if (!isOutside(root, realpathSync(output))) throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
+  } catch (error) {
+    closeSync(outputFd);
+    throw error;
   }
-  return { root, output, events };
+  return { root, output, outputFd };
 }
 
 export function main(argv = process.argv.slice(2), context = createHostContext()) {
@@ -136,10 +171,12 @@ export function main(argv = process.argv.slice(2), context = createHostContext()
     scenarioId, verdict: "UNAVAILABLE", issues: [], source: null, native: null, process: null };
   let publicationAllowed = false;
   let output = null;
+  let outputFd = null;
   try {
     const invocation = prepareInvocation(options, context);
-    const { root, events } = invocation;
+    const { root } = invocation;
     output = invocation.output;
+    outputFd = invocation.outputFd;
     publicationAllowed = true;
     if (!/^[a-z0-9][a-z0-9._-]{2,80}$/.test(scenarioId)) throw new Error("SCENARIO_ID_INVALID");
     const before = observeSource(root);
@@ -149,11 +186,17 @@ export function main(argv = process.argv.slice(2), context = createHostContext()
     const base = options.base ?? before.head;
     if (!/^[0-9a-f]{40}$/.test(base)) throw new Error("BASE_REVISION_REQUIRED");
     receipt.source.base = base;
-    measureExecution({ root, scenarioId, base, events }, receipt);
+    measureExecution({ root, scenarioId, base }, receipt);
   } catch (error) {
     receipt.issues.push(error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : "LOCAL_EXECUTION_UNAVAILABLE");
   }
-  if (publicationAllowed) writeFileSync(output, `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx" });
+  if (publicationAllowed) {
+    try {
+      writeSync(outputFd, `${JSON.stringify(receipt, null, 2)}\n`);
+    } finally {
+      closeSync(outputFd);
+    }
+  }
   console.log(JSON.stringify({ scope: receipt.scope, trustedProducer: false, verdict: receipt.verdict,
     output: publicationAllowed ? output : null, issues: receipt.issues }));
   return receipt;
