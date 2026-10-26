@@ -1,0 +1,60 @@
+{
+  "source": {
+    "nativeIdentifier": "expenses.js:create",
+    "captureSha256": "8e9b1589bab4467d3ac2c121d36d4007467611dac4f9e7ac90d27b00a38c28be",
+    "boundary": "Retained authenticated native function-spec category metadata; no tenant financial data"
+  },
+  "category": {
+    "type": "union",
+    "value": [
+      {
+        "type": "literal",
+        "value": "REPAIR"
+      },
+      {
+        "type": "literal",
+        "value": "MAINTENANCE"
+      },
+      {
+        "type": "literal",
+        "value": "DETAILING"
+      },
+      {
+        "type": "literal",
+        "value": "TRANSPORT"
+      },
+      {
+        "type": "literal",
+        "value": "MARKETING"
+      },
+      {
+        "type": "literal",
+        "value": "OFFICE"
+      },
+      {
+        "type": "literal",
+        "value": "SALARIES"
+      },
+      {
+        "type": "literal",
+        "value": "RENT"
+      },
+      {
+        "type": "literal",
+        "value": "UTILITIES"
+      },
+      {
+        "type": "literal",
+        "value": "FEES"
+      },
+      {
+        "type": "literal",
+        "value": "PREPAID"
+      },
+      {
+        "type": "literal",
+        "value": "OTHER"
+      }
+    ]
+  }
+}

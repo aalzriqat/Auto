@@ -1,4 +1,5 @@
 import { makeFunctionReference, type FunctionReference } from "convex/server";
+import type { ExpenseCategory, NonPrepaidExpenseCategory } from "@autoflow/shared";
 
 export type MobilePaymentType = "CASH" | "FINANCE" | "EITHER";
 export type MobileMarketplacePaymentFilter = "CASH" | "FINANCE";
@@ -30,19 +31,8 @@ export type MobileSaleStatus = "PENDING" | "COMPLETED" | "CANCELLED";
 export type MobileFinancingType = "CASH" | "FINANCED" | "LEASE";
 /** SCRUM-495: what a NEW sale may be created with. LEASE is retired and the server refuses it. */
 export type MobileOperatedFinancingType = Exclude<MobileFinancingType, "LEASE">;
-export type MobileExpenseCategory =
-  | "REPAIR"
-  | "MAINTENANCE"
-  | "INSPECTION"
-  | "REGISTRATION"
-  | "CLEANING"
-  | "MARKETING"
-  | "OFFICE"
-  | "RENT"
-  | "SALARIES"
-  | "UTILITIES"
-  | "INSURANCE"
-  | "OTHER";
+export type MobileExpenseCategory = ExpenseCategory;
+export type MobileCreatableExpenseCategory = NonPrepaidExpenseCategory;
 export type MobileExpenseStatus = "PENDING" | "PAID";
 export type MobilePaymentMethod =
   | "CASH"
@@ -1773,7 +1763,7 @@ type ExpenseCreateArgs = OrgScopedArgs & {
   amount: number;
   taxAmount?: number;
   date: number;
-  category: MobileExpenseCategory;
+  category: MobileCreatableExpenseCategory;
   status?: MobileExpenseStatus;
   vendor?: string;
   payerId?: string;
