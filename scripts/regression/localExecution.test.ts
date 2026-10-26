@@ -32,7 +32,7 @@ interface Receipt {
 }
 
 function run(label: string, args: string[] = []): Receipt {
-  const child = spawnSync(process.execPath, [cli, "--scenario", record.id, "--output", `${label}.json`, ...args],
+  const child = spawnSync(process.execPath, [cli, "--scenario", record.id, ...args],
     { cwd: root, timeout: 70000, encoding: "utf8", maxBuffer: 1024 * 1024, env: { ...process.env, GITHUB_SHA: "0".repeat(40) } });
   expect(child.error).toBeUndefined();
   expect(child.signal).toBeNull();
@@ -84,8 +84,8 @@ afterEach(() => {
 });
 
 test("imported CLI entry executes real Git, child process and receipt I/O", () => {
-  const output = path.join(evidence, "--base-imported-entry.json");
-  const result = executeLocal(["--root", root, "--scenario", record.id, "--output=--base-imported-entry.json"], host());
+  const output = path.join(evidence, "result.json");
+  const result = executeLocal(["--root", root, "--scenario", record.id], host());
   const receipt: Receipt = JSON.parse(readFileSync(output, "utf8"));
   expect(receipt.verdict).toBe("PASS");
   expect(receipt).toEqual(result);
@@ -114,8 +114,8 @@ test.each(["wrong-head", "binding-deleted", "foreign-path", "source-mutation", "
     if (mode === "source-mutation") writeFileSync(path.join(root, "selected.test.ts"),
       `import { writeFileSync } from "node:fs"; test("${title}", () => { writeFileSync("marker.txt", "after"); expect(4).toBe(4); });`);
     if (mode === "native-failed") writeFileSync(path.join(root, "selected.test.ts"), `test("${title}", () => { expect(3).toBe(4); });`);
-    const output = path.join(evidence, `imported-${mode}.json`);
-    executeLocal(["--root", root, "--scenario", record.id, "--output", `imported-${mode}.json`,
+    const output = path.join(evidence, "result.json");
+    executeLocal(["--root", root, "--scenario", record.id,
       ...(mode === "wrong-head" ? ["--expect-head", "0".repeat(40)] : [])], host());
     const receipt: Receipt = JSON.parse(readFileSync(output, "utf8"));
     expect(receipt.verdict).not.toBe("PASS");
@@ -171,7 +171,7 @@ test("junction alias entry executes the CLI and publishes its actual receipt", (
   symlinkSync(path.dirname(cli), alias, process.platform === "win32" ? "junction" : "dir");
   try {
     const child = spawnSync(process.execPath, [path.join(alias, path.basename(cli)),
-      "--scenario", record.id, "--output", "alias-receipt.json"], { cwd: root, timeout: 70000, encoding: "utf8" });
+      "--scenario", record.id], { cwd: root, timeout: 70000, encoding: "utf8" });
     const output = String(JSON.parse(child.stdout).output);
     const observed = { exit: child.status, signal: child.signal, error: child.error?.name ?? null,
       stdout: child.stdout, stderr: child.stderr, receiptCreated: existsSync(output), platform: process.platform };
@@ -213,7 +213,7 @@ test("ordinary Git-listed missing file retains the missing census state", () => 
   expect(receipt.source.before).toEqual(receipt.source.after);
 }, 70000);
 
-test.each(["forbidden-output.json", "..receipt.json"])("path-shaped output naming %s is refused and never created", filename => {
+test.each(["forbidden-output.json", "..receipt.json"])("an --output path such as %s is unsupported and nothing is created", filename => {
   const forbidden = path.join(root, filename);
   expect(existsSync(forbidden)).toBe(false);
   const child = spawnSync(process.execPath, [cli, "--scenario", record.id, "--output", forbidden],
@@ -221,15 +221,9 @@ test.each(["forbidden-output.json", "..receipt.json"])("path-shaped output namin
   expect(child.error).toBeUndefined();
   expect(child.signal).toBeNull();
   expect(child.status).toBe(1);
-  expect(JSON.parse(child.stdout)).toMatchObject({ verdict: "UNAVAILABLE", output: null, issues: ["OUTPUT_NAME_INVALID"] });
+  expect(JSON.parse(child.stdout)).toMatchObject({ verdict: "UNAVAILABLE", output: null, issues: ["CLI_ARGUMENTS_INVALID"] });
   expect(existsSync(forbidden), child.stdout).toBe(false);
 }, 15000);
-
-test.each(["../escape.json", "nested/receipt.json", ".", "..", ".native-events.json", ""])("output name %j is not a single evidence file name", name => {
-  const receipt = executeLocal(["--root", root, "--scenario", record.id, "--output", name], host());
-  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["OUTPUT_NAME_INVALID"], native: null, process: null });
-  expect(existsSync(path.join(path.dirname(evidence), "escape.json"))).toBe(false);
-});
 
 test("an --root naming a different directory cannot redirect the host-selected root", () => {
   const foreign = mkdtempSync(path.join(tmpdir(), "s3-foreign-root-"));
@@ -298,8 +292,8 @@ test.each(["binding-deleted", "ruling-drift", "active-demoted", "retirement-no-r
 
 test.each(["expect-head", "base"])("missing or blank --%s refuses without executing", option => {
   for (const suffix of [[], [""], ["   "]]) {
-    const output = path.join(evidence, `${option}-${suffix.length}-${suffix[0]?.length ?? 0}.json`);
-    const child = spawnSync(process.execPath, [cli, "--scenario", record.id, "--output", path.basename(output),
+    const output = path.join(evidence, "result.json");
+    const child = spawnSync(process.execPath, [cli, "--scenario", record.id,
       `--${option}`, ...suffix], { cwd: root, timeout: 70000, encoding: "utf8" });
     expect(child.error).toBeUndefined();
     expect(child.signal).toBeNull();
@@ -309,10 +303,10 @@ test.each(["expect-head", "base"])("missing or blank --%s refuses without execut
   }
 }, 70000);
 
-test.each(["root", "scenario", "output", "base", "expect-head"])("repeated single-value --%s refuses before execution or publication", option => {
-  const output = path.join(evidence, "duplicate.json");
-  const values: Record<string, string> = { root, scenario: record.id, output: "duplicate.json", base: head, "expect-head": head };
-  const receipt = executeLocal(["--root", root, "--scenario", record.id, "--output", "duplicate.json",
+test.each(["root", "scenario", "base", "expect-head"])("repeated single-value --%s refuses before execution or publication", option => {
+  const output = path.join(evidence, "result.json");
+  const values: Record<string, string> = { root, scenario: record.id, base: head, "expect-head": head };
+  const receipt = executeLocal(["--root", root, "--scenario", record.id,
     `--${option}`, option === "expect-head" ? "0".repeat(40) : values[option], `--${option}`, values[option]], host());
   expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["CLI_ARGUMENTS_INVALID"], native: null, process: null });
   expect(existsSync(output)).toBe(false);
@@ -334,7 +328,7 @@ test.each(["source", "external"])("physical %s evidence-directory alias preserve
   const alias = path.join(evidence, "output-alias");
   symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
   try {
-    const receipt = executeLocal(["--root", root, "--scenario", record.id, "--output", "result.json"], { root, evidenceDirectory: alias });
+    const receipt = executeLocal(["--root", root, "--scenario", record.id], { root, evidenceDirectory: alias });
     if (destination === "source") {
       expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["OUTPUT_MUST_BE_OUTSIDE_SOURCE"], native: null, process: null });
       expect(existsSync(path.join(root, "result.json"))).toBe(false);

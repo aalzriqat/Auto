@@ -61,7 +61,7 @@ function measureExecution({ root, scenarioId, base, events }, receipt) {
 
 function parseOptions(argv) {
   const parsed = parseArgs({ args: argv, strict: true, allowPositionals: false, tokens: true,
-    options: { root: { type: "string" }, scenario: { type: "string" }, output: { type: "string" },
+    options: { root: { type: "string" }, scenario: { type: "string" },
       base: { type: "string" }, "expect-head": { type: "string" } } });
   const seen = new Set();
   for (const token of parsed.tokens) {
@@ -76,6 +76,7 @@ function parseOptions(argv) {
 }
 
 const EVENTS_FILE = ".native-events.json";
+const RECEIPT_FILE = "result.json";
 const sameFileName = (left, right) => (process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right);
 
 /**
@@ -96,15 +97,12 @@ function prepareInvocation(options, context) {
     if (!confirmation || ![root, path.resolve(context.root)].some(known => sameFileName(known, confirmation)))
       throw new Error("ROOT_CONTEXT_MISMATCH");
   }
-  // --output is one file name inside the host-owned evidence directory, never a path.
-  const name = options.output ?? "result.json";
-  if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || name === "." || name === ".." || path.basename(name) !== name || name === EVENTS_FILE)
-    throw new Error("OUTPUT_NAME_INVALID");
+  // The receipt name is fixed; no argument contributes to any output path.
   const evidenceDirectory = realpathSync(context.evidenceDirectory ?? mkdtempSync(path.join(tmpdir(), "autoflow-local-execution-")));
   const evidenceRelative = path.relative(root, evidenceDirectory);
   if (!(evidenceRelative === ".." || evidenceRelative.startsWith(`..${path.sep}`) || path.isAbsolute(evidenceRelative)))
     throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
-  const output = path.join(evidenceDirectory, name);
+  const output = path.join(evidenceDirectory, RECEIPT_FILE);
   if (existsSync(output)) throw new Error("OUTPUT_ALREADY_EXISTS");
   return { root, output, events: path.join(evidenceDirectory, EVENTS_FILE) };
 }
