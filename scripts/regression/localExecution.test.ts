@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { startVitest } from "vitest/node";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -963,7 +962,7 @@ describe("the reporter and runner run from the harness checkout's own HEAD, neve
 });
 
 describe("the export seams", () => {
-  const sha1 = (text: string) => createHash("sha1").update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest("hex");
+  const sha1 = (text: string) => execFileSync("git", ["hash-object", "--no-filters", "--stdin"], { input: text, encoding: "utf8" }).trim();
   let destination: string;
   beforeEach(() => { destination = mkdtempSync(path.join(tmpdir(), "s3-export-")); });
   afterEach(() => rmSync(destination, { recursive: true, force: true }));
@@ -1064,7 +1063,7 @@ describe("the export seams", () => {
       expect(() => checkTreePath(file, new Set())).not.toThrow();
     });
 
-    test.each(["", "a//b", "/a", "a/", ".", "..", "a/./b", "a/../b", ".git/config", "a/.GIT/x", "a\\b", "a:b", "a<b", "a>b", 'a"b', "a|b", "a?b", "a*b", "dot.", "space ", "CON", "con.txt", "a/AUX", "COM1", "lpt9.x", "nul"])("%j is refused as unsafe", file => {
+    test.each(["", "a//b", "/a", "a/", ".", "..", "a/./b", "a/../b", ".git/config", "a/.GIT/x", "a\\b", "a:b", "a<b", "a>b", 'a"b', "a|b", "a?b", "a*b", "dot.", "space ", "CON", "con.txt", "a/AUX", "COM1", "lpt9.x", "nul", "a\nb", "a\rb", "x/y\n"])("%j is refused as unsafe", file => {
       expect(() => checkTreePath(file, new Set())).toThrow("EXPORT_PATH_UNSAFE");
     });
 

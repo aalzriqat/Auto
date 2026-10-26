@@ -72,7 +72,22 @@ function exportedConfig(exportRoot) {
   }
 }
 
-const blobId = bytes => createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+/**
+ * Git's own blob ids for files on disk. Git computes them (its collision-detecting SHA-1), not Node, and `--no-filters`
+ * keeps clean/smudge drivers, attributes and line-ending conversion out, so these are the raw bytes' ids.
+ * @param {string} cwd any directory; the command reads only the listed files
+ * @param {string[]} files absolute paths, none containing a line break (checkTreePath refuses those names)
+ * @returns {string[]} one id per file, in order
+ */
+function gitBlobIds(cwd, files) {
+  if (!files.length) return [];
+  const read = spawnSync(resolveTrustedGitExecutable(), ["--no-replace-objects", "hash-object", "--no-filters", "--stdin-paths"],
+    { cwd, input: files.map(file => `${file}\n`).join(""), maxBuffer: 64 * 1024 * 1024, env: cleanEnv(), encoding: "utf8" });
+  if (read.error || read.status !== 0) throw new Error("EXPORT_OBJECTS_UNREADABLE");
+  const ids = read.stdout.split("\n");
+  if (ids.pop() !== "" || ids.length !== files.length || !ids.every(id => /^[0-9a-f]{40}$/.test(id))) throw new Error("EXPORT_OBJECTS_UNREADABLE");
+  return ids;
+}
 const RESERVED_NAME = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i;
 
 /**
@@ -92,7 +107,7 @@ export function checkTreePath(file, seen) {
   const segments = file.split("/");
   for (const segment of segments) {
     if (/^node_modules$/i.test(segment)) throw new Error("EXPORT_TRACKED_NODE_MODULES");
-    if (segment === "" || segment === "." || segment === ".." || /^\.git$/i.test(segment) || /[\\:<>"|?*\0]/.test(segment) ||
+    if (segment === "" || segment === "." || segment === ".." || /^\.git$/i.test(segment) || /[\\:<>"|?*\0\r\n]/.test(segment) ||
       /[. ]$/.test(segment) || RESERVED_NAME.test(segment)) throw new Error("EXPORT_PATH_UNSAFE");
   }
   const key = file.toLowerCase();
@@ -135,12 +150,15 @@ export function writeCommittedTree(root, head, exportRoot, include = () => true,
     if (!match || match[1] !== oid) throw new Error("EXPORT_OBJECTS_UNREADABLE");
     const size = Number(match[2]), start = lineEnd + 1;
     const bytes = output.subarray(start, start + size);
-    if (bytes.length !== size || output[start + size] !== 10 || blobId(bytes) !== oid) throw new Error("EXPORT_OBJECT_MISMATCH");
+    if (bytes.length !== size || output[start + size] !== 10) throw new Error("EXPORT_OBJECT_MISMATCH");
     bytesOf.set(oid, bytes);
     position = start + size + 1;
   }
   for (const directory of directories) if (directory) mkdirSync(path.join(exportRoot, directory), { recursive: true });
   for (const [file, oid] of files) writeFileSync(path.join(exportRoot, file), bytesOf.get(oid), { flag: "wx" });
+  // Each written file must hash (by Git) to the oid the tree lists for it, before verifyExport re-checks the finished directory.
+  const written = [...files.keys()], ids = gitBlobIds(exportRoot, written.map(file => path.join(exportRoot, file)));
+  if (written.some((file, at) => ids[at] !== files.get(file))) throw new Error("EXPORT_OBJECT_MISMATCH");
   verifyExport(exportRoot, files, directories);
 }
 
@@ -153,6 +171,7 @@ function readBlobBatch(root, oids) {
 
 /** The export holds exactly the listed files and directories, byte-identical to their blobs. Exported for tests. */
 export function verifyExport(exportRoot, files, directories) {
+  const found = [];
   const walk = (directory, relative) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const name = relative ? `${relative}/${entry.name}` : entry.name;
@@ -162,12 +181,16 @@ export function verifyExport(exportRoot, files, directories) {
         if (!directories.has(name)) throw new Error("EXPORT_DIFFERS_FROM_HEAD");
         walk(full, name);
       } else if (kind.isFile() && files.has(name)) {
-        if (blobId(readFileSync(full)) !== files.get(name)) throw new Error("EXPORT_DIFFERS_FROM_HEAD");
-        files.delete(name);
+        found.push([name, full]);
       } else throw new Error("EXPORT_DIFFERS_FROM_HEAD");
     }
   };
   walk(exportRoot, "");
+  const ids = gitBlobIds(exportRoot, found.map(([, full]) => full));
+  found.forEach(([name], at) => {
+    if (ids[at] !== files.get(name)) throw new Error("EXPORT_DIFFERS_FROM_HEAD");
+    files.delete(name);
+  });
   if (files.size) throw new Error("EXPORT_DIFFERS_FROM_HEAD");
 }
 
