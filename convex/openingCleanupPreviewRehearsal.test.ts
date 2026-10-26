@@ -161,8 +161,18 @@ test("with nine earlier organizations the driver refuses before creating the fix
   const results = await executeCallbacks(undefined, 9);
   expect(results[0], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-HISTORY", status: "PASS" });
   expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "FAIL", detail: expect.stringMatching(/12-organization/) });
-  // The refused fixture was never created, so nothing is left behind and no server bound was crossed.
+  // Only the refused SPLIT-REFERENCE fixture is proven absent: it was never created, so the server bound was not crossed.
   expect(await listPrimaryOrgNames()).not.toContain("QA TEST cleanup SPLIT-REFERENCE");
+});
+
+test("a HISTORY case that fails after its deletion fixture exists keeps that slot, and SPLIT stops at the bound", async () => {
+  // 8 prior + baseline + RESET + DELETION = 11 known (the failed deletion is not released); DISCOVERY reaches 12; REFERENCE would be 13.
+  const results = await executeCallbacks("deletion-throws", 8);
+  expect(results[0], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-HISTORY", status: "FAIL" });
+  expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "FAIL", detail: expect.stringMatching(/12-organization/) });
+  const names = await listPrimaryOrgNames();
+  expect(names).toContain("QA TEST cleanup HISTORY-DELETION");
+  expect(names).not.toContain("QA TEST cleanup SPLIT-REFERENCE");
 });
 
 test("a failing HISTORY case does not stop SPLIT from running inside the bound", async () => {

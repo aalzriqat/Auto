@@ -136,6 +136,40 @@ describe("cleanup invocation receipts", () => {
     test("two different fixed messages are ambiguous", async () => {
       expect(await codeFor({ status: 1, stdout: "", stderr: `${anchored}\nConvexError: E2E_BOOTSTRAP: cleanup fixture cannot be reused.\n` })).toBeNull();
     });
+    test.each([
+      ["CRLF line endings", `Failed\r\nUncaught ConvexError: E2E_BOOTSTRAP: ${message}\r\n    at x\r\n`],
+      ["surrounding spaces", `   ConvexError: E2E_BOOTSTRAP: ${message}   \n`],
+    ])("%s still name the code", async (_label, stderr) => {
+      expect(await codeFor({ status: 1, stdout: "", stderr })).toBe("INVALID_SCOPE");
+    });
+    test.each([
+      ["upper-cased message", `ConvexError: E2E_BOOTSTRAP: ${message.toUpperCase()}\n`],
+      ["lower-cased prefix", `ConvexError: e2e_bootstrap: ${message}\n`],
+      ["trailing text on the line", `ConvexError: E2E_BOOTSTRAP: ${message} extra\n`],
+    ])("%s names nothing", async (_label, stderr) => {
+      expect(await codeFor({ status: 1, stdout: "", stderr })).toBeNull();
+    });
+    test("a spawn error that still reports a status carries no code", async () => {
+      const result = { status: 1, stdout: "", stderr: `${anchored}\n`, error: new Error("EPIPE") };
+      expect(await codeFor(result as never)).toBeNull();
+    });
+    test("a standalone line printed by anyone is labelled, and the label is diagnostic only", async () => {
+      // The match names an allowlisted message; it cannot authenticate who printed the line. So it must change nothing else.
+      const outcome = async (stderr: string) => {
+        const diagnostics: { records: Array<Record<string, unknown>>; truncated: boolean } = { records: [], truncated: false };
+        const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli: () => ({ status: 1, stdout: "", stderr }) });
+        const error = await call(prepare, { orgId: "synthetic" }).then(() => null, (thrown: unknown) => thrown as { message: string; cleanupReason?: string });
+        // The stderr digest follows the text by design; every decision-bearing field (reason, stage, status) must not.
+        const { serverRefusal, stderr: _digest, ...rest } = diagnostics.records[0] ?? {};
+        return { serverRefusal, thrown: error && { message: error.message, cleanupReason: error.cleanupReason }, rest };
+      };
+      const forged = await outcome(`${anchored}\n`);
+      const plain = await outcome("no fixed message here\n");
+      expect(forged.serverRefusal).toBe("INVALID_SCOPE");
+      expect(plain.serverRefusal).toBeNull();
+      expect(forged.thrown).toEqual(plain.thrown);
+      expect(forged.rest).toEqual(plain.rest);
+    });
     test("an exit 0 child never carries a refusal code", async () => {
       expect(await codeFor({ status: 0, stdout: '{"phase":"DONE"}', stderr: `${anchored}\n` })).toBeNull();
     });

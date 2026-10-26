@@ -417,6 +417,8 @@ const cleanupUnavailable = (cleanupReason = "INVOCATION_UNAVAILABLE") => Object.
 /**
  * A code is named only for a complete, failed child whose stderr carries exactly one line that is, whole, an
  * allowlisted server message (optionally after "ConvexError: "). Echoed, repeated or competing text names nothing.
+ * The match names an allowlisted message; it does not authenticate who printed the line (the child's stderr can carry
+ * text from any code it ran). The label is therefore diagnostic only: it feeds no acceptance, refusal or retry decision.
  * @param {CleanupCliResult | undefined} result @returns {string | null}
  */
 function serverRefusalCode(result) {
