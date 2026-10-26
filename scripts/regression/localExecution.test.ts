@@ -118,6 +118,8 @@ test.each(["wrong-head", "binding-deleted", "foreign-path", "source-mutation", "
     if (mode === "source-mutation") writeFileSync(path.join(root, "selected.test.ts"),
       `import { writeFileSync } from "node:fs"; test("${title}", () => { writeFileSync("marker.txt", "after"); expect(4).toBe(4); });`);
     if (mode === "native-failed") writeFileSync(path.join(root, "selected.test.ts"), `test("${title}", () => { expect(3).toBe(4); });`);
+    // Only committed code runs; wrong-head, binding and path refusals fire before that check.
+    if (mode === "source-mutation" || mode === "native-failed") commitAll("candidate test");
     const output = path.join(evidence, "result.json");
     executeLocal(["--root", root, "--scenario", record.id,
       ...(mode === "wrong-head" ? ["--expect-head", "0".repeat(40)] : [])], host());
@@ -261,10 +263,72 @@ test("an existing result.json in the evidence directory refuses without followin
 });
 
 /** A forged native report: what a candidate config would write if it could reach the reporter's channel. */
-const forgedReportSource = `const events = process.env.AUTOFLOW_LOCAL_SCENARIO_EVENTS;
-if (events) process.getBuiltinModule("node:fs").writeFileSync(events, JSON.stringify({ schemaVersion: 1, root: process.cwd(), scenarioId: process.env.AUTOFLOW_LOCAL_SCENARIO_ID,
+const forgedReportSource = `const channel = Number(process.env.AUTOFLOW_LOCAL_SCENARIO_FD);
+if (Number.isInteger(channel)) process.getBuiltinModule("node:fs").writeSync(channel, JSON.stringify({ schemaVersion: 1, root: process.cwd(), scenarioId: process.env.AUTOFLOW_LOCAL_SCENARIO_ID,
   complete: true, verdict: "PASS", issues: [], cases: [], unhandledErrors: 0, runReason: "passed", baseRevision: process.env.AUTOFLOW_LOCAL_SCENARIO_BASE, selection: null }));
 process.exit(0);`;
+const forgingConfig = `import "./helper.mjs"; export default { test: { globals: true, environment: "node", include: ["selected.test.ts"], watch: false } };`;
+
+test("an untracked file anywhere in the checkout refuses: only committed code may run", () => {
+  writeFileSync(path.join(root, "helper.mjs"), forgedReportSource);
+  writeFileSync(path.join(root, "vitest.config.mjs"), forgingConfig);
+  git(["add", "vitest.config.mjs"]);
+  git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "config imports an uncommitted helper"]);
+  const receipt = executeLocal(["--scenario", record.id], host());
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["SOURCE_NOT_COMMITTED"], native: null, process: null });
+}, 30000);
+
+test("a modified tracked helper imported by the committed config refuses", () => {
+  writeFileSync(path.join(root, "helper.mjs"), "export {};");
+  writeFileSync(path.join(root, "vitest.config.mjs"), forgingConfig);
+  commitAll("config imports a helper");
+  writeFileSync(path.join(root, "helper.mjs"), forgedReportSource);
+  const receipt = executeLocal(["--scenario", record.id], host());
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["SOURCE_NOT_COMMITTED"], native: null, process: null });
+}, 30000);
+
+test("a case-variant config that Vitest would discover on a case-insensitive filesystem refuses", () => {
+  git(["rm", "-q", "-f", "vitest.config.mjs"]);
+  git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "no committed config"]);
+  writeFileSync(path.join(root, "Vitest.Config.MJS"), forgedReportSource);
+  const receipt = executeLocal(["--scenario", record.id], host());
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["TRUSTED_CONFIG_REQUIRED"], native: null, process: null });
+}, 30000);
+
+test("two committed configs are ambiguous and refuse", () => {
+  writeFileSync(path.join(root, "vite.config.mjs"), config());
+  commitAll("second config");
+  const receipt = executeLocal(["--scenario", record.id], host());
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["TRUSTED_CONFIG_REQUIRED"], native: null, process: null });
+}, 30000);
+
+test("a config entry that is not a regular file refuses", () => {
+  // Creating a symlink needs a privilege some hosts lack; a directory takes the same non-regular-file branch.
+  git(["rm", "-q", "-f", "vitest.config.mjs"]);
+  mkdirSync(path.join(root, "vitest.config.mjs"));
+  writeFileSync(path.join(root, "vitest.config.mjs", "index.mjs"), config());
+  commitAll("non-regular config");
+  const receipt = executeLocal(["--scenario", record.id], host());
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["TRUSTED_CONFIG_REQUIRED"], native: null, process: null });
+}, 30000);
+
+test("NODE_OPTIONS preloads do not reach the Vitest child", () => {
+  const marker = path.join(evidence, "preload-ran.txt");
+  const preload = path.join(evidence, "preload.cjs");
+  writeFileSync(preload, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran");`);
+  vi.stubEnv("NODE_OPTIONS", `--require ${JSON.stringify(preload)}`);
+  const receipt = executeLocal(["--scenario", record.id], host());
+  expect(existsSync(marker)).toBe(false);
+  expect(receipt.verdict).toBe("PASS");
+}, 70000);
+
+test("the fork pool is pinned even when the committed config asks for threads", () => {
+  writeFileSync(path.join(root, "vitest.config.mjs"), config(`pool: "threads",`));
+  writeFileSync(path.join(root, "selected.test.ts"), `test("${title}", () => { expect(typeof process.send).toBe("function"); });`);
+  commitAll("config requests threads");
+  const receipt = executeLocal(["--scenario", record.id], host());
+  expect(receipt.verdict, JSON.stringify(receipt.issues)).toBe("PASS");
+}, 70000);
 
 test.each(["modified-config", "untracked-config"])("a vitest config that is not the committed one is refused before any candidate code runs (%s)", mode => {
   if (mode === "modified-config") writeFileSync(path.join(root, "vitest.config.mjs"), forgedReportSource);
@@ -371,6 +435,7 @@ test("inherited GIT_DIR and GIT_WORK_TREE cannot redirect the observed checkout"
 
 test("ordinary Git-listed missing file retains the missing census state", () => {
   unlinkSync(path.join(root, "marker.txt"));
+  commitAll("remove marker");
   const receipt = run("ordinary-missing");
   expect(receipt.verdict).toBe("PASS");
   expect(receipt.source.before).toEqual(receipt.source.after);
@@ -412,7 +477,7 @@ test.each(["runtime-skip", "expected-failure", "zero", "duplicate", "source-muta
     if (mode === "source-mutation") writeFileSync(path.join(root, "selected.test.ts"),
       `import { writeFileSync } from "node:fs"; test("${title}", () => { writeFileSync("marker.txt", "after"); expect(4).toBe(4); });`);
     // The harness only runs a config that is committed, so a config variant is committed before the run.
-    if (mode === "zero" || mode === "duplicate") commitAll("config variant");
+    commitAll("candidate variant");
     const receipt = run(mode);
     expect(receipt.verdict).toBe("FAIL");
     if (mode === "runtime-skip") expect(receipt.native?.cases[0].state).toBe("skipped");
@@ -446,7 +511,9 @@ test.each(["binding-deleted", "ruling-drift", "active-demoted", "retirement-no-r
     if (defect === "retirement-no-reason") {
       record.status = "retired"; record.retiredByRuling = "SCRUM-761#description"; saveRecord();
     }
-    const receipt = run(defect, defect === "wrong-head" ? ["--expect-head", "0".repeat(40)] : []);
+    // The edit is committed (only committed code runs); transitions are still judged against the original head.
+    if (defect !== "wrong-head" && defect !== "binding-deleted") commitAll("record edit");
+    const receipt = run(defect, defect === "wrong-head" ? ["--expect-head", "0".repeat(40)] : ["--base", head]);
     expect(receipt.verdict).not.toBe("PASS");
     if (defect === "wrong-head") expect(receipt.issues).toContain("EXPECTED_HEAD_MISMATCH");
     if (defect === "active-demoted") expect(receipt.native?.issues.some(issue => issue.startsWith("transition:"))).toBe(true);

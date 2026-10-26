@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -11,6 +11,8 @@ const implementationRoot = path.resolve(path.dirname(fileURLToPath(import.meta.u
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 // GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and friends would redirect Git away from the observed checkout.
 const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+// Node preloads/loaders and Vite/Vitest overrides would run or reconfigure code the committed tree does not contain.
+const childEnv = () => Object.fromEntries(Object.entries(cleanEnv()).filter(([name]) => !/^(NODE_OPTIONS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|VITE_.*|VITEST_.*)$/i.test(name)));
 const git = (root, args) => execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, env: cleanEnv() });
 
 /** Observed local files, not a trusted-job or production attestation. */
@@ -43,7 +45,8 @@ function selectBinding(root, scenarioId) {
   return { binding, testFile };
 }
 
-const CONFIG_NAME = /^(vite|vitest)\.(config|workspace|projects)\.[cm]?[jt]s$|^vitest\.workspace\.json$/;
+// Case-insensitive: Vitest on a case-insensitive filesystem discovers Vitest.Config.MJS as vitest.config.mjs.
+const CONFIG_NAME = /^(vite|vitest)\.(config|workspace|projects)\.[cm]?[jt]s$|^vitest\.workspace\.json$/i;
 
 /**
  * A Vitest config executes in the same process as the reporter, so it could forge the report. Only a config that is
@@ -68,6 +71,9 @@ function trustedConfig(root, head) {
 function measureExecution({ root, scenarioId, base }, receipt) {
   const { binding, testFile } = selectBinding(root, scenarioId);
   const config = trustedConfig(root, receipt.source.before.head);
+  // The config (and everything it imports) runs in the process that holds the report pipe, so every non-ignored file
+  // must be exactly what HEAD records: an uncommitted helper or edit could otherwise forge the report.
+  if (receipt.source.before.dirty) throw new Error("SOURCE_NOT_COMMITTED");
   const escapedName = binding.testName.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
   const pattern = `^${escapedName}$`;
   // The report returns on an extra pipe (fd 3) that only the Vitest main process holds. Forked workers, where the
@@ -75,7 +81,7 @@ function measureExecution({ root, scenarioId, base }, receipt) {
   const child = spawnSync(process.execPath, [path.join(implementationRoot, "node_modules/vitest/vitest.mjs"), "run", testFile,
     "--root", root, ...(config ? ["--config", path.join(root, config)] : []), "--pool=forks", "--maxWorkers=1", "--no-file-parallelism", "--retry=0", "-t", pattern,
     "--reporter", path.join(implementationRoot, "scripts/regression/localExecutionReporter.ts")],
-  { cwd: root, timeout: 60000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", "pipe"], env: { ...cleanEnv(),
+  { cwd: root, timeout: 60000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", "pipe"], env: { ...childEnv(),
     AUTOFLOW_LOCAL_SCENARIO_FD: "3", AUTOFLOW_LOCAL_SCENARIO_ID: scenarioId, AUTOFLOW_LOCAL_SCENARIO_BASE: base } });
   receipt.process = { exit: child.status, signal: child.signal, error: child.error?.name ?? null };
   const channel = child.output?.[3];
@@ -151,6 +157,8 @@ function prepareInvocation(options, context) {
     if (!isOutside(root, realpathSync(output))) throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
   } catch (error) {
     closeSync(outputFd);
+    // The file this call just created must not survive a refused invocation, least of all inside the source tree.
+    try { unlinkSync(output); } catch { /* already gone */ }
     throw error;
   }
   return { root, output, outputFd };
