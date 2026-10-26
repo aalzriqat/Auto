@@ -25,6 +25,16 @@ const commitAll = (message: string) => {
   git(["add", "."]);
   git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", message]);
 };
+/**
+ * A commit in a fixture repository would otherwise start detached `git maintenance`/`gc`, which can still be writing under
+ * `.git/objects` while a recursive delete walks it (ENOTEMPTY on newer Git). Turn it off in the fixture's own config.
+ */
+const quiet = (run: (args: string[]) => string) => {
+  run(["config", "maintenance.auto", "false"]);
+  run(["config", "gc.auto", "0"]);
+};
+/** Belt for the braces above: tolerate a late writer instead of failing a cleanup. */
+const retries = { maxRetries: 5, retryDelay: 100 };
 const saveRecord = () =>writeFileSync(scenarioPath(), JSON.stringify(record));
 
 /** Remove a junction/symlink itself, never what it points at. */
@@ -76,6 +86,7 @@ beforeEach(() => {
   writeFileSync(path.join(root, ".gitignore"), "node_modules/\n.vitest/\n");
   writeFileSync(path.join(root, "marker.txt"), "before");
   git(["init", "-q"]);
+  quiet(git);
   git(["add", "."]);
   // Fixture-only history exercises real immutable base/head objects, never the application branch.
   git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "Synthetic execution fixture"]);
@@ -90,7 +101,7 @@ afterEach(() => {
     const absolute = path.resolve(target), parent = path.resolve(tmpdir());
     if (!absolute.startsWith(`${parent}${path.sep}s3-`)) throw new Error("Unsafe fixture cleanup path");
     // These created directories contain no dependency junctions or linked checkouts.
-    rmSync(absolute, { recursive: true, force: true });
+    rmSync(absolute, { recursive: true, force: true, ...retries });
   }
 });
 
@@ -721,12 +732,13 @@ describe("the reporter and runner run from the harness checkout's own HEAD, neve
     writeFileSync(harnessFile(".gitignore"), "scripts/regression/*.js\nnode_modules\n");
     symlinkSync(path.join(repository, "node_modules"), harnessFile("node_modules"), process.platform === "win32" ? "junction" : "dir");
     hgit(["init", "-q"]);
+    quiet(hgit);
     commitHarness();
   });
   afterEach(() => {
     // The link goes first so a recursive delete cannot reach the real dependencies.
     dropLink(harnessFile("node_modules"));
-    rmSync(harness, { recursive: true, force: true });
+    rmSync(harness, { recursive: true, force: true, ...retries });
   });
 
   test("a clean committed harness copy runs the scenario end to end", () => {
