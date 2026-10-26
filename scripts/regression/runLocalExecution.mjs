@@ -78,7 +78,11 @@ function parseOptions(argv) {
 const EVENTS_FILE = ".native-events.json";
 const sameFileName = (left, right) => (process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right);
 
-/** The host, not a CLI argument, selects the source root: the launcher's working directory. */
+/**
+ * The host, not a CLI argument, selects the source root: the launcher's working directory.
+ * @param {string} [cwd]
+ * @returns {{ root: string, evidenceDirectory: string | null }}
+ */
 export function createHostContext(cwd = process.cwd()) {
   return { root: cwd, evidenceDirectory: null };
 }
