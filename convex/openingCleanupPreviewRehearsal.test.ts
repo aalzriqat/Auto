@@ -129,7 +129,7 @@ async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "gene
     }
   };
   if (defect === "inventory") await primary.mutation(api.organizations.create, { name: "Unexpected unrecorded QA membership" });
-  listPrimaryOrgNames = async () => (await primary.query(api.organizations.listMine, {})).map((org: { name: string }) => org.name);
+  listPrimaryOrgNames = async () => (await primary.query(api.organizations.listMine, {})).flatMap(org => (org ? [org.name] : []));
   // Earlier rehearsal cases leave their organizations behind; the 12-organization fixture bound counts them.
   const createdRehearsalOrgIds: string[] = [];
   for (let index = 0; index < priorOrgs; index += 1)
