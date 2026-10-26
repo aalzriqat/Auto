@@ -30,6 +30,41 @@ async function setup() {
 }
 
 describe("expenses.create", () => {
+  async function ordinaryCategoryFlow(category: "DETAILING" | "TRANSPORT" | "FEES") {
+    const { t, orgId, asUser } = await setup();
+    const args = { orgId, title: "Synthetic ordinary category", amount: 25.5, date: Date.now(), category,
+      status: "PENDING" as const, idempotencyKey: "ordinary-category-intent" };
+    const expenseId = await asUser.mutation(api.expenses.create, args);
+    expect(await asUser.mutation(api.expenses.create, args)).toBe(expenseId);
+    await t.run(async ctx => {
+      expect(await ctx.db.query("expenses").withIndex("by_org", q => q.eq("orgId", orgId)).collect()).toHaveLength(1);
+      expect(await ctx.db.get(expenseId)).toMatchObject({ category, status: "PENDING" });
+      expect(await ctx.db.query("transactions").collect()).toEqual([]);
+      expect(await ctx.db.query("accountingEvents").collect()).toEqual([]);
+    });
+    await asUser.mutation(api.expenses.remove, { orgId, expenseId });
+    expect(await t.run(ctx => ctx.db.get(expenseId))).toMatchObject({ isDeleted: true });
+  }
+  test("SCRUM-179 detailing category retains native creation retry and removal", async () => { await ordinaryCategoryFlow("DETAILING"); });
+  test.each(["TRANSPORT", "FEES"] as const)("SCRUM-179 %s category retains native creation retry and removal", ordinaryCategoryFlow);
+
+  test.each(["PREPAID", "SALARIES"] as const)("SCRUM-179 %s retains its native business refusal before measured financial writes", async category => {
+    const { t, orgId, userId, asUser } = await setup();
+    if (category === "SALARIES") await t.run(ctx => ctx.db.insert("employeeCompensation", {
+      orgId, userId, active: true, monthlySalaryMinor: 100_000, currency: "JOD", effectiveFrom: Date.now(), createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    const witness = () => t.run(async ctx => ({
+      expenses: await ctx.db.query("expenses").collect(), transactions: await ctx.db.query("transactions").collect(),
+      events: await ctx.db.query("accountingEvents").collect(), journals: await ctx.db.query("journalEntries").collect(),
+      lines: await ctx.db.query("journalLines").collect(), pending: await ctx.db.query("pendingAccountingEvents").collect(),
+      commands: await ctx.db.query("commandIdempotency").collect(), prepaid: await ctx.db.query("prepaidExpenseSchedules").collect(),
+    }));
+    const before = await witness();
+    await expect(asUser.mutation(api.expenses.create, { orgId, category, title: "Synthetic refused category", amount: 25.5,
+      date: Date.now(), idempotencyKey: "refused-category-intent" })).rejects.toThrow(category === "PREPAID" ? "amortization months" : "Payroll module");
+    expect(await witness()).toEqual(before);
+  });
+
   test.each(["foreign", "inactive", "deleted", "wrong currency"] as const)(
     "refuses a %s physical bank without saving a paid expense",
     async (condition) => {

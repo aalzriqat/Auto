@@ -1,10 +1,16 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useRef, useState } from "react";
 import { Text, View } from "react-native";
-import { api, type MobileExpense, type MobileExpenseCategory } from "../../../convexApi";
+import { api, type MobileExpense, type MobileCreatableExpenseCategory } from "../../../convexApi";
+import { NON_PREPAID_EXPENSE_CATEGORIES, isNonPrepaidExpenseCategory } from "@autoflow/shared";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, useCommandIdentity, invalidNumberMessage, requiredText, useFieldFocusChain, useFormErrors, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
+
+type ExpenseForm = {
+  title: string; amount: string; taxAmount: string; category: MobileCreatableExpenseCategory;
+  vendor: string; vehicleId: string; notes: string;
+};
 
 export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; orgId: string }) {
   const styles = useStyles();
@@ -31,11 +37,11 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
   const vehicles = useQuery(api.vehicles.listAll, { orgId, includeReserved: true });
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<ExpenseForm>({
     title: "",
     amount: "",
     taxAmount: "",
-    category: "OTHER" as MobileExpenseCategory,
+    category: "OTHER",
     vendor: "",
     vehicleId: "",
     notes: "",
@@ -126,7 +132,9 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
         <FormField error={errors.amount} keyboardType="numeric" label={locale === "ar" ? "المبلغ" : "Amount"} value={form.amount} onChangeText={(amount) => setForm((prev) => ({ ...prev, amount }))} {...chain.fieldProps(1)} />
         <FormField keyboardType="numeric" label={locale === "ar" ? "الضريبة" : "Tax"} value={form.taxAmount} onChangeText={(taxAmount) => setForm((prev) => ({ ...prev, taxAmount }))} {...chain.fieldProps(2)} />
         <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={(vehicleId) => setForm((prev) => ({ ...prev, vehicleId }))} />
-        <SelectField label={locale === "ar" ? "الفئة" : "Category"} value={form.category} options={["REPAIR", "MAINTENANCE", "INSPECTION", "REGISTRATION", "CLEANING", "MARKETING", "OFFICE", "RENT", "SALARIES", "UTILITIES", "INSURANCE", "OTHER"].map((value) => ({ label: value, value }))} onChange={(category) => setForm((prev) => ({ ...prev, category: category as MobileExpenseCategory }))} />
+        <SelectField label={locale === "ar" ? "الفئة" : "Category"} value={form.category} options={NON_PREPAID_EXPENSE_CATEGORIES.map((value) => ({ label: value, value }))} onChange={(category) => {
+          if (isNonPrepaidExpenseCategory(category)) setForm((prev) => ({ ...prev, category }));
+        }} />
         <FormField label={locale === "ar" ? "المورد" : "Vendor"} value={form.vendor} onChangeText={(vendor) => setForm((prev) => ({ ...prev, vendor }))} {...chain.fieldProps(3)} />
         <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} {...chain.fieldProps(4)} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />

@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { expenseCategoryValidator } from "./utils/expenseCategories";
 import { wizardDraftDataValidator } from "./wizardDraftData";
 import { openingAllocationResultValidator, openingAllocationValidator } from "./utils/openingAllocationValidators";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator } from "./utils/paymentMethods";
@@ -2468,20 +2469,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     title: v.string(), // e.g., "Brake replacement", "Detailing", "Office supplies"
     amount: v.number(),
     date: v.number(),
-    category: v.union(
-      v.literal("REPAIR"),
-      v.literal("MAINTENANCE"),
-      v.literal("DETAILING"),
-      v.literal("TRANSPORT"),
-      v.literal("MARKETING"),
-      v.literal("OFFICE"),
-      v.literal("SALARIES"),
-      v.literal("RENT"),
-      v.literal("UTILITIES"),
-      v.literal("FEES"),
-      v.literal("PREPAID"),
-      v.literal("OTHER")
-    ),
+    category: expenseCategoryValidator,
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
     // When the prepaid coverage/service actually begins, if later than `date`
