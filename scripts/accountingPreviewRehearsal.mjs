@@ -55,6 +55,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import { createHash } from "node:crypto";
 import { assertPreviewTargeting, buildConvexRunArgs, isPreviewDeployKey, runConvex } from "./e2ePreviewBootstrap.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -395,13 +396,80 @@ const CLEANUP_FUNCTIONS = new Set([
   "adminOrgs:runDeletionRequestBatch",
 ]);
 const CLEANUP_OUTPUT_LIMIT = 262_144;
-const cleanupUnavailable = () => new RehearsalError("Cleanup preview invocation is UNAVAILABLE.");
+/** Fixed fixture refusals the server may state; the code is the only thing retained, never the stream. */
+const CLEANUP_SERVER_REFUSALS = new Map([
+  ["invalid cleanup fixture scope.", "INVALID_SCOPE"],
+  ["cleanup membership inventory is incomplete.", "INVENTORY_INCOMPLETE"],
+  ["cleanup requires the two active QA identities.", "IDENTITIES_UNAVAILABLE"],
+  ["cleanup QA baseline is unavailable.", "BASELINE_UNAVAILABLE"],
+  ["unexpected cleanup QA membership.", "UNEXPECTED_MEMBERSHIP"],
+  ["cleanup requires a newly created QA fixture.", "FIXTURE_NOT_NEW"],
+  ["cleanup fixture cannot be reused.", "FIXTURE_REUSED"],
+  ["cleanup fixture already has a lifecycle owner.", "LIFECYCLE_OWNED"],
+  ["cleanup reference scan is not ready.", "REFERENCE_NOT_READY"],
+  ["cleanup fixture was already removed.", "FIXTURE_REMOVED"],
+  ["cleanup organization is missing.", "ORG_MISSING"],
+]);
+const cleanupUnavailable = (cleanupReason = "INVOCATION_UNAVAILABLE") => Object.assign(
+  new RehearsalError("Cleanup preview invocation is UNAVAILABLE."), { cleanupReason });
+/** @typedef {{records:unknown[],truncated:boolean,terminal?:unknown,lastUnavailable?:unknown}} CleanupDiagnostics */
+
+/**
+ * A code is named only for a complete, failed child whose stderr carries exactly one line that is, whole, an
+ * allowlisted server message (optionally after "ConvexError: "). Echoed, repeated or competing text names nothing.
+ * The match names an allowlisted message; it does not authenticate who printed the line (the child's stderr can carry
+ * text from any code it ran). The label is therefore diagnostic only: it feeds no acceptance, refusal or retry decision.
+ * @param {CleanupCliResult | undefined} result @returns {string | null}
+ */
+function serverRefusalCode(result) {
+  const stderr = result?.stderr;
+  if (!result || result.error || result.signal || !Number.isInteger(result.status) || result.status === null || result.status < 1) return null;
+  if ((typeof stderr !== "string" && !Buffer.isBuffer(stderr)) || Buffer.byteLength(stderr) > CLEANUP_OUTPUT_LIMIT) return null;
+  const codes = [];
+  for (const line of stripVTControlCharacters(stderr.toString()).split(/\r?\n/).map(entry => entry.trim())) {
+    for (const [message, code] of CLEANUP_SERVER_REFUSALS) {
+      if (line === `E2E_BOOTSTRAP: ${message}` || line === `ConvexError: E2E_BOOTSTRAP: ${message}` ||
+          line === `Uncaught ConvexError: E2E_BOOTSTRAP: ${message}`) codes.push(code);
+    }
+  }
+  return codes.length === 1 ? codes[0] : null;
+}
+
+/** No stream text, arguments, targets or arbitrary exception fields enter evidence.
+ * @param {CleanupCliResult | undefined} result @param {string} functionName
+ * @param {CleanupSplitPhase | undefined} phase @param {string} reason */
+function cleanupDiagnostic(result, functionName, phase, reason) {
+  const complete = result && result.status !== null && Number.isInteger(result.status) && result.status >= 0 &&
+    !result.error && !result.signal;
+  /** @param {unknown} value */
+  const stream = (value) => {
+    if (typeof value !== "string" && !Buffer.isBuffer(value)) return { bytes: null, sha256: null, digestScope: "UNAVAILABLE" };
+    const bytes = Buffer.byteLength(value);
+    return { bytes, sha256: complete && bytes <= CLEANUP_OUTPUT_LIMIT ? createHash("sha256").update(value).digest("hex") : null,
+      digestScope: !complete ? "UNAVAILABLE_INCOMPLETE" : bytes <= CLEANUP_OUTPUT_LIMIT ? "COMPLETE" : "UNAVAILABLE_OVERSIZE" };
+  };
+  const code = result?.error && "code" in result.error ? result.error.code : null;
+  return {
+    functionName: CLEANUP_FUNCTIONS.has(functionName) ? functionName : "UNAVAILABLE",
+    phase: phase === "DISCOVERY" || phase === "REFERENCE" ? phase : null,
+    status: result && Number.isInteger(result.status) && result.status !== null && result.status >= 0 ? result.status : null,
+    signal: result?.signal == null ? null :
+      (["SIGTERM", "SIGKILL", "SIGINT", "SIGABRT", "SIGSEGV", "SIGPIPE", "SIGHUP"].includes(result.signal) ? result.signal : "UNAVAILABLE"),
+    errorCode: code == null ? null :
+      (typeof code === "string" && ["ETIMEDOUT", "ENOBUFS", "ENOENT", "EACCES", "EPERM", "E2BIG"].includes(code) ? code : "UNAVAILABLE"),
+    stdout: stream(result?.stdout), stderr: stream(result?.stderr), reason,
+    serverRefusal: serverRefusalCode(result),
+    stage: reason === "SUCCESS" || reason === "SPLIT_REFUSAL" ? "COMPLETE" :
+      reason.startsWith("REFUSAL_") || reason === "SUCCESS_JSON_UNAVAILABLE" ? "PARSER" :
+      reason === "STREAM_UNAVAILABLE" ? "STREAM" : "INVOCATION",
+  };
+}
 
 /** @param {unknown} value */
 function cleanupOutput(value) {
   if (value === undefined || value === null) return "";
   if ((!Buffer.isBuffer(value) && typeof value !== "string") || Buffer.byteLength(value) > CLEANUP_OUTPUT_LIMIT) {
-    throw cleanupUnavailable();
+    throw cleanupUnavailable("STREAM_UNAVAILABLE");
   }
   return stripVTControlCharacters(value.toString()).trim();
 }
@@ -416,21 +484,21 @@ function cleanupOutput(value) {
  */
 function cleanupReceipt(result, functionName, expectedSplitPhase) {
   if (!result || result.error || result.signal || !Number.isInteger(result.status) || result.status === null || result.status < 0) {
-    throw cleanupUnavailable();
+    throw cleanupUnavailable("CHILD_RESULT_UNAVAILABLE");
   }
   const stdout = cleanupOutput(result.stdout);
   const stderr = cleanupOutput(result.stderr);
   const markers = stderr.match(/OPENING_CLEANUP_SPLIT_REQUIRED_[A-Z_]+/g) ?? [];
   if (result.status === 0) {
-    if (!stdout || markers.length) throw cleanupUnavailable();
+    if (!stdout || markers.length) throw cleanupUnavailable("SUCCESS_JSON_UNAVAILABLE");
     try {
       /** @type {unknown} */
       const value = JSON.parse(stdout);
       return { ok: true, value };
-    } catch { throw cleanupUnavailable(); }
+    } catch { throw cleanupUnavailable("SUCCESS_JSON_UNAVAILABLE"); }
   }
   if (stdout || functionName !== "orgFinancialReset:resetOrgFinancialData" || !expectedSplitPhase || markers.length !== 1) {
-    throw cleanupUnavailable();
+    throw cleanupUnavailable("REFUSAL_PREREQUISITES");
   }
   const marker = `OPENING_CLEANUP_SPLIT_REQUIRED_${expectedSplitPhase}`;
   const lines = stderr.split(/\r?\n/).map(line => line.trim());
@@ -438,18 +506,18 @@ function cleanupReceipt(result, functionName, expectedSplitPhase) {
   const serverMarkers = lines.filter(line => [marker, `'${marker}'`, `"${marker}"`].some(value => line === loggerPrefix + value));
   const refusedCalls = lines.filter(line => line.replace(/^[✖✘] /, "") === `Failed to run function "${functionName}":`);
   if (markers[0] !== marker || serverMarkers.length !== 1 || refusedCalls.length !== 1 ||
-      !stderr.includes("Opening cleanup could not be verified. Please contact support.")) throw cleanupUnavailable();
+      !stderr.includes("Opening cleanup could not be verified. Please contact support.")) throw cleanupUnavailable("REFUSAL_SIGNATURE");
   return { ok: false, refusal: "OPENING_CLEANUP_SPLIT_REQUIRED", phase: expectedSplitPhase, exitCode: result.status };
 }
 
 /**
  * Trusted closure: callback arguments cannot supply a CLI target or environment.
- * Both output streams are bounded and retained privately; only typed receipts
- * cross back into the rehearsal's public evidence document.
+ * Both output streams are bounded. Only typed receipts and anonymous invocation
+ * diagnostics cross back into the rehearsal's public evidence document.
  * @param {{deployKey:string,previewName:string,convexUrl:string}} config
- * @param {{env?:Record<string,string|undefined>,spawnCli?:(command:string,args:string[],options:object)=>CleanupCliResult}} dependencies
+ * @param {{env?:Record<string,string|undefined>,spawnCli?:(command:string,args:string[],options:object)=>CleanupCliResult,diagnostics?:CleanupDiagnostics}} dependencies
  */
-export function createCleanupPreviewCall(config, { env = process.env, spawnCli = spawnSync } = {}) {
+export function createCleanupPreviewCall(config, { env = process.env, spawnCli = spawnSync, diagnostics } = {}) {
   const { deployKey, previewName, convexUrl } = config;
   const childEnv = { ...env, CONVEX_DEPLOY_KEY: deployKey, CONVEX_PREVIEW_NAME: previewName, NEXT_PUBLIC_CONVEX_URL: convexUrl };
   try {
@@ -464,29 +532,53 @@ export function createCleanupPreviewCall(config, { env = process.env, spawnCli =
    * @returns {Promise<CleanupPreviewReceipt>}
    */
   return async (functionName, args, expectedSplitPhase) => {
-    if (!CLEANUP_FUNCTIONS.has(functionName) || !args || typeof args !== "object" || Array.isArray(args) ||
-        (expectedSplitPhase !== undefined && expectedSplitPhase !== "DISCOVERY" && expectedSplitPhase !== "REFERENCE")) {
-      throw cleanupUnavailable();
-    }
-    const fixtureCall = functionName.startsWith("e2eBootstrap:");
-    if (fixtureCall && args.expectedCloudUrl !== undefined && args.expectedCloudUrl !== convexUrl) throw cleanupUnavailable();
-    const payload = fixtureCall ? { ...args, expectedCloudUrl: convexUrl } : args;
     /** @type {CleanupCliResult | undefined} */
     let result;
+    let reason = "INVOCATION_UNAVAILABLE";
     try {
-      const argsJson = JSON.stringify(payload);
-      if (Buffer.byteLength(argsJson) > 65_536) throw cleanupUnavailable();
-      const argv = buildConvexRunArgs({ functionName, argsJson, previewName, deployKey, env: childEnv });
-      runConvex(argv, functionName, (command, commandArgs, options) => {
-        result = spawnCli(command, commandArgs, { ...options, env: childEnv, stdio: ["ignore", "pipe", "pipe"],
-          timeout: 60_000, maxBuffer: CLEANUP_OUTPUT_LIMIT, encoding: "utf8", windowsHide: true });
-        return result;
-      });
-    } catch {
-      if (!result || result.status === 0) throw cleanupUnavailable();
+      if (!CLEANUP_FUNCTIONS.has(functionName) || !args || typeof args !== "object" || Array.isArray(args) ||
+          (expectedSplitPhase !== undefined && expectedSplitPhase !== "DISCOVERY" && expectedSplitPhase !== "REFERENCE")) {
+        throw cleanupUnavailable();
+      }
+      const fixtureCall = functionName.startsWith("e2eBootstrap:");
+      if (fixtureCall && args.expectedCloudUrl !== undefined && args.expectedCloudUrl !== convexUrl) throw cleanupUnavailable();
+      const payload = fixtureCall ? { ...args, expectedCloudUrl: convexUrl } : args;
+      try {
+        const argsJson = JSON.stringify(payload);
+        if (Buffer.byteLength(argsJson) > 65_536) throw cleanupUnavailable();
+        const argv = buildConvexRunArgs({ functionName, argsJson, previewName, deployKey, env: childEnv });
+        runConvex(argv, functionName, (command, commandArgs, options) => {
+          result = spawnCli(command, commandArgs, { ...options, env: childEnv, stdio: ["ignore", "pipe", "pipe"],
+            timeout: 60_000, maxBuffer: CLEANUP_OUTPUT_LIMIT, encoding: "utf8", windowsHide: true });
+          return result;
+        });
+      } catch {
+        if (!result || result.status === 0) throw cleanupUnavailable();
+      }
+      if (!result) throw cleanupUnavailable();
+      const receipt = cleanupReceipt(result, functionName, expectedSplitPhase);
+      reason = receipt.ok ? "SUCCESS" : "SPLIT_REFUSAL";
+      return receipt;
+      } catch (error) {
+      if (error instanceof RehearsalError && "cleanupReason" in error &&
+        ["CHILD_RESULT_UNAVAILABLE", "STREAM_UNAVAILABLE", "SUCCESS_JSON_UNAVAILABLE", "REFUSAL_PREREQUISITES", "REFUSAL_SIGNATURE"].includes(error.cleanupReason))
+        reason = error.cleanupReason;
+      throw error;
+    } finally {
+      // Diagnostics cannot promote or replace the original result/rejection.
+      if (diagnostics) {
+        try {
+          const record = cleanupDiagnostic(result, functionName, expectedSplitPhase, reason);
+          diagnostics.terminal = record;
+          // A later success or expected cap refusal cannot erase a real failure.
+          if (reason !== "SUCCESS" && reason !== "SPLIT_REFUSAL") diagnostics.lastUnavailable = record;
+          if (diagnostics.records.length < 256) diagnostics.records.push(record);
+          else diagnostics.truncated = true;
+        } catch {
+          try { diagnostics.truncated = true; } catch { /* Original invocation result takes precedence. */ }
+        }
+      }
     }
-    if (!result) throw cleanupUnavailable();
-    return cleanupReceipt(result, functionName, expectedSplitPhase);
   };
 }
 
@@ -629,6 +721,8 @@ export function fd1BankContractInputs({ env, cwd, readText = (file) => readFileS
 /* c8 ignore start — the orchestration below only runs inside CI against a preview. */
 export async function main(env = process.env) {
   const config = assertRehearsalEnv(env);
+  /** @type {CleanupDiagnostics} */
+  const cleanupInvocations = { records: [], truncated: false, terminal: null, lastUnavailable: null };
   const evidence = {
     testedSha: env.REHEARSAL_TESTED_SHA ?? null,
     previewName: config.previewName,
@@ -638,6 +732,7 @@ export async function main(env = process.env) {
     workflowRunAttempt: env.GITHUB_RUN_ATTEMPT ?? null,
     workflowJob: env.GITHUB_JOB ?? null,
     cases: [],
+    cleanupInvocations,
   };
 
   // ── Real Clerk identities, resolved before anything is targeted ───────────
@@ -734,7 +829,7 @@ export async function main(env = process.env) {
   await runRehearsalCases(context);
   const { runCleanupRehearsalCases } = await import("./accountingCleanupRehearsal.mjs");
   await runCleanupRehearsalCases({ ...context,
-    previewCall: createCleanupPreviewCall(config, { env }),
+    previewCall: createCleanupPreviewCall(config, { env, diagnostics: cleanupInvocations }),
     qaIdentities: { primaryClerkUserId: salesUserId, approverClerkUserId: approverUserId },
     createdRehearsalOrgIds: [...createdRehearsalOrgIds],
   });
