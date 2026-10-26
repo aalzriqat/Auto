@@ -396,9 +396,31 @@ const CLEANUP_FUNCTIONS = new Set([
   "adminOrgs:runDeletionRequestBatch",
 ]);
 const CLEANUP_OUTPUT_LIMIT = 262_144;
+/** Fixed fixture refusals the server may state; the code is the only thing retained, never the stream. */
+const CLEANUP_SERVER_REFUSALS = new Map([
+  ["invalid cleanup fixture scope.", "INVALID_SCOPE"],
+  ["cleanup membership inventory is incomplete.", "INVENTORY_INCOMPLETE"],
+  ["cleanup requires the two active QA identities.", "IDENTITIES_UNAVAILABLE"],
+  ["cleanup QA baseline is unavailable.", "BASELINE_UNAVAILABLE"],
+  ["unexpected cleanup QA membership.", "UNEXPECTED_MEMBERSHIP"],
+  ["cleanup requires a newly created QA fixture.", "FIXTURE_NOT_NEW"],
+  ["cleanup fixture cannot be reused.", "FIXTURE_REUSED"],
+  ["cleanup fixture already has a lifecycle owner.", "LIFECYCLE_OWNED"],
+  ["cleanup reference scan is not ready.", "REFERENCE_NOT_READY"],
+  ["cleanup fixture was already removed.", "FIXTURE_REMOVED"],
+  ["cleanup organization is missing.", "ORG_MISSING"],
+]);
 const cleanupUnavailable = (cleanupReason = "INVOCATION_UNAVAILABLE") => Object.assign(
   new RehearsalError("Cleanup preview invocation is UNAVAILABLE."), { cleanupReason });
 /** @typedef {{records:unknown[],truncated:boolean,terminal?:unknown,lastUnavailable?:unknown}} CleanupDiagnostics */
+
+/** @param {unknown} stderr @returns {string | null} an allowlisted code only when exactly one fixed message appears */
+function serverRefusalCode(stderr) {
+  if ((typeof stderr !== "string" && !Buffer.isBuffer(stderr)) || Buffer.byteLength(stderr) > CLEANUP_OUTPUT_LIMIT) return null;
+  const text = stderr.toString();
+  const found = new Set([...CLEANUP_SERVER_REFUSALS].filter(([message]) => text.includes(`E2E_BOOTSTRAP: ${message}`)).map(([, code]) => code));
+  return found.size === 1 ? [...found][0] : null;
+}
 
 /** No stream text, arguments, targets or arbitrary exception fields enter evidence.
  * @param {CleanupCliResult | undefined} result @param {string} functionName
@@ -423,6 +445,7 @@ function cleanupDiagnostic(result, functionName, phase, reason) {
     errorCode: code == null ? null :
       (typeof code === "string" && ["ETIMEDOUT", "ENOBUFS", "ENOENT", "EACCES", "EPERM", "E2BIG"].includes(code) ? code : "UNAVAILABLE"),
     stdout: stream(result?.stdout), stderr: stream(result?.stderr), reason,
+    serverRefusal: serverRefusalCode(result?.stderr),
     stage: reason === "SUCCESS" || reason === "SPLIT_REFUSAL" ? "COMPLETE" :
       reason.startsWith("REFUSAL_") || reason === "SUCCESS_JSON_UNAVAILABLE" ? "PARSER" :
       reason === "STREAM_UNAVAILABLE" ? "STREAM" : "INVOCATION",

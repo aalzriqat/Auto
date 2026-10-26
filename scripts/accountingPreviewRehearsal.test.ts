@@ -94,6 +94,20 @@ describe("cleanup invocation receipts", () => {
     expect(exitCodeForSummary(summarize(retained.cases))).toBe(1);
   });
 
+  test("a fixed fixture refusal is named by an allowlisted code, never by raw stderr", async () => {
+    const diagnostics: { records: Array<Record<string, unknown>>; truncated: boolean } = { records: [], truncated: false };
+    const prepare = "e2eBootstrap:prepareOpeningCleanupFixture";
+    const stderr = (message: string) => `[CONVEX M(${prepare})] [ERROR] 'private-detail'\nConvexError: E2E_BOOTSTRAP: ${message}\n`;
+    const spawnCli = vi.fn(() => ({ status: 1, stdout: "", stderr: stderr("invalid cleanup fixture scope.") }));
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli });
+    await expect(call(prepare, { orgId: "private-argument" })).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    spawnCli.mockReturnValue({ status: 1, stdout: "", stderr: stderr("something not in the allowlist private-text") });
+    await expect(call(prepare, { orgId: "private-argument" })).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    expect(diagnostics.records[0]).toMatchObject({ reason: "REFUSAL_PREREQUISITES", serverRefusal: "INVALID_SCOPE" });
+    expect(diagnostics.records[1]).toMatchObject({ reason: "REFUSAL_PREREQUISITES", serverRefusal: null });
+    expect(JSON.stringify(diagnostics)).not.toMatch(/private/);
+  });
+
   test("a broken diagnostic sink cannot replace the original cleanup refusal", async () => {
     const diagnostics = { records: [] as unknown[], truncated: false };
     Object.freeze(diagnostics.records);

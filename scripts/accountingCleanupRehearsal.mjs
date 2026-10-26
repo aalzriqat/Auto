@@ -156,7 +156,10 @@ export async function runCleanupRehearsalCases(ctx) {
   await ctx.recordCase(ctx.results, "S858-CLEANUP-HISTORY", "Native cleanup of 102 retained headers; historical admission is synthetic", async () => {
     const started = Date.now();
     const reset = await resetHistory(ctx, await prepareNativeOpening(ctx, knownOrgIds, "HISTORY-RESET"));
-    const deletion = await deletionHistory(ctx, await prepareNativeOpening(ctx, knownOrgIds, "HISTORY-DELETION"));
+    const deletionFixture = await prepareNativeOpening(ctx, knownOrgIds, "HISTORY-DELETION");
+    const deletion = await deletionHistory(ctx, deletionFixture);
+    // Completed deletion (org row and its seats gone) frees an inventory slot; the server bound of 12 stays untouched.
+    knownOrgIds.delete(deletionFixture.orgId);
     return { reset, deletion, elapsedMs: Date.now() - started, scope: "actual native functions; synthetic historical admission; no OCC claim" };
   });
   await ctx.recordCase(ctx.results, "S858-CLEANUP-SPLIT", "Actual discovery and reference cap guard receipts preserve cleanup state", async () => {

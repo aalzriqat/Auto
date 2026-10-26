@@ -87,7 +87,7 @@ test("cleanup observation refuses a foreign deletion request before returning ev
   await expect(t.query(internal.e2eBootstrap.observeOpeningCleanupFixture, { ...scopeArgs, deletionRequestId: requestId })).rejects.toThrow();
 });
 
-async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "generation") {
+async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "generation", priorOrgs = 0) {
   const { t, baseline, primary, approver } = await setup();
   const sdk = (actor: typeof primary) => async (kind: "query" | "mutation", name: string, args: Record<string, unknown>) =>
     kind === "query" ? await actor.query(makeFunctionReference<"query">(name), args)
@@ -126,14 +126,27 @@ async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "gene
     }
   };
   if (defect === "inventory") await primary.mutation(api.organizations.create, { name: "Unexpected unrecorded QA membership" });
+  // Earlier rehearsal cases leave their organizations behind; the 12-organization fixture bound counts them.
+  const createdRehearsalOrgIds: string[] = [];
+  for (let index = 0; index < priorOrgs; index += 1)
+    createdRehearsalOrgIds.push(await primary.mutation(api.organizations.create, { name: `Prior rehearsal org ${index}` }));
   await runCleanupRehearsalCases({ orgId: baseline.orgId, results, config: { convexUrl: CLOUD },
-    createdRehearsalOrgIds: [], qaIdentities: { primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId },
+    createdRehearsalOrgIds, qaIdentities: { primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId },
     salesMust: sdk(primary), approverMust: sdk(approver), previewCall, recordCase, unproven });
   return results;
 }
 
 test("cleanup cloud callbacks execute real fixture, reset and scheduled worker handlers", async () => {
   const results = await executeCallbacks();
+  expect(results, JSON.stringify(results)).toEqual([
+    expect.objectContaining({ id: "S858-CLEANUP-HISTORY", status: "PASS" }),
+    expect.objectContaining({ id: "S858-CLEANUP-SPLIT", status: "PASS" }),
+  ]);
+});
+
+test("cleanup cases stay inside the 12-organization fixture bound after eight earlier rehearsal organizations", async () => {
+  // Production rehearsal shape: 8 prior orgs + baseline + 4 cleanup fixtures would be 13 without releasing the deleted one.
+  const results = await executeCallbacks(undefined, 8);
   expect(results, JSON.stringify(results)).toEqual([
     expect.objectContaining({ id: "S858-CLEANUP-HISTORY", status: "PASS" }),
     expect.objectContaining({ id: "S858-CLEANUP-SPLIT", status: "PASS" }),
