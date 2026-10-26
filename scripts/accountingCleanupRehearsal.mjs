@@ -48,7 +48,12 @@ function verifyRemoval(before, after) {
   }
 }
 
+// Mirrors the server cleanup fixture scope bound (convex/e2eBootstrap requireCleanupFixtureScope); never raised here.
+const CLEANUP_ORG_INVENTORY_BOUND = 12;
+
 async function prepareNativeOpening(ctx, knownOrgIds, label, large = false) {
+  // Refuse before creating, so a fixture that would cross the bound is never left behind.
+  demand(knownOrgIds.size + 1 <= CLEANUP_ORG_INVENTORY_BOUND, `Cleanup ${label} fixture would exceed the ${CLEANUP_ORG_INVENTORY_BOUND}-organization inventory bound`);
   const must = ctx.salesMust;
   const primary = object(await must("query", "users:getMe", {}));
   const approver = object(await ctx.approverMust("query", "users:getMe", {}));
@@ -156,7 +161,11 @@ export async function runCleanupRehearsalCases(ctx) {
   await ctx.recordCase(ctx.results, "S858-CLEANUP-HISTORY", "Native cleanup of 102 retained headers; historical admission is synthetic", async () => {
     const started = Date.now();
     const reset = await resetHistory(ctx, await prepareNativeOpening(ctx, knownOrgIds, "HISTORY-RESET"));
-    const deletion = await deletionHistory(ctx, await prepareNativeOpening(ctx, knownOrgIds, "HISTORY-DELETION"));
+    const deletionFixture = await prepareNativeOpening(ctx, knownOrgIds, "HISTORY-DELETION");
+    const deletion = await deletionHistory(ctx, deletionFixture);
+    // Released only after deletionHistory succeeded (it throws otherwise): it proved the org row and its sources are gone,
+    // and a leftover seat would still fail closed server-side as UNEXPECTED_MEMBERSHIP. The server bound of 12 is untouched.
+    knownOrgIds.delete(deletionFixture.orgId);
     return { reset, deletion, elapsedMs: Date.now() - started, scope: "actual native functions; synthetic historical admission; no OCC claim" };
   });
   await ctx.recordCase(ctx.results, "S858-CLEANUP-SPLIT", "Actual discovery and reference cap guard receipts preserve cleanup state", async () => {
