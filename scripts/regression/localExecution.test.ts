@@ -1,14 +1,14 @@
 // @vitest-environment node
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { startVitest } from "vitest/node";
 import { execFileSync, spawnSync } from "node:child_process";
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { digestRulingText, scenarioFingerprint, type ScenarioRecord } from "./scenarioRecord";
 import LocalExecutionReporter, { type LocalExecutionReport } from "./localExecutionReporter";
-import { main as executeLocal } from "./runLocalExecution.mjs";
+import { main as executeLocal, removeCreatedFile, verifyHarness } from "./runLocalExecution.mjs";
 
 const cli = path.resolve(__dirname, "runLocalExecution.mjs");
 const title = "selected fixture execution";
@@ -648,3 +648,130 @@ test.each(["source", "external"])("physical %s evidence-directory alias preserve
     unlinkSync(alias);
   }
 }, 70000);
+
+// --- Seat 2 round: exact HEAD bytes, verified harness, ordered refusals -------------------------------------------
+
+test("a smudge filter and attributes in the invoker's repository cannot run during export or change the bytes", () => {
+  const marker = path.join(evidence, "smudge-ran").replace(/\\/g, "/");
+  writeFileSync(path.join(root, ".gitattributes"), "selected.test.ts filter=evil\nvitest.config.mjs filter=evil\n");
+  commitAll("attributes name a filter");
+  git(["config", "filter.evil.smudge", `node -e "require('fs').writeFileSync('${marker}','x')"`]);
+  // Attributes that exist only in the invoker's repository (info/attributes) must not matter either.
+  writeFileSync(path.join(root, ".git/info/attributes"), "marker.txt filter=evil\nselected.test.ts eol=crlf\n");
+  const receipt = run("smudge-filter");
+  expect(existsSync(marker)).toBe(false);
+  expect(receipt.verdict, JSON.stringify(receipt.issues)).toBe("PASS");
+}, 70000);
+
+test("a replace ref cannot substitute the committed bytes", () => {
+  const original = git(["rev-parse", "HEAD:selected.test.ts"]);
+  const swapped = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: root, encoding: "utf8",
+    input: `test("${title}", () => { expect(2 + 2).toBe(5); });` }).trim();
+  git(["replace", original, swapped]);
+  const receipt = run("replace-ref");
+  expect(receipt.verdict, JSON.stringify(receipt.issues)).toBe("PASS");
+}, 70000);
+
+test("a tracked node_modules directory refuses instead of replacing the trusted dependencies", () => {
+  mkdirSync(path.join(root, "node_modules/dep"), { recursive: true });
+  writeFileSync(path.join(root, "node_modules/dep/index.js"), "module.exports = 1;");
+  git(["add", "-f", "node_modules"]);
+  git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "tracked node_modules"]);
+  const receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt;
+  expect(receipt.verdict).not.toBe("PASS");
+  expect(receipt.issues).toContain("EXPORT_TRACKED_NODE_MODULES");
+  expect(receipt.native).toBeNull();
+}, 70000);
+
+test("a temp directory inside the checkout refuses the export before creating anything in it", () => {
+  const inner = path.join(root, "inner-tmp");
+  mkdirSync(inner);
+  for (const name of ["TEMP", "TMP", "TMPDIR"]) vi.stubEnv(name, inner);
+  const receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt;
+  expect(receipt.issues).toContain("EXPORT_MUST_BE_OUTSIDE_SOURCE");
+  expect(receipt.native).toBeNull();
+  expect(readdirSync(inner)).toEqual([]);
+}, 70000);
+
+describe("harness files are held to their own HEAD commit", () => {
+  let harness: string;
+  const hgit = (args: string[]) => execFileSync("git", args, { cwd: harness, encoding: "utf8" }).trim();
+  beforeEach(() => {
+    harness = mkdtempSync(path.join(tmpdir(), "s3-harness-"));
+    mkdirSync(path.join(harness, "scripts/regression"), { recursive: true });
+    writeFileSync(path.join(harness, "scripts/regression/reporter.ts"), "export const a = 1;\n");
+    writeFileSync(path.join(harness, "scripts/trustedGit.mjs"), "export const b = 2;\n");
+    writeFileSync(path.join(harness, "package.json"), '{"type":"module"}\n');
+    writeFileSync(path.join(harness, "tsconfig.json"), "{}\n");
+    writeFileSync(path.join(harness, ".gitignore"), "scripts/ignored.*\n");
+    hgit(["init", "-q"]);
+    hgit(["add", "."]);
+    hgit(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "harness"]);
+  });
+  afterEach(() => rmSync(harness, { recursive: true, force: true }));
+
+  test("a clean checkout verifies, including line endings converted by autocrlf", () => {
+    expect(() => verifyHarness(harness)).not.toThrow();
+    writeFileSync(path.join(harness, "scripts/trustedGit.mjs"), "export const b = 2;\r\n");
+    expect(() => verifyHarness(harness)).not.toThrow();
+  });
+
+  test.each(["assume-unchanged", "skip-worktree"])("a reporter edit hidden with %s refuses", flag => {
+    hgit(["update-index", `--${flag}`, "scripts/regression/reporter.ts"]);
+    writeFileSync(path.join(harness, "scripts/regression/reporter.ts"), "export const a = 'forged';\n");
+    expect(hgit(["status", "--porcelain"])).toBe("");
+    expect(() => verifyHarness(harness)).toThrow("HARNESS_NOT_COMMITTED");
+  });
+
+  test.each(["untracked", "ignored"])("an %s file that could shadow an import refuses", kind => {
+    writeFileSync(path.join(harness, kind === "ignored" ? "scripts/ignored.js" : "scripts/regression/reporter.js"), "export const a = 'shadow';\n");
+    expect(() => verifyHarness(harness)).toThrow("HARNESS_NOT_COMMITTED");
+  });
+
+  test("a modified tsconfig and a missing tracked file refuse", () => {
+    writeFileSync(path.join(harness, "tsconfig.json"), '{"compilerOptions":{"jsx":"preserve"}}\n');
+    expect(() => verifyHarness(harness)).toThrow("HARNESS_NOT_COMMITTED");
+    hgit(["checkout", "--", "tsconfig.json"]);
+    rmSync(path.join(harness, "scripts/trustedGit.mjs"));
+    expect(() => verifyHarness(harness)).toThrow("HARNESS_NOT_COMMITTED");
+  });
+
+  test("a directory that is not a repository cannot be verified", () => {
+    rmSync(path.join(harness, ".git"), { recursive: true, force: true });
+    expect(() => verifyHarness(harness)).toThrow("HARNESS_UNVERIFIED");
+  });
+
+  test("every module the reporter loads lives under the verified scripts/ tree", () => {
+    const repository = path.resolve(__dirname, "../..");
+    const seen = new Set<string>();
+    const visit = (file: string) => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      const source = readFileSync(file, "utf8");
+      for (const match of source.matchAll(/(?:from|import\()\s*["'](\.[^"']+)["']/g)) {
+        const base = path.resolve(path.dirname(file), match[1]);
+        const resolved = [base, `${base}.ts`, `${base}.mjs`, `${base}.js`].find(candidate => existsSync(candidate) && lstatSync(candidate).isFile());
+        expect(resolved, `${match[1]} imported by ${file}`).toBeDefined();
+        visit(resolved as string);
+      }
+    };
+    visit(path.join(repository, "scripts/regression/localExecutionReporter.ts"));
+    visit(path.join(repository, "scripts/regression/runLocalExecution.mjs"));
+    for (const file of seen) expect(path.relative(repository, file).replace(/\\/g, "/")).toMatch(/^scripts\//);
+  });
+});
+
+test("the created receipt file is removed only while it is still the same file", () => {
+  const target = path.join(evidence, "created.json");
+  const open = () => { const fd = openSync(target, "wx"); const stat = fstatSync(fd, { bigint: true }); closeSync(fd); return stat; };
+  expect(removeCreatedFile(target, open())).toBe(true);
+  expect(existsSync(target)).toBe(false);
+  const created = open();
+  // Replaced by another file between creation and cleanup: not ours to delete.
+  renameSync(target, path.join(evidence, "moved.json"));
+  writeFileSync(target, "replacement");
+  expect(removeCreatedFile(target, created)).toBe(false);
+  expect(readFileSync(target, "utf8")).toBe("replacement");
+  unlinkSync(target);
+  expect(removeCreatedFile(target, created)).toBe(false);
+});

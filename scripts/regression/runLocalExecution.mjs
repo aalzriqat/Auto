@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -72,24 +72,147 @@ function exportedConfig(exportRoot) {
   }
 }
 
+const blobId = bytes => createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+const RESERVED_NAME = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i;
+
 /**
- * Everything Vitest runs comes from a fresh export of the observed HEAD commit, never from the working tree, so ignored,
- * assume-unchanged, skip-worktree or hidden-untracked files cannot take part. A throwaway index keeps the user's index
- * untouched. Installed dependencies are reached through a link to the checkout's own node_modules.
+ * The blobs of one commit, listed without any working-tree input.
+ * @returns {{ mode: string, type: string, oid: string, file: string }[]}
+ */
+function listTree(cwd, args) {
+  return git(cwd, ["--no-replace-objects", "ls-tree", "-r", "-z", ...args]).split("\0").filter(Boolean).map(line => {
+    const match = /^(\d{6}) (blob|commit) ([0-9a-f]{40})\t([\s\S]+)$/.exec(line);
+    if (!match) throw new Error("EXPORT_TREE_UNREADABLE");
+    return { mode: match[1], type: match[2], oid: match[3], file: match[4] };
+  });
+}
+
+/** Paths from the object database are data: refuse anything that could leave, alias or hide inside the export. */
+function checkTreePath(file, seen) {
+  const segments = file.split("/");
+  for (const segment of segments) {
+    if (/^node_modules$/i.test(segment)) throw new Error("EXPORT_TRACKED_NODE_MODULES");
+    if (segment === "" || segment === "." || segment === ".." || /^\.git$/i.test(segment) || /[\\:<>"|?*\0]/.test(segment) ||
+      /[. ]$/.test(segment) || RESERVED_NAME.test(segment)) throw new Error("EXPORT_PATH_UNSAFE");
+  }
+  const key = file.toLowerCase();
+  if (seen.has(key)) throw new Error("EXPORT_PATH_COLLISION");
+  seen.add(key);
+}
+
+/**
+ * Write the commit's blobs straight from the object database. Nothing consults the working tree, the index, the invoker's
+ * smudge/clean filters, hooks or any .gitattributes, so the bytes are exactly the tree's; each blob is hashed again here
+ * and the finished export is compared against the listing before anything runs.
+ */
+function writeCommittedTree(root, head, exportRoot) {
+  if (git(root, ["rev-parse", "--show-object-format"]).trim() !== "sha1") throw new Error("EXPORT_OBJECT_FORMAT_UNSUPPORTED");
+  const entries = listTree(root, ["--full-tree", head]);
+  const seen = new Set(), files = new Map(), directories = new Set([""]);
+  for (const entry of entries) {
+    checkTreePath(entry.file, seen);
+    if (entry.mode === "160000") directories.add(entry.file);
+    else if (entry.mode === "100644" || entry.mode === "100755") files.set(entry.file, entry.oid);
+    else throw new Error("EXPORT_ENTRY_UNSUPPORTED");
+  }
+  for (const known of [...files.keys(), ...directories]) {
+    for (let at = known.lastIndexOf("/"); at > 0; at = known.lastIndexOf("/", at - 1)) directories.add(known.slice(0, at));
+  }
+  const wanted = [...files.values()];
+  const read = spawnSync(resolveTrustedGitExecutable(), ["--no-replace-objects", "cat-file", "--batch"],
+    { cwd: root, input: `${wanted.join("\n")}\n`, maxBuffer: 1024 * 1024 * 1024, env: cleanEnv() });
+  if (read.error || read.status !== 0) throw new Error("EXPORT_OBJECTS_UNREADABLE");
+  const output = read.stdout;
+  let position = 0;
+  const bytesOf = new Map();
+  for (const oid of wanted) {
+    const lineEnd = output.indexOf(10, position);
+    const header = lineEnd < 0 ? "" : output.subarray(position, lineEnd).toString("latin1");
+    const match = /^([0-9a-f]{40}) blob (\d+)$/.exec(header);
+    if (!match || match[1] !== oid) throw new Error("EXPORT_OBJECTS_UNREADABLE");
+    const size = Number(match[2]), start = lineEnd + 1;
+    const bytes = output.subarray(start, start + size);
+    if (bytes.length !== size || output[start + size] !== 10 || blobId(bytes) !== oid) throw new Error("EXPORT_OBJECT_MISMATCH");
+    bytesOf.set(oid, bytes);
+    position = start + size + 1;
+  }
+  for (const directory of directories) if (directory) mkdirSync(path.join(exportRoot, directory), { recursive: true });
+  for (const [file, oid] of files) writeFileSync(path.join(exportRoot, file), bytesOf.get(oid), { flag: "wx" });
+  verifyExport(exportRoot, files, directories);
+}
+
+/** The export holds exactly the listed files and directories, byte-identical to their blobs. */
+function verifyExport(exportRoot, files, directories) {
+  const walk = (directory, relative) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const name = relative ? `${relative}/${entry.name}` : entry.name;
+      const full = path.join(directory, entry.name);
+      const kind = lstatSync(full);
+      if (kind.isDirectory()) {
+        if (!directories.has(name)) throw new Error("EXPORT_DIFFERS_FROM_HEAD");
+        walk(full, name);
+      } else if (kind.isFile() && files.has(name)) {
+        if (blobId(readFileSync(full)) !== files.get(name)) throw new Error("EXPORT_DIFFERS_FROM_HEAD");
+        files.delete(name);
+      } else throw new Error("EXPORT_DIFFERS_FROM_HEAD");
+    }
+  };
+  walk(exportRoot, "");
+  if (files.size) throw new Error("EXPORT_DIFFERS_FROM_HEAD");
+}
+
+/**
+ * The files that load into the Vitest main process or compile the reporter come from the harness checkout, outside the
+ * export. They must be exactly what its HEAD commit holds, so an ignored, assume-unchanged, skip-worktree or untracked
+ * file there cannot take part. Line-ending conversion by the invoker's autocrlf is the only difference tolerated.
+ * node_modules stays a trusted environment.
+ */
+export function verifyHarness(base = implementationRoot) {
+  const inScope = file => file.startsWith("scripts/") || /^(package\.json|tsconfig[^/]*\.json)$/.test(file);
+  let tracked;
+  try {
+    tracked = listTree(base, ["HEAD"]).filter(entry => inScope(entry.file));
+  } catch {
+    throw new Error("HARNESS_UNVERIFIED");
+  }
+  if (!tracked.length || tracked.some(entry => entry.mode !== "100644" && entry.mode !== "100755")) throw new Error("HARNESS_UNVERIFIED");
+  const present = [];
+  const walk = (directory, relative) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const name = `${relative}${entry.name}`;
+      const kind = lstatSync(path.join(directory, entry.name));
+      if (kind.isDirectory()) { if (inScope(`${name}/`)) walk(path.join(directory, entry.name), `${name}/`); }
+      else if (inScope(name)) { if (!kind.isFile()) throw new Error("HARNESS_UNVERIFIED"); present.push(name); }
+    }
+  };
+  if (!existsSync(path.join(base, "scripts"))) throw new Error("HARNESS_UNVERIFIED");
+  walk(base, "");
+  const expected = new Map(tracked.map(entry => [entry.file, entry.oid]));
+  if (present.length !== expected.size || present.some(file => !expected.has(file))) throw new Error("HARNESS_NOT_COMMITTED");
+  for (const file of present) {
+    const bytes = readFileSync(path.join(base, file));
+    const lf = Buffer.from(bytes.toString("latin1").replace(/\r\n/g, "\n"), "latin1");
+    if (blobId(bytes) !== expected.get(file) && blobId(lf) !== expected.get(file)) throw new Error("HARNESS_NOT_COMMITTED");
+  }
+}
+
+/**
+ * Everything Vitest runs from the source comes from the observed HEAD commit's objects, never from the working tree, so
+ * ignored, assume-unchanged, skip-worktree or hidden-untracked files cannot take part. Installed dependencies are reached
+ * through a link to the checkout's own node_modules.
  */
 function exportCommitted(root, head) {
   const parent = realpathSync(tmpdir());
+  // Before creating anything, so a TEMP/TMP/TMPDIR inside the checkout leaves nothing behind.
+  if (!isOutside(root, parent)) throw new Error("EXPORT_MUST_BE_OUTSIDE_SOURCE");
   const area = mkdtempSync(path.join(parent, "autoflow-export-"));
   try {
-    if (!isOutside(root, area)) throw new Error("EXPORT_MUST_BE_OUTSIDE_SOURCE");
+    if (!isOutside(root, realpathSync(area))) throw new Error("EXPORT_MUST_BE_OUTSIDE_SOURCE");
     const exportRoot = path.join(area, "tree");
     mkdirSync(exportRoot);
-    const env = { GIT_INDEX_FILE: path.join(area, "index") };
-    git(root, ["read-tree", head], env);
-    git(root, ["checkout-index", "-a", "-f", `--prefix=${exportRoot.replace(/\\/g, "/")}/`], env);
+    writeCommittedTree(root, head, exportRoot);
     const modules = path.join(root, "node_modules");
-    if (lstatSync(modules, { throwIfNoEntry: false }) && !existsSync(path.join(exportRoot, "node_modules")))
-      symlinkSync(realpathSync(modules), path.join(exportRoot, "node_modules"), "junction");
+    if (lstatSync(modules, { throwIfNoEntry: false })) symlinkSync(realpathSync(modules), path.join(exportRoot, "node_modules"), "junction");
     return { area, exportRoot };
   } catch (error) {
     removeExport(area);
@@ -97,14 +220,23 @@ function exportCommitted(root, head) {
   }
 }
 
-/** Remove the link first: a recursive delete must never follow it into the real node_modules. */
+/**
+ * Detach the dependency link first: a recursive delete must never follow it into the real node_modules. If it cannot be
+ * detached, every other entry is still removed and only the link is left.
+ * @returns {boolean} true when nothing of the export remains
+ */
 function removeExport(area) {
-  const link = path.join(area, "tree", "node_modules");
+  const tree = path.join(area, "tree");
+  const link = path.join(tree, "node_modules");
   if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) {
-    try { rmdirSync(link); } catch { try { unlinkSync(link); } catch { /* leave the export rather than risk the link target */ } }
-    if (lstatSync(link, { throwIfNoEntry: false })) return;
+    try { rmdirSync(link); } catch { try { unlinkSync(link); } catch { /* checked next */ } }
+    if (lstatSync(link, { throwIfNoEntry: false })) {
+      for (const name of readdirSync(tree)) if (name !== "node_modules") rmSync(path.join(tree, name), { recursive: true, force: true });
+      return false;
+    }
   }
   rmSync(area, { recursive: true, force: true });
+  return true;
 }
 
 /** Digest of the exported files (not the dependency link), to see whether the run changed them. */
@@ -129,11 +261,18 @@ function measureExecution({ root, scenarioId, base }, receipt) {
   selectBinding(root, scenarioId);
   // Fail closed on visible uncommitted edits too: a verdict about HEAD must not be read as one about the edited tree.
   if (receipt.source.before.dirty) throw new Error("SOURCE_NOT_COMMITTED");
+  // The reporter and Vitest entry are loaded from the harness checkout, so that checkout is held to its own HEAD too.
+  verifyHarness();
   const { area, exportRoot } = exportCommitted(root, receipt.source.before.head);
+  let removed = false;
   try {
     runExported({ root, exportRoot, scenarioId, base }, receipt);
   } finally {
-    removeExport(area);
+    removed = removeExport(area);
+  }
+  if (!removed) {
+    receipt.issues.push("EXPORT_CLEANUP_INCOMPLETE");
+    receipt.verdict = "FAIL";
   }
 }
 
@@ -202,6 +341,18 @@ export function createHostContext(cwd = process.cwd()) {
   return { root: cwd, evidenceDirectory: null };
 }
 
+/**
+ * The file this call just created must not survive a refused invocation, least of all inside the source tree.
+ * Remove it only while the path still names that very file (same device and inode as the descriptor's stat); a
+ * replacement is not ours to delete.
+ * @returns {boolean} whether the path was removed
+ */
+export function removeCreatedFile(output, created) {
+  const now = lstatSync(output, { bigint: true, throwIfNoEntry: false });
+  if (!now || now.dev !== created.dev || now.ino !== created.ino) return false;
+  try { unlinkSync(output); return true; } catch { return false; }
+}
+
 function prepareInvocation(options, context) {
   const root = realpathSync(context.root);
   if (!statSync(root).isDirectory()) throw new Error("ROOT_DIRECTORY_REQUIRED");
@@ -228,12 +379,7 @@ function prepareInvocation(options, context) {
     if (!isOutside(root, realpathSync(output))) throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
   } catch (error) {
     closeSync(outputFd);
-    // The file this call just created must not survive a refused invocation, least of all inside the source tree.
-    // Remove it only while the path still names that very file; a replacement is not ours to delete.
-    const now = lstatSync(output, { bigint: true, throwIfNoEntry: false });
-    if (now && now.dev === created.dev && now.ino === created.ino) {
-      try { unlinkSync(output); } catch { /* already gone */ }
-    }
+    removeCreatedFile(output, created);
     throw error;
   }
   return { root, output, outputFd };
