@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -35,14 +35,14 @@ function selectBinding(root, scenarioId) {
   const binding = matches[0].impl, testFile = path.resolve(root, binding.file);
   const relative = path.relative(root, testFile);
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !/\.test\.tsx?$/.test(relative)) throw new Error("BACKEND_TEST_PATH_REQUIRED");
-  return { binding, relative };
+  return { binding, testFile };
 }
 
 function measureExecution({ root, scenarioId, base, events }, receipt) {
-  const { binding, relative } = selectBinding(root, scenarioId);
+  const { binding, testFile } = selectBinding(root, scenarioId);
   const escapedName = binding.testName.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
   const pattern = `^${escapedName}$`;
-  const child = spawnSync(process.execPath, [path.join(implementationRoot, "node_modules/vitest/vitest.mjs"), "run", relative,
+  const child = spawnSync(process.execPath, [path.join(implementationRoot, "node_modules/vitest/vitest.mjs"), "run", testFile,
     "--root", root, "--maxWorkers=1", "--no-file-parallelism", "--retry=0", "-t", pattern,
     "--reporter", path.join(implementationRoot, "scripts/regression/localExecutionReporter.ts")],
   { cwd: root, timeout: 60000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", env: { ...process.env,
@@ -59,49 +59,61 @@ function measureExecution({ root, scenarioId, base, events }, receipt) {
   receipt.verdict = receipt.issues.length ? "FAIL" : "PASS";
 }
 
+function parseOptions(argv) {
+  const parsed = parseArgs({ args: argv, strict: true, allowPositionals: false, tokens: true,
+    options: { root: { type: "string" }, scenario: { type: "string" }, output: { type: "string" },
+      base: { type: "string" }, "expect-head": { type: "string" } } });
+  const seen = new Set();
+  for (const token of parsed.tokens) {
+    if (token.kind !== "option") continue;
+    if (seen.has(token.name)) throw new Error("CLI_OPTION_REPEATED");
+    seen.add(token.name);
+  }
+  for (const name of ["base", "expect-head"]) {
+    if (parsed.values[name] !== undefined && !/^[0-9a-f]{40}$/.test(parsed.values[name])) throw new Error("REVISION_ARGUMENT_INVALID");
+  }
+  return parsed.values;
+}
+
+function prepareInvocation(options) {
+  const root = realpathSync(path.resolve(options.root ?? process.cwd()));
+  if (!statSync(root).isDirectory()) throw new Error("ROOT_DIRECTORY_REQUIRED");
+  const artifactDirectory = mkdtempSync(path.join(tmpdir(), "autoflow-local-execution-"));
+  const requestedOutput = path.resolve(options.output ?? path.join(artifactDirectory, "result.json"));
+  const output = path.join(realpathSync(path.dirname(requestedOutput)), path.basename(requestedOutput));
+  const outputRelative = path.relative(root, output);
+  if (!(outputRelative === ".." || outputRelative.startsWith(`..${path.sep}`) || path.isAbsolute(outputRelative)))
+    throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
+  if (existsSync(output)) throw new Error("OUTPUT_ALREADY_EXISTS");
+  return { root, output, events: path.join(artifactDirectory, "native-events.json") };
+}
+
 export function main(argv = process.argv.slice(2)) {
   let options;
   try {
-    const parsed = parseArgs({ args: argv, strict: true, allowPositionals: false, tokens: true,
-      options: { root: { type: "string" }, scenario: { type: "string" }, output: { type: "string" },
-        base: { type: "string" }, "expect-head": { type: "string" } } });
-    options = parsed.values;
-    const seen = new Set();
-    for (const token of parsed.tokens) {
-      if (token.kind !== "option") continue;
-      if (seen.has(token.name)) throw new Error("CLI_OPTION_REPEATED");
-      seen.add(token.name);
-    }
-    for (const name of ["base", "expect-head"]) {
-      if (options[name] !== undefined && !/^[0-9a-f]{40}$/.test(options[name])) throw new Error("REVISION_ARGUMENT_INVALID");
-    }
+    options = parseOptions(argv);
   } catch {
     const receipt = { schemaVersion: 1, scope: "LOCAL_BACKEND_HARNESS_ADVISORY", trustedProducer: false,
       verdict: "UNAVAILABLE", issues: ["CLI_ARGUMENTS_INVALID"], source: null, native: null, process: null };
     console.log(JSON.stringify({ ...receipt, output: null }));
     return receipt;
   }
-  const value = name => options[name];
-  const root = path.resolve(value("root") ?? process.cwd());
-  const scenarioId = value("scenario") ?? "opening-all-families-public-rehearsal";
-  const artifactDirectory = mkdtempSync(path.join(tmpdir(), "autoflow-local-execution-"));
-  const output = path.resolve(value("output") ?? path.join(artifactDirectory, "result.json"));
-  const events = path.join(artifactDirectory, "native-events.json");
+  const scenarioId = options.scenario ?? "opening-all-families-public-rehearsal";
   const receipt = { schemaVersion: 1, scope: "LOCAL_BACKEND_HARNESS_ADVISORY", trustedProducer: false,
     scenarioId, verdict: "UNAVAILABLE", issues: [], source: null, native: null, process: null };
   let publicationAllowed = false;
+  let output = null;
   try {
-    const outputRelative = path.relative(root, output);
-    if (!(outputRelative === ".." || outputRelative.startsWith(`..${path.sep}`) || path.isAbsolute(outputRelative)))
-      throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
-    if (existsSync(output)) throw new Error("OUTPUT_ALREADY_EXISTS");
+    const invocation = prepareInvocation(options);
+    const { root, events } = invocation;
+    output = invocation.output;
     publicationAllowed = true;
     if (!/^[a-z0-9][a-z0-9._-]{2,80}$/.test(scenarioId)) throw new Error("SCENARIO_ID_INVALID");
     const before = observeSource(root);
     receipt.source = { before, after: null, authority: "UNATTESTED_LOCAL_OBSERVATION" };
-    const expectedHead = value("expect-head");
+    const expectedHead = options["expect-head"];
     if (expectedHead && expectedHead !== before.head) throw new Error("EXPECTED_HEAD_MISMATCH");
-    const base = value("base") ?? before.head;
+    const base = options.base ?? before.head;
     if (!/^[0-9a-f]{40}$/.test(base)) throw new Error("BASE_REVISION_REQUIRED");
     receipt.source.base = base;
     measureExecution({ root, scenarioId, base, events }, receipt);
@@ -115,7 +127,7 @@ export function main(argv = process.argv.slice(2)) {
 }
 
 if (typeof import.meta.main !== "boolean") {
-  throw new Error("UNSUPPORTED_NODE: native import.meta.main requires Node 22.18.0 or later");
+  throw new TypeError("UNSUPPORTED_NODE: native import.meta.main requires Node 22.18.0 or later");
 }
 if (import.meta.main) {
   process.exitCode = main().verdict === "PASS" ? 0 : 1;

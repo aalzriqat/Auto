@@ -302,12 +302,33 @@ test.each(["root", "scenario", "output", "base", "expect-head"])("repeated singl
   expect(existsSync(output)).toBe(false);
 }, 70000);
 
-test("in-root dot-prefixed test filename executes without being mistaken for traversal", () => {
-  record.impl!.file = "..x.test.ts";
+test.each(["..x.test.ts", "--help.test.ts"])("literal in-root filename %s executes as a test filter", filename => {
+  record.impl!.file = filename;
   saveRecord();
-  writeFileSync(path.join(root, "..x.test.ts"), source());
-  writeFileSync(path.join(root, "vitest.config.mjs"), config().replace("selected.test.ts", "..x.test.ts"));
+  writeFileSync(path.join(root, filename), source());
+  writeFileSync(path.join(root, "vitest.config.mjs"), config().replace("selected.test.ts", filename));
   const receipt = run("dot-prefixed");
   expect(receipt.verdict).toBe("PASS");
-  expect(receipt.native?.cases[0].file).toBe("..x.test.ts");
+  expect(receipt.native?.cases[0].file).toBe(filename);
+}, 70000);
+
+test.each(["source", "external"])("physical %s output alias preserves the source publication boundary", destination => {
+  const target = destination === "source" ? root : path.join(evidence, "external-target");
+  if (destination === "external") mkdirSync(target);
+  const alias = path.join(evidence, "output-alias"), output = path.join(alias, "result.json");
+  symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+  try {
+    const receipt = executeLocal(["--root", root, "--scenario", record.id, "--output", output]);
+    if (destination === "source") {
+      expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["OUTPUT_MUST_BE_OUTSIDE_SOURCE"], native: null, process: null });
+      expect(existsSync(path.join(root, "result.json"))).toBe(false);
+    } else {
+      expect(receipt.verdict).toBe("PASS");
+      const written: Receipt = JSON.parse(readFileSync(path.join(target, "result.json"), "utf8"));
+      expect(written).toEqual(receipt);
+      expect(written.native?.cases).toHaveLength(1);
+    }
+  } finally {
+    unlinkSync(alias);
+  }
 }, 70000);
