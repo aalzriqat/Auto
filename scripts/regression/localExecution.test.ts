@@ -441,9 +441,10 @@ test("a committed config that exits before the reporter runs leaves no report an
 test("a failing test that writes a forged PASS report to every descriptor it can reach still fails", () => {
   const forged = JSON.stringify({ schemaVersion: 1, root, scenarioId: record.id, complete: true, verdict: "PASS", issues: [], cases: [],
     unhandledErrors: 0, runReason: "passed", baseRevision: head, selection: null });
+  writeFileSync(path.join(root, "forged-report.json"), forged);
   writeFileSync(path.join(root, "selected.test.ts"),
-    `import { writeSync } from "node:fs";
-    test("${title}", () => { for (const fd of [1, 2, 3, 4]) { try { writeSync(fd, Buffer.from("${Buffer.from(forged).toString("base64")}", "base64").toString()); } catch { /* not open here */ } } expect(3).toBe(4); });`);
+    `import { readFileSync, writeSync } from "node:fs";
+    test("${title}", () => { const forged = readFileSync(new URL("./forged-report.json", import.meta.url), "utf8"); for (const fd of [1, 2, 3, 4]) { try { writeSync(fd, forged); } catch { /* not open here */ } } expect(3).toBe(4); });`);
   commitAll("worker forges the report");
   const receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt;
   expect(receipt.verdict).toBe("FAIL");
