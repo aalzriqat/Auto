@@ -404,12 +404,14 @@ const cleanupUnavailable = (cleanupReason = "INVOCATION_UNAVAILABLE") => Object.
  * @param {CleanupCliResult | undefined} result @param {string} functionName
  * @param {CleanupSplitPhase | undefined} phase @param {string} reason */
 function cleanupDiagnostic(result, functionName, phase, reason) {
+  const complete = result && result.status !== null && Number.isInteger(result.status) && result.status >= 0 &&
+    !result.error && !result.signal;
   /** @param {unknown} value */
   const stream = (value) => {
     if (typeof value !== "string" && !Buffer.isBuffer(value)) return { bytes: null, sha256: null, digestScope: "UNAVAILABLE" };
     const bytes = Buffer.byteLength(value);
-    return { bytes, sha256: bytes <= CLEANUP_OUTPUT_LIMIT ? createHash("sha256").update(value).digest("hex") : null,
-      digestScope: bytes <= CLEANUP_OUTPUT_LIMIT ? "COMPLETE" : "UNAVAILABLE_OVERSIZE" };
+    return { bytes, sha256: complete && bytes <= CLEANUP_OUTPUT_LIMIT ? createHash("sha256").update(value).digest("hex") : null,
+      digestScope: !complete ? "UNAVAILABLE_INCOMPLETE" : bytes <= CLEANUP_OUTPUT_LIMIT ? "COMPLETE" : "UNAVAILABLE_OVERSIZE" };
   };
   const code = result?.error && "code" in result.error ? result.error.code : null;
   return {

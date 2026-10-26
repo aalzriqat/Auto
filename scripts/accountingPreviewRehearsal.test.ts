@@ -9,6 +9,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { ConvexHttpClient } from "convex/browser";
 import { format } from "node:util";
+import { spawnSync } from "node:child_process";
 import {
   assertRehearsalEnv,
   convexCall,
@@ -102,6 +103,26 @@ describe("cleanup invocation receipts", () => {
     await expect(call(RESET, { orgId: "synthetic" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
   });
 
+  test("maxBuffer termination cannot label its bounded captured fragments complete", async () => {
+    // Actual bounded Node child; no Convex CLI, target, identity or cloud call.
+    const child = spawnSync(process.execPath, ["-e",
+      'process.stdout.write("x".repeat(196608));process.stderr.write("y".repeat(196608));'],
+    { maxBuffer: 262144, timeout: 3000, encoding: "utf8" });
+    expect(child.error).toMatchObject({ code: "ENOBUFS" });
+    expect(Buffer.byteLength(child.stdout)).toBeGreaterThan(0);
+    expect(Buffer.byteLength(child.stdout)).toBeLessThanOrEqual(262144);
+    expect(Buffer.byteLength(child.stderr)).toBeGreaterThan(0);
+    expect(Buffer.byteLength(child.stderr)).toBeLessThanOrEqual(262144);
+    const diagnostics = { records: [] as unknown[], truncated: false };
+    const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli: () => child });
+    await expect(call(RESET, { orgId: "synthetic" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
+    expect(diagnostics.records[0]).toMatchObject({
+      reason: "CHILD_RESULT_UNAVAILABLE", errorCode: "ENOBUFS",
+      stdout: { bytes: Buffer.byteLength(child.stdout), sha256: null, digestScope: "UNAVAILABLE_INCOMPLETE" },
+      stderr: { bytes: Buffer.byteLength(child.stderr), sha256: null, digestScope: "UNAVAILABLE_INCOMPLETE" },
+    });
+  });
+
   test.each([
     ["ETIMEDOUT", "SIGTERM", "ETIMEDOUT", "SIGTERM"],
     ["private-code", "private-signal", "UNAVAILABLE", "UNAVAILABLE"],
@@ -113,7 +134,7 @@ describe("cleanup invocation receipts", () => {
     await expect(call(RESET, { orgId: "private-argument" }, "DISCOVERY")).rejects.toThrow(/^Cleanup preview invocation is UNAVAILABLE\.$/);
     expect(diagnostics.records[0]).toMatchObject({
       status: null, errorCode: expectedCode, signal: expectedSignal, reason: "CHILD_RESULT_UNAVAILABLE",
-      stderr: { bytes: 20, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      stderr: { bytes: 20, sha256: null, digestScope: "UNAVAILABLE_INCOMPLETE" },
     });
     expect(JSON.stringify(diagnostics)).not.toContain("private-");
   });
@@ -203,8 +224,10 @@ describe("cleanup invocation receipts", () => {
     expect(await call(RESET, { orgId: "synthetic" }, "DISCOVERY")).toMatchObject({ ok: false, phase: "DISCOVERY" });
     expect(await call("e2eBootstrap:observeOpeningCleanupFixture", {})).toEqual({ ok: true, value: { phase: "DONE" } });
     expect(diagnostics.records).toEqual([
-      expect.objectContaining({ reason: "SPLIT_REFUSAL", stage: "COMPLETE" }),
-      expect.objectContaining({ reason: "SUCCESS", stage: "COMPLETE" }),
+      expect.objectContaining({ reason: "SPLIT_REFUSAL", stage: "COMPLETE",
+        stderr: expect.objectContaining({ digestScope: "COMPLETE", sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }) }),
+      expect.objectContaining({ reason: "SUCCESS", stage: "COMPLETE",
+        stdout: expect.objectContaining({ digestScope: "COMPLETE", sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }) }),
     ]);
     diagnostics.records.length = 256;
     spawnCli.mockReturnValue({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" });
