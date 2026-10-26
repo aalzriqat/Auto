@@ -2,13 +2,14 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { startVitest } from "vitest/node";
 import { execFileSync, spawnSync } from "node:child_process";
-import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { digestRulingText, scenarioFingerprint, type ScenarioRecord } from "./scenarioRecord";
 import LocalExecutionReporter, { type LocalExecutionReport } from "./localExecutionReporter";
-import { main as executeLocal, removeCreatedFile, verifyHarness } from "./runLocalExecution.mjs";
+import { checkTreePath, isHarnessFile, main as executeLocal, removeCreatedFile, removeExport, verifyExport, writeCommittedTree } from "./runLocalExecution.mjs";
 
 const cli = path.resolve(__dirname, "runLocalExecution.mjs");
 const title = "selected fixture execution";
@@ -25,6 +26,12 @@ const commitAll = (message: string) => {
   git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", message]);
 };
 const saveRecord = () =>writeFileSync(scenarioPath(), JSON.stringify(record));
+
+/** Remove a junction/symlink itself, never what it points at. */
+const dropLink = (link: string) => {
+  if (!lstatSync(link, { throwIfNoEntry: false })) return;
+  try { rmdirSync(link); } catch { unlinkSync(link); }
+};
 
 interface Receipt {
   verdict: string;
@@ -693,55 +700,141 @@ test("a temp directory inside the checkout refuses the export before creating an
   expect(readdirSync(inner)).toEqual([]);
 }, 70000);
 
-describe("harness files are held to their own HEAD commit", () => {
+describe("the reporter and runner run from the harness checkout's own HEAD, never its working tree", () => {
+  const repository = path.resolve(__dirname, "../..");
   let harness: string;
   const hgit = (args: string[]) => execFileSync("git", args, { cwd: harness, encoding: "utf8" }).trim();
-  beforeEach(() => {
-    harness = mkdtempSync(path.join(tmpdir(), "s3-harness-"));
-    mkdirSync(path.join(harness, "scripts/regression"), { recursive: true });
-    writeFileSync(path.join(harness, "scripts/regression/reporter.ts"), "export const a = 1;\n");
-    writeFileSync(path.join(harness, "scripts/trustedGit.mjs"), "export const b = 2;\n");
-    writeFileSync(path.join(harness, "package.json"), '{"type":"module"}\n');
-    writeFileSync(path.join(harness, "tsconfig.json"), "{}\n");
-    writeFileSync(path.join(harness, ".gitignore"), "scripts/ignored.*\n");
-    hgit(["init", "-q"]);
-    hgit(["add", "."]);
+  const harnessFile = (file: string) => path.join(harness, file);
+  const commitHarness = () => {
+    hgit(["add", "-A"]);
     hgit(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "harness"]);
+  };
+  const harnessHost = () => ({ root, evidenceDirectory: evidence, harnessRoot: harness });
+  beforeEach(() => {
+    // A committed copy of this checkout's harness files: the working-tree edits below must not reach the run.
+    harness = mkdtempSync(path.join(tmpdir(), "s3-harness-"));
+    const listed = execFileSync("git", ["ls-files", "-z", "scripts", "package.json", "tsconfig.json"], { cwd: repository, encoding: "utf8" }).split("\0").filter(Boolean);
+    for (const file of listed) {
+      mkdirSync(path.dirname(harnessFile(file)), { recursive: true });
+      writeFileSync(harnessFile(file), readFileSync(path.join(repository, file)));
+    }
+    writeFileSync(harnessFile(".gitignore"), "scripts/regression/*.js\nnode_modules\n");
+    symlinkSync(path.join(repository, "node_modules"), harnessFile("node_modules"), process.platform === "win32" ? "junction" : "dir");
+    hgit(["init", "-q"]);
+    commitHarness();
   });
-  afterEach(() => rmSync(harness, { recursive: true, force: true }));
-
-  test("a clean checkout verifies, including line endings converted by autocrlf", () => {
-    expect(() => verifyHarness(harness)).not.toThrow();
-    writeFileSync(path.join(harness, "scripts/trustedGit.mjs"), "export const b = 2;\r\n");
-    expect(() => verifyHarness(harness)).not.toThrow();
-  });
-
-  test.each(["assume-unchanged", "skip-worktree"])("a reporter edit hidden with %s refuses", flag => {
-    hgit(["update-index", `--${flag}`, "scripts/regression/reporter.ts"]);
-    writeFileSync(path.join(harness, "scripts/regression/reporter.ts"), "export const a = 'forged';\n");
-    expect(hgit(["status", "--porcelain"])).toBe("");
-    expect(() => verifyHarness(harness)).toThrow("HARNESS_NOT_COMMITTED");
-  });
-
-  test.each(["untracked", "ignored"])("an %s file that could shadow an import refuses", kind => {
-    writeFileSync(path.join(harness, kind === "ignored" ? "scripts/ignored.js" : "scripts/regression/reporter.js"), "export const a = 'shadow';\n");
-    expect(() => verifyHarness(harness)).toThrow("HARNESS_NOT_COMMITTED");
-  });
-
-  test("a modified tsconfig and a missing tracked file refuse", () => {
-    writeFileSync(path.join(harness, "tsconfig.json"), '{"compilerOptions":{"jsx":"preserve"}}\n');
-    expect(() => verifyHarness(harness)).toThrow("HARNESS_NOT_COMMITTED");
-    hgit(["checkout", "--", "tsconfig.json"]);
-    rmSync(path.join(harness, "scripts/trustedGit.mjs"));
-    expect(() => verifyHarness(harness)).toThrow("HARNESS_NOT_COMMITTED");
+  afterEach(() => {
+    // The link goes first so a recursive delete cannot reach the real dependencies.
+    dropLink(harnessFile("node_modules"));
+    rmSync(harness, { recursive: true, force: true });
   });
 
-  test("a directory that is not a repository cannot be verified", () => {
-    rmSync(path.join(harness, ".git"), { recursive: true, force: true });
-    expect(() => verifyHarness(harness)).toThrow("HARNESS_UNVERIFIED");
-  });
+  test("a clean committed harness copy runs the scenario end to end", () => {
+    const receipt = executeLocal(["--scenario", record.id], harnessHost()) as unknown as Receipt;
+    expect(receipt.verdict, JSON.stringify(receipt.issues)).toBe("PASS");
+  }, 70000);
 
-  test("every module the reporter loads lives under the verified scripts/ tree", () => {
+  test.each(["assume-unchanged", "skip-worktree", "uncommitted"])("a reporter edit that is %s never runs", flag => {
+    if (flag !== "uncommitted") hgit(["update-index", `--${flag}`, "scripts/regression/localExecutionReporter.ts"]);
+    // Loading this version would fail the run outright; the HEAD copy has no such line.
+    writeFileSync(harnessFile("scripts/regression/localExecutionReporter.ts"),
+      `throw new Error("FORGED_REPORTER");\n${readFileSync(harnessFile("scripts/regression/localExecutionReporter.ts"), "utf8")}`);
+    const receipt = executeLocal(["--scenario", record.id], harnessHost()) as unknown as Receipt;
+    expect(receipt.verdict, JSON.stringify(receipt.issues)).toBe("PASS");
+  }, 70000);
+
+  test.each(["untracked", "ignored"])("an %s file that would shadow an import never runs", kind => {
+    // Both extensions outrank .ts when the reporter imports ./scenarioRecord.
+    const shadow = kind === "ignored" ? "scripts/regression/scenarioRecord.js" : "scripts/regression/scenarioRecord.mjs";
+    writeFileSync(harnessFile(shadow), 'throw new Error("SHADOW_RAN");\n');
+    const receipt = executeLocal(["--scenario", record.id], harnessHost()) as unknown as Receipt;
+    expect(receipt.verdict, JSON.stringify(receipt.issues)).toBe("PASS");
+  }, 70000);
+
+  test.each(["\r\n", "\r\r\n", "mixed"])("a forged edit with %j line endings never runs: endings were never a tolerance", ending => {
+    // The old verifier accepted a working tree that equals HEAD up to CR bytes; \r\r\n and mixed endings hid real edits.
+    const original = readFileSync(harnessFile("scripts/trustedGit.mjs"), "utf8");
+    const forged = `throw new Error("FORGED_TRUSTED_GIT");\n${original}`;
+    const lines = forged.split("\n");
+    writeFileSync(harnessFile("scripts/trustedGit.mjs"), lines.map((line, at) => `${line}${ending === "mixed" ? (at % 2 ? "\r\r" : "\r") : ending.slice(0, -1)}`).join("\n"));
+    const receipt = executeLocal(["--scenario", record.id], harnessHost()) as unknown as Receipt;
+    expect(receipt.verdict, JSON.stringify(receipt.issues)).toBe("PASS");
+  }, 70000);
+
+  test("a harness that is not a repository top cannot be used", () => {
+    rmSync(harnessFile(".git"), { recursive: true, force: true });
+    const receipt = executeLocal(["--scenario", record.id], harnessHost()) as unknown as Receipt;
+    expect(receipt.issues).toContain("HARNESS_UNVERIFIED");
+    expect(receipt.native).toBeNull();
+  }, 70000);
+
+  test("a subdirectory of the harness repository is not a harness checkout", () => {
+    const receipt = executeLocal(["--scenario", record.id], { ...harnessHost(), harnessRoot: harnessFile("scripts") }) as unknown as Receipt;
+    expect(receipt.issues).toContain("HARNESS_UNVERIFIED");
+    expect(receipt.native).toBeNull();
+  }, 70000);
+
+  test("a harness commit without the reporter cannot be used", () => {
+    rmSync(harnessFile("scripts/regression/localExecutionReporter.ts"));
+    commitHarness();
+    const receipt = executeLocal(["--scenario", record.id], harnessHost()) as unknown as Receipt;
+    expect(receipt.issues).toContain("HARNESS_UNVERIFIED");
+  }, 70000);
+
+  test("the reporter reads base records without replace refs", () => {
+    // A second scenario is active at the base commit and deleted at HEAD: that is a transition problem. A replace ref
+    // that turns its base blob into a retired record would hide it, so the reporter must not honor replace refs.
+    const other = { ...record, id: "fixture-other", fingerprint: "" };
+    writeFileSync(path.join(root, "regression/scenarios/other.scenario.json"), JSON.stringify(other));
+    commitAll("second active scenario");
+    const base = git(["rev-parse", "HEAD"]);
+    git(["rm", "-q", "regression/scenarios/other.scenario.json"]);
+    commitAll("delete the second scenario");
+    const blob = git(["rev-parse", `${base}:regression/scenarios/other.scenario.json`]);
+    const retired = execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: root, encoding: "utf8",
+      input: JSON.stringify({ ...other, status: "retired" }) }).trim();
+    git(["replace", blob, retired]);
+    const receipt = executeLocal(["--scenario", record.id, "--base", base], harnessHost()) as unknown as Receipt;
+    expect(receipt.verdict).toBe("FAIL");
+    expect(receipt.native?.issues.join("\n")).toMatch(/transition: fixture-other: an active scenario was deleted/);
+  }, 70000);
+
+  test("an incomplete cleanup fails the run, on success and on every throw path", () => {
+    const links: string[] = [];
+    const stubborn = { ...harnessHost(), detachLink: (link: string) => { links.push(link); return false; } };
+    const cleanUp = () => {
+      for (const link of links) dropLink(link);
+      for (const area of new Set(links.map(link => path.dirname(path.dirname(link))))) rmSync(area, { recursive: true, force: true });
+      links.length = 0;
+      rmSync(path.join(evidence, "result.json"));
+    };
+    try {
+      // Success path.
+      let receipt = executeLocal(["--scenario", record.id], stubborn) as unknown as Receipt;
+      expect(receipt.verdict).toBe("FAIL");
+      expect(receipt.issues).toContain("EXPORT_CLEANUP_INCOMPLETE");
+      cleanUp();
+      // A throw while running (two configs are ambiguous).
+      writeFileSync(path.join(root, "vite.config.mjs"), config());
+      commitAll("second config");
+      receipt = executeLocal(["--scenario", record.id], stubborn) as unknown as Receipt;
+      expect(receipt.issues).toEqual(expect.arrayContaining(["TRUSTED_CONFIG_REQUIRED", "EXPORT_CLEANUP_INCOMPLETE"]));
+      cleanUp();
+      // A throw while exporting (a tracked node_modules is refused after the harness copy exists).
+      git(["rm", "-q", "vite.config.mjs"]);
+      mkdirSync(path.join(root, "node_modules/dep"), { recursive: true });
+      writeFileSync(path.join(root, "node_modules/dep/index.js"), "module.exports = 1;");
+      git(["add", "-f", "node_modules"]);
+      commitAll("tracked node_modules");
+      receipt = executeLocal(["--scenario", record.id], stubborn) as unknown as Receipt;
+      expect(receipt.issues).toEqual(expect.arrayContaining(["EXPORT_TRACKED_NODE_MODULES", "EXPORT_CLEANUP_INCOMPLETE"]));
+      expect(receipt.verdict).toBe("FAIL");
+    } finally {
+      cleanUp();
+    }
+  }, 70000);
+
+  test("every module the reporter loads lives under the exported scripts/ tree", () => {
     const repository = path.resolve(__dirname, "../..");
     const seen = new Set<string>();
     const visit = (file: string) => {
@@ -758,6 +851,192 @@ describe("harness files are held to their own HEAD commit", () => {
     visit(path.join(repository, "scripts/regression/localExecutionReporter.ts"));
     visit(path.join(repository, "scripts/regression/runLocalExecution.mjs"));
     for (const file of seen) expect(path.relative(repository, file).replace(/\\/g, "/")).toMatch(/^scripts\//);
+  });
+});
+
+describe("the export seams", () => {
+  const sha1 = (text: string) => createHash("sha1").update(`blob ${Buffer.byteLength(text)}\0`).update(text).digest("hex");
+  let destination: string;
+  beforeEach(() => { destination = mkdtempSync(path.join(tmpdir(), "s3-export-")); });
+  afterEach(() => rmSync(destination, { recursive: true, force: true }));
+  const markerOnly = (file: string) => file === "marker.txt";
+  const markerOid = () => git(["rev-parse", `${head}:marker.txt`]);
+  const addEntry = (mode: string, content: string | null, file: string) => {
+    const oid = content === null ? "1".repeat(40) : execFileSync("git", ["hash-object", "-w", "--stdin"], { cwd: root, encoding: "utf8", input: content }).trim();
+    git(["update-index", "--add", "--cacheinfo", `${mode},${oid},${file}`]);
+    // No `add .`: these entries have no working-tree file and would be staged as deletions.
+    git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", `add ${file}`]);
+    return git(["rev-parse", "HEAD"]);
+  };
+
+  test("the committed bytes are written exactly, with directories, and only what the filter includes", () => {
+    writeCommittedTree(root, head, destination);
+    expect(readFileSync(path.join(destination, "marker.txt"), "utf8")).toBe("before");
+    expect(readFileSync(path.join(destination, "regression/scenarios/fixture.scenario.json"), "utf8")).toBe(readFileSync(scenarioPath(), "utf8"));
+    const filtered = mkdtempSync(path.join(tmpdir(), "s3-export-"));
+    try {
+      writeCommittedTree(root, head, filtered, markerOnly);
+      expect(readdirSync(filtered)).toEqual(["marker.txt"]);
+    } finally {
+      rmSync(filtered, { recursive: true, force: true });
+    }
+  });
+
+  test("a submodule entry becomes an empty directory, and an executable file is an ordinary file", () => {
+    addEntry("160000", null, "deep/sub");
+    const tip = addEntry("100755", "#!/bin/sh\n", "deep/tool.sh");
+    writeCommittedTree(root, tip, destination);
+    expect(readdirSync(path.join(destination, "deep/sub"))).toEqual([]);
+    expect(readFileSync(path.join(destination, "deep/tool.sh"), "utf8")).toBe("#!/bin/sh\n");
+  });
+
+  test("a symlink entry is refused", () => {
+    const linked = addEntry("120000", "marker.txt", "alias");
+    expect(() => writeCommittedTree(root, linked, destination)).toThrow("EXPORT_ENTRY_UNSUPPORTED");
+  });
+
+  test("a repository that is not sha1 cannot be exported", () => {
+    const other = mkdtempSync(path.join(tmpdir(), "s3-sha256-"));
+    try {
+      execFileSync("git", ["init", "-q", "--object-format=sha256"], { cwd: other });
+      expect(() => writeCommittedTree(other, "HEAD", destination)).toThrow("EXPORT_OBJECT_FORMAT_UNSUPPORTED");
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["correct bytes", () => `${markerOid()} blob 6\nbefore\n`, null],
+    ["different bytes of the right length", () => `${markerOid()} blob 6\nBEFORE\n`, "EXPORT_OBJECT_MISMATCH"],
+    ["a size larger than the bytes", () => `${markerOid()} blob 99\nbefore\n`, "EXPORT_OBJECT_MISMATCH"],
+    ["a size that swallows the separator", () => `${markerOid()} blob 7\nbefore\n`, "EXPORT_OBJECT_MISMATCH"],
+    ["no separator after the bytes", () => `${markerOid()} blob 6\nbefore`, "EXPORT_OBJECT_MISMATCH"],
+    ["another object", () => `${"0".repeat(40)} blob 6\nbefore\n`, "EXPORT_OBJECTS_UNREADABLE"],
+    ["a header that is not a blob", () => `${markerOid()} tree 6\nbefore\n`, "EXPORT_OBJECTS_UNREADABLE"],
+    ["no output", () => "", "EXPORT_OBJECTS_UNREADABLE"],
+    ["a header without a line end", () => `${markerOid()} blob 6`, "EXPORT_OBJECTS_UNREADABLE"],
+  ])("object output with %s", (_name, output, refusal) => {
+    const read = () => Buffer.from(output(), "latin1");
+    if (refusal) expect(() => writeCommittedTree(root, head, destination, markerOnly, read)).toThrow(refusal);
+    else {
+      writeCommittedTree(root, head, destination, markerOnly, read);
+      expect(readFileSync(path.join(destination, "marker.txt"), "utf8")).toBe("before");
+    }
+  });
+
+  describe("verifyExport", () => {
+    const place = (file: string, content: string) => {
+      mkdirSync(path.dirname(path.join(destination, file)), { recursive: true });
+      writeFileSync(path.join(destination, file), content);
+    };
+    const listing = () => ({ files: new Map([["a/b.txt", sha1("one")], ["c.txt", sha1("two")]]), directories: new Set(["", "a"]) });
+    beforeEach(() => { place("a/b.txt", "one"); place("c.txt", "two"); });
+
+    test("the exact listing verifies", () => {
+      const { files, directories } = listing();
+      expect(() => verifyExport(destination, files, directories)).not.toThrow();
+    });
+
+    test.each([
+      ["an extra file", () => place("extra.txt", "x")],
+      ["an extra nested file", () => place("a/extra.txt", "x")],
+      ["an extra directory", () => mkdirSync(path.join(destination, "stray"))],
+      ["a changed byte", () => place("c.txt", "twO")],
+      ["a missing file", () => rmSync(path.join(destination, "c.txt"))],
+      ["a file where a directory is listed", () => { rmSync(path.join(destination, "a"), { recursive: true }); place("a", "file"); }],
+    ])("%s refuses", (_name, change) => {
+      change();
+      const { files, directories } = listing();
+      expect(() => verifyExport(destination, files, directories)).toThrow("EXPORT_DIFFERS_FROM_HEAD");
+    });
+  });
+
+  describe("checkTreePath", () => {
+    test.each(["scripts/a.ts", ".gitignore", ".github/workflows/x.yml", "my_node_modules/x", "comet.txt", "com10", "..x", "a b/c", "x.test.ts", "a-b_c/d.e.f"])("%s is accepted", file => {
+      expect(() => checkTreePath(file, new Set())).not.toThrow();
+    });
+
+    test.each(["", "a//b", "/a", "a/", ".", "..", "a/./b", "a/../b", ".git/config", "a/.GIT/x", "a\\b", "a:b", "a<b", "a>b", 'a"b', "a|b", "a?b", "a*b", "dot.", "space ", "CON", "con.txt", "a/AUX", "COM1", "lpt9.x", "nul"])("%j is refused as unsafe", file => {
+      expect(() => checkTreePath(file, new Set())).toThrow("EXPORT_PATH_UNSAFE");
+    });
+
+    test.each(["node_modules/x", "a/Node_Modules/x", "NODE_MODULES"])("%s is refused as a tracked dependency tree", file => {
+      expect(() => checkTreePath(file, new Set())).toThrow("EXPORT_TRACKED_NODE_MODULES");
+    });
+
+    test("paths that differ only by case collide", () => {
+      const seen = new Set<string>();
+      checkTreePath("Docs/A.ts", seen);
+      expect(() => checkTreePath("docs/a.ts", seen)).toThrow("EXPORT_PATH_COLLISION");
+      expect(() => checkTreePath("docs/b.ts", seen)).not.toThrow();
+    });
+  });
+
+  describe("removeExport", () => {
+    let dependencies: string;
+    const lay = () => {
+      const area = mkdtempSync(path.join(tmpdir(), "s3-area-"));
+      const links: string[] = [];
+      for (const part of ["tree", "harness"]) {
+        mkdirSync(path.join(area, part, "src"), { recursive: true });
+        writeFileSync(path.join(area, part, "src/file.txt"), part);
+        const link = path.join(area, part, "node_modules");
+        symlinkSync(dependencies, link, process.platform === "win32" ? "junction" : "dir");
+        links.push(link);
+      }
+      return { area, links };
+    };
+    beforeEach(() => {
+      dependencies = mkdtempSync(path.join(tmpdir(), "s3-deps-"));
+      writeFileSync(path.join(dependencies, "dep.js"), "module.exports = 1;");
+    });
+    afterEach(() => rmSync(dependencies, { recursive: true, force: true }));
+
+    test("both links are detached before the recursive delete and the dependencies survive", () => {
+      const { area } = lay();
+      expect(removeExport(area)).toBe(true);
+      expect(existsSync(area)).toBe(false);
+      expect(readFileSync(path.join(dependencies, "dep.js"), "utf8")).toBe("module.exports = 1;");
+    });
+
+    test("a link that will not detach is reported, every sibling is still removed, and the link target is untouched", () => {
+      const { area, links } = lay();
+      const stuck = new Set<string>();
+      // The first link stays; the second detaches for real. One failure must not be forgotten by the success after it.
+      const detach = (link: string) => {
+        if (link === links[0]) { stuck.add(link); return false; }
+        dropLink(link);
+        return true;
+      };
+      try {
+        expect(removeExport(area, detach)).toBe(false);
+        expect(stuck.size).toBe(1);
+        expect(existsSync(path.join(area, "tree/src"))).toBe(false);
+        expect(existsSync(path.join(area, "harness/src"))).toBe(false);
+        expect(lstatSync(links[0]).isSymbolicLink()).toBe(true);
+        expect(readFileSync(path.join(dependencies, "dep.js"), "utf8")).toBe("module.exports = 1;");
+      } finally {
+        dropLink(links[0]);
+        rmSync(area, { recursive: true, force: true });
+      }
+    });
+
+    test("an area that is already partly gone is removed without error", () => {
+      const { area, links } = lay();
+      dropLink(links[1]);
+      rmSync(path.join(area, "harness"), { recursive: true });
+      expect(removeExport(area)).toBe(true);
+      expect(existsSync(area)).toBe(false);
+    });
+  });
+
+  test.each([
+    ["scripts/a.ts", true], ["scripts/regression/x.mjs", true], ["package.json", true], ["tsconfig.json", true],
+    ["tsconfig.build.json", true], ["tsconfig.app.json", true],
+    ["convex/package.json", false], ["scriptsx/a.ts", false], ["xpackage.json", false], ["package.jsonx", false], ["tsconfig/x.json", false],
+    ["tsconfig.jsonx", false], ["vitest.config.mjs", false], [".npmrc", false], ["pnpm-lock.yaml", false], ["regression/scenarios/a.scenario.json", false],
+  ])("%s is %s a harness file", (file, harnessFile) => {
+    expect(isHarnessFile(file)).toBe(harnessFile);
   });
 });
 

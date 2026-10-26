@@ -36,12 +36,13 @@ export interface LocalExecutionReport {
 function baseRecords(root: string, revision: string): Array<Pick<ScenarioRecord, "id" | "status">> {
   if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("BASE_REVISION_REQUIRED");
   const git = resolveTrustedGitExecutable();
-  const files = execFileSync(git, ["ls-tree", "-rz", "--name-only", revision, "--", "regression/scenarios"],
+  // No replace refs: the base records must be the commit's own objects.
+  const files = execFileSync(git, ["--no-replace-objects", "ls-tree", "-rz", "--name-only", revision, "--", "regression/scenarios"],
     { cwd: process.env.AUTOFLOW_LOCAL_SCENARIO_GIT_ROOT || root, encoding: "utf8" }).split("\0").filter(file => file.endsWith(".scenario.json"));
   if (!files.length) throw new Error("BASE_LIBRARY_UNAVAILABLE");
   // These immutable Git records feed the existing transition validator, never an execution verdict.
   return files.map(file => {
-    const record: unknown = JSON.parse(execFileSync(git, ["cat-file", "blob", `${revision}:${file}`], { cwd: process.env.AUTOFLOW_LOCAL_SCENARIO_GIT_ROOT || root, encoding: "utf8" }));
+    const record: unknown = JSON.parse(execFileSync(git, ["--no-replace-objects", "cat-file", "blob", `${revision}:${file}`], { cwd: process.env.AUTOFLOW_LOCAL_SCENARIO_GIT_ROOT || root, encoding: "utf8" }));
     if (!record || typeof record !== "object" || !("id" in record) || typeof record.id !== "string" ||
       !("status" in record) || (record.status !== "active" && record.status !== "candidate" && record.status !== "retired"))
       throw new Error("BASE_TRANSITION_RECORD_UNAVAILABLE");

@@ -87,8 +87,8 @@ function listTree(cwd, args) {
   });
 }
 
-/** Paths from the object database are data: refuse anything that could leave, alias or hide inside the export. */
-function checkTreePath(file, seen) {
+/** Paths from the object database are data: refuse anything that could leave, alias or hide inside the export. Exported for tests. */
+export function checkTreePath(file, seen) {
   const segments = file.split("/");
   for (const segment of segments) {
     if (/^node_modules$/i.test(segment)) throw new Error("EXPORT_TRACKED_NODE_MODULES");
@@ -103,11 +103,17 @@ function checkTreePath(file, seen) {
 /**
  * Write the commit's blobs straight from the object database. Nothing consults the working tree, the index, the invoker's
  * smudge/clean filters, hooks or any .gitattributes, so the bytes are exactly the tree's; each blob is hashed again here
- * and the finished export is compared against the listing before anything runs.
+ * and the finished export is compared against the listing before anything runs. Bytes are exact except that the
+ * executable bit is not restored, LFS files stay pointer text, and a submodule is an empty directory. Exported for tests.
+ * @param {string} root checkout whose object database is read
+ * @param {string} head commit to export
+ * @param {string} exportRoot empty destination directory
+ * @param {(file: string) => boolean} [include] which tree paths to write
+ * @param {(root: string, oids: string[]) => Buffer} [readObjects] raw `cat-file --batch` output; a seam for tests
  */
-function writeCommittedTree(root, head, exportRoot) {
+export function writeCommittedTree(root, head, exportRoot, include = () => true, readObjects = readBlobBatch) {
   if (git(root, ["rev-parse", "--show-object-format"]).trim() !== "sha1") throw new Error("EXPORT_OBJECT_FORMAT_UNSUPPORTED");
-  const entries = listTree(root, ["--full-tree", head]);
+  const entries = listTree(root, ["--full-tree", head]).filter(entry => include(entry.file));
   const seen = new Set(), files = new Map(), directories = new Set([""]);
   for (const entry of entries) {
     checkTreePath(entry.file, seen);
@@ -119,10 +125,7 @@ function writeCommittedTree(root, head, exportRoot) {
     for (let at = known.lastIndexOf("/"); at > 0; at = known.lastIndexOf("/", at - 1)) directories.add(known.slice(0, at));
   }
   const wanted = [...files.values()];
-  const read = spawnSync(resolveTrustedGitExecutable(), ["--no-replace-objects", "cat-file", "--batch"],
-    { cwd: root, input: `${wanted.join("\n")}\n`, maxBuffer: 1024 * 1024 * 1024, env: cleanEnv() });
-  if (read.error || read.status !== 0) throw new Error("EXPORT_OBJECTS_UNREADABLE");
-  const output = read.stdout;
+  const output = readObjects(root, wanted);
   let position = 0;
   const bytesOf = new Map();
   for (const oid of wanted) {
@@ -141,8 +144,15 @@ function writeCommittedTree(root, head, exportRoot) {
   verifyExport(exportRoot, files, directories);
 }
 
-/** The export holds exactly the listed files and directories, byte-identical to their blobs. */
-function verifyExport(exportRoot, files, directories) {
+function readBlobBatch(root, oids) {
+  const read = spawnSync(resolveTrustedGitExecutable(), ["--no-replace-objects", "cat-file", "--batch"],
+    { cwd: root, input: `${oids.join("\n")}\n`, maxBuffer: 1024 * 1024 * 1024, env: cleanEnv() });
+  if (read.error || read.status !== 0) throw new Error("EXPORT_OBJECTS_UNREADABLE");
+  return read.stdout;
+}
+
+/** The export holds exactly the listed files and directories, byte-identical to their blobs. Exported for tests. */
+export function verifyExport(exportRoot, files, directories) {
   const walk = (directory, relative) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const name = relative ? `${relative}/${entry.name}` : entry.name;
@@ -162,81 +172,86 @@ function verifyExport(exportRoot, files, directories) {
 }
 
 /**
- * The files that load into the Vitest main process or compile the reporter come from the harness checkout, outside the
- * export. They must be exactly what its HEAD commit holds, so an ignored, assume-unchanged, skip-worktree or untracked
- * file there cannot take part. Line-ending conversion by the invoker's autocrlf is the only difference tolerated.
- * node_modules stays a trusted environment.
+ * What the reporter and the Vitest main process load from the harness checkout: its scripts, package.json (module type)
+ * and tsconfig (compile options). They run from a copy exported from the harness's own HEAD, so the working tree there
+ * (edited, assume-unchanged, skip-worktree, untracked or shadowing files, line endings) never takes part. .npmrc, the pnpm
+ * workspace files and lockfiles are install-time inputs that Vitest does not read, and node_modules stays a trusted
+ * environment.
  */
-export function verifyHarness(base = implementationRoot) {
-  const inScope = file => file.startsWith("scripts/") || /^(package\.json|tsconfig[^/]*\.json)$/.test(file);
-  let tracked;
-  try {
-    tracked = listTree(base, ["HEAD"]).filter(entry => inScope(entry.file));
-  } catch {
-    throw new Error("HARNESS_UNVERIFIED");
-  }
-  if (!tracked.length || tracked.some(entry => entry.mode !== "100644" && entry.mode !== "100755")) throw new Error("HARNESS_UNVERIFIED");
-  const present = [];
-  const walk = (directory, relative) => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const name = `${relative}${entry.name}`;
-      const kind = lstatSync(path.join(directory, entry.name));
-      if (kind.isDirectory()) { if (inScope(`${name}/`)) walk(path.join(directory, entry.name), `${name}/`); }
-      else if (inScope(name)) { if (!kind.isFile()) throw new Error("HARNESS_UNVERIFIED"); present.push(name); }
-    }
-  };
-  if (!existsSync(path.join(base, "scripts"))) throw new Error("HARNESS_UNVERIFIED");
-  walk(base, "");
-  const expected = new Map(tracked.map(entry => [entry.file, entry.oid]));
-  if (present.length !== expected.size || present.some(file => !expected.has(file))) throw new Error("HARNESS_NOT_COMMITTED");
-  for (const file of present) {
-    const bytes = readFileSync(path.join(base, file));
-    const lf = Buffer.from(bytes.toString("latin1").replace(/\r\n/g, "\n"), "latin1");
-    if (blobId(bytes) !== expected.get(file) && blobId(lf) !== expected.get(file)) throw new Error("HARNESS_NOT_COMMITTED");
-  }
+export const isHarnessFile = file => file.startsWith("scripts/") || /^(package\.json|tsconfig[^/]*\.json)$/.test(file);
+
+/** Detach one dependency link without following it. @returns {boolean} true when it is gone */
+function detachLink(link) {
+  try { rmdirSync(link); } catch { try { unlinkSync(link); } catch { /* checked next */ } }
+  return !lstatSync(link, { throwIfNoEntry: false });
+}
+
+function linkModules(from, into) {
+  const modules = path.join(from, "node_modules");
+  if (lstatSync(modules, { throwIfNoEntry: false })) symlinkSync(realpathSync(modules), path.join(into, "node_modules"), "junction");
 }
 
 /**
- * Everything Vitest runs from the source comes from the observed HEAD commit's objects, never from the working tree, so
- * ignored, assume-unchanged, skip-worktree or hidden-untracked files cannot take part. Installed dependencies are reached
- * through a link to the checkout's own node_modules.
+ * Everything Vitest runs comes from commit objects, never from a working tree: the source's HEAD into `tree`, and the
+ * harness's own HEAD (scripts only) into `harness`. Ignored, assume-unchanged, skip-worktree or hidden-untracked files
+ * cannot take part. Installed dependencies are reached through links to each checkout's own node_modules.
  */
-function exportCommitted(root, head) {
+function exportCommitted(root, harnessRoot, head, receipt, detach) {
   const parent = realpathSync(tmpdir());
   // Before creating anything, so a TEMP/TMP/TMPDIR inside the checkout leaves nothing behind.
   if (!isOutside(root, parent)) throw new Error("EXPORT_MUST_BE_OUTSIDE_SOURCE");
   const area = mkdtempSync(path.join(parent, "autoflow-export-"));
   try {
     if (!isOutside(root, realpathSync(area))) throw new Error("EXPORT_MUST_BE_OUTSIDE_SOURCE");
+    const harness = path.join(area, "harness");
+    mkdirSync(harness);
+    let harnessHead;
+    try {
+      if (!sameFileName(realpathSync(git(harnessRoot, ["rev-parse", "--show-toplevel"]).trim()), realpathSync(harnessRoot))) throw new Error("HARNESS_UNVERIFIED");
+      harnessHead = git(harnessRoot, ["rev-parse", "HEAD"]).trim();
+    } catch {
+      throw new Error("HARNESS_UNVERIFIED");
+    }
+    writeCommittedTree(harnessRoot, harnessHead, harness, isHarnessFile);
+    if (!existsSync(path.join(harness, "scripts/regression/localExecutionReporter.ts"))) throw new Error("HARNESS_UNVERIFIED");
+    linkModules(harnessRoot, harness);
     const exportRoot = path.join(area, "tree");
     mkdirSync(exportRoot);
     writeCommittedTree(root, head, exportRoot);
-    const modules = path.join(root, "node_modules");
-    if (lstatSync(modules, { throwIfNoEntry: false })) symlinkSync(realpathSync(modules), path.join(exportRoot, "node_modules"), "junction");
-    return { area, exportRoot };
+    linkModules(root, exportRoot);
+    return { area, exportRoot, harness };
   } catch (error) {
-    removeExport(area);
+    if (!removeExport(area, detach)) {
+      receipt.issues.push("EXPORT_CLEANUP_INCOMPLETE");
+      receipt.verdict = "FAIL";
+    }
     throw error;
   }
 }
 
 /**
- * Detach the dependency link first: a recursive delete must never follow it into the real node_modules. If it cannot be
- * detached, every other entry is still removed and only the link is left.
+ * Detach each dependency link first: a recursive delete must never follow one into a real node_modules. If a link cannot
+ * be detached, every other entry is still removed and only the links are left. Exported for tests.
+ * @param {string} area
+ * @param {(link: string) => boolean} [detach] returns true when the link is gone
  * @returns {boolean} true when nothing of the export remains
  */
-function removeExport(area) {
-  const tree = path.join(area, "tree");
-  const link = path.join(tree, "node_modules");
-  if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) {
-    try { rmdirSync(link); } catch { try { unlinkSync(link); } catch { /* checked next */ } }
-    if (lstatSync(link, { throwIfNoEntry: false })) {
-      for (const name of readdirSync(tree)) if (name !== "node_modules") rmSync(path.join(tree, name), { recursive: true, force: true });
-      return false;
-    }
+export function removeExport(area, detach = detachLink) {
+  const parts = ["tree", "harness"].map(name => path.join(area, name));
+  let complete = true;
+  for (const part of parts) {
+    const link = path.join(part, "node_modules");
+    if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink() && !detach(link)) complete = false;
   }
-  rmSync(area, { recursive: true, force: true });
-  return true;
+  if (complete) {
+    rmSync(area, { recursive: true, force: true });
+    return true;
+  }
+  for (const part of parts) {
+    if (!existsSync(part)) continue;
+    for (const name of readdirSync(part)) if (name !== "node_modules") rmSync(path.join(part, name), { recursive: true, force: true });
+  }
+  return false;
 }
 
 /** Digest of the exported files (not the dependency link), to see whether the run changed them. */
@@ -257,26 +272,23 @@ function observeExport(exportRoot) {
   return digest.digest("hex");
 }
 
-function measureExecution({ root, scenarioId, base }, receipt) {
+function measureExecution({ root, scenarioId, base, harnessRoot, detach }, receipt) {
   selectBinding(root, scenarioId);
   // Fail closed on visible uncommitted edits too: a verdict about HEAD must not be read as one about the edited tree.
   if (receipt.source.before.dirty) throw new Error("SOURCE_NOT_COMMITTED");
-  // The reporter and Vitest entry are loaded from the harness checkout, so that checkout is held to its own HEAD too.
-  verifyHarness();
-  const { area, exportRoot } = exportCommitted(root, receipt.source.before.head);
-  let removed = false;
+  const { area, exportRoot, harness } = exportCommitted(root, harnessRoot, receipt.source.before.head, receipt, detach);
   try {
-    runExported({ root, exportRoot, scenarioId, base }, receipt);
+    runExported({ root, exportRoot, harness, harnessRoot, scenarioId, base }, receipt);
   } finally {
-    removed = removeExport(area);
-  }
-  if (!removed) {
-    receipt.issues.push("EXPORT_CLEANUP_INCOMPLETE");
-    receipt.verdict = "FAIL";
+    // Also on a throw: an incomplete cleanup is a failure whatever else went wrong.
+    if (!removeExport(area, detach)) {
+      receipt.issues.push("EXPORT_CLEANUP_INCOMPLETE");
+      receipt.verdict = "FAIL";
+    }
   }
 }
 
-function runExported({ root, exportRoot, scenarioId, base }, receipt) {
+function runExported({ root, exportRoot, harness, harnessRoot, scenarioId, base }, receipt) {
   const { binding, testFile } = selectBinding(exportRoot, scenarioId);
   const config = exportedConfig(exportRoot);
   const exportedBefore = observeExport(exportRoot);
@@ -285,9 +297,9 @@ function runExported({ root, exportRoot, scenarioId, base }, receipt) {
   const pattern = `^${escapedName}$`;
   // The report returns on an extra pipe (fd 3) that only the Vitest main process holds. Forked workers, where the
   // candidate's tests run, do not inherit it, and no file path is trusted: nothing the child can write on disk is read.
-  const child = spawnSync(process.execPath, [path.join(implementationRoot, "node_modules/vitest/vitest.mjs"), "run", testFile,
+  const child = spawnSync(process.execPath, [path.join(harnessRoot, "node_modules/vitest/vitest.mjs"), "run", testFile,
     "--root", exportRoot, ...(config ? ["--config", path.join(exportRoot, config)] : []), "--pool=forks", "--maxWorkers=1", "--no-file-parallelism", "--retry=0", "-t", pattern,
-    "--reporter", path.join(implementationRoot, "scripts/regression/localExecutionReporter.ts")],
+    "--reporter", path.join(harness, "scripts/regression/localExecutionReporter.ts")],
   { cwd: exportRoot, timeout: 60000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", "pipe"], env: { ...childEnv(),
     AUTOFLOW_LOCAL_SCENARIO_FD: "3", AUTOFLOW_LOCAL_SCENARIO_ID: scenarioId, AUTOFLOW_LOCAL_SCENARIO_BASE: base,
     AUTOFLOW_LOCAL_SCENARIO_GIT_ROOT: root } });
@@ -333,9 +345,10 @@ const RECEIPT_FILE = "result.json";
 const sameFileName = (left, right) => (process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right);
 
 /**
- * The host, not a CLI argument, selects the source root: the launcher's working directory.
+ * The host, not a CLI argument, selects the source root: the launcher's working directory. A trusted embedding caller
+ * may also name the harness checkout (default: the checkout this file lives in) and a link detacher (cleanup seam).
  * @param {string} [cwd]
- * @returns {{ root: string, evidenceDirectory: string | null }}
+ * @returns {{ root: string, evidenceDirectory: string | null, harnessRoot?: string, detachLink?: (link: string) => boolean }}
  */
 export function createHostContext(cwd = process.cwd()) {
   return { root: cwd, evidenceDirectory: null };
@@ -415,7 +428,7 @@ export function main(argv = process.argv.slice(2), context = createHostContext()
     const base = options.base ?? before.head;
     if (!/^[0-9a-f]{40}$/.test(base)) throw new Error("BASE_REVISION_REQUIRED");
     receipt.source.base = base;
-    measureExecution({ root, scenarioId, base }, receipt);
+    measureExecution({ root, scenarioId, base, harnessRoot: realpathSync(context.harnessRoot ?? implementationRoot), detach: context.detachLink }, receipt);
   } catch (error) {
     receipt.issues.push(error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : "LOCAL_EXECUTION_UNAVAILABLE");
   }
