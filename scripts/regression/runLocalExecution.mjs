@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 const implementationRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -33,13 +34,14 @@ function selectBinding(root, scenarioId) {
     throw new Error("SINGLE_RECORD_BINDING_REQUIRED");
   const binding = matches[0].impl, testFile = path.resolve(root, binding.file);
   const relative = path.relative(root, testFile);
-  if (relative.startsWith("..") || path.isAbsolute(relative) || !/\.test\.tsx?$/.test(relative)) throw new Error("BACKEND_TEST_PATH_REQUIRED");
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !/\.test\.tsx?$/.test(relative)) throw new Error("BACKEND_TEST_PATH_REQUIRED");
   return { binding, relative };
 }
 
 function measureExecution({ root, scenarioId, base, events }, receipt) {
   const { binding, relative } = selectBinding(root, scenarioId);
-  const pattern = `^${binding.testName.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)}$`;
+  const escapedName = binding.testName.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  const pattern = `^${escapedName}$`;
   const child = spawnSync(process.execPath, [path.join(implementationRoot, "node_modules/vitest/vitest.mjs"), "run", relative,
     "--root", root, "--maxWorkers=1", "--no-file-parallelism", "--retry=0", "-t", pattern,
     "--reporter", path.join(implementationRoot, "scripts/regression/localExecutionReporter.ts")],
@@ -58,7 +60,21 @@ function measureExecution({ root, scenarioId, base, events }, receipt) {
 }
 
 export function main(argv = process.argv.slice(2)) {
-  const value = name => { const index = argv.indexOf(`--${name}`); return index < 0 ? undefined : argv[index + 1]; };
+  let options;
+  try {
+    ({ values: options } = parseArgs({ args: argv, strict: true, allowPositionals: false,
+      options: { root: { type: "string" }, scenario: { type: "string" }, output: { type: "string" },
+        base: { type: "string" }, "expect-head": { type: "string" } } }));
+    for (const name of ["base", "expect-head"]) {
+      if (options[name] !== undefined && !/^[0-9a-f]{40}$/.test(options[name])) throw new Error("REVISION_ARGUMENT_INVALID");
+    }
+  } catch {
+    const receipt = { schemaVersion: 1, scope: "LOCAL_BACKEND_HARNESS_ADVISORY", trustedProducer: false,
+      verdict: "UNAVAILABLE", issues: ["CLI_ARGUMENTS_INVALID"], source: null, native: null, process: null };
+    console.log(JSON.stringify({ ...receipt, output: null }));
+    return receipt;
+  }
+  const value = name => options[name];
   const root = path.resolve(value("root") ?? process.cwd());
   const scenarioId = value("scenario") ?? "opening-all-families-public-rehearsal";
   const artifactDirectory = mkdtempSync(path.join(tmpdir(), "autoflow-local-execution-"));
@@ -91,6 +107,9 @@ export function main(argv = process.argv.slice(2)) {
   return receipt;
 }
 
+if (typeof import.meta.main !== "boolean") {
+  throw new Error("UNSUPPORTED_NODE: native import.meta.main requires Node 22.18.0 or later");
+}
 if (import.meta.main) {
   process.exitCode = main().verdict === "PASS" ? 0 : 1;
 }

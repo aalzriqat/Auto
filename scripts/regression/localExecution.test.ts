@@ -279,3 +279,26 @@ test.each(["binding-deleted", "ruling-drift", "active-demoted", "retirement-no-r
     if (defect === "retirement-no-reason") expect(receipt.native?.issues.some(issue => issue.includes("retired"))).toBe(true);
   }, 70000,
 );
+
+test.each(["expect-head", "base"])("missing or blank --%s refuses without executing", option => {
+  for (const suffix of [[], [""], ["   "]]) {
+    const output = path.join(evidence, `${option}-${suffix.length}-${suffix[0]?.length ?? 0}.json`);
+    const child = spawnSync(process.execPath, [cli, "--root", root, "--scenario", record.id, "--output", output,
+      `--${option}`, ...suffix], { timeout: 70000, encoding: "utf8" });
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    expect(child.status, child.stdout).toBe(1);
+    expect(child.stdout).not.toContain('"verdict":"PASS"');
+    if (existsSync(output)) expect(JSON.parse(readFileSync(output, "utf8")).native).toBeNull();
+  }
+}, 70000);
+
+test("in-root dot-prefixed test filename executes without being mistaken for traversal", () => {
+  record.impl!.file = "..x.test.ts";
+  saveRecord();
+  writeFileSync(path.join(root, "..x.test.ts"), source());
+  writeFileSync(path.join(root, "vitest.config.mjs"), config().replace("selected.test.ts", "..x.test.ts"));
+  const receipt = run("dot-prefixed");
+  expect(receipt.verdict).toBe("PASS");
+  expect(receipt.native?.cases[0].file).toBe("..x.test.ts");
+}, 70000);

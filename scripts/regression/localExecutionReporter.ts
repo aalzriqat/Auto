@@ -53,7 +53,7 @@ function baseRecords(root: string, revision: string): Array<Pick<ScenarioRecord,
 export default class LocalExecutionReporter implements Reporter {
   private readonly output = process.env.AUTOFLOW_LOCAL_SCENARIO_EVENTS ?? "";
   private selected: ScenarioRecord | undefined;
-  private report: LocalExecutionReport = {
+  private readonly report: LocalExecutionReport = {
     schemaVersion: 1, root: "", scenarioId: process.env.AUTOFLOW_LOCAL_SCENARIO_ID ?? "",
     complete: false, verdict: "FAIL", issues: [], cases: [], unhandledErrors: null, runReason: null,
     baseRevision: process.env.AUTOFLOW_LOCAL_SCENARIO_BASE ?? "", selection: null,
