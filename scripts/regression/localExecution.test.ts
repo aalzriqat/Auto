@@ -215,6 +215,8 @@ test("a tracked path through a symlinked parent directory refuses before native 
     rmSync(path.join(root, "linked"), { recursive: true });
     writeFileSync(path.join(outside, "inside.txt"), "foreign");
     symlinkSync(outside, path.join(root, "linked"), process.platform === "win32" ? "junction" : "dir");
+    // Ignored, so the census sees only the tracked path below the link and the parent check must be what refuses.
+    writeFileSync(path.join(root, ".gitignore"), "node_modules/\n.vitest/\nlinked\n");
     const receipt = run("symlinked-parent");
     expect(receipt.verdict).toBe("UNAVAILABLE");
     expect(receipt.issues).toContain("SOURCE_SYMLINK_UNAVAILABLE");
