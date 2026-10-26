@@ -292,8 +292,81 @@ test("a case-variant config that Vitest would discover on a case-insensitive fil
   git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "no committed config"]);
   writeFileSync(path.join(root, "Vitest.Config.MJS"), forgedReportSource);
   const receipt = executeLocal(["--scenario", record.id], host());
-  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["TRUSTED_CONFIG_REQUIRED"], native: null, process: null });
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["SOURCE_NOT_COMMITTED"], native: null, process: null });
 }, 30000);
+
+/** A committed config importing ./helper.mjs; the helper in the working tree forges a PASS report (no cases) and exits. */
+const commitForgingConfig = (helperCommitted: string) => {
+  writeFileSync(path.join(root, "helper.mjs"), helperCommitted);
+  writeFileSync(path.join(root, "vitest.config.mjs"), forgingConfig);
+  commitAll("config imports a helper");
+};
+const expectLegitimateRun = (receipt: Receipt) => {
+  expect(receipt.verdict, JSON.stringify(receipt.issues)).toBe("PASS");
+  expect(receipt.native?.cases).toHaveLength(1);
+};
+
+test.each(["assume-unchanged", "skip-worktree"])("a helper the index flags as %s runs as committed, never as edited", flag => {
+  commitForgingConfig("export {};");
+  git(["update-index", `--${flag}`, "helper.mjs"]);
+  writeFileSync(path.join(root, "helper.mjs"), forgedReportSource);
+  expectLegitimateRun(executeLocal(["--scenario", record.id], host()) as unknown as Receipt);
+}, 70000);
+
+test("an ignored helper cannot be reached from the committed config", () => {
+  commitForgingConfig("export {};");
+  git(["rm", "-q", "--cached", "helper.mjs"]);
+  writeFileSync(path.join(root, ".gitignore"), "node_modules/\n.vitest/\nhelper.mjs\n");
+  commitAll("ignore the helper");
+  writeFileSync(path.join(root, "helper.mjs"), forgedReportSource);
+  const receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt;
+  expect(receipt.verdict).toBe("FAIL");
+  expect(receipt.native?.verdict).not.toBe("PASS");
+}, 70000);
+
+test("status.showUntrackedFiles=no cannot hide an untracked helper from the run", () => {
+  commitForgingConfig("export {};");
+  git(["rm", "-q", "--cached", "helper.mjs"]);
+  git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "helper untracked"]);
+  git(["config", "status.showUntrackedFiles", "no"]);
+  writeFileSync(path.join(root, "helper.mjs"), forgedReportSource);
+  const receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt;
+  expect(receipt.verdict).toBe("FAIL");
+  expect(receipt.native?.verdict).not.toBe("PASS");
+}, 70000);
+
+test("a submodule directory is not executed: the gitlink exports empty", () => {
+  writeFileSync(path.join(root, "vitest.config.mjs"), forgingConfig.replace("./helper.mjs", "./sub/helper.mjs"));
+  commitAll("config imports a submodule file");
+  git(["update-index", "--add", "--cacheinfo", `160000,${head},sub`]);
+  git(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "gitlink"]);
+  mkdirSync(path.join(root, "sub"));
+  writeFileSync(path.join(root, "sub/helper.mjs"), forgedReportSource);
+  const receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt;
+  expect(receipt.verdict).not.toBe("PASS");
+  expect(receipt.native?.cases ?? [1]).not.toHaveLength(0);
+}, 70000);
+
+test("the export is removed and the real node_modules survives its cleanup", () => {
+  mkdirSync(path.join(root, "node_modules/dep"), { recursive: true });
+  writeFileSync(path.join(root, "node_modules/dep/package.json"), JSON.stringify({ name: "dep", type: "module", exports: "./index.mjs" }));
+  writeFileSync(path.join(root, "node_modules/dep/index.mjs"), "export const answer = 4;");
+  writeFileSync(path.join(root, "selected.test.ts"), `import { answer } from "dep"; test("${title}", () => { expect(answer).toBe(4); });`);
+  commitAll("test imports a dependency");
+  const exportsBefore = readdirSync(tmpdir()).filter(name => name.startsWith("autoflow-export-")).length;
+  expectLegitimateRun(executeLocal(["--scenario", record.id], host()) as unknown as Receipt);
+  expect(existsSync(path.join(root, "node_modules/dep/index.mjs"))).toBe(true);
+  expect(readdirSync(tmpdir()).filter(name => name.startsWith("autoflow-export-")).length).toBe(exportsBefore);
+}, 70000);
+
+test("npm_config_* and bare VITE variables are not passed to the child", () => {
+  vi.stubEnv("npm_config_probe", "1");
+  vi.stubEnv("VITE", "1");
+  writeFileSync(path.join(root, "selected.test.ts"),
+    `test("${title}", () => { expect(process.env.npm_config_probe).toBeUndefined(); expect(process.env.VITE).toBeUndefined(); });`);
+  commitAll("env probe");
+  expectLegitimateRun(executeLocal(["--scenario", record.id], host()) as unknown as Receipt);
+}, 70000);
 
 test("two committed configs are ambiguous and refuse", () => {
   writeFileSync(path.join(root, "vite.config.mjs"), config());
@@ -334,7 +407,7 @@ test.each(["modified-config", "untracked-config"])("a vitest config that is not 
   if (mode === "modified-config") writeFileSync(path.join(root, "vitest.config.mjs"), forgedReportSource);
   else writeFileSync(path.join(root, "vitest.config.cjs"), forgedReportSource);
   const receipt = executeLocal(["--scenario", record.id], host());
-  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["TRUSTED_CONFIG_REQUIRED"], native: null, process: null });
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["SOURCE_NOT_COMMITTED"], native: null, process: null });
   expect(readdirSync(evidence).sort()).toEqual(["result.json"]);
 }, 30000);
 

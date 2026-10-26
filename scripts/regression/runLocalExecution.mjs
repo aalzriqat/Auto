@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -12,8 +12,8 @@ const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 // GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and friends would redirect Git away from the observed checkout.
 const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
 // Node preloads/loaders and Vite/Vitest overrides would run or reconfigure code the committed tree does not contain.
-const childEnv = () => Object.fromEntries(Object.entries(cleanEnv()).filter(([name]) => !/^(NODE_OPTIONS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|VITE_.*|VITEST_.*)$/i.test(name)));
-const git = (root, args) => execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, env: cleanEnv() });
+const childEnv = () => Object.fromEntries(Object.entries(cleanEnv()).filter(([name]) => !/^(NODE_OPTIONS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|VITE|VITE_.*|VITEST|VITEST_.*|npm_config_.*|PNPM_.*)$/i.test(name)));
+const git = (root, args, extraEnv = {}) => execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, env: { ...cleanEnv(), ...extraEnv } });
 
 /** Observed local files, not a trusted-job or production attestation. */
 function observeSource(root) {
@@ -34,8 +34,16 @@ function observeSource(root) {
 }
 
 function selectBinding(root, scenarioId) {
-  const files = git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "regression/scenarios"])
-    .split("\0").filter(file => file.endsWith(".scenario.json"));
+  // A plain walk, so it works on the Git-less export as well; the export holds only committed files.
+  const files = [];
+  const walk = directory => {
+    for (const entry of readdirSync(path.join(root, directory), { withFileTypes: true })) {
+      const relative = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) walk(relative);
+      else if (entry.name.endsWith(".scenario.json")) files.push(relative);
+    }
+  };
+  if (existsSync(path.join(root, "regression/scenarios"))) walk("regression/scenarios");
   const matches = files.map(file => JSON.parse(readFileSync(path.join(root, file), "utf8"))).filter(record => record.id === scenarioId);
   if (matches.length !== 1 || !matches[0].impl || typeof matches[0].impl.file !== "string" || typeof matches[0].impl.testName !== "string")
     throw new Error("SINGLE_RECORD_BINDING_REQUIRED");
@@ -49,40 +57,101 @@ function selectBinding(root, scenarioId) {
 const CONFIG_NAME = /^(vite|vitest)\.(config|workspace|projects)\.[cm]?[jt]s$|^vitest\.workspace\.json$/i;
 
 /**
- * A Vitest config executes in the same process as the reporter, so it could forge the report. Only a config that is
- * byte-identical to the one committed at the observed HEAD is run; a modified, untracked or ambiguous one refuses.
- * @returns {string | null} the one committed config file name, or null when the checkout has none
+ * The one Vitest config of the exported tree. It runs in the process that holds the report pipe, so an ambiguous or
+ * non-regular entry refuses.
+ * @returns {string | null} the one config file name, or null when HEAD has none
  */
-function trustedConfig(root, head) {
+function exportedConfig(exportRoot) {
   try {
-    const present = readdirSync(root).filter(name => CONFIG_NAME.test(name));
+    const present = readdirSync(exportRoot).filter(name => CONFIG_NAME.test(name));
     if (present.length > 1) throw new Error("TRUSTED_CONFIG_REQUIRED");
-    for (const name of present) {
-      if (!lstatSync(path.join(root, name)).isFile()) throw new Error("TRUSTED_CONFIG_REQUIRED");
-      const committed = git(root, ["rev-parse", "--verify", "--quiet", `${head}:${name}`]).trim();
-      if (committed !== git(root, ["hash-object", "--no-filters", "--", name]).trim()) throw new Error("TRUSTED_CONFIG_REQUIRED");
-    }
+    for (const name of present) if (!lstatSync(path.join(exportRoot, name)).isFile()) throw new Error("TRUSTED_CONFIG_REQUIRED");
     return present[0] ?? null;
   } catch {
     throw new Error("TRUSTED_CONFIG_REQUIRED");
   }
 }
 
+/**
+ * Everything Vitest runs comes from a fresh export of the observed HEAD commit, never from the working tree, so ignored,
+ * assume-unchanged, skip-worktree or hidden-untracked files cannot take part. A throwaway index keeps the user's index
+ * untouched. Installed dependencies are reached through a link to the checkout's own node_modules.
+ */
+function exportCommitted(root, head) {
+  const parent = realpathSync(tmpdir());
+  const area = mkdtempSync(path.join(parent, "autoflow-export-"));
+  try {
+    if (!isOutside(root, area)) throw new Error("EXPORT_MUST_BE_OUTSIDE_SOURCE");
+    const exportRoot = path.join(area, "tree");
+    mkdirSync(exportRoot);
+    const env = { GIT_INDEX_FILE: path.join(area, "index") };
+    git(root, ["read-tree", head], env);
+    git(root, ["checkout-index", "-a", "-f", `--prefix=${exportRoot.replace(/\\/g, "/")}/`], env);
+    const modules = path.join(root, "node_modules");
+    if (lstatSync(modules, { throwIfNoEntry: false }) && !existsSync(path.join(exportRoot, "node_modules")))
+      symlinkSync(realpathSync(modules), path.join(exportRoot, "node_modules"), "junction");
+    return { area, exportRoot };
+  } catch (error) {
+    removeExport(area);
+    throw error;
+  }
+}
+
+/** Remove the link first: a recursive delete must never follow it into the real node_modules. */
+function removeExport(area) {
+  const link = path.join(area, "tree", "node_modules");
+  if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    try { rmdirSync(link); } catch { try { unlinkSync(link); } catch { /* leave the export rather than risk the link target */ } }
+    if (lstatSync(link, { throwIfNoEntry: false })) return;
+  }
+  rmSync(area, { recursive: true, force: true });
+}
+
+/** Digest of the exported files (not the dependency link), to see whether the run changed them. */
+function observeExport(exportRoot) {
+  const digest = createHash("sha256");
+  const walk = directory => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const full = path.join(directory, entry.name);
+      if (directory === exportRoot && entry.name === "node_modules") continue;
+      digest.update(path.relative(exportRoot, full)).update("\0");
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isSymbolicLink()) digest.update("LINK");
+      else digest.update(hash(readFileSync(full)));
+      digest.update("\0");
+    }
+  };
+  walk(exportRoot);
+  return digest.digest("hex");
+}
+
 function measureExecution({ root, scenarioId, base }, receipt) {
-  const { binding, testFile } = selectBinding(root, scenarioId);
-  const config = trustedConfig(root, receipt.source.before.head);
-  // The config (and everything it imports) runs in the process that holds the report pipe, so every non-ignored file
-  // must be exactly what HEAD records: an uncommitted helper or edit could otherwise forge the report.
+  selectBinding(root, scenarioId);
+  // Fail closed on visible uncommitted edits too: a verdict about HEAD must not be read as one about the edited tree.
   if (receipt.source.before.dirty) throw new Error("SOURCE_NOT_COMMITTED");
+  const { area, exportRoot } = exportCommitted(root, receipt.source.before.head);
+  try {
+    runExported({ root, exportRoot, scenarioId, base }, receipt);
+  } finally {
+    removeExport(area);
+  }
+}
+
+function runExported({ root, exportRoot, scenarioId, base }, receipt) {
+  const { binding, testFile } = selectBinding(exportRoot, scenarioId);
+  const config = exportedConfig(exportRoot);
+  const exportedBefore = observeExport(exportRoot);
+  receipt.execution = { from: "HEAD_EXPORT" };
   const escapedName = binding.testName.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
   const pattern = `^${escapedName}$`;
   // The report returns on an extra pipe (fd 3) that only the Vitest main process holds. Forked workers, where the
   // candidate's tests run, do not inherit it, and no file path is trusted: nothing the child can write on disk is read.
   const child = spawnSync(process.execPath, [path.join(implementationRoot, "node_modules/vitest/vitest.mjs"), "run", testFile,
-    "--root", root, ...(config ? ["--config", path.join(root, config)] : []), "--pool=forks", "--maxWorkers=1", "--no-file-parallelism", "--retry=0", "-t", pattern,
+    "--root", exportRoot, ...(config ? ["--config", path.join(exportRoot, config)] : []), "--pool=forks", "--maxWorkers=1", "--no-file-parallelism", "--retry=0", "-t", pattern,
     "--reporter", path.join(implementationRoot, "scripts/regression/localExecutionReporter.ts")],
-  { cwd: root, timeout: 60000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", "pipe"], env: { ...childEnv(),
-    AUTOFLOW_LOCAL_SCENARIO_FD: "3", AUTOFLOW_LOCAL_SCENARIO_ID: scenarioId, AUTOFLOW_LOCAL_SCENARIO_BASE: base } });
+  { cwd: exportRoot, timeout: 60000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", stdio: ["ignore", "pipe", "pipe", "pipe"], env: { ...childEnv(),
+    AUTOFLOW_LOCAL_SCENARIO_FD: "3", AUTOFLOW_LOCAL_SCENARIO_ID: scenarioId, AUTOFLOW_LOCAL_SCENARIO_BASE: base,
+    AUTOFLOW_LOCAL_SCENARIO_GIT_ROOT: root } });
   receipt.process = { exit: child.status, signal: child.signal, error: child.error?.name ?? null };
   const channel = child.output?.[3];
   try {
@@ -93,9 +162,10 @@ function measureExecution({ root, scenarioId, base }, receipt) {
   }
   const after = observeSource(root);
   receipt.source.after = after;
-  if (JSON.stringify(receipt.source.before) !== JSON.stringify(after)) receipt.issues.push("SOURCE_CHANGED_DURING_EXECUTION");
+  if (JSON.stringify(receipt.source.before) !== JSON.stringify(after) || observeExport(exportRoot) !== exportedBefore)
+    receipt.issues.push("SOURCE_CHANGED_DURING_EXECUTION");
   if (child.status !== 0 || child.signal || child.error) receipt.issues.push("CHILD_PROCESS_NOT_CLEAN");
-  if (!receipt.native?.complete || receipt.native.verdict !== "PASS" || receipt.native.root !== root || receipt.native.scenarioId !== scenarioId || receipt.native.baseRevision !== base)
+  if (!receipt.native?.complete || receipt.native.verdict !== "PASS" || receipt.native.root !== exportRoot || receipt.native.scenarioId !== scenarioId || receipt.native.baseRevision !== base)
     receipt.issues.push("NATIVE_EXECUTION_NOT_VERIFIED");
   receipt.verdict = receipt.issues.length ? "FAIL" : "PASS";
 }
@@ -153,12 +223,17 @@ function prepareInvocation(options, context) {
   // Create the receipt now and keep the handle: the final write goes through this descriptor, never back through the
   // path, so replacing the directory (or a parent link) while the child runs cannot redirect it. "wx" is O_EXCL.
   const outputFd = openSync(output, "wx");
+  const created = fstatSync(outputFd, { bigint: true });
   try {
     if (!isOutside(root, realpathSync(output))) throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
   } catch (error) {
     closeSync(outputFd);
     // The file this call just created must not survive a refused invocation, least of all inside the source tree.
-    try { unlinkSync(output); } catch { /* already gone */ }
+    // Remove it only while the path still names that very file; a replacement is not ours to delete.
+    const now = lstatSync(output, { bigint: true, throwIfNoEntry: false });
+    if (now && now.dev === created.dev && now.ino === created.ino) {
+      try { unlinkSync(output); } catch { /* already gone */ }
+    }
     throw error;
   }
   return { root, output, outputFd };
