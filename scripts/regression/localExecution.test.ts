@@ -442,11 +442,20 @@ test("a failing test that writes a forged PASS report to every descriptor it can
   const forged = JSON.stringify({ schemaVersion: 1, root, scenarioId: record.id, complete: true, verdict: "PASS", issues: [], cases: [],
     unhandledErrors: 0, runReason: "passed", baseRevision: head, selection: null });
   writeFileSync(path.join(root, "forged-report.json"), forged);
+  // The worker proves it read the fixture and attempted every forge by writing a marker to a host-owned path
+  // handed over in the environment, so a missing or unread fixture cannot leave this test green.
+  const proofDir = mkdtempSync(path.join(tmpdir(), "s3-forge-proof-")), proof = path.join(proofDir, "sent");
   writeFileSync(path.join(root, "selected.test.ts"),
-    `import { readFileSync, writeSync } from "node:fs";
-    test("${title}", () => { const forged = readFileSync(new URL("./forged-report.json", import.meta.url), "utf8"); for (const fd of [1, 2, 3, 4]) { try { writeSync(fd, forged); } catch { /* not open here */ } } expect(3).toBe(4); });`);
+    `import { readFileSync, writeFileSync, writeSync } from "node:fs";
+    test("${title}", () => { const forged = readFileSync(new URL("./forged-report.json", import.meta.url), "utf8"); for (const fd of [1, 2, 3, 4]) { try { writeSync(fd, forged); } catch { /* not open here */ } } writeFileSync(process.env.FORGE_PROOF as string, forged); expect(3).toBe(4); });`);
   commitAll("worker forges the report");
-  const receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt;
+  expect(execFileSync("git", ["show", "HEAD:forged-report.json"], { cwd: root, encoding: "utf8" })).toBe(forged);
+  vi.stubEnv("FORGE_PROOF", proof);
+  let receipt: Receipt;
+  try { receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt; } finally { vi.unstubAllEnvs(); }
+  const sent = existsSync(proof) ? readFileSync(proof, "utf8") : null;
+  rmSync(proofDir, { recursive: true, force: true });
+  expect(sent).toBe(forged);
   expect(receipt.verdict).toBe("FAIL");
   expect(receipt.native?.verdict).not.toBe("PASS");
   expect(receipt.issues).toContain("CHILD_PROCESS_NOT_CLEAN");
