@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { breakKey } from "./compare.mjs";
+import { evaluateBaseline, loadBaseline } from "./baseline.mjs";
 
 /**
  * SCRUM-178 v2, D-24 CS-2: the exit policy, one subprocess test per table row.
@@ -102,10 +103,11 @@ const scaffold = (p: Project) => {
   return dir;
 };
 
-const run = (dir: string, args: string[], env: Record<string, string> = {}) => {
+const run = (dir: string, args: string[], env: Record<string, string> = {}, committedBaseline = false) => {
   const base = { ...process.env };
   delete base.CONVEX_PROD_DEPLOYMENT;
-  const out = spawnSync(process.execPath, [cli, ...args], {
+  const baselineArgs = committedBaseline || args.includes("--baseline") ? [] : ["--baseline", "baseline.json"];
+  const out = spawnSync(process.execPath, [cli, ...args, ...baselineArgs], {
     cwd: dir,
     encoding: "utf8",
     env: { ...base, ...env },
@@ -547,12 +549,31 @@ describe("the needs-evidence baseline", () => {
     expect(JSON.parse(fs.readFileSync(path.join(dir, "baseline.json"), "utf8"))).toEqual({ version: 1, entries: [] });
   }, 300_000);
 
-  test("the committed baseline is EMPTY", () => {
-    const committed = JSON.parse(
-      fs.readFileSync(path.resolve("scripts/contractSkew/needs-evidence-baseline.json"), "utf8")
-    );
-    expect(committed.entries).toEqual([]);
+  test("the approved committed baseline has valid metadata and unique governed identities", () => {
+    const baseline = path.resolve("scripts/contractSkew/needs-evidence-baseline.json");
+    const document: unknown = JSON.parse(fs.readFileSync(baseline, "utf8"));
+    expect(document).toMatchObject({ version: 1, entries: expect.any(Array) });
+    const committed = loadBaseline(baseline);
+    if (!committed.ok) throw new Error(committed.problem);
+    // Schema/identity validation only: actual expiry and source drift remain runtime gates.
+    const checked = evaluateBaseline(committed.entries, committed, new Date("1970-01-01T00:00:00Z"));
+    expect(checked.problems).toEqual([]);
+    for (const entry of committed.entries) {
+      expect(entry.surface).toMatch(/^(web|mobile)$/);
+      expect(entry.fingerprint).toMatch(/^[a-f0-9]{16}$/);
+      expect(entry.issue).toMatch(/^SCRUM-\d+(?:$|:)/);
+      expect(new Date(entry.expires).toISOString().slice(0, 10)).toBe(entry.expires);
+    }
   });
+
+  test("the default baseline is repository-bound and never rewritten by a synthetic scan", () => {
+    const baseline = path.resolve("scripts/contractSkew/needs-evidence-baseline.json");
+    const before = fs.readFileSync(baseline);
+    const dir = scaffold({ client: PROVEN });
+    run(dir, ["--mode", "production", "--spec", "spec.json", "--json", "report.json"], {}, true);
+    expect(reportOf(dir).baseline.path).toBe(baseline);
+    expect(fs.readFileSync(baseline)).toEqual(before);
+  }, 300_000); // Full CLI subprocess, with the same bounded budget as adjacent CLI cases.
 });
 
 describe("CS2-3 / D-26: baseline drift blocks a RELEASE too (exit 10, never a warning)", () => {

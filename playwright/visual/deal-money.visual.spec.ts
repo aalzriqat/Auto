@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { test, expect } from "@playwright/test";
 import { newContainedContext } from "../containedContext";
+import { captureWithDiagnostics } from "./browserCaptureDiagnostics";
 
 /**
  * SCRUM-724: the mounted operator money UI, painted. EN and AR x 390px and 1280px.
@@ -172,7 +173,7 @@ function documentFor(name: string, locale: Locale): string {
 for (const locale of LOCALES) {
   for (const viewport of VIEWPORTS) {
     for (const state of STATES) {
-      test(`${state.name} · ${locale} · ${viewport.name}px`, async ({ browser }) => {
+      test(`${state.name} · ${locale} · ${viewport.name}px`, async ({ browser }, testInfo) => {
         const context = await newContainedContext(browser, { viewport: { width: viewport.width, height: viewport.height } });
         const page = await context.newPage();
         try {
@@ -220,10 +221,14 @@ for (const locale of LOCALES) {
           );
           expect(overflow, "sideways scroll").toBeLessThanOrEqual(0);
 
-          await page.screenshot({
+          const image = await captureWithDiagnostics(page, {
             path: resolve(OUT_DIR, `shot-${state.name}-${locale}-${viewport.name}.png`),
             fullPage: true,
-          });
+          }, () => testInfo.outputPath("capture-failure.json"),
+          () => testInfo.outputPath("capture-document.json"));
+          const retainedImage = testInfo.outputPath("native-deal-capture.png");
+          writeFileSync(retainedImage, image, { flag: "wx" });
+          await testInfo.attach("native-deal-capture", { path: retainedImage, contentType: "image/png" });
         } finally {
           await context.close();
         }

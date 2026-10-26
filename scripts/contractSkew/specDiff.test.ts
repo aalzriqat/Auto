@@ -8,6 +8,12 @@ import { fetchDeployedSpec, readSpecFile, redact } from "./fetchSpec.mjs";
 import { blockersForRelease } from "./compare.mjs";
 import { unscannedConvexClients } from "./clientFiles.mjs";
 
+/** Synthetic CLI projects own their baseline; real repository debt is unrelated input. */
+const fixtureBaselineArgs = (dir: string) => {
+  fs.writeFileSync(path.join(dir, "baseline.json"), JSON.stringify({ version: 1, entries: [] }));
+  return ["--baseline", "baseline.json"];
+};
+
 /**
  * The release blocker is path-sensitive, which is only worth anything if the
  * changed paths are DERIVED rather than typed in by whoever opened the PR.
@@ -676,7 +682,7 @@ describe("an unreadable spec is UNAVAILABLE, never a proven skew", () => {
     const base = { ...process.env };
     delete base.CONVEX_PROD_DEPLOYMENT;
     try {
-      execFileSync(process.execPath, [cli, ...args], {
+      execFileSync(process.execPath, [cli, ...args, ...fixtureBaselineArgs(dir)], {
         cwd: dir,
         stdio: "pipe",
         env: { ...base, ...env },
@@ -692,7 +698,7 @@ describe("an unreadable spec is UNAVAILABLE, never a proven skew", () => {
     const base = { ...process.env };
     delete base.CONVEX_PROD_DEPLOYMENT;
     try {
-      execFileSync(process.execPath, [cli, ...args], {
+      execFileSync(process.execPath, [cli, ...args, ...fixtureBaselineArgs(dir)], {
         cwd: dir,
         stdio: "pipe",
         env: { ...base, ...env },
@@ -904,7 +910,7 @@ describe("an unscanned client file fails the run rather than passing it", () => 
 
   const runIn = (dir: string) => {
     try {
-      execFileSync(process.execPath, [cli, "--mode", "production", "--spec", "spec.json"], {
+      execFileSync(process.execPath, [cli, "--mode", "production", "--spec", "spec.json", ...fixtureBaselineArgs(dir)], {
         cwd: dir,
         stdio: "pipe",
       });
@@ -953,7 +959,7 @@ describe("an unscanned client file fails the run rather than passing it", () => 
     try {
       execFileSync(
         process.execPath,
-        [cli, "--mode", "release", "--spec", "spec.json", "--candidate", "spec.json"],
+        [cli, "--mode", "release", "--spec", "spec.json", "--candidate", "spec.json", ...fixtureBaselineArgs(dir)],
         { cwd: dir, stdio: "pipe" }
       );
       return 0;
@@ -1066,7 +1072,7 @@ describe("release mode distinguishes PROVED UNSAFE from CANNOT PROVE SAFE", () =
     try {
       execFileSync(
         process.execPath,
-        [cli, "--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json"],
+        [cli, "--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", ...fixtureBaselineArgs(dir)],
         { cwd: dir, stdio: "pipe" }
       );
       return 0;
