@@ -119,6 +119,11 @@ describe("cleanup invocation receipts", () => {
       return diagnostics.records[0]?.serverRefusal;
     };
 
+    test("the real CLI shape (captured from a dev deployment) names the code", async () => {
+      const real = `✖ Failed to run function "e2eBootstrap:prepareOpeningCleanupFixture":\nConvexError: [Request ID: 3336c979b5510e7d] Server Error\nUncaught ConvexError: E2E_BOOTSTRAP: ${message}\n    at requireCleanupFixtureScope (../convex/e2eBootstrap.ts:178:10)\n`;
+      expect(await codeFor({ status: 1, stdout: "", stderr: real })).toBe("INVALID_SCOPE");
+    });
+
     test("one anchored message on a failed complete child is named", async () => {
       expect(await codeFor({ status: 1, stdout: "", stderr: `Failed to run function\n${anchored}\n` })).toBe("INVALID_SCOPE");
     });

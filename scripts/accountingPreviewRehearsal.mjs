@@ -426,7 +426,8 @@ function serverRefusalCode(result) {
   const codes = [];
   for (const line of stripVTControlCharacters(stderr.toString()).split(/\r?\n/).map(entry => entry.trim())) {
     for (const [message, code] of CLEANUP_SERVER_REFUSALS) {
-      if (line === `E2E_BOOTSTRAP: ${message}` || line === `ConvexError: E2E_BOOTSTRAP: ${message}`) codes.push(code);
+      if (line === `E2E_BOOTSTRAP: ${message}` || line === `ConvexError: E2E_BOOTSTRAP: ${message}` ||
+          line === `Uncaught ConvexError: E2E_BOOTSTRAP: ${message}`) codes.push(code);
     }
   }
   return codes.length === 1 ? codes[0] : null;
