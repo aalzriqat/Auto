@@ -82,7 +82,7 @@ afterEach(() => {
 });
 
 test("imported CLI entry executes real Git, child process and receipt I/O", () => {
-  const output = path.join(evidence, "imported-entry.json");
+  const output = path.join(evidence, "--base-imported-entry.json");
   const result = executeLocal(["--root", root, "--scenario", record.id, "--output", output]);
   const receipt: Receipt = JSON.parse(readFileSync(output, "utf8"));
   expect(receipt.verdict).toBe("PASS");
@@ -291,6 +291,15 @@ test.each(["expect-head", "base"])("missing or blank --%s refuses without execut
     expect(child.stdout).not.toContain('"verdict":"PASS"');
     if (existsSync(output)) expect(JSON.parse(readFileSync(output, "utf8")).native).toBeNull();
   }
+}, 70000);
+
+test.each(["root", "scenario", "output", "base", "expect-head"])("repeated single-value --%s refuses before execution or publication", option => {
+  const output = path.join(evidence, "duplicate.json");
+  const values: Record<string, string> = { root, scenario: record.id, output, base: head, "expect-head": head };
+  const receipt = executeLocal(["--root", root, "--scenario", record.id, "--output", output,
+    `--${option}`, option === "expect-head" ? "0".repeat(40) : values[option], `--${option}`, values[option]]);
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["CLI_ARGUMENTS_INVALID"], native: null, process: null });
+  expect(existsSync(output)).toBe(false);
 }, 70000);
 
 test("in-root dot-prefixed test filename executes without being mistaken for traversal", () => {

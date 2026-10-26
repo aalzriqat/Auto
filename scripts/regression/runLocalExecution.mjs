@@ -62,9 +62,16 @@ function measureExecution({ root, scenarioId, base, events }, receipt) {
 export function main(argv = process.argv.slice(2)) {
   let options;
   try {
-    ({ values: options } = parseArgs({ args: argv, strict: true, allowPositionals: false,
+    const parsed = parseArgs({ args: argv, strict: true, allowPositionals: false, tokens: true,
       options: { root: { type: "string" }, scenario: { type: "string" }, output: { type: "string" },
-        base: { type: "string" }, "expect-head": { type: "string" } } }));
+        base: { type: "string" }, "expect-head": { type: "string" } } });
+    options = parsed.values;
+    const seen = new Set();
+    for (const token of parsed.tokens) {
+      if (token.kind !== "option") continue;
+      if (seen.has(token.name)) throw new Error("CLI_OPTION_REPEATED");
+      seen.add(token.name);
+    }
     for (const name of ["base", "expect-head"]) {
       if (options[name] !== undefined && !/^[0-9a-f]{40}$/.test(options[name])) throw new Error("REVISION_ARGUMENT_INVALID");
     }
