@@ -442,20 +442,25 @@ test("a failing test that writes a forged PASS report to every descriptor it can
   const forged = JSON.stringify({ schemaVersion: 1, root, scenarioId: record.id, complete: true, verdict: "PASS", issues: [], cases: [],
     unhandledErrors: 0, runReason: "passed", baseRevision: head, selection: null });
   writeFileSync(path.join(root, "forged-report.json"), forged);
-  // The worker proves it read the fixture and attempted every forge by writing a marker to a host-owned path
-  // handed over in the environment, so a missing or unread fixture cannot leave this test green.
+  // The worker records how many bytes of the payload each descriptor accepted, in a proof file at a host-owned path
+  // handed over in the environment, so a missing or unread fixture, or forges that never landed, cannot leave this green.
   const proofDir = mkdtempSync(path.join(tmpdir(), "s3-forge-proof-")), proof = path.join(proofDir, "sent");
-  writeFileSync(path.join(root, "selected.test.ts"),
-    `import { readFileSync, writeFileSync, writeSync } from "node:fs";
-    test("${title}", () => { const forged = readFileSync(new URL("./forged-report.json", import.meta.url), "utf8"); for (const fd of [1, 2, 3, 4]) { try { writeSync(fd, forged); } catch { /* not open here */ } } writeFileSync(process.env.FORGE_PROOF as string, forged); expect(3).toBe(4); });`);
-  commitAll("worker forges the report");
-  expect(execFileSync("git", ["show", "HEAD:forged-report.json"], { cwd: root, encoding: "utf8" })).toBe(forged);
-  vi.stubEnv("FORGE_PROOF", proof);
-  let receipt: Receipt;
-  try { receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt; } finally { vi.unstubAllEnvs(); }
-  const sent = existsSync(proof) ? readFileSync(proof, "utf8") : null;
-  rmSync(proofDir, { recursive: true, force: true });
-  expect(sent).toBe(forged);
+  let receipt: Receipt, sent: { payload: string; wrote: Record<string, number> } | null;
+  try {
+    writeFileSync(path.join(root, "selected.test.ts"),
+      `import { readFileSync, writeFileSync, writeSync } from "node:fs";
+      test("${title}", () => { const forged = readFileSync(new URL("./forged-report.json", import.meta.url), "utf8"); const wrote: Record<string, number> = {};
+        for (const fd of [1, 2, 3, 4]) { try { wrote[fd] = writeSync(fd, forged); } catch { wrote[fd] = -1; /* not open here */ } }
+        writeFileSync(process.env.FORGE_PROOF as string, JSON.stringify({ payload: forged, wrote })); expect(3).toBe(4); });`);
+    commitAll("worker forges the report");
+    expect(execFileSync("git", ["show", "HEAD:forged-report.json"], { cwd: root, encoding: "utf8" })).toBe(forged);
+    vi.stubEnv("FORGE_PROOF", proof);
+    try { receipt = executeLocal(["--scenario", record.id], host()) as unknown as Receipt; } finally { vi.unstubAllEnvs(); }
+    sent = existsSync(proof) ? JSON.parse(readFileSync(proof, "utf8")) : null;
+  } finally { rmSync(proofDir, { recursive: true, force: true }); }
+  expect(sent?.payload).toBe(forged);
+  // fds 1 to 3 accepted the whole payload on both Windows and Linux; fd 4 differs by platform, so it is not asserted.
+  expect([1, 2, 3].map(fd => sent?.wrote[fd])).toEqual(Array(3).fill(Buffer.byteLength(forged)));
   expect(receipt.verdict).toBe("FAIL");
   expect(receipt.native?.verdict).not.toBe("PASS");
   expect(receipt.issues).toContain("CHILD_PROCESS_NOT_CLEAN");
