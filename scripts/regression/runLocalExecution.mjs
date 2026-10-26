@@ -214,6 +214,13 @@ function exportCommitted(root, harnessRoot, head, receipt, detach) {
     }
     writeCommittedTree(harnessRoot, harnessHead, harness, isHarnessFile);
     if (!existsSync(path.join(harness, "scripts/regression/localExecutionReporter.ts"))) throw new Error("HARNESS_UNVERIFIED");
+    // The files this process is running from must be the harness HEAD's own bytes, whatever git status says.
+    const closureMatchesHead = RUNNING_FILES.every(file => {
+      const committed = path.join(harness, file);
+      return existsSync(committed) && matchesHead(readFileSync(path.join(implementationRoot, file)), readFileSync(committed));
+    });
+    receipt.harness = { head: harnessHead, closureMatchesHead };
+    if (!closureMatchesHead) throw new Error("HARNESS_NOT_COMMITTED");
     linkModules(harnessRoot, harness);
     const exportRoot = path.join(area, "tree");
     mkdirSync(exportRoot);
@@ -221,10 +228,7 @@ function exportCommitted(root, harnessRoot, head, receipt, detach) {
     linkModules(root, exportRoot);
     return { area, exportRoot, harness };
   } catch (error) {
-    if (!removeExport(area, detach)) {
-      receipt.issues.push("EXPORT_CLEANUP_INCOMPLETE");
-      receipt.verdict = "FAIL";
-    }
+    cleanUp(area, detach, receipt);
     throw error;
   }
 }
@@ -254,6 +258,35 @@ export function removeExport(area, detach = detachLink) {
   return false;
 }
 
+/** A cleanup that throws did not finish: it counts as incomplete and the verdict is FAIL, never the earlier PASS. */
+function cleanUp(area, detach, receipt) {
+  let complete = false;
+  try {
+    complete = removeExport(area, detach);
+  } catch {
+    complete = false;
+  }
+  if (!complete) {
+    receipt.issues.push("EXPORT_CLEANUP_INCOMPLETE");
+    receipt.verdict = "FAIL";
+  }
+}
+
+/** The files of this checkout that the CLI process itself loads; they are not part of any export. */
+const RUNNING_FILES = ["scripts/regression/runLocalExecution.mjs", "scripts/trustedGit.mjs"];
+
+/**
+ * Whether a working-tree file is the committed file. Equal bytes match. A committed file with no CR also matches its
+ * whole-file LF to CRLF conversion, which is what autocrlf checkouts produce; doubled CRs, mixed endings and any
+ * committed CR are compared byte for byte. Exported for tests.
+ * @param {Buffer} working
+ * @param {Buffer} committed
+ */
+export function matchesHead(working, committed) {
+  if (working.equals(committed)) return true;
+  return !committed.includes(13) && working.equals(Buffer.from(committed.toString("latin1").replace(/\n/g, "\r\n"), "latin1"));
+}
+
 /** Digest of the exported files (not the dependency link), to see whether the run changed them. */
 function observeExport(exportRoot) {
   const digest = createHash("sha256");
@@ -281,10 +314,7 @@ function measureExecution({ root, scenarioId, base, harnessRoot, detach }, recei
     runExported({ root, exportRoot, harness, harnessRoot, scenarioId, base }, receipt);
   } finally {
     // Also on a throw: an incomplete cleanup is a failure whatever else went wrong.
-    if (!removeExport(area, detach)) {
-      receipt.issues.push("EXPORT_CLEANUP_INCOMPLETE");
-      receipt.verdict = "FAIL";
-    }
+    cleanUp(area, detach, receipt);
   }
 }
 
@@ -431,6 +461,8 @@ export function main(argv = process.argv.slice(2), context = createHostContext()
     measureExecution({ root, scenarioId, base, harnessRoot: realpathSync(context.harnessRoot ?? implementationRoot), detach: context.detachLink }, receipt);
   } catch (error) {
     receipt.issues.push(error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : "LOCAL_EXECUTION_UNAVAILABLE");
+    // Whatever threw, a run that did not finish cleanly is never a PASS.
+    if (receipt.verdict === "PASS") receipt.verdict = "FAIL";
   }
   if (publicationAllowed) {
     try {

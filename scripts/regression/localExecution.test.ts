@@ -9,7 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { digestRulingText, scenarioFingerprint, type ScenarioRecord } from "./scenarioRecord";
 import LocalExecutionReporter, { type LocalExecutionReport } from "./localExecutionReporter";
-import { checkTreePath, isHarnessFile, main as executeLocal, removeCreatedFile, removeExport, verifyExport, writeCommittedTree } from "./runLocalExecution.mjs";
+import { checkTreePath, isHarnessFile, main as executeLocal, matchesHead, removeCreatedFile, removeExport, verifyExport, writeCommittedTree } from "./runLocalExecution.mjs";
 
 const cli = path.resolve(__dirname, "runLocalExecution.mjs");
 const title = "selected fixture execution";
@@ -768,6 +768,68 @@ describe("the reporter and runner run from the harness checkout's own HEAD, neve
     expect(receipt.native).toBeNull();
   }, 70000);
 
+  describe("a fresh CLI whose own files differ from the harness HEAD", () => {
+    const cliOf = () => harnessFile("scripts/regression/runLocalExecution.mjs");
+    const fresh = () => {
+      const child = spawnSync(process.execPath, [cliOf(), "--scenario", record.id], { cwd: root, timeout: 70000, encoding: "utf8", maxBuffer: 1024 * 1024 });
+      expect(child.error, child.stderr).toBeUndefined();
+      const output = String(JSON.parse(child.stdout).output);
+      try {
+        return JSON.parse(readFileSync(output, "utf8")) as Receipt & { harness?: { head: string; closureMatchesHead: boolean } };
+      } finally {
+        rmSync(path.dirname(output), { recursive: true, force: true });
+      }
+    };
+    const headBytes = (file: string) => execFileSync("git", ["show", `HEAD:${file}`], { cwd: harness, encoding: "latin1" });
+    const closure = ["scripts/trustedGit.mjs", "scripts/regression/runLocalExecution.mjs"];
+
+    test("an unmodified harness runs, and the receipt names its HEAD", () => {
+      const receipt = fresh();
+      expect(receipt.verdict, JSON.stringify(receipt.issues)).toBe("PASS");
+      expect(receipt.harness).toEqual({ head: hgit(["rev-parse", "HEAD"]), closureMatchesHead: true });
+    }, 70000);
+
+    test.each(closure)("%s converted whole-file to CRLF, as autocrlf does, is still the committed file", file => {
+      writeFileSync(harnessFile(file), headBytes(file).replace(/\n/g, "\r\n"), "latin1");
+      const receipt = fresh();
+      expect(receipt.verdict, JSON.stringify(receipt.issues)).toBe("PASS");
+      expect(receipt.harness?.closureMatchesHead).toBe(true);
+    }, 70000);
+
+    test.each(closure)("%s edited under assume-unchanged is reported, even though git status is clean", file => {
+      hgit(["update-index", "--assume-unchanged", file]);
+      writeFileSync(harnessFile(file), `${headBytes(file)}\n// edited\n`, "latin1");
+      expect(hgit(["status", "--porcelain"])).toBe("");
+      const receipt = fresh();
+      // A refused harness gives no verdict about the tree (UNAVAILABLE, exit 1), the same as every other thrown refusal.
+      expect(receipt.verdict).toBe("UNAVAILABLE");
+      expect(receipt.issues).toContain("HARNESS_NOT_COMMITTED");
+      expect(receipt.native).toBeNull();
+      expect(receipt.harness).toEqual({ head: hgit(["rev-parse", "HEAD"]), closureMatchesHead: false });
+    }, 70000);
+
+    test.each(["\r\r\n", "mixed"])("%j line endings are not the CRLF transform", ending => {
+      const text = headBytes("scripts/trustedGit.mjs");
+      const lines = text.split("\n");
+      writeFileSync(harnessFile("scripts/trustedGit.mjs"), lines.map((line, at) => (at === lines.length - 1 ? line : `${line}${ending === "mixed" ? (at % 2 ? "\r" : "") : "\r\r"}`)).join("\n"), "latin1");
+      const receipt = fresh();
+      expect(receipt.verdict).toBe("UNAVAILABLE");
+      expect(receipt.issues).toContain("HARNESS_NOT_COMMITTED");
+    }, 70000);
+
+    test("a committed file that has a CR is compared byte for byte", () => {
+      // autocrlf would strip the CR on commit; the committed blob must really contain it.
+      hgit(["config", "core.autocrlf", "false"]);
+      writeFileSync(harnessFile("scripts/trustedGit.mjs"), `${headBytes("scripts/trustedGit.mjs")}// has\r\n`, "latin1");
+      commitHarness();
+      expect(headBytes("scripts/trustedGit.mjs")).toContain("\r");
+      writeFileSync(harnessFile("scripts/trustedGit.mjs"), headBytes("scripts/trustedGit.mjs").replace(/\n/g, "\r\n"), "latin1");
+      const receipt = fresh();
+      expect(receipt.verdict).toBe("UNAVAILABLE");
+      expect(receipt.issues).toContain("HARNESS_NOT_COMMITTED");
+    }, 70000);
+  });
+
   test("a subdirectory of the harness repository is not a harness checkout", () => {
     const receipt = executeLocal(["--scenario", record.id], { ...harnessHost(), harnessRoot: harnessFile("scripts") }) as unknown as Receipt;
     expect(receipt.issues).toContain("HARNESS_UNVERIFIED");
@@ -833,6 +895,40 @@ describe("the reporter and runner run from the harness checkout's own HEAD, neve
       cleanUp();
     }
   }, 70000);
+
+  describe("a cleanup that throws is still a failed cleanup", () => {
+    const stuck = (message: string, links: string[]) => ({ ...harnessHost(), detachLink: (link: string) => { links.push(link); throw new Error(message); } });
+    const sweep = (links: string[]) => {
+      for (const link of links) dropLink(link);
+      for (const area of new Set(links.map(link => path.dirname(path.dirname(link))))) rmSync(area, { recursive: true, force: true });
+    };
+
+    test.each(["EBUSY_SEAM", "ebusy lowercase"])("a detacher that throws %j on a passing run gives FAIL, never PASS", message => {
+      const links: string[] = [];
+      try {
+        const receipt = executeLocal(["--scenario", record.id], stuck(message, links)) as unknown as Receipt;
+        expect(receipt.verdict).toBe("FAIL");
+        expect(receipt.issues).toContain("EXPORT_CLEANUP_INCOMPLETE");
+      } finally {
+        sweep(links);
+      }
+    }, 70000);
+
+    test("a detacher that throws while the export is being refused gives FAIL with the refusal kept", () => {
+      mkdirSync(path.join(root, "node_modules/dep"), { recursive: true });
+      writeFileSync(path.join(root, "node_modules/dep/index.js"), "module.exports = 1;");
+      git(["add", "-f", "node_modules"]);
+      commitAll("tracked node_modules");
+      const links: string[] = [];
+      try {
+        const receipt = executeLocal(["--scenario", record.id], stuck("EBUSY_SEAM", links)) as unknown as Receipt;
+        expect(receipt.verdict).toBe("FAIL");
+        expect(receipt.issues).toEqual(expect.arrayContaining(["EXPORT_TRACKED_NODE_MODULES", "EXPORT_CLEANUP_INCOMPLETE"]));
+      } finally {
+        sweep(links);
+      }
+    }, 70000);
+  });
 
   test("every module the reporter loads lives under the exported scripts/ tree", () => {
     const repository = path.resolve(__dirname, "../..");
@@ -970,6 +1066,23 @@ describe("the export seams", () => {
       expect(() => checkTreePath("docs/a.ts", seen)).toThrow("EXPORT_PATH_COLLISION");
       expect(() => checkTreePath("docs/b.ts", seen)).not.toThrow();
     });
+  });
+
+  test.each([
+    ["identical bytes", "a\nb\n", "a\nb\n", true],
+    ["identical bytes with CRLF committed", "a\r\nb\r\n", "a\r\nb\r\n", true],
+    ["a whole-file LF to CRLF conversion", "a\r\nb\r\n", "a\nb\n", true],
+    ["a conversion of a file with no trailing newline", "a\r\nb", "a\nb", true],
+    ["a conversion of an empty file", "", "", true],
+    ["a doubled CR", "a\r\r\nb\r\r\n", "a\nb\n", false],
+    ["mixed endings", "a\r\nb\n", "a\nb\n", false],
+    ["a lone CR added", "a\rb\n", "a\nb\n", false],
+    ["a changed byte", "a\r\nc\r\n", "a\nb\n", false],
+    ["an appended line", "a\r\nb\r\nc\r\n", "a\nb\n", false],
+    ["a CRLF conversion of a file that already had a CR", "a\r\r\nb\r\n", "a\rb\n", false],
+    ["a CRLF-only working file for a committed file with a CR", "a\r\nb\r\n", "a\r\nb\n", false],
+  ])("matchesHead: %s", (_name, working, committed, expected) => {
+    expect(matchesHead(Buffer.from(working, "latin1"), Buffer.from(committed, "latin1"))).toBe(expected);
   });
 
   describe("removeExport", () => {
