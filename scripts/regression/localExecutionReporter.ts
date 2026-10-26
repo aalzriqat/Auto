@@ -61,7 +61,8 @@ export default class LocalExecutionReporter implements Reporter {
 
   private save(): void {
     if (!this.output) throw new Error("LOCAL_EVENT_OUTPUT_REQUIRED");
-    writeFileSync(this.output, `${JSON.stringify(this.report, null, 2)}\n`);
+    // "wx": never follow or replace a file that already exists at the events path.
+    writeFileSync(this.output, `${JSON.stringify(this.report, null, 2)}\n`, { flag: "wx" });
   }
 
   onInit(vitest: Vitest): void {

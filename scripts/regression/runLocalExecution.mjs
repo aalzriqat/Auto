@@ -9,7 +9,9 @@ import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 const implementationRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
-const git = (root, args) => execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+// GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and friends would redirect Git away from the observed checkout.
+const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+const git = (root, args) => execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, env: cleanEnv() });
 
 /** Observed local files, not a trusted-job or production attestation. */
 function observeSource(root) {
@@ -17,6 +19,9 @@ function observeSource(root) {
   const digest = createHash("sha256");
   for (const file of files) {
     const target = path.resolve(root, file);
+    // A symlinked parent directory would let the final-component check follow into another tree.
+    const parent = path.dirname(target);
+    if (existsSync(parent) && !sameFileName(realpathSync(parent), parent)) throw new Error("SOURCE_SYMLINK_UNAVAILABLE");
     const entry = lstatSync(target, { throwIfNoEntry: false });
     if (entry?.isSymbolicLink()) throw new Error("SOURCE_SYMLINK_UNAVAILABLE");
     const bytes = entry ? hash(readFileSync(target)) : "MISSING";
@@ -45,7 +50,7 @@ function measureExecution({ root, scenarioId, base, events }, receipt) {
   const child = spawnSync(process.execPath, [path.join(implementationRoot, "node_modules/vitest/vitest.mjs"), "run", testFile,
     "--root", root, "--maxWorkers=1", "--no-file-parallelism", "--retry=0", "-t", pattern,
     "--reporter", path.join(implementationRoot, "scripts/regression/localExecutionReporter.ts")],
-  { cwd: root, timeout: 60000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", env: { ...process.env,
+  { cwd: root, timeout: 60000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", env: { ...cleanEnv(),
     AUTOFLOW_LOCAL_SCENARIO_EVENTS: events, AUTOFLOW_LOCAL_SCENARIO_ID: scenarioId, AUTOFLOW_LOCAL_SCENARIO_BASE: base } });
   receipt.process = { exit: child.status, signal: child.signal, error: child.error?.name ?? null };
   if (existsSync(events)) receipt.native = JSON.parse(readFileSync(events, "utf8"));
@@ -76,6 +81,10 @@ function parseOptions(argv) {
 }
 
 const EVENTS_FILE = ".native-events.json";
+const isOutside = (root, candidate) => {
+  const relative = path.relative(root, candidate);
+  return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+};
 const RECEIPT_FILE = "result.json";
 const sameFileName = (left, right) => (process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right);
 
@@ -98,13 +107,18 @@ function prepareInvocation(options, context) {
       throw new Error("ROOT_CONTEXT_MISMATCH");
   }
   // The receipt name is fixed; no argument contributes to any output path.
-  const evidenceDirectory = realpathSync(context.evidenceDirectory ?? mkdtempSync(path.join(tmpdir(), "autoflow-local-execution-")));
-  const evidenceRelative = path.relative(root, evidenceDirectory);
-  if (!(evidenceRelative === ".." || evidenceRelative.startsWith(`..${path.sep}`) || path.isAbsolute(evidenceRelative)))
-    throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
+  // Check the parent before creating anything, so a TEMP/TMP/TMPDIR inside the checkout leaves nothing behind.
+  const evidenceParent = context.evidenceDirectory ?? realpathSync(tmpdir());
+  if (!isOutside(root, realpathSync(evidenceParent))) throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
+  const evidenceDirectory = realpathSync(context.evidenceDirectory ?? mkdtempSync(path.join(realpathSync(tmpdir()), "autoflow-local-execution-")));
+  if (!isOutside(root, evidenceDirectory)) throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
   const output = path.join(evidenceDirectory, RECEIPT_FILE);
-  if (existsSync(output)) throw new Error("OUTPUT_ALREADY_EXISTS");
-  return { root, output, events: path.join(evidenceDirectory, EVENTS_FILE) };
+  const events = path.join(evidenceDirectory, EVENTS_FILE);
+  // lstat, not exists: a dangling link in the evidence directory must also refuse.
+  for (const reserved of [output, events]) {
+    if (lstatSync(reserved, { throwIfNoEntry: false })) throw new Error("OUTPUT_ALREADY_EXISTS");
+  }
+  return { root, output, events };
 }
 
 export function main(argv = process.argv.slice(2), context = createHostContext()) {

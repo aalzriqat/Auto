@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { startVitest } from "vitest/node";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -204,6 +204,92 @@ test("Git-listed dangling source link refuses before native execution", () => {
   expect(receipt.verdict).toBe("UNAVAILABLE");
   expect(receipt.issues).toContain("SOURCE_SYMLINK_UNAVAILABLE");
   expect(receipt.native).toBeNull();
+}, 70000);
+
+test("a tracked path through a symlinked parent directory refuses before native execution", () => {
+  const outside = mkdtempSync(path.join(tmpdir(), "s3-outside-"));
+  try {
+    mkdirSync(path.join(root, "linked"));
+    writeFileSync(path.join(root, "linked/inside.txt"), "tracked");
+    git(["add", "linked/inside.txt"]);
+    rmSync(path.join(root, "linked"), { recursive: true });
+    writeFileSync(path.join(outside, "inside.txt"), "foreign");
+    symlinkSync(outside, path.join(root, "linked"), process.platform === "win32" ? "junction" : "dir");
+    const receipt = run("symlinked-parent");
+    expect(receipt.verdict).toBe("UNAVAILABLE");
+    expect(receipt.issues).toContain("SOURCE_SYMLINK_UNAVAILABLE");
+    expect(receipt.native).toBeNull();
+  } finally {
+    const link = path.join(root, "linked");
+    if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(link);
+    rmSync(outside, { recursive: true, force: true });
+  }
+}, 70000);
+
+// Node reads TEMP/TMP on Windows and TMPDIR on POSIX, so pointing all three covers the effective one on either.
+test("a temp directory inside the checkout creates nothing and refuses", () => {
+  const before = readdirSync(root).sort();
+  const child = spawnSync(process.execPath, [cli, "--scenario", record.id],
+    { cwd: root, timeout: 15000, encoding: "utf8", env: { ...process.env, TEMP: root, TMP: root, TMPDIR: root } });
+  expect(child.status).toBe(1);
+  expect(JSON.parse(child.stdout)).toMatchObject({ verdict: "UNAVAILABLE", output: null, issues: ["OUTPUT_MUST_BE_OUTSIDE_SOURCE"] });
+  expect(readdirSync(root).sort()).toEqual(before);
+}, 20000);
+
+test.each(["equal", "inside"])("an evidence directory %s the checkout refuses", relation => {
+  const directory = relation === "equal" ? root : path.join(root, "inside-evidence");
+  if (relation === "inside") mkdirSync(directory);
+  const receipt = executeLocal(["--scenario", record.id], { root, evidenceDirectory: directory });
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["OUTPUT_MUST_BE_OUTSIDE_SOURCE"], native: null, process: null });
+  expect(readdirSync(directory).filter(name => name === "result.json" || name.startsWith("."))).toEqual(
+    readdirSync(directory).filter(name => name.startsWith(".git")));
+});
+
+test.each(["result.json", ".native-events.json"])("an existing %s in the evidence directory refuses without following or replacing it", name => {
+  writeFileSync(path.join(evidence, name), "PRIOR");
+  const receipt = executeLocal(["--scenario", record.id], host());
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["OUTPUT_ALREADY_EXISTS"], native: null, process: null });
+  expect(readFileSync(path.join(evidence, name), "utf8")).toBe("PRIOR");
+});
+
+test("the native reporter alone never overwrites an existing events file", () => {
+  const output = path.join(evidence, "existing-events.json");
+  writeFileSync(output, "PRIOR");
+  vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_EVENTS", output);
+  vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_ID", record.id);
+  vi.stubEnv("AUTOFLOW_LOCAL_SCENARIO_BASE", head);
+  expect(() => new LocalExecutionReporter().onTestRunEnd([], [], "passed")).toThrow(/EEXIST/);
+  expect(readFileSync(output, "utf8")).toBe("PRIOR");
+});
+
+test("invalid scenario id, missing root and malformed revisions refuse before native execution", () => {
+  expect(executeLocal(["--scenario", "Bad Id"], host())).toMatchObject({ verdict: "UNAVAILABLE", issues: ["SCENARIO_ID_INVALID"], native: null });
+  const missing = path.join(root, "absent-root");
+  expect(executeLocal(["--scenario", record.id], { root: missing, evidenceDirectory: evidence })).toMatchObject({
+    verdict: "UNAVAILABLE", issues: ["LOCAL_EXECUTION_UNAVAILABLE"], native: null, process: null });
+  for (const option of ["base", "expect-head"]) {
+    const dir = mkdtempSync(path.join(tmpdir(), "s3-receipt-fixture-"));
+    try {
+      const receipt = executeLocal(["--scenario", record.id, `--${option}`, "not-a-sha"], { root, evidenceDirectory: dir });
+      expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["CLI_ARGUMENTS_INVALID"], native: null, process: null });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("inherited GIT_DIR and GIT_WORK_TREE cannot redirect the observed checkout", () => {
+  const decoy = mkdtempSync(path.join(tmpdir(), "s3-decoy-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: decoy });
+    const child = spawnSync(process.execPath, [cli, "--scenario", record.id], { cwd: root, timeout: 70000, encoding: "utf8",
+      env: { ...process.env, GIT_DIR: path.join(decoy, ".git"), GIT_WORK_TREE: decoy } });
+    const receipt: Receipt = JSON.parse(readFileSync(String(JSON.parse(child.stdout).output), "utf8"));
+    expect(receipt.verdict).toBe("PASS");
+    expect(receipt.source.before.head).toBe(head);
+  } finally {
+    rmSync(decoy, { recursive: true, force: true });
+  }
 }, 70000);
 
 test("ordinary Git-listed missing file retains the missing census state", () => {
