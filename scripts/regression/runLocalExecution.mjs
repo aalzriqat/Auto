@@ -75,20 +75,37 @@ function parseOptions(argv) {
   return parsed.values;
 }
 
-function prepareInvocation(options) {
-  const root = realpathSync(path.resolve(options.root ?? process.cwd()));
-  if (!statSync(root).isDirectory()) throw new Error("ROOT_DIRECTORY_REQUIRED");
-  const artifactDirectory = mkdtempSync(path.join(tmpdir(), "autoflow-local-execution-"));
-  const requestedOutput = path.resolve(options.output ?? path.join(artifactDirectory, "result.json"));
-  const output = path.join(realpathSync(path.dirname(requestedOutput)), path.basename(requestedOutput));
-  const outputRelative = path.relative(root, output);
-  if (!(outputRelative === ".." || outputRelative.startsWith(`..${path.sep}`) || path.isAbsolute(outputRelative)))
-    throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
-  if (existsSync(output)) throw new Error("OUTPUT_ALREADY_EXISTS");
-  return { root, output, events: path.join(artifactDirectory, "native-events.json") };
+const EVENTS_FILE = ".native-events.json";
+const sameFileName = (left, right) => (process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right);
+
+/** The host, not a CLI argument, selects the source root: the launcher's working directory. */
+export function createHostContext(cwd = process.cwd()) {
+  return { root: cwd, evidenceDirectory: null };
 }
 
-export function main(argv = process.argv.slice(2)) {
+function prepareInvocation(options, context) {
+  const root = realpathSync(context.root);
+  if (!statSync(root).isDirectory()) throw new Error("ROOT_DIRECTORY_REQUIRED");
+  // --root only confirms the host-selected root; it is compared as text and never used as a path.
+  if (options.root !== undefined) {
+    const confirmation = options.root.trim() === "" ? "" : path.resolve(options.root);
+    if (!confirmation || ![root, path.resolve(context.root)].some(known => sameFileName(known, confirmation)))
+      throw new Error("ROOT_CONTEXT_MISMATCH");
+  }
+  // --output is one file name inside the host-owned evidence directory, never a path.
+  const name = options.output ?? "result.json";
+  if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || name === "." || name === ".." || path.basename(name) !== name || name === EVENTS_FILE)
+    throw new Error("OUTPUT_NAME_INVALID");
+  const evidenceDirectory = realpathSync(context.evidenceDirectory ?? mkdtempSync(path.join(tmpdir(), "autoflow-local-execution-")));
+  const evidenceRelative = path.relative(root, evidenceDirectory);
+  if (!(evidenceRelative === ".." || evidenceRelative.startsWith(`..${path.sep}`) || path.isAbsolute(evidenceRelative)))
+    throw new Error("OUTPUT_MUST_BE_OUTSIDE_SOURCE");
+  const output = path.join(evidenceDirectory, name);
+  if (existsSync(output)) throw new Error("OUTPUT_ALREADY_EXISTS");
+  return { root, output, events: path.join(evidenceDirectory, EVENTS_FILE) };
+}
+
+export function main(argv = process.argv.slice(2), context = createHostContext()) {
   let options;
   try {
     options = parseOptions(argv);
@@ -104,7 +121,7 @@ export function main(argv = process.argv.slice(2)) {
   let publicationAllowed = false;
   let output = null;
   try {
-    const invocation = prepareInvocation(options);
+    const invocation = prepareInvocation(options, context);
     const { root, events } = invocation;
     output = invocation.output;
     publicationAllowed = true;

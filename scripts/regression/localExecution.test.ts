@@ -18,7 +18,9 @@ const git = (args: string[]) => execFileSync("git", args, { cwd: root, encoding:
 const scenarioPath = () => path.join(root, "regression/scenarios/fixture.scenario.json");
 const config = (extra = "") => `export default { test: { globals: true, environment: "node", include: ["selected.test.ts"], watch: false, ${extra} } };`;
 const source = () => `test("${title}", () => { expect(2 + 2).toBe(4); });`;
-const saveRecord = () => writeFileSync(scenarioPath(), JSON.stringify(record));
+/** Trusted embedding caller: the host selects the source root and evidence directory, never argv. */
+const host = () => ({ root, evidenceDirectory: evidence });
+const saveRecord = () =>writeFileSync(scenarioPath(), JSON.stringify(record));
 
 interface Receipt {
   verdict: string;
@@ -30,11 +32,11 @@ interface Receipt {
 }
 
 function run(label: string, args: string[] = []): Receipt {
-  const output = path.join(evidence, `${label}.json`);
-  const child = spawnSync(process.execPath, [cli, "--root", root, "--scenario", record.id, "--output", output, ...args],
-    { timeout: 70000, encoding: "utf8", maxBuffer: 1024 * 1024, env: { ...process.env, GITHUB_SHA: "0".repeat(40) } });
+  const child = spawnSync(process.execPath, [cli, "--scenario", record.id, "--output", `${label}.json`, ...args],
+    { cwd: root, timeout: 70000, encoding: "utf8", maxBuffer: 1024 * 1024, env: { ...process.env, GITHUB_SHA: "0".repeat(40) } });
   expect(child.error).toBeUndefined();
   expect(child.signal).toBeNull();
+  const output = String(JSON.parse(child.stdout).output);
   expect(existsSync(output), child.stderr).toBe(true);
   const receipt: Receipt = JSON.parse(readFileSync(output, "utf8"));
   expect(child.status).toBe(receipt.verdict === "PASS" ? 0 : 1);
@@ -83,7 +85,7 @@ afterEach(() => {
 
 test("imported CLI entry executes real Git, child process and receipt I/O", () => {
   const output = path.join(evidence, "--base-imported-entry.json");
-  const result = executeLocal(["--root", root, "--scenario", record.id, "--output", output]);
+  const result = executeLocal(["--root", root, "--scenario", record.id, "--output=--base-imported-entry.json"], host());
   const receipt: Receipt = JSON.parse(readFileSync(output, "utf8"));
   expect(receipt.verdict).toBe("PASS");
   expect(receipt).toEqual(result);
@@ -113,8 +115,8 @@ test.each(["wrong-head", "binding-deleted", "foreign-path", "source-mutation", "
       `import { writeFileSync } from "node:fs"; test("${title}", () => { writeFileSync("marker.txt", "after"); expect(4).toBe(4); });`);
     if (mode === "native-failed") writeFileSync(path.join(root, "selected.test.ts"), `test("${title}", () => { expect(3).toBe(4); });`);
     const output = path.join(evidence, `imported-${mode}.json`);
-    executeLocal(["--root", root, "--scenario", record.id, "--output", output,
-      ...(mode === "wrong-head" ? ["--expect-head", "0".repeat(40)] : [])]);
+    executeLocal(["--root", root, "--scenario", record.id, "--output", `imported-${mode}.json`,
+      ...(mode === "wrong-head" ? ["--expect-head", "0".repeat(40)] : [])], host());
     const receipt: Receipt = JSON.parse(readFileSync(output, "utf8"));
     expect(receipt.verdict).not.toBe("PASS");
     const expected = { "wrong-head": "EXPECTED_HEAD_MISMATCH", "binding-deleted": "SINGLE_RECORD_BINDING_REQUIRED",
@@ -165,11 +167,12 @@ test("actual native execution joins one record without trusting GitHub environme
 }, 70000);
 
 test("junction alias entry executes the CLI and publishes its actual receipt", () => {
-  const alias = path.join(evidence, "entry-alias"), output = path.join(evidence, "alias-receipt.json");
+  const alias = path.join(evidence, "entry-alias");
   symlinkSync(path.dirname(cli), alias, process.platform === "win32" ? "junction" : "dir");
   try {
-    const child = spawnSync(process.execPath, [path.join(alias, path.basename(cli)), "--root", root,
-      "--scenario", record.id, "--output", output], { timeout: 70000, encoding: "utf8" });
+    const child = spawnSync(process.execPath, [path.join(alias, path.basename(cli)),
+      "--scenario", record.id, "--output", "alias-receipt.json"], { cwd: root, timeout: 70000, encoding: "utf8" });
+    const output = String(JSON.parse(child.stdout).output);
     const observed = { exit: child.status, signal: child.signal, error: child.error?.name ?? null,
       stdout: child.stdout, stderr: child.stderr, receiptCreated: existsSync(output), platform: process.platform };
     const retained = process.env.AUTOFLOW_S3_PROOF_DIR;
@@ -210,21 +213,34 @@ test("ordinary Git-listed missing file retains the missing census state", () => 
   expect(receipt.source.before).toEqual(receipt.source.after);
 }, 70000);
 
-test.each(["forbidden-output.json", "..receipt.json"])("refused source output %s is never created", filename => {
+test.each(["forbidden-output.json", "..receipt.json"])("path-shaped output naming %s is refused and never created", filename => {
   const forbidden = path.join(root, filename);
   expect(existsSync(forbidden)).toBe(false);
-  const child = spawnSync(process.execPath, [cli, "--root", root, "--scenario", record.id, "--output", forbidden],
-    { timeout: 10000, encoding: "utf8" });
+  const child = spawnSync(process.execPath, [cli, "--scenario", record.id, "--output", forbidden],
+    { cwd: root, timeout: 10000, encoding: "utf8" });
   expect(child.error).toBeUndefined();
   expect(child.signal).toBeNull();
   expect(child.status).toBe(1);
-  const retained = process.env.AUTOFLOW_S3_PROOF_DIR;
-  if (retained && existsSync(forbidden)) {
-    mkdirSync(retained, { recursive: true });
-    writeFileSync(path.join(retained, `rejected-${filename.replace(/\./g, "_")}.json`), readFileSync(forbidden));
-  }
+  expect(JSON.parse(child.stdout)).toMatchObject({ verdict: "UNAVAILABLE", output: null, issues: ["OUTPUT_NAME_INVALID"] });
   expect(existsSync(forbidden), child.stdout).toBe(false);
 }, 15000);
+
+test.each(["../escape.json", "nested/receipt.json", ".", "..", ".native-events.json", ""])("output name %j is not a single evidence file name", name => {
+  const receipt = executeLocal(["--root", root, "--scenario", record.id, "--output", name], host());
+  expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["OUTPUT_NAME_INVALID"], native: null, process: null });
+  expect(existsSync(path.join(path.dirname(evidence), "escape.json"))).toBe(false);
+});
+
+test("an --root naming a different directory cannot redirect the host-selected root", () => {
+  const foreign = mkdtempSync(path.join(tmpdir(), "s3-foreign-root-"));
+  try {
+    const receipt = executeLocal(["--root", foreign, "--scenario", record.id], host());
+    expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["ROOT_CONTEXT_MISMATCH"], native: null, process: null });
+    expect(executeLocal(["--root", "  ", "--scenario", record.id], host())).toMatchObject({ issues: ["ROOT_CONTEXT_MISMATCH"] });
+  } finally {
+    rmSync(foreign, { recursive: true, force: true });
+  }
+});
 
 test.each(["runtime-skip", "expected-failure", "zero", "duplicate", "source-mutation"] as const)(
   "actual %s execution cannot certify a record", mode => {
@@ -283,8 +299,8 @@ test.each(["binding-deleted", "ruling-drift", "active-demoted", "retirement-no-r
 test.each(["expect-head", "base"])("missing or blank --%s refuses without executing", option => {
   for (const suffix of [[], [""], ["   "]]) {
     const output = path.join(evidence, `${option}-${suffix.length}-${suffix[0]?.length ?? 0}.json`);
-    const child = spawnSync(process.execPath, [cli, "--root", root, "--scenario", record.id, "--output", output,
-      `--${option}`, ...suffix], { timeout: 70000, encoding: "utf8" });
+    const child = spawnSync(process.execPath, [cli, "--scenario", record.id, "--output", path.basename(output),
+      `--${option}`, ...suffix], { cwd: root, timeout: 70000, encoding: "utf8" });
     expect(child.error).toBeUndefined();
     expect(child.signal).toBeNull();
     expect(child.status, child.stdout).toBe(1);
@@ -295,9 +311,9 @@ test.each(["expect-head", "base"])("missing or blank --%s refuses without execut
 
 test.each(["root", "scenario", "output", "base", "expect-head"])("repeated single-value --%s refuses before execution or publication", option => {
   const output = path.join(evidence, "duplicate.json");
-  const values: Record<string, string> = { root, scenario: record.id, output, base: head, "expect-head": head };
-  const receipt = executeLocal(["--root", root, "--scenario", record.id, "--output", output,
-    `--${option}`, option === "expect-head" ? "0".repeat(40) : values[option], `--${option}`, values[option]]);
+  const values: Record<string, string> = { root, scenario: record.id, output: "duplicate.json", base: head, "expect-head": head };
+  const receipt = executeLocal(["--root", root, "--scenario", record.id, "--output", "duplicate.json",
+    `--${option}`, option === "expect-head" ? "0".repeat(40) : values[option], `--${option}`, values[option]], host());
   expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["CLI_ARGUMENTS_INVALID"], native: null, process: null });
   expect(existsSync(output)).toBe(false);
 }, 70000);
@@ -312,13 +328,13 @@ test.each(["..x.test.ts", "--help.test.ts"])("literal in-root filename %s execut
   expect(receipt.native?.cases[0].file).toBe(filename);
 }, 70000);
 
-test.each(["source", "external"])("physical %s output alias preserves the source publication boundary", destination => {
+test.each(["source", "external"])("physical %s evidence-directory alias preserves the source publication boundary", destination => {
   const target = destination === "source" ? root : path.join(evidence, "external-target");
   if (destination === "external") mkdirSync(target);
-  const alias = path.join(evidence, "output-alias"), output = path.join(alias, "result.json");
+  const alias = path.join(evidence, "output-alias");
   symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
   try {
-    const receipt = executeLocal(["--root", root, "--scenario", record.id, "--output", output]);
+    const receipt = executeLocal(["--root", root, "--scenario", record.id, "--output", "result.json"], { root, evidenceDirectory: alias });
     if (destination === "source") {
       expect(receipt).toMatchObject({ verdict: "UNAVAILABLE", issues: ["OUTPUT_MUST_BE_OUTSIDE_SOURCE"], native: null, process: null });
       expect(existsSync(path.join(root, "result.json"))).toBe(false);
