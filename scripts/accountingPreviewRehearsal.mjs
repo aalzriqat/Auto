@@ -414,12 +414,22 @@ const cleanupUnavailable = (cleanupReason = "INVOCATION_UNAVAILABLE") => Object.
   new RehearsalError("Cleanup preview invocation is UNAVAILABLE."), { cleanupReason });
 /** @typedef {{records:unknown[],truncated:boolean,terminal?:unknown,lastUnavailable?:unknown}} CleanupDiagnostics */
 
-/** @param {unknown} stderr @returns {string | null} an allowlisted code only when exactly one fixed message appears */
-function serverRefusalCode(stderr) {
+/**
+ * A code is named only for a complete, failed child whose stderr carries exactly one line that is, whole, an
+ * allowlisted server message (optionally after "ConvexError: "). Echoed, repeated or competing text names nothing.
+ * @param {CleanupCliResult | undefined} result @returns {string | null}
+ */
+function serverRefusalCode(result) {
+  const stderr = result?.stderr;
+  if (!result || result.error || result.signal || !Number.isInteger(result.status) || result.status === null || result.status < 1) return null;
   if ((typeof stderr !== "string" && !Buffer.isBuffer(stderr)) || Buffer.byteLength(stderr) > CLEANUP_OUTPUT_LIMIT) return null;
-  const text = stderr.toString();
-  const found = new Set([...CLEANUP_SERVER_REFUSALS].filter(([message]) => text.includes(`E2E_BOOTSTRAP: ${message}`)).map(([, code]) => code));
-  return found.size === 1 ? [...found][0] : null;
+  const codes = [];
+  for (const line of stripVTControlCharacters(stderr.toString()).split(/\r?\n/).map(entry => entry.trim())) {
+    for (const [message, code] of CLEANUP_SERVER_REFUSALS) {
+      if (line === `E2E_BOOTSTRAP: ${message}` || line === `ConvexError: E2E_BOOTSTRAP: ${message}`) codes.push(code);
+    }
+  }
+  return codes.length === 1 ? codes[0] : null;
 }
 
 /** No stream text, arguments, targets or arbitrary exception fields enter evidence.
@@ -445,7 +455,7 @@ function cleanupDiagnostic(result, functionName, phase, reason) {
     errorCode: code == null ? null :
       (typeof code === "string" && ["ETIMEDOUT", "ENOBUFS", "ENOENT", "EACCES", "EPERM", "E2BIG"].includes(code) ? code : "UNAVAILABLE"),
     stdout: stream(result?.stdout), stderr: stream(result?.stderr), reason,
-    serverRefusal: serverRefusalCode(result?.stderr),
+    serverRefusal: serverRefusalCode(result),
     stage: reason === "SUCCESS" || reason === "SPLIT_REFUSAL" ? "COMPLETE" :
       reason.startsWith("REFUSAL_") || reason === "SUCCESS_JSON_UNAVAILABLE" ? "PARSER" :
       reason === "STREAM_UNAVAILABLE" ? "STREAM" : "INVOCATION",

@@ -108,6 +108,40 @@ describe("cleanup invocation receipts", () => {
     expect(JSON.stringify(diagnostics)).not.toMatch(/private/);
   });
 
+  describe("the allowlisted server refusal code is anchored, counted and tied to a complete failed child", () => {
+    const prepare = "e2eBootstrap:prepareOpeningCleanupFixture";
+    const message = "invalid cleanup fixture scope.";
+    const anchored = `ConvexError: E2E_BOOTSTRAP: ${message}`;
+    const codeFor = async (result: { status: number | null; stdout: string; stderr: string; signal?: string }) => {
+      const diagnostics: { records: Array<Record<string, unknown>>; truncated: boolean } = { records: [], truncated: false };
+      const call = createCleanupPreviewCall(target(), { env: { ...VALID }, diagnostics, spawnCli: () => result });
+      await call(prepare, { orgId: "synthetic" }).catch(() => undefined);
+      return diagnostics.records[0]?.serverRefusal;
+    };
+
+    test("one anchored message on a failed complete child is named", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `Failed to run function\n${anchored}\n` })).toBe("INVALID_SCOPE");
+    });
+    test("text echoed inside another line is not a refusal", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `arguments echo: {"note":"E2E_BOOTSTRAP: ${message}"}\n` })).toBeNull();
+    });
+    test("a duplicated message is ambiguous", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `${anchored}\n${anchored}\n` })).toBeNull();
+    });
+    test("two different fixed messages are ambiguous", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `${anchored}\nConvexError: E2E_BOOTSTRAP: cleanup fixture cannot be reused.\n` })).toBeNull();
+    });
+    test("an exit 0 child never carries a refusal code", async () => {
+      expect(await codeFor({ status: 0, stdout: '{"phase":"DONE"}', stderr: `${anchored}\n` })).toBeNull();
+    });
+    test("a killed child is incomplete and carries no code", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `${anchored}\n`, signal: "SIGTERM" })).toBeNull();
+    });
+    test("an oversize stream carries no code", async () => {
+      expect(await codeFor({ status: 1, stdout: "", stderr: `${anchored}\n${"x".repeat(262_145)}` })).toBeNull();
+    });
+  });
+
   test("a broken diagnostic sink cannot replace the original cleanup refusal", async () => {
     const diagnostics = { records: [] as unknown[], truncated: false };
     Object.freeze(diagnostics.records);

@@ -48,7 +48,12 @@ function verifyRemoval(before, after) {
   }
 }
 
+// Mirrors the server cleanup fixture scope bound (convex/e2eBootstrap requireCleanupFixtureScope); never raised here.
+const CLEANUP_ORG_INVENTORY_BOUND = 12;
+
 async function prepareNativeOpening(ctx, knownOrgIds, label, large = false) {
+  // Refuse before creating, so a fixture that would cross the bound is never left behind.
+  demand(knownOrgIds.size + 1 <= CLEANUP_ORG_INVENTORY_BOUND, `Cleanup ${label} fixture would exceed the ${CLEANUP_ORG_INVENTORY_BOUND}-organization inventory bound`);
   const must = ctx.salesMust;
   const primary = object(await must("query", "users:getMe", {}));
   const approver = object(await ctx.approverMust("query", "users:getMe", {}));
@@ -158,7 +163,8 @@ export async function runCleanupRehearsalCases(ctx) {
     const reset = await resetHistory(ctx, await prepareNativeOpening(ctx, knownOrgIds, "HISTORY-RESET"));
     const deletionFixture = await prepareNativeOpening(ctx, knownOrgIds, "HISTORY-DELETION");
     const deletion = await deletionHistory(ctx, deletionFixture);
-    // Completed deletion (org row and its seats gone) frees an inventory slot; the server bound of 12 stays untouched.
+    // Released only after deletionHistory succeeded (it throws otherwise): it proved the org row and its sources are gone,
+    // and a leftover seat would still fail closed server-side as UNEXPECTED_MEMBERSHIP. The server bound of 12 is untouched.
     knownOrgIds.delete(deletionFixture.orgId);
     return { reset, deletion, elapsedMs: Date.now() - started, scope: "actual native functions; synthetic historical admission; no OCC claim" };
   });

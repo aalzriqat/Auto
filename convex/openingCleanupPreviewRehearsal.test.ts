@@ -87,7 +87,9 @@ test("cleanup observation refuses a foreign deletion request before returning ev
   await expect(t.query(internal.e2eBootstrap.observeOpeningCleanupFixture, { ...scopeArgs, deletionRequestId: requestId })).rejects.toThrow();
 });
 
-async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "generation", priorOrgs = 0) {
+let listPrimaryOrgNames: () => Promise<string[]> = async () => [];
+
+async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "generation" | "deletion-throws", priorOrgs = 0) {
   const { t, baseline, primary, approver } = await setup();
   const sdk = (actor: typeof primary) => async (kind: "query" | "mutation", name: string, args: Record<string, unknown>) =>
     kind === "query" ? await actor.query(makeFunctionReference<"query">(name), args)
@@ -111,6 +113,7 @@ async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "gene
       }
       return { ok: true, value };
     }
+    if (name === "adminOrgs:runDeletionRequestBatch" && defect === "deletion-throws") throw new Error("Synthetic deletion worker failure");
     if (name === "adminOrgs:runDeletionRequestBatch") return { ok: true, value: await t.mutation(makeFunctionReference<"mutation">(name), args) };
     if (name !== "orgFinancialReset:resetOrgFinancialData") throw new Error("Unsupported native test call");
     const beforeErrors = errors.mock.calls.length;
@@ -126,6 +129,7 @@ async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "gene
     }
   };
   if (defect === "inventory") await primary.mutation(api.organizations.create, { name: "Unexpected unrecorded QA membership" });
+  listPrimaryOrgNames = async () => (await primary.query(api.organizations.listMine, {})).map((org: { name: string }) => org.name);
   // Earlier rehearsal cases leave their organizations behind; the 12-organization fixture bound counts them.
   const createdRehearsalOrgIds: string[] = [];
   for (let index = 0; index < priorOrgs; index += 1)
@@ -151,6 +155,27 @@ test("cleanup cases stay inside the 12-organization fixture bound after eight ea
     expect.objectContaining({ id: "S858-CLEANUP-HISTORY", status: "PASS" }),
     expect.objectContaining({ id: "S858-CLEANUP-SPLIT", status: "PASS" }),
   ]);
+});
+
+test("with nine earlier organizations the driver refuses before creating the fixture that would exceed the bound", async () => {
+  const results = await executeCallbacks(undefined, 9);
+  expect(results[0], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-HISTORY", status: "PASS" });
+  expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "FAIL", detail: expect.stringMatching(/12-organization/) });
+  // The refused fixture was never created, so nothing is left behind and no server bound was crossed.
+  expect(await listPrimaryOrgNames()).not.toContain("QA TEST cleanup SPLIT-REFERENCE");
+});
+
+test("a failing HISTORY case does not stop SPLIT from running inside the bound", async () => {
+  const results = await executeCallbacks("generation", 8);
+  expect(results[0], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-HISTORY", status: "FAIL" });
+  expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "PASS" });
+});
+
+test("a deletion that throws keeps its organization in the inventory so later fixtures still pass the server scope", async () => {
+  // Releasing before success would drop a live QA membership from the known set, and the next fixture would be refused.
+  const results = await executeCallbacks("deletion-throws");
+  expect(results[0], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-HISTORY", status: "FAIL" });
+  expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "PASS" });
 });
 
 test.each(["phase", "state", "generation"] as const)("cleanup cloud assertions reject corrupted SDK %s evidence", async defect => {
