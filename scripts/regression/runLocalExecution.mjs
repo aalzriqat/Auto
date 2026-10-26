@@ -91,6 +91,6 @@ export function main(argv = process.argv.slice(2)) {
   return receipt;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   process.exitCode = main().verdict === "PASS" ? 0 : 1;
 }

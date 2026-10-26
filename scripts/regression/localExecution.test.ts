@@ -5,6 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { digestRulingText, scenarioFingerprint, type ScenarioRecord } from "./scenarioRecord";
 import LocalExecutionReporter, { type LocalExecutionReport } from "./localExecutionReporter";
 import { main as executeLocal } from "./runLocalExecution.mjs";
@@ -89,6 +90,21 @@ test("imported CLI entry executes real Git, child process and receipt I/O", () =
   expect(receipt.process?.exit).toBe(0);
 }, 70000);
 
+test("stdin import leaves the CLI unexecuted", () => {
+  const before = git(["status", "--porcelain"]);
+  const child = spawnSync(process.execPath, ["--input-type=module", "-"], { cwd: root, encoding: "utf8", timeout: 10000,
+    input: `await import(${JSON.stringify(pathToFileURL(cli).href)}); console.log("IMPORTED_WITHOUT_EXECUTION");` });
+  const retained = process.env.AUTOFLOW_S3_PROOF_DIR;
+  if (retained) { mkdirSync(retained, { recursive: true }); writeFileSync(path.join(retained, "stdin-import-observation.json"),
+    JSON.stringify({ exit: child.status, signal: child.signal, error: child.error?.name ?? null, stdout: child.stdout, stderr: child.stderr })); }
+  expect(child.error).toBeUndefined();
+  expect(child.signal).toBeNull();
+  expect(child.status).toBe(0);
+  expect(child.stdout.trim()).toBe("IMPORTED_WITHOUT_EXECUTION");
+  expect(child.stderr).toBe("");
+  expect(git(["status", "--porcelain"])).toBe(before);
+}, 15000);
+
 test.each(["wrong-head", "binding-deleted", "foreign-path", "source-mutation", "native-failed"] as const)(
   "imported CLI retains the actual %s refusal", mode => {
     if (mode === "binding-deleted") { delete record.impl; saveRecord(); }
@@ -146,6 +162,30 @@ test("actual native execution joins one record without trusting GitHub environme
   expect(receipt.native?.cases[0]).toMatchObject({ name: title, project: "", state: "passed", expectedFailure: false,
     retryCount: 0, repeatCount: 0, flaky: false });
   expect(receipt.native?.cases[0].id).toEqual(expect.any(String));
+}, 70000);
+
+test("junction alias entry executes the CLI and publishes its actual receipt", () => {
+  const alias = path.join(evidence, "entry-alias"), output = path.join(evidence, "alias-receipt.json");
+  symlinkSync(path.dirname(cli), alias, process.platform === "win32" ? "junction" : "dir");
+  try {
+    const child = spawnSync(process.execPath, [path.join(alias, path.basename(cli)), "--root", root,
+      "--scenario", record.id, "--output", output], { timeout: 70000, encoding: "utf8" });
+    const observed = { exit: child.status, signal: child.signal, error: child.error?.name ?? null,
+      stdout: child.stdout, stderr: child.stderr, receiptCreated: existsSync(output), platform: process.platform };
+    const retained = process.env.AUTOFLOW_S3_PROOF_DIR;
+    if (retained) { mkdirSync(retained, { recursive: true }); writeFileSync(path.join(retained, "entry-alias-observation.json"), JSON.stringify(observed)); }
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    expect(child.status).toBe(0);
+    expect(existsSync(output), child.stdout).toBe(true);
+    const receipt: Receipt = JSON.parse(readFileSync(output, "utf8"));
+    expect(receipt.verdict).toBe("PASS");
+    expect(receipt.native?.cases).toHaveLength(1);
+    expect(receipt.process?.exit).toBe(0);
+    if (retained) writeFileSync(path.join(retained, "entry-alias-receipt.json"), readFileSync(output));
+  } finally {
+    unlinkSync(alias);
+  }
 }, 70000);
 
 test("Git-listed dangling source link refuses before native execution", () => {
