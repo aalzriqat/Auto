@@ -4,6 +4,7 @@ import { convexTestWithComponents, registerRateLimiter } from "../test-utils/con
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { runRehearsalCases } from "../scripts/accountingRehearsalCases.mjs";
+import { runUnwindRehearsalCases } from "../scripts/accountingUnwindRehearsal.mjs";
 import { recordCase, unproven } from "../scripts/accountingPreviewRehearsal.mjs";
 
 /**
@@ -103,7 +104,9 @@ async function execute(wanted: "U-RET" | "CC-CASH", defect?: Defect) {
   };
   const asSales = soft(salesMust), asApprover = soft(approverMust);
   const results: Array<{ id: string; status: string; detail?: unknown }> = [];
-  await runRehearsalCases({ orgId, results, salesMust, approverMust, asSales, asApprover, config: {
+  // U-RET is its own callback: the trusted driver runs it after the cleanup cases, not inside runRehearsalCases (SCRUM-486).
+  const run = wanted === "U-RET" ? runUnwindRehearsalCases : runRehearsalCases;
+  await run({ orgId, results, salesMust, approverMust, asSales, asApprover, config: {
     salesEmail: "primary@qa.example.test", approverEmail: "approver@qa.example.test",
   }, unproven, recordCase: async (rows: unknown[], id: string, title: string, body: () => Promise<unknown>) => {
     // This slice selects one registered callback; it does not certify the full registry.

@@ -718,6 +718,29 @@ export function fd1BankContractInputs({ env, cwd, readText = (file) => readFileS
   };
 }
 
+/**
+ * The order in which the trusted driver runs the case groups. The order is load-bearing:
+ *
+ *  1. `runCases`: every case that shares the baseline organization, ending with P1 (which closes its period).
+ *  2. `runCleanup`: the S858 cleanup fixtures. The server (`requireCleanupFixtureScope` and `requireCleanupMemberships` in
+ *     convex/e2eBootstrap.ts) refuses any QA membership that is not in the caller's inventory, or whose role is not the
+ *     fixture's own shape, and bounds the inventory at 12 organizations. The inventory is `createdRehearsalOrgIds` taken at
+ *     the moment cleanup starts, and it already uses 9 of the 12 slots before the four cleanup fixtures.
+ *  3. `runUnwind` (U-RET): it creates two organizations of its own and seats the approver as MANAGER. Run any earlier, those
+ *     two organizations and that seat make every cleanup call refuse with UNEXPECTED_MEMBERSHIP and push the inventory
+ *     past its bound (run 40521502331: S858-CLEANUP-HISTORY and S858-CLEANUP-SPLIT failed for exactly this reason).
+ *     It uses only organizations it creates itself, so it does not need the baseline period that P1 closed.
+ *
+ * Any new case that creates organizations or QA memberships must run after `runCleanup`, not before it.
+ * @param {() => string[]} createdRehearsalOrgIds read at the moment cleanup starts, never earlier
+ * @param {{ runCases: () => Promise<void>, runCleanup: (createdRehearsalOrgIds: string[]) => Promise<void>, runUnwind: () => Promise<void> }} runners
+ */
+export async function runRehearsalSequence(createdRehearsalOrgIds, runners) {
+  await runners.runCases();
+  await runners.runCleanup(createdRehearsalOrgIds());
+  await runners.runUnwind();
+}
+
 /* c8 ignore start — the orchestration below only runs inside CI against a preview. */
 export async function main(env = process.env) {
   const config = assertRehearsalEnv(env);
@@ -826,12 +849,16 @@ export async function main(env = process.env) {
     unproven,
     fireConcurrentReleases,
   };
-  await runRehearsalCases(context);
   const { runCleanupRehearsalCases } = await import("./accountingCleanupRehearsal.mjs");
-  await runCleanupRehearsalCases({ ...context,
-    previewCall: createCleanupPreviewCall(config, { env, diagnostics: cleanupInvocations }),
-    qaIdentities: { primaryClerkUserId: salesUserId, approverClerkUserId: approverUserId },
-    createdRehearsalOrgIds: [...createdRehearsalOrgIds],
+  const { runUnwindRehearsalCases } = await import("./accountingUnwindRehearsal.mjs");
+  await runRehearsalSequence(() => [...createdRehearsalOrgIds], {
+    runCases: () => runRehearsalCases(context),
+    runCleanup: ids => runCleanupRehearsalCases({ ...context,
+      previewCall: createCleanupPreviewCall(config, { env, diagnostics: cleanupInvocations }),
+      qaIdentities: { primaryClerkUserId: salesUserId, approverClerkUserId: approverUserId },
+      createdRehearsalOrgIds: ids,
+    }),
+    runUnwind: () => runUnwindRehearsalCases(context),
   });
 
   evidence.summary = summarize(results);
