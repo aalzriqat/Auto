@@ -6,7 +6,7 @@
  * It verifies form only. The seats' own signed PR comments, not this check,
  * are the authoritative evidence that a review happened. It checks that the
  * evidence is present, well formed and internally consistent: Seat 1 is a different session and Opus 5.5, Seat 2 is gpt-6-sol
- * at medium or lower, the red run shows a failure, and certified SHAs are the
+ * or gpt-6.1-sol at medium or lower, the red run shows a failure, and certified SHAs are the
  * PR head or a commit in the PR's own range, and the red run names a test file
  * that is in the PR diff. It cannot prove the text is true; the links let the
  * owner verify.
@@ -23,7 +23,8 @@ const PLACEHOLDER_WORDS = new Set(["", "n/a", "none", "-", "todo", "tbd", "pendi
 // "0 failed" and prose such as "no error" do not count.
 const FAILURE_SIGNS = /\b[1-9]\d*\s+(?:failed|failing|failures?)\b|\bFAIL(?:ED)?\b|AssertionError|[✗✕×]/;
 const SEAT1_MODEL = /^(?:claude-)?opus[\s-]5[.\s-]5(?:\s*\(.*\))?$/i;
-const SEAT2_MODEL = /^gpt-6-sol(?:\s*\(.*\))?$/i;
+// Exactly gpt-6-sol or gpt-6.1-sol; the dot is escaped so "gpt-6x1-sol" cannot match.
+const SEAT2_MODEL = /^gpt-6(?:\.1)?-sol(?:\s*\(.*\))?$/i;
 const SEAT2_EFFORT = /^(?:low|medium)(?:\s*\(.*\))?$/i;
 
 /**
@@ -156,7 +157,7 @@ async function checkSeats(t, otherSessionText, localReview) {
     }
   }
   if (!SEAT1_MODEL.test(line(t, "Seat 1 model") ?? "")) problems.push('"Seat 1 model" must be Opus 5.5.');
-  if (!SEAT2_MODEL.test(line(t, "Seat 2 model") ?? "")) problems.push('"Seat 2 model" must be gpt-6-sol (Codex).');
+  if (!SEAT2_MODEL.test(line(t, "Seat 2 model") ?? "")) problems.push('"Seat 2 model" must be gpt-6-sol or gpt-6.1-sol (Codex).');
   if (!SEAT2_EFFORT.test(line(t, "Seat 2 effort") ?? "")) problems.push('"Seat 2 effort" must be low or medium.');
   return problems;
 }
@@ -208,6 +209,6 @@ export const TEMPLATE = `${SECTION}
 - Seat 1 review: <same-PR signed issue-comment URL, required for local reviews>
 - Seat 1 model: claude-opus-5-5
 - Seat 1 SHA: <head sha>
-- Seat 2 model: gpt-6-sol
+- Seat 2 model: gpt-6.1-sol
 - Seat 2 effort: medium
 - Seat 2 SHA: <head sha>`;
