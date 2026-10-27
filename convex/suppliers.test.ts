@@ -224,6 +224,51 @@ describe("supplier master: legal identity", () => {
     expect(await supplierCount(t, orgId)).toBe(3);
   });
 
+  // M2 (PR 687 Seat 1): a free-text jurisdiction made tax id 123 under JO and under JOR two legal
+  // identities, so confirming the soft candidate registered one company twice.
+  test("a tax jurisdiction must be an assigned ISO 3166 code: free-text spellings of a country are refused everywhere it is accepted", async () => {
+    const t = setup();
+    const { orgId, acct } = await seedFinanceOrg(t, "legal-iso");
+    const first = await createSupplier(acct, orgId, { displayName: "Gulf Parts", taxId: "123", taxJurisdiction: "JO" });
+    const other = await createSupplier(acct, orgId, { displayName: "Unrelated Trading", taxId: "999" });
+    const versionBefore = await registryVersion(t, orgId);
+
+    for (const bad of ["JOR", "J.O.", "jordan", "XX", "UK", "JO-ABCD", "JO AM"]) {
+      const create = await refusal(createSupplier(acct, orgId, { displayName: `Twin ${bad}`, taxId: "123", taxJurisdiction: bad }));
+      expect(create.code, `create ${bad}`).toBe("SUPPLIER_INVALID_INPUT");
+      // The refusal is the generic client-safe message and never echoes the input.
+      expect(String(create.data), bad).not.toContain(bad);
+      const preview = await refusal(acct.query(api.suppliers.candidatesFor, { orgId, displayName: "Twin", taxId: "123", taxJurisdiction: bad }));
+      expect(preview.code, `candidatesFor ${bad}`).toBe("SUPPLIER_INVALID_INPUT");
+      const update = await refusal(
+        acct.mutation(api.suppliers.update, { orgId, supplierId: other.supplierId, expectedVersion: 1, taxId: "123", taxJurisdiction: bad }),
+      );
+      expect(update.code, `update ${bad}`).toBe("SUPPLIER_INVALID_INPUT");
+    }
+    expect(await supplierCount(t, orgId)).toBe(2);
+    expect(await registryVersion(t, orgId)).toBe(versionBefore);
+
+    // A padded, lower-case JO is still the same identity as JO: a hard refusal with the existing id.
+    const clash = await refusal(createSupplier(acct, orgId, { displayName: "Twin", taxId: "123", taxJurisdiction: " jo " }));
+    expect(clash.code).toBe("SUPPLIER_LEGAL_IDENTITY_EXISTS");
+    expect(clash.payload.existingSupplierId).toBe(first.supplierId);
+
+    // Another real country is a different identity (soft candidate only), and SA still works.
+    const sa = await refusal(createSupplier(acct, orgId, { displayName: "Saudi Co", taxId: "123", taxJurisdiction: "sa" }));
+    expect(sa.code).toBe("SUPPLIER_DUPLICATE_CANDIDATES");
+    const created = await createSupplier(acct, orgId, {
+      displayName: "Saudi Co",
+      taxId: "123",
+      taxJurisdiction: "sa",
+      confirmDistinctFrom: [first.supplierId],
+    });
+    expect(await acct.query(api.suppliers.get, { orgId, supplierId: created.supplierId })).toMatchObject({ taxJurisdiction: "SA" });
+
+    // A subdivision suffix is accepted and stored normalised.
+    const sub = await createSupplier(acct, orgId, { displayName: "Amman Branch Office", taxId: "5550", taxJurisdiction: "jo-am" });
+    expect(await acct.query(api.suppliers.get, { orgId, supplierId: sub.supplierId })).toMatchObject({ taxJurisdiction: "JO-AM" });
+  });
+
   test("sharedLegalIdentityOf with a reason allows a second branch; a missing reason or a different identity is refused", async () => {
     const t = setup();
     const { orgId, acct } = await seedFinanceOrg(t, "legal-shared");

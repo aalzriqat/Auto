@@ -1,5 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { codeUnitCompare, normalizeNameKey, normalizeTaxIdKey, normalizeTaxJurisdiction } from "./supplierNames";
+import {
+  ISO_3166_1_ALPHA_2,
+  codeUnitCompare,
+  isValidTaxJurisdiction,
+  normalizeNameKey,
+  normalizeTaxIdKey,
+  normalizeTaxJurisdiction,
+} from "./supplierNames";
 
 /**
  * SCRUM-868 S1 test 11. The key is used for candidate lookup only (design 3.3):
@@ -76,6 +83,60 @@ describe("supplier name and tax normalisation", () => {
   test("tax jurisdiction is trimmed and upper-cased", () => {
     expect(normalizeTaxJurisdiction(" jo ")).toBe("JO");
     expect(normalizeTaxJurisdiction("sa")).toBe("SA");
+  });
+
+  // M2 (PR 687 Seat 1): free text defeats "one legal identity per organization", because tax id 123
+  // under "JO" and under "JOR" would be two identities. Only ISO 3166 codes are accepted.
+  test("tax jurisdiction accepts only an assigned ISO 3166-1 alpha-2 code, optionally with an ISO 3166-2 suffix", () => {
+    for (const ok of ["JO", "jo", " sa ", "SA", "US", "GB", "AE", "JO-AM", "us-ca", "CA-ON", "ＪＯ"]) {
+      expect(isValidTaxJurisdiction(normalizeTaxJurisdiction(ok)), ok).toBe(true);
+    }
+    for (const bad of ["JOR", "J.O.", "jordan", "Jordan", "XX", "ZZ", "UK", "EU", "J", "", "J0", "JO-", "JO-ABCD", "JO AM", "JO_AM", "AA", "JO-A.M"]) {
+      expect(isValidTaxJurisdiction(normalizeTaxJurisdiction(bad)), bad).toBe(false);
+    }
+  });
+
+  test("the embedded country list is the 249 officially assigned ISO 3166-1 alpha-2 codes", () => {
+    expect(ISO_3166_1_ALPHA_2.size).toBe(249);
+    for (const code of ISO_3166_1_ALPHA_2) expect(code).toMatch(/^[A-Z]{2}$/);
+  });
+});
+
+// L1 (PR 687 Seat 1): keys only find candidates, so folding more is the safe direction.
+describe("supplier name key folds (L1)", () => {
+  test("teh marbuta folds to heh (as Lucene's ArabicNormalizer does)", () => {
+    expect(normalizeNameKey("شركة النور")).toBe(normalizeNameKey("شركه النور"));
+    expect(normalizeNameKey("مؤسسة")).toBe(normalizeNameKey("مؤسسه"));
+  });
+
+  test("Arabic-Indic and Extended Arabic-Indic digits map to ASCII digits", () => {
+    expect(normalizeNameKey("مصنع ٢٠٢٥")).toBe(normalizeNameKey("مصنع 2025"));
+    expect(normalizeNameKey("Depot ۱۲۳")).toBe("depot 123");
+    expect(normalizeNameKey("Depot ٠١٢٣٤٥٦٧٨٩")).toBe("depot 0123456789");
+    expect(normalizeNameKey("Depot ۰۱۲۳۴۵۶۷۸۹")).toBe("depot 0123456789");
+  });
+
+  test("punctuation is whitespace, so spelling variants of one trade name share a key", () => {
+    expect(normalizeNameKey("Al-Noor Co.")).toBe(normalizeNameKey("Al Noor Co"));
+    expect(normalizeNameKey("Al-Noor Co.")).toBe("al noor co");
+    expect(normalizeNameKey("Gulf,Parts (Amman)")).toBe("gulf parts amman");
+    expect(normalizeNameKey("النور، للسيارات.")).toBe(normalizeNameKey("النور للسيارات"));
+    expect(normalizeNameKey("---")).toBe("");
+    expect(normalizeNameKey(" . - ، ")).toBe("");
+  });
+
+  test("the folds do not merge different names", () => {
+    expect(normalizeNameKey("Al Noor Co")).not.toBe(normalizeNameKey("Alnoor Co"));
+    expect(normalizeNameKey("Depot 12")).not.toBe(normalizeNameKey("Depot 21"));
+    expect(normalizeNameKey("مدرسة")).not.toBe(normalizeNameKey("مدرس"));
+  });
+
+  test("the tax id key normaliser is unchanged: it still drops separators and keeps its own digit fold", () => {
+    expect(normalizeTaxIdKey("12-345 678")).toBe("12345678");
+    expect(normalizeTaxIdKey("٠١٢٣٤٥")).toBe("012345");
+    expect(normalizeTaxIdKey("ab-12/c")).toBe("AB12C");
+    // A teh marbuta is a letter in a tax id: no fold to heh.
+    expect(normalizeTaxIdKey("ة1")).toBe("ة1");
   });
 });
 

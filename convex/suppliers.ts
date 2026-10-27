@@ -8,7 +8,13 @@ import { writeAuditLog } from "./utils/auditLog";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
-import { codeUnitCompare, normalizeNameKey, normalizeTaxIdKey, normalizeTaxJurisdiction } from "./utils/supplierNames";
+import {
+  codeUnitCompare,
+  isValidTaxJurisdiction,
+  normalizeNameKey,
+  normalizeTaxIdKey,
+  normalizeTaxJurisdiction,
+} from "./utils/supplierNames";
 import {
   CANDIDATE_CAP,
   ensureRegistryState,
@@ -112,6 +118,11 @@ function cleanTaxIdentity(taxId: string | undefined, jurisdiction: string | unde
   const taxIdKey = normalizeTaxIdKey(text);
   if (!taxIdKey) invalid("Tax id must contain letters or digits.");
   const taxJurisdiction = rawJurisdiction === undefined ? undefined : normalizeTaxJurisdiction(rawJurisdiction);
+  // Only an assigned ISO 3166 code is a jurisdiction. Free text ("JOR", "Jordan") would make one
+  // legal identity several (SCRUM-868 PR 687 M2). The message never echoes the input.
+  if (taxJurisdiction !== undefined && !isValidTaxJurisdiction(taxJurisdiction)) {
+    invalid("Tax jurisdiction must be an ISO 3166 country code such as JO, optionally with a subdivision such as JO-AM.");
+  }
   return { taxId: text, taxIdKey, taxJurisdiction };
 }
 
