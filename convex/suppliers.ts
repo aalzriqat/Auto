@@ -121,7 +121,7 @@ function cleanTaxIdentity(taxId: string | undefined, jurisdiction: string | unde
   // Only an assigned ISO 3166 code is a jurisdiction. Free text ("JOR", "Jordan") would make one
   // legal identity several (SCRUM-868 PR 687 M2). The message never echoes the input.
   if (taxJurisdiction !== undefined && !isValidTaxJurisdiction(taxJurisdiction)) {
-    invalid("Tax jurisdiction must be an ISO 3166 country code such as JO, optionally with a subdivision such as JO-AM.");
+    invalid("Tax jurisdiction must be an ISO 3166-1 alpha-2 country code such as JO.");
   }
   return { taxId: text, taxIdKey, taxJurisdiction };
 }

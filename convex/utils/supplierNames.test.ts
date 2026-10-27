@@ -87,11 +87,12 @@ describe("supplier name and tax normalisation", () => {
 
   // M2 (PR 687 Seat 1): free text defeats "one legal identity per organization", because tax id 123
   // under "JO" and under "JOR" would be two identities. Only ISO 3166 codes are accepted.
-  test("tax jurisdiction accepts only an assigned ISO 3166-1 alpha-2 code, optionally with an ISO 3166-2 suffix", () => {
-    for (const ok of ["JO", "jo", " sa ", "SA", "US", "GB", "AE", "JO-AM", "us-ca", "CA-ON", "ＪＯ"]) {
+  test("tax jurisdiction accepts only an assigned ISO 3166-1 alpha-2 code; no subdivision suffix", () => {
+    for (const ok of ["JO", "jo", " sa ", "SA", "US", "GB", "AE", "ＪＯ"]) {
       expect(isValidTaxJurisdiction(normalizeTaxJurisdiction(ok)), ok).toBe(true);
     }
-    for (const bad of ["JOR", "J.O.", "jordan", "Jordan", "XX", "ZZ", "UK", "EU", "J", "", "J0", "JO-", "JO-ABCD", "JO AM", "JO_AM", "AA", "JO-A.M"]) {
+    // A subdivision suffix is refused: "JO", "JO-AM" and an invented "JO-XYZ" would be three legal identities.
+    for (const bad of ["JO-AM", "us-ca", "CA-ON", "JO-XYZ", "JO-1", "JOR", "J.O.", "jordan", "Jordan", "XX", "ZZ", "UK", "EU", "J", "", "J0", "JO-", "JO-ABCD", "JO AM", "JO_AM", "AA", "JO-A.M"]) {
       expect(isValidTaxJurisdiction(normalizeTaxJurisdiction(bad)), bad).toBe(false);
     }
   });

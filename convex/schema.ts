@@ -7934,7 +7934,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     taxId: v.optional(v.string()),
     /** `normalizeTaxIdKey(taxId)`. Present exactly when `taxId` is. */
     taxIdKey: v.optional(v.string()),
-    /** Normalised (trimmed, upper-case) jurisdiction the tax id was issued in. */
+    /** ISO 3166-1 alpha-2 country code (upper-case, alpha-2 only, no subdivision) the tax id was issued in. */
     taxJurisdiction: v.optional(v.string()),
     /** A second branch of one legal entity: the supplier it shares the legal identity with. */
     sharedLegalIdentityOf: v.optional(v.id("suppliers")),

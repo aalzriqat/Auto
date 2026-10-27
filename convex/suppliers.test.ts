@@ -233,7 +233,7 @@ describe("supplier master: legal identity", () => {
     const other = await createSupplier(acct, orgId, { displayName: "Unrelated Trading", taxId: "999" });
     const versionBefore = await registryVersion(t, orgId);
 
-    for (const bad of ["JOR", "J.O.", "jordan", "XX", "UK", "JO-ABCD", "JO AM"]) {
+    for (const bad of ["JOR", "J.O.", "jordan", "XX", "UK", "JO-ABCD", "JO AM", "JO-AM", "JO-XYZ", "JO-1"]) {
       const create = await refusal(createSupplier(acct, orgId, { displayName: `Twin ${bad}`, taxId: "123", taxJurisdiction: bad }));
       expect(create.code, `create ${bad}`).toBe("SUPPLIER_INVALID_INPUT");
       // The refusal is the generic client-safe message and never echoes the input.
@@ -264,9 +264,14 @@ describe("supplier master: legal identity", () => {
     });
     expect(await acct.query(api.suppliers.get, { orgId, supplierId: created.supplierId })).toMatchObject({ taxJurisdiction: "SA" });
 
-    // A subdivision suffix is accepted and stored normalised.
-    const sub = await createSupplier(acct, orgId, { displayName: "Amman Branch Office", taxId: "5550", taxJurisdiction: "jo-am" });
-    expect(await acct.query(api.suppliers.get, { orgId, supplierId: sub.supplierId })).toMatchObject({ taxJurisdiction: "JO-AM" });
+    // A subdivision suffix is refused even with a fresh tax id: (123, JO) then (123, JO-AM) is the
+    // fragmentation the alpha-2-only rule exists to stop, and it never reaches the soft-match step.
+    const sub = await refusal(createSupplier(acct, orgId, { displayName: "Amman Branch Office", taxId: "5550", taxJurisdiction: "jo-am" }));
+    expect(sub.code).toBe("SUPPLIER_INVALID_INPUT");
+    const fragment = await refusal(
+      createSupplier(acct, orgId, { displayName: "Twin Amman", taxId: "123", taxJurisdiction: "JO-AM", confirmDistinctFrom: [first.supplierId] }),
+    );
+    expect(fragment.code).toBe("SUPPLIER_INVALID_INPUT");
   });
 
   test("sharedLegalIdentityOf with a reason allows a second branch; a missing reason or a different identity is refused", async () => {

@@ -122,23 +122,17 @@ export const ISO_3166_1_ALPHA_2: ReadonlySet<string> = new Set(
   ).split(" "),
 );
 
-// An ISO 3166-1 alpha-2 code, optionally followed by an ISO 3166-2 subdivision code (the part after
-// the hyphen is one to three letters or digits, e.g. "JO-AM", "US-CA", "GB-ENG").
-const TAX_JURISDICTION_SHAPE = /^([A-Z]{2})(?:-[A-Z0-9]{1,3})?$/;
-
 /** NFKC, trimmed, upper-case. Does not decide validity: see `isValidTaxJurisdiction`. */
 export function normalizeTaxJurisdiction(jurisdiction: string): string {
   return jurisdiction.normalize("NFKC").trim().toUpperCase();
 }
 
 /**
- * True for a normalised jurisdiction that is an assigned ISO 3166-1 alpha-2 country code,
- * optionally with a well-formed ISO 3166-2 subdivision suffix. The country part must be a real
- * assigned code; the subdivision part is checked for shape only, because the subdivision list is
- * large and changes. Free text ("JOR", "Jordan", "J.O.") is not a jurisdiction: it would split one
- * legal identity (tax id plus jurisdiction) into several.
+ * True for a normalised jurisdiction that is an assigned ISO 3166-1 alpha-2 country code, and
+ * nothing else. A subdivision suffix ("JO-AM", an invented "JO-XYZ") is refused: the legal identity
+ * is the tax id plus the jurisdiction, so "JO", "JO-AM" and "JO-XYZ" would be three identities for
+ * one company. Free text ("JOR", "Jordan", "J.O.") is refused for the same reason.
  */
 export function isValidTaxJurisdiction(normalised: string): boolean {
-  const match = TAX_JURISDICTION_SHAPE.exec(normalised);
-  return match !== null && ISO_3166_1_ALPHA_2.has(match[1]);
+  return ISO_3166_1_ALPHA_2.has(normalised);
 }
