@@ -311,7 +311,11 @@ export const get = query({
     }),
 });
 
-/** Read-only preview of what `create` would ask the caller to confirm. */
+/**
+ * Read-only preview of what `create` would ask the caller to confirm. It always reads every
+ * candidate source (names, aliases, tax id): it is the full preview, not the per-field check that
+ * `update` runs through `sources`. `excludeSupplierId` must be a supplier of this org.
+ */
 export const candidatesFor = query({
   args: {
     orgId: v.id("organizations"),
@@ -323,6 +327,10 @@ export const candidatesFor = query({
   handler: async (ctx, args) =>
     runGuarded(async () => {
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+      // A caller-supplied id is checked like `get` does: foreign and missing ids get one refusal.
+      if (args.excludeSupplierId) {
+        await requireOwnedRow(ctx, args.orgId, "suppliers", args.excludeSupplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+      }
       const nameKey = normalizeNameKey(requireDisplayName(args.displayName));
       const identity = cleanTaxIdentity(args.taxId, args.taxJurisdiction);
       return findSupplierCandidates(ctx, args.orgId, {

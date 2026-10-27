@@ -584,11 +584,39 @@ describe("supplier master: duplicate candidates", () => {
     expect((stored as { sharedLegalIdentityOf?: unknown }).sharedLegalIdentityOf).toBeUndefined();
   });
 
+  test("the preview refuses an excluded supplier id that is foreign or missing, with the same refusal as get", async () => {
+    const t = setup();
+    const { orgId, acct } = await seedFinanceOrg(t, "preview-owner");
+    const other = await seedFinanceOrg(t, "preview-owner-other");
+    const own = await createSupplier(acct, orgId, { displayName: "Dup Co" });
+    const twin = await createSupplier(acct, orgId, { displayName: "Dup Co", confirmDistinctFrom: [own.supplierId] });
+    const foreign = await createSupplier(other.acct, other.orgId, { displayName: "Foreign Co" });
+    const gone = await createSupplier(other.acct, other.orgId, { displayName: "Gone Co" });
+    await t.run(async (ctx) => ctx.db.delete(gone.supplierId));
+    const preview = (excludeSupplierId?: Id<"suppliers">) =>
+      acct.query(api.suppliers.candidatesFor, { orgId, displayName: "Dup Co", excludeSupplierId });
+
+    // What get says for the same ids is the contract.
+    const getForeign = await refusal(acct.query(api.suppliers.get, { orgId, supplierId: foreign.supplierId }));
+    const getMissing = await refusal(acct.query(api.suppliers.get, { orgId, supplierId: gone.supplierId }));
+    expect(getForeign.data).toBe("Supplier not found.");
+    expect(getMissing.data).toBe(getForeign.data);
+    const previewForeign = await refusal(preview(foreign.supplierId));
+    const previewMissing = await refusal(preview(gone.supplierId));
+    expect(previewForeign.data).toBe(getForeign.data);
+    expect(previewMissing.data).toBe(getForeign.data);
+
+    // Controls: no exclusion lists both; a valid self exclusion lists only the other.
+    expect((await preview()).map((c) => c.supplierId).sort()).toEqual([own.supplierId, twin.supplierId].sort());
+    expect((await preview(own.supplierId)).map((c) => c.supplierId)).toEqual([twin.supplierId]);
+  });
+
   test("retired aliases cannot crowd active ones out of the bounded alias read", async () => {
     const t = setup();
     const { orgId, acct } = await seedFinanceOrg(t, "alias-crowd");
     const archive = await createSupplier(acct, orgId, { displayName: "Archive Co" });
-    // 21 retired rows with the key come first in the index, ahead of every active row.
+    // 21 retired rows carry the key. In the old index they sat in creation order, ahead of the
+    // active rows; in the status index they sort after ACTIVE, and the ACTIVE filter keeps them out.
     for (let i = 0; i < 21; i += 1) {
       const { aliasId } = await acct.mutation(api.suppliers.addAlias, { orgId, supplierId: archive.supplierId, alias: "Old Name" });
       await acct.mutation(api.suppliers.retireAlias, { orgId, aliasId });
