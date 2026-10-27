@@ -3626,7 +3626,8 @@ export async function runRehearsalCases(ctx) {
     const correctedBalance = await trial();
     expectSameAccountBalances(openingBalance, correctedBalance, "CC-CASH correction lowers cash outflow and inventory together",
       deltasOf([["CASH_ON_HAND", -9_800_000], ["VEHICLE_INVENTORY", 9_800_000]]));
-    expectOnlyJournalEntriesAdded(openingEntries, await allJournalEntries({ orgId, ownerMust }),
+    const correctedEntries = await allJournalEntries({ orgId, ownerMust });
+    expectOnlyJournalEntriesAdded(openingEntries, correctedEntries,
       [acquisition.entry._id, correction.entry._id], "CC-CASH unexpected journal entry");
     const correctedIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
     for (const field of ["totalRevenue", "totalCogs", "grossProfit", "netIncome"]) {
@@ -3641,7 +3642,7 @@ export async function runRehearsalCases(ctx) {
     const quoteId = await ownerMust("mutation", "quotes:saveQuote", {
       orgId, customerId, vehicleId, mode: "CASH", vehiclePrice: 12_500, downPayment: 0, termMonths: 0,
     });
-    await ownerMust("mutation", "deposits:create", {
+    const depositId = await ownerMust("mutation", "deposits:create", {
       orgId, quoteId, amount: 12_500, method: "CASH", idempotencyKey: `rehearsal-cc-cash-deposit-${stamp}`,
     });
     const me = await ownerMust("query", "users:getMe", {});
@@ -3650,7 +3651,40 @@ export async function runRehearsalCases(ctx) {
       caseId: "CC-CASH", quoteId, vehicleId, customerId, salespersonId: me._id,
       stamp, fromDate, toDate, monthBoundaryDescription: "the sale",
     });
+    // The deposit, the sale and the deposit application are the ONLY postings of this phase. Each is found by its own
+    // source, its lines are exact, and the census below proves nothing else (not even a pair that nets to zero) was added.
+    const receipt = await eventAndJournal({
+      orgId, ownerMust, sourceType: "deposits", sourceId: depositId, eventType: "DEPOSIT_RECEIVED",
+    });
+    expectExactLines(receipt.lines, keyOf, [
+      { key: "CASH_ON_HAND", debitMinor: 12_500_000 },
+      { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: 12_500_000 },
+    ], { currency: "JOD", decimals: 3, what: "CC-CASH deposit receipt", customerId });
+    const salePosting = await eventAndJournal({
+      orgId, ownerMust, sourceType: "sales", sourceId: saleId, eventType: "SALE_COMPLETED",
+    });
+    expectExactLines(salePosting.lines, keyOf, [
+      { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: 12_500_000 },
+      { key: "SALES_REVENUE", creditMinor: 12_500_000 },
+      { key: "COST_OF_VEHICLES_SOLD", debitMinor: 9_800_000 },
+      { key: "VEHICLE_INVENTORY", creditMinor: 9_800_000 },
+    ], { currency: "JOD", decimals: 3, what: "CC-CASH sale at the corrected cost" });
+    const application = await eventAndJournal({
+      orgId, ownerMust, sourceType: "depositApplications", sourceId: `${depositId}:${vehicleId}`, eventType: "DEPOSIT_APPLIED",
+    });
+    expectExactLines(application.lines, keyOf, [
+      { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 12_500_000 },
+      { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: 12_500_000 },
+    ], { currency: "JOD", decimals: 3, what: "CC-CASH deposit application", customerId });
+    expectOnlyJournalEntriesAdded(correctedEntries, await allJournalEntries({ orgId, ownerMust }),
+      [receipt.entry._id, salePosting.entry._id, application.entry._id], "CC-CASH unexpected journal entry after the sale");
     const soldBalance = await trial();
+    // Whole chart, from the corrected books: cash takes the 12,500 deposit, inventory releases the remaining 9,800,
+    // revenue and COGS are recognised. The deposit liability and the receivable net to zero; every other account,
+    // including balance-sheet-only ones, must be unchanged.
+    expectSameAccountBalances(correctedBalance, soldBalance, "CC-CASH the sale moves only the expected accounts across the whole chart",
+      deltasOf([["CASH_ON_HAND", 12_500_000], ["VEHICLE_INVENTORY", -9_800_000],
+        ["SALES_REVENUE", 12_500_000], ["COST_OF_VEHICLES_SOLD", 9_800_000]]));
     for (const [key, delta] of [
       // Cash: -12,500 purchase + 2,700 refund + 12,500 deposit = +2,700, the margin. Inventory is fully released
       // (12,500 - 2,700 - 9,800). The deposit settled the invoice, so no receivable and no deposit liability remain.

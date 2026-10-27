@@ -1,6 +1,6 @@
 {
   "id": "owned-cash-car-cost-correction-lowers-cost-inventory-and-cash-together",
-  "fingerprint": "d6db405a6eb0bc8e1dbe62c0fa7ea60f6fbac321ec3a6e0ab774a79d87f13e9f",
+  "fingerprint": "7cdf5ed939e3d0e44c651b1305be76c75c06bae628194bfa3febacb75e41e40a",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -88,6 +88,14 @@
     },
     {
       "observable": "trialBalance.vehicleInventoryNetAfterSaleMinor",
+      "value": 0
+    },
+    {
+      "observable": "sale.journalEntriesBeyondDepositSaleAndApplication",
+      "value": 0
+    },
+    {
+      "observable": "sale.unexpectedAccountBalanceChange",
       "value": 0
     },
     {

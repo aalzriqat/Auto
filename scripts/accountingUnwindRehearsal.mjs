@@ -98,13 +98,16 @@ function assertBooks(witness, f, expected, bank, income, trial = UNWOUND_TRIAL) 
  * (`{ ok, error, errorCode }`). The throwing `*Must` wrappers keep only the refusal's message text
  * (`<path> failed: <message>`), never its machine code, so a code such as DEAL_UNWIND_NOT_FOUND could
  * not be recognised on a live deployment. `expected` is the coded refusal, or a fragment of a plain-text
- * refusal that has no code.
+ * refusal that has no code. A refusal that carries a machine code must carry exactly `expected`: the message-text
+ * fallback applies ONLY when the refusal has no code, so a different code whose message merely mentions
+ * `expected` (for example FORBIDDEN naming CUSTOMER_CREDIT_PAYOUT_DISABLED) cannot pass.
  */
 async function refused(must, f, operation, expected) {
   const before = await books(must, f);
   const result = await operation();
+  const hasCode = typeof result?.errorCode === "string" && result.errorCode !== "";
   const matched = result?.ok === false &&
-    (result.errorCode === expected || String(result.error).toLowerCase().includes(expected.toLowerCase()));
+    (hasCode ? result.errorCode === expected : String(result.error).toLowerCase().includes(expected.toLowerCase()));
   if (!matched) throw new Error(`U-RET missing or wrong refusal: ${expected}; observed ${JSON.stringify(result)}`);
   equal(await books(must, f), before, "refusal preserves complete public financial/operational witnesses");
 }

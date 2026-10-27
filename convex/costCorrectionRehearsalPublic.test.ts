@@ -19,7 +19,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-type Defect = "payout-accepted" | "cc-missing-inventory-leg" | "cc-stale-cost" | "cc-sold-accepted";
+type Defect = "payout-accepted" | "payout-wrong-code" | "cc-missing-inventory-leg" | "cc-stale-cost" | "cc-sold-accepted"
+  | "cc-extra-balance-pair" | "cc-extra-journal-entry";
 
 async function execute(wanted: "U-RET" | "CC-CASH", defect?: Defect) {
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
@@ -32,8 +33,19 @@ async function execute(wanted: "U-RET" | "CC-CASH", defect?: Defect) {
   const approver = t.withIdentity({ subject: "cc-approver" });
   const refs = api as unknown as Record<string, Record<string, FunctionReference<"query" | "mutation">>>;
   const calls: string[] = [];
+  // Set once the CC-CASH sale has really been created: only the post-sale readbacks are corrupted by the
+  // extra-posting controls, so every earlier gate of the case still runs on honest data.
+  let saleCreated = false;
+  const chartCodes = new Map<string, unknown>();
   const must = (actor: typeof primary) => async (kind: "query" | "mutation", name: string, args: Record<string, unknown>) => {
     calls.push(name);
+    // Control: a payout request is refused with a DIFFERENT machine code whose message merely mentions the pilot
+    // code. The real command is not run; the refusal wrongly looks right to a text-only matcher.
+    if (defect === "payout-wrong-code" && name === "dealUnwind:finishDealUnwind" && args.customerRefundMethod !== undefined) {
+      throw Object.assign(new Error("synthetic wrong-code refusal"), {
+        data: { code: "FORBIDDEN", message: "Not permitted. (CUSTOMER_CREDIT_PAYOUT_DISABLED is mentioned but is not the code)" },
+      });
+    }
     // Control: a customer-credit payout request is accepted without running the command.
     if (defect === "payout-accepted" && name === "dealUnwind:finishDealUnwind" && args.customerRefundMethod !== undefined) {
       return "synthetic-accepted";
@@ -48,6 +60,24 @@ async function execute(wanted: "U-RET" | "CC-CASH", defect?: Defect) {
       ? await actor.mutation(ref as FunctionReference<"mutation">, args as FunctionArgs<FunctionReference<"mutation">>)
       : await actor.query(ref as FunctionReference<"query">, args as FunctionArgs<FunctionReference<"query">>);
     // Only the SDK readback boundary is corrupted below. Every underlying command/query really executed.
+    if (name === "sales:create") saleCreated = true;
+    if (name === "chartOfAccounts:list") {
+      for (const row of result as Array<{ _id: unknown; code: string }>) chartCodes.set(row.code, row._id);
+    }
+    // Control: after the sale the books carry a balance-sheet-only pair (Dr 2220 / Cr 1110, 1.000 JOD) that none of
+    // the six named accounts shows. Only a whole-chart comparison can see it.
+    if (defect === "cc-extra-balance-pair" && saleCreated && name === "accountingReports:trialBalance") {
+      const copy = structuredClone(result) as { rows: Array<Record<string, unknown>> };
+      copy.rows.push({ accountId: chartCodes.get("2220"), code: "2220", currency: "JOD", netMinor: -1000 });
+      copy.rows.push({ accountId: chartCodes.get("1110"), code: "1110", currency: "JOD", netMinor: -1000 });
+      return copy;
+    }
+    // Control: after the sale the journal census holds one extra, balanced entry that nets to zero everywhere.
+    if (defect === "cc-extra-journal-entry" && saleCreated && name === "accountingLedger:listJournalEntries") {
+      const copy = structuredClone(result) as { isDone: boolean; page: Array<Record<string, unknown>> };
+      if (copy.isDone) copy.page.push({ _id: "synthetic-extra-balanced-entry", sourceType: "manualJournal" });
+      return copy;
+    }
     if (defect === "cc-stale-cost" && name === "vehicles:get" && (result as { purchasePrice?: number } | null)?.purchasePrice === 9800) {
       return { ...(result as object), purchasePrice: 12500 };
     }
@@ -93,6 +123,8 @@ test.each([
   ["cc-missing-inventory-leg", "journal lines are not exactly the expected posting"],
   ["cc-stale-cost", "CC-CASH corrected vehicle cost"],
   ["cc-sold-accepted", "CC-CASH sold-car correction"],
+  ["cc-extra-balance-pair", "CC-CASH the sale moves only the expected accounts across the whole chart"],
+  ["cc-extra-journal-entry", "CC-CASH unexpected journal entry after the sale: added journal entry count"],
 ] as const)("CC-CASH SDK %s cannot pass the public evidence oracle", async (defect, reason) => {
   const proof = await execute("CC-CASH", defect);
   expect(proof.result).toMatchObject({ id: "CC-CASH", status: "FAIL" });
@@ -107,4 +139,10 @@ test("U-RET refuses every customer-credit payout request with the pilot code and
   const attacked = await execute("U-RET", "payout-accepted");
   expect(attacked.result).toMatchObject({ id: "U-RET", status: "FAIL" });
   expect(attacked.result?.detail).toContain("CUSTOMER_CREDIT_PAYOUT_DISABLED");
+}, 120000);
+
+test("U-RET payout refusal with a different machine code cannot pass on a message that merely mentions the pilot code", async () => {
+  const attacked = await execute("U-RET", "payout-wrong-code");
+  expect(attacked.result).toMatchObject({ id: "U-RET", status: "FAIL" });
+  expect(attacked.result?.detail).toContain("U-RET missing or wrong refusal: CUSTOMER_CREDIT_PAYOUT_DISABLED");
 }, 120000);
