@@ -21,6 +21,17 @@ const WHITESPACE = /\s+/g;
 const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
 
 /**
+ * Orders two strings by UTF-16 code unit, which is what a bare `Array.prototype.sort()` does and
+ * what the `<` operator on strings does. It is the order the candidate list and the confirmation
+ * fingerprint were built on. Not `localeCompare`: that depends on the runtime's locale data and
+ * ranks "a" before "B", which would change a stored fingerprint's input order.
+ */
+export function codeUnitCompare(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
+/**
  * Lookup key for a name: NFKC, invisible characters removed, Arabic marks and tatweel removed,
  * alef and ya folded, case folded, whitespace collapsed.
  *
@@ -35,7 +46,7 @@ export function normalizeNameKey(name: string): string {
     .normalize("NFKC")
     .replace(INVISIBLE, "")
     .replace(ARABIC_MARKS, "")
-    .replace(TATWEEL, "")
+    .replaceAll(TATWEEL, "")
     .replace(ALEF_VARIANTS, "ا")
     .replace(YA_VARIANTS, "ي")
     .toUpperCase()

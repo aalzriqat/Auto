@@ -425,7 +425,7 @@ describe("supplier master: duplicate candidates", () => {
     const atCap = await insertSame(CANDIDATE_CAP);
     const listed = await refusal(createSupplier(acct, orgId, { displayName: "Dup Co" }));
     expect(listed.code).toBe("SUPPLIER_DUPLICATE_CANDIDATES");
-    expect((listed.payload.candidates as unknown[]).length).toBe(CANDIDATE_CAP);
+    expect(listed.payload.candidates as unknown[]).toHaveLength(CANDIDATE_CAP);
     await createSupplier(acct, orgId, { displayName: "Dup Co", confirmDistinctFrom: atCap });
 
     // One more than the cap: the list can no longer be shown or confirmed in full.
@@ -988,7 +988,7 @@ describe("supplier master: role matrix", () => {
       const fullRead = actor.query(api.suppliers.get, { orgId, supplierId: c.s0 });
       if (want.picker) {
         const page = (await pickerRead).page;
-        expect(page.length).toBe(2);
+        expect(page).toHaveLength(2);
         for (const row of page) expect(Object.keys(row).sort()).toEqual(["_id", "displayName", "status"]);
         const record = await fullRead;
         if (want.full) {
@@ -1041,7 +1041,7 @@ describe("supplier master: role matrix", () => {
         for (const write of writes) expect((await refusal(write())).code).toBe("FORBIDDEN");
         expect(await supplierWorld(t, orgId)).toBe(worldBefore);
         expect(await registryVersion(t, orgId)).toBe(versionBefore);
-        expect((await auditActions(t, orgId)).length).toBe(auditBefore);
+        expect(await auditActions(t, orgId)).toHaveLength(auditBefore);
       }
     });
   }
@@ -1077,7 +1077,7 @@ describe("supplier master: role matrix", () => {
     expect(refused.code).toBe("FORBIDDEN");
     expect(await supplierWorld(t, c.orgId)).toBe(worldBefore);
     expect(await registryVersion(t, c.orgId)).toBe(versionBefore);
-    expect((await auditActions(t, c.orgId)).length).toBe(auditBefore);
+    expect(await auditActions(t, c.orgId)).toHaveLength(auditBefore);
   });
 
   test("manage:finance without view:finance can write but the full record stays closed", async () => {

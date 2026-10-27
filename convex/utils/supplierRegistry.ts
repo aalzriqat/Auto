@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { codeUnitCompare } from "./supplierNames";
 import { requireOwnedRow } from "./tenancy";
 
 /**
@@ -180,7 +181,7 @@ export async function insertSupplier(
   row: SupplierInsert,
 ): Promise<Id<"suppliers">> {
   assertLockMatches(lock, row.orgId);
-  return ctx.db.insert("suppliers", row);
+  return await ctx.db.insert("suppliers", row);
 }
 
 export async function patchSupplier(
@@ -199,7 +200,7 @@ export async function insertSupplierAlias(
   row: AliasInsert,
 ): Promise<Id<"supplierAliases">> {
   assertLockMatches(lock, row.orgId);
-  return ctx.db.insert("supplierAliases", row);
+  return await ctx.db.insert("supplierAliases", row);
 }
 
 export async function patchSupplierAlias(
@@ -339,92 +340,126 @@ export async function findSupplierCandidates(
   },
 ): Promise<SupplierCandidate[]> {
   const sources = probe.sources ?? { name: true, taxId: true };
+  const collector = candidateCollector(orgId, probe.excludeSupplierId);
+  if (sources.name) await collectNameCandidates(ctx, orgId, probe.nameKey, collector.note);
+  if (sources.taxId && probe.taxIdKey) {
+    await collectTaxCandidates(ctx, orgId, probe.taxIdKey, probe.taxJurisdiction, collector.note);
+  }
+  return collector.toList();
+}
+
+type NoteCandidate = (doc: Doc<"suppliers"> | null, reason: CandidateReason) => void;
+
+function overCap(): never {
+  return throwSupplierError(
+    SUPPLIER_ERROR.CANDIDATES_OVER_CAP,
+    `More than ${CANDIDATE_CAP} similar suppliers exist. Use an existing supplier or ask an administrator to clean up the duplicates.`,
+    { limit: CANDIDATE_CAP },
+  );
+}
+
+/** A read that fills its bound cannot be shown to be complete, so it refuses (see READ_BOUND). */
+function complete<T>(rows: T[]): T[] {
+  if (rows.length >= READ_BOUND) overCap();
+  return rows;
+}
+
+/**
+ * Gathers candidates from the reads, keyed by supplier so one supplier hit twice lists once with
+ * both reasons. Rows of another organization and the excluded supplier are dropped. `toList` refuses
+ * when the merged list passes the cap even though no single read filled its bound, then returns
+ * the list sorted by id (UTF-16 code units, so the order is the same on every runtime).
+ */
+function candidateCollector(orgId: Id<"organizations">, excludeSupplierId: Id<"suppliers"> | undefined) {
   const found = new Map<Id<"suppliers">, { doc: Doc<"suppliers">; reasons: Set<CandidateReason> }>();
-  const note = (doc: Doc<"suppliers"> | null, reason: CandidateReason): void => {
-    if (!doc || doc.orgId !== orgId || doc._id === probe.excludeSupplierId) return;
+  const note: NoteCandidate = (doc, reason) => {
+    if (!doc || doc.orgId !== orgId || doc._id === excludeSupplierId) return;
     const entry = found.get(doc._id) ?? { doc, reasons: new Set<CandidateReason>() };
     entry.reasons.add(reason);
     found.set(doc._id, entry);
   };
-  const overCap = (): never =>
-    throwSupplierError(
-      SUPPLIER_ERROR.CANDIDATES_OVER_CAP,
-      `More than ${CANDIDATE_CAP} similar suppliers exist. Use an existing supplier or ask an administrator to clean up the duplicates.`,
-      { limit: CANDIDATE_CAP },
-    );
-  // A read that fills its bound cannot be shown to be complete, so it refuses (see READ_BOUND).
-  const complete = <T>(rows: T[]): T[] => {
-    if (rows.length >= READ_BOUND) overCap();
-    return rows;
+  const toList = (): SupplierCandidate[] => {
+    if (found.size > CANDIDATE_CAP) overCap();
+    return [...found.values()]
+      .sort((a, b) => codeUnitCompare(a.doc._id, b.doc._id))
+      .map(({ doc, reasons }) => ({
+        supplierId: doc._id,
+        displayName: doc.displayName,
+        status: doc.status,
+        reasons: [...reasons].sort(codeUnitCompare),
+      }));
   };
-  const byNameKey = async (key: string) =>
-    complete(
-      await ctx.db
-        .query("suppliers")
-        .withIndex("by_org_and_displayNameKey", (q) => q.eq("orgId", orgId).eq("displayNameKey", key))
-        .take(READ_BOUND),
-    );
+  return { note, toList };
+}
 
-  if (sources.name) {
-    for (const doc of await byNameKey(probe.nameKey)) note(doc, "SAME_NAME");
+async function suppliersByNameKey(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">, key: string) {
+  return complete(
+    await ctx.db
+      .query("suppliers")
+      .withIndex("by_org_and_displayNameKey", (q) => q.eq("orgId", orgId).eq("displayNameKey", key))
+      .take(READ_BOUND),
+  );
+}
 
-    // ACTIVE rows only, through the index, so retired aliases cannot fill the bound.
-    const aliasHits = complete(
-      await ctx.db
-        .query("supplierAliases")
-        .withIndex("by_org_and_aliasKey_and_status", (q) =>
-          q.eq("orgId", orgId).eq("aliasKey", probe.nameKey).eq("status", "ACTIVE"),
-        )
-        .take(READ_BOUND),
-    );
-    const aliased = await Promise.all(aliasHits.map((alias) => ctx.db.get(alias.supplierId)));
-    for (const doc of aliased) note(doc, "ALIAS");
+/** Same name key, an active alias with the key, and close names (whole-word prefix either way). */
+async function collectNameCandidates(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  nameKey: string,
+  note: NoteCandidate,
+): Promise<void> {
+  for (const doc of await suppliersByNameKey(ctx, orgId, nameKey)) note(doc, "SAME_NAME");
 
-    // Close names: every proper whole-word prefix of the new key that is an existing key, and every
-    // existing key that starts with the new key followed by a space. The prefix reads are independent,
-    // so they run together; the result is sorted by id, so completion order does not matter.
-    const tokens = probe.nameKey.split(" ");
-    const prefixes = tokens.slice(0, -1).map((_, i) => tokens.slice(0, i + 1).join(" "));
-    for (const docs of await Promise.all(prefixes.map(byNameKey))) {
-      for (const doc of docs) note(doc, "CLOSE_NAME");
-    }
-    const longer = complete(
-      await ctx.db
-        .query("suppliers")
-        .withIndex("by_org_and_displayNameKey", (q) =>
-          q.eq("orgId", orgId).gte("displayNameKey", `${probe.nameKey} `).lt("displayNameKey", `${probe.nameKey}!`),
-        )
-        .take(READ_BOUND),
-    );
-    for (const doc of longer) note(doc, "CLOSE_NAME");
+  // ACTIVE rows only, through the index, so retired aliases cannot fill the bound.
+  const aliasHits = complete(
+    await ctx.db
+      .query("supplierAliases")
+      .withIndex("by_org_and_aliasKey_and_status", (q) =>
+        q.eq("orgId", orgId).eq("aliasKey", nameKey).eq("status", "ACTIVE"),
+      )
+      .take(READ_BOUND),
+  );
+  const aliased = await Promise.all(aliasHits.map((alias) => ctx.db.get(alias.supplierId)));
+  for (const doc of aliased) note(doc, "ALIAS");
+
+  // Close names: every proper whole-word prefix of the new key that is an existing key, and every
+  // existing key that starts with the new key followed by a space. The prefix reads are independent,
+  // so they run together; the result is sorted by id, so completion order does not matter.
+  const tokens = nameKey.split(" ");
+  const prefixes = tokens.slice(0, -1).map((_, i) => tokens.slice(0, i + 1).join(" "));
+  for (const docs of await Promise.all(prefixes.map((key) => suppliersByNameKey(ctx, orgId, key)))) {
+    for (const doc of docs) note(doc, "CLOSE_NAME");
   }
+  const longer = complete(
+    await ctx.db
+      .query("suppliers")
+      .withIndex("by_org_and_displayNameKey", (q) =>
+        q.eq("orgId", orgId).gte("displayNameKey", `${nameKey} `).lt("displayNameKey", `${nameKey}!`),
+      )
+      .take(READ_BOUND),
+  );
+  for (const doc of longer) note(doc, "CLOSE_NAME");
+}
 
-  if (sources.taxId && probe.taxIdKey) {
-    const taxKey = probe.taxIdKey;
-    // The hard-match filter below drops rows after the read, so a full read cannot prove how many
-    // soft candidates it holds. It refuses rather than guess.
-    const sameKey = complete(
-      await ctx.db
-        .query("suppliers")
-        .withIndex("by_org_and_taxIdKey", (q) => q.eq("orgId", orgId).eq("taxIdKey", taxKey))
-        .take(READ_BOUND),
-    );
-    for (const doc of sameKey) {
-      const hardMatch =
-        probe.taxJurisdiction !== undefined && doc.taxJurisdiction !== undefined && doc.taxJurisdiction === probe.taxJurisdiction;
-      if (!hardMatch) note(doc, "TAX_ID");
-    }
+/** Soft tax-id match: the same key where the jurisdiction is missing or different. */
+async function collectTaxCandidates(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  taxKey: string,
+  taxJurisdiction: string | undefined,
+  note: NoteCandidate,
+): Promise<void> {
+  // The hard-match filter below drops rows after the read, so a full read cannot prove how many
+  // soft candidates it holds. It refuses rather than guess.
+  const sameKey = complete(
+    await ctx.db
+      .query("suppliers")
+      .withIndex("by_org_and_taxIdKey", (q) => q.eq("orgId", orgId).eq("taxIdKey", taxKey))
+      .take(READ_BOUND),
+  );
+  for (const doc of sameKey) {
+    const hardMatch =
+      taxJurisdiction !== undefined && doc.taxJurisdiction !== undefined && doc.taxJurisdiction === taxJurisdiction;
+    if (!hardMatch) note(doc, "TAX_ID");
   }
-
-  // The merged list can exceed the cap even when no single read filled its bound. Cutting it would
-  // hide candidates the caller is asked to confirm, so it refuses.
-  if (found.size > CANDIDATE_CAP) overCap();
-  return [...found.values()]
-    .sort((a, b) => (a.doc._id < b.doc._id ? -1 : a.doc._id > b.doc._id ? 1 : 0))
-    .map(({ doc, reasons }) => ({
-      supplierId: doc._id,
-      displayName: doc.displayName,
-      status: doc.status,
-      reasons: [...reasons].sort(),
-    }));
 }

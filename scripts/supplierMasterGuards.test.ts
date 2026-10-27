@@ -136,6 +136,9 @@ function scanSource(relPath: string, text: string): Scan {
       if (inSupplierModule && (method === "filter" || method === "collect") && chainHasQuery(node.expression.expression)) {
         flag(method === "filter" ? "filter" : "unbounded-collect", node);
       }
+      // A sort with no compare function orders by UTF-16 code unit only by accident of the default
+      // (Sonar typescript:S2871). The supplier modules say so with `codeUnitCompare`.
+      if (inSupplierModule && method === "sort" && node.arguments.length === 0) flag("bare-sort", node);
     }
     ts.forEachChild(node, visit);
   };
@@ -223,6 +226,16 @@ const BAD_SNIPPETS: Array<{ rule: string; file: string; source: string }> = [
     source: `export async function f(ctx: QueryCtx) { return ctx.db.query("suppliers").withIndex("by_org_and_status", (q) => q.eq("orgId", o)).collect(); }`,
   },
   {
+    rule: "bare-sort",
+    file: "convex/suppliers.ts",
+    source: `export function f(ids: string[]) { return [...ids].sort(); }`,
+  },
+  {
+    rule: "bare-sort",
+    file: "convex/utils/supplierRegistry.ts",
+    source: `export function f(ids: Set<string>) { return [...ids].sort(); }`,
+  },
+  {
     rule: "forged-lock",
     file: "convex/suppliers.ts",
     source: `export async function f(ctx: MutationCtx) { const lock = {} as RegistryLock; return lock; }`,
@@ -254,6 +267,8 @@ const GOOD_SNIPPETS: Array<{ file: string; source: string }> = [
       }`,
   },
   { file: "convex/other.ts", source: `export const x = (ctx: QueryCtx) => ctx.db.query("vehicles").take(1);` },
+  { file: "convex/suppliers.ts", source: `export const s = (ids: string[]) => [...ids].sort(codeUnitCompare);` },
+  { file: "convex/other.ts", source: `export const s = (ids: string[]) => [...ids].sort();` },
 ];
 
 describe("supplier master source guards", () => {

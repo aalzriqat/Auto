@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { normalizeNameKey, normalizeTaxIdKey, normalizeTaxJurisdiction } from "./supplierNames";
+import { codeUnitCompare, normalizeNameKey, normalizeTaxIdKey, normalizeTaxJurisdiction } from "./supplierNames";
 
 /**
  * SCRUM-868 S1 test 11. The key is used for candidate lookup only (design 3.3):
@@ -76,5 +76,24 @@ describe("supplier name and tax normalisation", () => {
   test("tax jurisdiction is trimmed and upper-cased", () => {
     expect(normalizeTaxJurisdiction(" jo ")).toBe("JO");
     expect(normalizeTaxJurisdiction("sa")).toBe("SA");
+  });
+});
+
+describe("codeUnitCompare", () => {
+  // Inputs where code-unit order, locale order and code-point order all differ: upper and lower
+  // case, an underscore, a non-ASCII letter, a surrogate pair (U+1F600, units D83D DE00) and U+FB01.
+  const input = ["b", "B", "a", "\u00e9", "Z", "_x", "A", "\u{1F600}", "\uFB01"];
+  const codeUnitOrder = ["A", "B", "Z", "_x", "a", "b", "\u00e9", "\u{1F600}", "\uFB01"];
+
+  test("orders by UTF-16 code unit, the order a bare sort gives, and not by locale", () => {
+    expect([...input].sort(codeUnitCompare)).toEqual(codeUnitOrder);
+    // The thing it must not be: the locale order ranks "a" before "B".
+    expect([...input].sort((a, b) => a.localeCompare(b))).not.toEqual(codeUnitOrder);
+  });
+
+  test("returns 0 for equal strings and is antisymmetric", () => {
+    expect(codeUnitCompare("abc", "abc")).toBe(0);
+    expect(Math.sign(codeUnitCompare("B", "a"))).toBe(-1);
+    expect(Math.sign(codeUnitCompare("a", "B"))).toBe(1);
   });
 });

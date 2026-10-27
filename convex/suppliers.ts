@@ -1,14 +1,14 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query, type QueryCtx } from "./_generated/server";
+import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { writeAuditLog } from "./utils/auditLog";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
-import { normalizeNameKey, normalizeTaxIdKey, normalizeTaxJurisdiction } from "./utils/supplierNames";
+import { codeUnitCompare, normalizeNameKey, normalizeTaxIdKey, normalizeTaxJurisdiction } from "./utils/supplierNames";
 import {
   CANDIDATE_CAP,
   ensureRegistryState,
@@ -18,6 +18,7 @@ import {
   insertSupplierAlias,
   patchSupplier,
   patchSupplierAlias,
+  type RegistryLock,
   requireNoLegalIdentityDuplicate,
   requireNoSharedIdentityDependents,
   runGuarded,
@@ -182,7 +183,7 @@ function auditView(supplier: Doc<"suppliers">) {
 }
 
 async function loadAliases(ctx: QueryCtx, orgId: Id<"organizations">, supplierId: Id<"suppliers">) {
-  return ctx.db
+  return await ctx.db
     .query("supplierAliases")
     .withIndex("by_org_and_supplierId", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId))
     .take(MAX_ALIAS_ROWS);
@@ -377,7 +378,7 @@ export const create = mutation({
         taxJurisdiction: identity.taxJurisdiction,
         shareTarget,
         shareReason,
-        confirm: [...(args.confirmDistinctFrom ?? [])].sort(),
+        confirm: [...(args.confirmDistinctFrom ?? [])].sort(codeUnitCompare),
       });
 
       return runWithIdempotency(
@@ -440,6 +441,168 @@ export const create = mutation({
     }),
 });
 
+/** The `update` arguments after validation by the Convex argument validators. */
+interface UpdateSupplierInput {
+  orgId: Id<"organizations">;
+  supplierId: Id<"suppliers">;
+  expectedVersion: number;
+  displayName?: string;
+  legalName?: string | null;
+  contact?: Contact | null;
+  taxId?: string | null;
+  taxJurisdiction?: string | null;
+  sharedLegalIdentityOf?: Id<"suppliers"> | null;
+  sharedLegalIdentityReason?: string;
+  reason?: string;
+  confirmDistinctFrom?: Id<"suppliers">[];
+}
+
+/** null clears the field, undefined keeps the stored value, text is cleaned and may not be blank. */
+function resolveLegalName(current: string | undefined, input: string | null | undefined): string | undefined {
+  if (input === null) return undefined;
+  if (input === undefined) return current;
+  return cleanText(input, "Legal name", MAX_NAME) ?? invalid("Legal name cannot be blank; send null to clear it.");
+}
+
+function resolveContact(current: Contact | undefined, input: Contact | null | undefined): Contact | undefined {
+  if (input === null) return undefined;
+  if (input === undefined) return current;
+  return cleanContact(input) ?? invalid("Contact cannot be empty; send null to clear it.");
+}
+
+function resolveTaxIdentity(
+  current: Doc<"suppliers">,
+  args: UpdateSupplierInput,
+): { identity: TaxIdentity; identityChanged: boolean } {
+  const nextTaxId = args.taxId === undefined ? current.taxId : args.taxId;
+  const nextJurisdiction = args.taxJurisdiction === undefined ? current.taxJurisdiction : args.taxJurisdiction;
+  const identity = cleanTaxIdentity(nextTaxId ?? undefined, nextTaxId === null ? undefined : (nextJurisdiction ?? undefined));
+  if (args.taxId === null && typeof args.taxJurisdiction === "string") invalid("A tax jurisdiction needs a tax id.");
+  const identityChanged = identity.taxIdKey !== current.taxIdKey || identity.taxJurisdiction !== current.taxJurisdiction;
+  return { identity, identityChanged };
+}
+
+/**
+ * The shared-legal-identity link after the edit. An explicit null removes it; moving the identity
+ * without naming a target removes it too (a link to a different identity would be invalid); an
+ * explicit target is validated and needs a reason.
+ */
+async function resolveSharedLink(
+  ctx: QueryCtx,
+  args: UpdateSupplierInput,
+  current: Doc<"suppliers">,
+  identity: TaxIdentity,
+  identityChanged: boolean,
+): Promise<{ sharedOf: Id<"suppliers"> | undefined; sharedReason: string | undefined }> {
+  const requested = args.sharedLegalIdentityOf;
+  if (requested === null || (requested === undefined && identityChanged)) {
+    return { sharedOf: undefined, sharedReason: undefined };
+  }
+  if (requested === undefined) {
+    return { sharedOf: current.sharedLegalIdentityOf, sharedReason: current.sharedLegalIdentityReason };
+  }
+  const sharedReason = requireReason(args.sharedLegalIdentityReason, "Shared legal identity reason");
+  await requireSharedIdentityTarget(ctx, args.orgId, requested, current._id, identity);
+  return { sharedOf: requested, sharedReason };
+}
+
+/** Candidate sources are read only for the fields the edit changes, so a standing duplicate of the other does not block it. */
+async function requireUpdateCandidatesConfirmed(
+  ctx: QueryCtx,
+  args: UpdateSupplierInput,
+  current: Doc<"suppliers">,
+  displayNameKey: string,
+  identity: TaxIdentity,
+  identityChanged: boolean,
+): Promise<void> {
+  const nameKeyChanged = displayNameKey !== current.displayNameKey;
+  if (!nameKeyChanged && !identityChanged) return;
+  const candidates = await findSupplierCandidates(ctx, args.orgId, {
+    nameKey: displayNameKey,
+    taxIdKey: identity.taxIdKey,
+    taxJurisdiction: identity.taxJurisdiction,
+    excludeSupplierId: current._id,
+    sources: { name: nameKeyChanged, taxId: identityChanged },
+  });
+  requireConfirmedCandidates(candidates, args.confirmDistinctFrom);
+}
+
+/** The body of `update`, run inside `withRegistryLock`. */
+async function applySupplierUpdate(
+  ctx: MutationCtx,
+  lock: RegistryLock,
+  user: Doc<"users">,
+  args: UpdateSupplierInput,
+): Promise<{ version: number }> {
+  const current = await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+  if (current.version !== args.expectedVersion) {
+    throwSupplierError(
+      SUPPLIER_ERROR.VERSION_CONFLICT,
+      "This supplier was changed by someone else. Reload it and try again.",
+      { currentVersion: current.version },
+    );
+  }
+
+  const displayName = args.displayName === undefined ? current.displayName : requireDisplayName(args.displayName);
+  const nameChanged = displayName !== current.displayName;
+  const reason = nameChanged ? requireReason(args.reason, "A reason for the display-name change") : undefined;
+  const displayNameKey = normalizeNameKey(displayName);
+  const legalName = resolveLegalName(current.legalName, args.legalName);
+  const contact = resolveContact(current.contact, args.contact);
+  const { identity, identityChanged } = resolveTaxIdentity(current, args);
+  const { sharedOf, sharedReason } = await resolveSharedLink(ctx, args, current, identity, identityChanged);
+
+  const unchanged =
+    displayName === current.displayName &&
+    legalName === current.legalName &&
+    canonical(contact) === canonical(current.contact) &&
+    identity.taxId === current.taxId &&
+    identity.taxJurisdiction === current.taxJurisdiction &&
+    sharedOf === current.sharedLegalIdentityOf &&
+    sharedReason === current.sharedLegalIdentityReason;
+  if (unchanged) throwSupplierError(SUPPLIER_ERROR.NO_CHANGE, "There is nothing to change.");
+
+  // Without a declared share, the final identity must be unique. That holds when the identity
+  // moves and when an existing link is removed (the supplier then stands on its own).
+  if (!sharedOf && (identityChanged || current.sharedLegalIdentityOf !== undefined)) {
+    await requireNoLegalIdentityDuplicate(ctx, args.orgId, identity, current._id);
+  }
+  // Other suppliers may point at this one's identity, so it cannot move while they do.
+  if (identityChanged) await requireNoSharedIdentityDependents(ctx, args.orgId, current._id);
+  await requireUpdateCandidatesConfirmed(ctx, args, current, displayNameKey, identity, identityChanged);
+
+  const snapshotChanged =
+    nameChanged ||
+    legalName !== current.legalName ||
+    identity.taxId !== current.taxId ||
+    identity.taxJurisdiction !== current.taxJurisdiction;
+  const version = snapshotChanged ? current.version + 1 : current.version;
+  const patch = {
+    displayName,
+    displayNameKey,
+    legalName,
+    contact,
+    taxId: identity.taxId,
+    taxIdKey: identity.taxIdKey,
+    taxJurisdiction: identity.taxJurisdiction,
+    sharedLegalIdentityOf: sharedOf,
+    sharedLegalIdentityReason: sharedReason,
+    version,
+    updatedBy: user._id,
+    updatedAt: Date.now(),
+  };
+  await patchSupplier(ctx, lock, current, patch);
+  await writeAuditLog(ctx, user, {
+    action: "supplier.update",
+    targetTable: "suppliers",
+    targetId: current._id,
+    orgId: args.orgId,
+    before: auditView(current),
+    after: { ...auditView({ ...current, ...patch }), reason },
+  });
+  return { version };
+}
+
 /** Nullable fields: undefined keeps the stored value, null clears it. */
 export const update = mutation({
   args: {
@@ -461,109 +624,7 @@ export const update = mutation({
       const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
       checkConfirmList(args.confirmDistinctFrom);
 
-      return withRegistryLock(ctx, args.orgId, async (lock) => {
-        const current = await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
-        if (current.version !== args.expectedVersion) {
-          throwSupplierError(
-            SUPPLIER_ERROR.VERSION_CONFLICT,
-            "This supplier was changed by someone else. Reload it and try again.",
-            { currentVersion: current.version },
-          );
-        }
-
-        const displayName = args.displayName === undefined ? current.displayName : requireDisplayName(args.displayName);
-        const nameChanged = displayName !== current.displayName;
-        const reason = nameChanged ? requireReason(args.reason, "A reason for the display-name change") : undefined;
-        const displayNameKey = normalizeNameKey(displayName);
-
-        let legalName = current.legalName;
-        if (args.legalName === null) legalName = undefined;
-        else if (args.legalName !== undefined) legalName = cleanText(args.legalName, "Legal name", MAX_NAME) ?? invalid("Legal name cannot be blank; send null to clear it.");
-
-        let contact = current.contact;
-        if (args.contact === null) contact = undefined;
-        else if (args.contact !== undefined) contact = cleanContact(args.contact) ?? invalid("Contact cannot be empty; send null to clear it.");
-
-        const nextTaxId = args.taxId === undefined ? current.taxId : args.taxId;
-        const nextJurisdiction = args.taxJurisdiction === undefined ? current.taxJurisdiction : args.taxJurisdiction;
-        const identity = cleanTaxIdentity(nextTaxId ?? undefined, nextTaxId === null ? undefined : (nextJurisdiction ?? undefined));
-        if (args.taxId === null && typeof args.taxJurisdiction === "string") invalid("A tax jurisdiction needs a tax id.");
-        const identityChanged =
-          identity.taxIdKey !== current.taxIdKey || identity.taxJurisdiction !== current.taxJurisdiction;
-
-        let sharedOf: Id<"suppliers"> | undefined = current.sharedLegalIdentityOf;
-        let sharedReason: string | undefined = current.sharedLegalIdentityReason;
-        if (args.sharedLegalIdentityOf === null || (args.sharedLegalIdentityOf === undefined && identityChanged)) {
-          sharedOf = undefined;
-          sharedReason = undefined;
-        } else if (args.sharedLegalIdentityOf !== undefined) {
-          sharedOf = args.sharedLegalIdentityOf;
-          sharedReason = requireReason(args.sharedLegalIdentityReason, "Shared legal identity reason");
-          await requireSharedIdentityTarget(ctx, args.orgId, sharedOf, current._id, identity);
-        }
-
-        const unchanged =
-          displayName === current.displayName &&
-          legalName === current.legalName &&
-          canonical(contact) === canonical(current.contact) &&
-          identity.taxId === current.taxId &&
-          identity.taxJurisdiction === current.taxJurisdiction &&
-          sharedOf === current.sharedLegalIdentityOf &&
-          sharedReason === current.sharedLegalIdentityReason;
-        if (unchanged) throwSupplierError(SUPPLIER_ERROR.NO_CHANGE, "There is nothing to change.");
-
-        // Without a declared share, the final identity must be unique. That holds when the identity
-        // moves and when an existing link is removed (the supplier then stands on its own).
-        if (!sharedOf && (identityChanged || current.sharedLegalIdentityOf !== undefined)) {
-          await requireNoLegalIdentityDuplicate(ctx, args.orgId, identity, current._id);
-        }
-        // Other suppliers may point at this one's identity, so it cannot move while they do.
-        if (identityChanged) await requireNoSharedIdentityDependents(ctx, args.orgId, current._id);
-        // Each source of candidates is checked only when the field it matches on changes, so an edit
-        // to one of them is not blocked by a standing duplicate of the other.
-        const nameKeyChanged = displayNameKey !== current.displayNameKey;
-        if (nameKeyChanged || identityChanged) {
-          const candidates = await findSupplierCandidates(ctx, args.orgId, {
-            nameKey: displayNameKey,
-            taxIdKey: identity.taxIdKey,
-            taxJurisdiction: identity.taxJurisdiction,
-            excludeSupplierId: current._id,
-            sources: { name: nameKeyChanged, taxId: identityChanged },
-          });
-          requireConfirmedCandidates(candidates, args.confirmDistinctFrom);
-        }
-
-        const snapshotChanged =
-          nameChanged ||
-          legalName !== current.legalName ||
-          identity.taxId !== current.taxId ||
-          identity.taxJurisdiction !== current.taxJurisdiction;
-        const version = snapshotChanged ? current.version + 1 : current.version;
-        const patch = {
-          displayName,
-          displayNameKey,
-          legalName,
-          contact,
-          taxId: identity.taxId,
-          taxIdKey: identity.taxIdKey,
-          taxJurisdiction: identity.taxJurisdiction,
-          sharedLegalIdentityOf: sharedOf,
-          sharedLegalIdentityReason: sharedReason,
-          version,
-          updatedBy: user._id,
-          updatedAt: Date.now(),
-        };
-        await patchSupplier(ctx, lock, current, patch);
-        await writeAuditLog(ctx, user, {
-          action: "supplier.update",
-          targetTable: "suppliers",
-          targetId: current._id,
-          orgId: args.orgId,
-          before: auditView(current),
-          after: { ...auditView({ ...current, ...patch }), reason },
-        });
-        return { version };
-      });
+      return withRegistryLock(ctx, args.orgId, (lock) => applySupplierUpdate(ctx, lock, user, args));
     }),
 });
 
