@@ -35,6 +35,20 @@ const RETURNED_TRIAL = { ...PAID_TRIAL, "1110": 12500000, "2220": 1575000 };
 const UNWOUND_TRIAL = { "1100": -9800000, "1400": 10000000, "2100": 200000 };
 const REFUNDED_TRIAL = { "1100": -10000000, "1400": 10000000 };
 
+/**
+ * `bankAccounts:getBookBalance` is called without `asOf`, so the backend answers at its own `Date.now()` and echoes that
+ * instant back as `asOf` (convex/bankAccounts.ts: `args.asOf ?? Date.now()`, then `base = { ..., asOf }`). On a live
+ * deployment two reads are evaluated at two different instants, so the echo differs between a before and an after read
+ * with no change to any book. It is the read clock, not a financial or operational witness: the balance, status, currency,
+ * bank identity, `unmatchedMinor` and `unattributedLineCount` beside it stay in the witness and are compared exactly.
+ * The clock is still required to be a valid instant, so a malformed answer is not silently dropped.
+ */
+async function bankWitness(must, args) {
+  const { asOf, ...witness } = object(await must("query", "bankAccounts:getBookBalance", args));
+  equal(Number.isSafeInteger(asOf), true, "native bank balance read clock is a valid instant");
+  return witness;
+}
+
 async function books(must, f) {
   const list = object(await must("query", "accountingLedger:listJournalEntries", { orgId: f.orgId, paginationOpts: page }));
   equal(list.isDone, true, "bounded complete journal inventory");
@@ -45,7 +59,7 @@ async function books(must, f) {
   const args = { orgId: f.orgId };
   return { details, trial: await must("query", "accountingReports:trialBalance", args),
     income: await must("query", "accountingReports:incomeStatement", { ...args, fromDate: f.periodStart, toDate: f.periodEnd }),
-    bank: await must("query", "bankAccounts:getBookBalance", args),
+    bank: await bankWitness(must, args),
     application: await must("query", "applications:get", { ...args, applicationId: f.applicationId }),
     sale: await must("query", "sales:get", { ...args, saleId: f.saleId }),
     vehicle: await must("query", "vehicles:get", { ...args, vehicleId: f.vehicleId }),

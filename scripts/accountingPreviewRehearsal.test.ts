@@ -10,6 +10,9 @@ import { describe, expect, test, vi } from "vitest";
 import { ConvexHttpClient } from "convex/browser";
 import { format } from "node:util";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   assertRehearsalEnv,
   convexCall,
@@ -28,6 +31,7 @@ import {
   unproven,
   exitCodeForSummary,
   bannerForSummary,
+  runRehearsalSequence,
 } from "./accountingPreviewRehearsal.mjs";
 import { previewNameForRef } from "./e2ePreviewBootstrap.mjs";
 
@@ -812,4 +816,33 @@ test("a run that both FAILED and left cases UNPROVEN names BOTH lists in the ban
   expect(banner).toMatch(/FAILED: 2 of 5/);
   expect(banner).toMatch(/D2, D3/);
   expect(banner).toMatch(/1 UNPROVEN \(C1\)/);
+});
+
+describe("SCRUM-486 case order: U-RET runs after the S858 cleanup cases", () => {
+  // Rationale: see runRehearsalSequence in accountingPreviewRehearsal.mjs (run 40521502331).
+  test("cases, then cleanup with the inventory as it stands, then unwind; unwind organizations never reach the inventory", async () => {
+    const order: string[] = [];
+    const created = new Set<string>(["baseline"]);
+    await runRehearsalSequence(() => [...created], {
+      runCases: async () => { order.push("cases"); created.add("shared-case-org"); },
+      runCleanup: async (ids: string[]) => { order.push(`cleanup:${ids.join(",")}`); },
+      runUnwind: async () => { order.push("unwind"); created.add("uret-org-1"); created.add("uret-org-2"); },
+    });
+    expect(order).toEqual(["cases", "cleanup:baseline,shared-case-org", "unwind"]);
+  });
+
+  test("a failing earlier group stops the sequence so no later group runs on a half-built preview", async () => {
+    const order: string[] = [];
+    await expect(runRehearsalSequence(() => [], {
+      runCases: async () => { order.push("cases"); throw new Error("cases failed"); },
+      runCleanup: async () => { order.push("cleanup"); },
+      runUnwind: async () => { order.push("unwind"); },
+    })).rejects.toThrow("cases failed");
+    expect(order).toEqual(["cases"]);
+  });
+
+  test("the shared-organization case driver can neither import nor run U-RET", () => {
+    const cases = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "accountingRehearsalCases.mjs"), "utf8");
+    expect(cases).not.toMatch(/accountingUnwindRehearsal|runUnwindRehearsalCases\(/);
+  });
 });
