@@ -9573,7 +9573,7 @@
       "cause": "client sends an unbranded string where the backend declares id: it is a string, but NOT verified as a document id for this table",
       "fingerprint": "d1178df784bee5f0",
       "multiplicity": 1,
-      "rationale": "Re-read at c82890bd after #678 changed the expense form: vehicleId is still maybeText(form.vehicleId) with form typed as string, so the value is now a known string (blank becomes undefined, which the optional vehicles ID field accepts) instead of the earlier any. The analysis therefore reports the string-not-branded cause rather than the any cause; the call site, field, kind and fingerprint are unchanged. The debt itself is unchanged: nothing proves the picker string is an authentic vehicles document ID. Same cause and scope as the other vehicleId entries; no other entry is touched.",
+      "rationale": "Re-read at c82890bd after #678 changed the expense form: vehicleId is still maybeText(form.vehicleId) with form typed as string, so the value is now a known string (blank becomes undefined, which the optional vehicles ID field accepts) instead of the earlier any. The analysis therefore reports the string-not-branded cause rather than the any cause; the call site, field, kind and fingerprint are unchanged. The debt itself is unchanged: nothing proves the picker string is an authentic vehicles document ID. No other entry is touched.",
       "issue": "SCRUM-711",
       "expires": "2026-11-01"
     },
