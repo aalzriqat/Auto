@@ -15,9 +15,14 @@ const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([n
 const childEnv = () => Object.fromEntries(Object.entries(cleanEnv()).filter(([name]) => !/^(NODE_OPTIONS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|VITE|VITE_.*|VITEST|VITEST_.*|npm_config_.*|PNPM_.*)$/i.test(name)));
 const git = (root, args, extraEnv = {}) => execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, env: { ...cleanEnv(), ...extraEnv } });
 
+// UTF-16 code-unit order, i.e. what Array.prototype.sort does without a compare function
+// (https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort#description),
+// but explicit (Sonar S2871). Never localeCompare: the source digest must not depend on the host locale.
+const codeUnitCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
 /** Observed local files, not a trusted-job or production attestation. */
-function observeSource(root) {
-  const files = git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
+export function observeSource(root) {
+  const files = git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort(codeUnitCompare);
   const digest = createHash("sha256");
   for (const file of files) {
     const target = path.resolve(root, file);
@@ -314,7 +319,7 @@ export function matchesHead(working, committed) {
 function observeExport(exportRoot) {
   const digest = createHash("sha256");
   const walk = directory => {
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => codeUnitCompare(a.name, b.name))) {
       const full = path.join(directory, entry.name);
       if (directory === exportRoot && entry.name === "node_modules") continue;
       digest.update(path.relative(exportRoot, full)).update("\0");

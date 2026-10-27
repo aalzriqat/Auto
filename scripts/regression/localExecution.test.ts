@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { startVitest } from "vitest/node";
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { digestRulingText, scenarioFingerprint, type ScenarioRecord } from "./scenarioRecord";
 import LocalExecutionReporter, { type LocalExecutionReport } from "./localExecutionReporter";
-import { checkTreePath, isHarnessFile, main as executeLocal, matchesHead, removeCreatedFile, removeExport, verifyExport, writeCommittedTree } from "./runLocalExecution.mjs";
+import { checkTreePath, isHarnessFile, main as executeLocal, matchesHead, observeSource, removeCreatedFile, removeExport, verifyExport, writeCommittedTree } from "./runLocalExecution.mjs";
 
 const cli = path.resolve(__dirname, "runLocalExecution.mjs");
 const title = "selected fixture execution";
@@ -1192,4 +1193,40 @@ test("the created receipt file is removed only while it is still the same file",
   expect(readFileSync(target, "utf8")).toBe("replacement");
   unlinkSync(target);
   expect(removeCreatedFile(target, created)).toBe(false);
+});
+
+describe("observeSource orders the digest by UTF-16 code unit, never by locale (Sonar S2871)", () => {
+  // Code-unit order puts every uppercase letter before "_" and every lowercase letter; localeCompare does not.
+  // Names differ in more than case so a case-insensitive checkout cannot merge two of them.
+  const names = ["b", "C", "a", "_x", "Z"];
+  const codeUnitOrder = ["C", "Z", "_x", "a", "b"];
+  const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+  let repository: string;
+
+  beforeEach(() => {
+    repository = mkdtempSync(path.join(tmpdir(), "s3-order-fixture-"));
+    const run = (args: string[]) => execFileSync("git", args, { cwd: repository, encoding: "utf8" });
+    run(["init", "-q"]);
+    quiet(run);
+    writeFileSync(path.join(repository, "tracked.txt"), "tracked");
+    run(["add", "tracked.txt"]);
+    run(["-c", "user.name=S3Fixture", "-c", "user.email=s3@example.invalid", "commit", "-qm", "init"]);
+    for (const name of names) writeFileSync(path.join(repository, name), `content of ${name}`);
+  });
+  afterEach(() => rmSync(repository, { recursive: true, force: true, ...retries }));
+
+  test("the file digest equals the one the default Array.prototype.sort order produces", () => {
+    // Guard: this set really separates locale order from code-unit order, so the pin below is not vacuous.
+    const everyFile = [...names, "tracked.txt"];
+    expect([...everyFile].sort((a, b) => a.localeCompare(b))).not.toEqual([...everyFile].sort());
+    expect([...names].sort()).toEqual(codeUnitOrder);
+
+    const expected = createHash("sha256");
+    for (const file of [...codeUnitOrder, "tracked.txt"]) {
+      expected.update(file).update("\0").update(sha256(file === "tracked.txt" ? "tracked" : `content of ${file}`)).update("\0");
+    }
+    const observed = observeSource(repository);
+    expect(observed.fileCount).toBe(everyFile.length);
+    expect(observed.fileDigest).toBe(expected.digest("hex"));
+  });
 });
