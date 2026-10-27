@@ -1,4 +1,5 @@
 import { runOpeningRehearsalCases } from "./accountingOpeningRehearsal.mjs";
+import { runUnwindRehearsalCases } from "./accountingUnwindRehearsal.mjs";
 /**
  * The rehearsal's cases, driven ONLY through the real public API of a live
  * preview deployment as two genuine Clerk-authenticated users.
@@ -25,7 +26,7 @@ import { runOpeningRehearsalCases } from "./accountingOpeningRehearsal.mjs";
 // executed IDs, and the real-preview validator uses the same list.
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
-  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "S853", "S811", "S858-OPENING", "S858-CONTAINMENT", "P1", "SETUP", "S858-CLEANUP-HISTORY", "S858-CLEANUP-SPLIT",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "S853", "S811", "S858-OPENING", "S858-CONTAINMENT", "P1", "SETUP", "S858-CLEANUP-HISTORY", "S858-CLEANUP-SPLIT", "U-RET", "CC-CASH",
 ]);
 
 function fail(message) {
@@ -3486,7 +3487,243 @@ export async function runRehearsalCases(ctx) {
       commandsExercised: ["organizations.create", "vehicles.create", "sales.createDraft", "sales.update", "sales.get", "vehicles.get"] };
   });
 
+  // ── CC-CASH — SCRUM-760 / SCRUM-486: vehicles.correctAcquisitionCost, CASH_REFUND ──
+  //
+  // Owner ruling 2026-10-19: correcting a car's purchase cost is indispensable for the pilot, so it is certified on
+  // a real backend, not only in the convex-test harness. Every expected figure is a literal taken from the harness
+  // cell "CC-CASH" in `convex/scrum486Certification.test.ts`: a car bought for 12,500 JOD cash, corrected to 9,800,
+  // so 2,700 JOD returns to cash and leaves Vehicle Inventory; the corrected cost is what the sale recognises
+  // (COGS 9,800, margin 2,700); a SOLD car's cost can no longer be corrected, and the refusal writes nothing.
+  // Only public mutations and queries are used. The car's later sale uses the pilot cash path (full price held as a
+  // deposit first, SCRUM-802), exactly as M486C1 does.
+  await recordCase(results, "CC-CASH", "SCRUM-760: a CASH_REFUND cost correction on an unsold owned car lowers cost, Vehicle Inventory and cash by the same amount; a sold car is refused with nothing written", async () => {
+    // The in-memory model backend implements no cost correction. Like U-RET this runs only where the actual native
+    // context (two real identities) exists; a model run reports it UNPROVEN rather than green.
+    if (!ctx.config?.salesEmail || !ctx.config?.approverEmail) {
+      return unproven("CC-CASH actual native context unavailable");
+    }
+    const { fromDate, toDate, reportArgs } = await ownedCashJodWindow({ caseId: "CC-CASH", orgId, ownerMust });
+    const stamp = `${Date.now().toString(36)}-${uuid().slice(0, 8)}`;
+    const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
+    const { keyOf, accountOf } = await chartIndex({ orgId, ownerMust });
+    for (const [key, code] of [
+      ["CASH_ON_HAND", "1100"], ["VEHICLE_INVENTORY", "1400"], ["ACCOUNTS_RECEIVABLE_CUSTOMERS", "1200"],
+      ["CUSTOMER_DEPOSITS_LIABILITY", "2100"], ["SALES_REVENUE", "4100"], ["COST_OF_VEHICLES_SOLD", "5100"],
+    ]) {
+      expectEqual(chart.find((a) => a.systemKey === key)?.code, code, `CC-CASH chart code ${key}`);
+      if (!accountOf.get(key)) unproven(`CC-CASH chart account ${key} is unavailable`);
+    }
+    const deltasOf = (entries) => new Map(entries.map(([key, amount]) =>
+      [JSON.stringify([String(accountOf.get(key)), "JOD"]), amount]));
+    const netOf = (report, key) => (report?.rows ?? [])
+      .filter((r) => String(r.accountId) === String(accountOf.get(key)) && r.currency === "JOD")
+      .reduce((sum, r) => sum + r.netMinor, 0);
+    const trial = () => ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const stillThisMonth = (what) => {
+      if (Date.now() > toDate || Date.now() < fromDate) unproven(`CC-CASH crossed its UTC accounting month during ${what}`);
+    };
+
+    const openingBalance = await trial();
+    const openingIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const openingEntries = await allJournalEntries({ orgId, ownerMust });
+
+    // A car bought for 12,500 JOD in cash through the public door: Dr Vehicle Inventory / Cr Cash 12,500.
+    const customerId = await ownerMust("mutation", "customers:create", {
+      orgId, firstName: "Certification", lastName: `costfix-${stamp}`,
+    });
+    const vin = `RHSCC0${uuid().replace(/-/g, "").slice(0, 11)}`.toUpperCase();
+    const vehicleId = await createVehicleForRehearsal(ownerMust, {
+      orgId, vin, make: "Toyota", model: "Camry-CC", year: 2022,
+      mileage: 800, color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 12_500, sourceType: "STOCK", status: "AVAILABLE",
+      purchasePrice: 12_500, purchasePaymentMethod: "CASH",
+      idempotencyKey: `rehearsal-cc-cash-vehicle-${stamp}`,
+    });
+    stillThisMonth("the purchase");
+    const acquisition = await eventAndJournal({
+      orgId, ownerMust, sourceType: "vehicles", sourceId: vehicleId, eventType: "VEHICLE_ACQUIRED",
+    });
+    expectExactLines(acquisition.lines, keyOf, [
+      { key: "VEHICLE_INVENTORY", debitMinor: 12_500_000 },
+      { key: "CASH_ON_HAND", creditMinor: 12_500_000 },
+    ], { currency: "JOD", decimals: 3, what: "CC-CASH owned vehicle acquisition" });
+    const boughtBalance = await trial();
+    expectSameAccountBalances(openingBalance, boughtBalance, "CC-CASH purchase moves only cash and inventory",
+      deltasOf([["CASH_ON_HAND", -12_500_000], ["VEHICLE_INVENTORY", 12_500_000]]));
+
+    const readVehicle = () => ownerMust("query", "vehicles:get", { orgId, vehicleId });
+    const readContext = () => ownerMust("query", "vehicles:getAcquisitionCostCorrectionContext", { orgId, vehicleId });
+    const bought = await readVehicle();
+    expectEqual(bought?.purchasePrice, 12_500, "CC-CASH purchase price before the correction");
+    expectEqual(bought?.status, "AVAILABLE", "CC-CASH car is unsold before the correction");
+    const boughtContext = await readContext();
+    expectEqual(boughtContext?.blockedReason, null, "CC-CASH correction is open on an unsold owned car");
+    expectEqual(boughtContext?.originalPaymentMethod, "CASH", "CC-CASH original payment method");
+    if (!Array.isArray(boughtContext?.allowedTypes) || !boughtContext.allowedTypes.includes("CASH_REFUND")) {
+      fail("CC-CASH a cash-paid owned car does not offer the CASH_REFUND correction");
+    }
+    expectEqual(boughtContext?.corrections?.length, 0, "CC-CASH no correction exists before the first one");
+
+    // Every readback a refusal must leave untouched: all balances, the journal census, the whole vehicle row and its
+    // correction history. A refusal that wrote anything shows up in one of these.
+    const snapshot = async () => ({
+      balance: await trial(),
+      entries: await allJournalEntries({ orgId, ownerMust }),
+      vehicle: await readVehicle(),
+      context: await readContext(),
+    });
+    const expectNothingWritten = async (before, what) => {
+      const after = await snapshot();
+      expectSameAccountBalances(before.balance, after.balance, `${what} leaves every account balance`);
+      expectOnlyJournalEntriesAdded(before.entries, after.entries, [], `${what} posts no journal entry`);
+      expectEqual(JSON.stringify(after.vehicle), JSON.stringify(before.vehicle), `${what} leaves the vehicle row`);
+      expectEqual(JSON.stringify(after.context.corrections), JSON.stringify(before.context.corrections),
+        `${what} leaves the correction history`);
+    };
+    const correct = (over = {}) => ownerCall("mutation", "vehicles:correctAcquisitionCost", {
+      orgId, vehicleId, newCost: 9_800, reason: "Supplier invoice was for 9,800.",
+      correctionType: "CASH_REFUND", paymentMethod: "CASH", ...over,
+    });
+
+    // Refusals on the unsold car, each with nothing written (harness cell CC-CASH).
+    for (const [what, over, code] of [
+      ["CC-CASH an unchanged cost", { newCost: 12_500 }, "COST_CORRECTION_NO_CHANGE"],
+      ["CC-CASH a cost with sub-minor-unit precision", { newCost: 9_800.0004 }, "COST_CORRECTION_INVALID_AMOUNT"],
+      ["CC-CASH a payable-only type on a cash-paid car", { correctionType: "SUPPLIER_INVOICE_ERROR" }, "COST_CORRECTION_TYPE_NOT_ALLOWED"],
+      ["CC-CASH a restatement of an open-period purchase",
+        { correctionType: "PRIOR_PERIOD_RESTATEMENT", paymentMethod: undefined }, "COST_CORRECTION_RESTATEMENT_PERIOD_OPEN"],
+    ]) {
+      const before = await snapshot();
+      expectRefusal(await correct(over), code, `${what} was not refused with ${code}`);
+      await expectNothingWritten(before, what);
+    }
+
+    // 12,500 -> 9,800: 2,700 comes back to the cash drawer and leaves inventory.
+    const refunded = await correct();
+    if (!refunded.ok) fail(`CC-CASH the cash-refund correction was refused: ${refunded.error}`);
+    expectEqual(refunded.value?.previousCost, 12_500, "CC-CASH reported previous cost");
+    expectEqual(refunded.value?.newCost, 9_800, "CC-CASH reported new cost");
+    stillThisMonth("the correction");
+    const corrected = await readVehicle();
+    expectEqual(corrected?.purchasePrice, 9_800, "CC-CASH corrected vehicle cost");
+    expectEqual(corrected?.status, "AVAILABLE", "CC-CASH the correction does not change availability");
+    const correctedContext = await readContext();
+    expectEqual(correctedContext?.corrections?.length, 1, "CC-CASH exactly one correction recorded");
+    expectEqual(correctedContext.corrections[0]?.previousCost, 12_500, "CC-CASH recorded previous cost");
+    expectEqual(correctedContext.corrections[0]?.newCost, 9_800, "CC-CASH recorded new cost");
+    expectEqual(correctedContext.corrections[0]?.correctionType, "CASH_REFUND", "CC-CASH recorded correction type");
+    const correction = await eventAndJournal({
+      orgId, ownerMust, sourceType: "vehicleCostCorrections", sourceId: "", eventType: "VEHICLE_ACQUISITION_COST_CORRECTED",
+      pick: (e) => e.sourceType === "vehicleCostCorrections" && String(e.sourceId).startsWith(`${vehicleId}_`),
+    });
+    expectExactLines(correction.lines, keyOf, [
+      { key: "CASH_ON_HAND", debitMinor: 2_700_000 },
+      { key: "VEHICLE_INVENTORY", creditMinor: 2_700_000 },
+    ], { currency: "JOD", decimals: 3, what: "CC-CASH cost correction" });
+    for (const line of correction.lines) {
+      expectEqual(String(line.vehicleId), String(vehicleId), "CC-CASH correction vehicle dimension");
+    }
+    const correctedBalance = await trial();
+    expectSameAccountBalances(openingBalance, correctedBalance, "CC-CASH correction lowers cash outflow and inventory together",
+      deltasOf([["CASH_ON_HAND", -9_800_000], ["VEHICLE_INVENTORY", 9_800_000]]));
+    const correctedEntries = await allJournalEntries({ orgId, ownerMust });
+    expectOnlyJournalEntriesAdded(openingEntries, correctedEntries,
+      [acquisition.entry._id, correction.entry._id], "CC-CASH unexpected journal entry");
+    const correctedIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    for (const field of ["totalRevenue", "totalCogs", "grossProfit", "netIncome"]) {
+      expectEqual(correctedIncome?.[field], openingIncome?.[field], `CC-CASH a cost correction moves no income ${field}`);
+    }
+    // A repeat of the same correction is a convergent refusal, never a second posting.
+    const beforeRepeat = await snapshot();
+    expectRefusal(await correct(), "COST_CORRECTION_NO_CHANGE", "CC-CASH repeating the correction was not refused as no change");
+    await expectNothingWritten(beforeRepeat, "CC-CASH a repeated correction");
+
+    // The corrected cost is what the sale recognises: COGS 9,800, margin 2,700 (pilot cash path: full deposit first).
+    const quoteId = await ownerMust("mutation", "quotes:saveQuote", {
+      orgId, customerId, vehicleId, mode: "CASH", vehiclePrice: 12_500, downPayment: 0, termMonths: 0,
+    });
+    const depositId = await ownerMust("mutation", "deposits:create", {
+      orgId, quoteId, amount: 12_500, method: "CASH", idempotencyKey: `rehearsal-cc-cash-deposit-${stamp}`,
+    });
+    const me = await ownerMust("query", "users:getMe", {});
+    if (!me?._id) unproven("CC-CASH has no authenticated salesperson identity");
+    const { saleId } = await completeOwnedCashCertificationSale({
+      caseId: "CC-CASH", quoteId, vehicleId, customerId, salespersonId: me._id,
+      stamp, fromDate, toDate, monthBoundaryDescription: "the sale",
+    });
+    // The deposit, the sale and the deposit application are the ONLY postings of this phase. Each is found by its own
+    // source, its lines are exact, and the census below proves nothing else (not even a pair that nets to zero) was added.
+    const receipt = await eventAndJournal({
+      orgId, ownerMust, sourceType: "deposits", sourceId: depositId, eventType: "DEPOSIT_RECEIVED",
+    });
+    expectExactLines(receipt.lines, keyOf, [
+      { key: "CASH_ON_HAND", debitMinor: 12_500_000 },
+      { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: 12_500_000 },
+    ], { currency: "JOD", decimals: 3, what: "CC-CASH deposit receipt", customerId });
+    const salePosting = await eventAndJournal({
+      orgId, ownerMust, sourceType: "sales", sourceId: saleId, eventType: "SALE_COMPLETED",
+    });
+    expectExactLines(salePosting.lines, keyOf, [
+      { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: 12_500_000 },
+      { key: "SALES_REVENUE", creditMinor: 12_500_000 },
+      { key: "COST_OF_VEHICLES_SOLD", debitMinor: 9_800_000 },
+      { key: "VEHICLE_INVENTORY", creditMinor: 9_800_000 },
+    ], { currency: "JOD", decimals: 3, what: "CC-CASH sale at the corrected cost" });
+    const application = await eventAndJournal({
+      orgId, ownerMust, sourceType: "depositApplications", sourceId: `${depositId}:${vehicleId}`, eventType: "DEPOSIT_APPLIED",
+    });
+    expectExactLines(application.lines, keyOf, [
+      { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 12_500_000 },
+      { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: 12_500_000 },
+    ], { currency: "JOD", decimals: 3, what: "CC-CASH deposit application", customerId });
+    expectOnlyJournalEntriesAdded(correctedEntries, await allJournalEntries({ orgId, ownerMust }),
+      [receipt.entry._id, salePosting.entry._id, application.entry._id], "CC-CASH unexpected journal entry after the sale");
+    const soldBalance = await trial();
+    // Whole chart, from the corrected books: cash takes the 12,500 deposit, inventory releases the remaining 9,800,
+    // revenue and COGS are recognised. The deposit liability and the receivable net to zero; every other account,
+    // including balance-sheet-only ones, must be unchanged.
+    expectSameAccountBalances(correctedBalance, soldBalance, "CC-CASH the sale moves only the expected accounts across the whole chart",
+      deltasOf([["CASH_ON_HAND", 12_500_000], ["VEHICLE_INVENTORY", -9_800_000],
+        ["SALES_REVENUE", 12_500_000], ["COST_OF_VEHICLES_SOLD", 9_800_000]]));
+    for (const [key, delta] of [
+      // Cash: -12,500 purchase + 2,700 refund + 12,500 deposit = +2,700, the margin. Inventory is fully released
+      // (12,500 - 2,700 - 9,800). The deposit settled the invoice, so no receivable and no deposit liability remain.
+      ["CASH_ON_HAND", 2_700_000], ["VEHICLE_INVENTORY", 0], ["ACCOUNTS_RECEIVABLE_CUSTOMERS", 0],
+      ["CUSTOMER_DEPOSITS_LIABILITY", 0], ["SALES_REVENUE", 12_500_000], ["COST_OF_VEHICLES_SOLD", 9_800_000],
+    ]) {
+      expectEqual(netOf(soldBalance, key) - netOf(openingBalance, key), delta, `CC-CASH sold trial balance ${key}`);
+    }
+    const soldIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    for (const [field, delta] of [
+      ["totalRevenue", 12_500_000], ["totalCogs", 9_800_000], ["grossProfit", 2_700_000], ["netIncome", 2_700_000],
+    ]) {
+      expectEqual(soldIncome?.[field] - openingIncome?.[field], delta, `CC-CASH sold public income ${field}`);
+    }
+
+    // Once sold the cost is no longer correctable here: refused with its own code, nothing changes.
+    const sold = await readVehicle();
+    expectEqual(sold?.status, "SOLD", "CC-CASH the car is sold");
+    expectEqual(sold?.purchasePrice, 9_800, "CC-CASH sold car keeps the corrected cost");
+    expectEqual((await readContext())?.blockedReason, "SOLD", "CC-CASH the correction context reports the car as sold");
+    const beforeSoldRefusal = await snapshot();
+    expectRefusal(await correct({ newCost: 9_000 }), "COST_CORRECTION_SOLD",
+      "CC-CASH sold-car correction was not refused with COST_CORRECTION_SOLD");
+    await expectNothingWritten(beforeSoldRefusal, "CC-CASH sold-car correction");
+    const finalIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    for (const field of ["totalRevenue", "totalCogs", "grossProfit", "netIncome"]) {
+      expectEqual(finalIncome?.[field], soldIncome?.[field], `CC-CASH the refused sold-car correction moves no income ${field}`);
+    }
+    return { vehicleId: String(vehicleId), saleId: String(saleId), currency: "JOD",
+      previousCostMinor: 12_500_000, correctedCostMinor: 9_800_000, refundedToCashMinor: 2_700_000,
+      cogsMinor: 9_800_000, marginMinor: 2_700_000, correctionJournalEntryId: String(correction.entry._id),
+      commandsExercised: ["vehicles.create", "vehicles.correctAcquisitionCost", "quotes.saveQuote", "deposits.create", "sales.create"],
+      reportsRead: ["vehicles.get", "vehicles.getAcquisitionCostCorrectionContext", "accountingLedger.listJournalEntries",
+        "accountingLedger.listAccountingEvents", "accountingLedger.getJournalEntry", "accountingReports.trialBalance",
+        "accountingReports.incomeStatement"] };
+  });
+
   await runOpeningRehearsalCases(ctx);
+  await runUnwindRehearsalCases(ctx);
 
   // ── P1 — a CLOSED period holds the posting; it does not half-post it ───────
   //

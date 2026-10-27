@@ -1,0 +1,121 @@
+{
+  "id": "owned-cash-car-cost-correction-lowers-cost-inventory-and-cash-together",
+  "fingerprint": "7cdf5ed939e3d0e44c651b1305be76c75c06bae628194bfa3febacb75e41e40a",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum486-cc-cash-public-rehearsal",
+    "firstSeen": "2026-10-27"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "sourceType": "STOCK",
+        "purchasePriceMinor": 12500000,
+        "purchasePaymentMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "vehicles.correctAcquisitionCost",
+      "input": {
+        "correctionType": "CASH_REFUND",
+        "newCostMinor": 9800000,
+        "unchangedCostRefused": true,
+        "payableOnlyTypeRefused": true,
+        "repeatRefused": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "sales.create",
+      "input": {
+        "paymentMode": "CASH",
+        "fullDepositFirst": true,
+        "salePriceMinor": 12500000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "vehicles.correctAcquisitionCost",
+      "input": {
+        "correctionType": "CASH_REFUND",
+        "newCostMinor": 9000000,
+        "carIsSold": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "correction.postedLines.cashDebitMinor",
+      "value": 2700000
+    },
+    {
+      "observable": "correction.postedLines.vehicleInventoryCreditMinor",
+      "value": 2700000
+    },
+    {
+      "observable": "vehicle.purchasePriceMinorAfterCorrection",
+      "value": 9800000
+    },
+    {
+      "observable": "incomeStatement.changeFromCorrectionAlone",
+      "value": 0
+    },
+    {
+      "observable": "sale.costOfVehiclesSoldMinor",
+      "value": 9800000
+    },
+    {
+      "observable": "sale.grossProfitMinor",
+      "value": 2700000
+    },
+    {
+      "observable": "trialBalance.vehicleInventoryNetAfterSaleMinor",
+      "value": 0
+    },
+    {
+      "observable": "sale.journalEntriesBeyondDepositSaleAndApplication",
+      "value": 0
+    },
+    {
+      "observable": "sale.unexpectedAccountBalanceChange",
+      "value": 0
+    },
+    {
+      "observable": "soldCarCorrection.refusalCode",
+      "value": "COST_CORRECTION_SOLD"
+    },
+    {
+      "observable": "soldCarCorrection.writesChange",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/costCorrectionRehearsalPublic.test.ts",
+    "testName": "registered CC-CASH callback lowers an unsold car's cost, inventory and cash together and refuses a sold car, in the harness"
+  },
+  "matrixRow": "CC-CASH"
+}
