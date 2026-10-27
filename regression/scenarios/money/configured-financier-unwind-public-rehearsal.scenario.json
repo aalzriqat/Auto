@@ -1,0 +1,128 @@
+{
+  "id": "configured-financier-unwind-public-rehearsal",
+  "fingerprint": "e873e3bc5f02643f7022ff7f6e9dc3b95175bfd8dc36baed0f67902a07eef765",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum486-uret-public-handler-harness",
+    "firstSeen": "2026-10-26"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "dealUnwind.startDealUnwind",
+      "input": {
+        "configuredFinancier": true,
+        "remittanceMinor": 12500000,
+        "heldDepositMinor": 200000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "dealUnwind.recordDealUnwindForwardReturn",
+      "input": {
+        "forwardMinor": 1575000,
+        "rail": "BANK_TRANSFER",
+        "replay": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "dealUnwind.finishDealUnwind",
+      "input": {
+        "customerPaymentDisposition": "RETAIN_CREDIT",
+        "customerCreditMinor": 0,
+        "replay": true
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "DISPOSABLE_SYNTHETIC"
+      },
+      "action": "deposits.release",
+      "input": {
+        "resolution": "REFUNDED",
+        "refundMethod": "CASH",
+        "depositMinor": 200000,
+        "distinctFromCreator": true,
+        "replay": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "ISOLATED_CLOSED_CONTROLS"
+      },
+      "action": "accountingPeriods.close",
+      "input": {
+        "override": false,
+        "forwardAndFinishRefuseAfterClose": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unwind.start.postedJournalChange",
+      "value": 0
+    },
+    {
+      "observable": "unwind.forwardReturnedMinor",
+      "value": 1575000
+    },
+    {
+      "observable": "unwind.remittanceReversedMinor",
+      "value": 12500000
+    },
+    {
+      "observable": "unwind.status",
+      "value": "COMPLETED"
+    },
+    {
+      "observable": "financierInvoice.status",
+      "value": "CANCELLED"
+    },
+    {
+      "observable": "bank.finalBalanceMinor",
+      "value": 0
+    },
+    {
+      "observable": "income.finalNetMinor",
+      "value": 0
+    },
+    {
+      "observable": "closedPublicConsumers.refusalChange",
+      "value": 0
+    },
+    {
+      "observable": "publicPendingDepositDecision.afterRefund",
+      "value": false
+    },
+    {
+      "observable": "returnedVehicle.afterDepositDecision",
+      "value": "AVAILABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/unwindRehearsalPublic.test.ts",
+    "testName": "registered U-RET callback executes public unwind and reconciles literal witnesses in the harness"
+  },
+  "matrixRow": "U-RET"
+}

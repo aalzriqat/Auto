@@ -2540,7 +2540,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(result?.status).toBe("FAIL");
     expect(result?.detail).toContain(reason);
   });
-  test("all old29 model cases execute while the two native-only opening callbacks remain explicitly unproven", async () => {
+  test("all old29 model cases execute while the four native-only callbacks remain explicitly unproven", async () => {
     const results = await runAgainst();
     const failures = results.filter((r) => r.status === "FAIL");
     expect(failures.map((f) => `${f.id}: ${f.detail}`)).toEqual([]);
@@ -2548,12 +2548,12 @@ describe("the rehearsal passes against a backend that behaves", () => {
     // past the line above — which is precisely how a partial rehearsal gets
     // quoted as a complete one. Against a healthy backend nothing may decline.
     const declined = results.filter((r) => r.status === "UNPROVEN");
-    expect(declined.map((d) => d.id).sort()).toEqual(["S858-CONTAINMENT","S858-OPENING"]);
-    expect(summarize(results)).toMatchObject({total:31,passed:29,failed:0,unproven:2,unprovenIds:["S858-OPENING","S858-CONTAINMENT"],complete:false});
+    expect(declined.map((d) => d.id).sort()).toEqual(["CC-CASH","S858-CONTAINMENT","S858-OPENING","U-RET"]);
+    expect(summarize(results)).toMatchObject({total:33,passed:29,failed:0,unproven:4,unprovenIds:["CC-CASH","S858-OPENING","S858-CONTAINMENT","U-RET"],complete:false});
     // And it actually ran the cases rather than finding nothing to do.
-    // Cleanup callbacks execute after this original31 driver, in the trusted main entry point.
+    // Cleanup callbacks execute after this driver, in the trusted main entry point.
     const originalIds = REQUIRED_REHEARSAL_CASE_IDS.filter(id => id !== "S858-CLEANUP-HISTORY" && id !== "S858-CLEANUP-SPLIT");
-    expect(originalIds).toHaveLength(31);
+    expect(originalIds).toHaveLength(33);
     expect(results.map((r) => r.id).sort()).toEqual([...originalIds].sort());
   for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
@@ -2626,10 +2626,10 @@ describe("SCRUM-834 the rehearsal runs from main against either reconcile contra
   test.each([
     ["the candidate contract (pins the amount and evidence revision)", {}],
     ["the legacy contract (no pins, no revision served)", { legacyReconcileContract: true }],
-  ] as const)("all old29 cases execute against %s; opening remains outside this model", async (_label, defects) => {
+  ] as const)("all old29 cases execute against %s; native-only callbacks remain outside this model", async (_label, defects) => {
     const results = await runAgainst(defects);
     expect(results.filter((r) => r.status === "FAIL")).toEqual([]);
-    expect(results.filter((r) => r.status === "UNPROVEN").map(r=>r.id).sort()).toEqual(["S858-CONTAINMENT","S858-OPENING"]);
+    expect(results.filter((r) => r.status === "UNPROVEN").map(r=>r.id).sort()).toEqual(["CC-CASH","S858-CONTAINMENT","S858-OPENING","U-RET"]);
     expect(results.filter(r=>r.status === "PASS")).toHaveLength(29);
     for (const id of ["M486C5", "FD1"]) expect(statusOf(results, id), `${id} reconciles a fee`).toBe("PASS");
   });
