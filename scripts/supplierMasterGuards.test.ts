@@ -34,6 +34,8 @@ const ALL_TABLES: readonly string[] = [...SUPPLIER_TABLES, REGISTRY_TABLE];
 const SUPPLIER_MODULES = new Set(["convex/suppliers.ts", "convex/utils/supplierRegistry.ts"]);
 const LOCK_MODULE = "convex/utils/supplierRegistry.ts";
 const WRITE_METHODS = new Set(["insert", "patch", "replace"]);
+/** Per-test timeout for the whole-tree scan; see the comment on the lock-coverage test. */
+const SCAN_TIMEOUT_MS = 60_000;
 
 interface Violation {
   rule: string;
@@ -276,7 +278,12 @@ describe("supplier master source guards", () => {
     // The scan must have looked at the real writers: insert and patch on both tables.
     expect(supplierWrites).toBeGreaterThanOrEqual(4);
     expect(problems).toEqual([]);
-  });
+    // This test parses every non-test source under convex/ into a full AST. That takes about 1.4 s
+    // alone, but CI runs it in a coverage batch with v8 instrumentation and several workers, where
+    // it overran vitest's default 5 s test timeout (SCRUM-868, run 40525208382: "Test timed out in
+    // 5000ms", passing in 1.4 s on the non-coverage rerun). The scan is unchanged; the timeout is
+    // explicit, as in the sibling AST guards (organizationReactivationGuard, orgFinancialResetReferenceCoverage).
+  }, SCAN_TIMEOUT_MS);
 
   test("the supplier modules exist and are the only sources that name the new tables in a database call", () => {
     for (const relPath of SUPPLIER_MODULES) expect(REAL_SOURCES.some((s) => s.relPath === relPath), relPath).toBe(true);

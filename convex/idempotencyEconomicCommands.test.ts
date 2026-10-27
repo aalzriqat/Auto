@@ -665,7 +665,8 @@ describe("SCRUM-57 — classification ratchet", () => {
    *
    * So this walks source → manifest and asserts the two sets are EQUAL. It also
    * pins the non-economic side by name: a command may be `economic: false` only
-   * if it is `sales.createDraft`. Flipping any economic command to `false` to
+   * if it is `sales.createDraft` or `suppliers.create` (each with its recorded
+   * reason where the set is asserted below). Flipping any economic command to `false` to
    * silence the ratchet fails here instead of passing quietly.
    */
   test("the manifest is exactly the set of economic commands in the source, both directions", async () => {
@@ -717,9 +718,22 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
     // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
     // 56 -> 57: SCRUM-766 PR-B's `customerFinanceCompanyPayments.confirmPayment`.
+    // 58 -> 59 call sites by SCRUM-868 S1: `suppliers.create`, classified NON-economic (see below).
     expect(economicInSource.size).toBe(57);
-    expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(58);
+    // The non-economic side is pinned by name. `sales.createDraft` is the original entry.
+    //
+    // `suppliers.create` (SCRUM-868 S1, supplier master) is the second, classified on the code
+    // rather than inherited: it inserts one `suppliers` row, one audit log row and bumps the
+    // `supplierRegistryState` version, and nothing else. It posts no accounting event, creates
+    // no receivable or payable, moves no vehicle status and reserves nothing. The master holds
+    // identity only: `scripts/supplierMasterGuards.test.ts` pins the exact field list of all
+    // three tables and fails if any field name looks like money (I12), so this classification
+    // cannot lapse silently if someone adds a money field. It still takes a REQUIRED
+    // `idempotencyKey` (a retry returns the first supplier), but a double submit would create a
+    // duplicate master row, which the candidate check already refuses, not a double posting.
+    // Any later supplier command that touches money must be economic: true and listed above.
+    expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft", "suppliers.create"]);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(59);
   });
 
   /**
