@@ -19,10 +19,16 @@ import { requireOwnedRow } from "./tenancy";
  * `convex-test` serializes everything, so this is argued from the documented read set; it is
  * not demonstrated by any test.
  *
- * LOCK COVERAGE IS A COMPILE-TIME PROPERTY. The write helpers below take a `RegistryLock`, a
- * branded value only `withRegistryLock` mints, and `scripts/supplierMasterGuards.test.ts` fails on
- * any insert or patch of `suppliers` or `supplierAliases` outside a function that holds one, on a
- * forged lock, and on any delete.
+ * LOCK COVERAGE IS ENFORCED BY A TYPE PLUS A TYPE-AWARE TEST, NOT BY THE COMPILER ALONE. The write
+ * helpers below take a `RegistryLock`, a branded value only `withRegistryLock` mints. The compiler
+ * cannot stop a caller from writing the table directly, or from casting a lock into place, so
+ * `scripts/supplierMasterGuards.test.ts` builds a TypeScript program over `convex/` and fails on
+ * any insert, patch or replace of `suppliers` or `supplierAliases` outside a function that holds a
+ * lock (the table is read from a literal or from the `Id<"suppliers">` type), on a lock passed to a
+ * lock-taking helper that is cast, `any` or not a `RegistryLock`, on a cast to `RegistryLock`, on any
+ * delete, and on table-generic access outside two named modules. It does not prove what it cannot
+ * see: a table erased to `string` or `any`, or a lock reached through an indirect call. The test's
+ * header says exactly what is and is not proven.
  */
 
 export const SUPPLIER_ERROR = {
