@@ -671,6 +671,7 @@ describe("evaluate (PR check)", () => {
     ["Seat 2 model", "gpt-6.10-sol"],
     ["Seat 2 model", "gpt-6.1sol"],
     ["Seat 2 model", "gpt-61-sol"],
+    ["Seat 2 model", "gpt-6x1-sol"],
   ])("%s %j is rejected", async (label, value) => {
     expect((await evaluate({ body: fill({ [label]: value }), files: money })).ok).toBe(false);
   });
