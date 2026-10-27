@@ -763,12 +763,16 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // explicit native orgId declarations; legacy also exposes its caller-supplied opening id.
   // Source-driven handler controls and an unchecked-patch mutant above prove the
   // shared validator spreads do not silently withdraw either coverage property.
+  // SCRUM-868 S1 supplier master: +8 total (create, update, deactivate, reactivate, addAlias,
+  // retireAlias, internal initialiseRegistry, internal backfillRegistry), +7 analysed (all but
+  // the org-less backfill), +1 skippedNoOrgId (backfillRegistry paginates every organization).
+  // Every caller-supplied supplier or alias id goes through requireOwnedRow.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 554,
-      analysed: 373,
+      totalMutations: 562,
+      analysed: 380,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 166,
+      skippedNoOrgId: 167,
     });
   });
 });

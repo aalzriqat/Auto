@@ -269,6 +269,16 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "openingManagementSettlementPlans", index: "by_org" },
   { kind: "orgRows", table: "openingPayablePayments", index: "by_org" },
   { kind: "orgRows", table: "openingCommissionLiabilities", index: "by_org" },
+  // SCRUM-868 S1. The supplier master is tenant data and goes with its organization: aliases
+  // before the suppliers they name, and the registry lock document last. Appended after the
+  // existing steps because the order is pinned (a saved currentStepIndex must keep addressing
+  // the same step). It is RETAINED across a financial reset (see `orgFinancialReset.ts`), which is
+  // why these appear here and not there. An in-flight purge whose cursor is already past this
+  // position holds no supplier rows: its organization is suspended, so no supplier write passes
+  // `requireTenantAuth`, and `ensureRegistryState` refuses to create a registry row for it.
+  { kind: "orgRows", table: "supplierAliases", index: "by_org_and_supplierId" },
+  { kind: "orgRows", table: "suppliers", index: "by_org_and_status" },
+  { kind: "orgRows", table: "supplierRegistryState", index: "by_org" },
   // Explicit retention marker, not a deletion step: the owner requires task
   // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
   // never purged here. Keep it last; never turn it into a delete.

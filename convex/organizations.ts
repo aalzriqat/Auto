@@ -6,6 +6,7 @@ import { requireTenantAuth, requireOwner, requireOrCreateAuthenticatedUser } fro
 import { PERMISSIONS, DEFAULT_ROLE_TEMPLATES, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { ensureRegistryState } from "./utils/supplierRegistry";
 import {
   SOCIAL_CONVERSATION_GENERATION,
   SOCIAL_PLATFORMS,
@@ -132,6 +133,11 @@ export async function createOrganizationWithDefaultRoles(
   for (const platform of SOCIAL_PLATFORMS) {
     await ctx.db.insert("socialMaterializationState", { ...materializationStamp, platform });
   }
+
+  // SCRUM-868 S1: the supplier registry lock document. Every supplier write refuses
+  // REGISTRY_NOT_INITIALISED without it, so a dealership must be born with it. Organizations
+  // that predate this are covered by `internal.suppliers.backfillRegistry`.
+  await ensureRegistryState(ctx, orgId);
 
   // Seed default roles for the new organization
   let ownerRoleId = null;
