@@ -13,35 +13,46 @@
  *    reset.
  *
  * HOW THE TABLE IS FOUND. The scan is type-aware: one `ts.createProgram` over the convex project
- * (convex/tsconfig.json) gives a type checker. For every `db.insert/patch/replace/delete/get/query`
- * call the table is the string literal first argument, or else it is read from the checker type of
- * the first argument: an `Id<"suppliers">` (the legacy `db.patch(id, ...)` / `db.replace(id, row)`
- * form), or a variable whose type is a table-name union that includes one of the three tables.
- * A call counts only if it resolves to a signature declared in the `convex` package, or does not
- * resolve at all (an `any` receiver); `Map.get(supplierId)` is not a database call.
+ * (convex/tsconfig.json) gives a type checker. A call is a database call because the checker resolves it
+ * to an insert/patch/replace/delete/get/query method declared in a Convex database interface
+ * (`GenericDatabaseWriter` and friends, node_modules/convex/dist/esm-types/server/database.d.ts), not
+ * because of how it is written: `ctx.db["patch"](...)`, `const { patch } = ctx.db; patch(...)` and an
+ * aliased `db` all resolve the same way. `.bind`, `.call` and `.apply` on a database method are refused
+ * ("db-indirect-call"). A callee that does not resolve at all (an `any` receiver) is treated as a database
+ * call if its name is a database method name; `Map.get(supplierId)` is not a database call.
+ * The table is the string literal first argument, or else it is read from the checker type of the first
+ * argument: an `Id<"suppliers">` (the legacy `db.patch(id, ...)` / `db.replace(id, row)` form), a
+ * table-name union, or a type parameter, through its base constraint (`<T extends "suppliers" | "x">`).
  *
  * HOW A LOCK IS CHECKED. Any call to a function that has a `RegistryLock` parameter must pass, for
  * that parameter, an argument whose static type is assignable to `RegistryLock`, that is not
- * `any`/`unknown`, and that is not a type assertion (`as any`, `as unknown as never`,
+ * `any`/`unknown`/`never`, and that is not a type assertion (`as any`, `as unknown as never`,
  * `<RegistryLock>`), and the call must not use a spread. A suppressed type error
  * (`@ts-expect-error`) still fails, because the argument type is checked, not the diagnostics.
- * `as RegistryLock` and `as never` are refused anywhere outside `withRegistryLock`.
+ * `as RegistryLock` is refused anywhere outside `withRegistryLock`.
+ *
+ * GENERIC TABLE ACCESS. A database call whose table is typed as every table (`Id<TableNames>`,
+ * `<T extends TableNames>`) names no table. It is refused ("generic-table-access", so a helper like
+ * `patchRow<T extends TableNames>` is caught in its body) unless it sits in one of the exact functions
+ * in GENERIC_ALLOWANCES, with the methods listed there. Each adminData handler must call
+ * `assertAdminTable` as a straight-line statement before the database call; the purge runner is
+ * private and has one caller, passing `step.table`; two read-only helpers may use `get`. A test fails if
+ * an allowance matches no real call.
  *
  * WHAT IS PROVEN, AND WHAT IS NOT.
  *  Proven, for the code under convex/ that this program resolves (not test files): every
- *  `db` call whose table is statically knowable as a supplier table, by literal or by type, is
- *  inside a function with a `RegistryLock` parameter and does not delete; every call to a
- *  lock-taking function passes a lock that type-checks and is not cast into place.
+ *  `db` call whose table is statically knowable as a supplier table, by literal, by `Id` type or by
+ *  type-parameter constraint, is inside a function with a `RegistryLock` parameter and does not delete;
+ *  every call to a lock-taking function passes a lock that type-checks and is not cast into place.
  *  NOT proven, so do not read this as a sealed boundary:
  *   - a database call whose table type is `string`, `any` or otherwise erased (a helper taking
- *     `table: string` and an `any` receiver) shows no table to the scanner;
- *   - a call whose table is typed as EVERY table (`Id<TableNames>`) names no table. It is refused
- *     ("generic-table-access") except in convex/adminData.ts and convex/adminOrgs.ts, which are table-driven
- *     by design. For those two the proof is indirect: adminData's allowlist is read and shown to
- *     exclude the supplier tables, and the purge steps are asserted below. Whether adminData applies
- *     its allowlist before every call is not proven by this scan;
- *   - a lock reached through an indirect call (`fn.call`, a callback or object member bound to a
- *     lock-taking function, an `any`-typed callee) is not followed;
+ *     `table: string` and an `any` receiver, `(ctx.db as any).table("suppliers")`) shows no table;
+ *   - a READ of a supplier row through a generic read-only helper (`requireOwnedRow`, `makeDocCache`) is
+ *     not tracked: those helpers are exempt as `get`-only, and their callers are not scanned for tables;
+ *   - for adminData, the allowlist's content and the guard's position are checked, but not that
+ *     `assertAdminTable` throws on a table outside it; "dominates" is straight-line statements only;
+ *   - a lock reached through an indirect call (a callback or object member bound to a lock-taking
+ *     function, an `any`-typed callee) is not followed;
  *   - code outside convex/ (scripts, the Convex dashboard, `npx convex run` of a function that is
  *     not in this tree) is not scanned;
  *   - it does NOT prove concurrent writers conflict. `convex-test` serializes everything, so that
@@ -68,7 +79,7 @@ const SUPPLIER_MODULES = new Set(["convex/suppliers.ts", "convex/utils/supplierR
 const LOCK_MODULE = "convex/utils/supplierRegistry.ts";
 const WRITE_METHODS = new Set(["insert", "patch", "replace"]);
 /** Per-test timeout for the whole-tree scan; see the comment on the lock-coverage test. */
-const SCAN_TIMEOUT_MS = 180_000;
+const SCAN_TIMEOUT_MS = 75_000;
 
 interface Violation {
   rule: string;
@@ -81,22 +92,52 @@ interface Scan {
 }
 
 const SCHEMA_TABLES = Object.keys(schema.tables);
+
 /**
- * The only modules allowed a database call whose table is typed as every table. Each is table-driven
- * by design and has its own guard, asserted in the "generic table modules" test:
- *  - convex/adminData.ts: the cross-org Data Browser. `assertAdminTable` refuses any table not in its
- *    ADMIN_TABLES allowlist, which names none of the supplier tables.
- *  - convex/adminOrgs.ts: the organization purge. It deletes every org row table by table, the supplier
- *    tables included, children before parents (ORGANIZATION_DELETION_STEPS). That is the one sanctioned
- *    delete of supplier data, together with the organization it belongs to.
+ * The exact functions allowed a database call whose table is typed as every table (or as a union that
+ * includes a supplier table). Not whole modules: a supplier write added anywhere else in these files is
+ * flagged. Each entry names the methods it may use and, where there is one, the guard that must run
+ * first. The guard is checked as a straight-line statement at the top of an enclosing function, before the
+ * database call (so it dominates it); the "generic functions" test proves each entry still matches code.
+ *  - adminData.ts handlers (the cross-org Data Browser): `assertAdminTable` refuses any table not in its
+ *    ADMIN_TABLES allowlist, which names none of the supplier tables (asserted below).
+ *  - adminOrgs.ts `deleteRowsByOrgBatch` (the organization purge): called once, with `step.table` from
+ *    ORGANIZATION_DELETION_STEPS (asserted below). That is the one sanctioned delete of supplier data,
+ *    together with the organization it belongs to.
+ *  - tenancy.ts `requireOwnedRow` and sales.ts `makeDocCache`: generic read-only helpers (`get`), which cannot
+ *    write. A READ of a supplier row through such a helper is not tracked by this scan (see the header).
  */
-const GENERIC_TABLE_MODULES = new Map<string, string>([
-  ["convex/adminData.ts", "table-driven admin editor behind an ADMIN_TABLES allowlist"],
-  ["convex/adminOrgs.ts", "organization purge over ORGANIZATION_DELETION_STEPS"],
-]);
+interface GenericAllowance {
+  file: string;
+  fn: string;
+  methods: readonly string[];
+  guard?: string;
+  /** Also allow a table typed as a PARTIAL union that includes a supplier table (the constraint of a generic read helper). */
+  allowPartial?: boolean;
+  reason: string;
+}
+const ADMIN_GUARD = "assertAdminTable";
+const GENERIC_ALLOWANCES: readonly GenericAllowance[] = [
+  { file: "convex/adminData.ts", fn: "adminListByOrg", methods: ["query"], guard: ADMIN_GUARD, reason: "Data Browser list" },
+  { file: "convex/adminData.ts", fn: "adminGetRecord", methods: ["get"], guard: ADMIN_GUARD, reason: "Data Browser read" },
+  { file: "convex/adminData.ts", fn: "adminUpdateRecord", methods: ["get", "patch"], guard: ADMIN_GUARD, reason: "Data Browser edit" },
+  { file: "convex/adminData.ts", fn: "adminRestoreRecords", methods: ["get", "patch"], guard: ADMIN_GUARD, reason: "Data Browser restore" },
+  { file: "convex/adminData.ts", fn: "adminHardDelete", methods: ["get", "delete"], guard: ADMIN_GUARD, reason: "Data Browser delete" },
+  { file: "convex/adminOrgs.ts", fn: "deleteRowsByOrgBatch", methods: ["query", "delete"], reason: "organization purge step runner" },
+  { file: "convex/utils/tenancy.ts", fn: "requireOwnedRow", methods: ["get"], allowPartial: true, reason: "generic read-only ownership check" },
+  { file: "convex/sales.ts", fn: "makeDocCache", methods: ["get"], reason: "generic read-only document cache" },
+];
 
 const DB_METHODS = new Set(["insert", "patch", "replace", "delete", "get", "query"]);
 const CONVEX_PACKAGE = /[\\/]node_modules[\\/]convex[\\/]/;
+/** The Convex interfaces whose methods are database calls (node_modules/convex/dist/esm-types/server/database.d.ts). */
+const CONVEX_DB_INTERFACES = new Set([
+  "BaseDatabaseReader",
+  "GenericDatabaseReader",
+  "GenericDatabaseWriter",
+  "BaseTableReader",
+  "BaseTableWriter",
+]);
 
 interface LockParameter {
   index: number;
@@ -109,7 +150,7 @@ interface TableFacts {
   unresolved: boolean;
 }
 
-/** Table names carried by a type: a string literal, a union of them, or `Id<"table">`. */
+/** Table names carried by a type: a string literal, a union, `Id<"table">`, or a type parameter's constraint. */
 function tablesOfType(checker: ts.TypeChecker, type: ts.Type, at: ts.Node, out: TableFacts, depth = 0): void {
   if (depth > 8) {
     out.unresolved = true;
@@ -125,6 +166,13 @@ function tablesOfType(checker: ts.TypeChecker, type: ts.Type, at: ts.Node, out: 
   }
   if (type.isStringLiteral()) {
     out.tables.push(type.value);
+    return;
+  }
+  if (type.flags & ts.TypeFlags.TypeParameter) {
+    // `T extends TableNames` or `T extends "suppliers" | "vehicles"`: the table is whatever the constraint allows.
+    const constraint = checker.getBaseConstraintOfType(type);
+    if (constraint === undefined || constraint === type) out.unresolved = true;
+    else tablesOfType(checker, constraint, at, out, depth + 1);
     return;
   }
   // GenericId<T> is `string & { __tableName: T }`; the property carries the table-name type.
@@ -183,10 +231,68 @@ function enclosingFunctionName(node: ts.Node): string | undefined {
   return undefined;
 }
 
+/** The name of the top-level declaration containing `node`: a function, or `export const name = ...`. */
+function topLevelName(node: ts.Node): string | undefined {
+  for (let current: ts.Node | undefined = node; current?.parent; current = current.parent) {
+    if (!ts.isSourceFile(current.parent)) continue;
+    if (ts.isFunctionDeclaration(current)) return current.name?.text;
+    if (ts.isVariableStatement(current)) {
+      const declaration = current.declarationList.declarations[0];
+      return declaration && ts.isIdentifier(declaration.name) ? declaration.name.text : undefined;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
 function skipParentheses(node: ts.Expression): ts.Expression {
   let current = node;
   while (ts.isParenthesizedExpression(current)) current = current.expression;
   return current;
+}
+
+function skipAwait(node: ts.Expression): ts.Expression {
+  let current = skipParentheses(node);
+  while (ts.isAwaitExpression(current)) current = skipParentheses(current.expression);
+  return current;
+}
+
+function isCallTo(expression: ts.Expression | undefined, name: string): boolean {
+  if (!expression) return false;
+  const bare = skipAwait(expression);
+  return ts.isCallExpression(bare) && ts.isIdentifier(bare.expression) && bare.expression.text === name;
+}
+
+/**
+ * True when some function enclosing `node` has, directly in its body block (not inside an `if`, a loop or
+ * a callback), a statement that calls `guard` and ends before `node` starts. Straight-line code, so the
+ * guard runs, or throws, before `node`.
+ */
+function guardDominates(node: ts.Node, guard: string, sourceFile: ts.SourceFile): boolean {
+  for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
+    if (!ts.isFunctionLike(current)) continue;
+    const body = (current as ts.FunctionLikeDeclaration).body;
+    if (!body || !ts.isBlock(body)) continue;
+    for (const statement of body.statements) {
+      if (statement.end > node.getStart(sourceFile)) break;
+      if (ts.isExpressionStatement(statement) && isCallTo(statement.expression, guard)) return true;
+      if (
+        ts.isVariableStatement(statement) &&
+        statement.declarationList.declarations.some((declaration) => isCallTo(declaration.initializer, guard))
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** The method name of a callee written `x.name`, `x["name"]` or a bare identifier. */
+function calleeName(callee: ts.Expression): string | undefined {
+  if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+  if (ts.isElementAccessExpression(callee)) return stringLiteralValue(callee.argumentExpression);
+  if (ts.isIdentifier(callee)) return callee.text;
+  return undefined;
 }
 
 /** The function-like declaration a symbol stands for: a function, a method or `const f = () => {}`. */
@@ -219,11 +325,26 @@ class Scanner {
     return facts;
   }
 
-  /** A database call resolves into the convex package. An unresolved callee (any receiver) is assumed to be one. */
-  private isDatabaseCall(call: ts.CallExpression): boolean {
-    const declaration = this.checker.getResolvedSignature(call)?.declaration;
-    if (!declaration) return true;
-    return CONVEX_PACKAGE.test(declaration.getSourceFile().fileName.replaceAll("\\", "/"));
+  /**
+   * The Convex database method a resolved signature declares, or undefined. The checker answers this,
+   * not the syntax: `ctx.db["patch"](...)`, `const { patch } = ctx.db; patch(...)` and an aliased `db` all
+   * resolve to the same declaration in the `GenericDatabaseWriter` interface.
+   */
+  private databaseMethodOf(signature: ts.Signature | undefined): string | undefined {
+    const declaration = signature?.declaration;
+    if (!declaration || !CONVEX_PACKAGE.test(declaration.getSourceFile().fileName.replaceAll("\\", "/"))) return undefined;
+    const owner = declaration.parent;
+    if (!ts.isInterfaceDeclaration(owner) || !CONVEX_DB_INTERFACES.has(owner.name.text)) return undefined;
+    const name = ts.isMethodSignature(declaration) ? declaration.name : undefined;
+    return name && ts.isIdentifier(name) && DB_METHODS.has(name.text) ? name.text : undefined;
+  }
+
+  /** `db.patch.bind(db)`, `.call(...)` and `.apply(...)` on a database method: the call is made through a wrapper. */
+  private isIndirectDatabaseCall(call: ts.CallExpression): boolean {
+    const callee = call.expression;
+    if (!ts.isPropertyAccessExpression(callee) || !["bind", "call", "apply"].includes(callee.name.text)) return false;
+    const target = this.checker.getTypeAtLocation(callee.expression);
+    return target.getCallSignatures().some((signature) => this.databaseMethodOf(signature) !== undefined);
   }
 
   /** Declared `RegistryLock` parameters of `call`'s callee, with their positions; empty for any other callee. */
@@ -258,7 +379,8 @@ class Scanner {
     if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Never)) return true;
     return !this.checker.isTypeAssignableTo(type, this.checker.getTypeFromTypeNode(parameter.typeNode));
   }
-  scan(sourceFile: ts.SourceFile, relPath: string): Scan {
+
+  scan(sourceFile: ts.SourceFile, relPath: string, used?: Set<string>): Scan {
     const inSupplierModule = SUPPLIER_MODULES.has(relPath);
     const violations: Violation[] = [];
     let supplierWrites = 0;
@@ -279,11 +401,8 @@ class Scanner {
             if (this.forgedLockArgument(node, parameter)) flag("forged-lock", node);
           }
         }
-        if (ts.isPropertyAccessExpression(node.expression)) {
-          this.scanMethodCall(node, node.expression, relPath, inSupplierModule, flag, () => {
-            supplierWrites += 1;
-          });
-        }
+        if (this.isIndirectDatabaseCall(node)) flag("db-indirect-call", node);
+        this.scanCall(node, { used, relPath, sourceFile, inSupplierModule, flag, countSupplierWrite: () => (supplierWrites += 1) });
       }
       ts.forEachChild(node, visit);
     };
@@ -291,53 +410,86 @@ class Scanner {
     return { violations, supplierWrites };
   }
 
-  private scanMethodCall(
-    node: ts.CallExpression,
-    callee: ts.PropertyAccessExpression,
-    relPath: string,
-    inSupplierModule: boolean,
-    flag: (rule: string, node: ts.Node) => void,
-    countSupplierWrite: () => void,
-  ): void {
-    const method = callee.name.text;
+  private scanCall(node: ts.CallExpression, context: CallContext): void {
+    const { relPath, sourceFile, inSupplierModule, flag } = context;
+    const callee = node.expression;
     const first = node.arguments[0];
+    // A call is a database call when the checker resolves it into a Convex database interface. A callee that
+    // does not resolve at all (an `any` receiver) is treated as one if its name is a database method name.
+    const resolved = this.checker.getResolvedSignature(node);
+    const declared = this.databaseMethodOf(resolved);
+    const written = calleeName(callee);
+    const isDatabaseCall = declared !== undefined || (resolved?.declaration === undefined && written !== undefined && DB_METHODS.has(written));
+    const method = declared ?? written;
     let facts: TableFacts = { tables: [], unresolved: true };
-    if (DB_METHODS.has(method) && first !== undefined) {
-      const literal = stringLiteralValue(first);
-      // A literal table is trusted syntactically. A table given only by type counts when the call
-      // is a database call: `Map.get(supplierId)` and `Set.delete(supplierId)` are not.
-      if (literal !== undefined || this.isDatabaseCall(node)) facts = this.tablesOfExpression(first);
+    // A literal table is trusted syntactically; a table given only by type counts for a database call.
+    // `Map.get(supplierId)` and `Set.delete(supplierId)` are not database calls.
+    if (method !== undefined && DB_METHODS.has(method) && first !== undefined) {
+      if (stringLiteralValue(first) !== undefined || isDatabaseCall) facts = this.tablesOfExpression(first);
     }
-    // A table typed as every table (`Id<TableNames>`, `table: TableNames`) names no table in particular:
-    // generic code. It may reach the supplier tables only in a module listed in GENERIC_TABLE_MODULES,
-    // whose own guard is asserted by a separate test below. Anywhere else it is a violation.
-    if (DB_METHODS.has(method) && SCHEMA_TABLES.every((table) => facts.tables.includes(table))) {
-      if (!GENERIC_TABLE_MODULES.has(relPath)) flag("generic-table-access", node);
+    const generic = isDatabaseCall && SCHEMA_TABLES.every((table) => facts.tables.includes(table));
+    const touchesNewTable = facts.tables.some((table) => ALL_TABLES.includes(table));
+
+    // An allowed generic function may make this call: its name, the method, and its guard all match.
+    // Anything else that touches a supplier table through a type is a violation, in the rule that fits.
+    if (isDatabaseCall && method !== undefined && (generic || touchesNewTable)) {
+      const allowance = this.allowedGenericCall(node, relPath, method, sourceFile);
+      if (allowance && (generic || allowance.allowPartial)) {
+        context.used?.add(`${allowance.file}#${allowance.fn}#${method}`);
+        return;
+      }
+    }
+    if (generic) {
+      flag("generic-table-access", node);
       facts = { tables: [], unresolved: true };
     }
-    const touchesNewTable = facts.tables.some((table) => ALL_TABLES.includes(table));
     const isSupplierTable = facts.tables.some((table) => (SUPPLIER_TABLES as readonly string[]).includes(table));
+    const touches = facts.tables.some((table) => ALL_TABLES.includes(table));
     const noTable = facts.tables.length === 0;
 
-    if (method === "delete" && (touchesNewTable || inSupplierModule)) flag("delete", node);
-    if (!inSupplierModule && touchesNewTable && ["insert", "patch", "replace", "query", "get"].includes(method)) {
+    if (method === "delete" && (touches || inSupplierModule)) flag("delete", node);
+    if (!inSupplierModule && touches && ["insert", "patch", "replace", "query", "get"].includes(method ?? "")) {
       flag("foreign-access", node);
     }
-    if (inSupplierModule && WRITE_METHODS.has(method)) {
+    if (inSupplierModule && method !== undefined && WRITE_METHODS.has(method)) {
       if (noTable) flag("untabled-write", node);
       if (facts.tables.includes(REGISTRY_TABLE) && relPath !== LOCK_MODULE) flag("registry-write-outside-lock-module", node);
     }
-    if (isSupplierTable && WRITE_METHODS.has(method)) {
-      countSupplierWrite();
+    if (isSupplierTable && method !== undefined && WRITE_METHODS.has(method)) {
+      context.countSupplierWrite();
       if (!holdsRegistryLock(node)) flag("unlocked-write", node);
     }
-    if (inSupplierModule && (method === "filter" || method === "collect") && chainHasQuery(callee.expression)) {
-      flag(method === "filter" ? "filter" : "unbounded-collect", node);
+    if (ts.isPropertyAccessExpression(callee)) {
+      if (inSupplierModule && (method === "filter" || method === "collect") && chainHasQuery(callee.expression)) {
+        flag(method === "filter" ? "filter" : "unbounded-collect", node);
+      }
+      // A sort with no compare function orders by UTF-16 code unit only by accident of the default
+      // (Sonar typescript:S2871). The supplier modules say so with `codeUnitCompare`.
+      if (inSupplierModule && method === "sort" && node.arguments.length === 0) flag("bare-sort", node);
     }
-    // A sort with no compare function orders by UTF-16 code unit only by accident of the default
-    // (Sonar typescript:S2871). The supplier modules say so with `codeUnitCompare`.
-    if (inSupplierModule && method === "sort" && node.arguments.length === 0) flag("bare-sort", node);
   }
+
+  private allowedGenericCall(
+    node: ts.CallExpression,
+    relPath: string,
+    method: string,
+    sourceFile: ts.SourceFile,
+  ): GenericAllowance | undefined {
+    const fn = topLevelName(node);
+    const entry = GENERIC_ALLOWANCES.find((allowance) => allowance.file === relPath && allowance.fn === fn);
+    if (!entry || !entry.methods.includes(method)) return undefined;
+    return entry.guard === undefined || guardDominates(node, entry.guard, sourceFile) ? entry : undefined;
+  }
+}
+
+interface CallContext {
+  /** Allowances actually used, as `file#fn#method`; passed for the real tree so a stale entry can be caught. */
+  used?: Set<string>;
+  relPath: string;
+  sourceFile: ts.SourceFile;
+  inSupplierModule: boolean;
+  flag: (rule: string, node: ts.Node) => void;
+  countSupplierWrite: () => number;
 }
 
 function listConvexSources(dir: string, out: string[] = []): string[] {
@@ -430,11 +582,11 @@ function scanSnippet(snippet: Snippet): Scan {
   return scanner.scan(sourceFile, snippet.file);
 }
 
-function scanReal(source: { relPath: string; absPath: string }): Scan {
+function scanReal(source: { relPath: string; absPath: string }, usedAllowances: Set<string>): Scan {
   const { scanner, program } = getScanner();
   const sourceFile = program.getSourceFile(source.absPath);
   if (!sourceFile) throw new Error(`${source.relPath} is not in the program`);
-  return scanner.scan(sourceFile, source.relPath);
+  return scanner.scan(sourceFile, source.relPath, usedAllowances);
 }
 
 const BAD_SNIPPETS: Array<Snippet & { rule: string }> = [
@@ -558,7 +710,71 @@ const BAD_SNIPPETS: Array<Snippet & { rule: string }> = [
     file: "convex/other.ts",
     source: `export async function f(ctx: MutationCtx, supplierId: Id<"suppliers">) { await ctx.db.delete(supplierId); }`,
   },
-  // A table typed as every table names no table in particular. Outside the two generic modules it is refused.
+  // Round 2 (PR 687 Seat 2): database calls the syntactic `<expr>.patch(` match could not see, and
+  // generic helpers that hide the table behind a type parameter. Each was zero violations before.
+  {
+    rule: "foreign-access",
+    file: "convex/other.ts",
+    source: `export async function f(ctx: MutationCtx, supplierId: Id<"suppliers">) { await ctx.db["patch"](supplierId, { status: "INACTIVE" }); }`,
+  },
+  {
+    rule: "foreign-access",
+    file: "convex/other.ts",
+    source: `export async function f(ctx: MutationCtx, supplierId: Id<"suppliers">) { const { patch } = ctx.db; await patch(supplierId, { status: "INACTIVE" }); }`,
+  },
+  {
+    rule: "unlocked-write",
+    file: "convex/suppliers.ts",
+    source: `export async function f(ctx: MutationCtx, supplierId: Id<"suppliers">) { const { patch } = ctx.db; await patch(supplierId, { status: "INACTIVE" }); }`,
+  },
+  {
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    source: `export async function f(ctx: MutationCtx, supplierId: Id<"suppliers">) { const p = ctx.db.patch.bind(ctx.db); await p(supplierId, { status: "INACTIVE" }); }`,
+  },
+  {
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    source: `export async function f(ctx: MutationCtx, supplierId: Id<"suppliers">) { await ctx.db.patch.call(ctx.db, supplierId, { status: "INACTIVE" }); }`,
+  },
+  {
+    rule: "generic-table-access",
+    file: "convex/other.ts",
+    source: `export async function patchRow<T extends TableNames>(ctx: MutationCtx, id: Id<T>, value: never) { await ctx.db.patch(id, value); }`,
+  },
+  {
+    rule: "foreign-access",
+    file: "convex/other.ts",
+    source: `export async function patchOwned<T extends "suppliers" | "vehicles">(ctx: MutationCtx, id: Id<T>, value: never) { await ctx.db.patch(id, value); }`,
+  },
+  // The exemption is per function, not per module. A generic call elsewhere in adminData/adminOrgs is refused,
+  // and so is an allowlisted function that lacks its guard.
+  {
+    rule: "generic-table-access",
+    file: "convex/adminData.ts",
+    source: `export async function sneaky(ctx: MutationCtx, id: Id<TableNames>) { await ctx.db.delete(id); }`,
+  },
+  {
+    rule: "generic-table-access",
+    file: "convex/adminOrgs.ts",
+    source: `export async function sneaky(ctx: MutationCtx, id: Id<TableNames>) { await ctx.db.delete(id); }`,
+  },
+  {
+    rule: "generic-table-access",
+    file: "convex/adminData.ts",
+    source: `export async function adminUpdateRecord(ctx: MutationCtx, id: Id<TableNames>) { await ctx.db.patch(id, {} as never); }`,
+  },
+  {
+    rule: "foreign-access",
+    file: "convex/adminData.ts",
+    source: `export async function adminUpdateRecord(ctx: MutationCtx, id: Id<"suppliers">) { assertAdminTable("vehicles"); await ctx.db.patch(id, {} as never); }`,
+  },
+  {
+    rule: "foreign-access",
+    file: "convex/adminOrgs.ts",
+    source: `export async function deleteRowsByOrgBatch(ctx: MutationCtx, id: Id<"suppliers">) { await ctx.db.patch(id, {} as never); }`,
+  },
+  // A table typed as every table names no table in particular. Outside the generic functions it is refused.
   {
     rule: "generic-table-access",
     file: "convex/other.ts",
@@ -628,8 +844,27 @@ const GOOD_SNIPPETS: Snippet[] = [
   { file: "convex/other.ts", source: `export const s = (ids: string[]) => [...ids].sort();` },
   // Type-aware good cases: the same shapes as the probes, but legitimate.
   {
+    // An allowed generic function, with its guard as a straight-line statement before the call.
     file: "convex/adminData.ts",
-    source: `export async function f(ctx: MutationCtx, id: Id<TableNames>) { return await ctx.db.get(id); }`,
+    source: `export async function adminUpdateRecord(ctx: MutationCtx, id: Id<TableNames>, name: string) {
+      const { table } = assertAdminTable(name);
+      return await ctx.db.get(id);
+    }`,
+  },
+  {
+    file: "convex/adminData.ts",
+    source: `export const adminHardDelete = async (ctx: MutationCtx, id: Id<TableNames>, name: string) => {
+      assertAdminTable(name);
+      for (const n of [1]) { await ctx.db.delete(id); }
+    };`,
+  },
+  {
+    file: "convex/adminOrgs.ts",
+    source: `async function deleteRowsByOrgBatch(ctx: MutationCtx, table: TableNames) { return ctx.db.query(table).take(1); }`,
+  },
+  {
+    file: "convex/utils/tenancy.ts",
+    source: `export async function requireOwnedRow<T extends "suppliers" | "vehicles">(ctx: QueryCtx, id: Id<T>) { return await ctx.db.get(id); }`,
   },
   {
     file: "convex/suppliers.ts",
@@ -670,33 +905,45 @@ describe("supplier master source guards", () => {
   test("lock coverage: no insert, patch or replace on suppliers or supplierAliases happens outside a function holding a RegistryLock, and nothing deletes either table", () => {
     let supplierWrites = 0;
     const problems: string[] = [];
+    const used = new Set<string>();
     for (const source of REAL_SOURCES) {
-      const scan = scanReal(source);
+      const scan = scanReal(source, used);
       supplierWrites += scan.supplierWrites;
       for (const v of scan.violations) problems.push(`${source.relPath}:${v.line} ${v.rule} ${v.text}`);
     }
     // The scan must have looked at the real writers: insert and patch on both tables.
     expect(supplierWrites).toBeGreaterThanOrEqual(4);
     expect(problems).toEqual([]);
+    // Every allowance still matches real code: a stale entry (renamed function, removed call) fails here
+    // instead of silently exempting nothing, or the wrong thing, later.
+    const unused = GENERIC_ALLOWANCES.flatMap((entry) =>
+      entry.methods.filter((method) => !used.has(`${entry.file}#${entry.fn}#${method}`)).map((method) => `${entry.file}#${entry.fn}#${method}`),
+    );
+    expect(unused, "allowances that matched no real call").toEqual([]);
     // The first test to run builds one TypeScript program over every non-test source under convex/
     // plus the synthetic snippets, so the type checker can read table and lock types. Measured on a
-    // developer machine (SCRUM-868 PR 687): the whole file takes about 14 s, almost all of it that
+    // developer machine (SCRUM-868 PR 687, round 2): the whole file takes about 16 s (a second reviewer measured 15.8 s), almost all of it that
     // program build and the scan. CI runs it in a coverage batch with v8 instrumentation and several
     // workers (the earlier AST-only version overran vitest's default 5 s there: run 40525208382,
-    // "Test timed out in 5000ms", 1.4 s uncovered), so the timeout leaves roughly 12x headroom. Tests
+    // "Test timed out in 5000ms", 1.4 s uncovered). The timeout is about 4x the measured time, 75 s, which is also the ceiling we accept for this guard; a CI run that exceeds it should be investigated, not given a larger number. Tests
     // that need the program share it through getScanner(); each carries the explicit timeout, as in
     // the sibling AST guards (organizationReactivationGuard, orgFinancialResetReferenceCoverage).
   }, SCAN_TIMEOUT_MS);
 
-  test("generic table modules: the Data Browser allowlist names none of the supplier tables, and the purge lists all three", () => {
+  test("generic functions: the Data Browser allowlist names no supplier table, and the purge runner is driven only by its steps", () => {
     const { program } = getScanner();
-    const adminData = REAL_SOURCES.find((s) => s.relPath === "convex/adminData.ts");
-    expect(adminData).toBeDefined();
-    const sourceFile = program.getSourceFile(adminData!.absPath);
-    expect(sourceFile).toBeDefined();
+    const sourceOf = (relPath: string): ts.SourceFile => {
+      const real = REAL_SOURCES.find((s) => s.relPath === relPath);
+      expect(real, relPath).toBeDefined();
+      const file = program.getSourceFile(real!.absPath);
+      expect(file, relPath).toBeDefined();
+      return file!;
+    };
+
+    // adminData: the allowlist that assertAdminTable enforces holds none of the supplier tables.
     const allowlisted: string[] = [];
     let found = false;
-    const visit = (node: ts.Node): void => {
+    const readAllowlist = (node: ts.Node): void => {
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "ADMIN_TABLES" && node.initializer) {
         found = true;
         const collect = (inner: ts.Node): void => {
@@ -708,14 +955,30 @@ describe("supplier master source guards", () => {
         };
         collect(node.initializer);
       }
-      ts.forEachChild(node, visit);
+      ts.forEachChild(node, readAllowlist);
     };
-    visit(sourceFile!);
+    readAllowlist(sourceOf("convex/adminData.ts"));
     expect(found, "ADMIN_TABLES is declared in convex/adminData.ts").toBe(true);
     expect(allowlisted.length, "the allowlist was read").toBeGreaterThan(10);
     expect(allowlisted.filter((table) => ALL_TABLES.includes(table))).toEqual([]);
-    // The purge side is asserted by "all three tables are deleted with the organization" below.
-    expect([...GENERIC_TABLE_MODULES.keys()].sort()).toEqual(["convex/adminData.ts", "convex/adminOrgs.ts"]);
+
+    // adminOrgs: the purge step runner is private and has exactly one caller, which passes `step.table`.
+    const adminOrgs = sourceOf("convex/adminOrgs.ts");
+    let declaredPrivate = false;
+    const callers: string[] = [];
+    const readRunner = (node: ts.Node): void => {
+      if (ts.isFunctionDeclaration(node) && node.name?.text === "deleteRowsByOrgBatch") {
+        declaredPrivate = !node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+      }
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "deleteRowsByOrgBatch") {
+        callers.push(node.arguments[1]?.getText(adminOrgs) ?? "");
+      }
+      ts.forEachChild(node, readRunner);
+    };
+    readRunner(adminOrgs);
+    expect(declaredPrivate, "deleteRowsByOrgBatch is not exported").toBe(true);
+    expect(callers).toEqual(["step.table"]);
+    // That the steps include all three supplier tables, children first, is the purge test below.
   }, SCAN_TIMEOUT_MS);
 
   test("the supplier modules exist and are the only sources that name the new tables in a database call", () => {
