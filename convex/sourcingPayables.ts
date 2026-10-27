@@ -11,6 +11,13 @@ import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentM
 import { Doc, Id } from "./_generated/dataModel";
 import { getActiveDepositHolds } from "./utils/depositHelpers";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { supplierPayableVatReclassAllowed } from "./utils/vehicleOwnership";
+
+const OPENING_PAYABLE_VAT_REFUSAL = "Opening liabilities cannot be reclassified as VAT.";
+
+/** SCRUM-781, owner ruling SCRUM-773 c22401: no reclaimable VAT on a consigned supplier payable. */
+const CONSIGNED_PAYABLE_VAT_REFUSAL =
+  "A consigned vehicle's supplier payable is settled at its gross amount. VAT cannot be reclassified on it.";
 
 const supplierMethodUsesBank = (method: string) =>
   method === "BANK_TRANSFER" || method === "CARD" || method === "CHEQUE";
@@ -311,7 +318,19 @@ export const markPaid = mutation({
         }
 
         const opening = await openingPayableBasis(ctx,args.orgId,payable);
-        if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError("Opening liabilities cannot be reclassified as VAT.");
+        if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError(OPENING_PAYABLE_VAT_REFUSAL);
+        // SCRUM-781 (owner ruling SCRUM-773 c22401): a consignment books no vehicle cost, so there is
+        // no cost to reclaim VAT out of. Refused here, at the mutation boundary and inside the
+        // idempotency callback: the uncaught throw rolls back the command claim, so the refusal is
+        // not cached and the same key can be retried without VAT.
+        if (args.taxAmount !== undefined && args.taxAmount > 0) {
+          // An opening liability has no vehicle to prove ownership from; same refusal as above, fail closed.
+          if (payable.origin === "OPENING") throw new ConvexError(OPENING_PAYABLE_VAT_REFUSAL);
+          const vehicle = await ctx.db.get(payable.vehicleId);
+          if (!supplierPayableVatReclassAllowed(payable, vehicle?.orgId === args.orgId ? vehicle : null)) {
+            throw new ConvexError(CONSIGNED_PAYABLE_VAT_REFUSAL);
+          }
+        }
         const now = Date.now();
         await ctx.db.patch(args.payableId, {
           status: "PAID",
@@ -468,7 +487,7 @@ export const recordPartialPayment = mutation({
         }
 
         const opening = await openingPayableBasis(ctx,args.orgId,payable);
-        if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError("Opening liabilities cannot be reclassified as VAT.");
+        if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError(OPENING_PAYABLE_VAT_REFUSAL);
         const now = Date.now();
         const settlesInFull = projectedMinor === dueMinor;
         const paymentSeq = (payable.paymentSeq ?? 0) + 1;
