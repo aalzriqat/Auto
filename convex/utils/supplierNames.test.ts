@@ -42,6 +42,29 @@ describe("supplier name and tax normalisation", () => {
     expect(normalizeNameKey("ـــ")).toBe("");
   });
 
+  test("invisible format characters do not change the key, and a name made only of them has an empty key", () => {
+    const RLM = "‏";
+    const LRM = "‎";
+    expect(normalizeNameKey(`محمد${RLM}`)).toBe(normalizeNameKey("محمد"));
+    expect(normalizeNameKey(`${LRM}Al Nour${RLM}`)).toBe("al nour");
+    expect(normalizeNameKey("Al​Nour")).toBe("alnour");
+    expect(normalizeNameKey("Al­Nour")).toBe("alnour");
+    expect(normalizeNameKey("Al﻿Nour")).toBe("alnour");
+    expect(normalizeNameKey("می‌خواهم")).toBe(normalizeNameKey("میخواهم"));
+    // One code point from each class: default-ignorable but not Cf (CGJ), and Cf but not default-ignorable.
+    expect(normalizeNameKey("Al͏Nour")).toBe("alnour");
+    expect(normalizeNameKey("Al؀Nour")).toBe("alnour");
+    expect(normalizeNameKey(RLM)).toBe("");
+    expect(normalizeNameKey(`  ${RLM}${LRM}​ `)).toBe("");
+  });
+
+  test("full case folding puts sharp s, final sigma and ordinary case on one key", () => {
+    expect(normalizeNameKey("Straße GmbH")).toBe(normalizeNameKey("STRASSE GMBH"));
+    expect(normalizeNameKey("οδυσσευς")).toBe(normalizeNameKey("οδυσσευσ"));
+    expect(normalizeNameKey("ΟΔΥΣΣΕΥΣ")).toBe(normalizeNameKey("οδυσσευσ"));
+    expect(normalizeNameKey("Straße")).not.toBe(normalizeNameKey("Strase"));
+  });
+
   test("tax ids drop separators, fold Arabic-Indic digits and upper-case letters", () => {
     expect(normalizeTaxIdKey("12-345 678")).toBe("12345678");
     expect(normalizeTaxIdKey("٠١٢٣٤٥")).toBe("012345");

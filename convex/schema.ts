@@ -7956,6 +7956,9 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     // Added beyond the design's list: a tax id typed with no jurisdiction, or a
     // different one, is only a soft candidate and must still be found by key alone.
     .index("by_org_and_taxIdKey", ["orgId", "taxIdKey"])
+    // Finds the suppliers that share a legal identity with a given one, so its identity
+    // cannot change underneath them.
+    .index("by_org_and_sharedLegalIdentityOf", ["orgId", "sharedLegalIdentityOf"])
     .searchIndex("search_displayName", { searchField: "displayName", filterFields: ["orgId", "status"] }),
 
   supplierAliases: defineTable({

@@ -29,7 +29,9 @@ export const SUPPLIER_ERROR = {
   REGISTRY_CORRUPT: "REGISTRY_CORRUPT",
   LEGAL_IDENTITY_EXISTS: "SUPPLIER_LEGAL_IDENTITY_EXISTS",
   DUPLICATE_CANDIDATES: "SUPPLIER_DUPLICATE_CANDIDATES",
+  CANDIDATES_OVER_CAP: "SUPPLIER_CANDIDATES_OVER_CAP",
   SHARED_IDENTITY_MISMATCH: "SUPPLIER_SHARED_IDENTITY_MISMATCH",
+  SHARED_IDENTITY_IN_USE: "SUPPLIER_SHARED_IDENTITY_IN_USE",
   REASON_REQUIRED: "SUPPLIER_REASON_REQUIRED",
   VERSION_CONFLICT: "SUPPLIER_VERSION_CONFLICT",
   IDEMPOTENCY_CONFLICT: "SUPPLIER_IDEMPOTENCY_CONFLICT",
@@ -94,11 +96,38 @@ async function readRegistryState(
   return rows[0] ?? null;
 }
 
-/** Creates the organization's registry document if it has none. Safe to call repeatedly. */
+export type RegistryInitResult = { created: boolean; skipped?: "ORG_MISSING" | "ORG_DELETING" };
+
+/**
+ * True once an organization deletion has been requested or its purge has started. Any one of the
+ * three fields is enough: `deletionRequestId` and `deletionRequestedAt` are set when the request is
+ * filed, and `destructivePurgeStartedAt` is stamped before the first destructive step and is never
+ * cleared (see the field's comment in `schema.ts`). A rejected request clears the first two, so an
+ * organization that returns to service can be initialised again.
+ */
+function isOrgBeingDeleted(org: Doc<"organizations">): boolean {
+  return (
+    org.deletionRequestId !== undefined ||
+    org.deletionRequestedAt !== undefined ||
+    org.destructivePurgeStartedAt !== undefined
+  );
+}
+
+/**
+ * Creates the organization's registry document if it has none. Safe to call repeatedly. It reads
+ * the organization row in the same transaction and creates nothing for a missing or doomed
+ * organization: the purge deletes the registry row in an early step and the organization row last,
+ * so a row created in between would be orphaned. Reading the organization row also puts it in this
+ * transaction's read set, so a purge that stamps it concurrently conflicts and re-runs
+ * (https://docs.convex.dev/database/advanced/occ).
+ */
 export async function ensureRegistryState(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
-): Promise<{ created: boolean }> {
+): Promise<RegistryInitResult> {
+  const org = await ctx.db.get(orgId);
+  if (!org) return { created: false, skipped: "ORG_MISSING" };
+  if (isOrgBeingDeleted(org)) return { created: false, skipped: "ORG_DELETING" };
   if (await readRegistryState(ctx, orgId)) return { created: false };
   await ctx.db.insert("supplierRegistryState", { orgId, version: 0 });
   return { created: true };
@@ -254,6 +283,29 @@ export async function requireNoLegalIdentityDuplicate(
 }
 
 /**
+ * Refuses a change to a supplier's legal identity while another supplier declares it shares that
+ * identity (`sharedLegalIdentityOf`). Otherwise the link would point at a different identity and
+ * two suppliers could not be told apart from an undeclared duplicate. Callers run it inside the lock.
+ */
+export async function requireNoSharedIdentityDependents(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers">,
+): Promise<void> {
+  const dependent = await ctx.db
+    .query("suppliers")
+    .withIndex("by_org_and_sharedLegalIdentityOf", (q) => q.eq("orgId", orgId).eq("sharedLegalIdentityOf", supplierId))
+    .first();
+  if (dependent) {
+    throwSupplierError(
+      SUPPLIER_ERROR.SHARED_IDENTITY_IN_USE,
+      "Other suppliers share this legal identity. Unlink them or change them first.",
+      { dependentSupplierId: dependent._id },
+    );
+  }
+}
+
+/**
  * The candidates a new or renamed supplier must be confirmed distinct from: same name key, an
  * active alias hit, a close name (one key is a whole-word prefix of the other), and a soft tax-id
  * match (same key, jurisdiction missing or different). A hard legal-identity match is not a
@@ -323,9 +375,17 @@ export async function findSupplierCandidates(
     }
   }
 
+  // Every read above is bounded at CANDIDATE_CAP + 1, so a list longer than the cap is detected and
+  // refused here. Cutting it would hide candidates the caller is asked to confirm.
+  if (found.size > CANDIDATE_CAP) {
+    throwSupplierError(
+      SUPPLIER_ERROR.CANDIDATES_OVER_CAP,
+      `More than ${CANDIDATE_CAP} similar suppliers exist. Use an existing supplier or ask an administrator to clean up the duplicates.`,
+      { limit: CANDIDATE_CAP },
+    );
+  }
   return [...found.values()]
     .sort((a, b) => (a.doc._id < b.doc._id ? -1 : a.doc._id > b.doc._id ? 1 : 0))
-    .slice(0, CANDIDATE_CAP)
     .map(({ doc, reasons }) => ({
       supplierId: doc._id,
       displayName: doc.displayName,

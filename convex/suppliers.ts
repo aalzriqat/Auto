@@ -12,12 +12,14 @@ import { normalizeNameKey, normalizeTaxIdKey, normalizeTaxJurisdiction } from ".
 import {
   CANDIDATE_CAP,
   ensureRegistryState,
+  type RegistryInitResult,
   findSupplierCandidates,
   insertSupplier,
   insertSupplierAlias,
   patchSupplier,
   patchSupplierAlias,
   requireNoLegalIdentityDuplicate,
+  requireNoSharedIdentityDependents,
   runGuarded,
   SUPPLIER_ALIAS_NOT_FOUND_MESSAGE,
   SUPPLIER_ERROR,
@@ -492,7 +494,13 @@ export const update = mutation({
           sharedReason === current.sharedLegalIdentityReason;
         if (unchanged) throwSupplierError(SUPPLIER_ERROR.NO_CHANGE, "There is nothing to change.");
 
-        if (identityChanged && !sharedOf) await requireNoLegalIdentityDuplicate(ctx, args.orgId, identity, current._id);
+        // Without a declared share, the final identity must be unique. That holds when the identity
+        // moves and when an existing link is removed (the supplier then stands on its own).
+        if (!sharedOf && (identityChanged || current.sharedLegalIdentityOf !== undefined)) {
+          await requireNoLegalIdentityDuplicate(ctx, args.orgId, identity, current._id);
+        }
+        // Other suppliers may point at this one's identity, so it cannot move while they do.
+        if (identityChanged) await requireNoSharedIdentityDependents(ctx, args.orgId, current._id);
         if (displayNameKey !== current.displayNameKey || identityChanged) {
           const candidates = await findSupplierCandidates(ctx, args.orgId, {
             nameKey: displayNameKey,
@@ -669,10 +677,11 @@ export const retireAlias = mutation({
 /** Creates the organization's registry document if it has none. Idempotent. */
 export const initialiseRegistry = internalMutation({
   args: { orgId: v.id("organizations") },
-  handler: async (ctx, args): Promise<{ created: boolean }> =>
+  handler: async (ctx, args): Promise<RegistryInitResult> =>
     runGuarded(async () => {
-      if (!(await ctx.db.get(args.orgId))) throw new ConvexError("Organization not found.");
-      return ensureRegistryState(ctx, args.orgId);
+      const result = await ensureRegistryState(ctx, args.orgId);
+      if (result.skipped === "ORG_MISSING") throw new ConvexError("Organization not found.");
+      return result;
     }),
 });
 

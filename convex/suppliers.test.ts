@@ -5,9 +5,12 @@ import { seedOrgWithMember } from "../test-utils/seedOrg";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
 import { createOrganizationWithDefaultRoles } from "./organizations";
 import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import {
+  CANDIDATE_CAP,
+  ensureRegistryState,
   insertSupplier,
   requireActiveSupplier,
   requireNoLegalIdentityDuplicate,
@@ -277,6 +280,85 @@ describe("supplier master: legal identity", () => {
     });
   });
 
+  test("unlinking a shared legal identity is refused while it would leave two suppliers on one identity", async () => {
+    const t = setup();
+    const { orgId, acct } = await seedFinanceOrg(t, "legal-unlink");
+    const head = await createSupplier(acct, orgId, { displayName: "Gulf Parts", taxId: "123456", taxJurisdiction: "JO" });
+    const branch = await createSupplier(acct, orgId, {
+      displayName: "Amman Branch",
+      taxId: "123456",
+      taxJurisdiction: "JO",
+      sharedLegalIdentityOf: head.supplierId,
+      sharedLegalIdentityReason: "Second branch of the same company",
+    });
+    const before = await supplierWorld(t, orgId);
+
+    const unlink = await refusal(
+      acct.mutation(api.suppliers.update, {
+        orgId,
+        supplierId: branch.supplierId,
+        expectedVersion: 1,
+        sharedLegalIdentityOf: null,
+      }),
+    );
+    expect(unlink.code).toBe("SUPPLIER_LEGAL_IDENTITY_EXISTS");
+    expect(unlink.payload.existingSupplierId).toBe(head.supplierId);
+    expect(await supplierWorld(t, orgId)).toBe(before);
+
+    // Control: unlinking while moving to a unique identity is allowed, and the link is gone.
+    await acct.mutation(api.suppliers.update, {
+      orgId,
+      supplierId: branch.supplierId,
+      expectedVersion: 1,
+      taxId: "777",
+      sharedLegalIdentityOf: null,
+    });
+    const after = await acct.query(api.suppliers.get, { orgId, supplierId: branch.supplierId });
+    expect(after).toMatchObject({ taxId: "777" });
+    expect((after as { sharedLegalIdentityOf?: unknown }).sharedLegalIdentityOf).toBeUndefined();
+  });
+
+  test("a supplier that other suppliers share its legal identity with cannot change that identity", async () => {
+    const t = setup();
+    const { orgId, acct } = await seedFinanceOrg(t, "legal-dependents");
+    const head = await createSupplier(acct, orgId, { displayName: "Gulf Parts", taxId: "123456", taxJurisdiction: "JO" });
+    const branch = await createSupplier(acct, orgId, {
+      displayName: "Amman Branch",
+      taxId: "123456",
+      taxJurisdiction: "JO",
+      sharedLegalIdentityOf: head.supplierId,
+      sharedLegalIdentityReason: "Second branch of the same company",
+    });
+    const before = await supplierWorld(t, orgId);
+
+    const stale = await refusal(
+      acct.mutation(api.suppliers.update, { orgId, supplierId: head.supplierId, expectedVersion: 1, taxId: "999" }),
+    );
+    expect(stale.code).toBe("SUPPLIER_SHARED_IDENTITY_IN_USE");
+    expect(stale.payload.dependentSupplierId).toBe(branch.supplierId);
+    const jurisdiction = await refusal(
+      acct.mutation(api.suppliers.update, { orgId, supplierId: head.supplierId, expectedVersion: 1, taxJurisdiction: "SA" }),
+    );
+    expect(jurisdiction.code).toBe("SUPPLIER_SHARED_IDENTITY_IN_USE");
+    expect(await supplierWorld(t, orgId)).toBe(before);
+
+    // Controls: an edit that keeps the identity is allowed, and so is the move once nothing points at it.
+    await acct.mutation(api.suppliers.update, {
+      orgId,
+      supplierId: head.supplierId,
+      expectedVersion: 1,
+      legalName: "Gulf Parts Trading LLC",
+    });
+    await acct.mutation(api.suppliers.update, {
+      orgId,
+      supplierId: branch.supplierId,
+      expectedVersion: 1,
+      taxId: "777",
+    });
+    await acct.mutation(api.suppliers.update, { orgId, supplierId: head.supplierId, expectedVersion: 2, taxId: "999" });
+    expect(await acct.query(api.suppliers.get, { orgId, supplierId: head.supplierId })).toMatchObject({ taxId: "999" });
+  });
+
   test("the legal-identity check skips the supplier being edited and reads nothing for an incomplete identity", async () => {
     const t = setup();
     const { orgId, acct, userId } = await seedFinanceOrg(t, "legal-exclude");
@@ -312,6 +394,57 @@ describe("supplier master: legal identity", () => {
 });
 
 describe("supplier master: duplicate candidates", () => {
+  test("more candidates than the cap are refused instead of silently cut to the cap", async () => {
+    const t = setup();
+    const { orgId, acct, userId } = await seedFinanceOrg(t, "over-cap");
+    const insertSame = (count: number) =>
+      t.run(async (ctx) =>
+        withRegistryLock(ctx, orgId, async (lock) => {
+          const ids: Id<"suppliers">[] = [];
+          for (let i = 0; i < count; i += 1) {
+            ids.push(
+              await insertSupplier(ctx, lock, {
+                orgId,
+                displayName: "Dup Co",
+                displayNameKey: "dup co",
+                status: "ACTIVE",
+                version: 1,
+                origin: "MANUAL",
+                createdBy: userId,
+                createdAt: 1,
+                updatedBy: userId,
+                updatedAt: 1,
+              }),
+            );
+          }
+          return ids;
+        }),
+      );
+
+    // Control: exactly the cap is listed in full and can be confirmed.
+    const atCap = await insertSame(CANDIDATE_CAP);
+    const listed = await refusal(createSupplier(acct, orgId, { displayName: "Dup Co" }));
+    expect(listed.code).toBe("SUPPLIER_DUPLICATE_CANDIDATES");
+    expect((listed.payload.candidates as unknown[]).length).toBe(CANDIDATE_CAP);
+    await createSupplier(acct, orgId, { displayName: "Dup Co", confirmDistinctFrom: atCap });
+
+    // One more than the cap: the list can no longer be shown or confirmed in full.
+    const overCap = await refusal(createSupplier(acct, orgId, { displayName: "Dup Co" }));
+    expect(overCap.code).toBe("SUPPLIER_CANDIDATES_OVER_CAP");
+    expect(overCap.payload.limit).toBe(CANDIDATE_CAP);
+    const readOnly = await refusal(acct.query(api.suppliers.candidatesFor, { orgId, displayName: "Dup Co" }));
+    expect(readOnly.code).toBe("SUPPLIER_CANDIDATES_OVER_CAP");
+    expect(await supplierCount(t, orgId)).toBe(CANDIDATE_CAP + 1);
+  });
+
+  test("a display name made only of invisible format characters is refused", async () => {
+    const t = setup();
+    const { orgId, acct } = await seedFinanceOrg(t, "invisible-name");
+    const refused = await refusal(createSupplier(acct, orgId, { displayName: "‏‎" }));
+    expect(refused.code).toBe("SUPPLIER_INVALID_INPUT");
+    expect(await supplierCount(t, orgId)).toBe(0);
+  });
+
   test("a same-name create is refused until confirmDistinctFrom covers exactly the candidates found in the transaction", async () => {
     const t = setup();
     const { orgId, acct } = await seedFinanceOrg(t, "candidates");
@@ -780,6 +913,111 @@ describe("supplier registry: bootstrap and backfill", () => {
     const rerun = await t.mutation(internal.suppliers.backfillRegistry, { batchSize: 50, continueAutomatically: false });
     expect(rerun).toMatchObject({ migrated: 0, isDone: true });
     expect(await countStates()).toBe(5);
+  });
+
+  test("an organization purge leaves no registry row, even when the backfill runs between the registry step and the org delete", async () => {
+    const t = setup();
+    const { orgId, userId } = await seedFinanceOrg(t, "purge-race");
+    const registryStep = ORGANIZATION_DELETION_STEPS.findIndex(
+      (step) => "table" in step && step.table === "supplierRegistryState",
+    );
+    expect(registryStep).toBeGreaterThan(-1);
+    const requestId = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("organizationDeletionRequests", {
+        orgId,
+        orgName: "Org purge-race",
+        requestedBy: userId,
+        requestedAt: 1,
+        status: "RUNNING",
+        startedAt: 1,
+        currentStepIndex: 0,
+        deletedCounts: {},
+      });
+      await ctx.db.patch(orgId, { suspended: true, deletionRequestedAt: 1, deletionRequestId: id });
+      return id;
+    });
+    const countStates = () =>
+      t.run(async (ctx) => (await ctx.db.query("supplierRegistryState").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).length);
+
+    // Run the purge until it has passed the registry step but has not deleted the org row.
+    for (let batch = 0; batch < 300; batch += 1) {
+      const request = await t.run((ctx) => ctx.db.get(requestId));
+      if ((request?.currentStepIndex ?? 0) > registryStep) break;
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId });
+    }
+    expect(await countStates()).toBe(0);
+    expect(await t.run((ctx) => ctx.db.get(orgId))).not.toBeNull();
+
+    // Both doors that create a registry document must now refuse to.
+    expect(await t.mutation(internal.suppliers.initialiseRegistry, { orgId })).toMatchObject({ created: false });
+    await t.mutation(internal.suppliers.backfillRegistry, { batchSize: 100, continueAutomatically: false });
+    expect(await countStates()).toBe(0);
+
+    // The purge then finishes: no registry row and no organization remain.
+    for (let batch = 0; batch < 300; batch += 1) {
+      const request = await t.run((ctx) => ctx.db.get(requestId));
+      if (request?.status !== "RUNNING") break;
+      await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId });
+    }
+    expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("COMPLETED");
+    expect(await t.run((ctx) => ctx.db.get(orgId))).toBeNull();
+    expect(await countStates()).toBe(0);
+  });
+
+  test("each deletion marker alone, and a missing organization, stops the registry document from being created", async () => {
+    const t = setup();
+    const { byRequestId, byRequestedAt, byPurgeStart, gone } = await t.run(async (ctx) => {
+      const owner = await ctx.db.insert("users", { clerkId: "marker-owner", email: "marker@test.com", name: "Owner" });
+      const doomed = await ctx.db.insert("organizations", { name: "Doomed", createdAt: 1 });
+      const requestId = await ctx.db.insert("organizationDeletionRequests", {
+        orgId: doomed,
+        orgName: "Doomed",
+        requestedBy: owner,
+        requestedAt: 1,
+        status: "PENDING_REVIEW",
+      });
+      const removed = await ctx.db.insert("organizations", { name: "Removed", createdAt: 5 });
+      await ctx.db.delete(removed);
+      return {
+        byRequestId: await ctx.db.insert("organizations", { name: "A", createdAt: 2, deletionRequestId: requestId }),
+        byRequestedAt: await ctx.db.insert("organizations", { name: "B", createdAt: 3, deletionRequestedAt: 3 }),
+        byPurgeStart: await ctx.db.insert("organizations", { name: "C", createdAt: 4, destructivePurgeStartedAt: 4 }),
+        gone: removed,
+      };
+    });
+    for (const orgId of [byRequestId, byRequestedAt, byPurgeStart]) {
+      expect(await t.mutation(internal.suppliers.initialiseRegistry, { orgId })).toEqual({
+        created: false,
+        skipped: "ORG_DELETING",
+      });
+    }
+    await t.mutation(internal.suppliers.backfillRegistry, { batchSize: 100, continueAutomatically: false });
+    const rowsFor = (orgIds: Id<"organizations">[]) =>
+      t.run(async (ctx) =>
+        (await ctx.db.query("supplierRegistryState").take(20)).filter((row) => orgIds.includes(row.orgId)).length,
+      );
+    expect(await rowsFor([byRequestId, byRequestedAt, byPurgeStart])).toBe(0);
+
+    expect(await t.run((ctx) => ensureRegistryState(ctx, gone))).toEqual({ created: false, skipped: "ORG_MISSING" });
+    expect((await refusal(t.mutation(internal.suppliers.initialiseRegistry, { orgId: gone }))).data).toBe("Organization not found.");
+    expect(await rowsFor([gone])).toBe(0);
+  });
+
+  test("a suspended organization or one in a financial reset still gets its registry document", async () => {
+    const t = setup();
+    const { suspended, resetting, ordinary } = await t.run(async (ctx) => ({
+      suspended: await ctx.db.insert("organizations", { name: "Suspended", createdAt: 1, suspended: true }),
+      resetting: await ctx.db.insert("organizations", {
+        name: "Resetting",
+        createdAt: 2,
+        suspended: true,
+        financialResetGeneration: 1,
+      }),
+      ordinary: await ctx.db.insert("organizations", { name: "Ordinary", createdAt: 3 }),
+    }));
+    expect(await t.mutation(internal.suppliers.initialiseRegistry, { orgId: suspended })).toEqual({ created: true });
+    await t.mutation(internal.suppliers.backfillRegistry, { batchSize: 100, continueAutomatically: false });
+    for (const orgId of [suspended, resetting, ordinary]) expect(await registryVersion(t, orgId)).toBe(0);
   });
 
   test("the backfill reschedules itself from the returned cursor until every organization is covered", async () => {
