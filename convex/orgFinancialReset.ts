@@ -31,6 +31,11 @@ import {
  *   org has to remain usable and its people have to remain able to sign in.
  * - `bankAccounts`, `financeCompanies`, `orgValuationCompanies` — configuration
  *   describing who the dealer banks and finances with, not transactions.
+ * - `suppliers`, `supplierAliases`, `supplierRegistryState` (SCRUM-868) — the
+ *   supplier master is identity, not money, and carries no amount. It stays so
+ *   that a reset never changes who a supplier is. It is still deleted with the
+ *   organization (`ORGANIZATION_DELETION_STEPS`); `scripts/supplierMasterGuards.test.ts`
+ *   pins both.
  *
  * ## Known, accepted inconsistency
  *
