@@ -82,6 +82,10 @@ export const NO_GUARD_ALLOWLIST: AllowEntry[] = [
   { id: "convex/prepaidExpenses.ts:runAmortizationNow", reason: "action delegating to listActiveForManualRun, which requires MANAGE_FINANCE (read by the PR #512 reviewer, prepaidExpenses.ts:556)" },
   { id: "convex/subscriptions.ts:requestUpgrade", reason: "action delegating to _requireMemberOrg, which is member-only (requireTenantAuth with no permission; read by the PR #512 reviewer, subscriptions.ts:731)" },
   { id: "convex/organizations.ts:listMine", reason: SELF },
+  ...entries(
+    "SCRUM-868 S1 supplier reads: delegate to requireSupplierReadAccess in convex/suppliers.ts, which calls requireTenantAuth and then requires VIEW_VEHICLES or VIEW_FINANCE (either one; the full record needs VIEW_FINANCE). An either-or rule cannot be written as a requireTenantAuth permission list, which means all of them. Pinned by the role matrix in convex/suppliers.test.ts (read)",
+    ["convex/suppliers.ts:list", "convex/suppliers.ts:search", "convex/suppliers.ts:get"],
+  ),
   { id: "convex/marketplaceListings.ts:getMyListings", reason: "inline ctx.auth identity check, seller-scoped (read)" },
   { id: "convex/marketplaceListings.ts:getListingById", reason: "LIVE listings are public; non-LIVE only to the owner or a super-admin (read)" },
   { id: "convex/marketplaceTradeIns.ts:acceptOffer", reason: "gated by offer id plus buyer phone, no login (read by the reviewer)" },
