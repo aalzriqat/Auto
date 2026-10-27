@@ -437,6 +437,217 @@ describe("supplier master: duplicate candidates", () => {
     expect(await supplierCount(t, orgId)).toBe(CANDIDATE_CAP + 1);
   });
 
+  test("a tax id read that fills its bound refuses, because hard matches are dropped after the read", async () => {
+    const t = setup();
+    const { orgId, acct, userId } = await seedFinanceOrg(t, "tax-saturated");
+    const insertSharing = (count: number) =>
+      t.run(async (ctx) =>
+        withRegistryLock(ctx, orgId, async (lock) => {
+          const ids: Id<"suppliers">[] = [];
+          for (let i = 0; i < count; i += 1) {
+            ids.push(
+              await insertSupplier(ctx, lock, {
+                orgId,
+                displayName: `Branch ${i}`,
+                displayNameKey: `branch ${i}`,
+                status: "ACTIVE",
+                taxId: "123456",
+                taxIdKey: "123456",
+                taxJurisdiction: "JO",
+                version: 1,
+                origin: "MANUAL",
+                createdBy: userId,
+                createdAt: 1,
+                updatedBy: userId,
+                updatedAt: 1,
+              }),
+            );
+          }
+          return ids;
+        }),
+      );
+    const link = (supplierId: Id<"suppliers">, name: string) =>
+      createSupplier(acct, orgId, {
+        displayName: name,
+        taxId: "123456",
+        taxJurisdiction: "JO",
+        sharedLegalIdentityOf: supplierId,
+        sharedLegalIdentityReason: "Another branch of the same company",
+      });
+
+    // Control: 21 rows with the key (all hard matches, so no candidates) do not fill the bound.
+    const [root] = await insertSharing(CANDIDATE_CAP + 1);
+    await link(root, "Linked One");
+    // The 23rd row reads 22 rows with the key: the read is full and cannot be shown complete.
+    const full = await refusal(link(root, "Linked Two"));
+    expect(full.code).toBe("SUPPLIER_CANDIDATES_OVER_CAP");
+    expect(await supplierCount(t, orgId)).toBe(CANDIDATE_CAP + 2);
+  });
+
+  test("an edit that changes only the tax id does not re-check name candidates", async () => {
+    const t = setup();
+    const { orgId, acct, userId } = await seedFinanceOrg(t, "tax-only");
+    const insertNamed = (count: number) =>
+      t.run(async (ctx) =>
+        withRegistryLock(ctx, orgId, async (lock) => {
+          const ids: Id<"suppliers">[] = [];
+          for (let i = 0; i < count; i += 1) {
+            ids.push(
+              await insertSupplier(ctx, lock, {
+                orgId,
+                displayName: "Dup Co",
+                displayNameKey: "dup co",
+                status: "ACTIVE",
+                version: 1,
+                origin: "MANUAL",
+                createdBy: userId,
+                createdAt: 1,
+                updatedBy: userId,
+                updatedAt: 1,
+              }),
+            );
+          }
+          return ids;
+        }),
+      );
+    const [subject] = await insertNamed(CANDIDATE_CAP + 2);
+    const mover = await createSupplier(acct, orgId, { displayName: "Mover Co" });
+
+    // A name that has more than the cap of candidates stays refused (control for the check itself).
+    const rename = await refusal(
+      acct.mutation(api.suppliers.update, { orgId, supplierId: mover.supplierId, expectedVersion: 1, displayName: "Dup Co", reason: "Rename" }),
+    );
+    expect(rename.code).toBe("SUPPLIER_CANDIDATES_OVER_CAP");
+
+    // The subject's name did not change, so adding its tax id is not blocked by 21 same-name rows.
+    await acct.mutation(api.suppliers.update, {
+      orgId,
+      supplierId: subject,
+      expectedVersion: 1,
+      taxId: "555",
+      taxJurisdiction: "JO",
+    });
+    expect(await acct.query(api.suppliers.get, { orgId, supplierId: subject })).toMatchObject({ taxId: "555", taxJurisdiction: "JO" });
+
+    // The tax-id source still runs when the identity changes: a soft match needs confirmation, and only it.
+    const soft = await createSupplier(acct, orgId, { displayName: "Soft Match Co", taxId: "777" });
+    const other = await createSupplier(acct, orgId, { displayName: "Other Co" });
+    const needsConfirm = await refusal(
+      acct.mutation(api.suppliers.update, { orgId, supplierId: other.supplierId, expectedVersion: 1, taxId: "777", taxJurisdiction: "JO" }),
+    );
+    expect(needsConfirm.code).toBe("SUPPLIER_DUPLICATE_CANDIDATES");
+    expect((needsConfirm.payload.candidates as { supplierId: string }[]).map((c) => c.supplierId)).toEqual([soft.supplierId]);
+    await acct.mutation(api.suppliers.update, {
+      orgId,
+      supplierId: other.supplierId,
+      expectedVersion: 1,
+      taxId: "777",
+      taxJurisdiction: "JO",
+      confirmDistinctFrom: [soft.supplierId],
+    });
+  });
+
+  test("a legal identity link stays one level deep: no link to a linked supplier, no cycle", async () => {
+    const t = setup();
+    const { orgId, acct } = await seedFinanceOrg(t, "link-depth");
+    const head = await createSupplier(acct, orgId, { displayName: "Gulf Parts", taxId: "123456", taxJurisdiction: "JO" });
+    const link = (supplierId: Id<"suppliers">, name: string) =>
+      createSupplier(acct, orgId, {
+        displayName: name,
+        taxId: "123456",
+        taxJurisdiction: "JO",
+        sharedLegalIdentityOf: supplierId,
+        sharedLegalIdentityReason: "Another branch of the same company",
+      });
+    const branch = await link(head.supplierId, "Amman Branch");
+    const before = await supplierWorld(t, orgId);
+
+    // A cycle: the head tries to link to its own dependent.
+    const cycle = await refusal(
+      acct.mutation(api.suppliers.update, {
+        orgId,
+        supplierId: head.supplierId,
+        expectedVersion: 1,
+        sharedLegalIdentityOf: branch.supplierId,
+        sharedLegalIdentityReason: "Wrong direction",
+      }),
+    );
+    expect(cycle.code).toBe("SUPPLIER_SHARED_IDENTITY_MISMATCH");
+    // A chain on create: a new branch points at a branch instead of the head.
+    const chain = await refusal(link(branch.supplierId, "Irbid Branch"));
+    expect(chain.code).toBe("SUPPLIER_SHARED_IDENTITY_MISMATCH");
+    expect(await supplierWorld(t, orgId)).toBe(before);
+
+    // Control: linking to the head is still allowed, on create and on edit.
+    await link(head.supplierId, "Irbid Branch");
+    const stored = await acct.query(api.suppliers.get, { orgId, supplierId: head.supplierId });
+    expect((stored as { sharedLegalIdentityOf?: unknown }).sharedLegalIdentityOf).toBeUndefined();
+  });
+
+  test("retired aliases cannot crowd active ones out of the bounded alias read", async () => {
+    const t = setup();
+    const { orgId, acct } = await seedFinanceOrg(t, "alias-crowd");
+    const archive = await createSupplier(acct, orgId, { displayName: "Archive Co" });
+    // 21 retired rows with the key come first in the index, ahead of every active row.
+    for (let i = 0; i < 21; i += 1) {
+      const { aliasId } = await acct.mutation(api.suppliers.addAlias, { orgId, supplierId: archive.supplierId, alias: "Old Name" });
+      await acct.mutation(api.suppliers.retireAlias, { orgId, aliasId });
+    }
+    const holders: { supplierId: Id<"suppliers">; oldAliasId: Id<"supplierAliases"> }[] = [];
+    const addHolder = async () => {
+      const { supplierId } = await createSupplier(acct, orgId, { displayName: `Zq${holders.length + 1}` });
+      const old = await acct.mutation(api.suppliers.addAlias, { orgId, supplierId, alias: "Old Name" });
+      await acct.mutation(api.suppliers.addAlias, { orgId, supplierId, alias: "Control Name" });
+      holders.push({ supplierId, oldAliasId: old.aliasId });
+    };
+    const preview = (displayName: string, excludeSupplierId?: Id<"suppliers">) =>
+      acct.query(api.suppliers.candidatesFor, { orgId, displayName, excludeSupplierId });
+
+    // Control: a few active holders are listed, and the retired rows are not.
+    for (let i = 0; i < 3; i += 1) await addHolder();
+    const fresh = await preview("Old Name");
+    expect(fresh.map((c) => c.supplierId).sort()).toEqual(holders.map((h) => h.supplierId).sort());
+    expect(fresh.every((c) => c.reasons.includes("ALIAS"))).toBe(true);
+    // The picker search reads the same index and lists active holders only, never the retired rows.
+    const searched = await acct.query(api.suppliers.search, { orgId, query: "Old Name", limit: 10 });
+    expect(searched.map((s) => s._id).sort()).toEqual(holders.map((h) => h.supplierId).sort());
+
+    while (holders.length < CANDIDATE_CAP + 1) await addHolder();
+    const versionBefore = await registryVersion(t, orgId);
+    const countBefore = await supplierCount(t, orgId);
+
+    // 21 active holders: both keys are over the cap, so both are refused.
+    expect((await refusal(preview("Control Name"))).code).toBe("SUPPLIER_CANDIDATES_OVER_CAP");
+    expect((await refusal(preview("Old Name"))).code).toBe("SUPPLIER_CANDIDATES_OVER_CAP");
+    expect((await refusal(createSupplier(acct, orgId, { displayName: "Old Name" }))).code).toBe("SUPPLIER_CANDIDATES_OVER_CAP");
+    // A rename onto the key is refused the same way and changes nothing.
+    const mover = await createSupplier(acct, orgId, { displayName: "Mover Co" });
+    const moverCount = await supplierCount(t, orgId);
+    const moverVersion = await registryVersion(t, orgId);
+    const renamed = await refusal(
+      acct.mutation(api.suppliers.update, { orgId, supplierId: mover.supplierId, expectedVersion: 1, displayName: "Old Name", reason: "Rename" }),
+    );
+    expect(renamed.code).toBe("SUPPLIER_CANDIDATES_OVER_CAP");
+    expect(await supplierCount(t, orgId)).toBe(moverCount);
+    expect(await registryVersion(t, orgId)).toBe(moverVersion);
+    expect(countBefore + 1).toBe(moverCount);
+    expect(versionBefore + 1).toBe(moverVersion);
+
+    // Self-exclusion: 21 holders minus the one being edited is exactly the cap, which is listed in full.
+    const withoutSelf = await preview("Old Name", holders[0].supplierId);
+    expect(withoutSelf).toHaveLength(CANDIDATE_CAP);
+    expect(withoutSelf.map((c) => c.supplierId)).not.toContain(holders[0].supplierId);
+
+    // Retiring two active rows brings the key back under the cap; retired rows stay out of the list.
+    for (const holder of holders.slice(-2)) {
+      await acct.mutation(api.suppliers.retireAlias, { orgId, aliasId: holder.oldAliasId });
+    }
+    const afterRetire = await preview("Old Name");
+    expect(afterRetire).toHaveLength(CANDIDATE_CAP - 1);
+    const retiredHolderIds = holders.slice(-2).map((h) => h.supplierId);
+    for (const id of retiredHolderIds) expect(afterRetire.map((c) => c.supplierId)).not.toContain(id);
+  });
+
   test("a display name made only of invisible format characters is refused", async () => {
     const t = setup();
     const { orgId, acct } = await seedFinanceOrg(t, "invisible-name");

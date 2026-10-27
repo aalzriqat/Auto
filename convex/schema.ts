@@ -7972,7 +7972,9 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     createdBy: v.id("users"),
     createdAt: v.number(),
   })
-    .index("by_org_and_aliasKey", ["orgId", "aliasKey"])
+    // Status is part of the key so the bounded candidate and search reads see ACTIVE rows only:
+    // retired rows are kept for history and must not crowd active ones out of a `.take(n)`.
+    .index("by_org_and_aliasKey_and_status", ["orgId", "aliasKey", "status"])
     .index("by_org_and_supplierId", ["orgId", "supplierId"]),
 
   // Exactly one row per organization: the registry lock document.

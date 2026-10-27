@@ -208,7 +208,11 @@ function checkConfirmList(confirmed: Id<"suppliers">[] | undefined): void {
   if (confirmed && confirmed.length > CANDIDATE_CAP) invalid(`confirmDistinctFrom lists at most ${CANDIDATE_CAP} suppliers.`);
 }
 
-/** The target of `sharedLegalIdentityOf` must be a supplier of this org with the same legal identity. */
+/**
+ * The target of `sharedLegalIdentityOf` must be a supplier of this org with the same legal identity,
+ * and must not itself be linked. Links stay one level deep: a target that is linked would make a
+ * chain, and a head that links to its own dependent would make a cycle.
+ */
 async function requireSharedIdentityTarget(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
@@ -226,6 +230,12 @@ async function requireSharedIdentityTarget(
     throwSupplierError(
       SUPPLIER_ERROR.SHARED_IDENTITY_MISMATCH,
       "A shared legal identity needs another supplier with the same tax id and jurisdiction.",
+    );
+  }
+  if (target.sharedLegalIdentityOf !== undefined) {
+    throwSupplierError(
+      SUPPLIER_ERROR.SHARED_IDENTITY_MISMATCH,
+      "That supplier shares another supplier's legal identity. Link to the supplier that holds it.",
     );
   }
 }
@@ -273,11 +283,11 @@ export const search = query({
       exact.forEach(add);
       const aliasHits = await ctx.db
         .query("supplierAliases")
-        .withIndex("by_org_and_aliasKey", (q) => q.eq("orgId", args.orgId).eq("aliasKey", key))
+        .withIndex("by_org_and_aliasKey_and_status", (q) => q.eq("orgId", args.orgId).eq("aliasKey", key).eq("status", "ACTIVE"))
         .take(limit);
       for (const alias of aliasHits) {
         if (hits.size >= limit) break;
-        if (alias.status === "ACTIVE") add(await ctx.db.get(alias.supplierId));
+        add(await ctx.db.get(alias.supplierId));
       }
       if (hits.size < limit) {
         const matched = await ctx.db
@@ -501,12 +511,16 @@ export const update = mutation({
         }
         // Other suppliers may point at this one's identity, so it cannot move while they do.
         if (identityChanged) await requireNoSharedIdentityDependents(ctx, args.orgId, current._id);
-        if (displayNameKey !== current.displayNameKey || identityChanged) {
+        // Each source of candidates is checked only when the field it matches on changes, so an edit
+        // to one of them is not blocked by a standing duplicate of the other.
+        const nameKeyChanged = displayNameKey !== current.displayNameKey;
+        if (nameKeyChanged || identityChanged) {
           const candidates = await findSupplierCandidates(ctx, args.orgId, {
             nameKey: displayNameKey,
             taxIdKey: identity.taxIdKey,
             taxJurisdiction: identity.taxJurisdiction,
             excludeSupplierId: current._id,
+            sources: { name: nameKeyChanged, taxId: identityChanged },
           });
           requireConfirmedCandidates(candidates, args.confirmDistinctFrom);
         }

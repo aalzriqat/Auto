@@ -116,10 +116,16 @@ function isOrgBeingDeleted(org: Doc<"organizations">): boolean {
 /**
  * Creates the organization's registry document if it has none. Safe to call repeatedly. It reads
  * the organization row in the same transaction and creates nothing for a missing or doomed
- * organization: the purge deletes the registry row in an early step and the organization row last,
+ * organization: the purge deletes the registry row in one of its last steps and the organization row after it,
  * so a row created in between would be orphaned. Reading the organization row also puts it in this
  * transaction's read set, so a purge that stamps it concurrently conflicts and re-runs
  * (https://docs.convex.dev/database/advanced/occ).
+ *
+ * An organization that had a deletion request pending when the backfill ran is skipped. If that
+ * request is later rejected, the organization has no registry, and every supplier write refuses with
+ * REGISTRY_NOT_INITIALISED (fail-closed) until an operator runs `internal.suppliers.initialiseRegistry`
+ * for it. The reactivation path is deliberately not changed: it is a guarded, ratcheted function
+ * (`scripts/organizationReactivationGuard.test.ts`) and this is a rare, operator-visible state.
  */
 export async function ensureRegistryState(
   ctx: MutationCtx,
@@ -227,9 +233,17 @@ export async function requireActiveSupplier(
 
 // ─── Duplicate detection (read-only; callers run it inside the lock) ──────────────────────────
 
-/** Per-source read bound and the cap on the candidate list a caller must confirm. */
+/**
+ * The cap on the candidate list a caller must confirm, and the per-source read bound.
+ *
+ * The bound is the cap plus two. Each source below returns at most one row per supplier (a name key
+ * belongs to one supplier row, and an ACTIVE alias key is unique per supplier), and the supplier
+ * being edited may be one of the rows. So a read that fills the bound holds at least
+ * `CANDIDATE_CAP + 1` other suppliers: the list is over the cap, and the read refuses instead of
+ * returning what it happened to see. A read that does not fill the bound has seen every row.
+ */
 export const CANDIDATE_CAP = 20;
-const READ_BOUND = CANDIDATE_CAP + 1;
+const READ_BOUND = CANDIDATE_CAP + 2;
 
 export type CandidateReason = "SAME_NAME" | "ALIAS" | "CLOSE_NAME" | "TAX_ID";
 export interface SupplierCandidate {
@@ -320,8 +334,11 @@ export async function findSupplierCandidates(
     taxIdKey?: string;
     taxJurisdiction?: string;
     excludeSupplierId?: Id<"suppliers">;
+    /** Which sources to read. Default: both. An edit passes the sources whose field it changes. */
+    sources?: { name: boolean; taxId: boolean };
   },
 ): Promise<SupplierCandidate[]> {
+  const sources = probe.sources ?? { name: true, taxId: true };
   const found = new Map<Id<"suppliers">, { doc: Doc<"suppliers">; reasons: Set<CandidateReason> }>();
   const note = (doc: Doc<"suppliers"> | null, reason: CandidateReason): void => {
     if (!doc || doc.orgId !== orgId || doc._id === probe.excludeSupplierId) return;
@@ -329,45 +346,69 @@ export async function findSupplierCandidates(
     entry.reasons.add(reason);
     found.set(doc._id, entry);
   };
-  const byNameKey = (key: string) =>
-    ctx.db
-      .query("suppliers")
-      .withIndex("by_org_and_displayNameKey", (q) => q.eq("orgId", orgId).eq("displayNameKey", key))
-      .take(READ_BOUND);
+  const overCap = (): never =>
+    throwSupplierError(
+      SUPPLIER_ERROR.CANDIDATES_OVER_CAP,
+      `More than ${CANDIDATE_CAP} similar suppliers exist. Use an existing supplier or ask an administrator to clean up the duplicates.`,
+      { limit: CANDIDATE_CAP },
+    );
+  // A read that fills its bound cannot be shown to be complete, so it refuses (see READ_BOUND).
+  const complete = <T>(rows: T[]): T[] => {
+    if (rows.length >= READ_BOUND) overCap();
+    return rows;
+  };
+  const byNameKey = async (key: string) =>
+    complete(
+      await ctx.db
+        .query("suppliers")
+        .withIndex("by_org_and_displayNameKey", (q) => q.eq("orgId", orgId).eq("displayNameKey", key))
+        .take(READ_BOUND),
+    );
 
-  for (const doc of await byNameKey(probe.nameKey)) note(doc, "SAME_NAME");
+  if (sources.name) {
+    for (const doc of await byNameKey(probe.nameKey)) note(doc, "SAME_NAME");
 
-  const aliasHits = await ctx.db
-    .query("supplierAliases")
-    .withIndex("by_org_and_aliasKey", (q) => q.eq("orgId", orgId).eq("aliasKey", probe.nameKey))
-    .take(READ_BOUND);
-  const aliased = await Promise.all(
-    aliasHits.filter((alias) => alias.status === "ACTIVE").map((alias) => ctx.db.get(alias.supplierId)),
-  );
-  for (const doc of aliased) note(doc, "ALIAS");
+    // ACTIVE rows only, through the index, so retired aliases cannot fill the bound.
+    const aliasHits = complete(
+      await ctx.db
+        .query("supplierAliases")
+        .withIndex("by_org_and_aliasKey_and_status", (q) =>
+          q.eq("orgId", orgId).eq("aliasKey", probe.nameKey).eq("status", "ACTIVE"),
+        )
+        .take(READ_BOUND),
+    );
+    const aliased = await Promise.all(aliasHits.map((alias) => ctx.db.get(alias.supplierId)));
+    for (const doc of aliased) note(doc, "ALIAS");
 
-  // Close names: every proper whole-word prefix of the new key that is an existing key, and every
-  // existing key that starts with the new key followed by a space. The prefix reads are independent,
-  // so they run together; the result is sorted by id, so completion order does not matter.
-  const tokens = probe.nameKey.split(" ");
-  const prefixes = tokens.slice(0, -1).map((_, i) => tokens.slice(0, i + 1).join(" "));
-  for (const docs of await Promise.all(prefixes.map(byNameKey))) {
-    for (const doc of docs) note(doc, "CLOSE_NAME");
+    // Close names: every proper whole-word prefix of the new key that is an existing key, and every
+    // existing key that starts with the new key followed by a space. The prefix reads are independent,
+    // so they run together; the result is sorted by id, so completion order does not matter.
+    const tokens = probe.nameKey.split(" ");
+    const prefixes = tokens.slice(0, -1).map((_, i) => tokens.slice(0, i + 1).join(" "));
+    for (const docs of await Promise.all(prefixes.map(byNameKey))) {
+      for (const doc of docs) note(doc, "CLOSE_NAME");
+    }
+    const longer = complete(
+      await ctx.db
+        .query("suppliers")
+        .withIndex("by_org_and_displayNameKey", (q) =>
+          q.eq("orgId", orgId).gte("displayNameKey", `${probe.nameKey} `).lt("displayNameKey", `${probe.nameKey}!`),
+        )
+        .take(READ_BOUND),
+    );
+    for (const doc of longer) note(doc, "CLOSE_NAME");
   }
-  const longer = await ctx.db
-    .query("suppliers")
-    .withIndex("by_org_and_displayNameKey", (q) =>
-      q.eq("orgId", orgId).gte("displayNameKey", `${probe.nameKey} `).lt("displayNameKey", `${probe.nameKey}!`),
-    )
-    .take(READ_BOUND);
-  for (const doc of longer) note(doc, "CLOSE_NAME");
 
-  if (probe.taxIdKey) {
+  if (sources.taxId && probe.taxIdKey) {
     const taxKey = probe.taxIdKey;
-    const sameKey = await ctx.db
-      .query("suppliers")
-      .withIndex("by_org_and_taxIdKey", (q) => q.eq("orgId", orgId).eq("taxIdKey", taxKey))
-      .take(READ_BOUND);
+    // The hard-match filter below drops rows after the read, so a full read cannot prove how many
+    // soft candidates it holds. It refuses rather than guess.
+    const sameKey = complete(
+      await ctx.db
+        .query("suppliers")
+        .withIndex("by_org_and_taxIdKey", (q) => q.eq("orgId", orgId).eq("taxIdKey", taxKey))
+        .take(READ_BOUND),
+    );
     for (const doc of sameKey) {
       const hardMatch =
         probe.taxJurisdiction !== undefined && doc.taxJurisdiction !== undefined && doc.taxJurisdiction === probe.taxJurisdiction;
@@ -375,15 +416,9 @@ export async function findSupplierCandidates(
     }
   }
 
-  // Every read above is bounded at CANDIDATE_CAP + 1, so a list longer than the cap is detected and
-  // refused here. Cutting it would hide candidates the caller is asked to confirm.
-  if (found.size > CANDIDATE_CAP) {
-    throwSupplierError(
-      SUPPLIER_ERROR.CANDIDATES_OVER_CAP,
-      `More than ${CANDIDATE_CAP} similar suppliers exist. Use an existing supplier or ask an administrator to clean up the duplicates.`,
-      { limit: CANDIDATE_CAP },
-    );
-  }
+  // The merged list can exceed the cap even when no single read filled its bound. Cutting it would
+  // hide candidates the caller is asked to confirm, so it refuses.
+  if (found.size > CANDIDATE_CAP) overCap();
   return [...found.values()]
     .sort((a, b) => (a.doc._id < b.doc._id ? -1 : a.doc._id > b.doc._id ? 1 : 0))
     .map(({ doc, reasons }) => ({

@@ -99,12 +99,6 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // the expense and vehicle a recovery names — deepest first, as above.
   { kind: "orgRows", table: "supplierCostRecoveryReceipts", index: "by_org" },
   { kind: "orgRows", table: "supplierCostRecoveries", index: "by_org" },
-  // SCRUM-868 S1. The supplier master is tenant data and goes with its organization: aliases
-  // before the suppliers they name, and the registry lock document last. It is RETAINED across
-  // a financial reset (see `orgFinancialReset.ts`), which is why these appear here and not there.
-  { kind: "orgRows", table: "supplierAliases", index: "by_org_and_supplierId" },
-  { kind: "orgRows", table: "suppliers", index: "by_org_and_status" },
-  { kind: "orgRows", table: "supplierRegistryState", index: "by_org" },
   // Ordered before `sales` and `journalEntries` for the same reason as every
   // other child step: it holds ids into both, so removing it after them would
   // leave rows pointing at documents that no longer exist.
@@ -275,6 +269,16 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "openingManagementSettlementPlans", index: "by_org" },
   { kind: "orgRows", table: "openingPayablePayments", index: "by_org" },
   { kind: "orgRows", table: "openingCommissionLiabilities", index: "by_org" },
+  // SCRUM-868 S1. The supplier master is tenant data and goes with its organization: aliases
+  // before the suppliers they name, and the registry lock document last. Appended after the
+  // existing steps because the order is pinned (a saved currentStepIndex must keep addressing
+  // the same step). It is RETAINED across a financial reset (see `orgFinancialReset.ts`), which is
+  // why these appear here and not there. An in-flight purge whose cursor is already past this
+  // position holds no supplier rows: its organization is suspended, so no supplier write passes
+  // `requireTenantAuth`, and `ensureRegistryState` refuses to create a registry row for it.
+  { kind: "orgRows", table: "supplierAliases", index: "by_org_and_supplierId" },
+  { kind: "orgRows", table: "suppliers", index: "by_org_and_status" },
+  { kind: "orgRows", table: "supplierRegistryState", index: "by_org" },
   // Explicit retention marker, not a deletion step: the owner requires task
   // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
   // never purged here. Keep it last; never turn it into a delete.
