@@ -3,7 +3,7 @@ import type { FunctionArgs, FunctionReference } from "convex/server";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { runRehearsalCases } from "../scripts/accountingRehearsalCases.mjs";
+import { runUnwindRehearsalCases } from "../scripts/accountingUnwindRehearsal.mjs";
 import { recordCase, unproven } from "../scripts/accountingPreviewRehearsal.mjs";
 
 beforeEach(() => {
@@ -13,7 +13,10 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-type Defect = "missing-reversal" | "duplicate-reversal" | "bank-attribution" | "stale-trial" | "invoice-attribution" | "role-overgrant";
+type Defect = "missing-reversal" | "duplicate-reversal" | "bank-attribution" | "stale-trial" | "invoice-attribution" | "role-overgrant"
+  // SCRUM-486: a refused call that really writes (real handler untouched; the write is a separate real database patch),
+  // a refused call whose effect is only visible in the native bank reader, and a malformed read clock.
+  | "refusal-writes-vehicle" | `refusal-moves-bank:${string}` | "bank-clock-malformed";
 async function execute(defect?: Defect) {
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
   registerRateLimiter(t);
@@ -27,7 +30,20 @@ async function execute(defect?: Defect) {
   const calls: string[] = [];
   const chart = new Map<unknown, Map<unknown, unknown>>(), priorTrial = new Map<unknown, unknown>();
   let completedOrg: unknown;
+  let refusalSeen = false;
+  // Models a refused command that nevertheless wrote: a real, public-reader-visible change to the unwound vehicle.
+  const writeOnRefusal = async () => {
+    refusalSeen = true;
+    if (defect !== "refusal-writes-vehicle") return;
+    await t.run(async ctx => {
+      const vehicle = await ctx.db.query("vehicles").first();
+      if (vehicle) await ctx.db.patch(vehicle._id, { mileage: (vehicle.mileage ?? 0) + 1 });
+    });
+  };
   const must = (actor: typeof primary) => async (kind: "query" | "mutation", name: string, args: Record<string, unknown>) => {
+    // A live deployment evaluates every call at a later wall-clock time. `getBookBalance` echoes its evaluation time as
+    // `asOf`, so a witness compared across two reads must not treat that read clock as financial state (SCRUM-486).
+    vi.advanceTimersByTime(1);
     calls.push(name);
     const [module, method] = name.split(":");
     const ref = refs[module][method];
@@ -42,6 +58,14 @@ async function execute(defect?: Defect) {
       const role = result as { roleName?: string; permissions: string[] };
       if (role.roleName?.startsWith("QA TEST U-RET")) return { ...role,
         permissions: [...role.permissions, "cancel:closed_deal", "confirm:finance_disbursement"] };
+    }
+    if (name === "bankAccounts:getBookBalance") {
+      const bank = structuredClone(result) as Record<string, unknown>;
+      if (defect === "bank-clock-malformed") return { ...bank, asOf: null };
+      if (defect?.startsWith("refusal-moves-bank:") && refusalSeen) {
+        const field = defect.slice("refusal-moves-bank:".length);
+        return { ...bank, [field]: typeof bank[field] === "number" ? Number(bank[field]) + 1 : `${String(bank[field])}-moved` };
+      }
     }
     if (kind === "query" && args.orgId === completedOrg) {
       if (defect === "stale-trial" && name === "accountingReports:trialBalance") return structuredClone(priorTrial.get(args.orgId));
@@ -65,29 +89,22 @@ async function execute(defect?: Defect) {
   };
   const salesMust = must(primary), approverMust = must(approver);
   const orgId = await salesMust("mutation", "organizations:create", { name: "QA TEST U-RET control" });
-  const asSales = async (kind: "query" | "mutation", name: string, args: Record<string, unknown>) => {
-    try { return { ok: true, value: await salesMust(kind, name, args) }; }
+  // Shaped like the live HTTP boundary (`convexCall`): the refusal's own message text plus its machine code.
+  // The throwing `*Must` wrappers on a live deployment carry the message only, never the code.
+  const soft = (actorMust: typeof salesMust) => async (kind: "query" | "mutation", name: string, args: Record<string, unknown>) => {
+    try { return { ok: true, value: await actorMust(kind, name, args) }; }
     catch (error) {
-      // Shaped like the live HTTP boundary (`convexCall`): the refusal's own message text plus its machine code.
-      // The throwing `*Must` wrappers on a live deployment carry the message only, never the code.
       const data = (error as { data?: { code?: unknown; message?: unknown } }).data;
+      await writeOnRefusal();
       return { ok: false, error: String(data?.message ?? error), ...(typeof data?.code === "string" ? { errorCode: data.code } : {}) };
     }
   };
-  const asApprover = async (kind: "query" | "mutation", name: string, args: Record<string, unknown>) => {
-    try { return { ok: true, value: await approverMust(kind, name, args) }; }
-    catch (error) {
-      const data = (error as { data?: { code?: unknown; message?: unknown } }).data;
-      return { ok: false, error: String(data?.message ?? error), ...(typeof data?.code === "string" ? { errorCode: data.code } : {}) };
-    }
-  };
+  const asSales = soft(salesMust), asApprover = soft(approverMust);
   const results: Array<{ id: string; status: string; detail?: unknown }> = [];
-  await runRehearsalCases({ orgId, results, salesMust, approverMust, asSales, asApprover, config: {
+  // U-RET is a separate callback that the trusted driver runs after the cleanup cases (see runRehearsalSequence).
+  await runUnwindRehearsalCases({ orgId, results, salesMust, approverMust, asSales, asApprover, config: {
     salesEmail: "primary@qa.example.test", approverEmail: "approver@qa.example.test",
-  }, unproven, recordCase: async (rows: unknown[], id: string, title: string, body: () => Promise<unknown>) => {
-    // This slice selects the registered callback; it does not certify the full registry.
-    if (id === "U-RET") await recordCase(rows, id, title, body);
-  } });
+  }, unproven, recordCase });
   const proof = { result: results.find(row => row.id === "U-RET"), calls };
   const retained = process.env.AUTOFLOW_URET_PROOF_DIR;
   if (retained) {
@@ -117,9 +134,16 @@ test.each([
   ["stale-trial", "literal public trial balance"],
   ["invoice-attribution", "invoice financier attribution"],
   ["role-overgrant", "denied capability absent"],
+  // SCRUM-486: excluding the read clock must not blind the refusal witness to a real write or to a bank change.
+  ["refusal-writes-vehicle", "refusal preserves complete public financial/operational witnesses"],
+  ...["balanceMinor", "status", "currency", "name", "bankAccountId", "unmatchedMinor", "unattributedLineCount"].map(field =>
+    [`refusal-moves-bank:${field}`, "refusal preserves complete public financial/operational witnesses"] as const),
+  ["bank-clock-malformed", "read clock is a valid instant"],
 ] as const)("U-RET SDK %s cannot pass the public financial evidence oracle", async (defect, reason) => {
   const proof = await execute(defect);
   expect(proof.result).toMatchObject({ id: "U-RET", status: "FAIL" });
   expect(proof.result?.detail).toContain(reason);
-  if (defect !== "role-overgrant") expect(proof.calls).toContain("dealUnwind:finishDealUnwind");
+  // Only the closed-book readback corruptions need the unwind to have completed; the others fail earlier by design.
+  const needsCompletedUnwind = ["missing-reversal", "duplicate-reversal", "bank-attribution", "stale-trial", "invoice-attribution"];
+  if (needsCompletedUnwind.includes(defect)) expect(proof.calls).toContain("dealUnwind:finishDealUnwind");
 }, 30000);

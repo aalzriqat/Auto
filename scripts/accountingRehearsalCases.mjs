@@ -1,5 +1,4 @@
 import { runOpeningRehearsalCases } from "./accountingOpeningRehearsal.mjs";
-import { runUnwindRehearsalCases } from "./accountingUnwindRehearsal.mjs";
 /**
  * The rehearsal's cases, driven ONLY through the real public API of a live
  * preview deployment as two genuine Clerk-authenticated users.
@@ -3723,7 +3722,7 @@ export async function runRehearsalCases(ctx) {
   });
 
   await runOpeningRehearsalCases(ctx);
-  await runUnwindRehearsalCases(ctx);
+  // U-RET is NOT run here: it must run after the cleanup cases. See `runRehearsalSequence` in accountingPreviewRehearsal.mjs.
 
   // ── P1 — a CLOSED period holds the posting; it does not half-post it ───────
   //

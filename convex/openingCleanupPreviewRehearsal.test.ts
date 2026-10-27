@@ -71,6 +71,23 @@ test.each(["class", "provider", "url", "baseline", "membership", "actor", "role"
   },
 );
 
+test("an earlier organization that seats the approver as MANAGER refuses the cleanup fixture (SCRUM-486 U-RET shape)", async () => {
+  // Root cause of S858-CLEANUP-HISTORY failing in run 40521502331: U-RET seats the approver as MANAGER in the organization it
+  // creates. That organization is in the caller's inventory, but the seat is not a shape the cleanup fixture allows (owner or
+  // SENIOR_ACCOUNTANT), so the server refuses with UNEXPECTED_MEMBERSHIP. The cure is to run such cases after cleanup
+  // (runRehearsalSequence), never to relax this server fence.
+  const control = await prepareScope();
+  await expect(control.t.mutation(internal.e2eBootstrap.prepareOpeningCleanupFixture, control.args)).resolves.toBeDefined();
+  const { t, primary, args } = await prepareScope();
+  const earlierOrg = await primary.mutation(api.organizations.create, { name: "QA TEST U-RET" });
+  const manager = (await primary.query(api.roles.list, { orgId: earlierOrg })).find(row => row.name === "MANAGER");
+  if (!manager) throw new Error("Missing native MANAGER role");
+  await primary.mutation(api.memberships.add, { orgId: earlierOrg, userEmail: APPROVER.email, roleId: manager._id });
+  const before = await t.run(ctx => ctx.db.query("openingBalanceDrafts").collect());
+  await expect(t.mutation(internal.e2eBootstrap.prepareOpeningCleanupFixture, { ...args, knownOrgIds: [...args.knownOrgIds, earlierOrg] }))
+    .rejects.toThrow(/unexpected cleanup QA membership/);
+  expect(await t.run(ctx => ctx.db.query("openingBalanceDrafts").collect())).toEqual(before);
+});
 test("cleanup historical reset refuses missing native opening proof without starting a generation", async () => {
   const { t, args } = await prepareScope();
   await t.mutation(internal.e2eBootstrap.prepareOpeningCleanupFixture, args);
@@ -163,6 +180,13 @@ test("with nine earlier organizations the driver refuses before creating the fix
   expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "FAIL", detail: expect.stringMatching(/12-organization/) });
   // Only the refused SPLIT-REFERENCE fixture is proven absent: it was never created, so the server bound was not crossed.
   expect(await listPrimaryOrgNames()).not.toContain("QA TEST cleanup SPLIT-REFERENCE");
+});
+
+test("ten earlier organizations (the usual eight plus the two U-RET creates) leave no room: both cleanup cases refuse at the bound", async () => {
+  // SCRUM-486: this is the arithmetic behind the 12-organization failure in run 40521502331. U-RET therefore runs after cleanup.
+  const results = await executeCallbacks(undefined, 10);
+  expect(results[0], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-HISTORY", status: "FAIL", detail: expect.stringMatching(/12-organization/) });
+  expect(results[1], JSON.stringify(results)).toMatchObject({ id: "S858-CLEANUP-SPLIT", status: "FAIL", detail: expect.stringMatching(/12-organization/) });
 });
 
 test("a HISTORY case that fails after its deletion fixture exists keeps that slot, and SPLIT stops at the bound", async () => {
