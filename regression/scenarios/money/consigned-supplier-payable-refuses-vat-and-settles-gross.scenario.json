@@ -1,0 +1,71 @@
+{
+  "id": "consigned-supplier-payable-refuses-vat-and-settles-gross",
+  "fingerprint": "c593eaacbb0e422b38af464bb8b4cd1747cf6ad41089bd97c1f5e8eae0795e6e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum-773-hunt",
+    "firstSeen": "2026-10-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "payable": "consigned",
+        "taxAmount": 2000,
+        "paymentMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "payable": "consigned",
+        "taxAmount": 0,
+        "paymentMethod": "CASH"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "markPaid.withVat.refused",
+      "value": true
+    },
+    {
+      "observable": "markPaid.withVat.rowsWritten",
+      "value": 0
+    },
+    {
+      "observable": "markPaid.withVat.eventsPosted",
+      "value": 0
+    },
+    {
+      "observable": "markPaid.gross.vatReceivableLines",
+      "value": 0
+    },
+    {
+      "observable": "markPaid.gross.journalLines",
+      "value": 2
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-773#c22401",
+      "digest": "f5fd390b6fc991ed9147c55bf122ecc91749b31ba865547088d95ba1fadd10e5"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedPayableVat.scrum781.test.ts",
+    "testName": "markPaid refuses VAT 2,000 on a consigned payable; nothing is written and the refusal is not cached"
+  },
+  "matrixRow": "SCRUM781-consigned-payable-vat"
+}
