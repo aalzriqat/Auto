@@ -30,8 +30,8 @@ import { internalMutation, mutation } from "./functions";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { PostCommand, postAccountingEvent, retiredPostingRefusal } from "./accounting/postingEngine";
 import { fixedAssetPostingRefusal } from "./utils/fixedAssetLifecycleContainment";
+import { PostCommand, postAccountingEvent, findPostedAccountingEvent, retiredPostingRefusal, supplierPaymentVatPostingRefusal } from "./accounting/postingEngine";
 import {
   isReservedReceiptKey,
   isReservedReceiptTuple,
@@ -270,10 +270,7 @@ async function assertOpeningPendingPostProof(ctx:MutationCtx,row:Doc<"pendingAcc
   await assertOpeningPostingProof(ctx,{orgId:row.orgId,eventType:row.eventType,sourceType:row.sourceType,sourceId:row.sourceId,eventVersion:row.eventVersion??1,currency:row.currency,accountingDate:row.accountingDate,occurredAt:row.occurredAt??row.accountingDate,idempotencyKey:row.idempotencyKey,payload:(row.payload??{}) as Record<string,unknown>,actorId:row.actorId});
 }
 
-async function postPendingEntry(
-  ctx: MutationCtx,
-  p: Doc<"pendingAccountingEvents">
-): Promise<Id<"accountingEvents"> | null> {
+function pendingPostCommand(p: Doc<"pendingAccountingEvents">): PostCommand {
   if (!p.eventType) throw new Error("Pending POST record missing eventType");
   if (!p.currency) throw new Error("Pending POST record missing currency");
   const eventVersion = p.eventVersion ?? 1;
@@ -312,7 +309,7 @@ async function postPendingEntry(
         })
       : undefined;
 
-  const res = await postAccountingEvent(ctx, {
+  return {
     orgId: p.orgId,
     branchId: p.branchId,
     eventType: p.eventType,
@@ -326,7 +323,14 @@ async function postPendingEntry(
     payload: (p.payload ?? {}) as Record<string, unknown>,
     actorId: p.actorId,
     receiptAuthority,
-  });
+  };
+}
+
+async function postPendingEntry(
+  ctx: MutationCtx,
+  p: Doc<"pendingAccountingEvents">
+): Promise<Id<"accountingEvents"> | null> {
+  const res = await postAccountingEvent(ctx, pendingPostCommand(p));
   return res.eventId;
 }
 
@@ -1332,7 +1336,10 @@ const OUTBOX_HOLD_DELAY_MS = 60_000;
  * (https://docs.convex.dev/scheduling/scheduled-functions), so a durable wake
  * table and a recovery cron would only duplicate the platform. What remains is a
  * developer error or a manually cancelled schedule: `redrive` re-wakes the org.
- * Other holds (dependencies, org lifecycle) have no wake route and keep the flat delay.
+ * SCRUM-782 additionally reclassifies legacy invalid supplier VAT holds through
+ * a one-time rollout migration and eager drains. Valid period holds stay
+ * parked. Other holds (dependencies, org lifecycle) have no wake route and
+ * keep the flat delay.
  */
 
 /**
@@ -1820,6 +1827,35 @@ export const postOutboxRow = internalMutation({
         sourceType: row.sourceType,
       });
       if (fixedAssetRefusal) return await failOutboxRow(ctx, row, fixedAssetRefusal);
+      // A proven replay acknowledges existing history before today's VAT or
+      // period eligibility. Shared proof retains receipt authority and collision
+      // checks; marking the queue complete creates no new financial records.
+      if (row.eventType === "SUPPLIER_PAYMENT_SETTLED") {
+        let replay: Awaited<ReturnType<typeof findPostedAccountingEvent>>;
+        try {
+          // Read-only proof ONLY. Catching a financial writer here would commit
+          // its partial writes; postPendingEntry below deliberately still throws.
+          replay = await findPostedAccountingEvent(ctx, pendingPostCommand(row));
+        } catch (error) {
+          console.error("[outbox] supplier replay proof refused", { rowId: row._id, error });
+          return await failOutboxRow(ctx, row,
+            "SUPPLIER_REPLAY_REFUSED: The queued settlement could not be verified against its recorded occurrence. Operator review is required before retrying.");
+        }
+        if (replay) {
+          await markEntryPosted(ctx, row, replay.eventId);
+          return { outcome: "POSTED" as const };
+        }
+      }
+
+      // SCRUM-782: a legacy consigned VAT settlement is invalid as queued.
+      // Classify before period/dependency holds, without any financial write.
+      // Preserve the paid source and payload for operator review; retry alone
+      // cannot correct the recorded VAT. Use the existing refusal disposition.
+      const supplierVatRefusal = await supplierPaymentVatPostingRefusal(ctx, {
+        orgId: row.orgId, eventType: row.eventType ?? "", sourceType: row.sourceType,
+        sourceId: row.sourceId, payload: row.payload,
+      });
+      if (supplierVatRefusal) return await failOutboxRow(ctx, row, supplierVatRefusal);
 
       // ⚠️ R8 (Sol) — A CUSTODY ROW THAT IS NOT THE POSTING ITS KEY PROMISES,
       // OR DOES NOT STAND ON ITS SOURCE, IS PERMANENTLY REFUSED — HERE, WITH
@@ -2008,7 +2044,7 @@ export async function drainEntries(
   // SCRUM-807 — true ONLY for an operator's explicit redrive (`redrive`,
   // `prepaidExpenses.redriveScheduleEvents`): parked period holds are released and
   // claimed, and counted in `scheduled`, so the caller's "N queued" is the truth.
-  // Every automatic drain leaves the default and keeps parked rows excluded.
+  // Automatic drains release only the legacy VAT refusals classified below.
   options: { releaseParked?: boolean } = {}
 ): Promise<{ scheduled: number; alreadyInFlight: number; periodHeld: number }> {
   let scheduled = 0;
@@ -2032,12 +2068,18 @@ export async function drainEntries(
       continue;
     }
     // SCRUM-807 — a row parked for its period is neither "in flight" nor "nothing
-    // here": an automatic drain counts it on its own and does NOT claim it — only the
-    // period opening releases it, and claiming it would re-run a hold whose blocker
-    // has not changed. A manual redrive releases it and falls through to the claim
+    // here": an automatic drain preserves valid period holds. A legacy supplier
+    // VAT refusal must reach the worker even without a period opening. A manual
+    // redrive releases every hold and falls through to the claim
     // below; the worker re-proves the period and re-parks it with no attempt burned.
     if (p.dispatchState === "PERIOD_HELD") {
-      if (!options.releaseParked) {
+      const supplierVatRefusal = p.kind === "POST"
+        ? await supplierPaymentVatPostingRefusal(ctx, {
+            orgId: p.orgId, eventType: p.eventType ?? "", sourceType: p.sourceType,
+            sourceId: p.sourceId, payload: p.payload,
+          })
+        : null;
+      if (!options.releaseParked && !supplierVatRefusal) {
         periodHeld += 1;
         continue;
       }
@@ -2048,6 +2090,48 @@ export async function drainEntries(
   }
   return { scheduled, alreadyInFlight, periodHeld };
 }
+
+/**
+ * One-time SCRUM-782 rollout migration, following bankBalanceBackfill.runPage:
+ * persist the cursor with each batch, return MORE/READY, and let rolloutRelease
+ * call the next page. No recurring scan or background migration chain.
+ * https://stack.convex.dev/migrating-data-with-mutations
+ * New invalid VAT rows are refused BEFORE holdOutboxRow, so this population is
+ * closed. Completion is deployment-wide and survives organization resets.
+ */
+export const recoverPeriodHeldSupplierVat = internalMutation({
+  args: {},
+  returns: v.object({ status: v.union(v.literal("MORE"), v.literal("READY")), reclassified: v.number() }),
+  handler: async (ctx): Promise<{ status: "MORE" | "READY"; reclassified: number }> => {
+    const state = await ctx.db.query("supplierVatHoldMigration").unique();
+    if (state?.completedAt !== undefined) return { status: "READY", reclassified: 0 };
+    // At the 1 MiB document limit: two outbox rows + two payable/vehicle
+    // pairs + checkpoint <= 7 MiB read. Releases rewrite <= 2 MiB of rows;
+    // the cursor checkpoint and two row-id-only schedules are small.
+    // Keep headroom below https://docs.convex.dev/production/state/limits.
+    // Convex 1.42.1 supports these native scan budgets (server/pagination.ts).
+    const page = await ctx.db.query("pendingAccountingEvents")
+      .withIndex("by_dispatch_next_action", (q) => q.eq("status", "PENDING").eq("dispatchState", "PERIOD_HELD"))
+      .paginate({
+        cursor: state?.cursor ?? null, numItems: 2,
+        maximumRowsRead: 2, maximumBytesRead: 2 * 1024 * 1024,
+      });
+    const result = await drainEntries(ctx, page.page);
+    const checkpoint = {
+      cursor: page.isDone ? undefined : page.continueCursor,
+      completedAt: page.isDone ? Date.now() : undefined,
+      updatedAt: Date.now(),
+    };
+    // Cursor, release metadata and scheduled claims commit together. Any throw
+    // rolls back the entire page, leaving it resumable at the previous cursor.
+    if (state) {
+      await ctx.db.patch(state._id, checkpoint);
+    } else {
+      await ctx.db.insert("supplierVatHoldMigration", checkpoint);
+    }
+    return { status: page.isDone ? "READY" : "MORE", reclassified: result.scheduled };
+  },
+});
 
 // ─── Internal mutation (scheduler target) ─────────────────────────────────────
 
