@@ -4631,7 +4631,7 @@
       "cause": "key is declared (number) but the value is `any`: shape-safe, value NOT verified",
       "fingerprint": "39d7158b3756c286",
       "multiplicity": 1,
-      "rationale": "Sourcing taxAmount is undefined for blank input; otherwise Number(trimmedTax) after finite/nonnegative refusal. Native permits optional number. Propose the numeric producer-analysis gap without financial tax/recovery certification.",
+      "rationale": "Sourcing taxAmount is 0 when the payable does not allow VAT reclassification (vatReclassAllowed !== true, the consigned case since SCRUM-781), whatever was typed. When VAT is allowed it is undefined for blank input, otherwise Number(trimmedTax) after a finite/nonnegative refusal. Native permits optional number. Propose the numeric producer-analysis gap without financial tax/recovery certification.",
       "issue": "SCRUM-711",
       "expires": "2026-11-01"
     },
