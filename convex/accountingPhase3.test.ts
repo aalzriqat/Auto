@@ -1,7 +1,14 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+
+// SCRUM-760 ruling 11 legacy-collection-refund opt-out: this suite reverses an allocation through the subledger.reverseAllocationMutation operator door as a FIXTURE.
+// The narrow pilot blocks that internal door by default, so the block is off here. The shipped state is asserted in
+// convex/legacyCollectionRefundContainment.test.ts; the census in scripts/legacyCollectionRefundOptOutCensus.test.ts allows only
+// the files listed there.
+vi.mock("./utils/legacyCollectionRefundContainment", async (importOriginal) =>
+  (await import("../test-utils/legacyCollectionRefundSwitches")).openLegacyCollectionRefund(await importOriginal()));
 
 async function seedPhase3Dealer() {
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));

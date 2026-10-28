@@ -1,0 +1,49 @@
+{
+  "id": "reverse-allocation-mutation-refuses-and-allocation-stays-active",
+  "fingerprint": "cfca1a8b0dec225725265e6399dee65c9c175c0b9e5698056d620fbedfaa49f1",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-ruling11-lref",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "operator",
+        "org": "A"
+      },
+      "action": "subledger.reverseAllocationMutation",
+      "input": {
+        "allocation": "ACTIVE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "LEGACY_COLLECTION_REFUND_PILOT_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "allocation.status",
+      "value": "ACTIVE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    }
+  ],
+  "impl": {
+    "file": "convex/legacyCollectionRefundContainment.test.ts",
+    "testName": "is refused and the allocation stays ACTIVE with nothing else changed"
+  },
+  "matrixRow": "SCRUM-760-legacy-collection-refund"
+}

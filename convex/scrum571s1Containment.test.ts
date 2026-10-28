@@ -10,6 +10,13 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 
+// SCRUM-760 ruling 11 legacy-collection-refund opt-out: this suite drives the legacy collection REFUND request and approval
+// (collections.requestApproval / respondToApproval) as a FIXTURE or as the behaviour that returns when that door is activated.
+// The narrow pilot blocks the door by default, so the block is off here. The shipped state is asserted in
+// convex/legacyCollectionRefundContainment.test.ts; the census in scripts/legacyCollectionRefundOptOutCensus.test.ts allows only
+// the files listed there.
+vi.mock("./utils/legacyCollectionRefundContainment", async (importOriginal) =>
+  (await import("../test-utils/legacyCollectionRefundSwitches")).openLegacyCollectionRefund(await importOriginal()));
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
