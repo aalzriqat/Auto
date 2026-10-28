@@ -1,4 +1,5 @@
 "use client";
+import { isRt11DoorDisabled } from "@/convex/utils/rt11DoorContainment";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
@@ -121,7 +122,7 @@ import {
   type CustomerFinanceCompanyPayment,
 } from "./CustomerFinanceCompanyPaymentCard";
 import { ResolveReconciliationDialog } from "./ResolveReconciliationDialog";
-import { ResolveGapDialog } from "./ResolveGapDialog";
+import { ResolveGapDialog, type SupplierConcessionBasis } from "./ResolveGapDialog";
 import {
   RecordSubmittedQuotationDialog,
   toQuotationCalculation,
@@ -920,6 +921,34 @@ function DealCockpitContent({
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
   const economicsApp = economics?.application ?? null;
+  /**
+   * The supplier concession basis (SCRUM-766 PR-C), asked for ONLY when there is
+   * a shortfall the caller can see and the caller holds both permissions the
+   * query demands: it THROWS for anyone else, and an uncaught throw from
+   * `useQuery` during render would white-screen the cockpit. `eligible: false`
+   * (stock car, several vehicles, no supplier on record) maps to no field.
+   */
+  const supplierConcessionBasis = useQuery(
+    api.financingEconomics.supplierConcessionBasis,
+    canViewApplications &&
+      !permissionsLoading &&
+      hasPermission(PERMISSIONS.VIEW_FINANCE) &&
+      deal &&
+      typeof deal.money?.shortfall?.totalMinor === "number"
+      ? { orgId, applicationId }
+      : "skip"
+  );
+  // Stable identity: the dialog lists this in an effect's dependencies.
+  const concessionEntitlementMinor = supplierConcessionBasis?.eligible ? supplierConcessionBasis.entitlementMinor : null;
+  const concessionCurrency = supplierConcessionBasis?.eligible ? supplierConcessionBasis.currency : null;
+  const concessionSupplierName = supplierConcessionBasis?.eligible ? supplierConcessionBasis.supplierName : null;
+  const supplierBasis = useMemo(
+    () =>
+      concessionEntitlementMinor !== null && concessionCurrency !== null && concessionSupplierName !== null
+        ? { entitlementMinor: concessionEntitlementMinor, currency: concessionCurrency, supplierName: concessionSupplierName }
+        : null,
+    [concessionEntitlementMinor, concessionCurrency, concessionSupplierName]
+  );
 
   /**
    * The calculator, mounted wherever the quotation action can actually be
@@ -2271,7 +2300,7 @@ function DealCockpitContent({
      */
     // SCRUM-417 (G4): a FAILED negotiation on a live deal is settled through
     // the same writer — `resolveAppraisalGap` refuses only a gap already
-    // CUSTOMER_ABSORBS / DEALER_ABSORBS / SPLIT, and the rail hands both
+    // CUSTOMER_ABSORBS / DEALER_ABSORBS / SPLIT / SUPPLIER_ABSORBS, and the rail hands both
     // blockers to the dealership for exactly this action.
     if (liveStage?.blocker === "GapUnresolved" || liveStage?.blocker === "GapNegotiationFailed") {
       // The amount to settle is the server's NET shortfall (SCRUM-766). An
@@ -3095,6 +3124,7 @@ function DealCockpitContent({
           recommended: dealCosts?.recommendedCustody ?? null,
           openPeriodToday: dealCosts?.custodyPostsNow,
           reopenLocked: unwindBars,
+          finalized: (dealCosts?.economicsFrozen?.frozen ?? false) || app.status === "CLOSED",
           dealStopped:
             // The issuing commands' own predicate, when the read has it;
             // the local status check stays as the fallback while it loads.
@@ -3828,6 +3858,7 @@ function DealCockpitContent({
         onOpenChange: setResolvingGap,
         submittedQuotationMinor: economicsApp?.submittedQuotationMinor ?? null,
         approvedPurchaseAmountMinor: economicsApp?.approvedDealerPurchaseAmountMinor ?? null,
+        supplierBasis,
         /**
          * RETHROWS, for the reason the handover submit documents: the refusal
          * belongs to the attempt that earned it, and the server's messages
@@ -3851,6 +3882,11 @@ function DealCockpitContent({
                   customerGapCashToDealerMinor: values.customerGapCashToDealerMinor,
                   customerGapInstallmentToDealerMinor: values.customerGapInstallmentToDealerMinor,
                   customerGapToFinanceCompanyMinor: values.customerGapToFinanceCompanyMinor,
+                  // Present only for a SOURCED vehicle's concession (SCRUM-766
+                  // PR-C), together with the basis the operator saw.
+                  supplierGapShareMinor: values.supplierGapShareMinor,
+                  observedSupplierEntitlementMinor: values.observedSupplierEntitlementMinor,
+                  observedSupplierName: values.observedSupplierName,
                   notes: values.notes || undefined,
                 }),
               "GapResolved"
@@ -5407,6 +5443,8 @@ export function DealCockpitView({
     /** Context figures from the economics row; null when withheld from this caller. */
     submittedQuotationMinor: number | null;
     approvedPurchaseAmountMinor: number | null;
+    /** Null unless the supplier may concede part of the shortfall (SOURCED vehicle). */
+    supplierBasis: SupplierConcessionBasis | null;
     /** Rejects on refusal, so the dialog can name the figure that did not add up. */
     onSubmit: (values: {
       customerGapShareMinor: number;
@@ -5414,6 +5452,9 @@ export function DealCockpitView({
       customerGapCashToDealerMinor: number;
       customerGapInstallmentToDealerMinor: number;
       customerGapToFinanceCompanyMinor: number;
+      supplierGapShareMinor?: number;
+      observedSupplierEntitlementMinor?: number;
+      observedSupplierName?: string;
       notes: string;
       economicsStamp: string | undefined;
     }) => Promise<void>;
@@ -7293,11 +7334,14 @@ export function DealCockpitView({
                 variant="outline"
                 size="sm"
                 className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                disabled={isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED")}
+                title={isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") ? t("ServerError_SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") : undefined}
                 onClick={() => setCorrectingAdvice(true)}
               >
                 {t("CorrectSettlementAdvice")}
               </Button>
             )}
+            {canCorrectAdvice && isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") && <p className="text-xs text-muted-foreground">{t("ServerError_SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED")}</p>}
           </div>
           )}
         </div>
@@ -7636,6 +7680,7 @@ export function DealCockpitView({
           allowFinanceCompany={deal.money.shortfall.method !== "GROSS_MANUAL"}
           submittedQuotationMinor={gapResolution.submittedQuotationMinor}
           approvedPurchaseAmountMinor={gapResolution.approvedPurchaseAmountMinor}
+          supplierBasis={gapResolution.supplierBasis}
           economicsStamp={"economicsStamp" in deal ? deal.economicsStamp : undefined}
           factor={factor}
           money={money}
@@ -7824,7 +7869,7 @@ export function DealCockpitView({
         </>
       )}
 
-      {discrepancy && canCorrectAdvice && (
+      {discrepancy && canCorrectAdvice && !isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") && (
         <SettlementAdviceCorrectionDialog
           open={correctingAdvice}
           submitting={correctionSubmitting}

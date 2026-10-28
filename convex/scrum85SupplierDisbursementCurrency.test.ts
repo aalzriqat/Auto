@@ -26,6 +26,13 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
+// RT11-DOORS: this file proves the SCRUM-85 currency refusal on the amend door, so the pilot door is
+// explicitly open here (the shipped-state RT11 refusal lives in rt11DoorContainment.test.ts).
+vi.mock("./utils/rt11DoorContainment", async (importOriginal) =>
+  (await import("../test-utils/rt11DoorSwitches")).openRt11Doors(
+    await importOriginal<typeof import("./utils/rt11DoorContainment")>()
+  ));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),

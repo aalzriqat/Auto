@@ -126,6 +126,13 @@ vi.mock("convex/react", async () => {
   };
 });
 
+// RT11-DOORS: the SCRUM-85 advice-correction tests below exercise the screen with the pilot door open;
+// the shipped-state RT11 refusal on this control is covered in DealCockpitView.test.tsx.
+vi.mock("@/convex/utils/rt11DoorContainment", async (importOriginal) =>
+  (await import("@/test-utils/rt11DoorSwitches")).openRt11Doors(
+    await importOriginal<typeof import("@/convex/utils/rt11DoorContainment")>()
+  ));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
 }));

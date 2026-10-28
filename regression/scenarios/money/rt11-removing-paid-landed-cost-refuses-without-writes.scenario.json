@@ -1,0 +1,50 @@
+{
+  "id": "rt11-removing-paid-landed-cost-refuses-without-writes",
+  "fingerprint": "64fb3de970202895c4a596ab60df2b73cc8d258ba1407641af51f5c3fcf21753",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.upsertLandedCosts",
+      "input": {
+        "previousAmount": 100,
+        "itemCount": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "PAID_LANDED_COST_CHANGE_PILOT_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "step1.schedulerChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 removing paid landed cost refuses without writes"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

@@ -51,7 +51,7 @@
  * Nothing else in this file was changed.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
@@ -70,6 +70,13 @@ import {
 import { simplePayloadHash } from "./accounting/postingRules";
 import { postReceiptOccurrence, findPostedReceiptOccurrence } from "./accounting/workflowHooks";
 import { settleOutbox, outboxRows } from "../test-utils/outboxWork";
+
+// SCRUM-760 ruling 11 legacy-collection-refund opt-out: L4 posts a COLLECTION_REFUND event through accountingLedger.post to prove the receipt reservation does not over-block it.
+// The narrow pilot blocks that internal door by default, so the block is off here. The shipped state is asserted in
+// convex/legacyCollectionRefundContainment.test.ts; the census in scripts/legacyCollectionRefundOptOutCensus.test.ts allows only
+// the files listed there.
+vi.mock("./utils/legacyCollectionRefundContainment", async (importOriginal) =>
+  (await import("../test-utils/legacyCollectionRefundSwitches")).openLegacyCollectionRefund(await importOriginal()));
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 

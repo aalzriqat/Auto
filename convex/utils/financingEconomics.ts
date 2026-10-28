@@ -96,6 +96,8 @@ export const gapResolutionValidator = v.union(
   v.literal("PENDING_NEGOTIATION"),
   v.literal("CUSTOMER_ABSORBS"),
   v.literal("DEALER_ABSORBS"),
+  // SCRUM-766 PR-C: the supplier of a SOURCED vehicle concedes the whole net shortfall.
+  v.literal("SUPPLIER_ABSORBS"),
   v.literal("SPLIT"),
   v.literal("FAILED")
 );
@@ -1251,6 +1253,7 @@ export function assertGapResolutionValid(
     customerGapCashToDealerMinor: number;
     customerGapInstallmentToDealerMinor: number;
     customerGapToFinanceCompanyMinor: number;
+    supplierGapShareMinor?: number;
   }
 ): void {
   const violations = validateGapShares(rawAppraisalGapMinor, settlement);
@@ -1270,6 +1273,7 @@ export function appraisalGapIsSettled(gapResolution: GapResolution): boolean {
   return (
     gapResolution === "CUSTOMER_ABSORBS" ||
     gapResolution === "DEALER_ABSORBS" ||
+    gapResolution === "SUPPLIER_ABSORBS" ||
     gapResolution === "SPLIT"
   );
 }
@@ -1335,6 +1339,10 @@ export const GAP_RESOLUTION_CLEARED = Object.freeze({
   customerGapCashToDealerMinor: undefined,
   customerGapInstallmentToDealerMinor: undefined,
   customerGapToFinanceCompanyMinor: undefined,
+  // SCRUM-766 PR-C: a supplier's concession is voided with the split it belongs to,
+  // together with the entitlement it was agreed against.
+  supplierGapShareMinor: undefined,
+  supplierGapBasis: undefined,
   gapResolvedAt: undefined,
   gapResolvedBy: undefined,
   gapResolutionNotes: undefined,

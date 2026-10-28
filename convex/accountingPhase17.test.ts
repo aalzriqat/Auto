@@ -8,13 +8,18 @@
  * still-unmigrated rows.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { postLegacyTransactionEvent } from "../test-utils/legacyMigrationSeed";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+// SCRUM-560: the fixed-asset lifecycle is OFF for the pilot; this file tests the fixed-asset
+// minor-unit backfill itself, so it opens the switch (refusal: fixedAssetLifecycleContainment.scrum560.test.ts).
+vi.mock("./utils/fixedAssetLifecycleContainment", async (importOriginal) =>
+  (await import("../test-utils/fixedAssetLifecycleSwitch")).openFixedAssetLifecycle(await importOriginal()));
 
 // Retained earnings is a synthetic test offset only; it classifies no real guide amount.
 async function seedCutoverDealer() {

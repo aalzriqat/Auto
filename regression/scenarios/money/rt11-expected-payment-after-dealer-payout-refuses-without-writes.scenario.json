@@ -1,0 +1,49 @@
+{
+  "id": "rt11-expected-payment-after-dealer-payout-refuses-without-writes",
+  "fingerprint": "ac1fdca1d0c27cc03b70b10ae2a419177d1e43fea9df39c99a5a41e8cd1c5050",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.correctExpectedPayment",
+      "input": {
+        "payoutState": "DEALER_DISBURSED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "EXPECTED_PAYMENT_PAID_PILOT_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "step1.schedulerChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 expected payment after dealer payout refuses without writes"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

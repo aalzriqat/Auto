@@ -1,4 +1,5 @@
 import { v, ConvexError } from "convex/values";
+import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
 import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
@@ -37,6 +38,7 @@ import {
 } from "./utils/financingEconomics";
 import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
+import { projectSaleRow } from "./utils/saleRowProjection";
 import { auditLog } from "./financialAudit";
 import { effectiveCommissionMode, isAutoCommissionMode } from "./utils/commissionMode";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
@@ -152,7 +154,7 @@ export const list = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const salespersonId = args.salespersonId;
     // Native paginate over the isDeleted index keeps reactive page ends pinned.
@@ -202,7 +204,9 @@ export const list = query({
             : undefined;
 
         return {
-          ...sale,
+          // Allowlist projection (SCRUM-766 PR-C, ACC-10): the supplier concession is a
+          // FINANCE-tier figure and `view:sales` alone must not carry it.
+          ...projectSaleRow(sale, role),
           linkedApplication,
           vehicleSummary: vehicle
             ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
@@ -229,7 +233,7 @@ export const get = query({
     saleId: v.id("sales"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
@@ -241,7 +245,7 @@ export const get = query({
     const salesperson = await ctx.db.get(sale.salespersonId);
 
     return {
-      ...sale,
+      ...projectSaleRow(sale, role),
       vehicle,
       customer,
       salesperson: salesperson
@@ -1603,7 +1607,7 @@ async function commissionPage(
         const canSetAmount =
           isManualMode && sale.status === "COMPLETED" && sale.commissionPaidAt == null;
         return {
-          ...sale,
+          ...projectSaleRow(sale, role),
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
           salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
@@ -1739,7 +1743,7 @@ export const listCommissions = query({
         const salesperson = await getUser(sale.salespersonId);
         const paidBy = sale.commissionPaidBy ? await getUser(sale.commissionPaidBy) : null;
         return {
-          ...sale,
+          ...projectSaleRow(sale, role),
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
           salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
@@ -1908,6 +1912,8 @@ export const markCommissionPaid = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+    await requireOwnedRow(ctx, args.orgId, "sales", args.saleId, "Sale not found.");
+    assertRt11DoorAllowed("DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED");
     const paymentMethod = normalizePaymentMethod(args.paymentMethod);
 
     return await runWithIdempotency(
@@ -2390,7 +2396,23 @@ export const recalculateCommission = mutation({
        */
       const marginCurrency = sale.consignedMarginCurrency;
       const frozenMarginMinor = sale.consignedMarginMinor;
-      const frozenRecognizedEarnings =
+      // SCRUM-766 PR-C: a financed consigned sale on a server-derived plan froze its commission
+      // basis M = K - E_eff - contra as `financedNetRevenue` at completion, and the commission
+      // was worked out from that same figure. Recalculation reads it back (never below 0) so the
+      // two cannot drift; a stored figure that is corrupt or in another currency is refused,
+      // never silently replaced by the older margin. Absent keeps the margin path below.
+      const frozenNet = sale.financedNetRevenue;
+      let frozenNetEarnings: number | undefined;
+      if (isConsignedAgentSale(vehicle) && frozenNet !== undefined) {
+        if (
+          !Number.isSafeInteger(frozenNet.minor) ||
+          frozenNet.currency !== (await getOrgCurrency(ctx, args.orgId))
+        ) {
+          throw new ConvexError(CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN);
+        }
+        frozenNetEarnings = fromMinorUnits(Math.max(0, frozenNet.minor), frozenNet.currency);
+      }
+      const frozenMarginEarnings =
         isConsignedAgentSale(vehicle) &&
         frozenMarginMinor !== undefined &&
         Number.isFinite(frozenMarginMinor) &&
@@ -2398,14 +2420,18 @@ export const recalculateCommission = mutation({
         marginCurrency === requireConfiguredCurrency(orgSettings)
           ? fromMinorUnits(frozenMarginMinor, marginCurrency)
           : undefined;
+      const frozenRecognizedEarnings = frozenNetEarnings ?? frozenMarginEarnings;
 
       // Fail closed rather than fall back to the vehicle. A financed direct
       // sale whose frozen margin is absent, corrupt or in another currency is
       // the one shape where re-deriving is most wrong — the sale price is not
       // what the supplier received and the live cost is not what he was owed —
       // so the commission is left exactly as it is and the mutation rolls back.
+      // SCRUM-766 PR-C: judged on the recorded MARGIN, not on the new net figure, so a financed
+      // direct sale whose margin record is gone still refuses even though its frozen net
+      // revenue survives; two independent records must both be intact (fail closed).
       if (
-        frozenRecognizedEarnings === undefined &&
+        frozenMarginEarnings === undefined &&
         isConsignedAgentSale(vehicle) &&
         !dealershipCollectsGross(
           consignedSettlementRoute({ supplierSettlementRoute: sale.supplierSettlementRoute })

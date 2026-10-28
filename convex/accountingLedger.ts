@@ -9,6 +9,7 @@ import { reverseAccountingEvent } from "./accounting/reversals";
 import { RECEIPT_EVENT_TYPE, RECEIPT_SOURCE_TYPE } from "./accounting/receiptOccurrence";
 import { requireFeature } from "./subscriptions";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
+import { assertLegacyCollectionRefundAllowed } from "./utils/legacyCollectionRefundContainment";
 
 import { Doc, Id } from "./_generated/dataModel";
 
@@ -420,6 +421,10 @@ export const post = internalMutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
+    // SCRUM-760 ruling 11: no NEW collection refund posting through this operator door. Refused
+    // before the engine is entered, so nothing is written. The outbox is deliberately not gated:
+    // a refund queued before the switch records a payout that already happened.
+    if (args.eventType === "COLLECTION_REFUND") assertLegacyCollectionRefundAllowed();
     return postAccountingEvent(ctx, { ...args, actorId: user._id });
   },
 });

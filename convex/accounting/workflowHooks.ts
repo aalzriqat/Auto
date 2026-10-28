@@ -12,6 +12,7 @@ import { assertOpeningPostingProof } from "../utils/openingPostingProof";
  * re-driven idempotently when a chart is initialized or a period is opened.
  */
 import { ConvexError } from "convex/values";
+import { assertLegacyCollectionRefundAllowed } from "../utils/legacyCollectionRefundContainment";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import {
@@ -1390,8 +1391,13 @@ type CollectionHookArgs = {
  * the one mechanism that would have silently disabled refunds.
  */
 function makeCollectionHook(eventType: "COLLECTION_REFUND", keyPrefix: string) {
-  return async (ctx: MutationCtx, args: CollectionHookArgs) =>
-    postDomainEvent(ctx, {
+  return async (ctx: MutationCtx, args: CollectionHookArgs) => {
+    // SCRUM-760 ruling 11: no NEW collection refund posting or enqueue. The one caller,
+    // `collections.respondToApproval`, is already refused; this keeps a future caller from
+    // starting one. It runs in the same transaction as the payout, so no payout can exist whose
+    // hook this refuses. Rows already queued are untouched: the outbox worker does not call here.
+    assertLegacyCollectionRefundAllowed();
+    return postDomainEvent(ctx, {
       orgId: args.orgId,
       eventType,
       sourceType: "collectionPayments",
@@ -1409,6 +1415,7 @@ function makeCollectionHook(eventType: "COLLECTION_REFUND", keyPrefix: string) {
         ...(args.bankAccountId ? { bankAccountId: args.bankAccountId.toString() } : {}),
       },
     });
+  };
 }
 
 /*

@@ -1,4 +1,5 @@
 "use client";
+import { isRt11DoorDisabled } from "@/convex/utils/rt11DoorContainment";
 
 import { useState } from "react";
 import { HandCoins, Loader2, Lock, UserRound } from "lucide-react";
@@ -163,6 +164,8 @@ export type DealCustodyWiring = Readonly<{
   openPeriodToday?: boolean;
   /** The deal is finalized, closed or stopped: nothing NEW is planned or issued on it; existing custody still settles. */
   dealStopped?: boolean;
+  /** The server's finalization predicate, separate from cancelled/rejected. */
+  finalized?: boolean;
   /** A live deal unwind owns the custody record: the server refuses to reopen it meanwhile. */
   reopenLocked?: boolean;
   actions?: DealCustodyActions;
@@ -280,6 +283,7 @@ function CustodyRecord({
   canStart,
   blocked,
   reopenLocked,
+  finalized,
   hasEligibleFees,
   openDialog,
   t,
@@ -295,6 +299,7 @@ function CustodyRecord({
   blocked: boolean;
   /** Reopening is locked by a live unwind. */
   reopenLocked: boolean;
+  finalized: boolean;
   hasEligibleFees: boolean;
   openDialog: (request: DialogRequest) => void;
   t: T;
@@ -383,7 +388,7 @@ function CustodyRecord({
                 {t("CustodyRecordReturn")}
               </Button>
               {s !== null && s.reimbursementOutstandingMinor > 0 && (
-                <Button type="button" size="sm" variant="outline" disabled={!act} onClick={() => openDialog({ kind: "MOVE", custodyId: id, movement: "REIMBURSED" })}>
+                <Button type="button" size="sm" variant="outline" disabled={!act || (finalized && isRt11DoorDisabled("CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED"))} title={finalized && isRt11DoorDisabled("CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED") ? t("ServerError_CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED") : undefined} onClick={() => openDialog({ kind: "MOVE", custodyId: id, movement: "REIMBURSED" })}>
                   {t("CustodyReimburse")}
                 </Button>
               )}
@@ -401,12 +406,14 @@ function CustodyRecord({
               </Button>
             </>
           ) : (
-            <Button type="button" size="sm" variant="outline" disabled={!act || reopenLocked} onClick={() => openDialog({ kind: "REOPEN", custodyId: id })}>
+            <Button type="button" size="sm" variant="outline" disabled={!act || reopenLocked || isRt11DoorDisabled("CUSTODY_REOPEN_PILOT_DISABLED")} title={isRt11DoorDisabled("CUSTODY_REOPEN_PILOT_DISABLED") ? t("ServerError_CUSTODY_REOPEN_PILOT_DISABLED") : undefined} onClick={() => openDialog({ kind: "REOPEN", custodyId: id })}>
               {t("CustodyReopen")}
             </Button>
           )}
         </div>
       )}
+      {canAct && !open && isRt11DoorDisabled("CUSTODY_REOPEN_PILOT_DISABLED") && <p className="text-xs text-muted-foreground">{t("ServerError_CUSTODY_REOPEN_PILOT_DISABLED")}</p>}
+      {canAct && open && finalized && isRt11DoorDisabled("CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED") && <p className="text-xs text-muted-foreground">{t("ServerError_CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED")}</p>}
       {canAct && !record.legacy && open && canStart && !hasEligibleFees && (
         // "Charge a cost" is disabled with nothing to charge; say where a
         // cost the employee paid is recorded instead, so the disabled button
@@ -430,7 +437,7 @@ function CustodyRecord({
         {showMovements &&
           renderMovements(
             record._id,
-            act && open && !record.legacy ? (movement) => openDialog({ kind: "REVERSE", custodyId: id, movement }) : undefined
+            act && open && !record.legacy && !(finalized && isRt11DoorDisabled("CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED")) ? (movement) => openDialog({ kind: "REVERSE", custodyId: id, movement }) : undefined
           )}
       </div>
     </article>
@@ -674,6 +681,7 @@ export function DealCustodyPanel({
                   canStart={canStart}
                   blocked={blocked}
                   reopenLocked={wiring.reopenLocked === true}
+                  finalized={wiring.finalized === true}
                   hasEligibleFees={(actions?.eligibleFees.length ?? 0) > 0}
                   openDialog={openDialog}
                   t={t}

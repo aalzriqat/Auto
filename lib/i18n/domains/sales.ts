@@ -713,6 +713,18 @@ const dealRailMessages = defineBilingualMessages({
     "The dealership covers the whole difference; nothing is collected from the customer for it.",
     "يتحمّل المعرض الفرق كاملاً، ولا يُحصَّل شيء من العميل مقابله.",
   ],
+  // Shown INSTEAD of the two above once a supplier concession is entered (SCRUM-766 PR-C,
+  // review of PR #697): the option is about the customer owing nothing, and the sentence
+  // must not say the dealership covers a difference the supplier is covering.
+  GapNoCustomerPart: ["The customer pays no part", "لا يدفع العميل أي جزء"],
+  GapNoCustomerPartHintShared: [
+    "Nothing is collected from the customer. The supplier concession entered below is deducted, and the dealership covers the rest.",
+    "لا يُحصَّل شيء من العميل. يُخصم تنازل المورّد المُدخل أدناه، ويتحمّل المعرض الباقي.",
+  ],
+  GapNoCustomerPartHintSupplier: [
+    "Nothing is collected from the customer. The supplier concession entered below covers the whole difference, so the dealership covers nothing.",
+    "لا يُحصَّل شيء من العميل. يغطي تنازل المورّد المُدخل أدناه الفرق كاملاً، فلا يتحمّل المعرض شيئاً.",
+  ],
   GapCustomerShare: ["The customer's part", "نصيب العميل"],
   GapDealerShare: ["The dealership then covers", "ويتحمّل المعرض"],
   GapWhereCustomerPays: ["Where the customer's part is paid", "أين يُدفع نصيب العميل"],
@@ -748,6 +760,22 @@ const dealRailMessages = defineBilingualMessages({
     "يجب أن يساوي مجموع المبالغ نصيب العميل بالضبط.",
   ],
   GapAllocationComplete: ["Everything is accounted for.", "كل شيء محسوب."],
+  // SCRUM-766 PR-C: the supplier of a SOURCED vehicle concedes part of its
+  // entitlement. Optional; blank means none.
+  GapSupplierConcession: ["Supplier concession (optional)", "تنازل المورّد (اختياري)"],
+  GapSupplierEntitlement: ["The supplier is owed", "المستحق للمورّد"],
+  GapSupplierConcessionHint: [
+    "Part of the shortfall the supplier agrees to bear by taking less. Leave blank if none.",
+    "جزء من العجز يقبل المورّد تحمّله بتقاضي مبلغ أقل. اتركه فارغاً إن لم يوجد.",
+  ],
+  GapSupplierInvalid: [
+    "The supplier concession must be a valid amount, or left blank.",
+    "يجب أن يكون تنازل المورّد مبلغاً صحيحاً أو يُترك فارغاً.",
+  ],
+  GapSupplierTooLarge: [
+    "The supplier concession must be less than what the supplier is owed.",
+    "يجب أن يقلّ تنازل المورّد عن المبلغ المستحق له.",
+  ],
   GapNotes: ["Notes (optional)", "ملاحظات (اختياري)"],
   NoHandoverCosts: ["No handover costs recorded yet.", "لم تُسجَّل مصاريف تسليم بعد."],
   AddHandoverCost: ["Add cost", "إضافة مصروف"],
