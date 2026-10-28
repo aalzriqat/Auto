@@ -37,7 +37,7 @@
         "role": "owner",
         "org": "A"
       },
-      "action": "collections.payInvoice",
+      "action": "fixture.allocation",
       "input": {
         "amountMinor": 200000
       }
@@ -88,5 +88,5 @@
     "file": "convex/collectionsCanonicalDebt.scrum56.test.ts",
     "testName": "a financed customer gap R=500 is in Outstanding and in aging once; a manual legacy receivable adds to it"
   },
-  "fingerprint": "73d95e472e35fa77eaa4aae7f7e3b92fec12f39225de53b90c6e206072789604"
+  "fingerprint": "0e09559dc29a574bc8a6a0ae9d3c0199afcbb77241639ab81bc2597e28bff03d"
 }

@@ -17,7 +17,8 @@
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { payInvoice } from "../test-utils/saleInvoiceFixtures";
+import type { MutationCtx } from "./_generated/server";
+import { allocatePaymentToReceivable, reverseAllocation } from "./subledger";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import {
@@ -53,6 +54,22 @@ async function seed(tag: string, sourced = false) {
   });
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
+
+/** Fixture allocation, not an enabled public sale-invoice payment door. Uses the real allocator/status transition. */
+async function fixtureAllocateInvoice(ctx: MutationCtx, args: {
+  orgId: Id<"organizations">; userId: Id<"users">; customerId: Id<"customers">;
+  receivableId: Id<"receivableDocuments">; amountMinor: number;
+}): Promise<Id<"paymentAllocations">> {
+  const paymentId = await ctx.db.insert("canonicalPayments", {
+    orgId: args.orgId, direction: "IN", payerType: "CUSTOMER", customerId: args.customerId,
+    method: "CASH", amountMinor: args.amountMinor, currency: "JOD", scale: 3, status: "SETTLED",
+    idempotencyKey: crypto.randomUUID(), createdBy: args.userId, createdAt: Date.now(),
+  });
+  return allocatePaymentToReceivable(ctx, {
+    orgId: args.orgId, paymentId, receivableDocumentId: args.receivableId,
+    amountMinor: args.amountMinor, actorId: args.userId,
+  });
+}
 
 /** A financed deal with customer gap R, driven through the real doors to a finalized (CLOSED) sale. */
 async function closeFinancedWithGap(s: Seeded, route?: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER") {
@@ -124,11 +141,13 @@ describe("SCRUM-56: an open sale receivable is visible in Collections, read from
     const receivableId = invoice[0]._id;
     const userId = s.owner.userId;
 
-    await s.t.run((ctx) => payInvoice(ctx, { orgId: s.orgId, userId, customerId: s.customerId, receivableId, amountMinor: 200_000 }));
+    await s.t.run((ctx) => fixtureAllocateInvoice(ctx, { orgId: s.orgId, userId, customerId: s.customerId, receivableId, amountMinor: 200_000 }));
+    expect((await s.t.run((ctx) => ctx.db.get(receivableId)))?.status).toBe("PARTIALLY_PAID");
     const partial = await list(s);
     expect(partial.page.map((row) => row.outstandingMinor)).toEqual([300_000]);
 
-    await s.t.run((ctx) => payInvoice(ctx, { orgId: s.orgId, userId, customerId: s.customerId, receivableId, amountMinor: 300_000 }));
+    await s.t.run((ctx) => fixtureAllocateInvoice(ctx, { orgId: s.orgId, userId, customerId: s.customerId, receivableId, amountMinor: 300_000 }));
+    expect((await s.t.run((ctx) => ctx.db.get(receivableId)))?.status).toBe("PAID");
     const settled = await list(s);
     expect(settled.page).toEqual([]);
   });
@@ -270,6 +289,47 @@ describe("SCRUM-56: no duplicate of a sale-linked legacy receivable beside its c
     expect(canonical.page.map((row) => row.outstandingMinor)).toEqual([R]);
   });
 
+  test("the calendar replaces sale-linked legacy debt with the canonical invoice and retains manual debt", async () => {
+    const s = await seed("calendar1");
+    const { saleId, invoice } = await closeFinancedWithGap(s);
+    const duplicateId = await legacyRowFor(s, saleId);
+    const legacyDueDate = (await s.t.run((ctx) => ctx.db.get(duplicateId)))!.dueDate;
+    const dueDate = legacyDueDate + 86_400_000;
+    await s.t.run((ctx) => ctx.db.patch(invoice[0]._id, { dueDate }));
+    const manualId = await s.t.run((ctx) => ctx.db.insert("receivables", {
+      orgId: s.orgId, customerId: s.customerId, sourceType: "OTHER", title: "Manual calendar debt",
+      originalAmount: 40, outstandingAmount: 40, dueDate, status: "OPEN", createdBy: s.owner.userId,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    const calendar = await s.owner.as.query(api.collections.listReceivablesDueBetween, { orgId: s.orgId, startDate: dueDate - 1, endDate: dueDate + 1 });
+    expect(calendar).toHaveLength(2);
+    expect(calendar).toEqual(expect.arrayContaining([
+      expect.objectContaining({ _id: manualId, outstandingAmount: 40 }),
+      expect.objectContaining({ _id: invoice[0]._id, dueDate, outstandingAmount: 500, currency: "JOD", scale: 3 }),
+    ]));
+    expect(await s.owner.as.query(api.collections.listReceivablesDueBetween, {
+      orgId: s.orgId, startDate: legacyDueDate - 1, endDate: legacyDueDate + 1,
+    })).toEqual([]);
+    expect((await list(s)).page).toMatchObject([{ saleId, outstandingMinor: 500_000 }]);
+  });
+
+  test("canonical source identity deduplicates a legacy twin even when the sale back-pointer is absent", async () => {
+    const s = await seed("nopointer");
+    const { saleId, invoice } = await closeFinancedWithGap(s);
+    const legacyId = await legacyRowFor(s, saleId);
+    await s.t.run((ctx) => ctx.db.patch(saleId, { canonicalReceivableDocumentId: undefined }));
+    expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.canonicalReceivableDocumentId).toBeUndefined();
+    expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).totalOutstanding).toBe(500);
+    expect((await list(s)).page).toMatchObject([{ receivableDocumentId: invoice[0]._id, outstandingMinor: R }]);
+    expect((await s.owner.as.query(api.collections.listReceivables, { orgId: s.orgId, paginationOpts: FIRST_PAGE })).page).toEqual([]);
+    expect(agingTotals(await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId }))).toEqual({ count: 1, amount: 500 });
+    const legacyDueDate = (await s.t.run((ctx) => ctx.db.get(legacyId)))!.dueDate;
+    const calendar = await s.owner.as.query(api.collections.listReceivablesDueBetween, {
+      orgId: s.orgId, startDate: invoice[0].dueDate, endDate: legacyDueDate,
+    });
+    expect(calendar).toMatchObject([{ _id: invoice[0]._id, outstandingAmount: 500 }]);
+  });
+
   test("a legacy row with no sale (a manual receivable) stays in the legacy list", async () => {
     const s = await seed("dup2");
     await s.t.run(async (ctx) => {
@@ -283,12 +343,70 @@ describe("SCRUM-56: no duplicate of a sale-linked legacy receivable beside its c
     expect(legacy.page.map((row) => row.outstandingAmount)).toEqual([40]);
     expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).totalOutstanding).toBe(40);
   });
+
+  test("a sale-linked legacy row without a canonical customer twin remains visible", async () => {
+    const s = await seed("notwin");
+    const { saleId, invoice } = await closeFinancedWithGap(s);
+    const legacyId = await legacyRowFor(s, saleId);
+    await s.t.run((ctx) => ctx.db.delete(invoice[0]._id));
+    expect((await s.owner.as.query(api.collections.listReceivables, { orgId: s.orgId, paginationOpts: FIRST_PAGE })).page)
+      .toMatchObject([{ _id: legacyId, outstandingAmount: 500 }]);
+    expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).totalOutstanding).toBe(500);
+    expect(agingTotals(await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId }))).toEqual({ count: 1, amount: 500 });
+  });
+
+  test("the calendar uses invoice due date and denomination, excluding other tenants, finance claims and cancelled debt", async () => {
+    const s = await seed("calcurrency");
+    const { invoice } = await closeFinancedWithGap(s);
+    const dueDate = Date.now();
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(invoice[0]._id, { dueDate, currency: "USD", scale: 2, originalAmountMinor: 12_345 });
+      const { _id, _creationTime, ...doc } = invoice[0];
+      const otherOrg = await ctx.db.insert("organizations", { name: "Other calendar dealer", createdAt: dueDate });
+      await ctx.db.insert("receivableDocuments", { ...doc, orgId: otherOrg, dueDate });
+      await ctx.db.insert("receivableDocuments", { ...doc, sourceType: "finance_application", payerType: "FINANCE_COMPANY", dueDate });
+    });
+    const calendar = (startDate: number, endDate: number) => s.owner.as.query(api.collections.listReceivablesDueBetween, { orgId: s.orgId, startDate, endDate });
+    expect(await calendar(dueDate, dueDate)).toMatchObject([
+      { _id: invoice[0]._id, dueDate, outstandingAmount: 123.45, currency: "USD", scale: 2 },
+    ]);
+    expect(await calendar(dueDate + 1, dueDate + 2)).toEqual([]);
+    expect(await calendar(dueDate - 2, dueDate - 1)).toEqual([]);
+    await s.t.run((ctx) => ctx.db.patch(invoice[0]._id, { status: "CANCELLED" }));
+    expect(await calendar(dueDate, dueDate)).toEqual([]);
+    await expect(s.actors.viewer.as.query(api.collections.listReceivablesDueBetween, {
+      orgId: s.orgId, startDate: dueDate, endDate: dueDate,
+    })).rejects.toThrow(/permission/i);
+  });
+
+  test.each(["legacy", "canonical"] as const)("the calendar refuses an incomplete %s range instead of silently dropping debt", async (kind) => {
+    const s = await seed(`calbound${kind}`);
+    const { invoice } = await closeFinancedWithGap(s);
+    const dueDate = invoice[0].dueDate;
+    await s.t.run(async (ctx) => {
+      for (let i = 0; i < 501; i++) {
+        if (kind === "canonical") {
+          const { _id, _creationTime, ...doc } = invoice[0];
+          await ctx.db.insert("receivableDocuments", { ...doc, sourceId: `calendar-bound-${i}` });
+        } else {
+          await ctx.db.insert("receivables", {
+            orgId: s.orgId, customerId: s.customerId, sourceType: "OTHER", title: "Manual bound debt",
+            originalAmount: 1, outstandingAmount: 1, dueDate, status: "OPEN", createdBy: s.owner.userId,
+            createdAt: dueDate, updatedAt: dueDate,
+          });
+        }
+      }
+    });
+    await expect(s.owner.as.query(api.collections.listReceivablesDueBetween, {
+      orgId: s.orgId, startDate: dueDate, endDate: dueDate,
+    })).rejects.toThrow(/too many receivables/i);
+  });
 });
 
 describe("SCRUM-56: the headline total and the aging report include the canonical sale debt (ruling 8: queue/aging)", () => {
   test("a financed customer gap R=500 is in Outstanding and in aging once; a manual legacy receivable adds to it", async () => {
     const s = await seed("agg1");
-    await closeFinancedWithGap(s);
+    const { invoice } = await closeFinancedWithGap(s);
     await s.t.run(async (ctx) => {
       const now = Date.now();
       await ctx.db.insert("receivables", {
@@ -303,22 +421,82 @@ describe("SCRUM-56: the headline total and the aging report include the canonica
     const aging = await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId });
     expect(agingTotals(aging)).toEqual({ count: 2, amount: 540 });
     expect(aging.saleDebtComplete).toBe(true);
+
+    // This is the allocation step bound by the registered scenario, with the manual 40 still outstanding.
+    await s.t.run((ctx) => fixtureAllocateInvoice(ctx, {
+      orgId: s.orgId, userId: s.owner.userId, customerId: s.customerId,
+      receivableId: invoice[0]._id, amountMinor: 200_000,
+    }));
+    expect((await s.t.run((ctx) => ctx.db.get(invoice[0]._id)))?.status).toBe("PARTIALLY_PAID");
+    expect((await list(s)).page).toMatchObject([{ outstandingMinor: 300_000, status: "PARTIALLY_PAID" }]);
+    expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).totalOutstanding).toBe(340);
+    expect(agingTotals(await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId }))).toEqual({ count: 2, amount: 340 });
   });
 
-  test("a partial payment lowers the totals; the full payment removes the debt from both", async () => {
+  test("fixture allocation reduces list, summary and aging; reversal of full payment restores partial debt", async () => {
     const s = await seed("agg2");
     const { invoice } = await closeFinancedWithGap(s);
     const receivableId = invoice[0]._id;
     const pay = (amountMinor: number) =>
-      s.t.run((ctx) => payInvoice(ctx, { orgId: s.orgId, userId: s.owner.userId, customerId: s.customerId, receivableId, amountMinor }));
+      s.t.run((ctx) => fixtureAllocateInvoice(ctx, { orgId: s.orgId, userId: s.owner.userId, customerId: s.customerId, receivableId, amountMinor }));
+    const calendar = () => s.owner.as.query(api.collections.listReceivablesDueBetween, {
+      orgId: s.orgId, startDate: invoice[0].dueDate, endDate: invoice[0].dueDate,
+    });
 
     await pay(200_000);
+    expect((await s.t.run((ctx) => ctx.db.get(receivableId)))?.status).toBe("PARTIALLY_PAID");
+    expect((await list(s)).page).toMatchObject([{ receivableDocumentId: receivableId, status: "PARTIALLY_PAID", outstandingMinor: 300_000 }]);
     expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).totalOutstanding).toBe(300);
     expect(agingTotals(await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId }))).toEqual({ count: 1, amount: 300 });
+    expect(await calendar()).toMatchObject([{ _id: receivableId, outstandingAmount: 300, status: "PARTIALLY_PAID" }]);
 
-    await pay(300_000);
+    const finalAllocationId = await pay(300_000);
+    expect((await s.t.run((ctx) => ctx.db.get(receivableId)))?.status).toBe("PAID");
+    expect((await list(s)).page).toEqual([]);
     expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).totalOutstanding).toBe(0);
     expect(agingTotals(await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId }))).toEqual({ count: 0, amount: 0 });
+    expect(await calendar()).toEqual([]);
+
+    await s.t.run((ctx) => reverseAllocation(ctx, { orgId: s.orgId, allocationId: finalAllocationId, actorId: s.owner.userId }));
+    expect((await s.t.run((ctx) => ctx.db.get(receivableId)))?.status).toBe("PARTIALLY_PAID");
+    expect((await list(s)).page).toMatchObject([{ receivableDocumentId: receivableId, status: "PARTIALLY_PAID", outstandingMinor: 300_000 }]);
+    expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).totalOutstanding).toBe(300);
+    expect(agingTotals(await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId }))).toEqual({ count: 1, amount: 300 });
+    expect(await calendar()).toMatchObject([{ _id: receivableId, outstandingAmount: 300, status: "PARTIALLY_PAID" }]);
+  });
+
+  test("the list and Overdue headline share the strict dueDate < now boundary", async () => {
+    const s = await seed("due1");
+    const { invoice } = await closeFinancedWithGap(s);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      for (const [dueDate, isOverdue, overdueOutstanding] of [
+        [now - 1, true, 500], [now, false, 0], [now + 1, false, 0],
+      ] as const) {
+        await s.t.run((ctx) => ctx.db.patch(invoice[0]._id, { dueDate }));
+        expect((await list(s)).page[0]).toMatchObject({ dueDate, isOverdue });
+        expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).overdueOutstanding).toBe(overdueOutstanding);
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("currency case does not exclude the canonical debt from summary or aging", async () => {
+    const s = await seed("currency1");
+    const { invoice } = await closeFinancedWithGap(s);
+    for (const [orgCurrency, docCurrency] of [["jod", "JOD"], ["JOD", "jod"]]) {
+      await s.t.run(async (ctx) => {
+        const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).unique();
+        await ctx.db.patch(settings!._id, { currency: orgCurrency });
+        await ctx.db.patch(invoice[0]._id, { currency: docCurrency });
+      });
+      expect(await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).toMatchObject({ totalOutstanding: 500, saleDebtComplete: true });
+      const aging = await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId });
+      expect(agingTotals(aging)).toEqual({ count: 1, amount: 500 });
+      expect(aging.saleDebtComplete).toBe(true);
+    }
   });
 
   test("a cancelled sale invoice and another organization's debt are not counted", async () => {

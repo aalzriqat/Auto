@@ -28,7 +28,9 @@ export function SaleReceivablesSection({ orgId, statusFilter }: Readonly<{ orgId
   const formatInCurrency = useCurrencyFormatterInCurrency();
   const { results, status, loadMore } = usePaginatedQuery(api.collections.listOpenSaleReceivables, { orgId }, { initialNumItems: PAGE_SIZE });
 
-  const rows = statusFilter === "ALL" ? results : results.filter((row) => row.status === statusFilter);
+  const rows = statusFilter === "ALL"
+    ? results
+    : results.filter((row) => statusFilter === "OVERDUE" ? row.isOverdue : row.status === statusFilter);
   const waitingForFirstRow = status === "CanLoadMore" && results.length === 0;
   useEffect(() => {
     if (waitingForFirstRow) loadMore(PAGE_SIZE * 4);
@@ -37,7 +39,7 @@ export function SaleReceivablesSection({ orgId, statusFilter }: Readonly<{ orgId
   if (status === "LoadingFirstPage" || waitingForFirstRow) {
     return <p className="text-sm text-muted-foreground">{t("CollectionSaleBalancesLoading" as any)}</p>;
   }
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && status !== "CanLoadMore" && status !== "LoadingMore") return null;
 
   const money = (amountMinor: number, currency: string, scale: number) => formatInCurrency(amountMinor / 10 ** scale, currency, scale);
   const statusKey = (value: string) => {

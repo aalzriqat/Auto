@@ -4,7 +4,7 @@
  * Component logic under mocked data only; no browser rendering and no backend is involved.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Id } from "@/convex/_generated/dataModel";
 import { SaleReceivablesSection } from "./SaleReceivablesSection";
 
@@ -19,6 +19,7 @@ type Row = {
   scale: number;
   status: "OPEN" | "PARTIALLY_PAID";
   dueDate: number;
+  isOverdue: boolean;
 };
 
 const paginated = vi.hoisted(() => ({
@@ -35,7 +36,7 @@ const ORG = "org_1" as Id<"organizations">;
 const row = (over: Partial<Row> = {}): Row => ({
   receivableDocumentId: "doc_1", documentNumber: "INV-1", customerName: "Buyer fin1", vehicleLabel: "2024 Kia Sportage",
   originalAmountMinor: 500_000, outstandingMinor: 300_000, currency: "JOD", scale: 3, status: "OPEN",
-  dueDate: Date.UTC(2026, 9, 28, 12), ...over,
+  dueDate: Date.UTC(2026, 9, 28, 12), isOverdue: true, ...over,
 });
 
 describe("SaleReceivablesSection", () => {
@@ -61,14 +62,31 @@ describe("SaleReceivablesSection", () => {
     expect(container.textContent).toBe("");
   });
 
-  test("a status filter shows only the matching rows, and nothing when none match", () => {
+  test("status filters preserve partial debt and Overdue uses the server classification", () => {
     paginated.state.results = [row({ receivableDocumentId: "a", customerName: "Alpha" }), row({ receivableDocumentId: "b", customerName: "Beta", status: "PARTIALLY_PAID" })];
-    const { rerender, container } = render(<SaleReceivablesSection orgId={ORG} statusFilter="PARTIALLY_PAID" />);
+    paginated.state.results.push(row({ receivableDocumentId: "c", customerName: "Future", isOverdue: false }));
+    const { rerender } = render(<SaleReceivablesSection orgId={ORG} statusFilter="PARTIALLY_PAID" />);
     expect(screen.queryByText("Alpha")).toBeNull();
     expect(screen.getByText("Beta")).toBeDefined();
 
     rerender(<SaleReceivablesSection orgId={ORG} statusFilter="OVERDUE" />);
-    expect(container.textContent).toBe("");
+    expect(screen.getByText("Alpha")).toBeDefined();
+    expect(screen.getByText("Beta")).toBeDefined();
+    expect(screen.queryByText("Future")).toBeNull();
+  });
+
+  test("Load more reaches a matching debt on a later page when the loaded rows do not match", () => {
+    paginated.state = { results: [row({ customerName: "Alpha" })], status: "CanLoadMore", loadMore: vi.fn() };
+    const { rerender } = render(<SaleReceivablesSection orgId={ORG} statusFilter="PARTIALLY_PAID" />);
+    expect(screen.queryByText("Alpha")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "LoadMore" }));
+    expect(paginated.state.loadMore).toHaveBeenCalledWith(25);
+
+    paginated.state.results.push(row({ receivableDocumentId: "b", customerName: "Beta", status: "PARTIALLY_PAID" }));
+    paginated.state.status = "Exhausted";
+    rerender(<SaleReceivablesSection orgId={ORG} statusFilter="PARTIALLY_PAID" />);
+    expect(screen.getByText("Beta")).toBeDefined();
+    expect(screen.queryByText("Alpha")).toBeNull();
   });
 
   test("a page of only paid invoices (no row yet, more pages) keeps loading instead of showing an empty state", () => {
