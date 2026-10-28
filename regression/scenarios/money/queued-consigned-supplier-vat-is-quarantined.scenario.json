@@ -1,0 +1,69 @@
+{
+  "id": "queued-consigned-supplier-vat-is-quarantined",
+  "fingerprint": "fe1b5b321b0c96c23eabb30901c5461ddf8a72cce4245a71c7627e54020dd9de",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum-782-design-attack",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM",
+        "org": "A"
+      },
+      "action": "accountingOutbox.drainPendingAccountingEvents",
+      "input": {
+        "eventType": "SUPPLIER_PAYMENT_SETTLED",
+        "payable": "consigned-paid",
+        "amountMinor": 18000000,
+        "taxMinor": 2000000,
+        "attempts": 10
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "outbox.status",
+      "value": "FAILED"
+    },
+    {
+      "observable": "outbox.attempts",
+      "value": 10
+    },
+    {
+      "observable": "settlement.financialRowsWritten",
+      "value": 0
+    },
+    {
+      "observable": "settlement.vatReceivableLines",
+      "value": 0
+    },
+    {
+      "observable": "settlement.cogsLines",
+      "value": 0
+    },
+    {
+      "observable": "payable.status",
+      "value": "PAID"
+    },
+    {
+      "observable": "supplierReconciliation.status",
+      "value": "UNAVAILABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-773#c22401",
+      "digest": "f5fd390b6fc991ed9147c55bf122ecc91749b31ba865547088d95ba1fadd10e5"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedQueuedVat.scrum782.test.ts",
+    "testName": "legacy queued consigned VAT dead-letters visibly without a VAT or COGS journal"
+  },
+  "matrixRow": "SCRUM782-queued-consigned-payable-vat"
+}
