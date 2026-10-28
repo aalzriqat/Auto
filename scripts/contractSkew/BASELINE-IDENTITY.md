@@ -56,6 +56,45 @@ base branch. No production secret is used. This change does not edit branch
 protection, `.github/release-waivers.json`, or the baseline JSON. It does not claim
 that a new standalone check is required by branch protection.
 
+## Empty baseline
+
+`checkBaselineIdentity.mjs` refuses a baseline with no entries (exit 3, "has no
+baseline entries"). "0 entries matched" is vacuously true and is also what a
+truncated or mispointed file looks like. Retiring all reviewed debt is a reviewed
+decision, stated on the command line with `--allow-empty`; the flag never excuses a
+non-empty baseline that has drifted (exit 10 still applies).
+
+## Renewal closure and what it cannot see (SCRUM-866)
+
+`renewBaselineReviewed.mjs` renews an entry mechanically only when every file in
+its closure is the same git blob at the reviewed revision and HEAD. The closure of
+the client file and of the backend module (`importClosure.mjs`) contains:
+
+- files reached by an import edge, resolved with the surface's real tsconfig;
+- backend modules reached by a Convex function reference: `api.<module>.<fn>` and
+  `internal.<module>.<fn>` at any depth (`ctx.runQuery`, `runMutation`, `runAction`,
+  the scheduler and crons all take one) and mobile's `makeFunctionReference("mod:fn")`.
+  Convex maps `convex/messages/access.ts` to `api.messages.access.<fn>`
+  (`convex/_generated/ai/guidelines.md`, "Function references"), so every leading run
+  of segments that names `convex/<run>.ts` or `<run>/index.ts` is an edge. A reference
+  that names no module, or cannot be read statically (bare `api`, `api[key]`, a
+  namespace or dynamic import of `_generated/api`, `anyApi`, a non-literal
+  `makeFunctionReference`), is unresolved and refuses mechanical renewal;
+- the tsconfig of each program and its relative `extends` chain, that directory's
+  `package.json`, and the shared inputs `package.json`, `pnpm-lock.yaml` and
+  `convex/schema.ts` (clients reach the schema only through the excluded
+  `_generated/dataModel`).
+
+Still outside it: ambient declarations (`declare global`, a `.d.ts` nobody imports);
+what a dependency's code does inside `node_modules` (the lockfile and package.json
+pin the version, nothing reviews its behaviour); handler-only behaviour that no edge
+reaches (a trigger, an HTTP route, a cron table, a scheduled job, a function named
+through a string built at run time); `components.*` references; and a local variable
+that shadows `api` or `internal`, which is treated as the generated object (it only
+over-includes). A reference graph this wide reaches most of the backend, so a change
+to a widely referenced module refuses almost every entry: each renewal text then
+names the changed files it was read against.
+
 ## Evidence, 2026-10-28
 
 Base: `2e7ea58cdbfe746a0169494570443316846026e6`. Live GitHub main was read

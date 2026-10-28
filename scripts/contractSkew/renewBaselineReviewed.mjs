@@ -41,6 +41,8 @@ import { createImportClosure } from "./importClosure.mjs";
 
 const MODULE_FUNCTION_ID = /^([A-Za-z0-9_]+):([A-Za-z0-9_]+)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+// Inputs every closure includes: dependency pins, and the schema (clients reach it only via the excluded generated dataModel).
+const IMPLICIT_INPUTS = ["package.json", "pnpm-lock.yaml", "convex/schema.ts"];
 const PATH_TOKEN = /[\w@()[\]/.-]+\.(?:tsx?|jsx?|mjs|cjs|json|md|ya?ml)\b/g;
 
 /**
@@ -213,7 +215,7 @@ function main(argv) {
     })),
     { tsconfig: "convex/tsconfig.json", rootFiles: [...new Set(entries.map((e) => backendModuleOf(e.functionId)).filter(Boolean))] },
   ];
-  const resolveClosure = createImportClosure({ root, projects });
+  const resolveClosure = createImportClosure({ root, projects, implicitInputs: IMPLICIT_INPUTS });
   const closureOf = (file) => {
     const closure = resolveClosure(file);
     const edited = closure.files.find((f) => dirty.has(f));

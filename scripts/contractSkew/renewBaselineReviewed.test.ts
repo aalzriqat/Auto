@@ -208,11 +208,11 @@ describe("createImportClosure + gitCompare (real TypeScript, real git)", () => {
     write("app/style.css", "a{}");
     write("lib/deep.ts", "import { h } from './helper'; export const deep = 1; export const back = h;");
     write("lib/helper.ts", "import { deep } from './deep'; export const h = deep; export * from '../lib/deep';");
-    write("app/page.tsx", 'import { h } from "@/lib/helper"; import "./style.css"; import p from "pkg"; import { api } from "../convex/_generated/api"; export const v = [h, p, api];');
+    write("app/page.tsx", 'import { h } from "@/lib/helper"; import "./style.css"; import p from "pkg"; import { components } from "../convex/_generated/api"; export const v = [h, p, components];');
     write("app/other.tsx", "export const o = 1;");
     write("app/broken.tsx", 'import "./missing-module"; export const b = 1;');
     write("convex/vehicles.ts", "export const update = 1;");
-    write("convex/orgs.ts", "import { api } from './_generated/api'; export const get = api;");
+    write("convex/orgs.ts", "import { components } from './_generated/api'; export const get = components;");
     run("init", "-q");
     run("add", "--", ...tracked);
     run("commit", "-q", "-m", "reviewed");
@@ -226,10 +226,10 @@ describe("createImportClosure + gitCompare (real TypeScript, real git)", () => {
       ],
     });
     expect(closureOf("app/page.tsx")).toEqual({
-      files: ["app/page.tsx", "app/style.css", "lib/deep.ts", "lib/helper.ts"],
+      files: ["app/page.tsx", "app/style.css", "lib/deep.ts", "lib/helper.ts", "tsconfig.json"],
       unresolved: [],
     });
-    expect(closureOf("convex/orgs.ts").files).toEqual(["convex/orgs.ts"]);
+    expect(closureOf("convex/orgs.ts").files).toEqual(["convex/orgs.ts", "tsconfig.json"]);
     expect(closureOf("app/broken.tsx").unresolved).toEqual(["./missing-module"]);
     expect(() => closureOf("app/not-a-root.tsx")).toThrow(/not a root/);
   });
@@ -287,5 +287,115 @@ describe("gitCompare (real git)", () => {
     expect(compare("gone.ts")).toBe("missing");
     expect(compare("added.ts")).toBe("missing");
     expect(compare("never/existed.ts")).toBe("missing");
+  });
+});
+
+// SCRUM-866 round 5: what the compiler used to resolve imports, and the Convex function references that reach
+// other backend modules only through convex/_generated/api, were outside the closure.
+describe("closure also covers resolution inputs and Convex function references", () => {
+  const git = resolveGit();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-closure2-"));
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const write = (file: string, text: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), text);
+  };
+  const run = (...args: string[]) =>
+    execFileSync(String(git), ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
+      cwd: dir,
+      encoding: "utf8",
+    }).trim();
+  const tsconfig = (paths: string) =>
+    JSON.stringify({ compilerOptions: { strict: true, module: "esnext", moduleResolution: "bundler", target: "esnext", types: [], baseUrl: ".", paths: { "@/*": [paths] } } });
+  const closureFor = (rootFiles: string[], implicitInputs: string[] = []) =>
+    createImportClosure({ root: dir, projects: [{ tsconfig: "tsconfig.json", rootFiles }], implicitInputs });
+  const renewal = (closureOf: ReturnType<typeof closureFor>, file: string, functionId: string, reviewed: string) =>
+    renewBaseline(serialize([entry({ file, callSiteId: `${file}:1:1`, functionId })]), {
+      compare: gitCompare({ git: String(git), cwd: dir, reviewed, head: "HEAD" }),
+      closureOf,
+      expires: RENEWED_EXPIRES,
+      renewal: RENEWAL,
+    });
+  let reviewed = "";
+
+  test("setup: reviewed revision", () => {
+    expect(git, "git must be locatable; cannot-run is a failure, not a skip").toBeTruthy();
+    write("tsconfig.json", tsconfig("./*"));
+    write("package.json", '{"name":"fx"}');
+    write("lib/helper.ts", "export const h = 1;");
+    write("alt/lib/helper.ts", "export const h = 2;");
+    write("app/page.tsx", 'import { h } from "@/lib/helper"; export const v = h;');
+    write("convex/_generated/api.ts", "export const api: any = 1; export const internal: any = 2; export const components: any = 3;");
+    write("convex/schema.ts", "export default 1;");
+    write("convex/worker.ts", "export const run = 1;");
+    write("convex/lone.ts", "export const only = 1;");
+    write("convex/messages/access.ts", "export const h = 1;");
+    write(
+      "convex/vehicles.ts",
+      'import { internal } from "./_generated/api"; export const update = async (ctx: any) => ctx.runMutation(internal.worker.run, {});'
+    );
+    write("convex/nested.ts", 'import { api } from "./_generated/api"; export const n = () => api.messages.access.h;');
+    write("convex/ghost.ts", 'import { internal } from "./_generated/api"; export const g = () => internal.nowhere.fn;');
+    write("convex/bare.ts", 'import { internal } from "./_generated/api"; export const b = internal;');
+    write("convex/dyn.ts", 'import { api } from "./_generated/api"; export const d = (k: string) => api[k];');
+    write("convex/ns.ts", 'import * as gen from "./_generated/api"; export const n = gen;');
+    write("convex/plain.ts", "export const p = 1;");
+    run("init", "-q");
+    run("add", "--", "."); // an isolated temp repository, so the pathspec stays inside it
+    run("commit", "-q", "-m", "reviewed");
+    reviewed = run("rev-parse", "HEAD");
+  });
+
+  test("the tsconfig, package.json and the declared implicit inputs are part of every closure", () => {
+    const files = closureFor(["app/page.tsx"], ["package.json", "pnpm-lock.yaml", "convex/schema.ts"])("app/page.tsx").files;
+    expect(files).toEqual(expect.arrayContaining(["tsconfig.json", "package.json", "pnpm-lock.yaml", "convex/schema.ts", "lib/helper.ts"]));
+  });
+
+  test("a function reference makes the referenced backend module part of the closure (nested directories too)", () => {
+    expect(closureFor(["convex/vehicles.ts"])("convex/vehicles.ts").files).toContain("convex/worker.ts");
+    expect(closureFor(["convex/nested.ts"])("convex/nested.ts").files).toContain("convex/messages/access.ts");
+  });
+
+  test("a function reference that names no backend module, a bare api/internal, a dynamic key and a namespace import are unresolved", () => {
+    expect(closureFor(["convex/ghost.ts"])("convex/ghost.ts").unresolved).toEqual([expect.stringMatching(/internal\.nowhere\.fn/)]);
+    expect(closureFor(["convex/bare.ts"])("convex/bare.ts").unresolved).toEqual([expect.stringMatching(/internal/)]);
+    expect(closureFor(["convex/dyn.ts"])("convex/dyn.ts").unresolved).toEqual([expect.stringMatching(/api/)]);
+    expect(closureFor(["convex/ns.ts"])("convex/ns.ts").unresolved).toEqual([expect.stringMatching(/_generated\/api/)]);
+  });
+
+  test("CONTROL: a backend calling internal.worker.run is refused when the worker changed", () => {
+    write("convex/worker.ts", "export const run = 2;");
+    run("add", "--", "convex/worker.ts");
+    run("commit", "-q", "-m", "worker changed");
+    const result = renewal(closureFor(["app/page.tsx", "convex/vehicles.ts", "convex/plain.ts"]), "app/page.tsx", "vehicles:update", reviewed);
+    expect(result.renewed).toBe(0);
+    expect(result.refused[0].reason).toMatch(/backend module convex\/vehicles\.ts imports convex\/worker\.ts, which changed/);
+  });
+
+  test("CONTROL: a tsconfig paths change that redirects an import refuses the renewal", () => {
+    write("tsconfig.json", tsconfig("./alt/*"));
+    run("add", "--", "tsconfig.json");
+    run("commit", "-q", "-m", "paths redirect");
+    const result = renewal(closureFor(["app/page.tsx"]), "app/page.tsx", "plain:p", reviewed);
+    expect(result.renewed).toBe(0);
+    expect(result.refused[0].reason).toMatch(/imports tsconfig\.json, which changed/);
+  });
+
+  test("an unresolvable function reference refuses mechanical renewal", () => {
+    // Compared against the current HEAD, so nothing else is "changed" and only the unresolvable reference can refuse.
+    const result = renewal(closureFor(["app/page.tsx", "convex/ghost.ts"]), "app/page.tsx", "ghost:g", run("rev-parse", "HEAD"));
+    expect(result.renewed).toBe(0);
+    expect(result.refused[0].reason).toMatch(/cannot resolve .*internal\.nowhere\.fn/);
+  });
+
+  test("a mobile-style makeFunctionReference string names its backend module", () => {
+    write(
+      "app/mobile.ts",
+      'import { makeFunctionReference } from "convex/server"; export const r = makeFunctionReference<"query">("lone:only"); export const d = makeFunctionReference<"query">("messages/access:h");'
+    );
+    const files = closureFor(["app/mobile.ts"])("app/mobile.ts").files;
+    expect(files).toEqual(expect.arrayContaining(["convex/lone.ts", "convex/messages/access.ts"]));
+    write("app/mobile2.ts", 'import { makeFunctionReference } from "convex/server"; declare const n: string; export const r = makeFunctionReference<"query">(n);');
+    expect(closureFor(["app/mobile2.ts"])("app/mobile2.ts").unresolved).toEqual([expect.stringMatching(/makeFunctionReference/)]);
   });
 });
