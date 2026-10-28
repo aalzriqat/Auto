@@ -29,6 +29,21 @@ import {
 export type GapMode = "CUSTOMER_ABSORBS" | "SPLIT" | "DEALER_ABSORBS";
 
 /**
+ * The supplier's contract entitlement the server offers a concession against
+ * (SCRUM-766 PR-C; `financingEconomics.supplierConcessionBasis`). Present only
+ * for a single-vehicle SOURCED deal; absent means NO supplier field is shown.
+ *
+ * The three figures are snapshotted when the dialog opens and sent back as the
+ * `observed*` arguments, so the server can refuse an allocation made against a
+ * supplier cost the operator never saw (a vehicle edited mid-dialog).
+ */
+export type SupplierConcessionBasis = {
+  entitlementMinor: number;
+  currency: string;
+  supplierName: string;
+};
+
+/**
  * One confirmation attempt: what the operator typed AND the figures they were
  * typing against.
  *
@@ -48,12 +63,15 @@ type Attempt = {
   submittedQuotationMinor: number | null;
   approvedPurchaseAmountMinor: number | null;
   economicsStamp: string | undefined;
+  supplierBasis: SupplierConcessionBasis | null;
 };
 
 /** What the operator typed, before it is anything the server would accept. */
 type Draft = {
   mode: GapMode;
   customerShare: string;
+  /** The supplier's concession; blank means none (it is optional, unlike a destination). */
+  supplier: string;
   cash: string;
   installments: string;
   toFinanceCompany: string;
@@ -63,6 +81,7 @@ type Draft = {
 const EMPTY: Draft = {
   mode: "CUSTOMER_ABSORBS",
   customerShare: "",
+  supplier: "",
   cash: "",
   installments: "",
   toFinanceCompany: "",
@@ -121,6 +140,7 @@ export function ResolveGapDialog({
   submittedQuotationMinor,
   approvedPurchaseAmountMinor,
   economicsStamp,
+  supplierBasis = null,
   factor,
   money,
   t,
@@ -147,6 +167,12 @@ export function ResolveGapDialog({
   approvedPurchaseAmountMinor: number | null;
   /** The revision those figures belong to; snapshotted alongside them. */
   economicsStamp: string | undefined;
+  /**
+   * Set only when the supplier may concede part of the shortfall (a SOURCED
+   * vehicle, owner ruling SCRUM-760 c23812 #3). Null/undefined: not eligible,
+   * and the dialog is exactly the customer/dealership dialog it always was.
+   */
+  supplierBasis?: SupplierConcessionBasis | null;
   /** Minor units per major unit, for the deal's own denomination. */
   factor: number;
   money: (minor: number) => string;
@@ -158,6 +184,10 @@ export function ResolveGapDialog({
     customerGapCashToDealerMinor: number;
     customerGapInstallmentToDealerMinor: number;
     customerGapToFinanceCompanyMinor: number;
+    /** Present only when a concession was entered (> 0); then the observed basis rides with it. */
+    supplierGapShareMinor?: number;
+    observedSupplierEntitlementMinor?: number;
+    observedSupplierName?: string;
     notes: string;
     economicsStamp: string | undefined;
   }) => Promise<void>;
@@ -183,8 +213,18 @@ export function ResolveGapDialog({
       submittedQuotationMinor,
       approvedPurchaseAmountMinor,
       economicsStamp,
+      supplierBasis,
     });
-  }, [open, shortfallMinor, breakdown, grossLabel, submittedQuotationMinor, approvedPurchaseAmountMinor, economicsStamp]);
+  }, [
+    open,
+    shortfallMinor,
+    breakdown,
+    grossLabel,
+    submittedQuotationMinor,
+    approvedPurchaseAmountMinor,
+    economicsStamp,
+    supplierBasis,
+  ]);
 
   // Before the first open there is no snapshot yet, and the live values are
   // correct in that window because nothing has been typed against them.
@@ -195,6 +235,7 @@ export function ResolveGapDialog({
     submittedQuotationMinor,
     approvedPurchaseAmountMinor,
     economicsStamp,
+    supplierBasis,
   };
   const gapMinor = live.shortfallMinor;
 
@@ -215,9 +256,50 @@ export function ResolveGapDialog({
         ? 0
         : toMinor(draft.customerShare, factor);
 
+  /**
+   * The supplier's concession (SCRUM-766 PR-C). Offered only where the server
+   * said the vehicle is SOURCED, and never when the customer covers it all.
+   * Unlike a destination, BLANK is a decision here: the concession is optional,
+   * and "none" is what an empty box means. A figure that is not a number the
+   * server could use is null, and blocks the button.
+   */
+  const offeredBasis = draft.mode !== "CUSTOMER_ABSORBS" ? live.supplierBasis : null;
+  const supplierOffered = offeredBasis !== null;
+  const supplierShareMinor = !supplierOffered
+    ? 0
+    : draft.supplier.trim() === ""
+      ? 0
+      : toMinor(draft.supplier, factor);
+  const supplierTooPrecise = supplierOffered && isTooPrecise(draft.supplier, factor);
+  // The supplier cannot concede its entire entitlement or more: the server
+  // refuses S >= E (the vehicle would be sourced for nothing).
+  const supplierTooLarge =
+    offeredBasis !== null &&
+    supplierShareMinor !== null &&
+    supplierShareMinor >= offeredBasis.entitlementMinor;
+
   // Derived, never typed. Entering one side and computing the other is what
-  // stops two boxes from disagreeing about a number that must sum exactly.
-  const dealerShareMinor = customerShareMinor === null ? null : gapMinor - customerShareMinor;
+  // stops two boxes from disagreeing about a number that must sum exactly. The
+  // dealership covers whatever neither the customer nor the supplier does.
+  const dealerShareMinor =
+    customerShareMinor === null || supplierShareMinor === null
+      ? null
+      : gapMinor - customerShareMinor - supplierShareMinor;
+
+  /**
+   * What the "customer pays nothing" option says. It follows the allocation being
+   * submitted, not the mode alone: with a supplier concession entered the dealership
+   * does NOT cover the whole difference (the server records SPLIT, or SUPPLIER_ABSORBS
+   * when the dealership's remainder is 0), so the original sentence would be false.
+   */
+  const noCustomerPartKeys =
+    draft.mode === "DEALER_ABSORBS" && supplierShareMinor !== null && supplierShareMinor > 0
+      ? {
+          label: "GapNoCustomerPart",
+          hint:
+            dealerShareMinor === 0 ? "GapNoCustomerPartHintSupplier" : "GapNoCustomerPartHintShared",
+        }
+      : { label: "GapDealerAbsorbs", hint: "GapDealerAbsorbsHint" };
 
   /**
    * Where the customer's part is paid.
@@ -259,6 +341,10 @@ export function ResolveGapDialog({
     | "DESTINATIONS_INCOMPLETE"
     /** The customer share is not a usable number yet. */
     | "SHARE_MISSING"
+    /** The supplier's concession is filled in but is not a usable figure. */
+    | "SUPPLIER_INVALID"
+    /** The supplier's concession is not smaller than the entitlement it reduces. */
+    | "SUPPLIER_TOO_LARGE"
     /** A "split" giving the customer the whole gap IS customer-absorbs. */
     | "SPLIT_IS_WHOLE_GAP"
     /** A "split" leaving the customer nothing IS dealer-absorbs. */
@@ -267,8 +353,10 @@ export function ResolveGapDialog({
     | "ALLOCATION_MISMATCH";
 
   const verdict: Readiness = (() => {
-    if (shareTooPrecise) return "TOO_PRECISE";
+    if (shareTooPrecise || supplierTooPrecise) return "TOO_PRECISE";
+    if (supplierShareMinor === null) return "SUPPLIER_INVALID";
     if (customerShareMinor === null || dealerShareMinor === null) return "SHARE_MISSING";
+    if (supplierTooLarge) return "SUPPLIER_TOO_LARGE";
     if (draft.mode === "SPLIT") {
       // Checked BEFORE the arithmetic, because both endpoints reconcile
       // perfectly and would otherwise read as ready. The remedy is a different
@@ -286,6 +374,7 @@ export function ResolveGapDialog({
       customerGapCashToDealerMinor: cashMinor,
       customerGapInstallmentToDealerMinor: installmentsMinor,
       customerGapToFinanceCompanyMinor: toFinanceCompanyMinor,
+      supplierGapShareMinor: supplierShareMinor,
     });
     return violations.length > 0 ? "ALLOCATION_MISMATCH" : "READY";
   })();
@@ -295,6 +384,8 @@ export function ResolveGapDialog({
     TOO_PRECISE: "AmountTooPrecise",
     DESTINATIONS_INCOMPLETE: "GapDestinationsIncomplete",
     SHARE_MISSING: "GapShareMissing",
+    SUPPLIER_INVALID: "GapSupplierInvalid",
+    SUPPLIER_TOO_LARGE: "GapSupplierTooLarge",
     SPLIT_IS_WHOLE_GAP: "GapSplitIsWholeGap",
     SPLIT_LEAVES_CUSTOMER_NOTHING: "GapSplitLeavesCustomerNothing",
     ALLOCATION_MISMATCH: "GapAllocationMismatch",
@@ -310,6 +401,7 @@ export function ResolveGapDialog({
       !canSubmit ||
       customerShareMinor === null ||
       dealerShareMinor === null ||
+      supplierShareMinor === null ||
       cashMinor === null ||
       installmentsMinor === null ||
       toFinanceCompanyMinor === null
@@ -324,6 +416,16 @@ export function ResolveGapDialog({
         customerGapCashToDealerMinor: cashMinor,
         customerGapInstallmentToDealerMinor: installmentsMinor,
         customerGapToFinanceCompanyMinor: toFinanceCompanyMinor,
+        // Only when a concession was actually entered: absence keeps the
+        // request byte-identical to a pre-PR-C one, and the observed basis is
+        // the one the dialog OPENED against (same rule as the stamp).
+        ...(supplierShareMinor > 0 && offeredBasis
+          ? {
+              supplierGapShareMinor: supplierShareMinor,
+              observedSupplierEntitlementMinor: offeredBasis.entitlementMinor,
+              observedSupplierName: offeredBasis.supplierName,
+            }
+          : {}),
         notes: draft.notes.trim(),
         // The stamp the dialog was OPENED against, not whatever the deal says
         // now. Sending the live one would tell the server the operator had seen
@@ -419,8 +521,8 @@ export function ResolveGapDialog({
               },
               {
                 value: "DEALER_ABSORBS",
-                label: t("GapDealerAbsorbs"),
-                hint: t("GapDealerAbsorbsHint"),
+                label: t(noCustomerPartKeys.label),
+                hint: t(noCustomerPartKeys.hint),
               },
             ]}
           />
@@ -446,6 +548,45 @@ export function ResolveGapDialog({
                     : "—"}
                 </span>
               </p>
+            </div>
+          )}
+
+          {/* The supplier's concession (SCRUM-766 PR-C). Only for a SOURCED
+              vehicle, and only where the dealership or the customer would
+              otherwise bear the shortfall. Optional: blank means none. The
+              entitlement shown is the one the server stated when the dialog
+              opened, and the same figure is sent back for the server to
+              re-check. */}
+          {offeredBasis && (
+            <div className="space-y-2" data-testid="gap-supplier">
+              <Label htmlFor="gap-supplier-concession">
+                {t("GapSupplierConcession")} — {offeredBasis.supplierName}
+              </Label>
+              <Input
+                id="gap-supplier-concession"
+                inputMode="decimal"
+                value={draft.supplier}
+                onChange={(event) => set({ supplier: event.target.value })}
+                className="tabular-nums"
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("GapSupplierEntitlement")}{" "}
+                <span className="font-medium tabular-nums">
+                  <bdi data-testid="gap-supplier-entitlement">{money(offeredBasis.entitlementMinor)}</bdi>
+                </span>
+                {" · "}
+                {t("GapSupplierConcessionHint")}
+              </p>
+              {draft.mode === "DEALER_ABSORBS" && (
+                <p className="text-xs text-muted-foreground">
+                  {t("GapDealerShare")}{" "}
+                  <span className="font-medium tabular-nums">
+                    <bdi data-testid="gap-dealer-remainder">
+                      {dealerShareMinor !== null && dealerShareMinor >= 0 ? money(dealerShareMinor) : "—"}
+                    </bdi>
+                  </span>
+                </p>
+              )}
             </div>
           )}
 
