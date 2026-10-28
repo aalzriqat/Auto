@@ -2554,7 +2554,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     // And it actually ran the cases rather than finding nothing to do.
     // Cleanup callbacks, then U-RET, execute after this driver, in the trusted main entry point (runRehearsalSequence).
     const originalIds = REQUIRED_REHEARSAL_CASE_IDS.filter(id => ![
-      "S858-CLEANUP-HISTORY", "S858-CLEANUP-SPLIT", "U-RET", "CANCEL-SALE", "CANCEL-CLOSED", "RESTORE-HELD",
+      "S858-CLEANUP-HISTORY", "S858-CLEANUP-SPLIT", "U-RET", "CANCEL-SALE", "CANCEL-CLOSED", "RESTORE-HELD", "RETURN-FC-CHEQUE",
     ].includes(id));
     expect(originalIds).toHaveLength(32);
     expect(results.map((r) => r.id).sort()).toEqual([...originalIds].sort());

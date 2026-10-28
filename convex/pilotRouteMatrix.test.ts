@@ -3,6 +3,8 @@
  * Existing happy-path financial oracles are cited in route-matrix-11.md; do not duplicate them here.
  * Historical invoice/reservation/request rows are seeded deliberately: pilot containment must also
  * refuse commands against rows created before the switch was enabled. No business module is mocked.
+ * Snapshots cover root schema tables and root scheduled functions; mounted component internals
+ * (aggregates, rate limiter and workpool) are outside this snapshot. Harness evidence is not platform/OCC proof.
  */
 import { describe, expect, test } from "vitest";
 import { seedCashDealer } from "../test-utils/cashDealerFixture";
@@ -10,6 +12,8 @@ import { registerRateLimiter } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { seedSaleInvoice } from "../test-utils/saleInvoiceFixtures";
 import { seedBank } from "../test-utils/bankFixture";
+import { seedFinancedDealership, newApplication, insertReceiptBank } from "../test-utils/financedDealFixture";
+import { registerHandover } from "../test-utils/convexTest";
 import { api } from "./_generated/api";
 import schema from "./schema";
 
@@ -48,7 +52,7 @@ async function world(tag: string) {
 }
 
 type World = Awaited<ReturnType<typeof world>>;
-async function refuses(w: World, call: () => Promise<unknown>, code: string) {
+async function refuses(w: Pick<World, "t">, call: () => Promise<unknown>, code: string) {
   const before = await dbSnapshot(w.t, TABLES);
   const scheduledBefore = await w.t.run(ctx => ctx.db.system.query("_scheduled_functions").collect());
   await expect(call()).rejects.toMatchObject({ data: { code } });
@@ -191,6 +195,7 @@ test.each(["add", "update", "remove"] as const)("retired manual cashbook %s refu
     orgId: w.orgId, type: "IN", amount: 100, date: Date.now(), category: "OTHER", description: "Historical cashbook row",
   }));
   const before = await dbSnapshot(w.t, TABLES);
+  const scheduledBefore = await w.t.run(ctx => ctx.db.system.query("_scheduled_functions").collect());
   const calls = {
     add: () => w.asUser.mutation(api.transactions.add, {
       orgId: w.orgId, type: "OUT", amount: 1, date: Date.now(), category: "OTHER", description: "Manual correction",
@@ -200,4 +205,99 @@ test.each(["add", "update", "remove"] as const)("retired manual cashbook %s refu
   };
   await expect(calls[door]()).rejects.toThrow(/view only and is not the General Ledger/);
   expect(await dbSnapshot(w.t, TABLES)).toEqual(before);
+  expect(await w.t.run(ctx => ctx.db.system.query("_scheduled_functions").collect())).toEqual(scheduledBefore);
 }, 30_000);
+
+/** Owner 2026-10-19: FC-cheque recovery stays enabled, unlike customer cleared-cheque return.
+ * Same 12,500 JOD / zero-deposit opening as the four SCRUM-486 finance-cheque certification rows.
+ */
+async function financeCheque(tag: string) {
+  const s = await seedFinancedDealership(tag, {
+    modules: MODULES, ownerPerms: [], label: "Ruling 11 FC cheque", vinPrefix: "RT11FC",
+    actors: { viewOnly: ["view:finance"], confirmOnly: ["confirm:finance_disbursement"] },
+  });
+  registerRateLimiter(s.t);
+  const { applicationId } = await newApplication(s);
+  const args = { orgId: s.orgId, applicationId };
+  await s.owner.as.mutation(api.applications.updateStatus, { ...args, status: "UNDER_REVIEW" });
+  await s.approver.as.mutation(api.applications.updateStatus, { ...args, status: "APPROVED" });
+  await s.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+    ...args, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
+  });
+  await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    ...args, approvedAmountMinor: 12_500_000, basis: "MANUAL", notes: "Ruling 11 worked amount",
+  });
+  await registerHandover(s.owner.as, api, s.orgId, applicationId);
+  await s.owner.as.mutation(api.applications.registerExpectedPayment, {
+    ...args, method: "CHEQUE", expectedDate: Date.now(), faceAmount: "12500",
+    chequeDetails: { bank: "Finance bank", chequeNumber: tag },
+  });
+  const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
+    ...args, expectedCurrency: "JOD", idempotencyKey: `${tag}-fee`, feeType: "OTHER_CLOSING_EXPENSE",
+    paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
+    deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing fee",
+  });
+  await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
+    orgId: s.orgId, feeId, notes: "Zero fee", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
+  });
+  await s.owner.as.mutation(api.applications.finalizeDeal, { ...args, idempotencyKey: `${tag}-close` });
+  const bankAccountId = await insertReceiptBank(s);
+  await s.t.run(ctx => ctx.db.patch(bankAccountId, { isReconciliationTarget: true }));
+  await s.owner.as.mutation(api.applications.confirmDisbursement, {
+    ...args, bankAccountId, disbursedAmountMinor: 12_500_000, idempotencyKey: `${tag}-receipt`,
+  });
+  const cheques = await s.t.run(ctx => ctx.db.query("postDatedCheques")
+    .withIndex("by_application", q => q.eq("applicationId", applicationId)).collect());
+  expect(cheques).toHaveLength(1);
+  expect(cheques[0].status).toBe("CLEARED");
+  return { ...s, applicationId, returnArgs: { ...args, chequeId: cheques[0]._id,
+    returnReason: "Bank returned the cleared cheque", idempotencyKey: `${tag}-return` } };
+}
+
+test("enabled FC-cheque return restores bank zero and financier debt, voids payment and reverses allocations", async () => {
+  const s = await financeCheque("rt11-fc-enabled");
+  const invoice = await s.t.run(ctx => ctx.db.query("receivableDocuments").withIndex("by_org_source", q =>
+    q.eq("orgId", s.orgId).eq("sourceType", "finance_application").eq("sourceId", s.applicationId)).unique());
+  expect(invoice).toMatchObject({ status: "PAID", originalAmountMinor: 12_500_000, payerType: "FINANCE_COMPANY" });
+  if (!invoice) throw new Error("Missing financier invoice");
+  const debt = () => s.owner.as.query(api.subledger.getReceivableBalance, { orgId: s.orgId, receivableDocumentId: invoice._id });
+  const allocations = () => s.owner.as.query(api.subledger.listAllocations, { orgId: s.orgId, receivableDocumentId: invoice._id });
+  const paid = await allocations();
+  expect(paid).toHaveLength(1);
+  expect(paid[0]).toMatchObject({ status: "ACTIVE", amountMinor: 12_500_000 });
+  expect((await debt())?.outstandingMinor).toBe(0);
+  expect(await s.owner.as.query(api.bankAccounts.getBookBalance, { orgId: s.orgId })).toMatchObject({ status: "OK", balanceMinor: 12_500_000 });
+  await s.owner.as.mutation(api.applications.returnFinanceDisbursementCheque, s.returnArgs);
+  expect(await s.owner.as.query(api.bankAccounts.getBookBalance, { orgId: s.orgId })).toMatchObject({ status: "OK", balanceMinor: 0 });
+  expect(await debt()).toMatchObject({ outstandingMinor: 12_500_000, doc: { status: "OPEN", payerType: "FINANCE_COMPANY", financeCompanyId: s.companyId } });
+  const reversed = await allocations();
+  expect(reversed).toHaveLength(2);
+  expect(reversed).toEqual(expect.arrayContaining([
+    expect.objectContaining({ _id: paid[0]._id, status: "REVERSED", amountMinor: 12_500_000 }),
+    expect.objectContaining({ reversalOfAllocationId: paid[0]._id, status: "REVERSED", amountMinor: 12_500_000 }),
+  ]));
+  expect(await s.owner.as.query(api.subledger.getPaymentBalance, { orgId: s.orgId, paymentId: paid[0].paymentId }))
+    .toMatchObject({ payment: { status: "VOIDED", amountMinor: 12_500_000 } });
+  expect(await s.t.run(ctx => ctx.db.get(s.applicationId))).toMatchObject({ status: "CLOSED", settlementStatus: "EXPECTED", disbursementVersion: 2 });
+  const after = await dbSnapshot(s.t, TABLES);
+  await s.owner.as.mutation(api.applications.returnFinanceDisbursementCheque, s.returnArgs);
+  expect(await dbSnapshot(s.t, TABLES)).toEqual(after);
+}, 60_000);
+
+test.each(["viewOnly", "confirmOnly", "foreign"] as const)("enabled FC-cheque return refuses %s authority with zero root/scheduler writes", async actor => {
+  const s = await financeCheque(`rt11-fc-${actor}`);
+  if (actor !== "foreign") {
+    await refuses(s, () => s.actors[actor].as.mutation(api.applications.returnFinanceDisbursementCheque, s.returnArgs), "FORBIDDEN");
+    return;
+  }
+  // Foreign owner in the SAME harness avoids cross-instance document-id collisions.
+  const orgId = await s.t.run(async ctx => {
+    const id = await ctx.db.insert("organizations", { name: "Foreign FC tenant", createdAt: Date.now() });
+    const roleId = await ctx.db.insert("roles", { orgId: id, name: "OWNER", permissions: [], isSystemOwnerRole: true });
+    const userId = await ctx.db.insert("users", { clerkId: "rt11-fc-foreign-owner", email: "foreign@qa.example.test" });
+    await ctx.db.insert("memberships", { orgId: id, roleId, userId });
+    return id;
+  });
+  await refuses(s, () => s.t.withIdentity({ subject: "rt11-fc-foreign-owner" }).mutation(
+    api.applications.returnFinanceDisbursementCheque, { ...s.returnArgs, orgId }), "FINANCE_RETURN_NOT_FOUND");
+}, 60_000);

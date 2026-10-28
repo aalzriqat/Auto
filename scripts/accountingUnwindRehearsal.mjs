@@ -87,7 +87,7 @@ function journalRows(witness, f) {
     });
   });
 }
-function assertBooks(witness, f, expected, bank, income, trial = UNWOUND_TRIAL) {
+function assertBooks(witness, f, expected, bank, income, trial = UNWOUND_TRIAL, outstandingMinor = 0) {
   equal(sorted(journalRows(witness, f)), sorted(expected), "literal journal multiset");
   equal(object(witness.trial).isBalanced, true, "trial balance balanced");
   equal(sorted(array(witness.trial.rows).filter(row => row.netMinor !== 0).map(row => [row.code, row.currency, row.netMinor])),
@@ -102,7 +102,7 @@ function assertBooks(witness, f, expected, bank, income, trial = UNWOUND_TRIAL) 
   equal(invoice.currency, "JOD", "invoice currency");
   equal(invoice.scale, 3, "invoice scale");
   equal(invoice.originalAmountMinor, 12500000, "literal original financier receivable");
-  equal(witness.invoice.outstandingMinor, 0, "financier receivable not collectible after payment or cancellation");
+  equal(witness.invoice.outstandingMinor, outstandingMinor, "literal collectible financier receivable");
   equal(object(witness.bank).status, "OK", "native bank reader available");
   equal(object(witness.bank).balanceMinor, bank, "native bank balance");
   equal(object(witness.income).netIncome, income, "native income statement");
@@ -132,7 +132,7 @@ async function retry(must, f, operation) {
   return first;
 }
 
-async function prepare(ctx, { cash = false, beforeReceipt = false } = {}) {
+async function prepare(ctx, { cash = false, beforeReceipt = false, financeCheque = false } = {}) {
   const must = ctx.salesMust, approver = object(await ctx.approverMust("query", "users:getMe", {}));
   const primary = object(await must("query", "users:getMe", {}));
   equal(String(primary.email).toLowerCase(), ctx.config.salesEmail.toLowerCase(), "actual primary identity");
@@ -161,7 +161,7 @@ async function prepare(ctx, { cash = false, beforeReceipt = false } = {}) {
   if (!eligibility) return ctx.unproven("U-RET native customer eligibility unavailable");
   const customerId = await must("mutation", "customers:create", { orgId, firstName: "QA TEST", lastName: "Unwind" });
   const companyId = await must("mutation", "finance:createCompany", { orgId, name: `QA TEST U-RET financier ${key()}`,
-    profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 0, defaultLtvPercent: 87.4, adminFees: 0,
+    profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 0, defaultLtvPercent: financeCheque ? 100 : 87.4, adminFees: 0,
     acceptedStatuses: [eligibility], isActive: true });
   const vehicleId = await must("mutation", "vehicles:create", { orgId, vin: `1HGCM82633A${key().replaceAll("-", "").slice(0, 6).toUpperCase()}`,
     make: "Kia", model: "Sportage", year: 2024, mileage: 10, color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
@@ -178,8 +178,9 @@ async function prepare(ctx, { cash = false, beforeReceipt = false } = {}) {
       codes, bankId, customerId, vehicleId, quoteId, depositId, saleId, invoiceId: sale.canonicalReceivableDocumentId };
   }
   const quoteId = await must("mutation", "quotes:saveQuote", { orgId, customerId, vehicleId, mode: "CONFIGURED_FINANCE_COMPANY",
-    companyId, customerEligibilityStatusIds: [eligibility], vehiclePrice: 12500, downPayment: 200, totalFinancedAmount: 12300, termMonths: 48 });
-  const depositId = await must("mutation", "deposits:create", { orgId, quoteId, amount: 200, method: "CASH", idempotencyKey: key() });
+    companyId, customerEligibilityStatusIds: [eligibility], vehiclePrice: 12500, downPayment: financeCheque ? 0 : 200,
+    totalFinancedAmount: financeCheque ? 12500 : 12300, termMonths: 48 });
+  const depositId = financeCheque ? undefined : await must("mutation", "deposits:create", { orgId, quoteId, amount: 200, method: "CASH", idempotencyKey: key() });
   const applicationId = await must("mutation", "applications:createFromQuote", { orgId, quoteId });
   await must("mutation", "financingEconomics:recordSubmittedQuotation", { orgId, applicationId, submittedQuotationMinor: 12500000, source: "MANUAL_ENTRY" });
   await ctx.approverMust("mutation", "financingEconomics:approveDealerPurchaseAmount", { orgId, applicationId,
@@ -188,14 +189,16 @@ async function prepare(ctx, { cash = false, beforeReceipt = false } = {}) {
   await ctx.approverMust("mutation", "applications:updateStatus", { orgId, applicationId, status: "APPROVED" });
   const economicsStamp = await must("query", "applications:handoverStamp", { orgId, applicationId });
   await must("mutation", "applications:registerVehicleHandover", { orgId, applicationId, economicsStamp });
-  await must("mutation", "applications:registerExpectedPayment", { orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now() });
+  await must("mutation", "applications:registerExpectedPayment", { orgId, applicationId, expectedDate: Date.now(),
+    ...(financeCheque ? { method: "CHEQUE", faceAmount: "12500", chequeDetails: { bank: "QA TEST finance bank", chequeNumber: key() } }
+      : { method: "BANK_TRANSFER" }) });
   await must("mutation", "financeDealCosts:recordLegalInvoice", { orgId, applicationId, legalInvoiceAmountMinor: 12500000,
     legalInvoiceNumber: `QA-${key()}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY" });
   const feeId = await must("mutation", "financeDealCosts:recordDealFee", { orgId, applicationId, expectedCurrency: "JOD", idempotencyKey: key(),
     feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
     deductedFromSettlement: false, actualAmountMinor: 0, description: "QA TEST no closing cost" });
   await must("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes: "QA TEST zero cost", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
-  const forwardId = await must("mutation", "financeCompanyForward:recordFinanceCompanyForward", { orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: bankId,
+  const forwardId = financeCheque ? undefined : await must("mutation", "financeCompanyForward:recordFinanceCompanyForward", { orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: bankId,
     paidAt: Date.now(), expectedAmountMinor: 1575000, reference: "QA-URET-FORWARD", idempotencyKey: key() });
   const saleId = await must("mutation", "applications:finalizeDeal", { orgId, applicationId, idempotencyKey: key() });
   const invoices = array(await must("query", "subledger:listReceivables", { orgId, limit: 200 }))
@@ -205,17 +208,78 @@ async function prepare(ctx, { cash = false, beforeReceipt = false } = {}) {
   await must("mutation", "bankAccounts:setReconciliationTarget", { orgId, bankAccountId: bankId });
   if (!beforeReceipt) await ctx.approverMust("mutation", "applications:confirmDisbursement", { orgId, applicationId, disbursedAmountMinor: 12500000,
     bankAccountId: bankId, idempotencyKey: key() });
-  await must("mutation", "sales:setCommissionAmount", { orgId, saleId, commissionAmount: 250 });
+  if (!financeCheque) await must("mutation", "sales:setCommissionAmount", { orgId, saleId, commissionAmount: 250 });
   return { orgId, periodId, periodStart: Date.UTC(year, month, 1), periodEnd: Date.UTC(year, month + 1, 1) - 1,
     codes, bankId, customerId, companyId, vehicleId, quoteId, depositId, applicationId, saleId, invoiceId, forwardId };
 }
 
-/** c23812(11): three independent native scenarios; each owns a fresh public-command organization.
+/** c23812(11) and owner 2026-10-19: independent native scenarios; each owns a fresh public-command organization.
  * No database fixture API and no changed product switch. Expected amounts are worked JOD literals.
  */
 export async function runPilotRouteRehearsalCases(ctx) {
   const native = () => Boolean(ctx.config?.salesEmail && ctx.config?.approverEmail);
   const must = ctx.salesMust;
+  await ctx.recordCase(ctx.results, "RETURN-FC-CHEQUE", "Owner 2026-10-19: enabled cleared FC cheque return reopens financier debt and reverses the receipt", async () => {
+    if (!native()) return ctx.unproven("RETURN-FC-CHEQUE actual two-identity native context unavailable");
+    const f = await prepare(ctx, { financeCheque: true });
+    const chequeRows = async () => {
+      const result = object(await must("query", "collections:listCheques", { orgId: f.orgId, paginationOpts: page }));
+      equal(result.isDone, true, "RETURN-FC-CHEQUE complete instrument inventory");
+      return array(result.page).filter(row => row.applicationId === f.applicationId);
+    };
+    const cheques = await chequeRows();
+    equal(cheques.length, 1, "RETURN-FC-CHEQUE one instrument");
+    equal(cheques[0].status, "CLEARED", "RETURN-FC-CHEQUE cleared precondition");
+    const paid = await books(must, f);
+    equal(paid.application.status, "CLOSED", "RETURN-FC-CHEQUE delivered precondition");
+    equal(paid.invoice.doc.status, "PAID", "RETURN-FC-CHEQUE financier paid precondition");
+    const allocations = array(paid.allocations);
+    equal(allocations.length, 1, "RETURN-FC-CHEQUE one paid allocation");
+    equal(allocations[0].status, "ACTIVE", "RETURN-FC-CHEQUE active precondition");
+    equal(allocations[0].amountMinor, 12500000, "RETURN-FC-CHEQUE full paid amount");
+    const paymentArgs = { orgId: f.orgId, paymentId: allocations[0].paymentId };
+    const payment = async () => object(object(await must("query", "subledger:getPaymentBalance", paymentArgs)).payment);
+    equal((await payment()).status, "SETTLED", "RETURN-FC-CHEQUE settled precondition");
+    const sale = [J("1210", 12500000, 0), J("4100", 0, 12500000), J("5100", 10000000, 0), J("1400", 0, 10000000)];
+    assertBooks(paid, f, [...PURCHASE, ...sale, ...RECEIPT], 12500000, 2500000,
+      { "1100": -10000000, "1110": 12500000, "4100": 12500000, "5100": 10000000 });
+    const args = { orgId: f.orgId, applicationId: f.applicationId, chequeId: cheques[0]._id,
+      returnReason: "QA TEST bank returned cleared FC cheque", idempotencyKey: key() };
+    const foreignOrg = await must("mutation", "organizations:create", { name: `QA TEST FC foreign ${key()}` });
+    await refused(must, f, () => ctx.asSales("mutation", "applications:returnFinanceDisbursementCheque", {
+      ...args, orgId: foreignOrg }), "FINANCE_RETURN_NOT_FOUND");
+    for (const [granted, missing] of [["view:finance", "confirm:finance_disbursement"], ["confirm:finance_disbursement", "view:finance"]]) {
+      await deniedAuthority(ctx, f, [granted], missing,
+        () => ctx.asApprover("mutation", "applications:returnFinanceDisbursementCheque", args));
+    }
+    await must("mutation", "applications:returnFinanceDisbursementCheque", args);
+    const after = await books(must, f);
+    assertBooks(after, f, [...PURCHASE, ...sale, ...reversed(RECEIPT)], 0, 2500000,
+      { "1100": -10000000, "1210": 12500000, "4100": 12500000, "5100": 10000000 }, 12500000);
+    equal(after.invoice.doc.status, "OPEN", "RETURN-FC-CHEQUE financier debt reopened");
+    equal(after.application.status, "CLOSED", "RETURN-FC-CHEQUE delivered deal survives");
+    equal(after.application.settlementStatus, "EXPECTED", "RETURN-FC-CHEQUE settlement reopened");
+    equal(after.application.disbursementVersion, 2, "RETURN-FC-CHEQUE next receipt generation");
+    equal(after.application.disbursedAt, undefined, "RETURN-FC-CHEQUE disbursement cleared");
+    equal((await payment()).status, "VOIDED", "RETURN-FC-CHEQUE payment voided");
+    equal((await payment()).amountMinor, 12500000, "RETURN-FC-CHEQUE immutable payment amount");
+    const reversedAllocations = array(after.allocations);
+    equal(reversedAllocations.length, 2, "RETURN-FC-CHEQUE original and reversal allocation");
+    equal(reversedAllocations.every(row => row.status === "REVERSED" && row.amountMinor === 12500000), true,
+      "RETURN-FC-CHEQUE allocations reversed in full");
+    const original = reversedAllocations.find(row => row._id === allocations[0]._id);
+    const inverse = reversedAllocations.find(row => row.reversalOfAllocationId === allocations[0]._id);
+    equal(original?._id, allocations[0]._id, "RETURN-FC-CHEQUE original allocation retained");
+    equal(typeof inverse?._id, "string", "RETURN-FC-CHEQUE inverse allocation exists");
+    equal(original.reversedByAllocationId, inverse._id, "RETURN-FC-CHEQUE reversal lineage");
+    equal((await chequeRows())[0].status, "RETURNED", "RETURN-FC-CHEQUE instrument returned");
+    const witness = { books: after, payment: await payment(), cheques: await chequeRows() };
+    await must("mutation", "applications:returnFinanceDisbursementCheque", args);
+    equal({ books: await books(must, f), payment: await payment(), cheques: await chequeRows() }, witness,
+      "RETURN-FC-CHEQUE replay preserves every public witness");
+    return { applicationId: f.applicationId, paymentId: paymentArgs.paymentId, bankMinor: 0, reopenedDebtMinor: 12500000,
+      commandsExercised: ["applications.confirmDisbursement", "applications.returnFinanceDisbursementCheque"] };
+  });
   await ctx.recordCase(ctx.results, "CANCEL-SALE", "Ruling 11: completed CASH sale cancellation preserves the paid deposit and reverses sale debt", async () => {
     if (!native()) return ctx.unproven("CANCEL-SALE actual two-identity native context unavailable");
     const f = await prepare(ctx, { cash: true });
