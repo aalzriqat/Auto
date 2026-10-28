@@ -10,6 +10,7 @@ import { isRemainingOpeningKind } from "../utils/openingAccountPolicy";
 // app edges is safe to initialize before anything that can participate in
 // a cycle, so it goes above every local import.
 import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
+import { supplierPayableVatReclassAllowed } from "../utils/vehicleOwnership";
 import { ConvexError } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
@@ -367,6 +368,36 @@ export function assertExistingRowIsSameOccurrence(
   }
 }
 
+/**
+ * SCRUM-782: stored supplier tax is not evidence of reclaimable VAT. Re-prove
+ * the payable's ownership before posting, including payloads queued before
+ * SCRUM-781. Shared with the outbox so a refusal consumes its bounded retry
+ * budget instead of parking forever behind a missing period.
+ */
+export async function supplierPaymentVatPostingRefusal(
+  ctx: MutationCtx,
+  cmd: Pick<PostCommand, "orgId" | "eventType" | "sourceType" | "sourceId"> & { payload?: unknown }
+): Promise<string | null> {
+  if (cmd.eventType !== "SUPPLIER_PAYMENT_SETTLED") return null;
+  const payload = cmd.payload;
+  if (!payload || typeof payload !== "object" || !("taxMinor" in payload)) return null;
+  const taxMinor = payload.taxMinor;
+  if (taxMinor === undefined || taxMinor === 0) return null;
+  const refusal = "Supplier settlement VAT cannot be verified as reclaimable. Nothing was posted; operator review and correction are required before retrying.";
+  if (typeof taxMinor !== "number" || !Number.isSafeInteger(taxMinor) || taxMinor < 0) return refusal;
+  const payableId = ctx.db.normalizeId("vehicleSupplierPayables", cmd.sourceId);
+  if (
+    cmd.sourceType !== "vehicleSupplierPayables" || !payableId ||
+    !("payableId" in payload) || payload.payableId !== cmd.sourceId
+  ) return refusal;
+  const payable = await ctx.db.get(payableId);
+  if (!payable || payable.orgId !== cmd.orgId || !("vehicleId" in payable)) return refusal;
+  const vehicle = await ctx.db.get(payable.vehicleId);
+  return supplierPayableVatReclassAllowed(payable, vehicle?.orgId === cmd.orgId ? vehicle : null)
+    ? null
+    : refusal;
+}
+
 export async function postAccountingEvent(
   ctx: MutationCtx,
   cmd: PostCommand,
@@ -425,6 +456,9 @@ export async function postAccountingEvent(
   // through `orgEconomicLifecycleBlock`, so a queued entry is dead-lettered or
   // held according to whether the refusal can ever be lifted.
   await assertOrgEconomicallyActive(ctx, cmd.orgId);
+
+  const supplierVatRefusal = await supplierPaymentVatPostingRefusal(ctx, cmd);
+  if (supplierVatRefusal) throw new ConvexError(supplierVatRefusal);
 
   // ⚠️ 1c. THE RESERVED RECEIPT OCCURRENCE IS PROVEN HERE — SCRUM-249.
   //

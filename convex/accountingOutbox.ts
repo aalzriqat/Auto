@@ -30,7 +30,7 @@ import { internalMutation, mutation } from "./functions";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { PostCommand, postAccountingEvent, retiredPostingRefusal } from "./accounting/postingEngine";
+import { PostCommand, postAccountingEvent, retiredPostingRefusal, supplierPaymentVatPostingRefusal } from "./accounting/postingEngine";
 import {
   isReservedReceiptKey,
   isReservedReceiptTuple,
@@ -1796,6 +1796,16 @@ export const postOutboxRow = internalMutation({
         sourceType: row.sourceType,
       });
       if (retired) return await failOutboxRow(ctx, row, retired);
+
+      // SCRUM-782: a legacy consigned VAT settlement is invalid as queued.
+      // Classify before period/dependency holds, without any financial write.
+      // Preserve the paid source and payload for operator review; retry alone
+      // cannot correct the recorded VAT. Use the existing refusal disposition.
+      const supplierVatRefusal = await supplierPaymentVatPostingRefusal(ctx, {
+        orgId: row.orgId, eventType: row.eventType ?? "", sourceType: row.sourceType,
+        sourceId: row.sourceId, payload: row.payload,
+      });
+      if (supplierVatRefusal) return await failOutboxRow(ctx, row, supplierVatRefusal);
 
       // ⚠️ R8 (Sol) — A CUSTODY ROW THAT IS NOT THE POSTING ITS KEY PROMISES,
       // OR DOES NOT STAND ON ITS SOURCE, IS PERMANENTLY REFUSED — HERE, WITH
