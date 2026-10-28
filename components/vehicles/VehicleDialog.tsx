@@ -1,4 +1,5 @@
 "use client";
+import { isRt11DoorDisabled } from "@/convex/utils/rt11DoorContainment";
 
 import { useState, useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
@@ -565,7 +566,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                           key={type}
                           type="button"
                           aria-pressed={field.value === type}
-                          disabled={!!vehicle && type !== storedSourceType && !!ownershipChangeBlocked}
+                          disabled={!!vehicle && type !== storedSourceType && (!!ownershipChangeBlocked || isRt11DoorDisabled("VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED"))}
                           onClick={() => {
                             field.onChange(type);
                             form.setValue("bankAccountId", undefined);
@@ -607,6 +608,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   {isOwned && !isBuyout && !vehicle && (
                     <p className="text-xs text-muted-foreground">{t("VehicleOwnershipOwnedHint")}</p>
                   )}
+                  {vehicle && isRt11DoorDisabled("VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED") && <p className="text-xs text-muted-foreground">{t("ServerError_VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED")}</p>}
                   {isBuyout && (
                     <p className="text-xs text-muted-foreground">{t("VehicleBuyoutTermsHint")}</p>
                   )}

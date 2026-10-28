@@ -66,7 +66,10 @@ test("commission rows preserve decided, undecided and cancelled status presentat
   const paid = screen.getByRole("row", { name: /Synthetic PAID/ });
   expect(within(paid).getByText(/^Paid /)).toBeTruthy();
   expect(within(paid).queryByRole("button", { name: "Mark Paid" })).toBeNull();
-  expect(within(screen.getByRole("row", { name: /Synthetic UNPAID/ })).getByRole("button", { name: "Mark Paid" })).toBeTruthy();
+  // SCRUM-760 c23862(8): direct payout is blocked for the pilot; the unpaid row explains payroll instead.
+  const unpaid = screen.getByRole("row", { name: /Synthetic UNPAID/ });
+  expect(within(unpaid).queryByRole("button", { name: "Mark Paid" })).toBeNull();
+  expect(within(unpaid).getByText(/^Direct commission payout is not available during the pilot\. Pay commissions through payroll\./)).toBeTruthy();
 });
 
 test("setting an undecided commission still edits and submits its own row", async () => {
