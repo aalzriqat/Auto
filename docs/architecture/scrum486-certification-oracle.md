@@ -27,14 +27,18 @@ are outside the snapshot. The guards precede claims and the rate limiter.
 | 11, edit paid cost | `PAID_LANDED_COST_CHANGE_PILOT_DISABLED` | `editing paid landed cost refuses without writes` |
 | 11, remove paid cost | `PAID_LANDED_COST_CHANGE_PILOT_DISABLED` | `removing paid landed cost refuses without writes` |
 | 11, move paid cost | `PAID_LANDED_COST_CHANGE_PILOT_DISABLED` | `moving paid landed cost refuses without writes` |
+| 11, negative new line, same method | `PAID_LANDED_COST_CHANGE_PILOT_DISABLED` | `negative landed cost offset on the same method refuses without writes` |
+| 11, negative new line with a bank move | `PAID_LANDED_COST_CHANGE_PILOT_DISABLED` | `negative landed cost offset with a positive bank move refuses without writes` |
+| 11, negative new line, another bank | `PAID_LANDED_COST_CHANGE_PILOT_DISABLED` | `negative landed cost on another physical bank refuses without writes` |
 
 Controls in the same file (same prefix): `pre-final reimbursement still pays the employee`
 (50,000 JOD minor units owed and reimbursed), `balanced custody closure remains allowed`
 (100,000 issued and returned; RECONCILED even with a reason), `expected payment before payout remains correctable`
 (registered method removed), `ordinary vehicle edit remains allowed` (color changed),
 and `adding new landed cost preserves the paid item` (100 + 20 = 120 JOD).
-Additional controls preserve duplicate paid occurrences, harmless reorder and
-informational SOURCED costs. Dealer and supplier payout markers are existing
+Additional controls preserve duplicate paid occurrences, harmless reorder,
+informational SOURCED costs, and earlier signed rows kept as they are next to a
+positive addition (`preserving legacy signed landed costs still allows a positive addition`). Dealer and supplier payout markers are existing
 schema facts; a supplier discrepancy still means money was paid.
 
 Door 9, `cashDrawer.approveVariance`, and all posting rules remain unchanged.
