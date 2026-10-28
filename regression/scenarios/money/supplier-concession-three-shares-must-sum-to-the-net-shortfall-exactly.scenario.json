@@ -1,0 +1,84 @@
+{
+  "id": "supplier-concession-three-shares-must-sum-to-the-net-shortfall-exactly",
+  "steps": [
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "financingEconomics.resolveAppraisalGap",
+      "input": {
+        "netShortfallMinor": 850000,
+        "supplierShareMinor": 401000,
+        "dealerShareMinor": 450000
+      }
+    },
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "financingEconomics.resolveAppraisalGap",
+      "input": {
+        "netShortfallMinor": 850000,
+        "supplierShareMinor": 400000,
+        "dealerShareMinor": 449000
+      }
+    },
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "financingEconomics.resolveAppraisalGap",
+      "input": {
+        "netShortfallMinor": 850000,
+        "supplierShareMinor": 400000,
+        "dealerShareMinor": 450000,
+        "observedEntitlementMinor": 9500000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refused",
+      "value": true
+    },
+    {
+      "observable": "step2.refused",
+      "value": true
+    },
+    {
+      "observable": "step2.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "step3.supplierGapShareMinor",
+      "value": 400000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierConcession.scrum766c.test.ts",
+    "testName": "the three shares must add up to the net shortfall exactly (one minor unit over or under is refused)"
+  },
+  "matrixRow": "pilot-supplier-concession-refusals",
+  "fingerprint": "ba4c119042e1c776903c838db8490d80b49ee5d4fd8ae382c8622c596d1add28",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum766c-supplier-concession",
+    "firstSeen": "2026-10-28"
+  }
+}

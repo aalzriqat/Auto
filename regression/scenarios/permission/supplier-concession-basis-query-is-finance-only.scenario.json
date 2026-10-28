@@ -1,0 +1,51 @@
+{
+  "id": "supplier-concession-basis-query-is-finance-only",
+  "steps": [
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "financingEconomics.supplierConcessionBasis",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "clerk",
+        "org": "A"
+      },
+      "action": "financingEconomics.supplierConcessionBasis",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.entitlementMinor",
+      "value": 9500000
+    },
+    {
+      "observable": "step2.refusal",
+      "value": "missing-permissions"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierConcession.scrum766c.test.ts",
+    "testName": "the dialog's basis query is finance-only and reports eligibility and the entitlement"
+  },
+  "matrixRow": "pilot-supplier-concession-authority",
+  "fingerprint": "8bfdd4dc4dc28bd85dfd24c1837c1fb0b13df7eb2f94bb5ba74cf726a275fbc5",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum766c-supplier-concession",
+    "firstSeen": "2026-10-28"
+  }
+}

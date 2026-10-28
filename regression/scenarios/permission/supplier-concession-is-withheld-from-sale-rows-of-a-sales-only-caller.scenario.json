@@ -1,0 +1,63 @@
+{
+  "id": "supplier-concession-is-withheld-from-sale-rows-of-a-sales-only-caller",
+  "steps": [
+    {
+      "actor": {
+        "role": "salesonly",
+        "org": "A"
+      },
+      "action": "sales.list",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "salesonly",
+        "org": "A"
+      },
+      "action": "sales.get",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.consignedSupplierConcessionMinor",
+      "value": "absent"
+    },
+    {
+      "observable": "step2.consignedSupplierConcessionMinor",
+      "value": "absent"
+    },
+    {
+      "observable": "step3.consignedSupplierConcessionMinor",
+      "value": 400000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierConcession.scrum766c.test.ts",
+    "testName": "sales.list and sales.get omit the concession for a view:sales-only caller and show it to finance"
+  },
+  "matrixRow": "pilot-supplier-concession-disclosure",
+  "fingerprint": "a5812b3f2d3d52f18536f093dfd92893c435be5d0bd71925455789759b7d1c94",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum766c-supplier-concession",
+    "firstSeen": "2026-10-28"
+  }
+}

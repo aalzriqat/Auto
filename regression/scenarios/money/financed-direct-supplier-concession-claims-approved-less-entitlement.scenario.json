@@ -1,0 +1,76 @@
+{
+  "id": "financed-direct-supplier-concession-claims-approved-less-entitlement",
+  "steps": [
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "financingEconomics.resolveAppraisalGap",
+      "input": {
+        "netShortfallMinor": 850000,
+        "supplierShareMinor": 400000,
+        "dealerShareMinor": 450000,
+        "observedEntitlementMinor": 9500000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "route": "DIRECT_TO_SUPPLIER",
+        "approvedMinor": 11500000,
+        "supplierEntitlementMinor": 9500000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "sale.supplierEntitlementMinor",
+      "value": 9100000
+    },
+    {
+      "observable": "sale.supplierConcessionMinor",
+      "value": 400000
+    },
+    {
+      "observable": "ledger.supplierClaimMinor",
+      "value": 2400000
+    },
+    {
+      "observable": "ledger.consignmentCommissionRevenueMinor",
+      "value": 2400000
+    },
+    {
+      "observable": "ledger.saleCompletedNetMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierConcession.scrum766c.test.ts",
+    "testName": "V3 claims A - E_eff = 2,400 on the supplier and posts the same on the ledger"
+  },
+  "matrixRow": "pilot-supplier-concession-direct",
+  "fingerprint": "80312a5849a1a9a64275d10b9abf714eee916e6180ce67a4899c833963c58c05",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum766c-supplier-concession",
+    "firstSeen": "2026-10-28"
+  }
+}

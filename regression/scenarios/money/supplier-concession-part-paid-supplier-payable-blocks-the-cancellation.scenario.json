@@ -1,0 +1,60 @@
+{
+  "id": "supplier-concession-part-paid-supplier-payable-blocks-the-cancellation",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "route": "THROUGH_DEALERSHIP",
+        "gapCoveredBy": "SUPPLIER_AND_DEALER"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.cancelApplication",
+      "input": {
+        "supplierPayableAmountPaid": 4000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "cancel.refused",
+      "value": true
+    },
+    {
+      "observable": "supplierPayable.status",
+      "value": "NOT_CANCELLED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierConcession.scrum766c.test.ts",
+    "testName": "THROUGH: a part-paid supplier payable blocks the cancellation (9,100 is owed, not 9,500)"
+  },
+  "matrixRow": "pilot-supplier-concession-reversal",
+  "fingerprint": "39b0eb087da3971e0db517c0d8efc19495d09cc801460a2ef90911c5f786b891",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum766c-supplier-concession",
+    "firstSeen": "2026-10-28"
+  }
+}
