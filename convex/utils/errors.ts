@@ -329,6 +329,10 @@ export const AppErrorCode = {
   // currency is never defaulted. See `requireConfiguredCurrency`. Translated under
   // ServerError_<code>.
   CURRENCY_NOT_CONFIGURED: "CURRENCY_NOT_CONFIGURED",
+  // SCRUM-781 (owner rulings SCRUM-773 c22401, SCRUM-760 c23812): `sourcingPayables.markPaid` refuses a
+  // nonzero VAT on a consigned supplier payable. Message in convex/sourcingPayables.ts; translated
+  // under ServerError_<code>.
+  CONSIGNED_PAYABLE_VAT_REFUSED: "CONSIGNED_PAYABLE_VAT_REFUSED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

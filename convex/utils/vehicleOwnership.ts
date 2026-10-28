@@ -62,6 +62,24 @@ export function isConsignedAgentSale(vehicle: OwnershipFacts): boolean {
 }
 
 /**
+ * SCRUM-781 (owner ruling SCRUM-773 c22401). Whether a supplier payable may carry an input-VAT
+ * reclassification when it is settled. The ONE definition of "consigned payable": it is the
+ * complement of this set.
+ *
+ * Only an owned car's ON_ACCOUNT acquisition payable (no linked sale, readable dealer-owned
+ * vehicle) can reclaim VAT. A payable linked to a sale is the consigned sale's payable, and a
+ * SOURCED vehicle's payable is consigned however it was written. A payable whose vehicle cannot
+ * be read is not provably owned, so it fails closed: a consignment books no cost of sales, so a
+ * reclaim against one would drive Cost of Vehicles Sold negative.
+ */
+export function supplierPayableVatReclassAllowed(
+  payable: { saleId?: unknown },
+  vehicle: OwnershipFacts | null
+): boolean {
+  return payable.saleId == null && vehicle !== null && !isConsignedAgentSale(vehicle);
+}
+
+/**
  * Where the buyer's money went on a consigned sale.
  *
  * Unlike ownership this is NOT derivable — the same consigned vehicle can be
