@@ -28,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { fromMinorUnits, scaleForCurrency } from "@/convex/utils/money";
+import { denominationOf, fromMinorUnits, scaleForCurrency } from "@/convex/utils/money";
 import { getLocalizedErrorMessage } from "@/lib/errors";
 import { accountDisplayName } from "../reports/FinancialReportShared";
 import { parseOpeningMoneyMinor } from "./openingMoneyInput";
@@ -202,11 +202,12 @@ export function OpeningBalanceCard() {
   const postDirect = useMutation(api.accountingCutover.postOpeningBalanceDirect);
   const draftForApproval = useMutation(api.accountingCutover.draftOpeningBalance);
 
-  // The org's own currency, from the server. The minor-unit scale is 3 for
-  // JOD/KWD/BHD/OMR and 2 for everything else, so a hardcoded factor posts
-  // amounts off by a factor of ten on any org that is not on a 3-decimal
-  // currency.
-  const currency = entryCurrency ?? status?.currency ?? "JOD";
+  // The org's own currency, from the server, and nothing else. The minor-unit scale
+  // is per-currency (3 for JOD/KWD/BHD/OMR, 2 for most others), so a guessed
+  // currency posts amounts off by a factor of ten. SCRUM-85 (c23823): there is no
+  // default. `null` means the server gave no denomination AutoFlow can scale
+  // (still loading, or not a canonical supported code), and the form is refused.
+  const currency = denominationOf(entryCurrency ?? status?.currency ?? undefined)?.code ?? null;
   const currencyChanged = open && entryCurrency !== null && status?.currency !== entryCurrency;
 
   // The bank control account is the one chart account whose line must name a
@@ -217,7 +218,7 @@ export function OpeningBalanceCard() {
     [accounts]
   );
   const selectableBanks = useMemo(
-    () => (bankAccounts ?? []).filter((bank) => bank.isActive && bank.currency === currency),
+    () => currency === null ? [] : (bankAccounts ?? []).filter((bank) => bank.isActive && bank.currency === currency),
     [bankAccounts, currency]
   );
 
@@ -225,8 +226,8 @@ export function OpeningBalanceCard() {
   // server validates rather than accumulating float error across lines.
   const parsedLines = useMemo(() => lines.map((line) => ({
     ...line,
-    debitMinor: line.debit === "" ? 0 : parseOpeningMoneyMinor(line.debit, currency),
-    creditMinor: line.credit === "" ? 0 : parseOpeningMoneyMinor(line.credit, currency),
+    debitMinor: line.debit === "" ? 0 : currency === null ? null : parseOpeningMoneyMinor(line.debit, currency),
+    creditMinor: line.credit === "" ? 0 : currency === null ? null : parseOpeningMoneyMinor(line.credit, currency),
   })), [lines, currency]);
   const totals = useMemo(() => {
     let debitMinor = 0;
@@ -256,7 +257,7 @@ export function OpeningBalanceCard() {
     const policy = policyByAccount.get(line.accountId)?.policy;
     return policy !== undefined && policy !== "UNSUPPORTED" && policy !== "UNAVAILABLE";
   });
-  const allocationsReady = openingAllocationTotalsMatch(allocations, allocationGroups, currency);
+  const allocationsReady = currency !== null && openingAllocationTotalsMatch(allocations, allocationGroups, currency);
   // A chosen bank counts only while it is still offered: a bank deactivated, or a currency
   // changed, after the choice leaves a stale id that the server would refuse.
   const selectableBankIds = new Set(selectableBanks.map((bank) => bank._id as string));
@@ -265,6 +266,7 @@ export function OpeningBalanceCard() {
   );
   const canSubmit =
     Boolean(activeOrgId) &&
+    currency !== null &&
     totals.balanced &&
     selectedAccountsSupported &&
     allocationsReady &&
@@ -302,7 +304,7 @@ export function OpeningBalanceCard() {
   }
 
   async function submit() {
-    if (!activeOrgId || !canSubmit) return;
+    if (!activeOrgId || !canSubmit || currency === null) return;
     const asOfMs = dateInputToUtcMs(asOfDate);
     if (asOfMs === null) return;
     const allocationPayload = buildOpeningAllocationPayload(allocations, currency);
@@ -375,7 +377,7 @@ export function OpeningBalanceCard() {
                 {t("OpeningBalancePosted")}
               </p>
             )}
-            {status.posted && postedReadback && (
+            {status.posted && postedReadback && currency !== null && (
               <PostedOpeningAllocations readback={postedReadback} currency={status.currency} />
             )}
             {!status.posted && status.pendingExists && (
@@ -390,7 +392,12 @@ export function OpeningBalanceCard() {
           </div>
         </div>
 
-        {!alreadyResolved && (
+        {!alreadyResolved && currency === null && (
+          <p className="text-sm text-amber-700 dark:text-amber-300" role="alert">
+            {t("CurrencyNotConfigured")}
+          </p>
+        )}
+        {!alreadyResolved && currency !== null && (
           <Dialog open={open} onOpenChange={(nextOpen) => {
             setOpen(nextOpen);
             setEntryCurrency(nextOpen ? status.currency : null);
