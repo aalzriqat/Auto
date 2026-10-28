@@ -1,6 +1,7 @@
 // @vitest-environment node
-/** SCRUM-760 c23812(11): shipped receipt/payout doors refuse without changing any app table.
- * Existing happy-path financial oracles are cited in route-matrix-11.md; do not duplicate them here.
+/** SCRUM-760 c23812(11); route evidence: docs/architecture/pilot-route-matrix.md.
+ * Shipped receipt/payout doors refuse without changing any app table. Existing full financial oracles are cited there.
+ * Literal test titles bind one regression record per cell; shared helpers preserve the assertions.
  * Historical invoice/reservation/request rows are seeded deliberately: pilot containment must also
  * refuse commands against rows created before the switch was enabled. No business module is mocked.
  * Snapshots cover root schema tables and root scheduled functions; mounted component internals
@@ -61,135 +62,147 @@ async function refuses(w: Pick<World, "t">, call: () => Promise<unknown>, code: 
 }
 
 describe("ruling 11: shipped sale-invoice receipt doors", () => {
-  test.each(["cheque", "reserve", "activate", "recordPayment"] as const)(
-    "%s refuses with zero writes, including existing journal lines and scheduled work", async door => {
-      const w = await world(door);
-      const common = { orgId: w.orgId, saleId: w.saleId, receiptMovementId: w.movement._id,
-        amountMinor: 1_000, idempotencyKey: `refused-${door}` };
-      const invoice = await w.t.run(ctx => ctx.db.get(w.saleId));
-      expect(invoice?.canonicalReceivableDocumentId).toBeDefined();
-      const reservationId = await w.t.run(ctx => ctx.db.insert("invoiceReceiptApplications", {
-        orgId: w.orgId, saleId: w.saleId, receiptMovementId: w.movement._id,
-        receivableDocumentId: invoice!.canonicalReceivableDocumentId!,
-        customerId: w.customerId, currency: "JOD", amountMinor: 1_000,
-        status: "PENDING", createdBy: w.userId, createdAt: Date.now(),
-      }));
-      const calls = {
-        cheque: () => w.asUser.mutation(api.collections.registerSaleInvoiceCheque, {
-          orgId: w.orgId, saleId: w.saleId, bank: "Customer bank", chequeNumber: "RT11",
-          chequeDate: Date.now(), amountMinor: 1_000,
-        }),
-        reserve: () => w.asUser.mutation(api.collections.reserveSaleInvoiceReceipt, common),
-        activate: () => w.asUser.mutation(api.collections.activateSaleInvoiceReceipt, {
-          orgId: w.orgId, applicationId: reservationId, amountMinor: 1_000, idempotencyKey: "activate",
-        }),
-        recordPayment: () => w.asUser.mutation(api.collections.recordPayment, {
-          orgId: w.orgId, invoiceSaleId: w.saleId, customerId: w.customerId,
-          amount: 1, method: "CASH", paymentDate: Date.now(), idempotencyKey: "invoice-receipt",
-        }),
-      };
-      await refuses(w, calls[door], "SALE_INVOICE_RECEIPT_DOORS_DISABLED");
-    }, 30_000,
-  );
+  async function checkInvoiceReceiptRefusal(door: "cheque" | "reserve" | "activate" | "recordPayment") {
+    const w = await world(door);
+    const common = { orgId: w.orgId, saleId: w.saleId, receiptMovementId: w.movement._id,
+      amountMinor: 1_000, idempotencyKey: `refused-${door}` };
+    const invoice = await w.t.run(ctx => ctx.db.get(w.saleId));
+    expect(invoice?.canonicalReceivableDocumentId).toBeDefined();
+    const reservationId = await w.t.run(ctx => ctx.db.insert("invoiceReceiptApplications", {
+      orgId: w.orgId, saleId: w.saleId, receiptMovementId: w.movement._id,
+      receivableDocumentId: invoice!.canonicalReceivableDocumentId!,
+      customerId: w.customerId, currency: "JOD", amountMinor: 1_000,
+      status: "PENDING", createdBy: w.userId, createdAt: Date.now(),
+    }));
+    const calls = {
+      cheque: () => w.asUser.mutation(api.collections.registerSaleInvoiceCheque, {
+        orgId: w.orgId, saleId: w.saleId, bank: "Customer bank", chequeNumber: "RT11",
+        chequeDate: Date.now(), amountMinor: 1_000,
+      }),
+      reserve: () => w.asUser.mutation(api.collections.reserveSaleInvoiceReceipt, common),
+      activate: () => w.asUser.mutation(api.collections.activateSaleInvoiceReceipt, {
+        orgId: w.orgId, applicationId: reservationId, amountMinor: 1_000, idempotencyKey: "activate",
+      }),
+      recordPayment: () => w.asUser.mutation(api.collections.recordPayment, {
+        orgId: w.orgId, invoiceSaleId: w.saleId, customerId: w.customerId,
+        amount: 1, method: "CASH", paymentDate: Date.now(), idempotencyKey: "invoice-receipt",
+      }),
+    };
+    await refuses(w, calls[door], "SALE_INVOICE_RECEIPT_DOORS_DISABLED");
+  }
+  test("cheque refuses with zero writes, including existing journal lines and scheduled work", () => checkInvoiceReceiptRefusal("cheque"), 30_000);
+  test("reserve refuses with zero writes, including existing journal lines and scheduled work", () => checkInvoiceReceiptRefusal("reserve"), 30_000);
+  test("activate refuses with zero writes, including existing journal lines and scheduled work", () => checkInvoiceReceiptRefusal("activate"), 30_000);
+  test("recordPayment refuses with zero writes, including existing journal lines and scheduled work", () => checkInvoiceReceiptRefusal("recordPayment"), 30_000);
 });
 
 describe("ruling 11: shipped customer-credit payout doors", () => {
-  test.each(["request", "approve", "execute"] as const)(
-    "%s refuses with zero writes to the retained position, payment, ledger and all other app tables", async door => {
-      const w = await world(door);
-      const requestId = await w.t.run(async ctx => {
-        const requester = await ctx.db.insert("users", { clerkId: `historical-${door}`, email: "history@example.test" });
-        return ctx.db.insert("retainedCreditRefundRequests", {
-          orgId: w.orgId, receiptMovementId: w.movement._id, positionId: w.position._id,
-          customerId: w.customerId, currency: "JOD", amountMinor: 1_000, method: "BANK_TRANSFER",
-          reason: "Historical request", status: door === "execute" ? "APPROVED" : "PENDING",
-          requestedBy: requester, createdAt: Date.now(), updatedAt: Date.now(),
-        });
+  async function checkCreditPayoutRefusal(door: "request" | "approve" | "execute") {
+    const w = await world(door);
+    const requestId = await w.t.run(async ctx => {
+      const requester = await ctx.db.insert("users", { clerkId: `historical-${door}`, email: "history@example.test" });
+      return ctx.db.insert("retainedCreditRefundRequests", {
+        orgId: w.orgId, receiptMovementId: w.movement._id, positionId: w.position._id,
+        customerId: w.customerId, currency: "JOD", amountMinor: 1_000, method: "BANK_TRANSFER",
+        reason: "Historical request", status: door === "execute" ? "APPROVED" : "PENDING",
+        requestedBy: requester, createdAt: Date.now(), updatedAt: Date.now(),
       });
-      const calls = {
-        request: () => w.asUser.mutation(api.retainedCreditRefunds.requestRetainedCreditRefund, {
-          orgId: w.orgId, receiptMovementId: w.movement._id, amountMinor: 1_000,
-          method: "BANK_TRANSFER", reason: "Customer asks for credit back",
-        }),
-        approve: () => w.asUser.mutation(api.retainedCreditRefunds.respondToRetainedCreditRefund, {
-          orgId: w.orgId, requestId, status: "APPROVED", idempotencyKey: "approve-credit",
-        }),
-        execute: () => w.asUser.mutation(api.retainedCreditRefunds.executeRetainedCreditRefund, {
-          orgId: w.orgId, requestId, bankAccountId: w.bankAccountId, reference: "RT11",
-          paidAt: Date.now(), idempotencyKey: "execute-credit",
-        }),
-      };
-      await refuses(w, calls[door], "CUSTOMER_CREDIT_PAYOUT_DISABLED");
-    }, 30_000,
-  );
+    });
+    const calls = {
+      request: () => w.asUser.mutation(api.retainedCreditRefunds.requestRetainedCreditRefund, {
+        orgId: w.orgId, receiptMovementId: w.movement._id, amountMinor: 1_000,
+        method: "BANK_TRANSFER", reason: "Customer asks for credit back",
+      }),
+      approve: () => w.asUser.mutation(api.retainedCreditRefunds.respondToRetainedCreditRefund, {
+        orgId: w.orgId, requestId, status: "APPROVED", idempotencyKey: "approve-credit",
+      }),
+      execute: () => w.asUser.mutation(api.retainedCreditRefunds.executeRetainedCreditRefund, {
+        orgId: w.orgId, requestId, bankAccountId: w.bankAccountId, reference: "RT11",
+        paidAt: Date.now(), idempotencyKey: "execute-credit",
+      }),
+    };
+    await refuses(w, calls[door], "CUSTOMER_CREDIT_PAYOUT_DISABLED");
+  }
+  test("request refuses with zero writes to the retained position, payment, ledger and all other app tables", () => checkCreditPayoutRefusal("request"), 30_000);
+  test("approve refuses with zero writes to the retained position, payment, ledger and all other app tables", () => checkCreditPayoutRefusal("approve"), 30_000);
+  test("execute refuses with zero writes to the retained position, payment, ledger and all other app tables", () => checkCreditPayoutRefusal("execute"), 30_000);
 });
 
 describe("ruling 11: competing post-completion receipt doors", () => {
-  test.each(["newDebt", "installments", "directPayment", "legacyPayment", "credit", "registerCheque", "depositCheque", "clearCheque", "replaceCheque"] as const)(
-    "%s cannot use legacy sale debt and changes no app table", async door => {
-      const w = await world(door);
-      // A pre-containment debt and instrument: seed the historical linkage after creating
-      // a legitimate standalone debt. The door under test must refuse that linkage too.
-      const receivableId = await w.asUser.mutation(api.collections.createReceivable, {
-        orgId: w.orgId, customerId: w.customerId, sourceType: "OTHER", title: "Historical debt",
-        amount: 100, dueDate: Date.now(), creditSystemKey: "MISCELLANEOUS_INCOME", idempotencyKey: `debt-${door}`,
-      });
-      const chequeId = await w.asUser.mutation(api.collections.registerCheque, {
-        orgId: w.orgId, customerId: w.customerId, receivableId, bank: "Customer bank", chequeNumber: door,
-        chequeDate: Date.now(), amount: 1,
-      });
-      await w.t.run(async ctx => {
-        await ctx.db.patch(receivableId, { saleId: w.saleId });
-        await ctx.db.patch(chequeId, { saleId: w.saleId });
-      });
-      const target = { orgId: w.orgId, customerId: w.customerId, saleId: w.saleId };
-      const payment = { orgId: w.orgId, customerId: w.customerId, amount: 1,
-        method: "CASH" as const, paymentDate: Date.now(), idempotencyKey: door };
-      const calls = {
-        newDebt: () => w.asUser.mutation(api.collections.createReceivable, {
-          ...target, sourceType: "OTHER", title: "Duplicate sale debt", amount: 100,
-          dueDate: Date.now(), creditSystemKey: "MISCELLANEOUS_INCOME", idempotencyKey: "new-sale-debt",
-        }),
-        installments: () => w.asUser.mutation(api.collections.createInstallmentPlan, {
-          ...target, title: "Duplicate sale installments", totalAmount: 100, installmentCount: 2,
-          firstDueDate: Date.now(), creditSystemKey: "MISCELLANEOUS_INCOME", idempotencyKey: "new-sale-plan",
-        }),
-        directPayment: () => w.asUser.mutation(api.collections.recordPayment, { ...payment, saleId: w.saleId }),
-        legacyPayment: () => w.asUser.mutation(api.collections.recordPayment, { ...payment, receivableId }),
-        credit: () => w.asUser.mutation(api.collections.applyRetainedCredit, {
-          orgId: w.orgId, receivableId, receiptMovementId: w.movement._id, requestedAmount: 1, idempotencyKey: "credit",
-        }),
-        registerCheque: () => w.asUser.mutation(api.collections.registerCheque, {
-          ...target, bank: "Customer bank", chequeNumber: "new-sale-cheque", chequeDate: Date.now(), amount: 1,
-        }),
-        depositCheque: () => w.asUser.mutation(api.collections.depositCheque, { orgId: w.orgId, chequeId }),
-        clearCheque: () => w.asUser.mutation(api.collections.clearCheque, {
-          orgId: w.orgId, chequeId, bankAccountId: w.bankAccountId, idempotencyKey: "clear-legacy-sale",
-        }),
-        replaceCheque: () => w.asUser.mutation(api.collections.replaceCheque, {
-          orgId: w.orgId, chequeId, bank: "Customer bank", chequeNumber: "replacement", chequeDate: Date.now(), amount: 1,
-        }),
-      };
-      await refuses(w, calls[door], door === "newDebt" || door === "installments"
-        ? "SALE_DEBT_COMPETING_RECEIVABLE_REFUSED" : "SALE_DEBT_RECEIPT_REFUSED");
-    }, 30_000,
-  );
-  test.each(["create", "settle"] as const)("payment link %s is dark with no state change", async door => {
-    const w = await world(`link-${door}`);
-    const intentId = await w.t.run(ctx => ctx.db.insert("paymentIntents", {
-      orgId: w.orgId, customerId: w.customerId, amountMinor: 1_000, currency: "JOD", provider: "tap",
-      status: "PENDING", idempotencyKey: "historical-link", createdBy: w.userId, createdAt: Date.now(), updatedAt: Date.now(),
-    }));
-    await refuses(w, () => door === "create" ? w.asUser.mutation(api.paymentIntents.create, {
-      orgId: w.orgId, customerId: w.customerId, saleId: w.saleId,
-      amountMinor: 1_000, currency: "JOD", provider: "tap", idempotencyKey: "new-link",
-    }) : w.asUser.mutation(api.paymentIntents.markSettled, {
-      orgId: w.orgId, intentId, idempotencyKey: "settle-link",
-    }), "PAYMENT_LINKS_DISABLED");
-  }, 30_000);
+  async function checkCompetingReceiptRefusal(door: "newDebt" | "installments" | "directPayment" | "legacyPayment" | "credit" | "registerCheque" | "depositCheque" | "clearCheque" | "replaceCheque") {
+    const w = await world(door);
+    // A pre-containment debt and instrument: seed the historical linkage after creating
+    // a legitimate standalone debt. The door under test must refuse that linkage too.
+    const receivableId = await w.asUser.mutation(api.collections.createReceivable, {
+      orgId: w.orgId, customerId: w.customerId, sourceType: "OTHER", title: "Historical debt",
+      amount: 100, dueDate: Date.now(), creditSystemKey: "MISCELLANEOUS_INCOME", idempotencyKey: `debt-${door}`,
+    });
+    const chequeId = await w.asUser.mutation(api.collections.registerCheque, {
+      orgId: w.orgId, customerId: w.customerId, receivableId, bank: "Customer bank", chequeNumber: door,
+      chequeDate: Date.now(), amount: 1,
+    });
+    await w.t.run(async ctx => {
+      await ctx.db.patch(receivableId, { saleId: w.saleId });
+      await ctx.db.patch(chequeId, { saleId: w.saleId });
+    });
+    const target = { orgId: w.orgId, customerId: w.customerId, saleId: w.saleId };
+    const payment = { orgId: w.orgId, customerId: w.customerId, amount: 1,
+      method: "CASH" as const, paymentDate: Date.now(), idempotencyKey: door };
+    const calls = {
+      newDebt: () => w.asUser.mutation(api.collections.createReceivable, {
+        ...target, sourceType: "OTHER", title: "Duplicate sale debt", amount: 100,
+        dueDate: Date.now(), creditSystemKey: "MISCELLANEOUS_INCOME", idempotencyKey: "new-sale-debt",
+      }),
+      installments: () => w.asUser.mutation(api.collections.createInstallmentPlan, {
+        ...target, title: "Duplicate sale installments", totalAmount: 100, installmentCount: 2,
+        firstDueDate: Date.now(), creditSystemKey: "MISCELLANEOUS_INCOME", idempotencyKey: "new-sale-plan",
+      }),
+      directPayment: () => w.asUser.mutation(api.collections.recordPayment, { ...payment, saleId: w.saleId }),
+      legacyPayment: () => w.asUser.mutation(api.collections.recordPayment, { ...payment, receivableId }),
+      credit: () => w.asUser.mutation(api.collections.applyRetainedCredit, {
+        orgId: w.orgId, receivableId, receiptMovementId: w.movement._id, requestedAmount: 1, idempotencyKey: "credit",
+      }),
+      registerCheque: () => w.asUser.mutation(api.collections.registerCheque, {
+        ...target, bank: "Customer bank", chequeNumber: "new-sale-cheque", chequeDate: Date.now(), amount: 1,
+      }),
+      depositCheque: () => w.asUser.mutation(api.collections.depositCheque, { orgId: w.orgId, chequeId }),
+      clearCheque: () => w.asUser.mutation(api.collections.clearCheque, {
+        orgId: w.orgId, chequeId, bankAccountId: w.bankAccountId, idempotencyKey: "clear-legacy-sale",
+      }),
+      replaceCheque: () => w.asUser.mutation(api.collections.replaceCheque, {
+        orgId: w.orgId, chequeId, bank: "Customer bank", chequeNumber: "replacement", chequeDate: Date.now(), amount: 1,
+      }),
+    };
+    await refuses(w, calls[door], door === "newDebt" || door === "installments"
+      ? "SALE_DEBT_COMPETING_RECEIVABLE_REFUSED" : "SALE_DEBT_RECEIPT_REFUSED");
+  }
+  test("newDebt cannot use legacy sale debt and changes no app table", () => checkCompetingReceiptRefusal("newDebt"), 30_000);
+  test("installments cannot use legacy sale debt and changes no app table", () => checkCompetingReceiptRefusal("installments"), 30_000);
+  test("directPayment cannot use legacy sale debt and changes no app table", () => checkCompetingReceiptRefusal("directPayment"), 30_000);
+  test("legacyPayment cannot use legacy sale debt and changes no app table", () => checkCompetingReceiptRefusal("legacyPayment"), 30_000);
+  test("credit cannot use legacy sale debt and changes no app table", () => checkCompetingReceiptRefusal("credit"), 30_000);
+  test("registerCheque cannot use legacy sale debt and changes no app table", () => checkCompetingReceiptRefusal("registerCheque"), 30_000);
+  test("depositCheque cannot use legacy sale debt and changes no app table", () => checkCompetingReceiptRefusal("depositCheque"), 30_000);
+  test("clearCheque cannot use legacy sale debt and changes no app table", () => checkCompetingReceiptRefusal("clearCheque"), 30_000);
+  test("replaceCheque cannot use legacy sale debt and changes no app table", () => checkCompetingReceiptRefusal("replaceCheque"), 30_000);
+  async function checkPaymentLinkRefusal(door: "create" | "settle") {
+  const w = await world(`link-${door}`);
+  const intentId = await w.t.run(ctx => ctx.db.insert("paymentIntents", {
+    orgId: w.orgId, customerId: w.customerId, amountMinor: 1_000, currency: "JOD", provider: "tap",
+    status: "PENDING", idempotencyKey: "historical-link", createdBy: w.userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+  await refuses(w, () => door === "create" ? w.asUser.mutation(api.paymentIntents.create, {
+    orgId: w.orgId, customerId: w.customerId, saleId: w.saleId,
+    amountMinor: 1_000, currency: "JOD", provider: "tap", idempotencyKey: "new-link",
+  }) : w.asUser.mutation(api.paymentIntents.markSettled, {
+    orgId: w.orgId, intentId, idempotencyKey: "settle-link",
+  }), "PAYMENT_LINKS_DISABLED");
+}
+  test("payment link create is dark with no state change", () => checkPaymentLinkRefusal("create"), 30_000);
+  test("payment link settle is dark with no state change", () => checkPaymentLinkRefusal("settle"), 30_000);
 });
 
-test.each(["add", "update", "remove"] as const)("retired manual cashbook %s refuses with every app table unchanged", async door => {
+async function checkCashbookRefusal(door: "add" | "update" | "remove") {
   const w = await world(`cashbook-${door}`);
   const transactionId = await w.t.run(ctx => ctx.db.insert("transactions", {
     orgId: w.orgId, type: "IN", amount: 100, date: Date.now(), category: "OTHER", description: "Historical cashbook row",
@@ -206,7 +219,10 @@ test.each(["add", "update", "remove"] as const)("retired manual cashbook %s refu
   await expect(calls[door]()).rejects.toThrow(/view only and is not the General Ledger/);
   expect(await dbSnapshot(w.t, TABLES)).toEqual(before);
   expect(await w.t.run(ctx => ctx.db.system.query("_scheduled_functions").collect())).toEqual(scheduledBefore);
-}, 30_000);
+}
+test("retired manual cashbook add refuses with every app table unchanged", () => checkCashbookRefusal("add"), 30_000);
+test("retired manual cashbook update refuses with every app table unchanged", () => checkCashbookRefusal("update"), 30_000);
+test("retired manual cashbook remove refuses with every app table unchanged", () => checkCashbookRefusal("remove"), 30_000);
 
 /** Owner 2026-10-19: FC-cheque recovery stays enabled, unlike customer cleared-cheque return.
  * Same 12,500 JOD / zero-deposit opening as the four SCRUM-486 finance-cheque certification rows.
@@ -284,7 +300,7 @@ test("enabled FC-cheque return restores bank zero and financier debt, voids paym
   expect(await dbSnapshot(s.t, TABLES)).toEqual(after);
 }, 60_000);
 
-test.each(["viewOnly", "confirmOnly", "foreign"] as const)("enabled FC-cheque return refuses %s authority with zero root/scheduler writes", async actor => {
+async function checkFinanceReturnAuthority(actor: "viewOnly" | "confirmOnly" | "foreign") {
   const s = await financeCheque(`rt11-fc-${actor}`);
   if (actor !== "foreign") {
     await refuses(s, () => s.actors[actor].as.mutation(api.applications.returnFinanceDisbursementCheque, s.returnArgs), "FORBIDDEN");
@@ -300,4 +316,7 @@ test.each(["viewOnly", "confirmOnly", "foreign"] as const)("enabled FC-cheque re
   });
   await refuses(s, () => s.t.withIdentity({ subject: "rt11-fc-foreign-owner" }).mutation(
     api.applications.returnFinanceDisbursementCheque, { ...s.returnArgs, orgId }), "FINANCE_RETURN_NOT_FOUND");
-}, 60_000);
+}
+test("enabled FC-cheque return refuses viewOnly authority with zero root/scheduler writes", () => checkFinanceReturnAuthority("viewOnly"), 60_000);
+test("enabled FC-cheque return refuses confirmOnly authority with zero root/scheduler writes", () => checkFinanceReturnAuthority("confirmOnly"), 60_000);
+test("enabled FC-cheque return refuses foreign authority with zero root/scheduler writes", () => checkFinanceReturnAuthority("foreign"), 60_000);

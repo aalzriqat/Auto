@@ -1,0 +1,50 @@
+{
+  "id": "rt11-competing-replacecheque",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-pr696-ruling11",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "collections.replaceCheque",
+      "input": {
+        "historicalSaleCheque": true,
+        "amount": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.schedulerChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.code",
+      "value": "SALE_DEBT_RECEIPT_REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    }
+  ],
+  "matrixRow": "RT11",
+  "impl": {
+    "file": "convex/pilotRouteMatrix.test.ts",
+    "testName": "replaceCheque cannot use legacy sale debt and changes no app table"
+  },
+  "fingerprint": "1c5b7f04d461023097be096a6ae79acf0e7077c209ed3633286eaad9eb21c3cc"
+}

@@ -1,0 +1,49 @@
+{
+  "id": "rt11-corrupt-cancel-sale-held",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-pr696-ruling11",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.update",
+      "input": {
+        "caseId": "CANCEL-SALE",
+        "ownership": "STOCK",
+        "currency": "JOD",
+        "approvedMinor": 12500000,
+        "corruptWitness": "heldDepositAmount"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "callback.status",
+      "value": "FAIL"
+    },
+    {
+      "observable": "callback.failureWitness",
+      "value": "heldAmount"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    }
+  ],
+  "matrixRow": "RT11",
+  "impl": {
+    "file": "convex/pilotRouteRehearsalPublic.test.ts",
+    "testName": "CANCEL-SALE cannot certify a zeroed held-deposit amount despite balanced books"
+  },
+  "fingerprint": "107cb24579de21a6afbf97b86d7688db2c18c8bbe1aeaab24e84ca03a9f8620d"
+}

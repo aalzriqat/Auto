@@ -1,0 +1,52 @@
+{
+  "id": "rt11-public-cancel-closed",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-pr696-ruling11",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.cancelApplication",
+      "input": {
+        "caseId": "CANCEL-CLOSED",
+        "ownership": "STOCK",
+        "currency": "JOD",
+        "approvedMinor": 12500000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "callback.status",
+      "value": "PASS"
+    },
+    {
+      "observable": "callback.literalJournals",
+      "value": true
+    },
+    {
+      "observable": "callback.debtAndFundsPreserved",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    }
+  ],
+  "matrixRow": "RT11",
+  "impl": {
+    "file": "convex/pilotRouteRehearsalPublic.test.ts",
+    "testName": "registered CANCEL-CLOSED preserves literal journals, subledger debt and paid funds in the harness"
+  },
+  "fingerprint": "4afd1392faedee0ee2ebc3d02fa97a0ae7422f61a7de3f60d44b2eaff1ff3730"
+}

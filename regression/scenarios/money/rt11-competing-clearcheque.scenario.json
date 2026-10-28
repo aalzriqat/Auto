@@ -1,0 +1,49 @@
+{
+  "id": "rt11-competing-clearcheque",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-pr696-ruling11",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "collections.clearCheque",
+      "input": {
+        "historicalSaleCheque": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.schedulerChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.code",
+      "value": "SALE_DEBT_RECEIPT_REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    }
+  ],
+  "matrixRow": "RT11",
+  "impl": {
+    "file": "convex/pilotRouteMatrix.test.ts",
+    "testName": "clearCheque cannot use legacy sale debt and changes no app table"
+  },
+  "fingerprint": "768e9d0f05ce5ef26bad9f6c3a3f8725608aacb15137d290c70696028a5d2c8d"
+}

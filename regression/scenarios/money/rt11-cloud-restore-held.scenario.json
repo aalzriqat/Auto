@@ -1,0 +1,90 @@
+{
+  "id": "rt11-cloud-restore-held",
+  "domain": "money",
+  "level": "cloud",
+  "status": "candidate",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-pr696-ruling11",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.confirmDisbursement",
+      "input": {
+        "amountMinor": 12500000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "dealUnwind.startDealUnwind",
+      "input": {
+        "customerPaymentDisposition": "RETAIN_CREDIT"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "dealUnwind.recordDealUnwindForwardReturn",
+      "input": {
+        "amountMinor": 1575000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "dealUnwind.finishDealUnwind",
+      "input": {
+        "customerCreditMinor": 0,
+        "customerPaymentDisposition": "RETAIN_CREDIT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "deposit.status",
+      "value": "HELD"
+    },
+    {
+      "observable": "deposit.holdActive",
+      "value": true
+    },
+    {
+      "observable": "deposit.amountMinor",
+      "value": 200000
+    },
+    {
+      "observable": "deposit.pendingDecision",
+      "value": true
+    },
+    {
+      "observable": "financier.paymentStatus",
+      "value": "VOIDED"
+    },
+    {
+      "observable": "bank.balanceMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    }
+  ],
+  "matrixRow": "RT11",
+  "candidateIssue": "SCRUM-762",
+  "candidateReason": "Cloud case RESTORE-HELD in runPilotRouteRehearsalCases. Harness proof is separate; await trusted exact-SHA disposable-backend execution and runner binding under SCRUM-762.",
+  "fingerprint": "739f205f6f8b1f39312ff9975b366e94c7adde61bbb38ed95ce8707cf6c196e0"
+}

@@ -1,0 +1,51 @@
+{
+  "id": "rt11-credit-execute",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-pr696-ruling11",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "retainedCreditRefunds.executeRetainedCreditRefund",
+      "input": {
+        "amountMinor": 1000,
+        "method": "BANK_TRANSFER",
+        "historicalRequest": "APPROVED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.schedulerChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.code",
+      "value": "CUSTOMER_CREDIT_PAYOUT_DISABLED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    }
+  ],
+  "matrixRow": "RT11",
+  "impl": {
+    "file": "convex/pilotRouteMatrix.test.ts",
+    "testName": "execute refuses with zero writes to the retained position, payment, ledger and all other app tables"
+  },
+  "fingerprint": "d3b89dfe3963a0d3555cd0758e70d632a9d2df8b2694ff890dc7a59122008354"
+}

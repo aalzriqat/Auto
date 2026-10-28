@@ -20,6 +20,7 @@ type CaseId = typeof IDS[number];
 /** Run the registered cloud callbacks through real public handlers in convex-test.
  * This checks callback construction, not platform, OCC, production or browser behavior.
  */
+// Literal test titles bind one regression record per cell; the shared bodies keep the same assertions.
 type Fault = "held" | "bank" | "debt" | "payment" | "allocations" | "settlement";
 async function execute(wanted: CaseId, fault?: Fault) {
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
@@ -78,27 +79,31 @@ async function execute(wanted: CaseId, fault?: Fault) {
   return results[0];
 }
 
-test.each(IDS)("registered %s preserves literal journals, subledger debt and paid funds in the harness", async id => {
+async function checkRegisteredCallback(id: "CANCEL-SALE" | "CANCEL-CLOSED" | "RESTORE-HELD" | "RETURN-FC-CHEQUE") {
   const result = await execute(id);
   expect(result, JSON.stringify(result)).toMatchObject({ id, status: "PASS" });
-}, 60_000);
+}
+test("registered CANCEL-SALE preserves literal journals, subledger debt and paid funds in the harness", () => checkRegisteredCallback("CANCEL-SALE"), 60_000);
+test("registered CANCEL-CLOSED preserves literal journals, subledger debt and paid funds in the harness", () => checkRegisteredCallback("CANCEL-CLOSED"), 60_000);
+test("registered RESTORE-HELD preserves literal journals, subledger debt and paid funds in the harness", () => checkRegisteredCallback("RESTORE-HELD"), 60_000);
+test("registered RETURN-FC-CHEQUE preserves literal journals, subledger debt and paid funds in the harness", () => checkRegisteredCallback("RETURN-FC-CHEQUE"), 60_000);
 
-test.each(HELD_IDS)("%s cannot certify a zeroed held-deposit amount despite balanced books", async id => {
+async function checkHeldDepositWitness(id: "CANCEL-SALE" | "CANCEL-CLOSED" | "RESTORE-HELD") {
   const result = await execute(id, "held");
   expect(result).toMatchObject({ id, status: "FAIL" });
   expect(result.detail).toMatch(/amount|survives/);
-}, 60_000);
+}
+test("CANCEL-SALE cannot certify a zeroed held-deposit amount despite balanced books", () => checkHeldDepositWitness("CANCEL-SALE"), 60_000);
+test("CANCEL-CLOSED cannot certify a zeroed held-deposit amount despite balanced books", () => checkHeldDepositWitness("CANCEL-CLOSED"), 60_000);
+test("RESTORE-HELD cannot certify a zeroed held-deposit amount despite balanced books", () => checkHeldDepositWitness("RESTORE-HELD"), 60_000);
 
-test.each([
-  ["bank", "native bank balance"],
-  ["debt", "literal collectible financier receivable"],
-  ["payment", "RETURN-FC-CHEQUE payment voided"],
-  ["allocations", "RETURN-FC-CHEQUE allocations reversed in full"],
-  ["settlement", "RETURN-FC-CHEQUE settlement reopened"],
-] as const)(
-  "RETURN-FC-CHEQUE refuses a corrupt %s witness after the return", async (fault, label) => {
-    const result = await execute("RETURN-FC-CHEQUE", fault);
-    expect(result).toMatchObject({ id: "RETURN-FC-CHEQUE", status: "FAIL" });
-    expect(result.detail).toContain(label);
-  }, 60_000,
-);
+async function checkFinanceReturnWitness(fault: "bank" | "debt" | "payment" | "allocations" | "settlement", label: string) {
+  const result = await execute("RETURN-FC-CHEQUE", fault);
+  expect(result).toMatchObject({ id: "RETURN-FC-CHEQUE", status: "FAIL" });
+  expect(result.detail).toContain(label);
+}
+test("RETURN-FC-CHEQUE refuses a corrupt bank witness after the return", () => checkFinanceReturnWitness("bank", "native bank balance"), 60_000);
+test("RETURN-FC-CHEQUE refuses a corrupt debt witness after the return", () => checkFinanceReturnWitness("debt", "literal collectible financier receivable"), 60_000);
+test("RETURN-FC-CHEQUE refuses a corrupt payment witness after the return", () => checkFinanceReturnWitness("payment", "RETURN-FC-CHEQUE payment voided"), 60_000);
+test("RETURN-FC-CHEQUE refuses a corrupt allocations witness after the return", () => checkFinanceReturnWitness("allocations", "RETURN-FC-CHEQUE allocations reversed in full"), 60_000);
+test("RETURN-FC-CHEQUE refuses a corrupt settlement witness after the return", () => checkFinanceReturnWitness("settlement", "RETURN-FC-CHEQUE settlement reopened"), 60_000);
