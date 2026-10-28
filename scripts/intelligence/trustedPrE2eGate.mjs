@@ -1,4 +1,5 @@
 // SCRUM-757. This module is loaded exclusively from the default-branch revision.
+import { compareCodeUnits } from "../contractSkew/compareCodeUnits.mjs";
 export const PR_E2E_CHECK = "authenticated-pr-e2e";
 const definition = (file) =>
   /^playwright\/tests\/.*\.(?:spec|setup)\.[cm]?[jt]sx?$/.test(file);
@@ -22,8 +23,8 @@ export function planPrE2e(changedFiles, mainFiles) {
     reason: inScope
       ? "Full trusted authenticated suite required for non-documentation or unavailable impact."
       : "Out of scope: changes contain documentation Markdown only.",
-    mainDefinitions: [...new Set(mainFiles.filter(definition))].sort(),
-    changedDefinitions: [...new Set(changedFiles.filter(definition))].sort(),
+    mainDefinitions: [...new Set(mainFiles.filter(definition))].sort(compareCodeUnits),
+    changedDefinitions: [...new Set(changedFiles.filter(definition))].sort(compareCodeUnits),
   };
 }
 
@@ -72,8 +73,8 @@ export function executionEvidence(report, discovery, identity) {
   const actual = collectedTests(report);
   const expected = collectedTests(discovery);
   if (
-    JSON.stringify(actual.map((entry) => entry.key).sort()) !==
-    JSON.stringify(expected.map((entry) => entry.key).sort())
+    JSON.stringify(actual.map((entry) => entry.key).sort(compareCodeUnits)) !==
+    JSON.stringify(expected.map((entry) => entry.key).sort(compareCodeUnits))
   )
     throw new Error("Executed tests differ from trusted discovery.");
   if (!Array.isArray(report.errors) || report.errors.length)
@@ -109,7 +110,7 @@ export function executionEvidence(report, discovery, identity) {
     passed: actual.length,
     flaky,
     skipped: 0,
-    executedDefinitions: [...new Set(actual.map((entry) => entry.file))].sort(),
+    executedDefinitions: [...new Set(actual.map((entry) => entry.file))].sort(compareCodeUnits),
   };
 }
 

@@ -25,7 +25,9 @@ jobs:
       - name: Checkout immutable default-branch judge
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ github.workflow_sha }}
+          # pull_request_target checks out the BASE branch commit by default
+          # (GITHUB_SHA); never name a PR ref. The CLI refuses unless HEAD equals
+          # GITHUB_WORKFLOW_SHA.
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:

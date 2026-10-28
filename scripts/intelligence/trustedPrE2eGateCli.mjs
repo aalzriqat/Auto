@@ -6,6 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { resolveGit } from "../contractSkew/gitExecutable.mjs";
 import {
   executionEvidence,
   planPrE2e,
@@ -22,14 +23,18 @@ const safeJson = (value) =>
 
 /** @param {string} mode @param {Record<string, string | undefined>} [env] @param {typeof fetch} [fetchImpl] */
 export async function runGate(mode, env = process.env, fetchImpl = fetch) {
-  const git = (...args) =>
-    execFileSync("git", args, {
+  // Fixed absolute git path: no PATH lookup (Sonar S4036).
+  const gitPath = resolveGit();
+  const git = (...args) => {
+    if (!gitPath) throw new Error("git executable not found at a fixed path.");
+    return execFileSync(gitPath, args, {
       cwd: env.G5_REPO_ROOT ?? process.cwd(),
       encoding: "utf8",
       timeout: 60_000,
       maxBuffer: 8 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
+  };
   const controllerSha = env.GITHUB_WORKFLOW_SHA;
   if (!sha(controllerSha) || git("rev-parse", "HEAD") !== controllerSha)
     throw new Error("Trusted controller checkout mismatch.");

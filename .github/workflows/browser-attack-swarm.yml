@@ -30,7 +30,9 @@ concurrency:
 jobs:
   e2e-gate-begin:
     name: authenticated-pr-e2e-start
-    if: github.event.workflow_run.event == 'pull_request'
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
@@ -394,7 +396,12 @@ jobs:
   candidate-source:
     name: exact-candidate-source-data
     needs: prepare
-    if: needs.prepare.result == 'success'
+    # Same-repository only: the exact candidate is archived as data for jobs
+    # that hold credentials, never for a fork's run.
+    if: >-
+      needs.prepare.result == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -2337,7 +2344,10 @@ jobs:
   e2e-gate-finish:
     name: authenticated-pr-e2e-publish
     needs: [e2e-gate-begin, prepare, candidate-build, trusted-e2e]
-    if: always() && github.event.workflow_run.event == 'pull_request'
+    if: >-
+      always() &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:

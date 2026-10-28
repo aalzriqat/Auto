@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const load = () => import("./trustedPrE2eGate.mjs");
@@ -271,5 +272,27 @@ describe("SCRUM-757 PR verdict", () => {
         evidence: gate.executionEvidence(report(), report(), identity),
       }).conclusion,
     ).toBe("success");
+  });
+
+  it("orders definitions by UTF-16 code unit, never by locale or insertion order (S2871)", async () => {
+    const gate = await load();
+    const plan = gate.planPrE2e(
+      ["playwright/tests/b.spec.ts", "playwright/tests/B.spec.ts", "playwright/tests/a.spec.ts"],
+      ["playwright/tests/b.spec.ts", "playwright/tests/B.spec.ts", "playwright/tests/a.spec.ts"],
+    );
+    expect(plan.mainDefinitions).toEqual([
+      "playwright/tests/B.spec.ts",
+      "playwright/tests/a.spec.ts",
+      "playwright/tests/b.spec.ts",
+    ]);
+    expect(plan.changedDefinitions).toEqual(plan.mainDefinitions);
+  });
+
+  it("has no comparator-less sort() in the judge module (Sonar S2871)", () => {
+    const source = readFileSync(
+      new URL("./trustedPrE2eGate.mjs", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toMatch(/\.sort\(\s*\)/);
   });
 });

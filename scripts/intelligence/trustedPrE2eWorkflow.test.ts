@@ -138,11 +138,11 @@ describe("SCRUM-757 workflow security and coverage wiring", () => {
       listener.jobs.admission.steps.find((step) =>
         step.uses?.startsWith("actions/checkout@"),
       )?.with?.ref,
-    ).toBe("${{ github.workflow_sha }}");
+    ).toBeUndefined();
     const workflow = read("browser-attack-swarm");
     const finish = workflow.jobs["e2e-gate-finish"];
     expect(finish.if).toBe(
-      "always() && github.event.workflow_run.event == 'pull_request'",
+      "always() && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository",
     );
     expect(finish.needs).toContain("trusted-e2e");
     expect(finish.steps.at(-1)?.env?.E2E_RESULT).toBe(
@@ -160,6 +160,14 @@ describe("SCRUM-757 workflow security and coverage wiring", () => {
         (job) => (job as { name?: string }).name === "authenticated-pr-e2e",
       ),
     ).toBe(false);
+  });
+
+  it("guards every workflow_run checkout job with the same-repository condition (Sonar S7631)", () => {
+    const jobs = read("browser-attack-swarm").jobs;
+    for (const name of ["e2e-gate-begin", "candidate-source", "e2e-gate-finish"])
+      expect(jobs[name].if?.replace(/\s+/g, " "), name).toContain(
+        "github.event.workflow_run.head_repository.full_name == github.repository",
+      );
   });
 
   it("keeps full assertions and preserves discovery and execution separately from period setup", () => {

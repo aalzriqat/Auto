@@ -170,4 +170,13 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
       conclusion: "success",
     });
   });
+
+  it("starts git by a fixed absolute path, never a bare name resolved through PATH (Sonar S4036)", () => {
+    const source = readFileSync(
+      new URL("./trustedPrE2eGateCli.mjs", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toMatch(/execFileSync\(\s*"git"/);
+    expect(source).toContain("resolveGit");
+  });
 });

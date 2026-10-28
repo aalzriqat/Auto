@@ -218,7 +218,12 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // jobs (e2e-gate-begin, candidate-source, e2e-gate-finish) so the
     // disposable preview is deleted only after every other job (SCRUM-377).
     // A `needs` list only; no step, secret or checkout changed.
-    "5ad28e758fb249a856a572f87fd298700611c13bbe33a80606014ed91e713e1c",
+    // Sonar S7631 follow-up: e2e-gate-begin, candidate-source and e2e-gate-finish
+    // gain the same-repository `head_repository.full_name == github.repository`
+    // job condition, so a fork's workflow_run skips them. This only NARROWS where
+    // those jobs run; no step, secret, permission or checkout ref changed. Fork
+    // PRs are judged by the pull_request_target admission workflow instead.
+    "aa713e3deee8f66fa5f9ae532ac7190275a9c2c0a20ab51a942f2296e4ff27c3",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
