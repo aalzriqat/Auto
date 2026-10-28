@@ -109,7 +109,7 @@ export function SupplierPaymentDialog({
               </div>
             ) : (
               <p className="rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground" role="note">
-                {t("ConsignedPayableNoVat" as any)}
+                {t("PayableNoVatReclass" as any)}
               </p>
             )}
             <div className="space-y-1.5">

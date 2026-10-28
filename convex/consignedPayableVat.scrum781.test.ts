@@ -212,38 +212,6 @@ describe("SCRUM-781: a consigned supplier payable is settled gross, never with V
     expect((await settlementLines(t, orgId, payableId)).lines).toHaveLength(2);
   });
 
-  test("scenario consigned-supplier-payable-refuses-vat-and-settles-gross: VAT 2,000 is refused, then the same payable settles gross at taxAmount 0", async () => {
-    const t = newTest();
-    const { orgId, userId, as } = await seedOrg(t, "scenario");
-    const { payableId } = await seedConsignedPayable(t, orgId, userId);
-    const before = await writeSurface(t, orgId, payableId);
-
-    // Step 1: OWNER, org A, markPaid with taxAmount 2000 on the consigned payable.
-    const code = await refusalCode(
-      as.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "CASH", taxAmount: 2000 })
-    );
-    expect(code).toBe(CONSIGNED_VAT_CODE); // markPaid.withVat.refused
-    expect(await writeSurface(t, orgId, payableId)).toEqual(before); // markPaid.withVat.rowsWritten = 0
-    expect((await settlementLines(t, orgId, payableId)).events).toHaveLength(0); // markPaid.withVat.eventsPosted = 0
-
-    // Step 2: the same payable, taxAmount 0.
-    await as.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "CASH", taxAmount: 0 });
-
-    const payable = await t.run((ctx) => ctx.db.get(payableId));
-    expect(payable?.status).toBe("PAID");
-    expect(payable?.amountPaid).toBe(18000);
-    expect(payable?.taxAmount).toBe(0);
-    const { events, lines } = await settlementLines(t, orgId, payableId);
-    expect(events).toHaveLength(1);
-    expect(lines.filter((l) => l.key === "VAT_RECEIVABLE")).toHaveLength(0); // markPaid.gross.vatReceivableLines = 0
-    expect(lines).toHaveLength(2); // markPaid.gross.journalLines = 2
-    expect(lines.find((l) => l.key === "ACCOUNTS_PAYABLE_SUPPLIERS")?.debit).toBe(18_000_000);
-    expect(lines.find((l) => l.key === "CASH_ON_HAND")?.credit).toBe(18_000_000);
-    // Balanced, and no cost of sales was touched on a consignment.
-    expect(lines.reduce((sum, l) => sum + l.debit, 0)).toBe(lines.reduce((sum, l) => sum + l.credit, 0));
-    expect(lines.some((l) => l.key === "COST_OF_VEHICLES_SOLD")).toBe(false);
-  });
-
   test("a payable whose vehicle belongs to another organization is not provably owned: VAT is refused", async () => {
     const t = newTest();
     const { orgId, userId, as } = await seedOrg(t, "xorg");
@@ -472,4 +440,38 @@ describe("SCRUM-781: a consigned supplier payable is settled gross, never with V
     expect(lines.find((l) => l.key === "COST_OF_VEHICLES_SOLD")?.credit).toBe(1_000_000);
     expect(lines.some((l) => l.key === "VEHICLE_INVENTORY")).toBe(false);
   });
+});
+
+// Top level on purpose: scripts/regression/runLocalExecution.mjs anchors the bound title as ^title$, and Vitest matches the
+// full name including enclosing suites, so a nested scenario test would be skipped instead of executed.
+test("scenario consigned-supplier-payable-refuses-vat-and-settles-gross: VAT 2,000 is refused, then the same payable settles gross at taxAmount 0", async () => {
+  const t = newTest();
+  const { orgId, userId, as } = await seedOrg(t, "scenario");
+  const { payableId } = await seedConsignedPayable(t, orgId, userId);
+  const before = await writeSurface(t, orgId, payableId);
+
+  // Step 1: OWNER, org A, markPaid with taxAmount 2000 on the consigned payable.
+  const code = await refusalCode(
+    as.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "CASH", taxAmount: 2000 })
+  );
+  expect(code).toBe(CONSIGNED_VAT_CODE); // markPaid.withVat.refused
+  expect(await writeSurface(t, orgId, payableId)).toEqual(before); // markPaid.withVat.rowsWritten = 0
+  expect((await settlementLines(t, orgId, payableId)).events).toHaveLength(0); // markPaid.withVat.eventsPosted = 0
+
+  // Step 2: the same payable, taxAmount 0.
+  await as.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "CASH", taxAmount: 0 });
+
+  const payable = await t.run((ctx) => ctx.db.get(payableId));
+  expect(payable?.status).toBe("PAID");
+  expect(payable?.amountPaid).toBe(18000);
+  expect(payable?.taxAmount).toBe(0);
+  const { events, lines } = await settlementLines(t, orgId, payableId);
+  expect(events).toHaveLength(1);
+  expect(lines.filter((l) => l.key === "VAT_RECEIVABLE")).toHaveLength(0); // markPaid.gross.vatReceivableLines = 0
+  expect(lines).toHaveLength(2); // markPaid.gross.journalLines = 2
+  expect(lines.find((l) => l.key === "ACCOUNTS_PAYABLE_SUPPLIERS")?.debit).toBe(18_000_000);
+  expect(lines.find((l) => l.key === "CASH_ON_HAND")?.credit).toBe(18_000_000);
+  // Balanced, and no cost of sales was touched on a consignment.
+  expect(lines.reduce((sum, l) => sum + l.debit, 0)).toBe(lines.reduce((sum, l) => sum + l.credit, 0));
+  expect(lines.some((l) => l.key === "COST_OF_VEHICLES_SOLD")).toBe(false);
 });
