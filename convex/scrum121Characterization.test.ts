@@ -1,3 +1,11 @@
+// SCRUM-760 ruling 11 legacy-collection-refund opt-out: this suite drives the legacy collection REFUND request and approval
+// (collections.requestApproval / respondToApproval) as a FIXTURE or as the behaviour that returns when that door is activated.
+// The narrow pilot blocks the door by default, so the block is off here. The shipped state is asserted in
+// convex/legacyCollectionRefundContainment.test.ts; the census in scripts/legacyCollectionRefundOptOutCensus.test.ts allows only
+// the files listed there.
+vi.mock("./utils/legacyCollectionRefundContainment", async (importOriginal) =>
+  (await import("../test-utils/legacyCollectionRefundSwitches")).openLegacyCollectionRefund(await importOriginal()));
+
 /**
  * SCRUM-121A-PRE — the regression suite for collection target correlation and
  * cancellation authority.
@@ -43,7 +51,7 @@
  * individually and killed by the single named test above, run in isolation.
  */
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";

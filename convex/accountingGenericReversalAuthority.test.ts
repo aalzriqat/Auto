@@ -42,6 +42,13 @@ import {
 import { postReceiptOccurrence } from "./accounting/workflowHooks";
 import { reverseAccountingEvent } from "./accounting/reversals";
 
+// SCRUM-760 ruling 11 legacy-collection-refund opt-out: GR8 posts a COLLECTION_REFUND event through accountingLedger.post as the vehicle for a non-certified tuple.
+// The narrow pilot blocks that internal door by default, so the block is off here. The shipped state is asserted in
+// convex/legacyCollectionRefundContainment.test.ts; the census in scripts/legacyCollectionRefundOptOutCensus.test.ts allows only
+// the files listed there.
+vi.mock("./utils/legacyCollectionRefundContainment", async (importOriginal) =>
+  (await import("../test-utils/legacyCollectionRefundSwitches")).openLegacyCollectionRefund(await importOriginal()));
+
 /**
  * ⚠️ THE INSTRUMENT THAT ACTUALLY OBSERVES THE INVARIANT.
  *
