@@ -462,7 +462,8 @@ describe("renewBaseline", () => {
   });
 });
 
-describe("createImportClosure + gitCompare (real TypeScript, real git)", () => {
+// Real TypeScript programs: over vitest's 5 s default on the coverage-instrumented CI runner (SCRUM-866 round 10).
+describe("createImportClosure + gitCompare (real TypeScript, real git)", { timeout: 60_000 }, () => {
   const git = resolveGit();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-closure-"));
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -695,7 +696,8 @@ describe("renewal evidence CLI missing history (SCRUM-866 round 8)", () => {
 
 // SCRUM-866 round 5: what the compiler used to resolve imports, and the Convex function references that reach
 // other backend modules only through convex/_generated/api, were outside the closure.
-describe("closure also covers resolution inputs and Convex function references", () => {
+// Real TypeScript programs: over vitest's 5 s default on the coverage-instrumented CI runner (SCRUM-866 round 10).
+describe("closure also covers resolution inputs and Convex function references", { timeout: 60_000 }, () => {
   const git = resolveGit();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-closure2-"));
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -805,7 +807,8 @@ describe("closure also covers resolution inputs and Convex function references",
 
 // SCRUM-866 round 3 (seat findings at 873309fb): implicit inputs were not traversed, `_generated/api` and
 // `convex/server` were recognised by specifier text, and a function reference resolved to any existing prefix.
-describe("closure ownership is decided by the resolved module, and a function reference names its exact module", () => {
+// Real TypeScript programs: over vitest's 5 s default on the coverage-instrumented CI runner (SCRUM-866 round 10).
+describe("closure ownership is decided by the resolved module, and a function reference names its exact module", { timeout: 60_000 }, () => {
   const git = resolveGit();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-closure3-"));
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
