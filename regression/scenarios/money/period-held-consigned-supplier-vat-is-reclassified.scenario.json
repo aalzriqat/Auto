@@ -1,0 +1,51 @@
+{
+  "id": "period-held-consigned-supplier-vat-is-reclassified",
+  "fingerprint": "59fcbd8e0d7e97d02b28f52c514117e5ae9b7239306126a4770a2014b216c7fe",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum-782-seat2-round2",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM",
+        "org": "A"
+      },
+      "action": "accountingOutbox.dispatchDueOutboxWork",
+      "input": {
+        "dispatchState": "PERIOD_HELD",
+        "precedingValidHolds": 101,
+        "taxMinor": 2000000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "outbox.attempts",
+      "value": 1
+    },
+    {
+      "observable": "outbox.periodHeldControls",
+      "value": 101
+    },
+    {
+      "observable": "settlement.financialRowsWritten",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-773#c22401",
+      "digest": "f5fd390b6fc991ed9147c55bf122ecc91749b31ba865547088d95ba1fadd10e5"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedQueuedVat.scrum782.test.ts",
+    "testName": "cron recovery reaches consigned VAT beyond the first page of valid period holds"
+  },
+  "matrixRow": "SCRUM782-queued-consigned-payable-vat"
+}

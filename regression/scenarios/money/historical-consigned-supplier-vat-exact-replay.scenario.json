@@ -1,0 +1,52 @@
+{
+  "id": "historical-consigned-supplier-vat-exact-replay",
+  "fingerprint": "8229ae97bf6a953879744c25600288004ac93dc6356d261ae45461a7ee2d48eb",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum-782-seat2-round2",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM",
+        "org": "A"
+      },
+      "action": "accountingLedger.post",
+      "input": {
+        "eventType": "SUPPLIER_PAYMENT_SETTLED",
+        "history": "posted-taxed-settlement",
+        "currentOwnership": "SOURCED",
+        "taxMinor": 2000000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "posting.alreadyPosted",
+      "value": true
+    },
+    {
+      "observable": "settlement.financialRowsWritten",
+      "value": 0
+    },
+    {
+      "observable": "historical.vatReceivableMinor",
+      "value": 2000000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-773#c22401",
+      "digest": "f5fd390b6fc991ed9147c55bf122ecc91749b31ba865547088d95ba1fadd10e5"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedQueuedVat.scrum782.test.ts",
+    "testName": "historical taxed settlement exact replay through direct returns the posted occurrence"
+  },
+  "matrixRow": "SCRUM782-queued-consigned-payable-vat"
+}

@@ -3,10 +3,10 @@
  * quarantine visibly, without inventing input VAT or reducing COGS.
  * These are serial convex-test checks, not Convex runtime or OCC evidence.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { makeDue, quiesceScheduler, settleOutbox } from "../test-utils/outboxWork";
-import { api } from "./_generated/api";
+import { makeDue, quiesceScheduler, settleOutbox, withFrozenScheduler } from "../test-utils/outboxWork";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { enqueuePendingPost } from "./accountingOutbox";
@@ -66,7 +66,7 @@ async function legacyPayment(t: T, orgId: Id<"organizations">, userId: Id<"users
       payload: { payableId, sourcedFromName: "Supplier", amountMinor: 18_000_000, taxMinor: 2_000_000,
         currency: "JOD", paymentMethod: "CASH", costOrigin: "COGS" },
     };
-    return { vehicleId, payableId, cmd };
+    return { vehicleId, payableId, saleId, cmd };
   });
 }
 
@@ -167,6 +167,146 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
     expect(row?.dispatchState).toBeUndefined();
     expect(row?.holdKind).toBeUndefined();
     expect((await footprint(t, orgId)).lines).toEqual([]);
+  });
+
+  test.each(["drain", "cron"] as const)("already period-held consigned VAT reaches quarantine through automatic %s", async (door) => {
+    const t = newTest();
+    const { orgId, userId, periodId } = await seedOrg(t);
+    const bad = await legacyPayment(t, orgId, userId);
+    const zeroVat = await legacyPayment(t, orgId, userId);
+    const owned = await legacyPayment(t, orgId, userId);
+    zeroVat.cmd.payload.taxMinor = 0;
+    await t.run(async (ctx) => {
+      await ctx.db.delete(periodId);
+      await ctx.db.patch(zeroVat.payableId, { taxAmount: 0 });
+      await ctx.db.patch(owned.payableId, { saleId: undefined });
+      await ctx.db.patch(owned.vehicleId, { sourceType: "STOCK" });
+      for (const payment of [bad, zeroVat, owned]) {
+        await enqueuePendingPost(ctx, payment.cmd, "No open period when paid");
+        const row = await ctx.db.query("pendingAccountingEvents")
+          .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", payment.cmd.idempotencyKey)).unique();
+        if (!row) throw new Error("Fixture did not enqueue the payment");
+        await ctx.db.patch(row._id, {
+          dispatchState: "PERIOD_HELD", holdKind: "PERIOD", nextActionAt: undefined,
+          lastError: "Waiting to post: No open accounting period covers this date.",
+        });
+      }
+    });
+    const controlsBefore = await Promise.all([zeroVat, owned].map((p) => queuedRow(t, orgId, p.cmd.idempotencyKey)));
+    const payableBefore = await t.run((ctx) => ctx.db.get(bad.payableId));
+    const before = await footprint(t, orgId);
+
+    await withFrozenScheduler(async () => {
+      if (door === "drain") await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+      else await t.mutation(internal.accountingOutbox.dispatchDueOutboxWork, {});
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    });
+
+    const refused = await queuedRow(t, orgId, bad.cmd.idempotencyKey);
+    expect(refused).toMatchObject({ status: "PENDING", attempts: 1, payload: bad.cmd.payload });
+    expect(refused?.lastError).toMatch(REFUSAL);
+    expect(refused?.dispatchState).toBeUndefined();
+    expect(refused?.holdKind).toBeUndefined();
+    expect(await footprint(t, orgId)).toEqual(before);
+    expect(await t.run((ctx) => ctx.db.get(bad.payableId))).toEqual(payableBefore);
+    expect(await Promise.all([zeroVat, owned].map((p) => queuedRow(t, orgId, p.cmd.idempotencyKey)))).toEqual(controlsBefore);
+  });
+
+  test("cron recovery reaches consigned VAT beyond the first page of valid period holds", async () => {
+    const t = newTest();
+    const { orgId, userId, periodId } = await seedOrg(t);
+    const valid = await legacyPayment(t, orgId, userId);
+    const bad = await legacyPayment(t, orgId, userId);
+    valid.cmd.payload.taxMinor = 0;
+    await t.run(async (ctx) => {
+      await ctx.db.delete(periodId);
+      for (let index = 0; index < 101; index += 1) {
+        await ctx.db.insert("pendingAccountingEvents", {
+          ...valid.cmd, idempotencyKey: `valid-held-${index}`, kind: "POST", status: "PENDING",
+          attempts: 0, createdAt: Date.now(), dispatchState: "PERIOD_HELD", holdKind: "PERIOD",
+        });
+      }
+      await enqueuePendingPost(ctx, bad.cmd, "Legacy period hold");
+      const row = await ctx.db.query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", bad.cmd.idempotencyKey)).unique();
+      if (!row) throw new Error("Fixture did not enqueue the payment");
+      await ctx.db.patch(row._id, { dispatchState: "PERIOD_HELD", holdKind: "PERIOD" });
+    });
+    const before = await footprint(t, orgId);
+    await withFrozenScheduler(async () => {
+      await t.mutation(internal.accountingOutbox.dispatchDueOutboxWork, {});
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    });
+    expect(await queuedRow(t, orgId, bad.cmd.idempotencyKey)).toMatchObject({ attempts: 1 });
+    expect((await queuedRow(t, orgId, bad.cmd.idempotencyKey))?.lastError).toMatch(REFUSAL);
+    const held = await t.run((ctx) => ctx.db.query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING")).collect());
+    expect(held.filter((row) => row.dispatchState === "PERIOD_HELD")).toHaveLength(101);
+    expect(await footprint(t, orgId)).toEqual(before);
+  });
+
+  async function historicalTaxedReplay(door: "direct" | "outbox"): Promise<void> {
+    const t = newTest();
+    const { orgId, userId, periodId } = await seedOrg(t);
+    const { payableId, vehicleId, saleId, cmd } = await legacyPayment(t, orgId, userId);
+    // Seed a historical VAT journal through the real engine, then restore the
+    // consigned evidence. No production guard is mocked or disabled.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(payableId, { saleId: undefined });
+      await ctx.db.patch(vehicleId, { sourceType: "STOCK" });
+    });
+    const original = await t.run((ctx) => postAccountingEvent(ctx, cmd));
+    expect(original.alreadyPosted).toBe(false);
+    expect(await accountLines(t, orgId)).toEqual([
+      { key: "ACCOUNTS_PAYABLE_SUPPLIERS", debit: 18_000_000, credit: 0 },
+      { key: "CASH_ON_HAND", debit: 0, credit: 18_000_000 },
+      { key: "VAT_RECEIVABLE", debit: 2_000_000, credit: 0 },
+      { key: "COST_OF_VEHICLES_SOLD", debit: 0, credit: 2_000_000 },
+    ]);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(payableId, { saleId });
+      await ctx.db.patch(vehicleId, { sourceType: "SOURCED" });
+      await ctx.db.delete(periodId);
+      if (door === "outbox") await enqueuePendingPost(ctx, cmd, "Legacy duplicate");
+    });
+    const before = await footprint(t, orgId);
+    if (door === "direct") {
+      expect(await t.run((ctx) => postAccountingEvent(ctx, cmd))).toEqual({ ...original, alreadyPosted: true });
+    } else {
+      await settleOutbox(t, orgId);
+      expect(await queuedRow(t, orgId, cmd.idempotencyKey)).toMatchObject({
+        status: "POSTED", attempts: 1, resultEventId: original.eventId,
+      });
+    }
+    // Idempotency acknowledges history; it does not repair the historical VAT.
+    expect(await footprint(t, orgId)).toEqual(before);
+  }
+
+  test("historical taxed settlement exact replay through direct returns the posted occurrence", () => historicalTaxedReplay("direct"));
+  test("historical taxed settlement exact replay through outbox returns the posted occurrence", () => historicalTaxedReplay("outbox"));
+
+  test.each(["economics", "source", "key", "reserved key"] as const)("historical taxed settlement refuses a replay collision in %s", async (collision) => {
+    const t = newTest();
+    const { orgId, userId } = await seedOrg(t);
+    const { payableId, vehicleId, cmd } = await legacyPayment(t, orgId, userId);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(payableId, { saleId: undefined });
+      await ctx.db.patch(vehicleId, { sourceType: "STOCK" });
+    });
+    const original = await t.run((ctx) => postAccountingEvent(ctx, cmd));
+    expect(original.alreadyPosted).toBe(false);
+    if (collision === "economics") cmd.payload.amountMinor = 17_000_000;
+    if (collision === "source") cmd.sourceId = "different-payable";
+    if (collision === "key") cmd.idempotencyKey += "_different";
+    if (collision === "reserved key") {
+      cmd.idempotencyKey = "occv_untrusted";
+      const eventId = original.eventId;
+      if (!eventId) throw new Error("Fixture did not post the payment");
+      await t.run((ctx) => ctx.db.patch(eventId, { idempotencyKey: cmd.idempotencyKey }));
+    }
+    const before = await footprint(t, orgId);
+    await expect(t.run((ctx) => postAccountingEvent(ctx, cmd))).rejects.toThrow(/SCRUM-249|reserved/i);
+    expect(await footprint(t, orgId)).toEqual(before);
   });
 
   test("valid zero-VAT consigned payment posts gross beside a quarantined predecessor and does not duplicate", async () => {
