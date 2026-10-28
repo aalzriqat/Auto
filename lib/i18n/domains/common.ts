@@ -121,6 +121,18 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Use a manual accounting correction.",
     "لا يمكن إلغاء البيع تلقائياً بعد سداد ذمة المورّد كلياً أو جزئياً. يلزم إجراء تصحيح محاسبي يدوي.",
   ],
+  // SCRUM-781 (owner rulings SCRUM-773 c22401, SCRUM-760 c23812). The English text must equal
+  // CONSIGNED_PAYABLE_VAT_REFUSAL in convex/sourcingPayables.ts. PayableNoVatReclass is the neutral
+  // note the pay screen shows in place of the VAT field: the backend predicate is also false for an opening liability
+  // and for unverifiable ownership, so the note must not claim the payable is consigned.
+  ServerError_CONSIGNED_PAYABLE_VAT_REFUSED: [
+    "A consigned vehicle's supplier payable is settled at its gross amount. VAT cannot be reclassified on it.",
+    "تُسوَّى ذمة المورّد عن سيارة الأمانة بمبلغها الإجمالي، ولا يمكن إعادة تصنيف ضريبة القيمة المضافة عليها.",
+  ],
+  PayableNoVatReclass: [
+    "VAT cannot be reclassified on this payable.",
+    "لا يمكن إعادة تصنيف ضريبة القيمة المضافة على هذه الذمة.",
+  ],
   // SCRUM-563. The English text must equal the server message in convex/utils/idempotency.ts,
   // and convex/adminOrgs.ts respectively.
   ServerError_COMMAND_RECORDED_BEFORE_RESET: [
@@ -327,6 +339,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED: [
     "Returning a cheque that has already cleared is not available during the pilot. Nothing has been changed.",
     "إرجاع شيك تمت تسويته بالفعل غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
+  // SCRUM-760 ruling 11: convex/utils/legacyCollectionRefundContainment.ts.
+  ServerError_LEGACY_COLLECTION_REFUND_PILOT_DISABLED: [
+    "Recording a refund against a collection receivable is not available during the pilot. You can still reject a pending refund request. Nothing has been changed.",
+    "تسجيل استرداد على مستحقات التحصيل غير متاح خلال المرحلة التجريبية. يمكنك رفض أي طلب استرداد معلّق. لم يتم تغيير أي شيء.",
   ],
   ServerError_PAYMENT_LINKS_DISABLED: [
     "Payment links are not available yet. Nothing has been changed.",
