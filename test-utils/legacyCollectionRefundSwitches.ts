@@ -11,7 +11,7 @@
  *   vi.mock("./utils/legacyCollectionRefundContainment", async (importOriginal) =>
  *     (await import("../test-utils/legacyCollectionRefundSwitches")).openLegacyCollectionRefund(await importOriginal()));
  *
- * The census in convex/legacyCollectionRefundContainment.test.ts allows only the files listed there.
+ * The census in scripts/legacyCollectionRefundOptOutCensus.test.ts allows only the files listed there.
  * The shipped value is pinned unmocked in that same file.
  */
 type Original = typeof import("../convex/utils/legacyCollectionRefundContainment");

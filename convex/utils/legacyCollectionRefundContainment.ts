@@ -12,12 +12,29 @@ import { AppErrorCode, throwAppError } from "./errors";
  * pays out, reverses receipt allocations, reopens the receivable and posts a
  * COLLECTION_REFUND journal. Hiding the button is not a block; the doors below are.
  *
- * Gated doors, both before any write:
+ * Gated doors, all before any write:
  *   - `collections.requestApproval` with requestType REFUND: no new request.
  *   - `collections.respondToApproval` APPROVED on a REFUND request, including a
  *     request created before the switch and a stored idempotent replay: not payable.
+ *   - Internal doors that reach the same money (Seat 2 of PR #698):
+ *       `accountingLedger.post` with eventType COLLECTION_REFUND,
+ *       `hookCollectionRefund` (the one producer of a refund posting or outbox row),
+ *       `subledger.recordPayment` with direction OUT and a customer (a refund payout),
+ *       `subledger.reverseAllocationMutation` (the receivable-reopening half of a refund).
+ *     None has a production caller except the hook, whose only caller is the approval door above.
+ *     Cancel, unwind and cheque return reverse allocations through the `reverseAllocation`
+ *     HELPER, which is not gated.
  * NOT gated: REJECTING a REFUND request (a cleanup exit that spends nothing), and
  * the RESCHEDULE and CANCEL_RECEIVABLE request types.
+ *
+ * The outbox is deliberately NOT gated (`accountingOutbox.postOutboxRow`, the drain, redrive
+ * and retryFailed). A COLLECTION_REFUND row can only have been queued by `hookCollectionRefund`
+ * in the same transaction that wrote the OUT payment and reversed the allocations, so the
+ * payout already happened. Holding or failing that row would leave the books without the cash
+ * out that is owed, which is the opposite of truthful; letting it post records what happened.
+ * No NEW row can be queued while the hook is refused. Compare the fixed-asset lifecycle (PR
+ * #691), whose queued rows are failed because that lifecycle never ran. The engine
+ * (`postAccountingEvent`) is not gated for the same reason: the outbox worker posts through it.
  *
  * This is separate from `customerCreditPayoutContainment.ts` (the new 2110
  * retained-credit payout and the sale-invoice receipt doors) and from
@@ -30,7 +47,7 @@ import { AppErrorCode, throwAppError } from "./errors";
  * set the switch to `false`, then convert the expected-refusal cells in
  * `convex/legacyCollectionRefundContainment.test.ts` into full-behaviour cells and
  * remove the opt-out mocks of this module from the suites that carry them (the
- * census in that test file lists them) in the same change.
+ * census in `scripts/legacyCollectionRefundOptOutCensus.test.ts` lists them) in the same change.
  *
  * LEAF MODULE: imports only `./errors`.
  */

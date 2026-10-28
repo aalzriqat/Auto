@@ -2,8 +2,11 @@
  * SCRUM-760 ruling 11 (c23812): the legacy COLLECTION REFUND door is blocked SERVER-SIDE
  * for the narrow pilot (convex/utils/legacyCollectionRefundContainment.ts).
  *
- * Two doors, two EXPECTED-REFUSAL cells (docs/architecture/scrum486-certification-oracle.md,
- * row LREF). A cell passes only when:
+ * Two public doors and four internal doors, each an EXPECTED-REFUSAL cell
+ * (docs/architecture/scrum486-certification-oracle.md, row LREF). The internal doors are
+ * accountingLedger.post (COLLECTION_REFUND), the hookCollectionRefund producer, subledger.recordPayment
+ * (customer OUT) and subledger.reverseAllocationMutation; a refund event queued BEFORE the switch
+ * still posts, because the payout it records already happened. A cell passes only when:
  *   - the call goes through the door's own public entry, by an authorized actor, with valid arguments;
  *   - it asserts the specific containment code and that the text says nothing was changed;
  *   - a full snapshot of EVERY schema table AND the scheduler is identical before and after
@@ -172,10 +175,18 @@ describe("the shipped switch is ON (unmocked pin)", () => {
 });
 
 describe("collections.requestApproval REFUND is blocked", () => {
-  test.each(["CASH", "BANK_TRANSFER"] as const)("a %s refund request is refused and nothing changes", async (method) => {
+  // Two plain tests, not test.each: the regression scenario record binds an EXACT title
+  // (scripts/regression/scenarioRecord.ts rejects parameterized names).
+  test("a CASH refund request is refused and nothing changes", async () => {
     const s = await seed();
-    const receivableId = await receivableWithPayment(s, `Refund request ${method}`);
-    await expectRefusedAndUnchanged(s, () => refundRequest(s, receivableId, method));
+    const receivableId = await receivableWithPayment(s, "Refund request CASH");
+    await expectRefusedAndUnchanged(s, () => refundRequest(s, receivableId, "CASH"));
+  });
+
+  test("a BANK_TRANSFER refund request is refused and nothing changes", async () => {
+    const s = await seed();
+    const receivableId = await receivableWithPayment(s, "Refund request BANK_TRANSFER");
+    await expectRefusedAndUnchanged(s, () => refundRequest(s, receivableId, "BANK_TRANSFER"));
   });
 
   test("MUTATION ATTACK: with the switch flipped off the same request is accepted", async () => {

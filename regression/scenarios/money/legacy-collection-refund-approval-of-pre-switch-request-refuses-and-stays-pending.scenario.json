@@ -1,5 +1,6 @@
 {
-  "id": "legacy-collection-refund-request-and-approval-refuse-with-nothing-changed",
+  "id": "legacy-collection-refund-approval-of-pre-switch-request-refuses-and-stays-pending",
+  "fingerprint": "075cb066faa8153ed1d1fa8d01ff5ee5aa2366146e836b1b270c1188c8ee058a",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -9,17 +10,6 @@
     "firstSeen": "2026-10-28"
   },
   "steps": [
-    {
-      "actor": {
-        "role": "finance",
-        "org": "A"
-      },
-      "action": "collections.requestApproval",
-      "input": {
-        "requestType": "REFUND",
-        "method": "CASH"
-      }
-    },
     {
       "actor": {
         "role": "approver",
@@ -43,24 +33,23 @@
       "value": 0
     },
     {
-      "observable": "step2.refusal",
-      "value": "LEGACY_COLLECTION_REFUND_PILOT_DISABLED"
+      "observable": "request.status",
+      "value": "PENDING"
     },
     {
-      "observable": "step2.rowsChanged",
+      "observable": "refundPayments.count",
       "value": 0
     }
   ],
   "rulings": [
     {
-      "id": "SCRUM-760#description",
-      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
     }
   ],
   "impl": {
     "file": "convex/legacyCollectionRefundContainment.test.ts",
     "testName": "a request created before the switch is not payable: refused, nothing changes, request stays PENDING"
   },
-  "matrixRow": "SCRUM-760-legacy-collection-refund",
-  "fingerprint": "47b8e339f6a60da99366b55ab698672b8bc31d4b06a41e5472e59797fe683ae2"
+  "matrixRow": "SCRUM-760-legacy-collection-refund"
 }
