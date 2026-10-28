@@ -48,7 +48,8 @@ export function createBackendDefinitionResolver({ root, functionIds, tsconfig = 
     const declaration = declarations[0];
     const source = declaration.getSourceFile();
     if (source.isDeclarationFile || unsupportedSource(source)) return undefined;
-    if ((symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+    const isAlias = Boolean(symbol.flags & ts.SymbolFlags.Alias);
+    if (isAlias) {
       return supportedAliasModule(declaration) ? definitionFile(checker.getImmediateAliasedSymbol(symbol), seen) : undefined;
     }
     if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) return undefined;

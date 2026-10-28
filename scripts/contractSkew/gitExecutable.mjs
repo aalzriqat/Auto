@@ -58,17 +58,44 @@ const REVISION = /^[A-Za-z0-9_][A-Za-z0-9_./@^~-]{0,254}$/;
 const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
- * @param {unknown} revision
- * @param {string} [role]
- * @returns {string} the same revision, once it is known to be a plain revision name
+ * The characters a value may be made of, as lookup tables from each allowed character to ITSELF as a program
+ * constant. A value is validated by REBUILDING it character by character from the table (an allowlist mapping),
+ * not by testing the original string and passing that same string on: what reaches git is composed only of the
+ * table's own constants, so nothing of the caller's string object flows into the process arguments, and a
+ * character outside the table cannot be copied at all.
  */
-export function assertSafeRevision(revision, role = "revision") {
-  if (typeof revision !== "string" || !REVISION.test(revision) || revision.includes("..")) {
-    throw new Error(`${role} ${JSON.stringify(String(revision).slice(0, 80))} is not a plain revision name or commit id (a leading "-", whitespace, ":" "{}" or ".." is refused)`);
+const tableOf = (characters) => new Map([...characters].map((character) => [character, character]));
+const REVISION_CHARACTERS = tableOf("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./@^~-");
+const HEX_CHARACTERS = tableOf("0123456789abcdef");
+
+/**
+ * @param {string} text
+ * @param {Map<string, string>} table
+ * @returns {string | undefined} a copy built from the table's constants, or undefined when any character is not in it
+ */
+function rebuildFrom(text, table) {
+  let rebuilt = "";
+  for (const character of text) {
+    const allowed = table.get(character);
+    if (allowed === undefined) return undefined;
+    rebuilt += allowed;
   }
-  return revision;
+  return rebuilt;
 }
 
+/**
+ * @param {unknown} revision
+ * @param {string} [role]
+ * @returns {string} an equal revision rebuilt from the allowlist, once it is known to be a plain revision name
+ */
+export function assertSafeRevision(revision, role = "revision") {
+  const rebuilt = typeof revision === "string" && REVISION.test(revision) && !revision.includes("..")
+    ? rebuildFrom(revision, REVISION_CHARACTERS) : undefined;
+  if (rebuilt === undefined) {
+    throw new Error(`${role} ${JSON.stringify(String(revision).slice(0, 80))} is not a plain revision name or commit id (a leading "-", whitespace, ":" "{}" or ".." is refused)`);
+  }
+  return rebuilt;
+}
 /** A git argument is a string without a NUL byte (which would end the C string early inside git). */
 function assertGitArguments(args) {
   if (!Array.isArray(args) || args.some((argument) => typeof argument !== "string" || argument.includes("\0"))) {
@@ -116,9 +143,10 @@ export function runGitBytes(git, args, { cwd, maxBuffer = 16 * 1024 * 1024 } = {
  * @param {string} [cwd]
  */
 export function resolveCommit(git, rev, cwd) {
-  assertSafeRevision(rev);
-  const commit = runGitText(git, ["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`], { cwd }).trim();
-  if (!COMMIT_ID.test(commit)) throw new Error(`git did not return a full commit id for ${rev}`);
+  const safeRevision = assertSafeRevision(rev);
+  const answer = runGitText(git, ["rev-parse", "--verify", "--end-of-options", `${safeRevision}^{commit}`], { cwd }).trim();
+  const commit = COMMIT_ID.test(answer) ? rebuildFrom(answer, HEX_CHARACTERS) : undefined;
+  if (commit === undefined) throw new Error(`git did not return a full commit id for ${safeRevision}`);
   return commit;
 }
 
@@ -131,10 +159,10 @@ export function resolveCommit(git, rev, cwd) {
  * @param {string} [cwd]
  */
 export function isAncestor(git, ancestor, descendant, cwd) {
-  assertSafeRevision(ancestor, "ancestor");
-  assertSafeRevision(descendant, "descendant");
+  const safeAncestor = assertSafeRevision(ancestor, "ancestor");
+  const safeDescendant = assertSafeRevision(descendant, "descendant");
   try {
-    runGitText(git, ["merge-base", "--is-ancestor", "--end-of-options", ancestor, descendant], { cwd });
+    runGitText(git, ["merge-base", "--is-ancestor", "--end-of-options", safeAncestor, safeDescendant], { cwd });
     return true;
   } catch {
     return false;

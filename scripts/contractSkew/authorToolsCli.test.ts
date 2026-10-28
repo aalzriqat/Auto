@@ -48,7 +48,7 @@ beforeAll(() => {
 });
 
 describe("revision arguments cannot be read as git options (argument injection, S8705)", () => {
-  test.each(["--output=owned", "-h", "--upload-pack=calc", "-", "a b", "main\n--x", "HEAD:file", "HEAD@{1}", "HEAD^{tree}", "a..b", "", " HEAD"])(
+  test.each(["--output=owned", "-h", "--upload-pack=calc", "-", "a b", "main\n--x", "HEAD:file", "HEAD@{1}", "HEAD^{tree}", "a..b", "", " HEAD", "caf\u00e9", "ab\u{1F600}", "HEAD\u0000"])(
     "assertSafeRevision refuses %j", (revision) => {
       expect(() => assertSafeRevision(revision)).toThrow(/not a plain revision name/);
     });
@@ -57,6 +57,13 @@ describe("revision arguments cannot be read as git options (argument injection, 
     "assertSafeRevision accepts %s", (revision) => {
       expect(assertSafeRevision(revision)).toBe(revision);
     });
+
+  test("assertSafeRevision returns an equal copy rebuilt from the allowlist, not the caller's string", () => {
+    const typed = ["HEAD", "~1"].join("");
+    expect(assertSafeRevision(typed)).toBe("HEAD~1");
+    expect(assertSafeRevision("x".repeat(255))).toHaveLength(255);
+    expect(() => assertSafeRevision("x".repeat(256))).toThrow(/not a plain revision name/);
+  });
 
   test("assertSafeRevision refuses a non-string", () => {
     expect(() => assertSafeRevision(undefined)).toThrow(/not a plain revision name/);
