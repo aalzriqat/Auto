@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -61,6 +61,27 @@ describe("member loader renewal refuses a changed worker (SCRUM-866 round 6)", (
     ["constructor", 'module.exports = module.constructor._load("./worker.js");'],
     ["aliased_module", 'const k = "require"; const m = module; module.exports = m[k]("./worker.js");'],
     ["global_key", 'const k = "require"; global[k]("./worker.js");'],
+    ["ambient_constructor", 'declare const module: any; module.exports = module.constructor._load("./worker.js");'],
+    ["ambient_aliased_module", 'declare var module: any; const m = module; const k = "require"; module.exports = m[k]("./worker.js");'],
+    ["ambient_global_key", 'declare let global: any; const k = "require"; global[k]("./worker.js");'],
+    ...["module", "global", "globalThis", "Reflect"].flatMap((name): Array<[string, string]> => [
+      ...["const", "let", "var"].map((kind): [string, string] => [
+        `ambient_${kind}_${name}`,
+        `declare ${kind} ${name}: any; const { ["require"]: load } = ${name}; ${name === "module" ? "module.exports = " : ""}load("./worker.js");`,
+      ]),
+      [`ambient_function_${name}`, `declare function ${name}(): void; const loader = ${name}; loader[k]("./worker.js");`],
+      [`ambient_class_${name}`, `declare class ${name} {}; const loader = ${name}; loader[k]("./worker.js");`],
+      [`ambient_enum_${name}`, `declare enum ${name} { Value }; const loader = ${name}; loader[k]("./worker.js");`],
+      [`ambient_namespace_${name}`, `declare namespace ${name} { const value: unknown; } const loader = ${name}; loader[k]("./worker.js");`],
+      [`ambient_module_${name}`, `declare module ${name} { const value: unknown; } const loader = ${name}; loader[k]("./worker.js");`],
+      [`ambient_context_${name}`, `declare namespace Ambient { const ${name}: any; const loader = ${name}; loader[k]("./worker.js"); }`],
+      [`ambient_global_context_${name}`, `declare global { const ${name}: any; const loader = ${name}; loader[k]("./worker.js"); }`],
+      [`type_import_${name}`, `import type ${name} from "pkg"; const loader = ${name}; loader[k]("./worker.js");`],
+      [`type_specifier_${name}`, `import { type Value as ${name} } from "pkg"; const loader = ${name}; loader[k]("./worker.js");`],
+      [`type_namespace_import_${name}`, `import type * as ${name} from "pkg"; const loader = ${name}; loader[k]("./worker.js");`],
+      [`type_import_equals_${name}`, `import type ${name} = require("pkg"); const loader = ${name}; loader[k]("./worker.js");`],
+      [`const_enum_${name}`, `const enum ${name} { Value }; const loader = ${name}; loader[k]("./worker.js");`],
+    ]),
   ];
   let reviewed = "";
   let compare: Compare;
@@ -89,6 +110,10 @@ describe("member loader renewal refuses a changed worker (SCRUM-866 round 6)", (
     // Execute the reported reproduction with Node's actual CommonJS loader.
     const loaded = execFileSync(process.execPath, ["-p", 'JSON.stringify(require("./convex/call.ts"))'], { cwd: dir, encoding: "utf8" });
     expect(JSON.parse(loaded)).toEqual({ run: 2 });
+    // Extracting module.require loses its module receiver; Node resolves this
+    // relative request from cwd. Run beside the worker to exercise the load.
+    const loadedAmbient = execFileSync(process.execPath, ["-p", 'JSON.stringify(require("./ambient_const_module.ts"))'], { cwd: path.join(dir, "convex"), encoding: "utf8" });
+    expect(JSON.parse(loadedAmbient)).toEqual({ run: 2 });
   });
 
   test.each([
@@ -114,7 +139,7 @@ describe("member loader renewal refuses a changed worker (SCRUM-866 round 6)", (
   });
 
   test("CONTROL: locally bound names and CommonJS module.exports remain accepted", () => {
-    write("convex/local.ts", 'const module = { value: 1 }; const global = { value: 2 }; const Reflect = { value: 3 }; export const n = module.value + global.value + Reflect.value;');
+    write("convex/local.ts", 'const module = { value: 1 }; const global = { value: 2 }; const Reflect = { value: 3 }; const globalThis = { value: 4 }; export const n = module.value + global.value + Reflect.value + globalThis.value;');
     const closure = createImportClosure({ root: dir, projects: [{ tsconfig: "tsconfig.json", rootFiles: ["convex/local.ts"] }] });
     expect(closure("convex/local.ts").unresolved).toEqual([]);
   });
@@ -166,22 +191,53 @@ describe("renewBaseline", () => {
   test("renewal evidence names every changed closure file by full path", () => {
     const e = entry({ renewal: "SCRUM-866 round 7 review against origin/main 549267ae: Reviewed convex/a.ts; a same-basename elsewhere is not evidence." });
     const closure: Closure = (file) => ({ files: [file, "convex/a.ts", "lib/a.ts"], unresolved: [] });
-    const stale = renewalEvidenceGaps(serialize([e]), { compare: changedOnly("convex/a.ts", "lib/a.ts"), closureOf: closure, evidenceChanged: () => "identical" });
+    const stale = renewalEvidenceGaps(serialize([e]), { reviewedText: serialize([entry()]), compare: changedOnly("convex/a.ts", "lib/a.ts"), closureOf: closure, evidenceChanged: () => "identical" });
     expect(stale).toHaveLength(1);
     expect(stale[0].missing).toEqual(["lib/a.ts"]);
     expect(renewalEvidenceGaps(serialize([{ ...e, renewal: "SCRUM-866 round 7 review against origin/main 549267ae: Reviewed convex/a.ts and lib/a.ts." }]), {
-      compare: changedOnly("convex/a.ts", "lib/a.ts"), closureOf: closure, evidenceChanged: () => "identical",
+      reviewedText: serialize([entry()]), compare: changedOnly("convex/a.ts", "lib/a.ts"), closureOf: closure, evidenceChanged: () => "identical",
     })).toEqual([]);
   });
   test("a file changed again after the named review SHA is stale even when its path is present", () => {
     const e = entry({ renewal: "SCRUM-866 round 7 review against origin/main 549267ae: convex/a.ts was reviewed." });
     const gaps = renewalEvidenceGaps(serialize([e]), {
+      reviewedText: serialize([entry()]),
       compare: changedOnly("convex/a.ts"),
       closureOf: (file) => ({ files: [file, "convex/a.ts"], unresolved: [] }),
       evidenceChanged: (_sha, file) => file === "convex/a.ts" ? "changed" : "identical",
     });
     expect(gaps).toHaveLength(1);
     expect(gaps[0].changedSinceEvidence).toEqual(["convex/a.ts"]);
+  });
+  test.each([{}, 42, "", "   ", null])("rejects malformed renewal evidence %j even with unchanged expiry", (renewal) => {
+    expect(renewalEvidenceGaps(serialize([entry({ renewal })]), {
+      reviewedText: serialize([entry()]), compare: allIdentical, closureOf: selfOnly, evidenceChanged: allIdentical,
+    })).toHaveLength(1);
+  });
+  test("an expiry change requires evidence even when the renewal field was deleted", () => {
+    expect(renewalEvidenceGaps(serialize([entry({ expires: RENEWED_EXPIRES })]), {
+      reviewedText: serialize([entry()]), compare: allIdentical, closureOf: selfOnly, evidenceChanged: allIdentical,
+    })).toHaveLength(1);
+  });
+  test("matches reviewed entries by full identity, independently of array order", () => {
+    const other = entry({ contractPath: "price", expires: RENEWED_EXPIRES });
+    const current = serialize([other, entry()]);
+    expect(renewalEvidenceGaps(current, {
+      reviewedText: serialize([entry(), other]), compare: allIdentical, closureOf: selfOnly, evidenceChanged: allIdentical,
+    })).toEqual([]);
+    const gaps = renewalEvidenceGaps(current, {
+      reviewedText: serialize([entry(), { ...other, expires: "2026-11-01" }]),
+      compare: allIdentical, closureOf: selfOnly, evidenceChanged: allIdentical,
+    });
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].index).toBe(0);
+  });
+  test("a new identity needs evidence; valid evidence satisfies an extended expiry", () => {
+    const options = { reviewedText: serialize([entry()]), compare: allIdentical, closureOf: selfOnly, evidenceChanged: allIdentical };
+    expect(renewalEvidenceGaps(serialize([entry({ contractPath: "price" })]), options)).toHaveLength(1);
+    expect(renewalEvidenceGaps(serialize([entry({ expires: RENEWED_EXPIRES,
+      renewal: "SCRUM-866 round 8 review against origin/main 99b175f7: reviewed source.",
+    })]), options)).toEqual([]);
   });
   test("renews an entry whose client file and backend module are unchanged", () => {
     const e = entry();
@@ -407,6 +463,29 @@ describe("gitCompare (real git)", () => {
     expect(compare("added.ts")).toBe("missing");
     expect(compare("never/existed.ts")).toBe("missing");
   });
+});
+
+describe("renewal evidence CLI missing history (SCRUM-866 round 8)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-evidence-history-"));
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const missingSha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+  test.each(["reviewed revision", "recorded evidence revision"])("refuses unavailable %s with a history diagnostic", (role) => {
+    const baseline = path.join(dir, "baseline.json");
+    const document = JSON.parse(fs.readFileSync("scripts/contractSkew/needs-evidence-baseline.json", "utf8"));
+    const recorded = document.entries[480];
+    recorded.renewal = `SCRUM-866 round 8 review against origin/main ${missingSha}: source reviewed.`;
+    fs.writeFileSync(baseline, serialize([recorded]));
+    const result = spawnSync(process.execPath, ["scripts/contractSkew/renewBaselineReviewed.mjs", "--reviewed",
+      role === "reviewed revision" ? missingSha : "c82890bd", "--check-evidence", "--baseline", baseline], {
+      encoding: "utf8", timeout: 20_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain(`${role} ${missingSha} is unavailable`);
+    expect(result.stderr).toContain("fetch full Git history");
+    expect(result.stdout).not.toContain("entries checked");
+    expect(fs.readFileSync(baseline, "utf8")).toBe(serialize([recorded]));
+  }, 25_000);
 });
 
 // SCRUM-866 round 5: what the compiler used to resolve imports, and the Convex function references that reach

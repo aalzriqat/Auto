@@ -298,21 +298,37 @@ function scan(source, ownerOf) {
   const binds = (name, wanted) => ts.isIdentifier(name)
     ? name.text === wanted
     : name.elements.some((part) => ts.isBindingElement(part) && binds(part.name, wanted));
+  // `declare` describes an existing value; it emits no shadow, including in
+  // nested ambient namespaces/global blocks and declaration files.
+  /** @param {import("typescript").Node} node */
+  const isAmbient = (node) => {
+    for (let current = node; current; current = current.parent) {
+      if (ts.isSourceFile(current) && current.isDeclarationFile) return true;
+      if (ts.canHaveModifiers(current) && ts.getModifiers(current)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)) return true;
+    }
+    return false;
+  };
   /** @param {import("typescript").Node} scope @param {string} wanted */
   const declares = (scope, wanted) => {
-    if (ts.isFunctionLike(scope) && scope.parameters.some((param) => binds(param.name, wanted))) return true;
+    if (isAmbient(scope)) return false;
+    if (ts.isFunctionLike(scope) && "body" in scope && scope.body && scope.parameters.some((param) => binds(param.name, wanted))) return true;
     if (ts.isCatchClause(scope) && scope.variableDeclaration && binds(scope.variableDeclaration.name, wanted)) return true;
     const statements = ts.isSourceFile(scope) || ts.isBlock(scope) || ts.isModuleBlock(scope)
       ? scope.statements : undefined;
     if (!statements) return false;
     for (const statement of statements) {
+      if (isAmbient(statement)) continue;
       if (ts.isVariableStatement(statement) && statement.declarationList.declarations.some((decl) => binds(decl.name, wanted))) return true;
-      if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isImportEqualsDeclaration(statement)) && statement.name?.text === wanted) return true;
-      if (ts.isImportDeclaration(statement) && statement.importClause) {
+      if (ts.isFunctionDeclaration(statement) && statement.body && statement.name?.text === wanted) return true;
+      if (ts.isClassDeclaration(statement) && statement.name?.text === wanted) return true;
+      // A const enum may be erased; an uncertain declaration must not hide a loader.
+      if (ts.isEnumDeclaration(statement) && !ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.ConstKeyword) && statement.name.text === wanted) return true;
+      if (ts.isImportEqualsDeclaration(statement) && !statement.isTypeOnly && statement.name.text === wanted) return true;
+      if (ts.isImportDeclaration(statement) && statement.importClause && !statement.importClause.isTypeOnly) {
         const clause = statement.importClause;
         if (clause.name?.text === wanted) return true;
         if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings) && clause.namedBindings.name.text === wanted) return true;
-        if (clause.namedBindings && ts.isNamedImports(clause.namedBindings) && clause.namedBindings.elements.some((element) => element.name.text === wanted)) return true;
+        if (clause.namedBindings && ts.isNamedImports(clause.namedBindings) && clause.namedBindings.elements.some((element) => !element.isTypeOnly && element.name.text === wanted)) return true;
       }
     }
     return false;
@@ -564,7 +580,7 @@ export function createImportClosure({ root, projects, implicitInputs = [] }) {
         for (const reference of scanned.references) {
           const modules = functionModules(reference.modulePath);
           if (modules.length === 0) unresolved.add(`${reference.text} (names no module under ${CONVEX_DIR}/)`);
-          for (const module of modules) files.add(module);
+          for (const moduleFile of modules) files.add(moduleFile);
         }
         for (const reference of source.referencedFiles) files.add(toRel(path.resolve(path.dirname(abs), reference.fileName)));
         for (const spec of specs) {

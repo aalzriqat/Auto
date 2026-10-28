@@ -38,6 +38,7 @@ import { resolveCommit, resolveGit, runGitText } from "./gitExecutable.mjs";
 import { DEFAULT_BASELINE, EXIT_UNAVAILABLE } from "./baselineIdentity.mjs";
 import { parseCanonicalBaseline, serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
 import { createImportClosure } from "./importClosure.mjs";
+import { identityOf } from "./baseline.mjs";
 
 const MODULE_FUNCTION_ID = /^([A-Za-z0-9_]+):([A-Za-z0-9_]+)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -183,22 +184,35 @@ export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
  * A human renewal must name each changed file in the two current closures.
  * This checks evidence coverage, not whether the prose's interpretation is true.
  * @param {string} text
- * @param {{ compare: (file: string) => "identical" | "changed" | "missing", closureOf: (file: string) => { files: string[], unresolved: string[] }, evidenceChanged: (sha: string, file: string) => "identical" | "changed" | "missing" }} options
- * @returns {Array<{ index: number, entry: string, missing: string[], changedSinceEvidence: string[], unresolved: string[] }>}
+ * @param {{ reviewedText: string, compare: (file: string) => "identical" | "changed" | "missing", closureOf: (file: string) => { files: string[], unresolved: string[] }, evidenceChanged: (sha: string, file: string) => "identical" | "changed" | "missing" }} options
+ * @returns {Array<{ index: number, entry: string, missing: string[], changedSinceEvidence: string[], unresolved: string[], renewalProblem?: "malformed" | "missing" }>}
  */
-export function renewalEvidenceGaps(text, { compare, closureOf, evidenceChanged }) {
+export function renewalEvidenceGaps(text, { reviewedText, compare, closureOf, evidenceChanged }) {
   if (typeof evidenceChanged !== "function") throw new Error("evidenceChanged is required: a renewal review SHA must be compared with HEAD");
   const document = parseCanonicalBaseline(text);
   if (!document || !Array.isArray(document.entries)) throw new Error("the baseline has no entries array");
+  const reviewed = parseCanonicalBaseline(reviewedText);
+  if (!reviewed || !Array.isArray(reviewed.entries) || !reviewed.entries.length) throw new Error("the reviewed baseline has no entries");
+  const reviewedEntries = new Map(reviewed.entries.map((entry) => [identityOf(entry), entry]));
+  if (reviewedEntries.size !== reviewed.entries.length) throw new Error("the reviewed baseline has duplicate identities");
   return document.entries.flatMap((entry, index) => {
-    if (typeof entry.renewal !== "string") return [];
+    const previous = reviewedEntries.get(identityOf(entry));
+    // A relocated/new identity cannot establish an unchanged expiry. Evidence is
+    // owed from the baseline comparison, never from the presence of `renewal`.
+    const needsEvidence = !previous || entry.expires !== previous.expires;
+    const hasRenewal = Object.hasOwn(entry, "renewal");
+    if (!hasRenewal && !needsEvidence) return [];
+    if (!hasRenewal || typeof entry.renewal !== "string" || !entry.renewal.trim()) {
+      return [{ index, entry: label(entry), missing: [hasRenewal ? "(malformed renewal text)" : "(changed expiry or new identity requires renewal text)"],
+        changedSinceEvidence: [], unresolved: [], renewalProblem: hasRenewal ? "malformed" : "missing" }];
+    }
     const backend = backendModuleOf(entry.functionId);
     if (!backend || typeof entry.file !== "string") {
       return [{ index, entry: label(entry), missing: ["(invalid client or backend root)"], changedSinceEvidence: [], unresolved: [] }];
     }
     const reviewHeads = [...entry.renewal.matchAll(/SCRUM-866 round \d+ review against origin\/main ([0-9a-f]{8,40})/g)];
     const reviewHead = reviewHeads.at(-1)?.[1];
-    if (!reviewHead) return [{ index, entry: label(entry), missing: ["(no reviewed source SHA in renewal)"], changedSinceEvidence: [], unresolved: [] }];
+    if (!reviewHead) return [{ index, entry: label(entry), missing: ["(no reviewed source SHA in renewal)"], changedSinceEvidence: [], unresolved: [], renewalProblem: "malformed" }];
     const clientClosure = closureOf(entry.file);
     const backendClosure = closureOf(backend);
     const unresolved = [...new Set([...clientClosure.unresolved, ...backendClosure.unresolved])];
@@ -234,7 +248,15 @@ function main(argv) {
   if (!git) throw new Error("git could not be located (set CONTRACT_SKEW_GIT to an absolute path)");
   const baseline = path.resolve(args.baseline ?? path.join(root, DEFAULT_BASELINE));
 
-  const reviewed = resolveCommit(git, args.reviewed, root);
+  /** @param {string} revision @param {string} role */
+  const resolveHistoryCommit = (revision, role) => {
+    try {
+      return resolveCommit(git, revision, root);
+    } catch {
+      throw new Error(`${role} ${revision} is unavailable; fetch full Git history (actions/checkout fetch-depth: 0) before checking renewal evidence`);
+    }
+  };
+  const reviewed = resolveHistoryCommit(args.reviewed, "reviewed revision");
   // The closure is read from the working tree and compared by HEAD's blobs, so HEAD is the only head there is.
   const headSha = resolveCommit(git, "HEAD", root);
   // A reviewed revision that is not an ancestor of HEAD says nothing about HEAD's history.
@@ -260,23 +282,26 @@ function main(argv) {
 
   const compare = gitCompare({ git, cwd: root, reviewed, head: headSha });
   if (args["check-evidence"]) {
+    const reviewedText = runGitText(git, ["show", `${reviewed}:${DEFAULT_BASELINE}`], { cwd: root });
     /** @type {Map<string, ReturnType<typeof gitCompare>>} */
     const evidenceComparisons = new Map();
     /** @param {string} sha @param {string} file */
     const evidenceChanged = (sha, file) => {
       let comparison = evidenceComparisons.get(sha);
       if (!comparison) {
-        const evidenceHead = resolveCommit(git, sha, root);
+        const evidenceHead = resolveHistoryCommit(sha, "recorded evidence revision");
         runGitText(git, ["merge-base", "--is-ancestor", evidenceHead, headSha], { cwd: root });
         comparison = gitCompare({ git, cwd: root, reviewed: evidenceHead, head: headSha });
         evidenceComparisons.set(sha, comparison);
       }
       return comparison(file);
     };
-    const gaps = renewalEvidenceGaps(baselineText, { compare, closureOf, evidenceChanged });
-    const renewedEntries = entries.filter((entry) => typeof entry.renewal === "string").length;
-    if (renewedEntries === 0) throw new Error("baseline has no renewed entries to check");
-    console.log(`renewal evidence: ${renewedEntries} renewed entries checked, ${entries.length - renewedEntries} unrenewed, ${gaps.length} stale`);
+    const gaps = renewalEvidenceGaps(baselineText, { reviewedText, compare, closureOf, evidenceChanged });
+    const renewedEntries = entries.filter((entry) => Object.hasOwn(entry, "renewal")).length;
+    if (entries.length === 0) throw new Error("baseline has no entries to check");
+    const malformed = gaps.filter((gap) => gap.renewalProblem === "malformed").length;
+    const missing = gaps.filter((gap) => gap.renewalProblem === "missing").length;
+    console.log(`renewal evidence: ${renewedEntries} renewed entries checked, ${entries.length - renewedEntries} unrenewed, ${gaps.length} stale, ${malformed} malformed, ${missing} missing`);
     for (const gap of gaps.slice(0, 20)) console.log(`STALE entry #${gap.index + 1} ${gap.entry}: unnamed ${gap.missing.join(", ")}; changed after review ${gap.changedSinceEvidence.join(", ")}; unresolved ${gap.unresolved.join(", ")}`);
     if (gaps.length > 20) console.log(`... ${gaps.length - 20} more stale entries`);
     if (gaps.length) process.exitCode = 10;
