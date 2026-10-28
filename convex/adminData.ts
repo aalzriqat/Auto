@@ -214,8 +214,8 @@ export const adminListByOrg = query({
   },
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
-    const { index } = assertAdminTable(args.table);
-    let q = (ctx.db.query(args.table as TableNames) as any).withIndex(
+    const { table, index } = assertAdminTable(args.table);
+    let q = (ctx.db.query(table) as any).withIndex(
       index,
       (q: any) => q.eq("orgId", args.orgId)
     );
@@ -287,7 +287,7 @@ export const adminRestoreRecords = mutation({
   args: { table: v.string(), ids: v.array(v.string()) },
   handler: async (ctx, args) => {
     const admin = await requireSuperAdmin(ctx);
-    assertAdminTable(args.table);
+    const { table } = assertAdminTable(args.table);
     assertAdminMayMutateTable(args.table, "adminRestoreRecords");
 
     if (args.ids.length === 0) {
@@ -299,7 +299,7 @@ export const adminRestoreRecords = mutation({
       // normalizeId proves the id actually belongs to args.table. Without it a
       // caller could pass a financial-table id under table:"vehicles" (which
       // passes the guard above) and this loop would patch that financial row.
-      const id = ctx.db.normalizeId(args.table as TableNames, rawId);
+      const id = ctx.db.normalizeId(table, rawId);
       if (!id) {
         throwAppError(AppErrorCode.VALIDATION_FAILED, `Record ${rawId} does not belong to table ${args.table}.`);
       }
