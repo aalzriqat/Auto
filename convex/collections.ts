@@ -62,6 +62,7 @@ import {
   createCanonicalPayment,
   ensureReceivableDocument,
   getReceivableOutstandingMinor,
+  outstandingFromReceivableDoc,
   reverseAllocation,
 } from "./subledger";
 
@@ -318,6 +319,19 @@ async function hydrateReceivable(ctx: QueryCtx, receivable: Doc<"receivables">) 
     customerName: customerName(customer),
     vehicleLabel: vehicleLabel(vehicle),
   };
+}
+
+/**
+ * SCRUM-56 (SCRUM-760 c23812 ruling 8): a sale's customer debt is its canonical invoice
+ * (`receivableDocuments`, source `sales/<saleId>`), listed by `listOpenSaleReceivables`. A historical legacy row that
+ * also carries the saleId would show the same debt twice, so the legacy readers skip it. Only a row whose sale (same
+ * organization) really has a canonical invoice is skipped: a legacy row with no canonical twin is the only record of
+ * its debt and stays visible. W1 containment means no new legacy row can carry a saleId.
+ */
+async function legacyRowRepeatsCanonicalSaleDebt(ctx: QueryCtx, orgId: Id<"organizations">, row: Doc<"receivables">) {
+  if (!row.saleId) return false;
+  const sale = await ctx.db.get(row.saleId);
+  return sale !== null && sale.orgId === orgId && sale.canonicalReceivableDocumentId !== undefined;
 }
 
 async function hydrateCheque(ctx: QueryCtx, cheque: Doc<"postDatedCheques">) {
@@ -738,6 +752,7 @@ export const summary = query({
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
         .take(500);
       for (const row of rows) {
+        if (await legacyRowRepeatsCanonicalSaleDebt(ctx, args.orgId, row)) continue;
         totalOutstanding += row.outstandingAmount;
         if (row.dueDate < now || row.status === "OVERDUE") overdueOutstanding += row.outstandingAmount;
         if (row.dueDate >= today.start && row.dueDate <= today.end) dueToday += row.outstandingAmount;
@@ -795,10 +810,67 @@ export const listReceivables = query({
           .order("asc")
           .paginate(args.paginationOpts);
 
-    return {
-      ...result,
-      page: await Promise.all(result.page.map((row) => hydrateReceivable(ctx, row))),
-    };
+    // A page may come back shorter than requested when it held rows the canonical sale debt already shows.
+    const rows = await Promise.all(
+      result.page.map(async (row) => ((await legacyRowRepeatsCanonicalSaleDebt(ctx, args.orgId, row)) ? null : await hydrateReceivable(ctx, row)))
+    );
+    return { ...result, page: rows.filter((row) => row !== null) };
+  },
+});
+
+/**
+ * SCRUM-56 (SCRUM-760 c23812 ruling 8): the customer debt of every sale that is still owed, read from the canonical
+ * sale invoice (`receivableDocuments` source `sales`), never from the legacy `receivables` table.
+ *
+ * - One row per invoice, `outstandingMinor` as the subledger derives it (original less ACTIVE allocations, 0 once
+ *   cancelled), integer minor units, never recomputed. Fully paid, cancelled, written-off and reversed invoices are
+ *   not listed.
+ * - Newest invoice first, paginated on `by_org_source_issueDate`: pages hold PAID invoices too (a CASH sale's invoice is
+ *   always PAID), so a page can come back shorter than requested or empty while `isDone` is false; the caller keeps
+ *   loading until `isDone`.
+ * - VIEW_FINANCE, like every other Collections read. The finance company's receivable (source `finance_application`)
+ *   is not customer debt and stays in the Claims queue.
+ */
+export const listOpenSaleReceivables = query({
+  args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const result = await ctx.db
+      .query("receivableDocuments")
+      .withIndex("by_org_source_issueDate", (q) => q.eq("orgId", args.orgId).eq("sourceType", "sales"))
+      .order("desc")
+      .paginate(args.paginationOpts);
+
+    const rows = await Promise.all(
+      result.page.map(async (doc) => {
+        if (doc.payerType !== "CUSTOMER" || (doc.status !== "OPEN" && doc.status !== "PARTIALLY_PAID")) return null;
+        const outstandingMinor = await outstandingFromReceivableDoc(ctx, doc);
+        if (outstandingMinor <= 0) return null;
+        // The ids come off the document, not the request: re-check the organization on every related read.
+        const saleId = ctx.db.normalizeId("sales", doc.sourceId);
+        const [sale, customer] = await Promise.all([saleId ? ctx.db.get(saleId) : null, doc.customerId ? ctx.db.get(doc.customerId) : null]);
+        const ownSale = sale !== null && sale.orgId === args.orgId ? sale : null;
+        const vehicle = await getOptionalVehicle(ctx, ownSale?.vehicleId);
+        return {
+          receivableDocumentId: doc._id,
+          documentNumber: doc.documentNumber,
+          saleId: ownSale?._id ?? null,
+          saleDate: ownSale?.saleDate ?? null,
+          financingType: ownSale?.financingType ?? null,
+          customerId: doc.customerId ?? null,
+          customerName: customer !== null && customer.orgId === args.orgId ? customerName(customer) : null,
+          vehicleLabel: vehicle !== null && vehicle.orgId === args.orgId ? (vehicleLabel(vehicle) ?? null) : null,
+          originalAmountMinor: doc.originalAmountMinor,
+          outstandingMinor,
+          currency: doc.currency,
+          scale: doc.scale,
+          status: doc.status,
+          issueDate: doc.issueDate,
+          dueDate: doc.dueDate,
+        };
+      })
+    );
+    return { ...result, page: rows.filter((row) => row !== null) };
   },
 });
 
@@ -824,7 +896,10 @@ export const listReceivablesDueBetween = query({
       )
       .collect();
     const openRows = rows.filter((row) => !row.isDeleted && !["PAID", "CANCELLED", "REFUNDED"].includes(row.status));
-    return Promise.all(openRows.map((row) => hydrateReceivable(ctx, row)));
+    const hydrated = await Promise.all(
+      openRows.map(async (row) => ((await legacyRowRepeatsCanonicalSaleDebt(ctx, args.orgId, row)) ? null : await hydrateReceivable(ctx, row)))
+    );
+    return hydrated.filter((row) => row !== null);
   },
 });
 
@@ -3873,6 +3948,7 @@ export const agingReport = query({
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
         .take(500);
       for (const row of rows) {
+        if (await legacyRowRepeatsCanonicalSaleDebt(ctx, args.orgId, row)) continue;
         const ageDays = Math.floor((now - row.dueDate) / DAY_MS);
         const bucket = ageDays <= 0
           ? buckets.current

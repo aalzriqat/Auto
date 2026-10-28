@@ -300,7 +300,7 @@ describe("SCRUM-56: tenancy and permission", () => {
     // Their own list is empty.
     expect((await asOther.query(api.collections.listOpenSaleReceivables, { orgId: other.orgId, paginationOpts: FIRST_PAGE })).page).toEqual([]);
     // Naming this organization is refused: they are not a member of it.
-    await expect(list(s, asOther)).rejects.toThrow();
+    await expect(list(s, asOther)).rejects.toThrow(/not a member of this organization/);
     // The owner still sees exactly their one receivable.
     expect((await list(s)).page).toHaveLength(1);
   });
@@ -309,7 +309,7 @@ describe("SCRUM-56: tenancy and permission", () => {
     const s = await seed("perm1");
     await closeFinancedWithGap(s);
 
-    await expect(list(s, s.actors.viewer.as)).rejects.toThrow();
+    await expect(list(s, s.actors.viewer.as)).rejects.toThrow(/Missing required permissions: view:finance/);
     expect((await list(s, s.actors.finance.as)).page).toHaveLength(1);
   });
 });

@@ -55,6 +55,7 @@ import { ClearChequeBankDialog } from "./ClearChequeBankDialog";
 import { CashDrawerPanel } from "./collections/CashDrawerPanel";
 import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
+import { SaleReceivablesSection } from "./collections/SaleReceivablesSection";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
@@ -303,6 +304,9 @@ export function CollectionsTab() {
           {receivablesView === "calendar" ? (
             <InstallmentCalendar />
           ) : (
+          <>
+          {/* SCRUM-56: the canonical sale debt (ruling 8), above the legacy receivables it never appears in. */}
+          <SaleReceivablesSection orgId={activeOrgId} statusFilter={receivableStatus} />
           <div className="rounded-md border border-border overflow-x-auto">
             <Table>
               <TableHeader className="bg-muted/50">
@@ -355,6 +359,7 @@ export function CollectionsTab() {
               </TableBody>
             </Table>
           </div>
+          </>
           )}
           {receivablesView === "list" && receivableLoadStatus === "CanLoadMore" && (
             <Button variant="outline" onClick={() => loadMoreReceivables(75)}>{t("LoadMore" as any)}</Button>
