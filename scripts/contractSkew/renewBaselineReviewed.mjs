@@ -29,13 +29,13 @@
  * ⚠️ The monitor never writes the baseline and this is not the monitor: it is
  * run by a person, against a revision they name, and its diff is reviewed.
  */
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 import { CLIENT_SURFACES } from "./clientFiles.mjs";
-import { resolveGit } from "./gitExecutable.mjs";
-import { DEFAULT_BASELINE } from "./baselineIdentity.mjs";
+import { resolveCommit, resolveGit, runGit } from "./gitExecutable.mjs";
+import { DEFAULT_BASELINE, EXIT_UNAVAILABLE } from "./baselineIdentity.mjs";
 import { parseCanonicalBaseline, serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
 import { createImportClosure } from "./importClosure.mjs";
 
@@ -80,7 +80,7 @@ const count = (text, char) => text.split(char).length - 1;
 export function gitCompare({ git, cwd, reviewed, head }) {
   // One `ls-tree -r` per revision, not three git processes per file: an import closure spans thousands of files.
   const treeOf = (rev) => {
-    const out = execFileSync(git, ["ls-tree", "-r", "-z", rev], { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    const out = runGit(git, ["ls-tree", "-r", "-z", rev], { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
     const blobs = new Map();
     for (const record of out.split("\0")) {
       const tab = record.indexOf("\t");
@@ -110,13 +110,16 @@ function refusalFor(entry, compare, closureOf) {
   if (backend === undefined) return `functionId ${entry.functionId} names no backend module`;
   if (typeof entry.file !== "string" || entry.file.trim() === "") return "entry names no client file";
 
-  const client = compare(entry.file);
-  if (client === "changed") return `client file ${entry.file} changed since the reviewed revision`;
-  if (client === "missing") return `client file ${entry.file} is missing at the reviewed revision or HEAD`;
+  /** @returns {string | undefined} why `file` is not provably unchanged; `subject` completes the sentence */
+  const differs = (file, subject) => {
+    const state = compare(file);
+    if (state === "changed") return `${subject} changed since the reviewed revision`;
+    if (state === "missing") return `${subject} is missing at the reviewed revision or HEAD`;
+    return undefined;
+  };
 
-  const module = compare(backend);
-  if (module === "changed") return `backend module ${backend} changed since the reviewed revision`;
-  if (module === "missing") return `backend module ${backend} is missing at the reviewed revision or HEAD`;
+  const direct = differs(entry.file, `client file ${entry.file}`) ?? differs(backend, `backend module ${backend}`);
+  if (direct !== undefined) return direct;
 
   // What the two files import decides what is sent and how it is handled, so it was part of the review.
   for (const [role, file] of [["client file", entry.file], ["backend module", backend]]) {
@@ -124,18 +127,17 @@ function refusalFor(entry, compare, closureOf) {
     if (closure.unresolved.length > 0) return `cannot resolve in-repo import(s) of ${role} ${file}: ${closure.unresolved.join(", ")}`;
     for (const imported of closure.files) {
       if (imported === file) continue;
-      const state = compare(imported);
-      if (state === "changed") return `${role} ${file} imports ${imported}, which changed since the reviewed revision`;
-      if (state === "missing") return `${role} ${file} imports ${imported}, which is missing at the reviewed revision or HEAD`;
+      const reason = differs(imported, `${role} ${file} imports ${imported}, which`);
+      if (reason !== undefined) return reason;
     }
   }
 
   for (const named of rationalePaths(entry.rationale)) {
-    const state = compare(named);
-    if (state === "changed") return `rationale file ${named} changed since the reviewed revision`;
     // A bare name with no directory that is not a tracked file (`result.json`)
     // is a variable or payload name in prose, not a repository path.
-    if (state === "missing" && named.includes("/")) return `rationale file ${named} is missing at the reviewed revision or HEAD`;
+    if (compare(named) === "missing" && !named.includes("/")) continue;
+    const reason = differs(named, `rationale file ${named}`);
+    if (reason !== undefined) return reason;
   }
   return undefined;
 }
@@ -175,39 +177,32 @@ export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
   return { text: serializeBaseline(document, text), renewed, skipped, refused };
 }
 
-function parseArgs(argv) {
-  const args = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--write") args.write = true;
-    else if (/^--(reviewed|head|baseline|expires|renewal)$/.test(arg) && argv[i + 1] !== undefined) args[arg.slice(2)] = argv[++i];
-    else throw new Error(`unknown or incomplete argument: ${arg}`);
-  }
-  return args;
-}
-
 function main(argv) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const args = parseArgs(argv);
+  // node:util parseArgs is strict by default: an unknown option, a positional, or an option missing its value throws.
+  const { values: args } = parseArgs({
+    args: argv,
+    options: {
+      reviewed: { type: "string" },
+      baseline: { type: "string" },
+      expires: { type: "string" },
+      renewal: { type: "string" },
+      write: { type: "boolean" },
+    },
+  });
   if (!args.reviewed) throw new Error("--reviewed <rev> is required");
   if (!args.expires) throw new Error("--expires <YYYY-MM-DD> is required: the new expiry is a decision, never defaulted");
   if (!args.renewal) throw new Error('--renewal "<reason>" is required: a renewal records why, it is never defaulted');
   const git = resolveGit();
   if (!git) throw new Error("git could not be located (set CONTRACT_SKEW_GIT to an absolute path)");
-  const head = args.head ?? "HEAD";
   const baseline = path.resolve(args.baseline ?? path.join(root, DEFAULT_BASELINE));
 
-  const resolve = (rev) => execFileSync(git, ["rev-parse", "--verify", `${rev}^{commit}`], { cwd: root, encoding: "utf8" }).trim();
-  const reviewed = resolve(args.reviewed);
-  const headSha = resolve(head);
+  const reviewed = resolveCommit(git, args.reviewed, root);
+  // The closure is read from the working tree and compared by HEAD's blobs, so HEAD is the only head there is.
+  const headSha = resolveCommit(git, "HEAD", root);
   // A reviewed revision that is not an ancestor of HEAD says nothing about HEAD's history.
-  execFileSync(git, ["merge-base", "--is-ancestor", reviewed, headSha], { cwd: root });
-
-  // The closure is read from the working tree and compared by HEAD's blobs, so they must be the same thing.
-  if (headSha !== resolve("HEAD")) throw new Error("--head must be the checked-out HEAD: the import closure is read from the working tree");
-  const dirty = new Set(
-    execFileSync(git, ["diff", "--name-only", "-z", "HEAD"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean)
-  );
+  runGit(git, ["merge-base", "--is-ancestor", reviewed, headSha], { cwd: root });
+  const dirty = new Set(runGit(git, ["diff", "--name-only", "-z", "HEAD"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean));
 
   const baselineText = fs.readFileSync(baseline, "utf8");
   const entries = JSON.parse(baselineText).entries ?? [];
@@ -248,6 +243,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     main(process.argv.slice(2));
   } catch (error) {
     console.error(`renewBaselineReviewed: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+    process.exit(EXIT_UNAVAILABLE);
   }
 }

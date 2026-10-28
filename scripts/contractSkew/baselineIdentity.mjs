@@ -3,7 +3,7 @@ import path from "node:path";
 import ts from "typescript";
 import { loadBaseline } from "./baseline.mjs";
 import { createClientProgram, extractClientCalls } from "./clientPaths.mjs";
-import { CLIENT_SURFACES, listSurfaceFiles } from "./clientFiles.mjs";
+import { CLIENT_SURFACES, listSurfaceFiles, toPosixRel } from "./clientFiles.mjs";
 
 export const DEFAULT_BASELINE = "scripts/contractSkew/needs-evidence-baseline.json";
 
@@ -49,7 +49,7 @@ export function inspectBaselineIdentities(entries) {
     const wanted = new Set(entries.filter((entry) => entry.surface === surface.name).map((entry) => entry.file));
     if (!wanted.size) continue;
     const files = listSurfaceFiles(process.cwd(), surface)
-      .filter((file) => wanted.has(path.relative(process.cwd(), file).replace(/\\/g, "/")));
+      .filter((file) => wanted.has(toPosixRel(process.cwd(), file)));
     // createClientProgram([]) falls back to the whole tsconfig; missing files are drift.
     if (!files.length) continue;
     const program = createClientProgram(files, surface.tsconfig);
@@ -92,6 +92,8 @@ export function callExpressionAt(source, siteId) {
   /** @type {import("typescript").Node | undefined} */
   let exact;
   const visit = (node) => {
+    // A node whose full range excludes the position cannot start there, and neither can its children.
+    if (position < node.getFullStart() || position >= node.end) return;
     if (node.getStart(source) === position) exact = node;
     ts.forEachChild(node, visit);
   };

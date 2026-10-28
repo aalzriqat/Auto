@@ -17,6 +17,7 @@
  * somewhere unusual. A relative value is ignored, because a relative path is a
  * lookup relative to the working directory — the same trust problem.
  */
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -42,4 +43,31 @@ export function resolveGit({ platform = process.platform, env = process.env, exi
   const explicit = env.CONTRACT_SKEW_GIT;
   if (explicit && pathApi.isAbsolute(explicit)) return exists(explicit) ? explicit : undefined;
   return gitCandidates(platform, env).find((candidate) => exists(candidate));
+}
+
+/** Upper bound for one git call made by the author tools (relocation, renewal). */
+export const GIT_TIMEOUT_MS = 10_000;
+
+/**
+ * Run git by absolute path with an explicit timeout. Returns a Buffer unless `encoding` is given
+ * (the same contract as `execFileSync`), so a caller that must decode strictly can.
+ *
+ * @param {string} git  from `resolveGit()`
+ * @param {string[]} args
+ * @param {{ cwd?: string, encoding?: BufferEncoding, maxBuffer?: number }} [options]
+ */
+export function runGit(git, args, { cwd, encoding, maxBuffer = 16 * 1024 * 1024 } = {}) {
+  return execFileSync(git, args, { cwd, encoding, maxBuffer, timeout: GIT_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
+}
+
+/**
+ * The full commit id a revision names. `--end-of-options` stops a revision that starts with `-`
+ * being read as a flag (git-rev-parse documents it for `--verify`).
+ *
+ * @param {string} git
+ * @param {string} rev
+ * @param {string} [cwd]
+ */
+export function resolveCommit(git, rev, cwd) {
+  return runGit(git, ["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`], { cwd, encoding: "utf8" }).trim();
 }

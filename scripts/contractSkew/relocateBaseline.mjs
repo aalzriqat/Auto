@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /** Explicit author tool; never imported or invoked by the production monitor. */
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import ts from "typescript";
-import { resolveGit } from "./gitExecutable.mjs";
+import { resolveCommit, resolveGit, runGit } from "./gitExecutable.mjs";
 import { serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
 import { DEFAULT_BASELINE, EXIT_IDENTITY_DRIFT, EXIT_UNAVAILABLE, readIdentityBaseline, inspectBaselineIdentities, callExpressionAt,
   callKey, describeStranded } from "./baselineIdentity.mjs";
@@ -19,41 +18,44 @@ try {
   if (!values.base) throw new Error("Required: --base <revision containing the reviewed calls at their old sites>");
   const git = resolveGit();
   if (!git) throw new Error("Git is unavailable; cannot verify the old call expression");
-  const runGit = (args) => execFileSync(git, args, { timeout: 10000, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
-  const base = runGit(["rev-parse", "--verify", "--end-of-options", `${values.base}^{commit}`]).toString("utf8").trim();
+  const base = resolveCommit(git, values.base);
   const before = fs.readFileSync(values.baseline, "utf8");
   const entries = readIdentityBaseline(values.baseline);
   const stranded = inspectBaselineIdentities(entries);
   const occupied = new Set(entries.map(callKey));
-  const sources = new Map();
-  const headSources = new Map();
+  /** @type {Map<string, { base: import("typescript").SourceFile, head: import("typescript").SourceFile }>} */
+  const sourcesByFile = new Map();
   const proposals = stranded.map((finding) => {
     const { entry, candidates } = finding;
-    if (!sources.has(entry.file)) {
-      const text = strictUtf8.decode(runGit(["show", `${base}:${entry.file}`]));
-      const source = ts.createSourceFile(entry.file, text, ts.ScriptTarget.Latest, true);
-      sources.set(entry.file, source);
-      const headText = strictUtf8.decode(fs.readFileSync(entry.file));
-      headSources.set(entry.file, ts.createSourceFile(entry.file, headText, ts.ScriptTarget.Latest, true));
+    let sources = sourcesByFile.get(entry.file);
+    if (!sources) {
+      const parse = (text) => ts.createSourceFile(entry.file, text, ts.ScriptTarget.Latest, true);
+      sources = {
+        base: parse(strictUtf8.decode(runGit(git, ["show", `${base}:${entry.file}`]))),
+        head: parse(strictUtf8.decode(fs.readFileSync(entry.file))),
+      };
+      sourcesByFile.set(entry.file, sources);
     }
-    const original = callExpressionAt(sources.get(entry.file), entry.callSiteId);
+    const original = callExpressionAt(sources.base, entry.callSiteId);
     const identical = candidates.filter((call) => original !== null &&
-      callExpressionAt(headSources.get(call.file), call.callSiteId) === original);
+      callExpressionAt(sources.head, call.callSiteId) === original);
     const target = identical.length === 1 && !occupied.has(callKey(identical[0])) ? identical[0] : undefined;
     return { ...finding, target };
   });
-  // Distinct old calls cannot both claim one new site, even if their text is identical.
-  const owners = new Map();
+  // Distinct old calls cannot both claim one new site, even if their text is identical. Several findings of the
+  // SAME old call (one per contract path) share a call key and may share the target; a second old call is a conflict.
+  /** @type {Map<string, string | null>} target key -> the one old call claiming it, or null once two differ */
+  const claimant = new Map();
   for (const proposal of proposals) {
     if (!proposal.target) continue;
-    const key = callKey(proposal.target);
-    if (!owners.has(key)) owners.set(key, new Set());
-    owners.get(key).add(callKey(proposal.entry));
+    const target = callKey(proposal.target);
+    const old = callKey(proposal.entry);
+    claimant.set(target, claimant.has(target) && claimant.get(target) !== old ? null : old);
   }
   let refused = 0;
   for (const proposal of proposals) {
     const { entry, target } = proposal;
-    if (!target || owners.get(callKey(target)).size !== 1) {
+    if (!target || claimant.get(callKey(target)) === null) {
       console.error(`NEEDS HUMAN REVIEW (changed, absent, ambiguous or occupied call): ${describeStranded(proposal)}`);
       refused++;
     } else {

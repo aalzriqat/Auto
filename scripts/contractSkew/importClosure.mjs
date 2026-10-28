@@ -23,6 +23,7 @@
 import path from "node:path";
 import ts from "typescript";
 import { createClientProgram } from "./clientPaths.mjs";
+import { toPosixRel } from "./clientFiles.mjs";
 
 export const GENERATED_PREFIX = "convex/_generated/";
 const SCRIPT_EXT = /\.(?:[cm]?[jt]sx?)$/;
@@ -63,21 +64,19 @@ function specifiersOf(source) {
  */
 export function createImportClosure({ root, projects }) {
   const absRoot = path.resolve(root);
-  const toRel = (/** @type {string} */ abs) => path.relative(absRoot, abs).replace(/\\/g, "/");
+  const toRel = (/** @type {string} */ abs) => toPosixRel(absRoot, abs);
   const states = projects
     .filter((project) => project.rootFiles.length > 0)
     .map(({ tsconfig, rootFiles }) => {
       const program = createClientProgram(rootFiles.map((file) => path.resolve(absRoot, file)), path.resolve(absRoot, tsconfig));
-      const options = program.getCompilerOptions();
-      return { program, options, cache: ts.createModuleResolutionCache(absRoot, (name) => name, options), roots: new Set(rootFiles) };
+      /** @type {Map<string, { files: string[], unresolved: string[] }>} direct imports per file, one project's program */
+      const edges = new Map();
+      return { program, options: program.getCompilerOptions(), edges, roots: new Set(rootFiles) };
     });
 
-  /** @type {Map<string, { files: string[], unresolved: string[] }>} */
-  const edgesByKey = new Map();
   /** @param {(typeof states)[number]} state @param {string} rel */
   const directImports = (state, rel) => {
-    const key = `${states.indexOf(state)}\u0000${rel}`;
-    const cached = edgesByKey.get(key);
+    const cached = state.edges.get(rel);
     if (cached) return cached;
     const files = new Set();
     const unresolved = new Set();
@@ -90,7 +89,7 @@ export function createImportClosure({ root, projects }) {
         const specs = new Set(specifiersOf(source));
         for (const reference of source.referencedFiles) files.add(toRel(path.resolve(path.dirname(abs), reference.fileName)));
         for (const spec of specs) {
-          const resolved = ts.resolveModuleName(spec, abs, state.options, ts.sys, state.cache).resolvedModule;
+          const resolved = ts.resolveModuleName(spec, abs, state.options, ts.sys).resolvedModule;
           if (resolved) {
             const target = toRel(resolved.resolvedFileName);
             const external = resolved.isExternalLibraryImport || target.startsWith("..") || target.split("/").includes("node_modules");
@@ -106,15 +105,11 @@ export function createImportClosure({ root, projects }) {
       }
     }
     const result = { files: [...files], unresolved: [...unresolved] };
-    edgesByKey.set(key, result);
+    state.edges.set(rel, result);
     return result;
   };
 
-  /** @type {Map<string, { files: string[], unresolved: string[] }>} */
-  const closures = new Map();
   return (file) => {
-    const done = closures.get(file);
-    if (done) return done;
     const state = states.find((candidate) => candidate.roots.has(file));
     if (!state) throw new Error(`${file} is not a root of any import-closure project`);
     const seen = new Set([file]);
@@ -130,8 +125,6 @@ export function createImportClosure({ root, projects }) {
         }
       }
     }
-    const result = { files: [...seen].sort(), unresolved: [...unresolved].sort() };
-    closures.set(file, result);
-    return result;
+    return { files: [...seen].sort(), unresolved: [...unresolved].sort() };
   };
 }
