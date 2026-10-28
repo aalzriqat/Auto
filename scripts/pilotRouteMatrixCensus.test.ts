@@ -45,7 +45,7 @@ test("the pilot matrix classifies each public registration in its named module s
   for (const door of STORAGE_ONLY) expect(expected).toContain(door);
   const moneyDoors = expected.filter(door => !STORAGE_ONLY.has(door)).sort();
   const matrix = readFileSync(path.join(ROOT, "docs/architecture/pilot-route-matrix.md"), "utf8").replace(/\r\n/g, "\n");
-  const section = matrix.split("## Normalized Unified Deal classification (F3)\n")[1]?.split("\n## Owner decisions needed")[0];
+  const section = matrix.split("## Normalized Unified Deal classification (F3)\n")[1]?.split("\n## Owner decisions resolved")[0];
   expect(section, "the normalized inventory section must exist").toBeDefined();
   const rows = [...(section ?? "").matchAll(/^\| `([\w]+\.[\w]+)` \(`convex\/[^`]+`\) \| (ENABLED|EXCLUDED|OWNER DECISION NEEDED) \| ([^|]+) \|/gm)];
   expect(rows.map(row => row[1]).sort()).toEqual(moneyDoors);
