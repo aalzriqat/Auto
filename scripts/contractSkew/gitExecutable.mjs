@@ -45,6 +45,37 @@ export function resolveGit({ platform = process.platform, env = process.env, exi
   return gitCandidates(platform, env).find((candidate) => exists(candidate));
 }
 
+/**
+ * A revision typed on a command line is untrusted input to git. Git reads an argument that starts with `-` as an
+ * option (argument injection: `--output=<file>`, `--upload-pack=<cmd>`; CWE-88, Sonar jssecurity:S8705), so a
+ * revision is accepted only when it is a plain ref name, abbreviated or full commit id, or `~`/`^` ancestry of one:
+ * it must start with a letter, digit or underscore and use only `[A-Za-z0-9_./@^~-]`. That refuses a leading `-`,
+ * whitespace, `:`, `{}` (so `@{u}` and `rev^{tree}` forms), `..` ranges and control characters. The command also
+ * passes `--end-of-options` so git itself stops option parsing, which is the documented defence in depth
+ * (git-rev-parse(1), gitcli(7)); the allow-list is what makes the value safe for the commands that lack it.
+ */
+const REVISION = /^[A-Za-z0-9_][A-Za-z0-9_./@^~-]{0,254}$/;
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
+ * @param {unknown} revision
+ * @param {string} [role]
+ * @returns {string} the same revision, once it is known to be a plain revision name
+ */
+export function assertSafeRevision(revision, role = "revision") {
+  if (typeof revision !== "string" || !REVISION.test(revision) || revision.includes("..")) {
+    throw new Error(`${role} ${JSON.stringify(String(revision).slice(0, 80))} is not a plain revision name or commit id (a leading "-", whitespace, ":" "{}" or ".." is refused)`);
+  }
+  return revision;
+}
+
+/** A git argument is a string without a NUL byte (which would end the C string early inside git). */
+function assertGitArguments(args) {
+  if (!Array.isArray(args) || args.some((argument) => typeof argument !== "string" || argument.includes("\0"))) {
+    throw new Error("git arguments must be strings without NUL bytes");
+  }
+}
+
 /** Upper bound for one git call made by the author tools (relocation, renewal). */
 export const GIT_TIMEOUT_MS = 10_000;
 
@@ -59,6 +90,7 @@ export const GIT_TIMEOUT_MS = 10_000;
  * @returns {string}
  */
 export function runGitText(git, args, { cwd, maxBuffer = 16 * 1024 * 1024 } = {}) {
+  assertGitArguments(args);
   return execFileSync(git, args, { cwd, encoding: "utf8", maxBuffer, timeout: GIT_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
 }
 
@@ -71,6 +103,7 @@ export function runGitText(git, args, { cwd, maxBuffer = 16 * 1024 * 1024 } = {}
  * @returns {Buffer}
  */
 export function runGitBytes(git, args, { cwd, maxBuffer = 16 * 1024 * 1024 } = {}) {
+  assertGitArguments(args);
   return execFileSync(git, args, { cwd, maxBuffer, timeout: GIT_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
 }
 
@@ -83,5 +116,27 @@ export function runGitBytes(git, args, { cwd, maxBuffer = 16 * 1024 * 1024 } = {
  * @param {string} [cwd]
  */
 export function resolveCommit(git, rev, cwd) {
-  return runGitText(git, ["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`], { cwd }).trim();
+  assertSafeRevision(rev);
+  const commit = runGitText(git, ["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`], { cwd }).trim();
+  if (!COMMIT_ID.test(commit)) throw new Error(`git did not return a full commit id for ${rev}`);
+  return commit;
+}
+
+/**
+ * Whether `ancestor` is an ancestor of (or equal to) `descendant`. Both are validated revisions.
+ *
+ * @param {string} git
+ * @param {string} ancestor
+ * @param {string} descendant
+ * @param {string} [cwd]
+ */
+export function isAncestor(git, ancestor, descendant, cwd) {
+  assertSafeRevision(ancestor, "ancestor");
+  assertSafeRevision(descendant, "descendant");
+  try {
+    runGitText(git, ["merge-base", "--is-ancestor", "--end-of-options", ancestor, descendant], { cwd });
+    return true;
+  } catch {
+    return false;
+  }
 }

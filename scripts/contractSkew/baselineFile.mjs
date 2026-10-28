@@ -36,20 +36,60 @@ export function parseCanonicalBaseline(text) {
 }
 
 /**
+ * @param {string} parent  absolute directory
+ * @param {string} child   absolute path
+ */
+const isWithin = (parent, child) => {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+};
+
+/**
+ * Resolve a command-line path against `root` and refuse one that leaves it (path traversal, CWE-22; Sonar
+ * jssecurity:S8707; OWASP "Path Traversal"). The check is the documented pattern: `path.resolve` to normalise
+ * `..` segments and absolute inputs, then `path.relative` to prove containment. It is repeated on the real path
+ * (`fs.realpathSync`) of whatever already exists, so a symlink or junction inside the root cannot point out of it.
+ *
+ * @param {string} root       the repository root (the directory the tool is run for)
+ * @param {unknown} candidate the path as typed
+ * @param {string} [role]     named in the refusal
+ * @returns {string} an absolute path inside `root`
+ */
+export function resolveInside(root, candidate, role = "path") {
+  if (typeof candidate !== "string" || candidate.trim() === "" || candidate.includes("\0")) {
+    throw new Error(`${role} must be a non-empty path`);
+  }
+  const lexicalRoot = path.resolve(root);
+  const resolved = path.resolve(lexicalRoot, candidate);
+  if (!isWithin(lexicalRoot, resolved)) throw new Error(`${role} ${candidate} is outside the repository root ${lexicalRoot}; refusing`);
+  const realRoot = fs.realpathSync(lexicalRoot);
+  let real = resolved;
+  try {
+    real = fs.realpathSync(resolved);
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error)?.code !== "ENOENT") throw error;
+  }
+  if (!isWithin(realRoot, real)) throw new Error(`${role} ${candidate} resolves outside the repository root ${lexicalRoot}; refusing`);
+  return resolved;
+}
+
+/**
  * Replace `file` with `text` through a temporary file in the same directory, so a
  * failure never leaves a half-written baseline. Refuses if the file changed since
- * `expectedBefore` was read.
+ * `expectedBefore` was read, or if `file` is outside `root`.
  *
  * @param {string} file
  * @param {string} text
  * @param {string} expectedBefore
+ * @param {string} [root]  defaults to the working directory
  */
-export function writeBaselineAtomically(file, text, expectedBefore) {
-  if (fs.readFileSync(file, "utf8") !== expectedBefore) throw new Error("Baseline changed while checking; refusing write");
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
+export function writeBaselineAtomically(file, text, expectedBefore, root = process.cwd()) {
+  const target = resolveInside(root, file, "baseline");
+  if (fs.readFileSync(target, "utf8") !== expectedBefore) throw new Error("Baseline changed while checking; refusing write");
+  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`);
   try {
-    fs.writeFileSync(temporary, text, { flag: "wx", mode: fs.statSync(file).mode });
-    fs.renameSync(temporary, file);
+    fs.writeFileSync(temporary, text, { flag: "wx", mode: fs.statSync(target).mode });
+    fs.renameSync(temporary, target);
   } finally {
     // Created by this call; the original is never removed on failure.
     fs.rmSync(temporary, { force: true });

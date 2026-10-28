@@ -50,12 +50,13 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CLIENT_SURFACES } from "./clientFiles.mjs";
-import { resolveCommit, resolveGit, runGitText } from "./gitExecutable.mjs";
+import { assertSafeRevision, isAncestor, resolveCommit, resolveGit, runGitText } from "./gitExecutable.mjs";
 import { DEFAULT_BASELINE, EXIT_UNAVAILABLE } from "./baselineIdentity.mjs";
-import { parseCanonicalBaseline, serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
+import { parseCanonicalBaseline, resolveInside, serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
+import { isRunDirectly } from "./runDirectly.mjs";
 import { createImportClosure } from "./importClosure.mjs";
 import { identityOf } from "./baseline.mjs";
 import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
@@ -246,8 +247,26 @@ export function renewalEvidenceGaps(text, { reviewedText, compare, backendDefini
   });
 }
 
-function main(argv) {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+/** The repository this copy of the tool lives in. */
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * @param {string[]} argv
+ * @param {{ log: (line: string) => void, error: (line: string) => void }} [io]
+ * @param {string} [root]  the repository to check; every path option must stay inside it
+ * @returns {number} the process exit code
+ */
+export function main(argv, io = { log: console.log, error: console.error }, root = REPO_ROOT) {
+  try {
+    return run(argv, io, root);
+  } catch (error) {
+    io.error(`renewBaselineReviewed: ${error instanceof Error ? error.message : String(error)}`);
+    return EXIT_UNAVAILABLE;
+  }
+}
+
+/** @returns {number} 0, or 10 when the evidence check found stale entries; throws when the check cannot be made */
+function run(argv, io, root) {
   // node:util parseArgs is strict by default: an unknown option, a positional, or an option missing its value throws.
   const { values: args } = parseArgs({
     args: argv,
@@ -266,10 +285,12 @@ function main(argv) {
   if (args["check-evidence"] && (args.write || args.expires || args.renewal)) throw new Error("--check-evidence is read-only and takes only --reviewed and --baseline");
   const git = resolveGit();
   if (!git) throw new Error("git could not be located (set CONTRACT_SKEW_GIT to an absolute path)");
-  const baseline = path.resolve(args.baseline ?? path.join(root, DEFAULT_BASELINE));
+  const baseline = resolveInside(root, args.baseline ?? DEFAULT_BASELINE, "baseline");
 
   /** @param {string} revision @param {string} role */
   const resolveHistoryCommit = (revision, role) => {
+    // A malformed revision is a usage error, not missing history: say so before the history hint can mislead.
+    assertSafeRevision(revision, role);
     try {
       return resolveCommit(git, revision, root);
     } catch {
@@ -281,9 +302,7 @@ function main(argv) {
   const headSha = resolveCommit(git, "HEAD", root);
   /** @param {string} revision @param {string} role */
   const requireAncestor = (revision, role) => {
-    try {
-      runGitText(git, ["merge-base", "--is-ancestor", revision, headSha], { cwd: root });
-    } catch {
+    if (!isAncestor(git, revision, headSha, root)) {
       throw new Error(`HISTORY_ANCESTRY_REFUSED: ${role} ${revision} is not a verified ancestor of HEAD; check the revision and available Git history before retrying`);
     }
   };
@@ -320,11 +339,10 @@ function main(argv) {
     const renewedEntries = entries.filter((entry) => Object.hasOwn(entry, "renewal")).length;
     const malformed = gaps.filter((gap) => gap.renewalProblem === "malformed").length;
     const missing = gaps.filter((gap) => gap.renewalProblem === "missing").length;
-    console.log(`renewal evidence: ${renewedEntries} renewed entries checked, ${entries.length - renewedEntries} unrenewed, ${gaps.length} stale, ${malformed} malformed, ${missing} missing`);
-    for (const gap of gaps.slice(0, 20)) console.log(`STALE entry #${gap.index + 1} ${gap.entry}: unnamed ${gap.missing.join(", ")}; changed after review ${gap.changedSinceEvidence.join(", ")}; unresolved ${gap.unresolved.join(", ")}`);
-    if (gaps.length > 20) console.log(`... ${gaps.length - 20} more stale entries`);
-    if (gaps.length) process.exitCode = 10;
-    return;
+    io.log(`renewal evidence: ${renewedEntries} renewed entries checked, ${entries.length - renewedEntries} unrenewed, ${gaps.length} stale, ${malformed} malformed, ${missing} missing`);
+    for (const gap of gaps.slice(0, 20)) io.log(`STALE entry #${gap.index + 1} ${gap.entry}: unnamed ${gap.missing.join(", ")}; changed after review ${gap.changedSinceEvidence.join(", ")}; unresolved ${gap.unresolved.join(", ")}`);
+    if (gaps.length > 20) io.log(`... ${gaps.length - 20} more stale entries`);
+    return gaps.length ? 10 : 0;
   }
 
   const projects = [
@@ -347,22 +365,16 @@ function main(argv) {
     expires: String(args.expires),
     renewal: String(args.renewal),
   });
-  console.log(`reviewed ${reviewed}\nhead     ${headSha}`);
-  console.log(`renewed ${result.renewed}, already current ${result.skipped}, refused ${result.refused.length}`);
-  for (const r of result.refused) console.log(`REFUSED entry #${r.index + 1} ${r.entry}: ${r.reason}`);
+  io.log(`reviewed ${reviewed}\nhead     ${headSha}`);
+  io.log(`renewed ${result.renewed}, already current ${result.skipped}, refused ${result.refused.length}`);
+  for (const r of result.refused) io.log(`REFUSED entry #${r.index + 1} ${r.entry}: ${r.reason}`);
   if (args.write) {
-    writeBaselineAtomically(baseline, result.text, baselineText);
-    console.log(`wrote ${baseline}`);
+    writeBaselineAtomically(baseline, result.text, baselineText, root);
+    io.log(`wrote ${baseline}`);
   } else {
-    console.log("dry run; pass --write to apply");
+    io.log("dry run; pass --write to apply");
   }
+  return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  try {
-    main(process.argv.slice(2));
-  } catch (error) {
-    console.error(`renewBaselineReviewed: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(EXIT_UNAVAILABLE);
-  }
-}
+if (isRunDirectly(import.meta.url)) process.exitCode = main(process.argv.slice(2));

@@ -105,6 +105,7 @@ import path from "node:path";
 import ts from "typescript";
 import { createClientProgram } from "./clientPaths.mjs";
 import { toPosixRel } from "./clientFiles.mjs";
+import { compareCodeUnits } from "./compareCodeUnits.mjs";
 
 export const GENERATED_PREFIX = "convex/_generated/";
 const CONVEX_DIR = "convex";
@@ -621,6 +622,6 @@ export function createImportClosure({ root, projects, implicitInputs = [] }) {
         }
       }
     }
-    return { files: [...seen].sort(), unresolved: [...unresolved].sort() };
+    return { files: [...seen].sort(compareCodeUnits), unresolved: [...unresolved].sort(compareCodeUnits) };
   };
 }
