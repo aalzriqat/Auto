@@ -1,0 +1,71 @@
+{
+  "id": "rt11-negative-landed-cost-other-bank",
+  "fingerprint": "ede76c4d0f459248bbede442c4edfa675be3d86d0a286ebb2764cd4d8ed77843",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors-round2",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.upsertLandedCosts",
+      "input": {
+        "sourceType": "STOCK",
+        "previousItems": [
+          {
+            "label": "Transport",
+            "amount": 100,
+            "paymentMethod": "BANK_TRANSFER",
+            "bank": "A"
+          }
+        ],
+        "items": [
+          {
+            "label": "Transport",
+            "amount": 100,
+            "paymentMethod": "BANK_TRANSFER",
+            "bank": "A"
+          },
+          {
+            "label": "Offset",
+            "amount": -100,
+            "paymentMethod": "BANK_TRANSFER",
+            "bank": "B"
+          }
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "PAID_LANDED_COST_CHANGE_PILOT_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "step1.schedulerChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 negative landed cost on another physical bank refuses without writes"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

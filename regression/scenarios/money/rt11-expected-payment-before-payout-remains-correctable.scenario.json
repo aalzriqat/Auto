@@ -1,0 +1,41 @@
+{
+  "id": "rt11-expected-payment-before-payout-remains-correctable",
+  "fingerprint": "3068cbccb8803611bfdde88b7ebb0fe7df9fcf957de4b74e409ff5bad56a45bf",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.correctExpectedPayment",
+      "input": {
+        "payoutState": "UNPAID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "application.expectedPaymentMethod",
+      "value": "ABSENT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 expected payment before payout remains correctable"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

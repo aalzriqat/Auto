@@ -50,6 +50,11 @@ vi.mock("./rateLimit", () => ({
 
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
+// SCRUM-560: the fixed-asset lifecycle is OFF for the pilot; this file tests the depreciation cron's
+// per-item isolation, so it opens the switch (the cron no-op: fixedAssetLifecycleContainment.scrum560.test.ts).
+vi.mock("./utils/fixedAssetLifecycleContainment", async (importOriginal) =>
+  (await import("../test-utils/fixedAssetLifecycleSwitch")).openFixedAssetLifecycle(await importOriginal()));
+
 const PERMISSIONS = [
   "create:vehicles", "edit:vehicles", "view:vehicles",
   "create:expenses", "edit:expenses", "view:expenses",
@@ -496,6 +501,7 @@ describe("every mutation skip reason is classified", () => {
   // ruled classification so a reclassification is a deliberate, visible change.
   test("depreciation reasons", () => {
     expect(DEPRECIATION_REASON_CLASS).toEqual({
+      lifecycle_disabled: "done", // SCRUM-560: the pilot switch, a counted ordinary skip
       org_lifecycle_blocked: "done",
       not_found: "done",
       not_active: "done",

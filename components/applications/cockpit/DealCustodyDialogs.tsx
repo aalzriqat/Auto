@@ -1,4 +1,5 @@
 "use client";
+import { isRt11DoorDisabled } from "@/convex/utils/rt11DoorContainment";
 
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
@@ -546,7 +547,7 @@ export function CustodyCloseDialog({
     setWriteOff(false);
     setReason("");
   });
-  const canWriteOff = !settled && employeeOwesMinor > 0;
+  const canWriteOff = !settled && employeeOwesMinor > 0 && !isRt11DoorDisabled("CUSTODY_WRITEOFF_PILOT_DISABLED");
   const canSubmit = notes.trim() !== "" && !busy && (!writeOff || reason.trim() !== "") && (settled || writeOff);
   const guard = busyCloseGuard(busy, onOpenChange);
   return (
@@ -597,6 +598,7 @@ export function CustodyCloseDialog({
               )}
             </div>
           )}
+          {!settled && employeeOwesMinor > 0 && isRt11DoorDisabled("CUSTODY_WRITEOFF_PILOT_DISABLED") && <p className="text-xs text-muted-foreground">{t("ServerError_CUSTODY_WRITEOFF_PILOT_DISABLED")}</p>}
           <SubmitError message={error} />
         </div>
         <DialogFooter>

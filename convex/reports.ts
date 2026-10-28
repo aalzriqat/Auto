@@ -3,6 +3,7 @@ import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { query, QueryCtx } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
+import { projectSaleRow } from "./utils/saleRowProjection";
 import { grossTransactionValueForTransaction } from "./utils/grossTransactionValue";
 import { PERMISSIONS } from "./utils/permissions";
 import { rateLimiter } from "./rateLimit";
@@ -274,7 +275,7 @@ export const getSalesAndProfitReport = query({
       }
 
       return {
-        ...sale,
+        ...projectSaleRow(sale, role),
         ...commissionView,
         vehicleMake: vehicle?.make,
         vehicleModel: vehicle?.model,

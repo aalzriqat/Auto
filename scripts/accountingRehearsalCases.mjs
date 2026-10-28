@@ -985,7 +985,7 @@ export async function runRehearsalCases(ctx) {
         deposit: { id: String(firstDeposit), replayReturnedSameId: true, rowsForVehicle: rows.length },
         commandsProven: ["vehicles.create", "deposits.create"],
         commandsStillUnproven:
-          "RT2 covers eight more; the remaining IDENTITY_GUARDED commands have no cloud retry proof — see the evidence inventory",
+          "RT2 covers seven more (and proves fixedAssets.capitalize is refused during the pilot); the remaining IDENTITY_GUARDED commands have no cloud retry proof — see the evidence inventory",
       };
     }
   );
@@ -996,7 +996,8 @@ export async function runRehearsalCases(ctx) {
   // createInstallmentPlan, fixedAssets.capitalize, partnerEquity.add with an
   // opening contribution, recordEquityMovement, vehicles.createReservation,
   // workOrders.create, and workOrders.update's state barrier. Not the census;
-  // these eight.
+  // these eight. Seven replay once. fixedAssets.capitalize is refused during the
+  // pilot (SCRUM-560), so its step proves the refusal instead of a replay.
   //
   // Each proof has two halves. The IDENTITY half is RT1's contract — a replay
   // is accepted and returns the original identity. The FOOTPRINT half is what
@@ -1006,7 +1007,7 @@ export async function runRehearsalCases(ctx) {
   await recordCase(
     results,
     "RT2",
-    "the eight named economic commands replay once and leave one footprint each",
+    "seven named economic commands replay once and leave one footprint each; fixedAssets.capitalize is refused (pilot)",
     async () => {
       const stamp = Date.now().toString(36);
       const denom = await orgDenomination({ orgId, ownerMust });
@@ -1073,19 +1074,24 @@ export async function runRehearsalCases(ctx) {
       }
       proven["collections.createInstallmentPlan"] = { ids: planIds.map(String), total: planTotal, rowsTitled: titledPlan.length };
 
-      // 3. fixedAssets.capitalize — one asset, one ASSET_CAPITALIZED.
-      const assetId = await replayMustReturnSame({
-        call: ownerCall, must: ownerMust, fnPath: "fixedAssets:capitalize", what: "fixedAssets.capitalize",
-        args: {
-          orgId, name: `Rehearsal RT2 lift ${stamp}`, purchaseDate: Date.now(), costMinor: 1500 * m,
-          usefulLifeMonths: 12, paymentMethod: "CASH", idempotencyKey: `rehearsal-rt2-asset-${stamp}`,
-        },
-      });
-      await oneEvent("fixedAssets", assetId, "ASSET_CAPITALIZED", "the asset");
+      // 3. fixedAssets.capitalize — OFF for the pilot (SCRUM-560 / SCRUM-760 owner ruling c23812, ruling 4).
+      //    The expected-refusal cell: the call and its replay are both refused server-side with the
+      //    stable code, and no asset row carrying the name exists afterwards. Re-enabling the lifecycle
+      //    converts this back into the replay-once proof in the same change.
+      const assetName = `Rehearsal RT2 lift ${stamp}`;
+      const capitalizeArgs = {
+        orgId, name: assetName, purchaseDate: Date.now(), costMinor: 1500 * m,
+        usefulLifeMonths: 12, paymentMethod: "CASH", idempotencyKey: `rehearsal-rt2-asset-${stamp}`,
+      };
+      for (const attempt of ["first call", "replay"]) {
+        const refused = await ownerCall("mutation", "fixedAssets:capitalize", capitalizeArgs);
+        if (refused.ok) fail(`fixedAssets.capitalize ${attempt} was ACCEPTED, but the pilot blocks the fixed-asset lifecycle server-side`);
+        expectEqual(refused.errorCode, "FIXED_ASSET_LIFECYCLE_DISABLED", `fixedAssets.capitalize ${attempt} refusal code`);
+      }
       const assetsPage = await ownerMust("query", "fixedAssets:list", { orgId, paginationOpts: { numItems: 200, cursor: null } });
-      const sameName = (assetsPage?.page ?? []).filter((a) => a.name === `Rehearsal RT2 lift ${stamp}`);
-      expectEqual(sameName.length, 1, "fixed-asset rows carrying this capitalization's name");
-      proven["fixedAssets.capitalize"] = { id: String(assetId) };
+      const sameName = (assetsPage?.page ?? []).filter((a) => a.name === assetName);
+      expectEqual(sameName.length, 0, "fixed-asset rows carrying the refused capitalization's name");
+      proven["fixedAssets.capitalize"] = { refusalCode: "FIXED_ASSET_LIFECYCLE_DISABLED", rowsCarryingTheName: sameName.length };
 
       // 4. partnerEquity.add WITH opening capital — one partner, one movement,
       //    one CAPITAL_CONTRIBUTED.

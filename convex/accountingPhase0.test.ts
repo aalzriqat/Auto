@@ -5,6 +5,13 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
+// SCRUM-760 ruling 11 legacy-collection-refund opt-out: this suite drives the legacy collection REFUND request and approval
+// (collections.requestApproval / respondToApproval) as a FIXTURE or as the behaviour that returns when that door is activated.
+// The narrow pilot blocks the door by default, so the block is off here. The shipped state is asserted in
+// convex/legacyCollectionRefundContainment.test.ts; the census in scripts/legacyCollectionRefundOptOutCensus.test.ts allows only
+// the files listed there.
+vi.mock("./utils/legacyCollectionRefundContainment", async (importOriginal) =>
+  (await import("../test-utils/legacyCollectionRefundSwitches")).openLegacyCollectionRefund(await importOriginal()));
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
 // itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
@@ -569,3 +576,10 @@ describe("Phase 0 financial safety controls", () => {
     ).rejects.toThrow(/vehicle not found/i);
   });
 });
+
+// RT11-DOORS: historical lifecycle mechanics with the pilot doors explicitly open.
+// Shipped-state refusals and controls live in rt11DoorContainment.test.ts.
+vi.mock("./utils/rt11DoorContainment", async (importOriginal) =>
+  (await import("../test-utils/rt11DoorSwitches")).openRt11Doors(
+    await importOriginal<typeof import("./utils/rt11DoorContainment")>()
+  ));

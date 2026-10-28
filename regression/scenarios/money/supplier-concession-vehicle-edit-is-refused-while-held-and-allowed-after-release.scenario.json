@@ -1,0 +1,84 @@
+{
+  "id": "supplier-concession-vehicle-edit-is-refused-while-held-and-allowed-after-release",
+  "steps": [
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "financingEconomics.resolveAppraisalGap",
+      "input": {
+        "netShortfallMinor": 850000,
+        "supplierShareMinor": 400000,
+        "dealerShareMinor": 450000,
+        "observedEntitlementMinor": 9500000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "sourceCost": 9600
+      }
+    },
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "financingEconomics.reopenApproval",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "sourceCost": 9600
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refused",
+      "value": true
+    },
+    {
+      "observable": "step2.refusalStatesNoFigures",
+      "value": true
+    },
+    {
+      "observable": "step4.vehicleSourceCost",
+      "value": 9600
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierConcession.scrum766c.test.ts",
+    "testName": "a vehicle edit that changes the supplier, cost or type is refused while a concession is held, and allowed after release"
+  },
+  "matrixRow": "pilot-supplier-concession-refusals",
+  "fingerprint": "d80bcc8e0ecf7b989abb02afdcf64b1f30e5d59bcfef05b4701b471f0412fce4",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum766c-supplier-concession",
+    "firstSeen": "2026-10-28"
+  }
+}

@@ -10,6 +10,7 @@
     "scripts/contractSkew/clientCoverage.test.ts": 60,
     "components/applications/cockpit/DealCockpitReviewParity.test.tsx": 48,
     "scripts/intelligence/browserSwarmDuplicateSubmitHandler.test.ts": 36,
+    "scripts/supplierMasterGuards.test.ts": 90,
     "scripts/contractSkew/specDiff.test.ts": 34,
     "scripts/autoflowInvariantCatalog.test.ts": 30,
     "convex/consignedReporting.test.ts": 29,

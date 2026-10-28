@@ -7,6 +7,10 @@
 // app edges is safe to initialize before anything that can participate in
 // a cycle, so it goes above every local import.
 import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
+import {
+  fixedAssetPostingRefusal,
+  refuseFixedAssetLifecycle,
+} from "../utils/fixedAssetLifecycleContainment";
 import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
@@ -99,6 +103,16 @@ export async function reverseAccountingEvent(
   const original = await ctx.db.get(cmd.originalEventId);
   if (!original || original.orgId !== cmd.orgId) {
     throw new ConvexError("Accounting event not found in this organization.");
+  }
+  // ⚠️ SCRUM-560 / SCRUM-760 RULING 4 — NO FIXED-ASSET REVERSAL WHILE THE LIFECYCLE IS OFF.
+  // The reversal of a capitalization, depreciation, impairment or disposal is part of the
+  // lifecycle and would unwind only the journal, leaving the asset row, accumulated
+  // depreciation and the derecognition state untouched. The ORIGINAL event is classified (by
+  // its source or its four event types), so reversals of every other family stay available.
+  // Before any write, so the refusal is atomic even for a caller that catches. Throws the
+  // coded `FIXED_ASSET_LIFECYCLE_DISABLED` refusal.
+  if (fixedAssetPostingRefusal({ eventType: original.eventType, sourceType: original.sourceType })) {
+    refuseFixedAssetLifecycle("FIXED_ASSET_LIFECYCLE_DISABLED");
   }
   // A journal-only reversal would leave the native movement (and every
   // partner balance consumer) unchanged. No governed partner reversal exists.
