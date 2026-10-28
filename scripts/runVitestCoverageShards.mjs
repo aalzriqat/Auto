@@ -77,6 +77,8 @@ const sonarCoverageArgs = [
   "--coverage.include=scripts/**/*.cjs",
   "--coverage.exclude=convex/_generated/**",
   "--coverage.exclude=**/*.test.ts",
+  // node:test files (scripts/contractSkew/baselineIdentity.test.mjs) are test code, classified so in sonar-project.properties (SCRUM-866).
+  "--coverage.exclude=**/*.test.mjs",
   ...thresholdZeroArgs,
 ];
 
