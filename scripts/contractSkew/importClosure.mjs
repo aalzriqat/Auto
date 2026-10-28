@@ -41,6 +41,18 @@
  *     - `anyApi`, and `makeFunctionReference` with a non-literal name, used without a
  *       call, or reached through a namespace used any other way (`const x = cv`,
  *       destructuring it, `cv[k]`); a dynamic `import()`/`require()` of `convex/server`;
+ *     - a COMPUTED load, in every closure file and whatever it targets: `import()`,
+ *       `require()` or `import x = require()` whose specifier is not a plain string
+ *       literal (a no-substitution template counts as plain) after wrappers are
+ *       skipped (`"a" + "b"`, a template with a substitution, an identifier, no
+ *       argument), because it cannot be proved not to reach `_generated/api` or
+ *       `convex/server`; and a bare `require` that is not called (`const r = require`;
+ *       `require.resolve` and `typeof require` are inert and allowed);
+ *     Wrappers are looked through before every decision above (parentheses, `as`,
+ *     `satisfies`, `<T>x`, `x!`, `f<T>`, partially emitted expressions): load specifiers,
+ *     makeFunctionReference names and callees, `api`/`internal` chain links and keys,
+ *     and namespace receivers. `ts.skipOuterExpressions` does this but is not in the
+ *     public typescript.d.ts, so the public predicates are used instead.
  *     A namespace import of `convex/server` whose only use is
  *     `ns.makeFunctionReference("mod:fn")` IS traced like the named import.
  *   At the revision this was written no shipped file does any of the refused forms
@@ -67,6 +79,9 @@
  *   - dependency behaviour inside `node_modules` (only the lockfile and package.json
  *     pin it; a changed version with an unchanged lockfile entry cannot exist, but
  *     what the code of that version does is not reviewed here);
+ *   - code that loads by other means: `eval`, `new Function`, `module.require`,
+ *     `require.context`, `createRequire(...)(x)` (a called require is read, but not
+ *     one reached through another object), and type-only `import("x")` type nodes;
  *   - handler-only behaviour not reached by an edge: a database trigger, an
  *     `internal` function reached through a string built at run time, an HTTP route,
  *     a cron table or a scheduled job that runs code this file never names;
@@ -91,6 +106,34 @@ const CONVEX_SERVER_FILE = /(?:^|\/)node_modules\/convex\/(?:[^/]+\/)*server\/in
 /** Fallback when a specifier does not resolve (a tree without node_modules): the text only ever ADDS ownership. */
 const GENERATED_API_TEXT = /(?:^|\/)_generated\/api(?:\.[cm]?[jt]sx?)?$/;
 
+/**
+ * Transparent wrappers that change no runtime value: parentheses, `x as T`, `x satisfies T`, `<T>x`, `x!`,
+ * `f<T>` and partially emitted expressions. Every syntactic decision in the scan looks through them.
+ * `ts.skipOuterExpressions` does this but is not part of the public typescript.d.ts, so it is not relied on;
+ * these are the public predicates (https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API).
+ *
+ * @param {import("typescript").Node} node
+ * @returns {node is import("typescript").Node & { expression: import("typescript").Expression }}
+ */
+function isTransparent(node) {
+  return (
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isExpressionWithTypeArguments(node) ||
+    ts.isPartiallyEmittedExpression(node)
+  );
+}
+
+/** @template {import("typescript").Node} T @param {T} node @returns {import("typescript").Node} */
+function unwrap(node) {
+  /** @type {import("typescript").Node} */
+  let current = node;
+  while (isTransparent(current)) current = current.expression;
+  return current;
+}
 /**
  * Everything a source file names that can change what it does: module specifiers
  * (static and type-only imports, `export ... from`, `import x = require()`,
@@ -121,12 +164,17 @@ function scan(source, ownerOf) {
   const MAKER = "makeFunctionReference";
   const ANY_API = "anyApi";
   const importedName = (/** @type {import("typescript").ImportSpecifier} */ element) => (element.propertyName ?? element.name).text;
+  /** The text of a plain string literal (or no-substitution template) once wrappers are skipped; anything else is undefined. */
+  const plainText = (/** @type {import("typescript").Expression} */ expression) => {
+    const inner = unwrap(expression);
+    return ts.isStringLiteralLike(inner) ? inner.text : undefined;
+  };
   const specifierOf = (/** @type {import("typescript").Node} */ node) => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       return node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
     }
-    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && ts.isStringLiteralLike(node.moduleReference.expression)) {
-      return node.moduleReference.expression.text;
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      return plainText(node.moduleReference.expression);
     }
     return undefined;
   };
@@ -178,14 +226,14 @@ function scan(source, ownerOf) {
     const reversed = [];
     let current = node;
     for (;;) {
+      current = unwrap(current);
       if (ts.isPropertyAccessExpression(current)) {
         reversed.push(current.name.text);
         current = current.expression;
       } else if (ts.isElementAccessExpression(current)) {
-        if (!ts.isStringLiteralLike(current.argumentExpression)) return { base: "", segments: [] }; // dynamic key
-        reversed.push(current.argumentExpression.text);
-        current = current.expression;
-      } else if (ts.isNonNullExpression(current) || ts.isParenthesizedExpression(current)) {
+        const key = plainText(current.argumentExpression);
+        if (key === undefined) return { base: "", segments: [] }; // dynamic key
+        reversed.push(key);
         current = current.expression;
       } else if (ts.isQualifiedName(current)) {
         reversed.push(current.right.text);
@@ -203,46 +251,81 @@ function scan(source, ownerOf) {
     const parent = node.parent;
     if (!parent) return false;
     if ((ts.isPropertyAccessExpression(parent) || ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent) || ts.isPropertyDeclaration(parent) ||
-      ts.isMethodDeclaration(parent) || ts.isBindingElement(parent) && parent.propertyName === node || ts.isEnumMember(parent)) && parent.name === node) return true;
+      ts.isMethodDeclaration(parent) || ts.isBindingElement(parent) && parent.propertyName === node || ts.isEnumMember(parent) ||
+      ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isFunctionDeclaration(parent) || ts.isFunctionExpression(parent)) && parent.name === node) return true;
     if (ts.isQualifiedName(parent) && parent.right === node) return true;
     return ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent) || ts.isImportEqualsDeclaration(parent);
   };
 
-  /** The call `makeFunctionReference(...)` or `ns.makeFunctionReference(...)`. @param {import("typescript").Expression} callee */
-  const isMakerCallee = (callee) =>
-    (ts.isIdentifier(callee) && makers.has(callee.text)) ||
-    (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && serverNamespaces.has(callee.expression.text) && callee.name.text === MAKER);
+  /** Whether `node`, seen through transparent wrappers, is the callee of a call. @param {import("typescript").Node} node */
+  const isCallee = (node) => {
+    let current = node;
+    while (current.parent && isTransparent(current.parent) && current.parent.expression === current) current = current.parent;
+    return current.parent !== undefined && ts.isCallExpression(current.parent) && current.parent.expression === current;
+  };
+
+  /** The call `makeFunctionReference(...)` or `ns.makeFunctionReference(...)`, wrappers skipped. @param {import("typescript").Expression} expression */
+  const isMakerCallee = (expression) => {
+    const callee = unwrap(expression);
+    if (ts.isIdentifier(callee)) return makers.has(callee.text);
+    if (!ts.isPropertyAccessExpression(callee)) return false;
+    const receiver = unwrap(callee.expression);
+    return ts.isIdentifier(receiver) && serverNamespaces.has(receiver.text) && callee.name.text === MAKER;
+  };
+
+  /**
+   * A namespace import of convex/server that `node` reads a member of (`cv.x`, `cv["x"]`, through wrappers), or undefined.
+   * @param {import("typescript").Node} node
+   */
+  const serverMemberAccess = (node) => {
+    if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return undefined;
+    const receiver = unwrap(node.expression);
+    return ts.isIdentifier(receiver) && serverNamespaces.has(receiver.text) ? node : undefined;
+  };
 
   /** @param {import("typescript").Node} node */
   const visit = (node) => {
     const specifier = specifierOf(node);
     if (specifier !== undefined) {
       specifiers.push(specifier);
-    } else if (ts.isCallExpression(node) && node.arguments.length >= 1 && ts.isStringLiteralLike(node.arguments[0])) {
-      const callee = node.expression;
-      if (callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require")) {
-        const target = node.arguments[0].text;
-        specifiers.push(target);
-        if (ownerOf(target) !== undefined) opaque.push(`dynamic load of ${target} cannot be traced`);
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      opaque.push("computed require() specifier cannot be traced");
+    } else if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
+      opaque.push("computed module specifier cannot be traced");
+    } else if (ts.isCallExpression(node)) {
+      // `import(x)` and `require(x)`, however the callee and the argument are wrapped. Every closure file is held to
+      // this, whatever the load targets: a specifier that is not a plain literal cannot be proved not to reach
+      // convex/_generated/api or convex/server.
+      const callee = unwrap(node.expression);
+      const kind = callee.kind === ts.SyntaxKind.ImportKeyword ? "import" : ts.isIdentifier(callee) && callee.text === "require" ? "require" : undefined;
+      if (kind !== undefined) {
+        const target = node.arguments.length >= 1 ? plainText(node.arguments[0]) : undefined;
+        if (target === undefined) {
+          opaque.push(`computed ${kind}() specifier cannot be traced`);
+        } else {
+          specifiers.push(target);
+          if (ownerOf(target) !== undefined) opaque.push(`dynamic load of ${target} cannot be traced`);
+        }
       }
     }
     if (ts.isCallExpression(node) && isMakerCallee(node.expression)) {
-      const [name] = node.arguments;
-      if (name && ts.isStringLiteralLike(name)) {
+      const name = node.arguments.length >= 1 ? plainText(node.arguments[0]) : undefined;
+      if (name !== undefined) {
         // "folder/module:fn" (a string with no ":" names the module's default export).
-        const [modulePath] = name.text.split(":");
-        references.push({ text: `makeFunctionReference("${name.text}")`, modulePath: modulePath.split("/") });
+        const [modulePath] = name.split(":");
+        references.push({ text: `makeFunctionReference("${name}")`, modulePath: modulePath.split("/") });
       } else {
         opaque.push("makeFunctionReference with a non-literal name cannot be traced");
       }
     }
     if (ts.isImportDeclaration(node)) return;
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && serverNamespaces.has(node.expression.text)) {
-      if (node.name.text === ANY_API) opaque.push("anyApi cannot be traced");
-      else if (node.name.text === MAKER && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) opaque.push("makeFunctionReference used without a call cannot be traced");
+    const member = serverMemberAccess(node);
+    if (member && ts.isPropertyAccessExpression(member)) {
+      if (member.name.text === ANY_API) opaque.push("anyApi cannot be traced");
+      else if (member.name.text === MAKER && !isCallee(member)) opaque.push("makeFunctionReference used without a call cannot be traced");
       return;
     }
-    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && serverNamespaces.has(node.expression.text)) {
+    if (member) {
       opaque.push("a computed member of convex/server cannot be traced");
       return;
     }
@@ -262,15 +345,18 @@ function scan(source, ownerOf) {
     if (ts.isIdentifier(node) && !isBindingOrMemberName(node)) {
       if (roots.has(node.text)) opaque.push(`${roots.get(node.text)} used without a static function path`);
       if (anyApis.has(node.text)) opaque.push("anyApi cannot be traced");
-      if (makers.has(node.text) && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) opaque.push("makeFunctionReference used without a call cannot be traced");
+      if (makers.has(node.text) && !isCallee(node)) opaque.push("makeFunctionReference used without a call cannot be traced");
       if (serverNamespaces.has(node.text)) opaque.push("a convex/server namespace used without a static member cannot be traced");
+      // `const r = require; r("x")` loads without a call the scan can read. `require.resolve` and `typeof require` load nothing.
+      const parent = node.parent;
+      const inert = parent !== undefined && ((ts.isPropertyAccessExpression(parent) && parent.expression === node) || ts.isTypeOfExpression(parent));
+      if (node.text === "require" && !isCallee(node) && !inert) opaque.push("require used without a call cannot be traced");
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
   return { specifiers, references, opaque };
 }
-
 /**
  * The tsconfig a program was built from and its relative `extends` chain, as repository-relative paths.
  * A package `extends` ("expo/tsconfig.base") resolves into node_modules and is pinned by the lockfile.

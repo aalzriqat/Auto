@@ -548,6 +548,62 @@ describe("closure ownership is decided by the resolved module, and a function re
     expect(closureOfFile("convex/moduleObject.ts").unresolved).toEqual([expect.stringMatching(/internal\.worker names no function/)]);
   });
 
+  // SCRUM-866 round 4 (Seat 2, VERIFIED): a transparent wrapper or a computed specifier hid a load of convex/server
+  // from the scan, so a changed worker module was not traced and the renewal was granted.
+  const wrapped: Array<[string, string, RegExp]> = [
+    ["parenthesized await import", 'export const f = async () => { const cv = await import(("convex/server")); return cv.makeFunctionReference("worker:run"); };', /dynamic load of convex\/server/],
+    ["import with an as-assertion", 'export const f = async () => import("convex/server" as string);', /dynamic load of convex\/server/],
+    ["import with satisfies", 'export const f = async () => import("convex/server" satisfies string);', /dynamic load of convex\/server/],
+    ["import with a non-null assertion", 'export const f = async () => import("convex/server"!);', /dynamic load of convex\/server/],
+    ["import with a type assertion", 'export const f = async () => import(<string>"convex/server");', /dynamic load of convex\/server/],
+    ["parenthesized require", "declare const require: (s: string) => any;\nexport const f = () => require((\"convex/server\"));", /dynamic load of convex\/server/],
+    ["concatenated import specifier", 'export const f = async () => import("convex/" + "server");', /computed import\(\) specifier/],
+    ["concatenated require specifier", 'declare const require: (s: string) => any;\nexport const f = () => require("convex/" + "server");', /computed require\(\) specifier/],
+    ["template with a substitution", "declare const n: string;\nexport const f = async () => import(`convex/${n}`);", /computed import\(\) specifier/],
+    ["identifier specifier of an unrelated load", "declare const n: string;\nexport const f = async () => import(n);", /computed import\(\) specifier/],
+    ["require aliased to a variable", 'declare const require: (s: string) => any;\nconst r = require;\nexport const f = r("convex/server");', /require used without a call/],
+    ["import = require with a computed specifier", 'declare const m: string;\nimport cv = require(m);\nexport const x = cv;', /computed require\(\) specifier/],
+    ["makeFunctionReference with a satisfies name", 'import { makeFunctionReference } from "convex/server"; export const r = makeFunctionReference<"query">("worker:run" satisfies string);', /^$/],
+    ["makeFunctionReference with a concatenated name", 'import { makeFunctionReference } from "convex/server"; export const r = makeFunctionReference<"query">("wor" + "ker:run");', /makeFunctionReference with a non-literal name/],
+    ["makeFunctionReference with a template substitution", 'import { makeFunctionReference } from "convex/server"; declare const n: string; export const r = makeFunctionReference<"query">(`${n}:run`);', /makeFunctionReference with a non-literal name/],
+    ["makeFunctionReference called through a wrapped callee", 'import * as cv from "convex/server"; export const r = (cv.makeFunctionReference as any)<"query">("worker:run");', /^$/],
+    ["makeFunctionReference through a non-null namespace receiver", 'import * as cv from "convex/server"; export const r = cv!.makeFunctionReference<"query">("worker:run");', /^$/],
+    ["namespace receiver behind as", 'import * as cv from "convex/server"; export const r = (cv as any).makeFunctionReference("worker:run");', /^$/],
+    ["api chain behind as/satisfies/non-null", 'import { internal } from "./_generated/api"; export const r = ((internal as any).worker satisfies object)!.run;', /^$/],
+    ["api element access with a wrapped literal key", 'import { internal } from "./_generated/api"; export const r = internal[("worker" as string)].run;', /^$/],
+  ];
+  test.each(wrapped.filter(([, , pattern]) => pattern.source !== "^$"))("a wrapped or computed load refuses: %s", (name, source, pattern) => {
+    const file = `convex/wrap_${name.replace(/\W+/g, "_")}.ts`;
+    write(file, source);
+    const closure = closureOfFile(file);
+    expect(closure.unresolved).toEqual([expect.stringMatching(pattern)]);
+  });
+  test.each(wrapped.filter(([, , pattern]) => pattern.source === "^$"))("a wrapped but literal reference is still traced to convex/worker.ts: %s", (name, source) => {
+    const file = `convex/wrapT_${name.replace(/\W+/g, "_")}.ts`;
+    write(file, source);
+    const closure = closureOfFile(file);
+    expect(closure.unresolved).toEqual([]);
+    expect(closure.files).toContain("convex/worker.ts");
+  });
+
+  test("the whole renewal path refuses when a wrapped load of convex/server hides a changed worker (Seat 2 reproduction)", () => {
+    write("convex/wrapRenew.ts", 'export const update = async () => { const cv = await import(("convex/server")); return cv.makeFunctionReference("worker:run"); };');
+    run("add", "--", "convex/wrapRenew.ts");
+    run("commit", "-q", "-m", "wrapped load");
+    const head = run("rev-parse", "HEAD");
+    write("convex/worker.ts", "export const run = 3;");
+    run("add", "--", "convex/worker.ts");
+    run("commit", "-q", "-m", "worker changed after the review");
+    const result = renewBaseline(serialize([entry({ file: "app/page.tsx", callSiteId: "app/page.tsx:1:1", functionId: "wrapRenew:update" })]), {
+      compare: gitCompare({ git: String(git), cwd: dir, reviewed: head, head: "HEAD" }),
+      closureOf: closureFor(["app/page.tsx", "convex/wrapRenew.ts"]),
+      expires: RENEWED_EXPIRES,
+      renewal: RENEWAL,
+    });
+    expect(result.renewed).toBe(0);
+    expect(result.refused[0].reason).toMatch(/cannot resolve .*dynamic load of convex\/server/);
+  });
+
   test("CONTROL: renewal is refused when a validator imported only by convex/schema.ts changed", () => {
     write("convex/validators.ts", 'export const kinds = ["a", "b"];');
     run("add", "--", "convex/validators.ts");
