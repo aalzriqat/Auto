@@ -1,0 +1,145 @@
+# Baseline call identities (SCRUM-866 part B)
+
+Run from the repository root after installing dependencies:
+
+```sh
+node scripts/contractSkew/checkBaselineIdentity.mjs
+node scripts/contractSkew/relocateBaseline.mjs --base <reviewed-base-sha>
+node scripts/contractSkew/relocateBaseline.mjs --base <reviewed-base-sha> --write
+```
+
+Both commands accept `--baseline <file>`. The helper requires a revision where
+the reviewed expressions still occupy their recorded coordinates. Use the PR
+base SHA for a new line shift. An already-stranded baseline may need an older
+revision; selecting a revision does not renew its review.
+
+The helper defaults to a dry run. Inspect the proposals before using `--write`.
+It changes `callSiteId` for a unique candidate in the same surface and file,
+and requires the complete containing call expression to match the old expression
+byte for byte. Whitespace and argument changes inside that expression require
+human review. Invalid UTF-8 is refused rather than normalized. Multiple findings
+on one call can move together; different old calls cannot claim one destination.
+Candidates already named by another baseline call are refused. Other review
+fields are preserved. JSON formatting is normalized when a write occurs.
+Writes are staged in a sibling temporary file and then renamed over the baseline;
+this avoids truncating the original while preparing its replacement.
+
+Exit 0 means the scoped operation completed without stranded/refused entries;
+10 means identity drift or human review is needed; 3 means evidence was
+unavailable. A missing base/source or unreadable baseline cannot pass. With
+`--write`, safe entries may move even when other entries require human review;
+the command still exits 10. The production monitor does not invoke this helper.
+
+## Signal and limits
+
+The check uses `CLIENT_SURFACES`, `listSurfaceFiles`, `createClientProgram` and
+`extractClientCalls`, shared with the production monitor. It scans baseline-bearing
+files with each surface's actual tsconfig and resolves their imports. It checks
+membership of `(surface, file, callSiteId, functionId)`. Deleted files, unresolved
+calls and calls proven skipped cannot satisfy that membership. It does not use a
+backend spec, a deployment, credentials, or a second regex-based call extractor.
+
+`contractPath` and finding `kind` require comparison with the backend validator;
+payload extraction alone cannot determine them. The check therefore does not
+certify those fields, fingerprints, causes, multiplicity, expiry, duplicate
+findings, new debt or contract compatibility. A same-function call that changes
+arguments without moving can still satisfy the four-field check. Identical call
+text also does not prove that surrounding bindings, imports or backend semantics
+are unchanged; reviewed rationale remains a human/independent-review obligation.
+File moves and request-map sites whose positions do not identify the containing
+call's callee or first argument need manual review, including memoized maps.
+
+The `Tests` workflow runs the new Node tests and check in its existing
+`type-check` job after dependency installation. On `pull_request`, its existing
+checkout tests GitHub's candidate merge ref, so it also sees integration with the
+base branch. No production secret is used. This change does not edit branch
+protection, `.github/release-waivers.json`, or the baseline JSON. It does not claim
+that a new standalone check is required by branch protection.
+
+## Evidence, 2026-10-28
+
+Base: `2e7ea58cdbfe746a0169494570443316846026e6`. Live GitHub main was read
+through the GitHub connector at implementation start and matched this SHA.
+Local shell fetch/network access was denied; no successful fetch is claimed.
+
+Recurring incidents supplied in the task and corroborated by SCRUM-866 and
+PR #700: #678 stranded 13 mobile entries (repaired in #680); #690 moved
+`sourcingPayables:markPaid` from `150:13` to `156:13`, stranding three entries.
+This prevention belongs in CI because documentation cannot prevent a coordinate
+shift. Changing the baseline's identity architecture is outside this part's
+scope; the monitor remains authoritative for backend finding identity.
+
+Failing-first command, before either CLI existed:
+
+```text
+node --test --test-concurrency=1 scripts/contractSkew/baselineIdentity.test.mjs
+tests 6
+pass 1
+fail 5
+#690 line shift ... AssertionError: 1 !== 10
+Cannot find module '.../checkBaselineIdentity.mjs'
+dry-run proposes ... AssertionError: 1 !== 0
+Cannot find module '.../relocateBaseline.mjs'
+```
+
+This initial red run proves the missing feature, not a pre-existing checker
+returning a wrong verdict. The initial unavailable-input control was too broad
+and passed on the missing CLIs; it now requires the deliberate exit code 3.
+The green regression executes real CLIs, compiler extraction, temporary Git
+base revisions and filesystem writes. The unchanged fixture reproduces exactly
+`150:13 -> 156:13`; a changed `taxAmount` argument is refused.
+
+The implemented checker also ran against the untouched baseline at the assigned
+base and reported three `STRANDED` entries (`bankAccountId`, `taxAmount`,
+`idempotencyKey`) at `150:13`, each naming candidate `156:13`. This is an expected
+red result requiring the separate baseline lane. #690 changed the actual
+`taxAmount` producer too, so that real call must not be automatically relocated.
+
+An advisory review found a separate wrapper-call edge: a memoized request-map
+entry selected the enclosing `useMemo(...)` expression. A failing-first test
+reported 8 passed / 1 failed, with that wrapper text where `null` was required.
+The locator now refuses that site. Scoped advisory rechecks reported the finding
+fixed; these are not independent review-seat certifications.
+
+Final local validation (Node v26.4.0; CI uses Node 22.21.1):
+
+```text
+node --test --test-concurrency=1 scripts/contractSkew/baselineIdentity.test.mjs
+9 passed, 0 failed
+pnpm exec vitest run scripts/contractSkew/baseline.test.ts scripts/contractSkew/acceptance.test.ts --maxWorkers=1
+2 files passed; 80 tests passed
+pnpm typecheck:contract-skew
+tsc -p scripts/contractSkew/tsconfig.json --noEmit
+```
+
+The dedicated detector project checks `.mjs` with `checkJs`; the root typecheck
+was not run because this part changes no `.ts` files. The first typecheck found
+new JSDoc/catch-narrowing errors; a later test addition needed Git availability
+narrowing. Those were corrected before the final run. No wide suites, browser
+hunters, CI runs, interruption fault injection, deployment or production
+verification are claimed for this tooling-only change.
+
+Git staging was attempted with the five explicit code/workflow paths. It failed
+creating `E:/Auto/Auto/.git/worktrees/auto-866c/index.lock` with permission denied.
+No commit SHA was produced, and nothing was pushed or opened as a PR. The report
+is the sixth changed file. The coordinator must commit these files with the
+requested `Co-Authored-By: Codex gpt-6.1-sol <noreply@openai.com>` trailer, integrate
+the separate baseline repair/review lane, and run the normal PR/review gates.
+
+## Design sources
+
+- [TypeScript Compiler API](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API):
+  reuse compiler programs and AST nodes for source locations and expression text.
+- [Git show](https://git-scm.com/docs/git-show): read the base revision's blob,
+  without a checkout or mutation of the working tree.
+- [GitHub pull request events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request):
+  retain the existing candidate-merge checkout and credential-free PR execution.
+- [Node parseArgs](https://nodejs.org/api/util.html#utilparseargsconfig)
+  and [Node test runner](https://nodejs.org/api/test.html): use
+  supported native CLI parsing and named, single-worker process-level tests.
+- [Node filesystem rename](https://nodejs.org/docs/latest-v22.x/api/fs.html#fsrenamesyncoldpath-newpath):
+  stage replacement content before renaming, rather than truncating the baseline.
+
+Documentation supports these design choices; the executable regression and
+detector typecheck provide implementation evidence. CI, independent review and
+production verification are separate evidence surfaces.

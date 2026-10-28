@@ -254,6 +254,14 @@ jobs:
     - name: Contract-skew detector type check
       run: pnpm typecheck:contract-skew
 
+    # No backend spec or production credentials: catch stranded review identities
+    # in the same candidate checkout used above (the PR merge ref on pull_request).
+    - name: Contract-skew baseline identity regression tests
+      run: node --test --test-concurrency=1 scripts/contractSkew/baselineIdentity.test.mjs
+
+    - name: Contract-skew baseline call identities
+      run: node scripts/contractSkew/checkBaselineIdentity.mjs
+
   # `pnpm build` ran nowhere in this workflow until now. It happens inside
   # playwright.yml (via playwright.config.ts's webServer) and twice more in
   # security.yml's zap-baseline/nuclei jobs — but none of those is a required
