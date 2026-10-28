@@ -62,10 +62,45 @@ with missing `useCurrencyFormatterInCurrency` mock exports. Main runs 3959044491
 timeouts, not this protocol error. Main 40413738195 attempt 1 was cancelled.
 These remain real failures; this recovery does not classify them as flakes.
 
-Artifact listing confirms #698's attempts have separate artifacts 12798760023
-and 12802837356. The connector could produce download references, but the shell
-could not download the ZIP. Their JSON receipts and frame inventory were not
-inspected. No exact page-age or role-loop variant is claimed from those artifacts.
+Round 2 also inspected [run 40698345146](https://github.com/aalzriqat/Auto/actions/runs/40698345146),
+job 122851045706: **two** empty-image failures, role-access's marketplace-only
+non-vehicle reply (`:122`, raw capture at `:100`) and Bill of Sale's
+cash-consigned-direct / en / 1280 (`:192`, helper). Both finished the font wait;
+role-access disabled animations. The run reports 503 passed, 2 failed and 36 not
+run. The initial inventory above is therefore not the latest complete inventory.
+
+## Round 2: CI control failure and paint receipts
+
+Reviewed head: `47faefb96fedd6f0cd2d55934bec5fab5e14f158`.
+`gh run view 40713227734 --repo aalzriqat/Auto --log-failed` was blocked by the
+shell network policy. The connected GitHub tool retrieved the decoded log for
+job 122903837936 in [run 40713227734](https://github.com/aalzriqat/Auto/actions/runs/40713227734).
+At 15:23:40 UTC the positive recovery control failed; the final summary is
+**1 failed, 548 passed**. The other seven recovery controls passed.
+The positive control captures warning output, so its retry outcome is absent
+from stdout. Its helper rethrows the injected first error when recovery fails;
+the log cannot identify the second error. The old failure marker did not classify it.
+
+The reviewer's already-downloaded artifacts were read directly in round 2:
+artifact **12798760023** (run 40647283601, attempt 1) and **12828006957**
+(run 40713227734). This avoids treating a download reference as inspected bytes.
+The earlier artifact contains **44 document receipts** and one failure diagnostic
+matching `capture-*.json`, rather than 45 document receipts. Of those 44 receipts,
+43 succeeded: 38 had first paint before capture, five first reported it after
+capture, and none lacked it after a successful capture.
+
+| Receipt | Status | `firstPaint` before / after | `observedAt` before / after (ms) |
+| --- | --- | --- | --- |
+| #698 deal-viewer / en / 1280 | CAPTURE_FAILED | null / null | 46.6 / 53.5 |
+| #701 injected positive recovery control | CAPTURE_FAILED | null / null | 52.8 / 193.9 |
+
+The control's receipt also records a visible, complete document, loaded fonts,
+390×1203 document geometry at DPR 1, and no crash/disconnect. Its first failure
+was injected, not a natural Chromium failure. The recovery failed while the
+document still had no recorded first paint. These receipts support a timing
+hypothesis; they do not prove that absent paint caused Chromium's failure or
+establish the second error's signature. The defect in our recovery policy is
+that an immediate retry requires no new readiness evidence.
 
 ## Diagnosis and design
 
@@ -90,6 +125,7 @@ inspected. No exact page-age or role-loop variant is claimed from those artifact
   navigation. [Playwright #38103](https://github.com/microsoft/playwright/issues/38103)
   records the same error around navigation, not a proven fix for these static pages.
   Two frame callbacks would not certify surface readiness after a full-page resize.
+  The receipts above now motivate observing the first-paint entry before recovery.
 * **No supported flag fix was established:** the PR container already uses `--ipc=host`;
   logged pre-suite shared memory is 7.9GiB with 84KiB used, and roughly 14GiB host
   memory is available. These are not capture-time or cgroup measurements. Playwright's
@@ -101,13 +137,36 @@ inspected. No exact page-age or role-loop variant is claimed from those artifact
 
 The permitted recovery is placed immediately around the failing SDK request:
 match the entire first error line, require a connected Chromium browser and open
-page with no observed crash/disconnect, retain first-failure diagnostics, then
-repeat the capture **once**. The second call retains fullPage, path, scale,
-animation and clip options; its timeout is capped at 5 seconds and respects a
-smaller explicit timeout. There is no page reload, test retry or assertion retry.
-Persistent or different second failures log failure and rethrow the original error.
-Recovered captures log success and optional document receipts say
-`CAPTURE_SUCCEEDED_AFTER_RETRY`. Normal successful captures still make one request.
+page with no observed crash/disconnect, and retain first-failure diagnostics.
+Round 2 replaces the immediate retry with a bounded first-paint wait, followed
+by at most **one** further capture. The first capture remains immediate and
+unchanged: waiting before every capture would change successful paths and obscure
+first-attempt evidence. Only recovery polls for
+`performance.getEntriesByName("first-paint", "paint")`, using Playwright's native
+[`page.waitForFunction`](https://playwright.dev/docs/api/class-page#page-wait-for-function)
+with animation-frame polling and an explicit timeout. This tests the paint entry,
+not a fixed sleep or an assumed number of frames.
+
+The paint wait is capped at 1,000 ms, an experimental recovery allowance rather
+than a measured Linux requirement. The wait and second capture share a maximum
+5,000 ms budget, reduced to a smaller explicit screenshot timeout when supplied.
+The second capture receives only the remaining positive budget; zero must never
+reach Playwright because it disables its timeout. FullPage, path, scale,
+animation and clip options are preserved. Diagnostic I/O retains its separate
+existing bounds. There is no page reload, test retry or assertion retry.
+
+Paint Timing [does not guarantee a first-paint entry](https://www.w3.org/TR/paint-timing/#mark-paint-timing),
+particularly for a blank document. Missing paint, a wait timeout, persistent
+capture failure or a different second failure all retain the original rejection.
+Even observed first paint does not certify the later resized capture surface.
+`BROWSER_CAPTURE_RETRY_FAILED` reports only `classification=same-signature` or
+`classification=other`, including `other` when the paint wait fails before a
+second request. It never prints the second error's text.
+Recovered captures log success, optional document receipts say
+`CAPTURE_SUCCEEDED_AFTER_RETRY`, and each recovery appends a
+`browser-capture-recovery` annotation with fixed metadata to the current test,
+following [Playwright's runtime annotation API](https://playwright.dev/docs/test-annotations#runtime-annotations).
+Normal successful captures still make one request and do not wait for paint.
 
 This is a bounded mitigation for a read that failed to produce an image. It does
 not make an assertion failure pass. It follows the principle of bounding retries
@@ -118,7 +177,7 @@ variants, thresholds and frame censuses stay unchanged.
 
 ## Verification
 
-Local environment: Windows, Playwright 1.61.1 / Chromium 149.0.7827.55, one
+Round 1 local environment: Windows, Playwright 1.61.1 / Chromium 149.0.7827.55, one
 Playwright worker. No app server, Clerk, Convex or production services were used.
 Docker has no available daemon; WSL enumeration is denied.
 
@@ -153,6 +212,36 @@ the regression controls mock the third-party SDK boundary, use a real PNG for
 successful recovery, and assert failures outside the code that preserves errors.
 Independent review is pending with the coordinator. No commits, staging, pushes,
 workflow dispatches or external posts were made.
+
+### Round 2 verification
+
+* New/extended controls against the unchanged helper: **4 failed**. Replaying the
+  final tests against the helper from `47faefb9` also produced **4 failed**:
+  the positive control observed zero paint entries at retry, the blank-document
+  control accepted bytes without paint, and both second-error controls exposed
+  missing classifications. Logs: `test-results/scrum861-r2-red.log` and
+  `test-results/scrum861-r2-baseline-red.log`.
+* Updated capture controls: **23 passed (5.1s)**; final rerun after restoring the
+  mutations: **23 passed (4.2s)**, one worker. Final log:
+  `test-results/scrum861-r2-final-controls.log`. The positive control
+  still injects exactly one SDK failure and uses real Chromium for its second
+  capture, checking PNG bytes, 390×1203 dimensions, disk contents, original
+  diagnostics, receipt, logs, observed first paint and recovery annotation.
+  Its local receipt changed from no paint at 106.1 ms to first paint at 192 ms
+  and successful recovery by 303.2 ms. This is Windows evidence only.
+* Removing the retry branch makes the real-PNG positive control **fail** with
+  the original error. Removing only the first-paint wait makes the blank-document
+  control **fail** because unpainted recovery returns bytes instead of refusing.
+  Each mutation was verified in the helper and the exact original bytes restored.
+  Logs: `scrum861-r2-no-retry.log`, `scrum861-r2-no-wait.log` in `test-results/`.
+* All four affected static specs: **207 passed (1.9m)**, one worker, with original
+  variants, geometry/overflow assertions and image options. The log has no
+  `BROWSER_CAPTURE_RETRY` marker. Log: `test-results/scrum861-r2-affected.log`.
+* Root `tsc --noEmit`: **exit 0**; excludes `convex/`, mobile, packages and
+  dealer-worker. ESLint on both changed TypeScript files: **exit 0**.
+
+Round 2 changes only the helper, its capture control spec and this document.
+The coordinator owns commit/push, Jira updates and independent re-review.
 
 Commands (from the worktree root):
 

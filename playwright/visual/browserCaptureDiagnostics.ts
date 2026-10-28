@@ -1,6 +1,6 @@
 import { statfs, writeFile } from "node:fs/promises";
 import { freemem, totalmem } from "node:os";
-import type { Page } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 
 type Observation<T> = { status: "AVAILABLE"; value: T } | { status: "UNAVAILABLE" };
 
@@ -50,6 +50,11 @@ async function captureState(page: Page) {
 function readSafely<T>(operation: () => T): Observation<T> {
   try { return { status: "AVAILABLE", value: operation() }; }
   catch { return { status: "UNAVAILABLE" }; }
+}
+
+function isEmptyCaptureError(error: unknown): boolean {
+  return error instanceof Error &&
+    /^page\.screenshot: Protocol error \(Page\.captureScreenshot\): Unable to capture screenshot(?:\r?\n|$)/.test(error.message);
 }
 
 /** Anonymous document facts, not a compositor acknowledgement or readiness guarantee. */
@@ -147,20 +152,37 @@ export async function captureWithDiagnostics(
     // assertions. A crash, timeout, other protocol response or persistent failure
     // must still fail. See docs/testing/scrum-861-screenshot-capture.md.
     const recoverable = readSafely(() =>
-      error instanceof Error &&
-      /^page\.screenshot: Protocol error \(Page\.captureScreenshot\): Unable to capture screenshot(?:\r?\n|$)/.test(error.message) &&
+      isEmptyCaptureError(error) &&
       browser.status === "AVAILABLE" && browser.value?.browserType().name() === "chromium" &&
       browser.value.isConnected() && !page.isClosed() && !pageCrashed && !browserDisconnected,
     );
     if (recoverable.status === "AVAILABLE" && recoverable.value) {
       readSafely(() => console.warn("BROWSER_CAPTURE_RETRY attempt=2/2 reason=chromium-empty-image"));
       try {
-        const image = await page.screenshot({ ...options, timeout: Math.min(options?.timeout || 5_000, 5_000) });
+        const timeout = Math.min(options?.timeout || 5_000, 5_000);
+        const deadline = performance.now() + timeout;
+        // CI receipts correlate empty images with absent first paint. Observe
+        // that signal, not a sleep or frame count; it does not certify a later
+        // full-page resize. The wait and retry share the original recovery cap.
+        const paint = await page.waitForFunction(
+          () => performance.getEntriesByName("first-paint", "paint").length > 0,
+          undefined, { timeout: Math.min(timeout, 1_000), polling: "raf" },
+        );
+        await paint.dispose();
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) throw new Error("Capture recovery budget exhausted");
+        const image = await page.screenshot({ ...options, timeout: remaining });
         captureStatus = "CAPTURE_SUCCEEDED_AFTER_RETRY";
         readSafely(() => console.warn("BROWSER_CAPTURE_RETRY_SUCCEEDED attempt=2/2"));
+        readSafely(() => test.info().annotations.push({
+          type: "browser-capture-recovery", description: "attempt=2/2 reason=chromium-empty-image",
+        }));
         return image;
-      } catch {
-        readSafely(() => console.warn("BROWSER_CAPTURE_RETRY_FAILED attempt=2/2"));
+      } catch (retryError) {
+        const classification = readSafely(() => isEmptyCaptureError(retryError));
+        readSafely(() => console.warn(`BROWSER_CAPTURE_RETRY_FAILED attempt=2/2 classification=${
+          classification.status === "AVAILABLE" && classification.value ? "same-signature" : "other"
+        }`));
         // Retain the original call site and error even if recovery/telemetry fails.
       }
     }

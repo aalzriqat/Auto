@@ -13,6 +13,7 @@ test("one empty Chromium capture recovers a full-page PNG and retains its failur
   const screenshot = page.screenshot;
   const firstError = new Error(`${EMPTY_CAPTURE}\nCall log:\n  - fonts loaded`);
   let calls = 0;
+  let retryPaintEntries: number | undefined;
   const warnings: string[] = [];
   const warn = console.warn;
   console.warn = (message: unknown) => { warnings.push(String(message)); };
@@ -21,7 +22,9 @@ test("one empty Chromium capture recovers a full-page PNG and retains its failur
     expect(options?.fullPage).toBe(true);
     expect(options?.animations).toBe("disabled");
     if (calls === 1) throw firstError;
-    expect(options?.timeout).toBe(5_000);
+    expect(options?.timeout).toBeGreaterThan(0);
+    expect(options?.timeout).toBeLessThanOrEqual(5_000);
+    retryPaintEntries = await page.evaluate(() => performance.getEntriesByName("first-paint", "paint").length);
     return screenshot.call(page, options);
   };
   const failure = info.outputPath("first-failure.json");
@@ -32,20 +35,52 @@ test("one empty Chromium capture recovers a full-page PNG and retains its failur
     image = await captureWithDiagnostics(page, { path, fullPage: true, animations: "disabled" }, () => failure, () => receipt);
   } finally { page.screenshot = screenshot; console.warn = warn; }
   expect(calls).toBe(2);
+  expect(retryPaintEntries).toBeGreaterThan(0);
   expect(image.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
   expect([image.readUInt32BE(16), image.readUInt32BE(20)]).toEqual([390, 1203]);
   expect(readFileSync(path)).toEqual(image);
   expect(JSON.parse(readFileSync(failure, "utf8")).status).toBe("CAPTURE_FAILED");
   expect(JSON.parse(readFileSync(receipt, "utf8")).status).toBe("CAPTURE_SUCCEEDED_AFTER_RETRY");
   expect(warnings).toEqual(["BROWSER_CAPTURE_RETRY attempt=2/2 reason=chromium-empty-image", "BROWSER_CAPTURE_RETRY_SUCCEEDED attempt=2/2"]);
+  expect(info.annotations.filter(annotation => annotation.type === "browser-capture-recovery")).toEqual([
+    { type: "browser-capture-recovery", description: "attempt=2/2 reason=chromium-empty-image" },
+  ]);
+});
+
+test("recovery refuses an unpainted document within the caller's timeout", async ({ page }, info) => {
+  test.setTimeout(5_000);
+  // A blank document need never paint. Recovery must not treat an absent
+  // paint entry as readiness, even if a second SDK call would return bytes.
+  expect(await page.evaluate(() => performance.getEntriesByType("paint"))).toEqual([]);
+  const screenshot = page.screenshot;
+  const firstError = new Error(EMPTY_CAPTURE);
+  let calls = 0;
+  page.screenshot = async () => {
+    calls += 1;
+    if (calls === 1) throw firstError;
+    return Buffer.from("must-not-be-accepted-without-paint");
+  };
+  const started = performance.now();
+  let result: unknown;
+  try {
+    result = await captureWithDiagnostics(page, { timeout: 200 }, () => info.outputPath("failure.json")).catch((error: unknown) => error);
+  } finally { page.screenshot = screenshot; }
+  expect(result).toBe(firstError);
+  expect(calls).toBe(1);
+  expect(performance.now() - started).toBeLessThan(2_000);
+  expect(info.annotations).not.toContainEqual(expect.objectContaining({ type: "browser-capture-recovery" }));
 });
 
 for (const secondFailure of ["empty-image", "timeout"] as const) {
   test(`capture recovery stops after a second ${secondFailure} and preserves the original error`, async ({ page }, info) => {
+    await page.setContent("<main>Persistent failure control</main>");
     const screenshot = page.screenshot;
     const firstError = new Error(EMPTY_CAPTURE);
     const nextError = new Error(secondFailure === "empty-image" ? EMPTY_CAPTURE : "page.screenshot: Timeout 1000ms exceeded.");
     let calls = 0;
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (message: unknown) => { warnings.push(String(message)); };
     const timeouts: Array<number | undefined> = [];
     page.screenshot = async options => {
       calls += 1;
@@ -55,10 +90,17 @@ for (const secondFailure of ["empty-image", "timeout"] as const) {
     let result: unknown;
     try {
       result = await captureWithDiagnostics(page, { fullPage: true, timeout: 1_000 }, () => info.outputPath("failure.json")).catch((error: unknown) => error);
-    } finally { page.screenshot = screenshot; }
+    } finally { page.screenshot = screenshot; console.warn = warn; }
     expect(result).toBe(firstError);
     expect(calls).toBe(2);
-    expect(timeouts).toEqual([1_000, 1_000]);
+    expect(timeouts[0]).toBe(1_000);
+    expect(timeouts[1]).toBeGreaterThan(0);
+    expect(timeouts[1]).toBeLessThanOrEqual(1_000);
+    expect(warnings).toEqual([
+      "BROWSER_CAPTURE_RETRY attempt=2/2 reason=chromium-empty-image",
+      `BROWSER_CAPTURE_RETRY_FAILED attempt=2/2 classification=${secondFailure === "empty-image" ? "same-signature" : "other"}`,
+    ]);
+    expect(info.annotations).not.toContainEqual(expect.objectContaining({ type: "browser-capture-recovery" }));
   });
 }
 
