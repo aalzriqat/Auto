@@ -34,7 +34,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { CLIENT_SURFACES } from "./clientFiles.mjs";
-import { resolveCommit, resolveGit, runGit } from "./gitExecutable.mjs";
+import { resolveCommit, resolveGit, runGitText } from "./gitExecutable.mjs";
 import { DEFAULT_BASELINE, EXIT_UNAVAILABLE } from "./baselineIdentity.mjs";
 import { parseCanonicalBaseline, serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
 import { createImportClosure } from "./importClosure.mjs";
@@ -80,7 +80,7 @@ const count = (text, char) => text.split(char).length - 1;
 export function gitCompare({ git, cwd, reviewed, head }) {
   // One `ls-tree -r` per revision, not three git processes per file: an import closure spans thousands of files.
   const treeOf = (rev) => {
-    const out = runGit(git, ["ls-tree", "-r", "-z", rev], { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+    const out = runGitText(git, ["ls-tree", "-r", "-z", rev], { cwd, maxBuffer: 256 * 1024 * 1024 });
     const blobs = new Map();
     for (const record of out.split("\0")) {
       const tab = record.indexOf("\t");
@@ -201,8 +201,8 @@ function main(argv) {
   // The closure is read from the working tree and compared by HEAD's blobs, so HEAD is the only head there is.
   const headSha = resolveCommit(git, "HEAD", root);
   // A reviewed revision that is not an ancestor of HEAD says nothing about HEAD's history.
-  runGit(git, ["merge-base", "--is-ancestor", reviewed, headSha], { cwd: root });
-  const dirty = new Set(runGit(git, ["diff", "--name-only", "-z", "HEAD"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean));
+  runGitText(git, ["merge-base", "--is-ancestor", reviewed, headSha], { cwd: root });
+  const dirty = new Set(runGitText(git, ["diff", "--name-only", "-z", "HEAD"], { cwd: root }).split("\0").filter(Boolean));
 
   const baselineText = fs.readFileSync(baseline, "utf8");
   const entries = JSON.parse(baselineText).entries ?? [];

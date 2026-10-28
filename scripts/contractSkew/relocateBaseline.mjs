@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import { parseArgs } from "node:util";
 import ts from "typescript";
-import { resolveCommit, resolveGit, runGit } from "./gitExecutable.mjs";
+import { resolveCommit, resolveGit, runGitBytes } from "./gitExecutable.mjs";
 import { serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
 import { DEFAULT_BASELINE, EXIT_IDENTITY_DRIFT, EXIT_UNAVAILABLE, readIdentityBaseline, inspectBaselineIdentities, callExpressionAt,
   callKey, describeStranded } from "./baselineIdentity.mjs";
@@ -31,7 +31,7 @@ try {
     if (!sources) {
       const parse = (text) => ts.createSourceFile(entry.file, text, ts.ScriptTarget.Latest, true);
       sources = {
-        base: parse(strictUtf8.decode(runGit(git, ["show", `${base}:${entry.file}`]))),
+        base: parse(strictUtf8.decode(runGitBytes(git, ["show", `${base}:${entry.file}`]))),
         head: parse(strictUtf8.decode(fs.readFileSync(entry.file))),
       };
       sourcesByFile.set(entry.file, sources);

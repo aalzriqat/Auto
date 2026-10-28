@@ -49,15 +49,29 @@ export function resolveGit({ platform = process.platform, env = process.env, exi
 export const GIT_TIMEOUT_MS = 10_000;
 
 /**
- * Run git by absolute path with an explicit timeout. Returns a Buffer unless `encoding` is given
- * (the same contract as `execFileSync`), so a caller that must decode strictly can.
+ * Run git by absolute path with an explicit timeout and return its stdout as UTF-8 text. Text and bytes are
+ * separate functions, not one function with an optional `encoding`, so each has one return type
+ * (`execFileSync` returns `string | Buffer` for a non-literal encoding, which no caller can use).
  *
  * @param {string} git  from `resolveGit()`
  * @param {string[]} args
- * @param {{ cwd?: string, encoding?: BufferEncoding, maxBuffer?: number }} [options]
+ * @param {{ cwd?: string, maxBuffer?: number }} [options]
+ * @returns {string}
  */
-export function runGit(git, args, { cwd, encoding, maxBuffer = 16 * 1024 * 1024 } = {}) {
-  return execFileSync(git, args, { cwd, encoding, maxBuffer, timeout: GIT_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
+export function runGitText(git, args, { cwd, maxBuffer = 16 * 1024 * 1024 } = {}) {
+  return execFileSync(git, args, { cwd, encoding: "utf8", maxBuffer, timeout: GIT_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
+}
+
+/**
+ * Same as `runGitText` but returns the raw bytes, for a caller that must decode strictly.
+ *
+ * @param {string} git
+ * @param {string[]} args
+ * @param {{ cwd?: string, maxBuffer?: number }} [options]
+ * @returns {Buffer}
+ */
+export function runGitBytes(git, args, { cwd, maxBuffer = 16 * 1024 * 1024 } = {}) {
+  return execFileSync(git, args, { cwd, maxBuffer, timeout: GIT_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 /**
@@ -69,5 +83,5 @@ export function runGit(git, args, { cwd, encoding, maxBuffer = 16 * 1024 * 1024 
  * @param {string} [cwd]
  */
 export function resolveCommit(git, rev, cwd) {
-  return runGit(git, ["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`], { cwd, encoding: "utf8" }).trim();
+  return runGitText(git, ["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`], { cwd }).trim();
 }
