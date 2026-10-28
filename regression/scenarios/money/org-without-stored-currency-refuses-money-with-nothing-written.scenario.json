@@ -1,0 +1,45 @@
+{
+  "id": "org-without-stored-currency-refuses-money-with-nothing-written",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "cashDrawer.open",
+      "input": {
+        "openingFloatMinor": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "open.refusalCode",
+      "value": "CURRENCY_NOT_CONFIGURED"
+    },
+    {
+      "observable": "cashDrawerSessions.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "ac365c4148eb4fae6b423d23244f0129e9a98adf7ea7f5db6d8efd9e22316bf9"
+    }
+  ],
+  "impl": {
+    "file": "convex/currencyNoDefault.scrum85.test.ts",
+    "testName": "opening a cash drawer for an org with no settings row is refused and writes nothing"
+  },
+  "matrixRow": "SCRUM85-currency-no-default",
+  "fingerprint": "556118016e81f087ffe9a264f1b276e8fde0419c8289f54cbd6f92bf62a75d48",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum85-currency-no-default",
+    "firstSeen": "2026-10-28"
+  }
+}

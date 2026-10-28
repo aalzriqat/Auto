@@ -1,0 +1,59 @@
+{
+  "id": "saving-unrelated-settings-never-chooses-a-currency-for-the-org",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgSettings.upsert",
+      "input": {
+        "dealershipName": "BloomTest"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "cashDrawer.open",
+      "input": {
+        "openingFloatMinor": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "orgSettings.currency",
+      "value": "absent"
+    },
+    {
+      "observable": "orgSettings.currencySymbol",
+      "value": "absent"
+    },
+    {
+      "observable": "open.refusalCode",
+      "value": "CURRENCY_NOT_CONFIGURED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "ac365c4148eb4fae6b423d23244f0129e9a98adf7ea7f5db6d8efd9e22316bf9"
+    }
+  ],
+  "impl": {
+    "file": "convex/currencyNoDefault.scrum85.test.ts",
+    "testName": "saving unrelated settings (dealership name) does not choose a currency for the org"
+  },
+  "matrixRow": "SCRUM85-currency-no-default",
+  "fingerprint": "29849db5f87a0e456d27e2cd95362e7cb929cc570101068f10b91b95fa9e70fd",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum85-currency-no-default",
+    "firstSeen": "2026-10-28"
+  }
+}
