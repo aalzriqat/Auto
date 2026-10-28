@@ -3311,9 +3311,12 @@ export async function runRehearsalCases(ctx) {
       for (let round = 0; round < 3; round += 1) {
         const org2 = await ownerMust("mutation", "organizations:create", { name: `Rehearsal FD2 ${stamp}-${round}` });
         if (String(org2) === String(orgId)) fail("the disposable organization is the shared one");
+        // Empty onboarding: a fresh organization has NO currency (the product no
+        // longer defaults one), and it can still be chosen -- explicitly, here, in
+        // the shared organization's own currency so the probe's scales still line up.
+        await ownerMust("mutation", "orgSettings:upsert", { orgId: org2, currency: denom.currency, currencySymbol: "?" });
         const before = await orgDenomination({ orgId: org2, ownerMust });
-        // Empty onboarding: the currency can still be chosen.
-        await ownerMust("mutation", "orgSettings:upsert", { orgId: org2, currency: before.currency, currencySymbol: "?" });
+        expectEqual(before.currency, denom.currency, `round ${round}: the disposable organization's explicitly chosen currency`);
         const v2 = await makeVehicle({ orgId: org2, ownerMust, label: `fd2r${round}${stamp}` });
         const c2 = await ownerMust("mutation", "customers:create", { orgId: org2, firstName: "Rehearsal", lastName: `fd2r-${round}-${stamp}` });
         const customerStatus2 = await customerEligibilityStatusFor({ orgId: org2, ownerMust });
@@ -4037,17 +4040,6 @@ export const CURRENCY_SCALES = {
   JPY: 0,
 };
 
-/**
- * The product's own default when an organization has never set a currency —
- * `getOrgCurrency` in `convex/accounting/workflowHooks.ts` returns
- * `settings?.currency ?? "JOD"`. Mirrored and pinned by the same test as the
- * scale table. The first cloud run of this closure failed all four money cases
- * on "the organization carries no currency": the runner read the
- * `organizations` row, which has no such field, while the product resolves
- * the denomination from `orgSettings` with this default. The org/currency
- * contract is the product's resolver, not a field I assumed.
- */
-export const DEFAULT_ORG_CURRENCY = "JOD";
 
 /**
  * AF-318-01 — `accountingLedger:listJournalEntries` now takes real cursor
@@ -4104,11 +4096,29 @@ async function allAccountActivityLines({ orgId, ownerMust, accountId, fromDate, 
   return { account, lines };
 }
 
-/** The organization's denomination, resolved the way the product resolves it. */
+/**
+ * The organization's denomination, resolved the way the product resolves it:
+ * the STORED `orgSettings.currency` or nothing. SCRUM-85 (owner ruling
+ * SCRUM-760 c23812 ruling 9) removed the product's "JOD" fallback --
+ * `getOrgCurrency` now refuses with `CURRENCY_NOT_CONFIGURED` -- so the runner
+ * must not invent one either. An org with no stored currency is a missing
+ * SEEDED PRECONDITION (the product refusing is correct, nothing is defective),
+ * so it is UNPROVEN, which still exits non-zero: never PASS, never skipped.
+ * The e2e bootstrap seeds the disposable org's currency explicitly
+ * (`seedOrgBaseline` in `convex/e2eBootstrap.ts`); a disposable org the
+ * rehearsal creates itself must choose its currency through
+ * `orgSettings:upsert` before anything reads it (FD2 Part B).
+ */
 async function orgDenomination({ orgId, ownerMust }) {
   const settings = await ownerMust("query", "orgSettings:get", { orgId });
-  const explicit = typeof settings?.currency === "string" && settings.currency.length > 0 ? settings.currency : null;
-  const currency = explicit ?? DEFAULT_ORG_CURRENCY;
+  const currency = typeof settings?.currency === "string" && settings.currency.length > 0 ? settings.currency : null;
+  if (currency === null) {
+    unproven(
+      "the organization has no stored currency, and the product no longer defaults one " +
+        "(CURRENCY_NOT_CONFIGURED, SCRUM-85): the seeded organization must state its currency explicitly, " +
+        "so expected minor amounts cannot be derived"
+    );
+  }
   const decimals = CURRENCY_SCALES[currency];
   if (decimals === undefined) {
     unproven(
@@ -4116,7 +4126,7 @@ async function orgDenomination({ orgId, ownerMust }) {
         `denominations, so expected minor amounts cannot be derived independently`
     );
   }
-  return { currency, decimals, minorPerMajor: 10 ** decimals, source: explicit ? "orgSettings.currency" : "product default" };
+  return { currency, decimals, minorPerMajor: 10 ** decimals, source: "orgSettings.currency" };
 }
 
 /** The literal JOD accounting month used by the owned CASH certification rows. */
