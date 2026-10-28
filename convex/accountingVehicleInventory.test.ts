@@ -1799,6 +1799,7 @@ describe("Fix #3 — vehicle-prep expenses capitalize into inventory", () => {
 describe("Fix #4 — one authoritative cost basis for COGS and commission", () => {
   test("COGS at sale equals purchase price + landed costs + capitalized expenses", async () => {
     const { t, orgId, asOwner, customerId, userId } = await seedDealer("f4a");
+    await asOwner.mutation(api.orgSettings.setCommissionMode, { orgId, commissionMode: "AUTO_MEMBER" });
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",

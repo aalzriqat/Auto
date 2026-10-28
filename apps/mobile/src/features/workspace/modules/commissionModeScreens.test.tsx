@@ -2,7 +2,7 @@
 
 /**
  * SCRUM-778: the two mobile screens that carry the commission mode drive the
- * real components. An org that never chose a mode shows AUTO_MEMBER, the other
+ * real components. An org that never chose a mode shows MANUAL, the other
  * settings are saved before the mode door is called, a refused settings save
  * never reaches the mode door, and a refused mode change is reported truthfully.
  */
@@ -72,10 +72,10 @@ describe("commission settings screen", () => {
     expect(view.queryByTestId("select-Commission mode")).toBeNull();
   });
 
-  test("an org with no stored mode shows AUTO_MEMBER and a same-mode save leaves the mode door alone", async () => {
+  test("an org with no stored mode shows MANUAL and a same-mode save leaves the mode door alone", async () => {
     mockUseQuery.mockReturnValue({ orgId: "org_1", commissionTiers: [{ minProfitAmount: 1000, commissionPct: 7.5 }, { minProfitAmount: 0, commissionPct: 5 }] } as never);
     const view = await render(withProviders(<CommissionSettingsModule orgId="org_1" />));
-    expect(view.getByTestId("select-Commission mode").props.value).toBe("AUTO_MEMBER");
+    expect(view.getByTestId("select-Commission mode").props.value).toBe("MANUAL");
     // Existing tiers load sorted by profit, one per line, and drive the preview rate.
     expect(view.getByDisplayValue("0,5\n1000,7.5")).toBeTruthy();
     expect(view.getByText("Rate: 7.5%")).toBeTruthy();
@@ -94,11 +94,11 @@ describe("commission settings screen", () => {
   test("a deliberate choice saves the tiers first, then calls the mode door", async () => {
     mockUseQuery.mockReturnValue({ orgId: "org_1" } as never);
     const view = await render(withProviders(<CommissionSettingsModule orgId="org_1" />));
-    await fireEvent.changeText(view.getByTestId("select-Commission mode"), "MANUAL");
+    await fireEvent.changeText(view.getByTestId("select-Commission mode"), "AUTO_MEMBER");
     await fireEvent.press(await view.findByRole("button", { name: "Save" }));
     await settle();
 
-    expect(setMode).toHaveBeenCalledWith({ orgId: "org_1", commissionMode: "MANUAL" });
+    expect(setMode).toHaveBeenCalledWith({ orgId: "org_1", commissionMode: "AUTO_MEMBER" });
     expect(upsert.mock.invocationCallOrder[0]).toBeLessThan(setMode.mock.invocationCallOrder[0]);
   });
 
@@ -106,7 +106,7 @@ describe("commission settings screen", () => {
     mockUseQuery.mockReturnValue({ orgId: "org_1" } as never);
     upsert.mockRejectedValue(new Error("refused"));
     const view = await render(withProviders(<CommissionSettingsModule orgId="org_1" />));
-    await fireEvent.changeText(view.getByTestId("select-Commission mode"), "MANUAL");
+    await fireEvent.changeText(view.getByTestId("select-Commission mode"), "AUTO_MEMBER");
     await fireEvent.press(await view.findByRole("button", { name: "Save" }));
     await settle();
 
@@ -117,7 +117,7 @@ describe("commission settings screen", () => {
     mockUseQuery.mockReturnValue({ orgId: "org_1" } as never);
     setMode.mockRejectedValue(new Error("owner only"));
     const view = await render(withProviders(<CommissionSettingsModule orgId="org_1" />));
-    await fireEvent.changeText(view.getByTestId("select-Commission mode"), "MANUAL");
+    await fireEvent.changeText(view.getByTestId("select-Commission mode"), "AUTO_MEMBER");
     await fireEvent.press(await view.findByRole("button", { name: "Save" }));
     await settle();
 
@@ -128,10 +128,10 @@ describe("commission settings screen", () => {
 describe("general settings screen", () => {
   const renderSettings = () => render(withProviders(<SettingsModule myMembership={MEMBERSHIP} org={ORG} />));
 
-  test("an org with no stored mode shows AUTO_MEMBER", async () => {
+  test("an org with no stored mode shows MANUAL", async () => {
     mockUseQuery.mockReturnValue({ orgId: "org_1", currency: "JOD" } as never);
     const view = await renderSettings();
-    expect(view.getByTestId("select-Commission mode").props.value).toBe("AUTO_MEMBER");
+    expect(view.getByTestId("select-Commission mode").props.value).toBe("MANUAL");
   });
 
   test("shows a loading state until settings arrive", async () => {
@@ -154,11 +154,11 @@ describe("general settings screen", () => {
   test("a deliberate choice calls the mode door after the settings are accepted", async () => {
     mockUseQuery.mockReturnValue({ orgId: "org_1", currency: "JOD" } as never);
     const view = await renderSettings();
-    await fireEvent.changeText(view.getByTestId("select-Commission mode"), "MANUAL");
+    await fireEvent.changeText(view.getByTestId("select-Commission mode"), "AUTO_MEMBER");
     await fireEvent.press(await view.findByRole("button", { name: "Save" }));
     await settle();
 
-    expect(setMode).toHaveBeenCalledWith({ orgId: "org_1", commissionMode: "MANUAL" });
+    expect(setMode).toHaveBeenCalledWith({ orgId: "org_1", commissionMode: "AUTO_MEMBER" });
     expect(upsert.mock.invocationCallOrder[0]).toBeLessThan(setMode.mock.invocationCallOrder[0]);
   });
 
@@ -166,7 +166,7 @@ describe("general settings screen", () => {
     mockUseQuery.mockReturnValue({ orgId: "org_1", currency: "JOD" } as never);
     upsert.mockRejectedValue(new Error("refused"));
     const view = await renderSettings();
-    await fireEvent.changeText(view.getByTestId("select-Commission mode"), "MANUAL");
+    await fireEvent.changeText(view.getByTestId("select-Commission mode"), "AUTO_MEMBER");
     await fireEvent.press(await view.findByRole("button", { name: "Save" }));
     await settle();
 

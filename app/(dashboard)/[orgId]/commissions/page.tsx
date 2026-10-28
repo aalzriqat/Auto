@@ -643,7 +643,7 @@ function CommissionPaymentAction({
 /** Read-side queue state and loaded-row summaries; only mounted beneath RoleGuard. */
 function useCommissionReviewQueue(activeOrgId: Id<"organizations"> | null) {
   // SCRUM-778: the mode in force, resolved on the server (an unset mode is
-  // AUTO_MEMBER) and readable by commission reviewers who cannot view settings.
+  // MANUAL) and readable by commission reviewers who cannot view settings.
   // `undefined` is loading and `null` is no access — no queue banner for either.
   // A null read is deliberately treated as "not MANUAL": a caller who cannot read the mode
   // must not be shown a manual work queue that may not match the org's real mode.

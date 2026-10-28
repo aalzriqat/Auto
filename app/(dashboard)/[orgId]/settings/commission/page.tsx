@@ -32,7 +32,7 @@ export default function CommissionSettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
 
-  // SCRUM-778: shows the mode the ledger actually runs — AUTO_MEMBER until one is
+  // SCRUM-778: shows the mode the ledger actually runs — MANUAL until one is
   // chosen. While settings load (`undefined`) no mode is shown as active and
   // none can be clicked: a loading screen is not a known configuration.
   const settingsLoaded = settings !== undefined;
