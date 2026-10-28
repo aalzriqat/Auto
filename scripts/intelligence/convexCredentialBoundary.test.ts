@@ -211,7 +211,10 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // URL-baked build and strict cleanup-gated verdict. Canonical credential
     // commands and negative controls remain unchanged; final source reviews bind this hash.
     // Minor closure: existing bounded creation backoff and cancellation-aware opening admission only.
-    "d2d6701e7e24b904ed6cc9975014fbdcc6e285484fcb8630b3eb779526ee6d31",
+    // SCRUM-757: counted authenticated PR-head verdict, default-branch-only
+    // publishers and a secret-free source archive replace privileged candidate
+    // checkouts. Canonical deploy/audit commands and their tamper tests remain.
+    "f307f6e0cb806f8551d8be802a798d10d349f1bbfc51fe8c72fbe8d650067e15",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
