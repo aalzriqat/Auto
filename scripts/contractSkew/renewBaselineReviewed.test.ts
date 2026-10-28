@@ -399,3 +399,161 @@ describe("closure also covers resolution inputs and Convex function references",
     expect(closureFor(["app/mobile2.ts"])("app/mobile2.ts").unresolved).toEqual([expect.stringMatching(/makeFunctionReference/)]);
   });
 });
+
+// SCRUM-866 round 3 (seat findings at 873309fb): implicit inputs were not traversed, `_generated/api` and
+// `convex/server` were recognised by specifier text, and a function reference resolved to any existing prefix.
+describe("closure ownership is decided by the resolved module, and a function reference names its exact module", () => {
+  const git = resolveGit();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-closure3-"));
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const write = (file: string, text: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), text);
+  };
+  const run = (...args: string[]) =>
+    execFileSync(String(git), ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
+      cwd: dir,
+      encoding: "utf8",
+    }).trim();
+  const SERVER_FILE = "node_modules/convex/dist/esm-types/server/index.d.ts";
+  const closureFor = (rootFiles: string[], implicitInputs: string[] = []) =>
+    createImportClosure({ root: dir, projects: [{ tsconfig: "tsconfig.json", rootFiles }], implicitInputs });
+  const closureOfFile = (file: string, implicitInputs: string[] = []) => closureFor([file], implicitInputs)(file);
+  const renewal = (closureOf: ReturnType<typeof closureFor>, reviewed: string) =>
+    renewBaseline(serialize([entry({ file: "app/page.tsx", callSiteId: "app/page.tsx:1:1", functionId: "vehicles:update" })]), {
+      compare: gitCompare({ git: String(git), cwd: dir, reviewed, head: "HEAD" }),
+      closureOf,
+      expires: RENEWED_EXPIRES,
+      renewal: RENEWAL,
+    });
+  let reviewed = "";
+
+  test("setup: reviewed revision", () => {
+    expect(git, "git must be locatable; cannot-run is a failure, not a skip").toBeTruthy();
+    write(
+      "tsconfig.json",
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          module: "esnext",
+          moduleResolution: "bundler",
+          target: "esnext",
+          types: [],
+          baseUrl: ".",
+          paths: { "@/*": ["./*"], genapi: ["./convex/_generated/api"], srv: [`./${SERVER_FILE}`] },
+        },
+      })
+    );
+    write("package.json", '{"name":"fx"}');
+    // A stand-in for the installed convex package, so "convex/server" resolves the way it does in the real tree.
+    write("node_modules/convex/package.json", JSON.stringify({ name: "convex", exports: { "./server": { types: `./${"dist/esm-types/server/index.d.ts"}` } } }));
+    write(SERVER_FILE, "export declare function makeFunctionReference<T extends string>(name: string): { t: T };\nexport declare const anyApi: any;\nexport declare const v: any;");
+    write("convex/_generated/api.ts", "export const api: any = 1; export const internal: any = 2; export const components: any = 3;");
+    write("convex/validators.ts", 'export const kinds = ["a"];');
+    write("convex/schema.ts", 'import { kinds } from "./validators"; export default kinds;');
+    write("convex/worker.ts", "export const run = 1;");
+    write("convex/lone.ts", "export const only = 1;");
+    write("convex/idx/index.ts", "export const fn = 1;");
+    write("convex/vehicles.ts", "export const update = 1;");
+    write("app/page.tsx", "export const v = 1;");
+    write("convex/viaJs.ts", 'import { internal } from "./_generated/api.js"; export const f = () => internal.worker.run;');
+    write("convex/viaAlias.ts", 'import { internal } from "genapi"; export const f = () => internal.worker.run;');
+    write("convex/nsLiteral.ts", 'import * as cv from "convex/server"; export const r = cv.makeFunctionReference<"query">("lone:only");');
+    write("convex/nsAlias.ts", 'import * as cv from "srv"; export const r = cv.makeFunctionReference<"query">("lone:only");');
+    write("convex/nsDynamic.ts", 'import * as cv from "convex/server"; declare const n: string; export const r = cv.makeFunctionReference<"query">(n);');
+    write("convex/nsBare.ts", 'import * as cv from "convex/server"; export const x = cv;');
+    write("convex/nsAny.ts", 'import * as cv from "convex/server"; export const x = cv.anyApi;');
+    write("convex/nsDestructure.ts", 'import * as cv from "convex/server"; export const { makeFunctionReference: m } = cv;');
+    write("convex/nsInnocent.ts", 'import * as cv from "convex/server"; export const x = cv.v;');
+    write("convex/reexpNamed.ts", 'export { internal } from "./_generated/api";');
+    write("convex/reexpStar.ts", 'export * from "./_generated/api.js";');
+    write("convex/reexpLocal.ts", 'import { api } from "./_generated/api"; export { api };');
+    write("convex/reexpMaker.ts", 'export { makeFunctionReference } from "convex/server";');
+    write("convex/reexpHarmless.ts", 'export { v } from "convex/server";');
+    write("convex/useReexp.ts", 'import { internal } from "./reexpNamed"; export const u = internal.worker.run;');
+    write("convex/dynLoad.ts", 'export const l = () => import("convex/server");');
+    write("convex/missing.ts", 'import { internal } from "./_generated/api"; export const m = internal.worker.missing.run;');
+    write("convex/idxShort.ts", 'import { api } from "./_generated/api"; export const m = api.idx.fn;');
+    write("convex/idxExact.ts", 'import { api } from "./_generated/api"; export const m = api.idx.index.fn;');
+    write("convex/exact.ts", 'import { internal } from "./_generated/api"; export const m = internal.worker.run;');
+    write("convex/moduleObject.ts", 'import { internal } from "./_generated/api"; export const m = internal.worker;');
+    run("init", "-q");
+    run("add", "--", "."); // an isolated temp repository, so the pathspec stays inside it
+    run("commit", "-q", "-m", "reviewed");
+    reviewed = run("rev-parse", "HEAD");
+  });
+
+  test("CONTROL: nothing changed, so a file whose closure now reaches the schema's imports still renews", () => {
+    const result = renewal(closureFor(["app/page.tsx", "convex/vehicles.ts"], ["package.json", "convex/schema.ts"]), reviewed);
+    expect(result.refused).toEqual([]);
+    expect(result.renewed).toBe(1);
+  });
+
+  test("an implicit .ts input's own imports are part of every closure", () => {
+    const files = closureOfFile("convex/vehicles.ts", ["package.json", "convex/schema.ts"]).files;
+    expect(files).toEqual(expect.arrayContaining(["convex/schema.ts", "convex/validators.ts"]));
+  });
+
+  test("a function reference through ./_generated/api.js or a path alias is traced", () => {
+    expect(closureOfFile("convex/viaJs.ts").files).toContain("convex/worker.ts");
+    expect(closureOfFile("convex/viaAlias.ts").files).toContain("convex/worker.ts");
+  });
+
+  test("a namespace import of convex/server (by specifier or by alias) is traced to its literal makeFunctionReference", () => {
+    expect(closureOfFile("convex/nsLiteral.ts").files).toContain("convex/lone.ts");
+    expect(closureOfFile("convex/nsAlias.ts").files).toContain("convex/lone.ts");
+    expect(closureOfFile("convex/nsLiteral.ts").unresolved).toEqual([]);
+  });
+
+  test("a namespace use that cannot be read statically refuses", () => {
+    expect(closureOfFile("convex/nsDynamic.ts").unresolved).toEqual([expect.stringMatching(/makeFunctionReference with a non-literal name/)]);
+    expect(closureOfFile("convex/nsBare.ts").unresolved).toEqual([expect.stringMatching(/namespace used without a static member/)]);
+    expect(closureOfFile("convex/nsAny.ts").unresolved).toEqual([expect.stringMatching(/anyApi/)]);
+    expect(closureOfFile("convex/nsDestructure.ts").unresolved).toEqual([expect.stringMatching(/namespace used without a static member/)]);
+  });
+
+  test("CONTROL: a namespace import used only for something unrelated to function references is not refused", () => {
+    expect(closureOfFile("convex/nsInnocent.ts").unresolved).toEqual([]);
+    expect(closureOfFile("convex/reexpHarmless.ts").unresolved).toEqual([]);
+  });
+
+  test("a re-export of api, internal or makeFunctionReference refuses, also for the file that imports the re-export", () => {
+    expect(closureOfFile("convex/reexpNamed.ts").unresolved).toEqual([expect.stringMatching(/re-export from \.\/_generated\/api cannot be traced/)]);
+    expect(closureOfFile("convex/reexpStar.ts").unresolved).toEqual([expect.stringMatching(/re-export from \.\/_generated\/api\.js cannot be traced/)]);
+    expect(closureOfFile("convex/reexpLocal.ts").unresolved).toEqual([expect.stringMatching(/re-export of api cannot be traced/)]);
+    expect(closureOfFile("convex/reexpMaker.ts").unresolved).toEqual([expect.stringMatching(/re-export from convex\/server cannot be traced/)]);
+    expect(closureOfFile("convex/useReexp.ts").unresolved).toEqual([expect.stringMatching(/re-export from \.\/_generated\/api cannot be traced/)]);
+  });
+
+  test("a dynamic load of convex/server refuses", () => {
+    expect(closureOfFile("convex/dynLoad.ts").unresolved).toEqual([expect.stringMatching(/dynamic load of convex\/server cannot be traced/)]);
+  });
+
+  test("CONTROL: internal.worker.run names convex/worker.ts exactly", () => {
+    expect(closureOfFile("convex/exact.ts")).toEqual({ files: expect.arrayContaining(["convex/worker.ts"]), unresolved: [] });
+  });
+
+  test("a function reference resolves its exact module, never a shorter prefix that happens to exist", () => {
+    const missing = closureOfFile("convex/missing.ts");
+    expect(missing.files).not.toContain("convex/worker.ts");
+    expect(missing.unresolved).toEqual([expect.stringMatching(/internal\.worker\.missing\.run \(names no module/)]);
+  });
+
+  test("index is not special: api.idx.fn names no module, api.idx.index.fn names convex/idx/index.ts", () => {
+    expect(closureOfFile("convex/idxShort.ts").unresolved).toEqual([expect.stringMatching(/api\.idx\.fn \(names no module/)]);
+    expect(closureOfFile("convex/idxExact.ts")).toEqual({ files: expect.arrayContaining(["convex/idx/index.ts"]), unresolved: [] });
+  });
+
+  test("a module object used without a function name (api.worker, internal.worker) cannot be traced and refuses", () => {
+    expect(closureOfFile("convex/moduleObject.ts").unresolved).toEqual([expect.stringMatching(/internal\.worker names no function/)]);
+  });
+
+  test("CONTROL: renewal is refused when a validator imported only by convex/schema.ts changed", () => {
+    write("convex/validators.ts", 'export const kinds = ["a", "b"];');
+    run("add", "--", "convex/validators.ts");
+    run("commit", "-q", "-m", "validator changed");
+    const result = renewal(closureFor(["app/page.tsx", "convex/vehicles.ts"], ["package.json", "convex/schema.ts"]), reviewed);
+    expect(result.renewed).toBe(0);
+    expect(result.refused[0].reason).toMatch(/convex\/validators\.ts, which changed/);
+  });
+});

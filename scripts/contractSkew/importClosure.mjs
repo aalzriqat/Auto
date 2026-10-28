@@ -18,17 +18,42 @@
  *      importing it: the reference resolves through `convex/_generated/api`.
  *      Convex maps a function `f` in `convex/messages/access.ts` to
  *      `api.messages.access.f` (convex/_generated/ai/guidelines.md, "Function
- *      references"), so every leading run of segments that names `convex/<run>.ts`
- *      (or `<run>/index.ts`) is an edge. Mobile's `makeFunctionReference("mod:fn")`
- *      string form is the same edge. A reference that names no module, or that
- *      cannot be read statically (bare `api`, `api[key]`, a namespace or dynamic
- *      import of `_generated/api`, `anyApi`, a non-literal `makeFunctionReference`)
- *      is reported in `unresolved`, which refuses mechanical renewal.
+ *      references"; docs.convex.dev/functions/query-functions, "Query names"), so
+ *      the module is EXACTLY every segment but the last: `convex/messages/access.ts`
+ *      and nothing shorter (`convex/messages.ts` is another module), and `index` is
+ *      not special (`api.idx.index.fn` is convex/idx/index.ts; `api.idx.fn` names no
+ *      module). Mobile's `makeFunctionReference("mod:fn")` string form is the same
+ *      edge. A reference whose exact module does not exist is `unresolved`.
+ *      Which import IS the generated api and which IS `convex/server` is decided by
+ *      the module TypeScript resolves the specifier to (so `./_generated/api.js`, a
+ *      path alias and a re-targeted tsconfig are seen), with the specifier text as a
+ *      fallback that can only add ownership.
+ *   Every form below is NOT traced and is reported in `unresolved`, which REFUSES
+ *   mechanical renewal (none passes silently). This is the complete list:
+ *     - `api`/`internal` used other than as a static chain: bare (`const a = internal`),
+ *       destructured, a dynamic key (`api[k]`), a chain that stops at a module
+ *       (`internal.worker`) or names no function;
+ *     - a default import, namespace import, `import x = require()` or dynamic
+ *       `import()` / `require()` of the generated api module;
+ *     - any re-export that could hand `api`/`internal`/`makeFunctionReference`/`anyApi`
+ *       to a file that is not scanned again (`export { internal } from "./_generated/api"`,
+ *       `export * from ...`, `export { api }`), and so the importers of such a file;
+ *     - `anyApi`, and `makeFunctionReference` with a non-literal name, used without a
+ *       call, or reached through a namespace used any other way (`const x = cv`,
+ *       destructuring it, `cv[k]`); a dynamic `import()`/`require()` of `convex/server`;
+ *     A namespace import of `convex/server` whose only use is
+ *     `ns.makeFunctionReference("mod:fn")` IS traced like the named import.
+ *   At the revision this was written no shipped file does any of the refused forms
+ *   (checked by ripgrep over the whole working tree, which skips ignored paths such as
+ *   node_modules, excluding `*.test.*` and `*.spec.*`; test files do use
+ *   `await import("convex/server")` for `getFunctionName`, and no baseline closure
+ *   reaches them), so today these only fire on a future change, which is the point.
  *   3. Inputs that decide HOW the first two resolve and type: the tsconfig each
  *      program was built from and its relative `extends` chain, that directory's
  *      package.json, and the `implicitInputs` the caller names (package.json,
  *      pnpm-lock.yaml, convex/schema.ts: the schema reaches clients only through
- *      the generated dataModel, which is excluded).
+ *      the generated dataModel, which is excluded). An implicit input that is source
+ *      is traversed like any member, so what convex/schema.ts imports is covered too.
  *
  * What is NOT part of the closure, and why:
  *   - `node_modules` (and anything resolving outside the repository): third-party
@@ -58,50 +83,92 @@ import { toPosixRel } from "./clientFiles.mjs";
 export const GENERATED_PREFIX = "convex/_generated/";
 const CONVEX_DIR = "convex";
 const SCRIPT_EXT = /\.(?:[cm]?[jt]sx?)$/;
-const GENERATED_API = /(?:^|\/)_generated\/api$/;
 const MODULE_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs"];
+/** The generated function-reference module, by its repository-relative resolved path (`.ts`, `.js` or `.d.ts`). */
+const GENERATED_API_FILE = /^convex\/_generated\/api\.(?:d\.)?[cm]?[jt]sx?$/;
+/** The `convex/server` entry point wherever the package manager put it (pnpm nests it under `.pnpm/`). */
+const CONVEX_SERVER_FILE = /(?:^|\/)node_modules\/convex\/(?:[^/]+\/)*server\/index\.(?:d\.)?[cm]?[jt]s$/;
+/** Fallback when a specifier does not resolve (a tree without node_modules): the text only ever ADDS ownership. */
+const GENERATED_API_TEXT = /(?:^|\/)_generated\/api(?:\.[cm]?[jt]sx?)?$/;
 
 /**
  * Everything a source file names that can change what it does: module specifiers
  * (static and type-only imports, `export ... from`, `import x = require()`,
  * `import()` and `require()` with a string literal) and Convex function references.
  *
+ * Which import is the generated `api` module and which is `convex/server` is decided by
+ * `ownerOf`, which resolves the specifier with TypeScript (so `./_generated/api.js`, a
+ * path alias and a re-targeted tsconfig are all seen), never by the specifier's text alone.
+ *
  * @param {import("typescript").SourceFile} source
- * @returns {{ specifiers: string[], functionPaths: Array<{ text: string, segments: string[] }>, opaque: string[] }}
- *   `functionPaths` are `api.a.b` chains; `opaque` are references that cannot be read statically.
+ * @param {(specifier: string) => "api" | "server" | undefined} ownerOf
+ * @returns {{ specifiers: string[], references: Array<{ text: string, modulePath: string[] }>, opaque: string[] }}
+ *   `references` name a backend module exactly (`api.a.b.fn` -> `["a", "b"]`);
+ *   `opaque` are references and loads that cannot be read statically, each of which refuses renewal.
  */
-function scan(source) {
+function scan(source, ownerOf) {
   /** @type {string[]} */
   const specifiers = [];
-  /** @type {Array<{ text: string, segments: string[] }>} */
-  const functionPaths = [];
+  /** @type {Array<{ text: string, modulePath: string[] }>} */
+  const references = [];
   /** @type {string[]} */
   const opaque = [];
   /** local name -> "api" | "internal" (the generated function-reference roots) */
   const roots = new Map();
-  const referenceMakers = new Set();
+  const makers = new Set();
   const anyApis = new Set();
+  const serverNamespaces = new Set();
+  const MAKER = "makeFunctionReference";
+  const ANY_API = "anyApi";
+  const importedName = (/** @type {import("typescript").ImportSpecifier} */ element) => (element.propertyName ?? element.name).text;
+  const specifierOf = (/** @type {import("typescript").Node} */ node) => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      return node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
+    }
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && ts.isStringLiteralLike(node.moduleReference.expression)) {
+      return node.moduleReference.expression.text;
+    }
+    return undefined;
+  };
 
+  // Pass 1: what the file imports from the two owned modules.
   for (const statement of source.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteralLike(statement.moduleSpecifier) || !statement.importClause) continue;
-    const from = statement.moduleSpecifier.text;
-    const clause = statement.importClause;
-    if (GENERATED_API.test(from)) {
-      if (clause.name) opaque.push(`default import of ${from} cannot be traced`);
+    const from = specifierOf(statement);
+    const owner = from === undefined ? undefined : ownerOf(from);
+    if (owner === undefined || from === undefined) continue;
+    if (ts.isImportEqualsDeclaration(statement)) {
+      if (owner === "api") opaque.push(`import = require of ${from} cannot be traced`);
+      else serverNamespaces.add(statement.name.text);
+    } else if (ts.isImportDeclaration(statement) && statement.importClause) {
+      const clause = statement.importClause;
       const bindings = clause.namedBindings;
-      if (bindings && ts.isNamespaceImport(bindings)) opaque.push(`namespace import of ${from} cannot be traced`);
-      else if (bindings) {
+      if (clause.name) opaque.push(`default import of ${from} cannot be traced`);
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        if (owner === "api") opaque.push(`namespace import of ${from} cannot be traced`);
+        else serverNamespaces.add(bindings.name.text);
+      } else if (bindings) {
         for (const element of bindings.elements) {
-          const imported = (element.propertyName ?? element.name).text;
-          if (imported === "api" || imported === "internal") roots.set(element.name.text, imported);
+          const imported = importedName(element);
+          if (owner === "api" && (imported === "api" || imported === "internal")) roots.set(element.name.text, imported);
+          if (owner === "server" && imported === MAKER) makers.add(element.name.text);
+          if (owner === "server" && imported === ANY_API) anyApis.add(element.name.text);
         }
       }
-    } else if (from === "convex/server" && clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
-      for (const element of clause.namedBindings.elements) {
-        const imported = (element.propertyName ?? element.name).text;
-        if (imported === "makeFunctionReference") referenceMakers.add(element.name.text);
-        if (imported === "anyApi") anyApis.add(element.name.text);
+    } else if (ts.isExportDeclaration(statement)) {
+      // A re-export hands the root to files this scan does not follow back to their uses.
+      const clause = statement.exportClause;
+      const names = clause && ts.isNamedExports(clause) ? clause.elements.map((element) => (element.propertyName ?? element.name).text) : undefined;
+      if (owner === "api" || names === undefined || names.includes(MAKER) || names.includes(ANY_API)) {
+        opaque.push(`re-export from ${from} cannot be traced`);
       }
+    }
+  }
+  // Pass 2: a local re-export of a root or maker (`export { api }`), wherever it is written in the file.
+  for (const statement of source.statements) {
+    if (!ts.isExportDeclaration(statement) || statement.moduleSpecifier || !statement.exportClause || !ts.isNamedExports(statement.exportClause)) continue;
+    for (const element of statement.exportClause.elements) {
+      const local = (element.propertyName ?? element.name).text;
+      if (roots.has(local) || makers.has(local) || anyApis.has(local) || serverNamespaces.has(local)) opaque.push(`re-export of ${local} cannot be traced`);
     }
   }
 
@@ -138,49 +205,70 @@ function scan(source) {
     if ((ts.isPropertyAccessExpression(parent) || ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent) || ts.isPropertyDeclaration(parent) ||
       ts.isMethodDeclaration(parent) || ts.isBindingElement(parent) && parent.propertyName === node || ts.isEnumMember(parent)) && parent.name === node) return true;
     if (ts.isQualifiedName(parent) && parent.right === node) return true;
-    return ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent);
+    return ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent) || ts.isImportEqualsDeclaration(parent);
   };
+
+  /** The call `makeFunctionReference(...)` or `ns.makeFunctionReference(...)`. @param {import("typescript").Expression} callee */
+  const isMakerCallee = (callee) =>
+    (ts.isIdentifier(callee) && makers.has(callee.text)) ||
+    (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && serverNamespaces.has(callee.expression.text) && callee.name.text === MAKER);
 
   /** @param {import("typescript").Node} node */
   const visit = (node) => {
-    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
-      specifiers.push(node.moduleSpecifier.text);
-    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && ts.isStringLiteralLike(node.moduleReference.expression)) {
-      specifiers.push(node.moduleReference.expression.text);
+    const specifier = specifierOf(node);
+    if (specifier !== undefined) {
+      specifiers.push(specifier);
     } else if (ts.isCallExpression(node) && node.arguments.length >= 1 && ts.isStringLiteralLike(node.arguments[0])) {
       const callee = node.expression;
       if (callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require")) {
-        specifiers.push(node.arguments[0].text);
-        if (GENERATED_API.test(node.arguments[0].text)) opaque.push(`dynamic load of ${node.arguments[0].text} cannot be traced`);
+        const target = node.arguments[0].text;
+        specifiers.push(target);
+        if (ownerOf(target) !== undefined) opaque.push(`dynamic load of ${target} cannot be traced`);
       }
     }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && referenceMakers.has(node.expression.text)) {
+    if (ts.isCallExpression(node) && isMakerCallee(node.expression)) {
       const [name] = node.arguments;
       if (name && ts.isStringLiteralLike(name)) {
+        // "folder/module:fn" (a string with no ":" names the module's default export).
         const [modulePath] = name.text.split(":");
-        functionPaths.push({ text: `makeFunctionReference("${name.text}")`, segments: modulePath.split("/") });
+        references.push({ text: `makeFunctionReference("${name.text}")`, modulePath: modulePath.split("/") });
       } else {
         opaque.push("makeFunctionReference with a non-literal name cannot be traced");
       }
     }
     if (ts.isImportDeclaration(node)) return;
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && serverNamespaces.has(node.expression.text)) {
+      if (node.name.text === ANY_API) opaque.push("anyApi cannot be traced");
+      else if (node.name.text === MAKER && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) opaque.push("makeFunctionReference used without a call cannot be traced");
+      return;
+    }
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && serverNamespaces.has(node.expression.text)) {
+      opaque.push("a computed member of convex/server cannot be traced");
+      return;
+    }
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isQualifiedName(node)) {
       const chain = chainOf(node);
       if (chain && roots.has(chain.base)) {
-        const label = chain.base;
-        if (chain.segments.length === 0) opaque.push(`${label}[<dynamic>] cannot be traced`);
-        else functionPaths.push({ text: `${roots.get(label)}.${chain.segments.join(".")}`, segments: chain.segments });
+        const root = roots.get(chain.base);
+        const text = `${root}.${chain.segments.join(".")}`;
+        if (chain.segments.length === 0) opaque.push(`${root}[<dynamic>] cannot be traced`);
+        else if (chain.segments.length < 2) opaque.push(`${text} names no function (a module path needs at least module and function)`);
+        // The module is every segment but the last: `api.messages.access.h` is function h of convex/messages/access.ts
+        // (https://docs.convex.dev/functions/query-functions, "Query names").
+        else references.push({ text, modulePath: chain.segments.slice(0, -1) });
         return; // the whole chain is accounted for
       }
     }
-    if (ts.isIdentifier(node)) {
-      if (roots.has(node.text) && !isBindingOrMemberName(node)) opaque.push(`${roots.get(node.text)} used without a static function path`);
-      if (anyApis.has(node.text) && !isBindingOrMemberName(node)) opaque.push("anyApi cannot be traced");
+    if (ts.isIdentifier(node) && !isBindingOrMemberName(node)) {
+      if (roots.has(node.text)) opaque.push(`${roots.get(node.text)} used without a static function path`);
+      if (anyApis.has(node.text)) opaque.push("anyApi cannot be traced");
+      if (makers.has(node.text) && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) opaque.push("makeFunctionReference used without a call cannot be traced");
+      if (serverNamespaces.has(node.text)) opaque.push("a convex/server namespace used without a static member cannot be traced");
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
-  return { specifiers, functionPaths, opaque };
+  return { specifiers, references, opaque };
 }
 
 /**
@@ -217,7 +305,8 @@ function configChain(absRoot, tsconfigAbs) {
  * @returns {(file: string) => { files: string[], unresolved: string[] }}
  *   `files` are repository-relative, sorted and include the file itself;
  *   `unresolved` lists in-repo specifiers (relative or `@/`) and function references that resolve to nothing.
- */export function createImportClosure({ root, projects, implicitInputs = [] }) {
+ */
+export function createImportClosure({ root, projects, implicitInputs = [] }) {
   const absRoot = path.resolve(root);
   const toRel = (/** @type {string} */ abs) => toPosixRel(absRoot, abs);
   const states = projects
@@ -237,17 +326,37 @@ function configChain(absRoot, tsconfigAbs) {
     return text === undefined ? undefined : ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true);
   };
 
-  /** Every leading run of segments that names a backend module file: `a.b.c` -> convex/a.ts, convex/a/b.ts, ... */
-  const functionModules = (/** @type {string[]} */ segments) => {
-    /** @type {string[]} */
-    const modules = [];
-    for (let length = 1; length <= segments.length; length++) {
-      const stem = path.join(absRoot, CONVEX_DIR, ...segments.slice(0, length));
-      for (const candidate of MODULE_EXTENSIONS.flatMap((extension) => [`${stem}${extension}`, path.join(stem, `index${extension}`)])) {
-        if (ts.sys.fileExists(candidate) && !toPosixRel(absRoot, candidate).startsWith(GENERATED_PREFIX)) modules.push(toPosixRel(absRoot, candidate));
-      }
+  /**
+   * The backend module file named by `modulePath` (every segment of a function path but the last):
+   * `["messages", "access"]` is convex/messages/access.ts. Exactly that file; a shorter prefix that happens to
+   * exist (convex/messages.ts) is a different module, and `index` has no special meaning
+   * (convex/_generated/ai/guidelines.md, "Function references"; docs.convex.dev/functions/query-functions, "Query names").
+   * An empty result is an unresolved reference.
+   */
+  const functionModules = (/** @type {string[]} */ modulePath) => {
+    const stem = path.join(absRoot, CONVEX_DIR, ...modulePath);
+    return MODULE_EXTENSIONS.map((extension) => toPosixRel(absRoot, `${stem}${extension}`)).filter(
+      (candidate) => ts.sys.fileExists(path.join(absRoot, candidate)) && !candidate.startsWith(GENERATED_PREFIX)
+    );
+  };
+
+  /**
+   * Which of the two modules whose bindings carry function references a specifier names, decided by what
+   * TypeScript resolves it to (`./_generated/api.js`, a path alias and a re-targeted tsconfig all count),
+   * with the specifier's text as a fallback so a tree that cannot resolve it can only over-refuse.
+   *
+   * @param {(typeof states)[number]} state @param {string} fromFile absolute path of the importing file
+   * @returns {(specifier: string) => "api" | "server" | undefined}
+   */
+  const ownerOfFor = (state, fromFile) => (specifier) => {
+    const resolved = ts.resolveModuleName(specifier, fromFile, state.options, ts.sys).resolvedModule;
+    if (resolved) {
+      const target = toRel(resolved.resolvedFileName);
+      if (GENERATED_API_FILE.test(target)) return "api";
+      if (CONVEX_SERVER_FILE.test(target)) return "server";
     }
-    return modules;
+    if (GENERATED_API_TEXT.test(specifier)) return "api";
+    return specifier === "convex/server" ? "server" : undefined;
   };
 
   /** @param {(typeof states)[number]} state @param {string} rel */
@@ -258,17 +367,18 @@ function configChain(absRoot, tsconfigAbs) {
     const unresolved = new Set();
     if (SCRIPT_EXT.test(rel)) {
       const abs = path.resolve(absRoot, rel);
-      // A function reference reaches a module the program never imported: scan it syntactically from disk
-      // (the scan needs no type information, and import specifiers resolve with the project options).
-      const source = state.program.getSourceFile(abs) ?? parseFromDisk(abs);
+      // Always parsed from disk with parent pointers (a program's own source files have none until type-checked,
+      // and a function reference reaches modules the program never imported). The scan needs no type information;
+      // import specifiers resolve with the project's options.
+      const source = parseFromDisk(abs);
       if (!source) {
-        unresolved.add(`(source ${rel} is not in the program)`);
+        unresolved.add(`(source ${rel} cannot be read)`);
       } else {
-        const scanned = scan(source);
+        const scanned = scan(source, ownerOfFor(state, abs));
         const specs = new Set(scanned.specifiers);
         for (const text of scanned.opaque) unresolved.add(text);
-        for (const reference of scanned.functionPaths) {
-          const modules = functionModules(reference.segments);
+        for (const reference of scanned.references) {
+          const modules = functionModules(reference.modulePath);
           if (modules.length === 0) unresolved.add(`${reference.text} (names no module under ${CONVEX_DIR}/)`);
           for (const module of modules) files.add(module);
         }
@@ -299,7 +409,8 @@ function configChain(absRoot, tsconfigAbs) {
     if (!state) throw new Error(`${file} is not a root of any import-closure project`);
     const seen = new Set([file, ...state.inputs]);
     const unresolved = new Set();
-    const stack = [file];
+    // An implicit input that is source (convex/schema.ts) has imports of its own that decide what it means.
+    const stack = [file, ...state.inputs.filter((input) => SCRIPT_EXT.test(input))];
     while (stack.length) {
       const edges = directImports(state, /** @type {string} */ (stack.pop()));
       for (const spec of edges.unresolved) unresolved.add(spec);

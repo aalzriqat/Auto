@@ -73,27 +73,44 @@ the client file and of the backend module (`importClosure.mjs`) contains:
 - files reached by an import edge, resolved with the surface's real tsconfig;
 - backend modules reached by a Convex function reference: `api.<module>.<fn>` and
   `internal.<module>.<fn>` at any depth (`ctx.runQuery`, `runMutation`, `runAction`,
-  the scheduler and crons all take one) and mobile's `makeFunctionReference("mod:fn")`.
-  Convex maps `convex/messages/access.ts` to `api.messages.access.<fn>`
-  (`convex/_generated/ai/guidelines.md`, "Function references"), so every leading run
-  of segments that names `convex/<run>.ts` or `<run>/index.ts` is an edge. A reference
-  that names no module, or cannot be read statically (bare `api`, `api[key]`, a
-  namespace or dynamic import of `_generated/api`, `anyApi`, a non-literal
-  `makeFunctionReference`), is unresolved and refuses mechanical renewal;
+  the scheduler and crons all take one) and `makeFunctionReference("mod:fn")`, also
+  through a namespace import of `convex/server`. The module is exactly every segment
+  but the last (`convex/messages/access.ts` is `api.messages.access.<fn>`:
+  `convex/_generated/ai/guidelines.md`, "Function references", and
+  [Query names](https://docs.convex.dev/functions/query-functions)). A shorter prefix
+  that happens to exist (`convex/messages.ts`) is a different module, and `index` is
+  not special: `api.idx.index.fn` is `convex/idx/index.ts`, `api.idx.fn` names no
+  module. A reference whose exact module does not exist is unresolved and refuses.
+  Which import is the generated api or `convex/server` is decided by the module
+  TypeScript resolves the specifier to (`./_generated/api.js` and path aliases
+  included), with the specifier text only as a fallback;
 - the tsconfig of each program and its relative `extends` chain, that directory's
   `package.json`, and the shared inputs `package.json`, `pnpm-lock.yaml` and
   `convex/schema.ts` (clients reach the schema only through the excluded
-  `_generated/dataModel`).
+  `_generated/dataModel`). An input that is source is traversed like any member, so
+  what `convex/schema.ts` imports (validators, enums) is in every closure too.
 
-Still outside it: ambient declarations (`declare global`, a `.d.ts` nobody imports);
-what a dependency's code does inside `node_modules` (the lockfile and package.json
-pin the version, nothing reviews its behaviour); handler-only behaviour that no edge
-reaches (a trigger, an HTTP route, a cron table, a scheduled job, a function named
-through a string built at run time); `components.*` references; and a local variable
-that shadows `api` or `internal`, which is treated as the generated object (it only
-over-includes). A reference graph this wide reaches most of the backend, so a change
-to a widely referenced module refuses almost every entry: each renewal text then
-names the changed files it was read against.
+Not traced, and each REFUSES mechanical renewal (reported as unresolved, never
+skipped): `api`/`internal` used other than as a static chain (bare, destructured,
+`api[key]`, a chain that stops at a module or names no function); a default import,
+namespace import, `import x = require()` or dynamic `import()`/`require()` of the
+generated api; any re-export that hands `api`, `internal`, `makeFunctionReference`
+or `anyApi` on (`export { internal } from "./_generated/api"`, `export *`,
+`export { api }`), which also refuses every file that imports the re-exporting file;
+`anyApi`; `makeFunctionReference` with a non-literal name or used without a call; a
+`convex/server` namespace used any way but `ns.makeFunctionReference("mod:fn")`; a
+dynamic load of `convex/server`. At this revision no shipped (non-test) file does any
+of these, so they only fire on a future change.
+
+Still outside the closure and not detected: ambient declarations (`declare global`, a
+`.d.ts` nobody imports); what a dependency's code does inside `node_modules` (the
+lockfile and package.json pin the version, nothing reviews its behaviour);
+handler-only behaviour that no edge reaches (a trigger, an HTTP route, a cron table, a
+scheduled job, a function named through a string built at run time); `components.*`
+references; and a local variable that shadows `api` or `internal`, which is treated as
+the generated object (it only over-includes). A reference graph this wide reaches most
+of the backend, so a change to a widely referenced module refuses almost every entry:
+each renewal text then names the changed files it was read against.
 
 ## Evidence, 2026-10-28
 
