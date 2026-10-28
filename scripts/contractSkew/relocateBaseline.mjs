@@ -67,7 +67,11 @@ try {
     document.entries = entries;
     const temporary = path.join(path.dirname(values.baseline), `.${path.basename(values.baseline)}.${randomUUID()}.tmp`);
     try {
-      fs.writeFileSync(temporary, JSON.stringify(document, null, 2) + "\n", { flag: "wx", mode: fs.statSync(values.baseline).mode });
+      // Keep the file's existing line endings (a Windows autocrlf checkout holds it as CRLF) so the diff is
+      // limited to the moved callSiteId values.
+      const serialized = JSON.stringify(document, null, 2) + "\n";
+      fs.writeFileSync(temporary, before.includes("\r\n") ? serialized.replace(/\n/g, "\r\n") : serialized,
+        { flag: "wx", mode: fs.statSync(values.baseline).mode });
       fs.renameSync(temporary, values.baseline);
     } finally {
       // This file is created by this invocation; never remove the original baseline on failure.

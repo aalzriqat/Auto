@@ -135,6 +135,52 @@ test("a deleted client file fails with no candidate instead of an empty successf
   assert.match(checked.output, /candidates: none/);
 });
 
+// SCRUM-866: on Windows `core.autocrlf=true` checks the head out as CRLF while `git show <base>:file`
+// returns the stored LF blob, so a textually identical MULTI-LINE call must still relocate.
+const multiLine = "markPaid({\n              payableId: 'payable',\n              taxAmount: amount,\n            })";
+
+test("a multi-line call relocates when the head is checked out with CRLF and the base blob is LF", () => {
+  const { root, base, entries } = fixture(source(156, multiLine).replace(/\n/g, "\r\n"));
+  fs.writeFileSync(path.join(root, file), source(150, multiLine));
+  const git = resolveGit();
+  assert.ok(git, "git is required for base-revision controls");
+  execFileSync(git, ["add", "--", file], { cwd: root, stdio: "pipe" });
+  execFileSync(git, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "multi-line base"], { cwd: root, stdio: "pipe" });
+  const multiBase = execFileSync(git, ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  assert.notEqual(multiBase, base);
+  assert.ok(!execFileSync(git, ["show", `${multiBase}:${file}`], { cwd: root, encoding: "utf8" }).includes("\r"), "the base blob must be LF");
+  fs.writeFileSync(path.join(root, file), source(156, multiLine).replace(/\n/g, "\r\n"));
+  assert.ok(fs.readFileSync(path.join(root, file), "utf8").includes("\r\n"), "the head must be CRLF");
+  const written = run(helper, root, ["--base", multiBase, "--write"]);
+  assert.equal(written.status, 0, written.output);
+  const actual = JSON.parse(fs.readFileSync(path.join(root, "baseline.json"), "utf8"));
+  assert.deepEqual(actual.entries, entries.map((entry) => ({ ...entry, callSiteId: newSite })));
+  assert.equal(run(checker, root).status, 0);
+});
+
+test("CRLF normalisation does not hide a real change inside a multi-line call", () => {
+  const { root, entries } = fixture();
+  fs.writeFileSync(path.join(root, file), source(150, multiLine));
+  const git = resolveGit();
+  assert.ok(git, "git is required for base-revision controls");
+  execFileSync(git, ["add", "--", file], { cwd: root, stdio: "pipe" });
+  execFileSync(git, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "multi-line base"], { cwd: root, stdio: "pipe" });
+  const multiBase = execFileSync(git, ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  fs.writeFileSync(path.join(root, file), source(156, multiLine.replace("amount", "0")).replace(/\n/g, "\r\n"));
+  const refused = run(helper, root, ["--base", multiBase, "--write"]);
+  assert.equal(refused.status, 10, refused.output);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, "baseline.json"), "utf8")).entries[0].callSiteId, entries[0].callSiteId);
+});
+
+test("--write preserves the baseline's CRLF line endings and every unrelated byte", () => {
+  const { root, baseline, base } = fixture();
+  const crlf = baseline.replace(/\n/g, "\r\n");
+  fs.writeFileSync(path.join(root, "baseline.json"), crlf);
+  const written = run(helper, root, ["--base", base, "--write"]);
+  assert.equal(written.status, 0, written.output);
+  assert.equal(fs.readFileSync(path.join(root, "baseline.json"), "utf8"), crlf.replaceAll(oldSite, newSite));
+});
+
 test("request maps inside unrelated wrapper calls cannot authorize relocation", () => {
   const text = "const map = useMemo(() => ({ key: { query: api.a.b, args: payload } }), []); useQueries(map);";
   const parsed = ts.createSourceFile("app/query.tsx", text, ts.ScriptTarget.Latest, true);

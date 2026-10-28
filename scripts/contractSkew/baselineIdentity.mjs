@@ -95,7 +95,12 @@ export function callExpressionAt(source, siteId) {
   while (exact && !ts.isCallExpression(exact)) exact = exact.parent;
   if (!exact || !ts.isCallExpression(exact)) return null;
   if (exact.expression.getStart(source) !== position && exact.arguments[0]?.getStart(source) !== position) return null;
-  return source.text.slice(exact.getStart(source), exact.end);
+  // Compare call TEXT independent of how the checkout stores line endings. `git show <rev>:file` returns
+  // the stored blob (LF), while a working tree with core.autocrlf=true holds the same file as CRLF
+  // (git-config "core.autocrlf": LF in the repository, CRLF in the working directory on checkout), so a
+  // textually identical multi-line call would otherwise compare unequal. Only the CRLF pair is folded;
+  // every other byte, including a lone CR, stays significant. Line and column positions are unaffected.
+  return source.text.slice(exact.getStart(source), exact.end).replace(/\r\n/g, "\n");
 }
 
 /** @param {ReturnType<typeof inspectBaselineIdentities>[number]} stranded */
