@@ -243,6 +243,7 @@ import type * as utils_leadActivity from "../utils/leadActivity.js";
 import type * as utils_leadAssignment from "../utils/leadAssignment.js";
 import type * as utils_leadStageHelpers from "../utils/leadStageHelpers.js";
 import type * as utils_ledgerCalendar from "../utils/ledgerCalendar.js";
+import type * as utils_legacyCollectionRefundContainment from "../utils/legacyCollectionRefundContainment.js";
 import type * as utils_manualFinancePayer from "../utils/manualFinancePayer.js";
 import type * as utils_manualJournalContainment from "../utils/manualJournalContainment.js";
 import type * as utils_marketplaceMatching from "../utils/marketplaceMatching.js";
@@ -576,6 +577,7 @@ declare const fullApi: ApiFromModules<{
   "utils/leadAssignment": typeof utils_leadAssignment;
   "utils/leadStageHelpers": typeof utils_leadStageHelpers;
   "utils/ledgerCalendar": typeof utils_ledgerCalendar;
+  "utils/legacyCollectionRefundContainment": typeof utils_legacyCollectionRefundContainment;
   "utils/manualFinancePayer": typeof utils_manualFinancePayer;
   "utils/manualJournalContainment": typeof utils_manualJournalContainment;
   "utils/marketplaceMatching": typeof utils_marketplaceMatching;
