@@ -896,6 +896,61 @@ describe("classifyGapResolution", () => {
     expect(classifyGapResolution(jod(1_000), 0, jod(1_000))).toBe("DEALER_ABSORBS");
     expect(classifyGapResolution(jod(1_000), jod(700), jod(300))).toBe("SPLIT");
   });
+
+  it("names a supplier-borne shortfall (SCRUM-766 PR-C): alone it is SUPPLIER_ABSORBS, shared with anyone else it is a SPLIT", () => {
+    expect(classifyGapResolution(jod(300), 0, 0, jod(300))).toBe("SUPPLIER_ABSORBS");
+    expect(classifyGapResolution(jod(850), 0, jod(550), jod(300))).toBe("SPLIT");
+    expect(classifyGapResolution(jod(850), jod(400), jod(150), jod(300))).toBe("SPLIT");
+    // A zero supplier share changes nothing for the three pre-existing outcomes.
+    expect(classifyGapResolution(jod(1_000), 0, jod(1_000), 0)).toBe("DEALER_ABSORBS");
+  });
+});
+
+describe("validateGapShares with a supplier share (SCRUM-766 PR-C)", () => {
+  const base = {
+    customerGapCashToDealerMinor: 0,
+    customerGapInstallmentToDealerMinor: 0,
+    customerGapToFinanceCompanyMinor: 0,
+  };
+
+  it("accepts customer + dealer + supplier summing to the shortfall", () => {
+    expect(
+      validateGapShares(jod(850), {
+        ...base,
+        customerGapShareMinor: jod(400),
+        customerGapCashToDealerMinor: jod(400),
+        dealerGapShareMinor: jod(150),
+        supplierGapShareMinor: jod(300),
+      })
+    ).toEqual([]);
+  });
+
+  it("refuses three shares that do not sum to the shortfall, and a negative supplier share", () => {
+    const short = validateGapShares(jod(850), {
+      ...base,
+      customerGapShareMinor: 0,
+      dealerGapShareMinor: jod(500),
+      supplierGapShareMinor: jod(300),
+    });
+    expect(short.map((v) => v.code)).toContain("SHARES_DO_NOT_SUM_TO_GAP");
+    const negative = validateGapShares(jod(850), {
+      ...base,
+      customerGapShareMinor: 0,
+      dealerGapShareMinor: jod(900),
+      supplierGapShareMinor: -jod(50),
+    });
+    expect(negative.map((v) => v.code)).toContain("NEGATIVE_AMOUNT");
+  });
+
+  it("an omitted supplier share is exactly zero: the pre-PR-C identity is unchanged", () => {
+    expect(
+      validateGapShares(jod(1_000), {
+        ...base,
+        customerGapShareMinor: 0,
+        dealerGapShareMinor: jod(1_000),
+      })
+    ).toEqual([]);
+  });
 });
 
 describe("computeExpectedRemittance", () => {
