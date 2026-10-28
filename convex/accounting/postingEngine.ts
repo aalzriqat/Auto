@@ -10,6 +10,7 @@ import { isRemainingOpeningKind } from "../utils/openingAccountPolicy";
 // app edges is safe to initialize before anything that can participate in
 // a cycle, so it goes above every local import.
 import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
+import { supplierPayableVatReclassAllowed } from "../utils/vehicleOwnership";
 import { ConvexError } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
@@ -359,12 +360,139 @@ export function assertExistingRowIsSameOccurrence(
   }
   if (divergent.length > 0) {
     throw new ConvexError(
-      `Refusing to absorb a reserved receipt occurrence into a conflicting existing row ` +
+      `Refusing to absorb ${cmd.eventType === "SUPPLIER_PAYMENT_SETTLED" ? "a supplier settlement" : "a reserved receipt occurrence"} into a conflicting existing row ` +
         `under idempotency key "${cmd.idempotencyKey}" (SCRUM-249): ${divergent.join("; ")}. ` +
         "A shared key is not evidence that two postings are the same economic fact, and " +
         "returning the earlier one would report them as equivalent."
     );
   }
+}
+
+/**
+ * SCRUM-782: stored supplier tax is not evidence of reclaimable VAT. Re-prove
+ * the payable's ownership before posting, including payloads queued before
+ * SCRUM-781. Shared with the outbox so a refusal consumes its bounded retry
+ * budget instead of parking forever behind a missing period.
+ */
+export async function supplierPaymentVatPostingRefusal(
+  ctx: MutationCtx,
+  cmd: Pick<PostCommand, "orgId" | "eventType" | "sourceType" | "sourceId"> & { payload?: unknown }
+): Promise<string | null> {
+  if (cmd.eventType !== "SUPPLIER_PAYMENT_SETTLED") return null;
+  const payload = cmd.payload;
+  if (!payload || typeof payload !== "object" || !("taxMinor" in payload)) return null;
+  const taxMinor = payload.taxMinor;
+  if (taxMinor === undefined || taxMinor === 0) return null;
+  const refusal = "Supplier settlement VAT cannot be verified as reclaimable. Nothing was posted; operator review and correction are required before retrying.";
+  if (typeof taxMinor !== "number" || !Number.isSafeInteger(taxMinor) || taxMinor < 0) return refusal;
+  const payableId = ctx.db.normalizeId("vehicleSupplierPayables", cmd.sourceId);
+  if (
+    cmd.sourceType !== "vehicleSupplierPayables" || !payableId ||
+    !("payableId" in payload) || payload.payableId !== cmd.sourceId
+  ) return refusal;
+  const payable = await ctx.db.get(payableId);
+  if (!payable || payable.orgId !== cmd.orgId || !("vehicleId" in payable)) return refusal;
+  const vehicle = await ctx.db.get(payable.vehicleId);
+  return supplierPayableVatReclassAllowed(payable, vehicle?.orgId === cmd.orgId ? vehicle : null)
+    ? null
+    : refusal;
+}
+
+/** Read-only replay proof. Callers establish lifecycle and opening authority first. */
+export async function findPostedAccountingEvent(ctx: MutationCtx, cmd: PostCommand): Promise<PostResult | null> {
+  // ⚠️ 1c. THE RESERVED RECEIPT OCCURRENCE IS PROVEN HERE — SCRUM-249.
+  //
+  // Placed BEFORE every idempotency lookup below, and that ordering is the
+  // whole point rather than a detail. The defect was never "a caller can choose
+  // a bad key"; it was that the key is compared before anything else, so
+  // whoever reaches a key first owns the occurrence and the certified payload
+  // is never compared to what is already there. A guard placed after the
+  // `alreadyPosted` short-circuit would run only in the cases that had already
+  // gone wrong.
+  //
+  // It also sits before `assertPostingAllowed`, the posting rules and every
+  // insert, so a refusal costs zero journal, event, journal line, snapshot or
+  // outbox row — measured, not assumed (SCRUM-249 §1 R2).
+  //
+  // Authority is a runtime capability minted in `receiptOccurrence`, so the
+  // registered generic ingress cannot produce one; the outbox drain, which
+  // holds no in-process value, re-establishes it from its persisted row through
+  // the one sanctioned rehydration door.
+  const reservedAuthority = proveReservedReceiptAuthority(cmd);
+
+  // 2. Validate currency
+  scaleForCurrency(cmd.currency.toUpperCase());
+
+  // Reserved receipts and supplier settlements require the same occurrence and
+  // economics before acknowledging a replay. Other families keep their existing
+  // replay contract. `simplePayloadHash` canonicalizes before hashing,
+  // so a payload that round-tripped through the outbox row hashes identically
+  // to the one the producer built.
+  const compareOccurrence = reservedAuthority || cmd.eventType === "SUPPLIER_PAYMENT_SETTLED";
+  const replayPayloadHash = compareOccurrence ? await simplePayloadHash(cmd.payload) : "";
+
+  // 3. Idempotency: check for existing event with same key
+  const existingByKey = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", cmd.orgId).eq("idempotencyKey", cmd.idempotencyKey)
+    )
+    .unique();
+
+  if (existingByKey) {
+    // SCRUM-515: a forward post is never satisfied by a reversal row. General
+    // key tuple-identity checking for other families is out of scope (SCRUM-544).
+    if (existingByKey.eventType === "JOURNAL_REVERSAL") {
+      throw new Error(
+        `Idempotency key "${cmd.idempotencyKey}" is held by reversal event ${existingByKey._id}; ` +
+          `a forward ${cmd.eventType} post cannot be satisfied by a JOURNAL_REVERSAL (SCRUM-515).`
+      );
+    }
+    if (existingByKey.status === "POSTED" && existingByKey.journalEntryId) {
+      // The key found something. For a receipt or supplier settlement, prove it is the
+      // SAME occurrence with the SAME economics before reporting equivalence.
+      if (compareOccurrence) {
+        assertExistingRowIsSameOccurrence(existingByKey, cmd, replayPayloadHash);
+      }
+      return {
+        eventId: existingByKey._id,
+        journalEntryId: existingByKey.journalEntryId,
+        alreadyPosted: true,
+      };
+    }
+    if (existingByKey.status === "REVERSED") {
+      throw new ConvexError("This accounting event has already been reversed and cannot be reposted.");
+    }
+  }
+
+  // 4. Check for duplicate event by source identity
+  const existingBySource = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_event_source_version", (q) =>
+      q
+        .eq("orgId", cmd.orgId)
+        .eq("eventType", cmd.eventType)
+        .eq("sourceType", cmd.sourceType)
+        .eq("sourceId", cmd.sourceId)
+        .eq("eventVersion", cmd.eventVersion)
+    )
+    .unique();
+
+  if (existingBySource && existingBySource.status === "POSTED" && existingBySource.journalEntryId) {
+    // Same occurrence by construction here — the index range IS the tuple — so
+    // only the economics can still differ. A repost of one receipt with a
+    // different split is not the same fact, whichever index found it.
+    if (compareOccurrence) {
+      assertExistingRowIsSameOccurrence(existingBySource, cmd, replayPayloadHash);
+    }
+    return {
+      eventId: existingBySource._id,
+      journalEntryId: existingBySource.journalEntryId,
+      alreadyPosted: true,
+    };
+  }
+
+  return null;
 }
 
 export async function postAccountingEvent(
@@ -426,96 +554,14 @@ export async function postAccountingEvent(
   // held according to whether the refusal can ever be lifted.
   await assertOrgEconomicallyActive(ctx, cmd.orgId);
 
-  // ⚠️ 1c. THE RESERVED RECEIPT OCCURRENCE IS PROVEN HERE — SCRUM-249.
-  //
-  // Placed BEFORE every idempotency lookup below, and that ordering is the
-  // whole point rather than a detail. The defect was never "a caller can choose
-  // a bad key"; it was that the key is compared before anything else, so
-  // whoever reaches a key first owns the occurrence and the certified payload
-  // is never compared to what is already there. A guard placed after the
-  // `alreadyPosted` short-circuit would run only in the cases that had already
-  // gone wrong.
-  //
-  // It also sits before `assertPostingAllowed`, the posting rules and every
-  // insert, so a refusal costs zero journal, event, journal line, snapshot or
-  // outbox row — measured, not assumed (SCRUM-249 §1 R2).
-  //
-  // Authority is a runtime capability minted in `receiptOccurrence`, so the
-  // registered generic ingress cannot produce one; the outbox drain, which
-  // holds no in-process value, re-establishes it from its persisted row through
-  // the one sanctioned rehydration door.
-  const reservedAuthority = proveReservedReceiptAuthority(cmd);
+  const replay = await findPostedAccountingEvent(ctx, cmd);
+  if (replay) return replay;
 
-  // 2. Validate currency
+  const supplierVatRefusal = await supplierPaymentVatPostingRefusal(ctx, cmd);
+  if (supplierVatRefusal) throw new ConvexError(supplierVatRefusal);
+
   const currency = cmd.currency.toUpperCase();
   const scale = scaleForCurrency(currency);
-
-  // Computed early ONLY for the reserved comparison below — the general path
-  // still hashes at step 9. `simplePayloadHash` canonicalizes before hashing,
-  // so a payload that round-tripped through the outbox row hashes identically
-  // to the one the producer built.
-  const reservedPayloadHash = reservedAuthority ? await simplePayloadHash(cmd.payload) : "";
-
-  // 3. Idempotency: check for existing event with same key
-  const existingByKey = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_idempotency", (q) =>
-      q.eq("orgId", cmd.orgId).eq("idempotencyKey", cmd.idempotencyKey)
-    )
-    .unique();
-
-  if (existingByKey) {
-    // SCRUM-515: a forward post is never satisfied by a reversal row. General
-    // key tuple-identity checking is out of scope (SCRUM-544).
-    if (existingByKey.eventType === "JOURNAL_REVERSAL") {
-      throw new Error(
-        `Idempotency key "${cmd.idempotencyKey}" is held by reversal event ${existingByKey._id}; ` +
-          `a forward ${cmd.eventType} post cannot be satisfied by a JOURNAL_REVERSAL (SCRUM-515).`
-      );
-    }
-    if (existingByKey.status === "POSTED" && existingByKey.journalEntryId) {
-      // The key found something. For the reserved occurrence, prove it is the
-      // SAME occurrence with the SAME economics before reporting equivalence.
-      if (reservedAuthority) {
-        assertExistingRowIsSameOccurrence(existingByKey, cmd, reservedPayloadHash);
-      }
-      return {
-        eventId: existingByKey._id,
-        journalEntryId: existingByKey.journalEntryId,
-        alreadyPosted: true,
-      };
-    }
-    if (existingByKey.status === "REVERSED") {
-      throw new ConvexError("This accounting event has already been reversed and cannot be reposted.");
-    }
-  }
-
-  // 4. Check for duplicate event by source identity
-  const existingBySource = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_event_source_version", (q) =>
-      q
-        .eq("orgId", cmd.orgId)
-        .eq("eventType", cmd.eventType)
-        .eq("sourceType", cmd.sourceType)
-        .eq("sourceId", cmd.sourceId)
-        .eq("eventVersion", cmd.eventVersion)
-    )
-    .unique();
-
-  if (existingBySource && existingBySource.status === "POSTED" && existingBySource.journalEntryId) {
-    // Same occurrence by construction here — the index range IS the tuple — so
-    // only the economics can still differ. A repost of one receipt with a
-    // different split is not the same fact, whichever index found it.
-    if (reservedAuthority) {
-      assertExistingRowIsSameOccurrence(existingBySource, cmd, reservedPayloadHash);
-    }
-    return {
-      eventId: existingBySource._id,
-      journalEntryId: existingBySource.journalEntryId,
-      alreadyPosted: true,
-    };
-  }
 
   // 5. Validate accounting period
   const periodId = await assertPostingAllowed(ctx, cmd.orgId, cmd.accountingDate);
@@ -607,7 +653,7 @@ export async function postAccountingEvent(
 
   // 9. Create accounting event record
   const now = Date.now();
-  const payloadHash = reservedAuthority ? reservedPayloadHash : await simplePayloadHash(cmd.payload);
+  const payloadHash = await simplePayloadHash(cmd.payload);
 
   const eventId = await ctx.db.insert("accountingEvents", {
     orgId: cmd.orgId,

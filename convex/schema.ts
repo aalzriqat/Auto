@@ -435,6 +435,14 @@ export default defineSchema({
     // query-level filter — used by computeRecognizedCommissionAsOf.
     .index("by_org_eventType_status_date", ["orgId", "eventType", "status", "accountingDate"]),
 
+  // SCRUM-782: deployment-wide singleton checkpoint, not tenant data. Only the
+  // internal rollout migration writes it; completion prevents repeat scans.
+  supplierVatHoldMigration: defineTable({
+    cursor: v.optional(v.string()),
+    completedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  }),
+
   // Durable outbox for accounting events that could not post at the time of the
   // domain operation (no chart of accounts or no open period). Instead of
   // silently dropping the GL entry, the hook enqueues it here; the events are
