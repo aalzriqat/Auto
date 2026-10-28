@@ -147,6 +147,15 @@ export function normalizeSurfacePath(p, platform = process.platform) {
   return platform === "win32" ? abs.toLowerCase() : abs;
 }
 
+/**
+ * `abs` as a repository-relative path with forward slashes, the form baseline entries and git use.
+ * (Not `normalizeSurfacePath`, which returns an absolute, case-folded key for comparisons.)
+ *
+ * @param {string} root
+ * @param {string} abs
+ */
+export const toPosixRel = (root, abs) => path.relative(root, abs).split(path.sep).join("/");
+
 const normalize = (p) => normalizeSurfacePath(p);
 
 /**
