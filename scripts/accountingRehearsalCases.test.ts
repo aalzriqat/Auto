@@ -245,6 +245,8 @@ type Defects = {
   duplicateOnCreateReplay?: boolean;
   /** A replayed create is REFUSED — safe-looking, and not safe. */
   refuseCreateReplay?: boolean;
+  /** fixedAssets.capitalize is ACCEPTED although the pilot switch (SCRUM-560) must refuse it server-side. */
+  fixedAssetCapitalizeAccepted?: boolean;
   /** An over-payment settles the invoice and the excess simply disappears. */
   swallowOverpayment?: boolean;
   /** Applying a retained credit does not reduce the liability. */
@@ -1717,6 +1719,14 @@ function makeBackend(defects: Defects = {}) {
           ],
         };
       case "fixedAssets:capitalize": {
+        // SCRUM-560: the lifecycle is off for the pilot, so the real backend refuses before any write.
+        if (!defects.fixedAssetCapitalizeAccepted) {
+          return {
+            ok: false as const,
+            errorCode: "FIXED_ASSET_LIFECYCLE_DISABLED",
+            error: "Fixed assets are not available during the pilot. Nothing has been changed.",
+          };
+        }
         const again = replayedFootprint(args);
         const made = replayableCreate("asset", args, true);
         if (made && !again) return made;
@@ -3183,7 +3193,12 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     expect(detail(results, "RC1")).toMatch(/RECEIPT_CREDIT_APPLIED events .* expected 1, got 0/);
   });
 
-  // ── RT2: the eight named commands ──
+  // ── RT2: the eight named commands (seven replay once; fixedAssets.capitalize is refused in the pilot) ──
+  test("RT2 catches a backend that ACCEPTS fixedAssets.capitalize although the pilot switch refuses it (SCRUM-560)", async () => {
+    const results = await runAgainst({ fixedAssetCapitalizeAccepted: true });
+    expect(statusOf(results, "RT2")).toBe("FAIL");
+    expect(detail(results, "RT2")).toMatch(/fixedAssets\.capitalize first call was ACCEPTED/);
+  });
   test("RT2 catches a replay that mints a second identity on any of the eight", async () => {
     const results = await runAgainst({ duplicateOnCreateReplay: true });
     expect(statusOf(results, "RT2")).toBe("FAIL");

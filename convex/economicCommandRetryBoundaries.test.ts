@@ -17,12 +17,17 @@
  * these guards exist for.
  */
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
+
+// SCRUM-560: the fixed-asset lifecycle is OFF for the pilot; this file tests the retry boundary of
+// the lifecycle commands themselves, so it opens the switch (refusals: fixedAssetLifecycleContainment.scrum560.test.ts).
+vi.mock("./utils/fixedAssetLifecycleContainment", async (importOriginal) =>
+  (await import("../test-utils/fixedAssetLifecycleSwitch")).openFixedAssetLifecycle(await importOriginal()));
 
 async function freshOrg(suffix: string) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);

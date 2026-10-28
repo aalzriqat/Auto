@@ -37,7 +37,10 @@ vi.mock("convex/react", async () => {
 });
 vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org_1" }) }));
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
+  useLanguage: () => ({
+    t: (key: string) => rt11.disabled ? ((rt11.locale === "en" ? commonEn : commonAr) as Record<string, string>)[key] ?? key : key,
+    isRtl: rt11.locale === "ar", locale: rt11.locale,
+  }),
 }));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/components/custom-fields/CustomFieldsSection", () => ({
@@ -46,6 +49,7 @@ vi.mock("@/components/custom-fields/CustomFieldsSection", () => ({
 }));
 
 import { VehicleDialog } from "./VehicleDialog";
+import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -153,4 +157,28 @@ describe("new-vehicle owned intake", () => {
     fireEvent.change(priceInput(), { target: { value: "5000" } });
     expect(priceInput().value).toBe("5000");
   });
+});
+
+
+// Historical UI mechanics keep these doors open; RT11 tests below use the REAL shipped switch.
+const rt11 = vi.hoisted(() => ({ disabled: false, locale: "en" as "en" | "ar" }));
+vi.mock("@/convex/utils/rt11DoorContainment", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/convex/utils/rt11DoorContainment")>();
+  return { ...original, isRt11DoorDisabled: (code: import("@/convex/utils/rt11DoorContainment").Rt11DoorCode) => rt11.disabled && original.isRt11DoorDisabled(code) };
+});
+afterEach(() => { rt11.disabled = false; rt11.locale = "en"; });
+
+test("RT11 saved vehicle ownership choice stays disabled", () => {
+  rt11.disabled = true;
+  for (const locale of ["en", "ar"] as const) {
+    rt11.locale = locale;
+    renderEdit();
+    expect((owned() as HTMLButtonElement).disabled).toBe(true);
+    expect((consignment() as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText((locale === "en" ? commonEn : commonAr).ServerError_VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED)).toBeTruthy();
+    fireEvent.click(owned());
+    expect(consignment().getAttribute("aria-pressed")).toBe("true");
+    expect(updateSpy()).not.toHaveBeenCalled();
+    cleanup();
+  }
 });

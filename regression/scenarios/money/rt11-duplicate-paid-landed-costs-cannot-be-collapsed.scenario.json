@@ -1,0 +1,47 @@
+{
+  "id": "rt11-duplicate-paid-landed-costs-cannot-be-collapsed",
+  "fingerprint": "76557f4c3ddde780be3fd281ec5d003d2fe50f2b7781db515e4ab60f70b7af38",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.upsertLandedCosts",
+      "input": {
+        "previousCount": 2,
+        "requestedCount": 1,
+        "amount": 100
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "PAID_LANDED_COST_CHANGE_PILOT_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 duplicate paid landed costs cannot be collapsed"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

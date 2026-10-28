@@ -32,6 +32,11 @@ vi.mock("./rateLimit", () => ({
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
+// SCRUM-560: the fixed-asset lifecycle is OFF for the pilot; this file tests the org-lifecycle gate
+// on the lifecycle commands themselves, so it opens the switch (refusals: fixedAssetLifecycleContainment.scrum560.test.ts).
+vi.mock("./utils/fixedAssetLifecycleContainment", async (importOriginal) =>
+  (await import("../test-utils/fixedAssetLifecycleSwitch")).openFixedAssetLifecycle(await importOriginal()));
+
 /**
  * The ledger-core table set.
  *

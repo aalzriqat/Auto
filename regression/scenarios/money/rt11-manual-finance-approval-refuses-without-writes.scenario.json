@@ -1,0 +1,51 @@
+{
+  "id": "rt11-manual-finance-approval-refuses-without-writes",
+  "fingerprint": "3702a4255db2bf78b1d446322edabee62fac8d8e2a67fddd02541b6c8297a2e6",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financingEconomics.recordManualFinanceApproval",
+      "input": {
+        "quoteMode": "MANUAL_FINANCE_COMPANY",
+        "approvedAmountMinor": 10000000,
+        "dealerSendsMinor": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "MANUAL_FINANCE_APPROVAL_PILOT_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "step1.schedulerChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 manual finance approval refuses without writes"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

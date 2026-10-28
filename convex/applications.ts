@@ -5,6 +5,7 @@ import {
   releaseRootIfNoLiveBasis,
 } from "./commitments";
 import { v, ConvexError } from "convex/values";
+import { assertRt11DoorAllowed, isRt11DoorDisabled } from "./utils/rt11DoorContainment";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
@@ -2459,7 +2460,8 @@ export const dealCockpit = query({
         : null,
       expectedPaymentCorrectable:
         app.status !== "CANCELLED" &&
-        !app.disbursedAt &&
+        app.disbursedAt === undefined &&
+        (!isRt11DoorDisabled("EXPECTED_PAYMENT_PAID_PILOT_DISABLED") || app.supplierDisbursementConfirmedAt === undefined) &&
         Boolean(app.expectedPaymentMethod),
       /**
        * That `finalizeDeal` will refuse until the settlement route is recorded.
@@ -4324,10 +4326,12 @@ export const correctExpectedPayment = mutation({
     );
     if (app.status === "CANCELLED") throw new ConvexError("This application was cancelled.");
     await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
-    if (app.disbursedAt) {
-      throw new ConvexError(
-        "Disbursement has already been confirmed for this deal, so its expected payment can no longer be corrected."
-      );
+    if (app.disbursedAt !== undefined || app.supplierDisbursementConfirmedAt !== undefined) {
+      assertRt11DoorAllowed("EXPECTED_PAYMENT_PAID_PILOT_DISABLED");
+      // Preserve the pre-pilot disbursement restriction if this switch is retired.
+      if (app.disbursedAt !== undefined) {
+        throw new ConvexError("Disbursement has already been confirmed for this deal, so its expected payment can no longer be corrected.");
+      }
     }
     if (!app.expectedPaymentMethod) {
       throw new ConvexError("Nothing registered — there is no expected payment to correct.");
@@ -6329,6 +6333,8 @@ export const amendSupplierDisbursementAdvice = mutation({
     // and MANAGE_FINANCE is the permission the default templates give to the
     // roles that answer for the deal rather than the ones that key it in.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId, "Application not found.");
+    assertRt11DoorAllowed("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED");
 
     return await runWithIdempotency(
       ctx,
