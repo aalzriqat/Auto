@@ -1,0 +1,43 @@
+{
+  "id": "rt11-pre-final-reimbursement-still-pays-the-employee",
+  "fingerprint": "312773b512b9444a0eaf71d5224c92d595cfa5e091636a9e553aeb707cfba82f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeDealCosts.recordCustodyMovement",
+      "input": {
+        "kind": "REIMBURSED",
+        "dealState": "APPROVED",
+        "amountMinor": 50000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "custody.reimbursedMinor",
+      "value": 50000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 pre-final reimbursement still pays the employee"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

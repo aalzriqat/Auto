@@ -288,6 +288,7 @@ import type * as utils_profitApproval from "../utils/profitApproval.js";
 import type * as utils_quoteDepositPosting from "../utils/quoteDepositPosting.js";
 import type * as utils_quoteEconomicsAnchor from "../utils/quoteEconomicsAnchor.js";
 import type * as utils_retainedCreditMessages from "../utils/retainedCreditMessages.js";
+import type * as utils_rt11DoorContainment from "../utils/rt11DoorContainment.js";
 import type * as utils_saleCancellation from "../utils/saleCancellation.js";
 import type * as utils_saleCompletion from "../utils/saleCompletion.js";
 import type * as utils_saleDebtContainment from "../utils/saleDebtContainment.js";
@@ -622,6 +623,7 @@ declare const fullApi: ApiFromModules<{
   "utils/quoteDepositPosting": typeof utils_quoteDepositPosting;
   "utils/quoteEconomicsAnchor": typeof utils_quoteEconomicsAnchor;
   "utils/retainedCreditMessages": typeof utils_retainedCreditMessages;
+  "utils/rt11DoorContainment": typeof utils_rt11DoorContainment;
   "utils/saleCancellation": typeof utils_saleCancellation;
   "utils/saleCompletion": typeof utils_saleCompletion;
   "utils/saleDebtContainment": typeof utils_saleDebtContainment;

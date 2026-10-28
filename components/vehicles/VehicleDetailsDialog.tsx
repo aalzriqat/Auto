@@ -1,4 +1,5 @@
 import { useQuery, useMutation } from "convex/react";
+import { isRt11DoorDisabled } from "@/convex/utils/rt11DoorContainment";
 import { useRouter } from "next/navigation";
 import {
   Printer,
@@ -54,7 +55,7 @@ import { HeldDepositActions } from "@/components/vehicles/HeldDepositActions";
 import { CorrectAcquisitionCostDialog } from "@/components/vehicles/CorrectAcquisitionCostDialog";
 import { UnconfirmedPayoutNotice } from "@/components/deposits/UnconfirmedPayoutNotice";
 import { usePendingDepositPayouts } from "@/hooks/usePendingDepositPayouts";
-import { getErrorMessage } from "@/lib/errors";
+import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { DepositReceiptBankPicker, useDepositReceiptBankOptions } from "@/components/deposits/DepositReceiptBankPicker";
@@ -147,7 +148,7 @@ export function VehicleDetailsDialog({
     Record<string, { method: PaymentMethod; bankAccountId?: Id<"bankAccounts">; generation: number }>
   >({});
   const [landedCostItems, setLandedCostItems] = useState<
-    { id: string; label: string; amount: number; paymentMethod: PaymentMethod; bankAccountId?: Id<"bankAccounts"> }[]
+    { id: string; label: string; amount: number; paymentMethod: PaymentMethod; bankAccountId?: Id<"bankAccounts">; pilotPaid?: boolean }[]
   >([]);
   const hasLegacyUnattributedBank = vehicle?.sourceType !== "SOURCED" && !!landedCosts?.items.some((item) =>
     item.amount !== 0 && (item.paymentMethod === "BANK_TRANSFER" || item.paymentMethod === "CARD" || item.paymentMethod === "CHEQUE") && !item.bankAccountId);
@@ -207,12 +208,13 @@ export function VehicleDetailsDialog({
           ...item,
           id: crypto.randomUUID(),
           paymentMethod: item.paymentMethod ?? "CASH",
+          pilotPaid: vehicle?.sourceType !== "SOURCED" && item.amount !== 0 && isRt11DoorDisabled("PAID_LANDED_COST_CHANGE_PILOT_DISABLED"),
         }))
       );
     } else if (landedCosts === null) {
       setLandedCostItems([]);
     }
-  }, [landedCosts]);
+  }, [landedCosts, vehicle?.sourceType]);
 
   const formatMoney = (value: number) => `${value.toLocaleString()} JOD`;
 
@@ -238,11 +240,11 @@ export function VehicleDetailsDialog({
       await upsertLandedCosts({
         orgId: activeOrgId,
         vehicleId: vehicle._id,
-        items: landedCostItems.map(({ id: _id, ...item }) => item),
+        items: landedCostItems.map(({ id: _id, pilotPaid: _pilotPaid, ...item }) => item),
       });
       toast.success(t("LandedCostSaved" as any));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setSavingLandedCosts(false);
     }
@@ -937,6 +939,7 @@ export function VehicleDetailsDialog({
                   </Button>
                 )}
               </div>
+              {landedCostItems.some(item => item.pilotPaid) && <p className="text-xs text-muted-foreground">{t("ServerError_PAID_LANDED_COST_CHANGE_PILOT_DISABLED")}</p>}
               {landedCosts === undefined ? (
                 <Skeleton className="h-[120px] w-full rounded-lg" />
               ) : landedCostItems.length === 0 ? (
@@ -949,7 +952,7 @@ export function VehicleDetailsDialog({
                         <Label>{t("CostItemLabel" as any)}</Label>
                         <Input
                           value={item.label}
-                          disabled={!canEditVehicles || hasLegacyUnattributedBank}
+                          disabled={!canEditVehicles || hasLegacyUnattributedBank || item.pilotPaid}
                           onChange={(event) => updateLandedCostItem(index, { label: event.target.value })}
                         />
                       </div>
@@ -959,7 +962,7 @@ export function VehicleDetailsDialog({
                           type="number"
                           min="0"
                           value={item.amount}
-                          disabled={!canEditVehicles || hasLegacyUnattributedBank}
+                          disabled={!canEditVehicles || hasLegacyUnattributedBank || item.pilotPaid}
                           onChange={(event) => updateLandedCostItem(index, { amount: Number(event.target.value) })}
                         />
                       </div>
@@ -968,7 +971,7 @@ export function VehicleDetailsDialog({
                         <PaymentMethodSelect
                           t={t as any}
                           value={item.paymentMethod}
-                          disabled={!canEditVehicles || hasLegacyUnattributedBank}
+                          disabled={!canEditVehicles || hasLegacyUnattributedBank || item.pilotPaid}
                           onValueChange={(method) => {
                             if (!hasLegacyUnattributedBank) updateLandedCostItem(index, { paymentMethod: method, bankAccountId: undefined });
                           }}
@@ -982,7 +985,7 @@ export function VehicleDetailsDialog({
                             className="flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
                             value={landedCostBanks?.banks?.some((bank) => bank._id === item.bankAccountId) ? item.bankAccountId : ""}
                             onChange={(event) => updateLandedCostItem(index, { bankAccountId: event.target.value ? event.target.value as Id<"bankAccounts"> : undefined })}
-                            disabled={!canEditVehicles || !landedCostBanks || landedCostBanks.truncated || !landedCostBanks.banks?.length || hasLegacyUnattributedBank}
+                            disabled={!canEditVehicles || !landedCostBanks || landedCostBanks.truncated || !landedCostBanks.banks?.length || hasLegacyUnattributedBank || item.pilotPaid}
                             required
                           >
                             <option value="">{t((landedCostBanks ? "DirectPaymentBankChoose" : "CashDrawerLoadingBanks") as any)}</option>
@@ -990,7 +993,7 @@ export function VehicleDetailsDialog({
                           </select>
                         </div>
                       ) : <div className="hidden lg:block" />}
-                      {canEditVehicles && !hasLegacyUnattributedBank && (
+                      {canEditVehicles && !hasLegacyUnattributedBank && !item.pilotPaid && (
                         <Button
                           type="button"
                           variant="ghost"

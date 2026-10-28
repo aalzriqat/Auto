@@ -5,6 +5,27 @@ public snapshot of the owner rulings they cite: comment id, digest, date only.
 Never put ruling text or customer data here. Format, validators and rules live in
 `scripts/regression/scenarioRecord.ts`; run `pnpm test:regression-library`.
 
+## RT11-DOORS pilot containment
+
+The `rt11-*` records cite the whole-comment digest of owner ruling
+`SCRUM-760#c23862` (RT11-DOORS, 2026-10-28). Public-mutation refusal tests in
+`convex/rt11DoorContainment.test.ts` use the shipped switches and compare full
+contents of every application schema table plus the scheduler, including
+journals, outbox, audits and command identities. Component tables are outside
+that snapshot; guards precede idempotency and rate-limit component writes by
+construction. The allowed controls cover pre-final reimbursement, balanced
+closure, correction before payout, ordinary vehicle edits and new cost additions.
+Duplicate, reorder and informational SOURCED-cost controls cover the paid-cost
+boundary. UI component tests supplement these records; browser execution is a
+separate certification obligation.
+
+Historical lifecycle suites explicitly call `openRt11Doors` from
+`test-utils/rt11DoorSwitches.ts`; their underlying posting/correction assertions
+remain useful, but they do not certify availability during the pilot. The
+RT11 backend refusal suite has no such opt-out. All evidence here is local,
+serial harness/component evidence. Platform, browser and release certification
+remain separate obligations under SCRUM-760/762.
+
 ## Known limits (S1)
 
 - Prose is refused structurally (actions/observables are dotted tokens, input/value strings are short space-free tokens), but a single-word token can still be a name. A human reviews every scenario PR for public-data hygiene.

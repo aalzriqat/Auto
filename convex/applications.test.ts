@@ -2755,7 +2755,7 @@ describe("SCRUM-447 D3 correcting the expected payment", () => {
         applicationId: s.applicationId,
         reason: "too late",
       })
-    ).rejects.toThrow(/already been confirmed/i);
+    ).rejects.toMatchObject({ data: { code: "EXPECTED_PAYMENT_PAID_PILOT_DISABLED" } });
   });
 
   test("finalizeDeal refuses a registered cheque whose live row is gone", async () => {

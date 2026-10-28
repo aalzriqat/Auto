@@ -1,5 +1,49 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-760-RT11-DOORS
+
+Owner ruling RT11-DOORS, [SCRUM-760 comment 23862](https://autoflowdealer.atlassian.net/browse/SCRUM-760?focusedCommentId=23862), 2026-10-28.
+These are expected-refusal cells for the pilot, not activation certificates.
+Every refusal below is a public-mutation call in `convex/rt11DoorContainment.test.ts`.
+Its helper requires the exact code, matching English and an Arabic dictionary
+entry, and identical contents of every application schema table and scheduler.
+This includes journals, outbox, audit and idempotency records; component tables
+are outside the snapshot. The guards precede claims and the rate limiter.
+
+| Door | Pilot refusal code | Bound test (prefix `RT11 `) |
+| --- | --- | --- |
+| 1, finalized REVERSAL | `CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED` | `finalized custody reversal refuses without writes` |
+| 1, finalized REIMBURSED | `CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED` | `finalized custody reimbursement refuses without writes` |
+| 2, shortage write-off | `CUSTODY_WRITEOFF_PILOT_DISABLED` | `custody shortage write-off refuses without writes` |
+| 3, legacy migration | `CUSTODY_MIGRATION_PILOT_DISABLED` | `legacy custody migration refuses without writes` |
+| 4, reopen | `CUSTODY_REOPEN_PILOT_DISABLED` | `custody reopen refuses without writes` |
+| 5, manual approval | `MANUAL_FINANCE_APPROVAL_PILOT_DISABLED` | `manual finance approval refuses without writes` |
+| 6, dealer payout (`disbursedAt`) | `EXPECTED_PAYMENT_PAID_PILOT_DISABLED` | `expected payment after dealer payout refuses without writes` |
+| 6, supplier payout (`supplierDisbursementConfirmedAt`) | `EXPECTED_PAYMENT_PAID_PILOT_DISABLED` | `expected payment after supplier payout refuses without writes` |
+| 7, advice amendment | `SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED` | `supplier advice amendment refuses without writes` |
+| 8, direct commission payout | `DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED` | `direct commission payout refuses without writes` |
+| 10, buyout | `VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED` | `sourced vehicle buyout refuses without writes` |
+| 10, conversion | `VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED` | `stock vehicle conversion refuses without writes` |
+| 11, edit paid cost | `PAID_LANDED_COST_CHANGE_PILOT_DISABLED` | `editing paid landed cost refuses without writes` |
+| 11, remove paid cost | `PAID_LANDED_COST_CHANGE_PILOT_DISABLED` | `removing paid landed cost refuses without writes` |
+| 11, move paid cost | `PAID_LANDED_COST_CHANGE_PILOT_DISABLED` | `moving paid landed cost refuses without writes` |
+
+Controls in the same file (same prefix): `pre-final reimbursement still pays the employee`
+(50,000 JOD minor units owed and reimbursed), `balanced custody closure remains allowed`
+(100,000 issued and returned; RECONCILED even with a reason), `expected payment before payout remains correctable`
+(registered method removed), `ordinary vehicle edit remains allowed` (color changed),
+and `adding new landed cost preserves the paid item` (100 + 20 = 120 JOD).
+Additional controls preserve duplicate paid occurrences, harmless reorder and
+informational SOURCED costs. Dealer and supplier payout markers are existing
+schema facts; a supplier discrepancy still means money was paid.
+
+Door 9, `cashDrawer.approveVariance`, and all posting rules remain unchanged.
+Historical lifecycle suites explicitly open the pilot doors in tests so their
+posting assertions remain exercised; they do not prove pilot availability.
+The RT11 refusal suite uses real switches. This is serial `convex-test` evidence,
+not Convex platform, OCC, browser or production certification. Enabled controls
+still need independent pilot certification before launch.
+
 ## SCRUM-179-mobile-expense-categories
 
 One shared category tuple preserves the independently captured native twelve-value domain and order for registered create/update arguments and stored expense records. Forms without amortization inputs derive the eleven non-prepaid choices; mobile reads retain PREPAID. DETAILING, TRANSPORT and FEES are offered under their existing meanings; INSPECTION, REGISTRATION, CLEANING and INSURANCE are removed without remapping. Server payroll and prepaid business guards remain authoritative.

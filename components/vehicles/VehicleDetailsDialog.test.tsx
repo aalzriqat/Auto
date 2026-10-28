@@ -189,6 +189,21 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("vehicle landed-cost bank choice", () => {
+  test("RT11 paid landed cost controls lock while a new item stays editable", async () => {
+    state.landedCosts = { items: [{ label: "Transport", amount: 100, paymentMethod: "CASH" }], total: 100 };
+    render(ui());
+    const saved = screen.getByDisplayValue("Transport") as HTMLInputElement;
+    expect(saved.disabled).toBe(true);
+    expect(screen.getByText("ServerError_PAID_LANDED_COST_CHANGE_PILOT_DISABLED")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "AddCostItem", hidden: true }));
+    const labels = screen.getAllByRole("textbox", { hidden: true }).filter(node => node.tagName === "INPUT") as HTMLInputElement[];
+    expect(labels.some(node => node.value === "" && !node.disabled)).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "SaveLandedCost", hidden: true }));
+    await waitFor(() => expect(state.landedCostCalls).toHaveLength(1));
+    const items = state.landedCostCalls[0]?.items;
+    expect(items).toEqual(expect.arrayContaining([{ label: "Transport", amount: 100, paymentMethod: "CASH" }]));
+    expect(JSON.stringify(items)).not.toContain("pilotPaid");
+  });
   test("a bank-funded item shows its amount and requires a chosen bank before saving", async () => {
     render(ui());
     fireEvent.click(screen.getByRole("button", { name: "AddCostItem", hidden: true }));
