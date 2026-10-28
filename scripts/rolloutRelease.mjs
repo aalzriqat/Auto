@@ -43,7 +43,7 @@ const REPORT_FN = "adminSystem:materializationReportForRelease";
 const START_FN = "migrations:startSocialConversationBackfills";
 const BANK_BACKFILL_FN = "bankBalanceBackfill:runPage";
 const SUPPLIER_VAT_HOLD_FN = "accountingOutbox:recoverPeriodHeldSupplierVat";
-/** 100 parked rows per page, with a durable completion marker. */
+/** At most two parked rows per page, with a durable completion marker. */
 const MAX_SUPPLIER_VAT_HOLD_PAGES = 10_000;
 /** 16 journal lines per page, so this bounds one org at 160,000 bank lines. */
 const MAX_BANK_PAGES_PER_ORG = 10_000;

@@ -8,14 +8,55 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { makeDue, quiesceScheduler, settleOutbox, withFrozenScheduler } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
 import schema from "./schema";
-import { enqueuePendingPost } from "./accountingOutbox";
+import { dispatchDueOutboxWork, enqueuePendingPost } from "./accountingOutbox";
 import { postAccountingEvent, type PostCommand } from "./accounting/postingEngine";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 const newTest = () => convexTestWithComponents(schema, MODULE_GLOB);
 type T = ReturnType<typeof newTest>;
 const REFUSAL = /supplier.*VAT.*operator review/i;
+
+/** Same pass-through DB telemetry as openingCommissionReadBudget: harness returns, not billed I/O. */
+function recordedDb<Db extends MutationCtx["db"]>(db: Db, totals: { queries: number; gets: number; documents: number }) {
+  const record = (rows: unknown) => {
+    totals.documents += Array.isArray(rows) ? rows.length : rows ? 1 : 0;
+  };
+  function queryObject(target: object): object {
+    return new Proxy(target, { get(object, key) {
+      const value: unknown = Reflect.get(object, key);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        const result: unknown = Reflect.apply(value, object, args);
+        if (["collect", "take", "first", "unique", "paginate", "next"].includes(String(key))) {
+          return Promise.resolve(result).then(rows => {
+            if (rows && typeof rows === "object" && "page" in rows) record(rows.page);
+            else if (rows && typeof rows === "object" && "done" in rows) {
+              if (!rows.done && "value" in rows) record(rows.value);
+            } else record(rows);
+            return rows;
+          });
+        }
+        return result && typeof result === "object" ? queryObject(result) : result;
+      };
+    } });
+  }
+  return new Proxy(db, { get(target, key) {
+    if (key === "get") return async (...args: Parameters<typeof db.get>) => {
+      totals.gets += 1;
+      const row = await Reflect.apply(db.get, db, args);
+      record(row);
+      return row;
+    };
+    if (key === "query") return (table: Parameters<typeof db.query>[0]) => {
+      totals.queries += 1;
+      return queryObject(db.query(table));
+    };
+    const value: unknown = Reflect.get(target, key);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+}
 
 async function seedOrg(t: T) {
   const now = Date.now();
@@ -112,15 +153,27 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
       }
     });
     const before = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    // Invoke the registered handler, including its production context wrapper,
+    // over the real harness DB. Normal FunctionReference dispatch uses this same
+    // _handler (also exercised below); no selector or query result is mocked.
+    const handler: unknown = Reflect.get(dispatchDueOutboxWork, "_handler");
+    if (typeof handler !== "function") throw new Error("Registered dispatcher handler unavailable");
+    const invoke = handler as (ctx: MutationCtx, args: Record<string, never>) => Promise<{ dispatched: number; observed: number }>;
+    const reads = { queries: 0, gets: 0, documents: 0 };
     await withFrozenScheduler(async () => {
       for (let tick = 0; tick < 3; tick += 1) {
-        expect(await t.mutation(internal.accountingOutbox.dispatchDueOutboxWork, {}))
+        expect(await t.runUnwrapped(ctx => invoke({ ...ctx, db: recordedDb(ctx.db, reads) }, {})))
           .toEqual({ dispatched: 0, observed: 0 });
         await t.finishAllScheduledFunctions(vi.runAllTimers);
       }
+      expect(await t.mutation(internal.accountingOutbox.dispatchDueOutboxWork, {}))
+        .toEqual({ dispatched: 0, observed: 0 });
     });
-    // SCRUM-807 measures persisted scheduler work, including scans that never
-    // claim a row. Checking only claim generations missed the round-2 defect.
+    expect(reads.documents).toBe(0);
+    expect(reads.gets).toBe(0);
+    expect(reads.queries).toBe(6); // Two real indexed queries per measured tick.
+    console.info("QUIET_CRON_READ_PROOF", reads);
+    // Keep the scheduler assertion too: a background scan escapes this tick's DB wrapper.
     expect(await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect())).toEqual(before);
   });
 
@@ -228,8 +281,20 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
 
     await withFrozenScheduler(async () => {
       if (door === "drain") await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
-      else expect(await t.mutation(internal.accountingOutbox.recoverPeriodHeldSupplierVat, {}))
-        .toEqual({ status: "READY", reclassified: 1 });
+      else {
+        let finished = false;
+        let reclassified = 0;
+        for (let page = 0; page < 4; page += 1) {
+          const result = await t.mutation(internal.accountingOutbox.recoverPeriodHeldSupplierVat, {});
+          reclassified += result.reclassified;
+          if (result.status === "READY") {
+            finished = true;
+            break;
+          }
+        }
+        expect(finished).toBe(true);
+        expect(reclassified).toBe(1);
+      }
       await t.finishAllScheduledFunctions(vi.runAllTimers);
     });
 
@@ -281,8 +346,24 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
     expect(checkpoint?.completedAt).toBeUndefined();
     expect((await queuedRow(t, orgId, bad.cmd.idempotencyKey))?.dispatchState).toBe("PERIOD_HELD");
     await withFrozenScheduler(async () => {
-      expect(await t.mutation(internal.accountingOutbox.recoverPeriodHeldSupplierVat, {}))
-        .toEqual({ status: "READY", reclassified: 1 });
+      let finished = false;
+      let reclassified = 0;
+      let cursor = checkpoint?.cursor;
+      for (let page = 0; page < 102; page += 1) {
+        const result = await t.mutation(internal.accountingOutbox.recoverPeriodHeldSupplierVat, {});
+        reclassified += result.reclassified;
+        const next = await t.run((ctx) => ctx.db.query("supplierVatHoldMigration").unique());
+        if (result.status === "READY") {
+          expect(next?.completedAt).toEqual(expect.any(Number));
+          finished = true;
+          break;
+        }
+        expect(next?.cursor).toEqual(expect.any(String));
+        expect(next?.cursor).not.toBe(cursor);
+        cursor = next?.cursor;
+      }
+      expect(finished).toBe(true);
+      expect(reclassified).toBe(1);
       await t.finishAllScheduledFunctions(vi.runAllTimers);
     });
     expect(await queuedRow(t, orgId, bad.cmd.idempotencyKey)).toMatchObject({ attempts: 1 });
@@ -290,6 +371,72 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
     const held = await t.run((ctx) => ctx.db.query("pendingAccountingEvents")
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING")).collect());
     expect(held.filter((row) => row.dispatchState === "PERIOD_HELD")).toHaveLength(101);
+    expect(await footprint(t, orgId)).toEqual(before);
+  });
+
+  test("large parked payloads and source documents migrate within transaction limits page by page", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB, { transactionLimits: true });
+    const { orgId, userId } = await seedOrg(t);
+    const owned = await legacyPayment(t, orgId, userId);
+    const bad = await legacyPayment(t, orgId, userId);
+    const padding = "x".repeat(900 * 1024); // Each document stays below 1 MiB.
+    for (const payment of [owned, bad]) {
+      await t.run(async ctx => {
+        await ctx.db.patch(payment.payableId, {
+          saleId: undefined, settlementCalculationNote: padding,
+        });
+        await ctx.db.patch(payment.vehicleId, {
+          sourceType: payment === owned ? "STOCK" : "SOURCED", model: padding,
+        });
+      });
+    }
+    const rows: { id: Id<"pendingAccountingEvents">; invalid: boolean }[] = [];
+    // >16 MiB of outbox data alone; seed in separate transactions so only the
+    // migration is under test. Both classes also require large payable/vehicle reads.
+    for (let index = 0; index < 20; index += 1) {
+      const invalid = index % 2 === 1;
+      const cmd = invalid ? bad.cmd : owned.cmd;
+      const id = await t.run(ctx => ctx.db.insert("pendingAccountingEvents", {
+        ...cmd, idempotencyKey: `large-held-${index}`, payload: { ...cmd.payload, legacyEvidence: padding },
+        kind: "POST", status: "PENDING", attempts: 0, createdAt: Date.now(),
+        dispatchState: "PERIOD_HELD", holdKind: "PERIOD",
+      }));
+      rows.push({ id, invalid });
+    }
+    const before = await footprint(t, orgId);
+    let pages = 0;
+    let reclassified = 0;
+    let finished = false;
+    let cursor: string | undefined;
+    await withFrozenScheduler(async () => {
+      for (let page = 0; page < 21; page += 1) {
+        const result = await t.mutation(internal.accountingOutbox.recoverPeriodHeldSupplierVat, {});
+        pages += 1;
+        reclassified += result.reclassified;
+        const checkpoint = await t.run(ctx => ctx.db.query("supplierVatHoldMigration").unique());
+        if (result.status === "READY") {
+          expect(checkpoint?.completedAt).toEqual(expect.any(Number));
+          finished = true;
+          break;
+        }
+        expect(checkpoint?.completedAt).toBeUndefined();
+        expect(checkpoint?.cursor).toEqual(expect.any(String));
+        expect(checkpoint?.cursor).not.toBe(cursor);
+        cursor = checkpoint?.cursor;
+      }
+      expect(finished).toBe(true);
+      expect(pages).toBeGreaterThan(1);
+      expect(reclassified).toBe(10);
+      console.info("SUPPLIER_VAT_HOLD_BYTE_PROOF", { pages, reclassified, payloadBytes: padding.length });
+      for (const { id, invalid } of rows) {
+        const row = await t.run(ctx => ctx.db.get(id));
+        expect(row?.dispatchState).toBe(invalid ? undefined : "PERIOD_HELD");
+        expect(row?.payload.legacyEvidence).toBe(padding);
+      }
+      expect(await t.mutation(internal.accountingOutbox.recoverPeriodHeldSupplierVat, {}))
+        .toEqual({ status: "READY", reclassified: 0 });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    });
     expect(await footprint(t, orgId)).toEqual(before);
   });
 

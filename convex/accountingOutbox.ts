@@ -2066,9 +2066,17 @@ export const recoverPeriodHeldSupplierVat = internalMutation({
   handler: async (ctx): Promise<{ status: "MORE" | "READY"; reclassified: number }> => {
     const state = await ctx.db.query("supplierVatHoldMigration").unique();
     if (state?.completedAt !== undefined) return { status: "READY", reclassified: 0 };
+    // At the 1 MiB document limit: two outbox rows + two payable/vehicle
+    // pairs + checkpoint <= 7 MiB read. Releases rewrite <= 2 MiB of rows;
+    // the cursor checkpoint and two row-id-only schedules are small.
+    // Keep headroom below https://docs.convex.dev/production/state/limits.
+    // Convex 1.42.1 supports these native scan budgets (server/pagination.ts).
     const page = await ctx.db.query("pendingAccountingEvents")
       .withIndex("by_dispatch_next_action", (q) => q.eq("status", "PENDING").eq("dispatchState", "PERIOD_HELD"))
-      .paginate({ cursor: state?.cursor ?? null, numItems: 100 });
+      .paginate({
+        cursor: state?.cursor ?? null, numItems: 2,
+        maximumRowsRead: 2, maximumBytesRead: 2 * 1024 * 1024,
+      });
     const result = await drainEntries(ctx, page.page);
     const checkpoint = {
       cursor: page.isDone ? undefined : page.continueCursor,
