@@ -748,6 +748,22 @@ const dealRailMessages = defineBilingualMessages({
     "يجب أن يساوي مجموع المبالغ نصيب العميل بالضبط.",
   ],
   GapAllocationComplete: ["Everything is accounted for.", "كل شيء محسوب."],
+  // SCRUM-766 PR-C: the supplier of a SOURCED vehicle concedes part of its
+  // entitlement. Optional; blank means none.
+  GapSupplierConcession: ["Supplier concession (optional)", "تنازل المورّد (اختياري)"],
+  GapSupplierEntitlement: ["The supplier is owed", "المستحق للمورّد"],
+  GapSupplierConcessionHint: [
+    "Part of the shortfall the supplier agrees to bear by taking less. Leave blank if none.",
+    "جزء من العجز يقبل المورّد تحمّله بتقاضي مبلغ أقل. اتركه فارغاً إن لم يوجد.",
+  ],
+  GapSupplierInvalid: [
+    "The supplier concession must be a valid amount, or left blank.",
+    "يجب أن يكون تنازل المورّد مبلغاً صحيحاً أو يُترك فارغاً.",
+  ],
+  GapSupplierTooLarge: [
+    "The supplier concession must be less than what the supplier is owed.",
+    "يجب أن يقلّ تنازل المورّد عن المبلغ المستحق له.",
+  ],
   GapNotes: ["Notes (optional)", "ملاحظات (اختياري)"],
   NoHandoverCosts: ["No handover costs recorded yet.", "لم تُسجَّل مصاريف تسليم بعد."],
   AddHandoverCost: ["Add cost", "إضافة مصروف"],

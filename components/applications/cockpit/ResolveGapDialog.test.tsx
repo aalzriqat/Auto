@@ -352,6 +352,144 @@ describe("the figures are a snapshot", () => {
   });
 });
 
+describe("the supplier's concession on a SOURCED vehicle (SCRUM-766 PR-C)", () => {
+  const BASIS = { entitlementMinor: 9_500 * FACTOR, currency: "JOD", supplierName: "Al Noor Motors" };
+  const supplierBox = () => screen.getByLabelText(/GapSupplierConcession/) as HTMLInputElement;
+
+  test("no basis from the server: no supplier field at all, in any mode (stock cars stay refused)", () => {
+    renderDialog({ supplierBasis: null });
+    expect(screen.queryByTestId("gap-supplier")).toBeNull();
+    fireEvent.click(radio(/^GapSplit/));
+    expect(screen.queryByTestId("gap-supplier")).toBeNull();
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    expect(screen.queryByTestId("gap-supplier")).toBeNull();
+  });
+
+  test("with a basis the field is offered when the dealership bears some of it, never when the customer covers it all", () => {
+    renderDialog({ supplierBasis: BASIS });
+    expect(screen.queryByTestId("gap-supplier")).toBeNull();
+    fireEvent.click(radio(/^GapSplit/));
+    expect(screen.getByTestId("gap-supplier")).toBeTruthy();
+    expect(screen.getByTestId("gap-supplier-entitlement").textContent).toBe("9,500 JOD");
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    expect(screen.getByTestId("gap-supplier")).toBeTruthy();
+    fireEvent.click(radio(/GapCustomerAbsorbs/));
+    expect(screen.queryByTestId("gap-supplier")).toBeNull();
+  });
+
+  test("blank is no concession: the request carries no supplier keys at all", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit, supplierBasis: BASIS });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    expect(readiness()).toBe("GapAllocationComplete");
+    fireEvent.click(confirmButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      customerGapShareMinor: 0,
+      dealerGapShareMinor: GAP_MINOR,
+      customerGapCashToDealerMinor: 0,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 0,
+      notes: "",
+      economicsStamp: "v2|3",
+    });
+  });
+
+  test("dealer-absorbs with a 300 concession on an 850 shortfall: the dealership covers 550 and the observed basis rides along", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit, supplierBasis: BASIS });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "300" } });
+    expect(screen.getByTestId("gap-dealer-remainder").textContent).toBe("550 JOD");
+    expect(readiness()).toBe("GapAllocationComplete");
+    fireEvent.click(confirmButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      customerGapShareMinor: 0,
+      dealerGapShareMinor: 550 * FACTOR,
+      customerGapCashToDealerMinor: 0,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 0,
+      supplierGapShareMinor: 300 * FACTOR,
+      observedSupplierEntitlementMinor: 9_500 * FACTOR,
+      observedSupplierName: "Al Noor Motors",
+      notes: "",
+      economicsStamp: "v2|3",
+    });
+  });
+
+  test("a split takes three parts: customer 400 + supplier 300 + dealership 150 = 850", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit, supplierBasis: BASIS });
+    fireEvent.click(radio(/^GapSplit/));
+    fireEvent.change(input("GapCustomerShare"), { target: { value: "400" } });
+    fireEvent.change(supplierBox(), { target: { value: "300" } });
+    expect(screen.getByText("GapDealerShare").parentElement?.textContent).toContain("150 JOD");
+    fireEvent.change(input("GapCashToDealer"), { target: { value: "400" } });
+    fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
+    expect(readiness()).toBe("GapAllocationComplete");
+    fireEvent.click(confirmButton());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      customerGapShareMinor: 400 * FACTOR,
+      dealerGapShareMinor: 150 * FACTOR,
+      supplierGapShareMinor: 300 * FACTOR,
+    });
+  });
+
+  test("shares that overshoot the shortfall are a mismatch, not a submission", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit, supplierBasis: BASIS });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "900" } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("GapAllocationMismatch");
+    fireEvent.click(confirmButton());
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  test("a concession that is not a usable figure, or is finer than the currency, is named and blocks", () => {
+    renderDialog({ supplierBasis: BASIS });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "abc" } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("GapSupplierInvalid");
+    fireEvent.change(supplierBox(), { target: { value: "300.0004" } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("AmountTooPrecise");
+  });
+
+  test("a concession that is not smaller than the entitlement is refused before the server is asked", () => {
+    renderDialog({ supplierBasis: { ...BASIS, entitlementMinor: 200 * FACTOR } });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "200" } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("GapSupplierTooLarge");
+  });
+
+  test("the observed basis is the one the dialog OPENED against, not a later rerender's", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    const view = renderDialog({ onSubmit, supplierBasis: BASIS });
+    view.rerender(
+      <ResolveGapDialog
+        {...props({ onSubmit, supplierBasis: { ...BASIS, entitlementMinor: 8_000 * FACTOR } })}
+      />
+    );
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "300" } });
+    fireEvent.click(confirmButton());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ observedSupplierEntitlementMinor: 9_500 * FACTOR });
+  });
+
+  test("switching back to customer-absorbs drops a typed concession from the request", () => {
+    renderDialog({ supplierBasis: BASIS });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "300" } });
+    fireEvent.click(radio(/GapCustomerAbsorbs/));
+    // Back in customer-absorbs the gap is the customer's alone; the readiness
+    // is about the destinations, not about a hidden supplier box.
+    expect(readiness()).toBe("GapDestinationsIncomplete");
+  });
+});
+
 describe("Arabic, right-to-left", () => {
   /**
    * The direction asserted is the one the COMPONENT derives: `DialogContent`
