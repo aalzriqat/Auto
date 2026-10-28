@@ -36,25 +36,37 @@
  *  - "db-indirect-call" (wrappers): a database method reached through `.bind`/`.call`/`.apply`, `Reflect.*` or
  *    `Function.prototype.*`, found by the lib declaration the call resolves to (`isIndirectDatabaseCall`), also
  *    when the database is only an element of the argument array (`Reflect.apply(f, undefined, [ctx.db, ...])`).
- *  - "db-indirect-call" (escape, `escapesDatabaseType`): a database value, one of its methods, or a `ctx` that carries
- *    one in its `db` property, handed to a position whose DECLARED type does not keep the Convex declaration: a
- *    parameter, an annotated variable, a parameter or property initializer, an `as` target, an `any[]` element, a
- *    returned value, `{ db }` into a declared property, a spread into a parameter or an array. The position is read at
- *    the end of the chain of parentheses, `!`, `satisfies`, `await`, conditional branches, `??` / `||` and the right of `&&` the
- *    name sits in (`valueSite`), because the checker types the destination, not the wrapper. After the hand-over the
- *    checker sees a structural or `any` type, not the Convex interface, which is how
+ *  - "db-indirect-call" (escape, `escapesDatabaseType`): a database value, one of its methods, or any HOLDER that carries one (a
+ *    `ctx` through `db`, `{ inner: ctx }`, `{ database: ctx.db }`, an array or tuple of them, at any depth), handed to a position
+ *    whose DECLARED type does not keep the Convex declaration: a parameter, an annotated variable, a parameter or property
+ *    initializer, an `as` target, an `any[]` element, a returned value, `{ db }` into a declared property, a spread into a parameter
+ *    or an array. The position is read at the end of the chain of parentheses, `!`, `satisfies`, `await`, conditional branches,
+ *    `??` / `||` and the right of `&&` the name sits in (`valueSite`), because the checker types the destination, not the wrapper.
+ *    After the hand-over the checker sees a structural or `any` type, not the Convex interface, which is how
  *    `const p: (id: Id<"suppliers">, v: {}) => Promise<void> = (ctx.db.patch)`, `invoke(ctx.db.patch, ...)`, `use(ctx.db)` with
- *    a structural parameter and `(ctx.db as any).patch` would otherwise vanish. For a `ctx` the destination is refused when
- *    it is `any`, or its `db` is `any` or exposes a get/query/insert/patch/replace/delete member that does not resolve into
- *    Convex (`use(ctx)` with `{ db: { patch(...) } }`). `{ db: { normalizeId(...) } }`, which adminData's id proof takes,
- *    exposes none of them and passes. A destination whose database-method members ALL resolve into Convex, such as
- *    `Pick<QueryCtx["db"], "get">`, is a Convex type. A UNION destination keeps the database only when every member
- *    does, nullish members aside (`QueryCtx["db"] | undefined` is fine; `Pick<QueryCtx["db"], "get"> | Patcher` is not,
- *    because narrowing it reaches the foreign member). A tuple spread pairs element i with the parameter at the same
- *    position; an array spread flows into every remaining parameter. A position with no declared type keeps the value's own type and is
- *    not an escape. One exemption: the KEY argument of a `WeakMap`/`WeakSet` method (the database as a key, as
- *    convex/utils/depositCancellationPending.ts does), found by the lib declaration; a database stored as a value is not
- *    exempt. The real tree passes `ctx.db` and `ctx` only to Convex-typed or `normalizeId`-only destinations, so its scan stays at zero.
+ *    a structural parameter and `(ctx.db as any).patch` would otherwise vanish.
+ *    ONE VERDICT decides every hand-over (`keepsConvex`), for a database and for a holder alike (the position a value lands in
+ *    is resolved beside it, with the exceptions named below): the value keeps its Convex
+ *    declaration only if EVERY member of the destination does, null/undefined/void/optional aside. A holder is compared
+ *    property by property with the destination's property of the same name (an index signature stands in for a missing one),
+ *    asking the same question of each property, each member of a union property, and each element and rest position of an
+ *    array or tuple. `QueryCtx["db"] | undefined` and `{ db?: QueryCtx["db"] }` are fine; `QueryCtx["db"] | Patcher`,
+ *    `Pick<QueryCtx["db"], "get"> | Patcher`, `{ db?: Patcher }`, `{ db: Patcher | null }` and `{ inner: { db: Patcher } }` are not,
+ *    because narrowing them reaches the foreign member. A destination whose database-method members ALL resolve into Convex,
+ *    such as `Pick<QueryCtx["db"], "get">`, is a Convex type. `any`, an unconstrained type parameter, `unknown`, `object`, `{}`
+ *    and a nesting (holders, constraints, elements) deeper than MAX_HOLDER_DEPTH are unknowable and FAIL CLOSED. A constrained type parameter is judged by
+ *    its constraint. One exemption, for a database found in a holder's property: a destination object that has properties but
+ *    no get/query/insert/patch/replace/delete member (`{ db: { normalizeId(...) } }`, convex/adminData.ts#assertIdBelongsToTable)
+ *    cannot read or write and keeps nothing foreign.
+ *    A spread is placed by its EXPANDED position, not by the index of its node: a fixed-length tuple contributes its length, an
+ *    array spread or a tuple with optional/rest elements makes every later position (a rest parameter included) a possible
+ *    destination, narrowed to those the element is assignable to (`isTypeAssignableTo`). A tuple-typed rest parameter is read
+ *    position by position. Plain arguments after a spread use the same expanded position. A callee of type `any` takes anything.
+ *    A position with no declared type keeps the value's own type and is not an escape; so does the pattern of an unannotated
+ *    destructuring in a variable declaration or parameter (`const { reader } = request`), which the checker types from the value (a destructuring assignment, `for...of` or `catch` pattern gets the checker's synthesized type and could be flagged; none is in the tree). One exemption: the KEY argument of a
+ *    `WeakMap`/`WeakSet` method (the database as a key, as convex/utils/depositCancellationPending.ts does), found by the lib
+ *    declaration; a database stored as a value is not exempt. The real tree passes `ctx.db` and `ctx` only to Convex-typed or
+ *    `normalizeId`-only destinations, so its scan stays at zero.
  *
  * CASTS OF A SUPPLIER ID (SCRUM-871 L6). `supplierId as any`, `as unknown as Id<"vehicles">`, `<any>supplierId`,
  * `"suppliers" as any` and `ids as unknown as Id<"vehicles">[]` hide the table from every rule above: after the cast
@@ -106,20 +118,23 @@
  *  against someone writing code to evade it. Known ways past it, none of them used in the tree:
  *   - the database retyped where the checker does not look. `escapesDatabaseType` reads the declared type at the
  *     positions and wrappers listed above and nothing else: a route through another construct (a comma expression, a
- *     `yield`, a class-field or destructuring default, an object spread `{ ...ctx }`, a `for...of` over databases) is
- *     not seen. A database value that is ALREADY `any` or structurally typed before it reaches a rule (it came out of
- *     `Reflect.get(ctx, "db")`, a generic helper that returns `any`, pass-through like `identity<T>(ctx.db)`) is not seen,
- *     and neither is the use of a database method through `Object.getOwnPropertyDescriptor(ctx.db, ...)` once its
- *     result is untyped. Ordinary helper functions that take `ctx` or `db` with a Convex type are fine and are followed.
- *     A user-written `invoke(fn, ...)` is caught only because its parameters are not Convex types. Also not handled:
- *     a database cast to a Convex type that lands in a foreign destination (`ctx.db as QueryCtx["db"]` into a structural
- *     parameter, or one more cast on top of it, is read at the first cast, whose target is Convex, not at the destination behind it; so is a ctx cast to its own type); a constrained generic
- *     (`use<D extends Patcher>(db: D)` called with `ctx.db`, where the type argument is inferred and the parameter is
- *     a type parameter); and an `Object.assign({}, ctx.db, extra)` or `ctx.db & Extra` intersection holder;
- *   - the container check looks at a property named exactly `db`: a holder under another name (`{ database: ctx.db }`),
- *     a holder of a holder (`{ ctx }`), and a `ctx` handed to `unknown`, `object` or `{}` (no `db` to compare) are not
- *     followed. A destination that exposes no get/query/insert/patch/replace/delete member (`system`, `normalizeId` only)
- *     is not foreign;
+ *     `yield`, a class-field default, a destructuring default, an object spread `{ ...ctx }`, a `for...of` over databases,
+ *     the holder stored inside a `Map`, `Set` or `Promise` and read back) is not seen. A database value that is ALREADY `any` or
+ *     structurally typed before it reaches a rule (it came out of `Reflect.get(ctx, "db")`, an `any`-returning helper such as
+ *     `getDb(ctx): any`, pass-through like `identity<T>(ctx.db)`) is not seen, and neither is the use of a database method
+ *     through `Object.getOwnPropertyDescriptor(ctx.db, ...)` once its result is untyped. Ordinary helper functions that take
+ *     `ctx` or `db` with a Convex type are fine and are followed. A user-written `invoke(fn, ...)` is caught only because its
+ *     parameters are not Convex types. Also not handled: a CAST to a Convex type that lands in a foreign destination
+ *     (`ctx.db as QueryCtx["db"]` into a structural parameter, or one more cast on top of it, is read at the first cast, whose
+ *     target is Convex, not at the destination behind it; so is a ctx cast to its own type); a CONSTRAINED generic
+ *     (`use<D extends Patcher>(db: D)` called with `ctx.db`: the call site sees the inferred Convex type, and the foreign
+ *     constraint is visible only inside the callee); and an `Object.assign({}, ctx.db, extra)` or `ctx.db & Extra`
+ *     intersection holder;
+ *   - the holder comparison pairs properties BY NAME with the destination. A destination with no property of that name has
+ *     nothing to compare (`use(ctx)` into `{ other: number }` passes), a holder inside a type ARGUMENT (`Map<string, QueryCtx>`,
+ *     `Promise<QueryCtx>`) is not a property and is not followed, and the exemption for a methodless `db` destination
+ *     (`{ normalizeId }`) trusts that such an object cannot reach the writer. After a variable-length spread the landing
+ *     positions are narrowed with `isTypeAssignableTo`, so a position the element is not assignable to is not asked;
  *   - an id retyped without a type assertion on a master-table type: widened to `string` first (`const raw: string =
  *     supplierId; raw as Id<"vehicles">`), passed through a generic `retype<T>(x): T`, a function that returns `any`,
  *     a JSON round trip, `Object.assign`, a spread into an `any` object; and a cast of a supplier ROW (`Doc<"suppliers">`),
@@ -147,8 +162,10 @@
  * are the checker calls the TypeScript Compiler API guide documents or that sit beside them
  * (https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API). The calls added for SCRUM-871 are not in that
  * guide and were checked against the installed node_modules/typescript/lib/typescript.d.ts (6.0.3):
- * `TypeChecker.getContextualType`, `getTypeFromTypeNode`, `isArrayType`/`isTupleType`/`getTypeArguments`, `Type.getNumberIndexType`, `Type.getProperty`, `getTypeOfSymbol`, `getAnyType`, `ts.findAncestor`, `ts.getPreEmitDiagnostics`, `ts.isConstTypeReference` and `ts.getCombinedNodeFlags`
- * with `ts.NodeFlags.Const`.
+ * `TypeChecker.getContextualType`, `getTypeFromTypeNode`, `isArrayType`/`isTupleType`/`getTypeArguments`, `isTypeAssignableTo`, `Type.isUnion` and its `.types`,
+ * `Type.getNumberIndexType`/`getStringIndexType`, `Type.getProperty`/`getProperties`/`getConstructSignatures`, `TupleType.elementFlags` with `ts.ElementFlags`,
+ * `ts.TypeFlags` (`Void`, `Unknown`, `NonPrimitive`), `getTypeOfSymbol`, `getAnyType`, `ts.findAncestor`, `ts.getPreEmitDiagnostics`,
+ * `ts.isConstTypeReference` and `ts.getCombinedNodeFlags` with `ts.NodeFlags.Const`.
  *
  * The scanner is itself tested against synthetic bad sources, so "no violations found" cannot
  * mean "the scanner looks at nothing". The synthetic sources are compiled in the same program as
@@ -425,6 +442,35 @@ function isValueCandidate(node: ts.Node): node is ValueCandidate {
   return ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node);
 }
 
+/** `null`, `undefined` and `void` are not a place a database can be put: a destination ignores them (an optional or nullable member). */
+const NULLISH_FLAGS = ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void;
+/** A holder inside a holder is followed this deep (`{ a: { b: { db } } }`); beyond it the hand-over fails closed. */
+const MAX_HOLDER_DEPTH = 6;
+
+/** One element of a spread array or tuple: the exact position it holds in the tuple, if known, else the earliest it can. */
+interface SpreadItem {
+  type: ts.Type;
+  offset: number | undefined;
+  lowerBound: number;
+}
+
+/** Where the next element of an argument list or array literal sits: exact, or only a lower bound after a variable-length spread. */
+interface Cursor {
+  position: number;
+  exact: boolean;
+}
+
+/** The declared types of the positions of an argument list or array literal. */
+interface PositionSource {
+  at: (position: number) => ts.Type[];
+  from: (position: number) => ts.Type[];
+}
+
+/** The elements of an argument list or array literal, in order. */
+function listOf(node: ts.Node): readonly ts.Expression[] {
+  if (ts.isCallExpression(node) || ts.isNewExpression(node)) return node.arguments ?? [];
+  return ts.isArrayLiteralExpression(node) ? node.elements : [];
+}
 /**
  * The outermost expression a value passes through unchanged on its way to wherever it is used: through parentheses,
  * `!`, `satisfies`, the branches of `c ? a : b`, either side of `??` and `||`, and the right of `&&`. The declared
@@ -504,7 +550,7 @@ class Scanner {
 
   constructor(private readonly checker: ts.TypeChecker) {}
   private readonly databaseTypes = new Map<ts.Type, boolean>();
-  private readonly databaseHolders = new Map<ts.Type, boolean>();
+  private readonly databaseCarriers = new Map<ts.Type, boolean>();
 
   private tablesOfExpression(expression: ts.Expression): TableFacts {
     const literal = stringLiteralValue(expression);
@@ -583,113 +629,266 @@ class Scanner {
     return this.isDatabaseType(this.checker.getTypeAtLocation(expression));
   }
 
-  /** The type of the property `name` of `type`, or undefined when it has none (`exposesForeignDatabase` asks a union part by part). */
+  /** The type of the property `name` of `type`, or undefined when it has none (the shorthand `{ db }` reads the literal's declared property). */
   private propertyTypeOf(type: ts.Type, name: string): ts.Type | undefined {
     const property = type.getProperty(name);
     return property ? this.checker.getTypeOfSymbol(property) : undefined;
   }
 
-  /** A value that is not a database but carries one in its `db` property: a Convex `ctx`. Answered once per type. */
-  private holdsDatabase(type: ts.Type): boolean {
-    const known = this.databaseHolders.get(type);
+  /**
+   * Can a value of `type` hand out a Convex database? It is one (a union is one when a member is), or an array or tuple
+   * with an element that can, or an object with a property that can: a `ctx` through `db`, `{ inner: ctx }` and
+   * `{ database: ctx.db }` through their property, at any depth. Answered once per type; a type that mentions itself
+   * counts for nothing the second time round. TS Compiler API: Type.getProperties, TypeChecker.getTypeOfSymbol.
+   */
+  private carriesDatabase(type: ts.Type): boolean {
+    const known = this.databaseCarriers.get(type);
     if (known !== undefined) return known;
-    const db = this.propertyTypeOf(type, "db");
-    const answer = db !== undefined && this.isDatabaseType(db);
-    this.databaseHolders.set(type, answer);
+    this.databaseCarriers.set(type, false);
+    const answer = this.computeCarriesDatabase(type);
+    this.databaseCarriers.set(type, answer);
     return answer;
   }
 
-  /**
-   * Does a database value keep its Convex declaration when it lands in `declared`? Every member of a union must be a
-   * database (or a Convex view), nullish members aside: `QueryCtx["db"] | undefined` keeps it, `Pick<QueryCtx["db"], "get"> | Patcher`
-   * does not, because narrowing the union then reaches the foreign member. (As a VALUE a union is a database when any
-   * member is, see `computeIsDatabaseType`: what matters for a value is what it can call.)
-   */
-  private isDatabaseDestination(declared: ts.Type): boolean {
-    if (!declared.isUnion()) return this.isDatabaseType(declared);
-    const members = declared.types.filter((part) => !(part.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)));
-    return members.length > 0 && members.every((part) => this.isDatabaseDestination(part));
+  private computeCarriesDatabase(type: ts.Type): boolean {
+    if (this.isDatabaseType(type)) return true;
+    if (type.isUnion()) return type.types.some((part) => this.carriesDatabase(part));
+    if (this.checker.isArrayType(type) || this.checker.isTupleType(type)) {
+      return this.checker.getTypeArguments(type as ts.TypeReference).some((item) => this.carriesDatabase(item));
+    }
+    if (!(type.flags & ts.TypeFlags.Object) && !type.isIntersection()) return false;
+    if (type.getCallSignatures().length > 0) return false; // a function type is not a holder; a database METHOD was matched above
+    return type.getProperties().some((property) => this.carriesDatabase(this.checker.getTypeOfSymbol(property)));
+  }
+
+  /** The constraint of a type parameter, or undefined when it has none a destination could be judged by (unconstrained, `any`, `unknown`): then it fails closed. */
+  private usableConstraint(type: ts.Type): ts.Type | undefined {
+    const constraint = this.checker.getBaseConstraintOfType(type);
+    return constraint !== undefined && constraint !== type && !(constraint.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) ? constraint : undefined;
+  }
+
+  /** The members of a destination (or of a value) that can take part: a union split up, `null`, `undefined` and `void` dropped. */
+  private destinationMembers(destination: ts.Type): ts.Type[] {
+    const parts = destination.isUnion() ? destination.types : [destination];
+    return parts.filter((part) => !(part.flags & NULLISH_FLAGS));
+  }
+
+  /** No property, signature or index at all: `unknown`, `object`, `{}`. Nothing can be compared with it, so a database handed to it is lost. */
+  private isOpaque(type: ts.Type): boolean {
+    if (type.flags & (ts.TypeFlags.Unknown | ts.TypeFlags.NonPrimitive)) return true;
+    return (
+      (type.flags & ts.TypeFlags.Object) !== 0 &&
+      type.getProperties().length === 0 &&
+      type.getCallSignatures().length === 0 &&
+      type.getConstructSignatures().length === 0 &&
+      type.getStringIndexType() === undefined &&
+      type.getNumberIndexType() === undefined
+    );
   }
 
   /**
-   * Is `declared` `any`, or a type whose `db` property is `any` or exposes database methods that do not resolve into Convex?
-   * A `ctx` retyped to it keeps every database call but loses the Convex declaration. `{ db: { normalizeId(...) } }`
-   * exposes no write, read or query method and is not foreign (convex/adminData.ts#assertIdBelongsToTable).
+   * THE ONE RULE for a database that is handed on. A Convex mutation-capable value (a database, a method of one, a `ctx`
+   * or any holder that carries one, an array or tuple of them) keeps its Convex declaration in `destination` only when
+   * EVERY member of the destination does, null, undefined and void aside, and the same is asked again of each property of a
+   * holder destination, each member of a union property, and each element and rest position of an array or tuple. The
+   * direct hand-over (`use(ctx.db)`) and the container hand-over (`use(ctx)`, `use({ inner: ctx })`) both end here.
+   *  - a database needs a destination member that is a Convex database or a view whose database methods all resolve into
+   *    Convex (`Pick<QueryCtx["db"], "get">`); `QueryCtx["db"] | undefined` is fine, `QueryCtx["db"] | Patcher` is not,
+   *    because narrowing it reaches the foreign member;
+   *  - a holder is compared property by property with the property of the same name in the destination (an index signature
+   *    stands in for a missing name); a destination with no such property has nothing to call it by and passes. One
+   *    exemption, for a database found in a holder's property: a destination object that has properties but no
+   *    get/query/insert/patch/replace/delete member (`{ normalizeId }`, convex/adminData.ts#assertIdBelongsToTable) cannot
+   *    read or write, so it keeps nothing foreign;
+   *  - `any`, an unconstrained type parameter, and (for anything but a database-free value) `unknown`, `object` and `{}`
+   *    are unknowable and fail closed: the value is treated as lost. A constrained type parameter is judged by its constraint;
+   *  - a holder chain deeper than MAX_HOLDER_DEPTH fails closed.
+   * TS Compiler API: Type.isUnion / .types, TypeChecker.getBaseConstraintOfType, Type.getProperty, Type.getStringIndexType.
    */
-  private exposesForeignDatabase(declared: ts.Type): boolean {
-    if (declared.isUnion()) return declared.types.some((part) => this.exposesForeignDatabase(part));
-    if (declared.flags & ts.TypeFlags.Any) return true;
-    const db = this.propertyTypeOf(declared, "db");
-    if (db === undefined || this.isDatabaseDestination(db)) return false;
-    return (db.flags & ts.TypeFlags.Any) !== 0 || this.databaseMethodMembers(db).length > 0;
+  private keepsConvex(value: ts.Type, destination: ts.Type, inHolder = false, depth = 0): boolean {
+    if (depth > MAX_HOLDER_DEPTH) return false;
+    const members = this.destinationMembers(destination);
+    if (members.length === 0) return false;
+    const parts = this.destinationMembers(value);
+    return members.every((member) => parts.every((part) => this.partKeepsConvex(part, member, inHolder, depth)));
+  }
+
+  private partKeepsConvex(part: ts.Type, member: ts.Type, inHolder: boolean, depth: number): boolean {
+    if (!this.carriesDatabase(part)) return true;
+    if (member.flags & ts.TypeFlags.Any) return false;
+    if (member.flags & ts.TypeFlags.TypeParameter) {
+      const constraint = this.usableConstraint(member);
+      return constraint !== undefined && this.keepsConvex(part, constraint, inHolder, depth + 1);
+    }
+    if (this.isDatabaseType(part)) {
+      return this.isDatabaseType(member) || (inHolder && this.isMethodlessObject(member));
+    }
+    if (this.isOpaque(member)) return false;
+    if (this.checker.isArrayType(part) || this.checker.isTupleType(part)) return this.elementsKeepConvex(part, member, inHolder, depth);
+    return part.getProperties().every((property) => {
+      const carried = this.checker.getTypeOfSymbol(property);
+      if (!this.carriesDatabase(carried)) return true;
+      const counterpart = member.getProperty(property.name);
+      const declared = counterpart ? this.checker.getTypeOfSymbol(counterpart) : member.getStringIndexType();
+      return declared === undefined || this.keepsConvex(carried, declared, true, depth + 1);
+    });
+  }
+
+  /** An object with at least one property and no database method among them: it cannot read or write, whatever else it offers. */
+  private isMethodlessObject(type: ts.Type): boolean {
+    return (
+      (type.flags & ts.TypeFlags.Object) !== 0 &&
+      type.getProperties().length > 0 &&
+      type.getCallSignatures().length === 0 &&
+      this.databaseMethodMembers(type).length === 0
+    );
+  }
+
+  /** Each element of an array or tuple that carries a database, against the position(s) of `member` it lands in. */
+  private elementsKeepConvex(part: ts.Type, member: ts.Type, inHolder: boolean, depth: number): boolean {
+    return this.spreadItems(part).every((item) => {
+      if (!this.carriesDatabase(item.type)) return true;
+      const landing = item.offset === undefined ? this.assignableTo(item.type, this.positionTypes(member, item.lowerBound, true)) : this.positionTypes(member, item.offset, false);
+      return landing.every((declared) => this.keepsConvex(item.type, declared, inHolder, depth + 1));
+    });
   }
 
   /**
-   * A database value, one of its methods, or a `ctx` that carries one, handed to a position whose DECLARED type does
-   * not keep the Convex declaration: a parameter, an annotated variable, an `as` target, an element of an `any[]`. From
-   * there on the checker no longer resolves calls into the Convex interface, which is how every later rule recognises a
+   * The elements of an array or tuple, each with the position it holds: an exact `offset` for a tuple element before any
+   * rest or variadic element, otherwise only the `lowerBound` (an array element can sit anywhere from 0). TS Compiler
+   * API: TypeChecker.isTupleType / isArrayType / getTypeArguments, TupleType.elementFlags, ElementFlags.
+   */
+  private spreadItems(type: ts.Type): SpreadItem[] {
+    if (this.checker.isTupleType(type)) {
+      const flags = (type as ts.TupleTypeReference).target.elementFlags;
+      const rest = flags.findIndex((flag) => flag & ts.ElementFlags.Variable);
+      return this.checker.getTypeArguments(type as ts.TypeReference).map((item, index) => ({
+        type: item,
+        offset: rest >= 0 && index >= rest ? undefined : index,
+        lowerBound: rest >= 0 ? Math.min(index, rest) : index,
+      }));
+    }
+    if (this.checker.isArrayType(type)) return this.checker.getTypeArguments(type as ts.TypeReference).map((item) => ({ type: item, offset: undefined, lowerBound: 0 }));
+    return [{ type, offset: undefined, lowerBound: 0 }];
+  }
+
+  /**
+   * Of the positions a value MIGHT land in (after a variable-length spread, or in a rest tuple), only those it can be assigned
+   * to are real: a database cannot land in a `number`. TS Compiler API: TypeChecker.isTypeAssignableTo (public since 5.4).
+   */
+  private assignableTo(value: ts.Type, candidates: readonly ts.Type[]): ts.Type[] {
+    const kept = candidates.filter((candidate) => this.checker.isTypeAssignableTo(value, candidate));
+    return kept.length > 0 ? kept : [...candidates]; // a comparison the checker cannot make is not a reason to drop the position: fail closed
+  }
+
+  /**
+   * The types position `offset` of `container` can hold: an element of a tuple (a rest or trailing element when the
+   * position is at or past the rest element), of an array, or the number index of anything else. With `onward`, every
+   * position from `offset` on. `any` and an unconstrained type parameter are returned as themselves, which `keepsConvex` refuses.
+   */
+  private positionTypes(container: ts.Type, offset: number, onward: boolean): ts.Type[] {
+    return this.destinationMembers(container).flatMap((member) => {
+      if (member.flags & ts.TypeFlags.Any) return [member];
+      if (member.flags & ts.TypeFlags.TypeParameter) {
+        const constraint = this.usableConstraint(member);
+        return constraint !== undefined ? this.positionTypes(constraint, offset, onward) : [member];
+      }
+      if (this.checker.isTupleType(member)) {
+        const flags = (member as ts.TupleTypeReference).target.elementFlags;
+        const rest = flags.findIndex((flag) => flag & ts.ElementFlags.Variable);
+        const items = this.checker.getTypeArguments(member as ts.TypeReference);
+        const reaches = (index: number): boolean => {
+          if (rest < 0) return onward ? index >= offset : index === offset;
+          if (onward) return index >= Math.min(offset, rest);
+          return offset < rest ? index === offset : index >= rest;
+        };
+        return items.filter((_item, index) => reaches(index));
+      }
+      if (this.checker.isArrayType(member)) return [...this.checker.getTypeArguments(member as ts.TypeReference)];
+      const indexed = member.getNumberIndexType();
+      return indexed ? [indexed] : [];
+    });
+  }
+
+  /**
+   * A database value, one of its methods, or a holder that carries one, handed to a position whose DECLARED type does
+   * not keep the Convex declaration (`keepsConvex`): a parameter, an annotated variable, an `as` target, an element of an
+   * `any[]`. From there on the checker no longer resolves calls into the Convex interface, which is how every later rule recognises a
    * database call (`const p: (id: Id<"suppliers">, v: {}) => Promise<void> = ctx.db.patch`, `use(ctx.db)` with a
    * structural parameter, `invoke(ctx.db.patch, ...)`, `(ctx.db as any).patch`, `use(ctx)` with a structural
    * `{ db: { patch(...) } }`). The position is the end of the chain of parentheses, `!`, `satisfies`, `await`, conditional
    * branches and `??` / `||` the name sits in (`valueSite`). A position with no declared type keeps the value's own
-   * type, so it is not an escape. TS Compiler API: TypeChecker.getContextualType, getTypeOfSymbol.
+   * type, so it is not an escape. TS Compiler API: TypeChecker.getContextualType, getResolvedSignature.
    */
   private escapesDatabaseType(node: ValueCandidate): boolean {
     const site = valueSite(node);
     if (!isValuePosition(site)) return false;
     const type = this.checker.getTypeAtLocation(node);
+    if (!ts.isSpreadElement(site.parent) && !this.carriesDatabase(type)) return false;
     // `use(...dbs)`: what flows is each element of the spread array or tuple.
     const spread = ts.isSpreadElement(site.parent) ? site.parent : undefined;
-    const values = spread ? this.elementTypesOf(type) : [type];
-    if (!values.some((value) => this.isDatabaseType(value) || this.holdsDatabase(value))) return false;
+    const items = spread ? this.spreadItems(type) : [{ type, offset: undefined, lowerBound: 0 }];
+    if (!items.some((item) => this.carriesDatabase(item.type))) return false;
     // A WeakMap/WeakSet KEY (argument 0) is only ever compared by identity: it cannot be read back or called
     // (convex/utils/depositCancellationPending.ts). A database stored as a VALUE can be read back, so it is not exempt.
     const parent = site.parent;
     if (ts.isCallExpression(parent) && parent.arguments[0] === site && this.libContainerOf(parent, WEAK_KEY_OWNERS) !== undefined) return false;
-    if (!spread) return this.flowsToForeign(type, this.destinationTypes(site, undefined));
-    // A tuple spread pairs element i with the parameter at the same position; an array spread flows into every remaining one.
-    const tuple = this.checker.isTupleType(type);
-    return values.some((value, index) => this.flowsToForeign(value, this.destinationTypes(site, spread, tuple ? index : undefined)));
-  }
-
-  /** Does `value` (a database, or a `ctx` carrying one) lose its Convex declaration in any of the `destinations`? */
-  private flowsToForeign(value: ts.Type, destinations: readonly ts.Type[]): boolean {
-    if (this.isDatabaseType(value)) return destinations.some((declared) => !this.isDatabaseDestination(declared));
-    return this.holdsDatabase(value) && destinations.some((declared) => this.exposesForeignDatabase(declared));
-  }
-
-  /** The element types of an array or tuple (what a spread of it passes on); the type itself otherwise. */
-  private elementTypesOf(type: ts.Type): ts.Type[] {
-    return this.checker.isArrayType(type) || this.checker.isTupleType(type) ? [...this.checker.getTypeArguments(type as ts.TypeReference)] : [type];
+    if (!spread) return this.destinationTypes(site).some((declared) => !this.keepsConvex(type, declared));
+    const source = this.positionSource(spread.parent);
+    if (!source) return false;
+    const cursor = this.cursorBefore(listOf(spread.parent), spread);
+    return items.some((item) => {
+      if (!this.carriesDatabase(item.type)) return false;
+      const exact = item.offset !== undefined && cursor.exact;
+      const landing = exact ? source.at(cursor.position + (item.offset ?? 0)) : this.assignableTo(item.type, source.from(cursor.position + item.lowerBound));
+      return landing.some((declared) => !this.keepsConvex(item.type, declared));
+    });
   }
 
   /**
-   * The declared types a value at `site` flows into. The contextual type of the site, or for an element of an array literal
-   * the array's declared element type (e.g. `ArrayLike<any>`), or for the shorthand `{ db }` the property of the object
-   * literal's contextual type, or for a spread into an argument list every remaining parameter (only the one at
-   * `element` for a tuple spread).
+   * Where the argument or element `target` of a list starts: the number of positions before it, exact while every earlier
+   * element is a plain one or a fixed-length tuple spread, otherwise only a lower bound (an array spread, or a tuple with
+   * optional or rest elements, can be any length). This is the EXPANDED position, not the index of the node in the list.
    */
-  private destinationTypes(site: ts.Expression, spread: ts.SpreadElement | undefined, element?: number): ts.Type[] {
-    const parent = site.parent;
-    if (spread) {
-      const list = spread.parent;
-      if (ts.isArrayLiteralExpression(list)) return this.arrayElementDestination(list);
-      if (!ts.isCallExpression(list) && !ts.isNewExpression(list)) return [];
-      const signature = this.checker.getResolvedSignature(list);
-      const from = list.arguments?.indexOf(spread) ?? -1;
-      if (!signature || from < 0) return [];
-      const parameters = signature.getParameters();
-      const isRest = (parameter: ts.Symbol): boolean => !!parameter.valueDeclaration && ts.isParameter(parameter.valueDeclaration) && !!parameter.valueDeclaration.dotDotDotToken;
-      const typesOf = (parameter: ts.Symbol): ts.Type[] => {
-        const declared = this.checker.getTypeOfSymbolAtLocation(parameter, list);
-        const item = isRest(parameter) ? declared.getNumberIndexType() : declared;
-        return item ? [item] : [];
-      };
-      if (element === undefined) return parameters.slice(Math.min(from, parameters.length - 1)).flatMap(typesOf);
-      const index = from + element;
-      const parameter = parameters[Math.min(index, parameters.length - 1)];
-      return parameter && (index < parameters.length || isRest(parameter)) ? typesOf(parameter) : [];
+  private cursorBefore(elements: readonly ts.Expression[], target: ts.Expression): Cursor {
+    let cursor: Cursor = { position: 0, exact: true };
+    for (const element of elements) {
+      if (element === target) break;
+      if (!ts.isSpreadElement(element)) {
+        cursor = { position: cursor.position + 1, exact: cursor.exact };
+        continue;
+      }
+      const type = this.checker.getTypeAtLocation(element.expression);
+      if (this.checker.isTupleType(type)) {
+        const flags = (type as ts.TupleTypeReference).target.elementFlags;
+        const required = flags.filter((flag) => flag & ts.ElementFlags.Required).length;
+        cursor = { position: cursor.position + required, exact: cursor.exact && flags.every((flag) => flag & ts.ElementFlags.Required) };
+      } else {
+        cursor = { position: cursor.position, exact: false };
+      }
     }
+    return cursor;
+  }
+
+  /**
+   * The declared types a plain (non-spread) value at `site` flows into. The contextual type of the site, or for an element
+   * of an array literal the array's declared element type (e.g. `ArrayLike<any>`), or for the shorthand `{ db }` the
+   * property of the object literal's contextual type; after a spread in the same list, the type at the expanded position.
+   */
+  private destinationTypes(site: ts.Expression): ts.Type[] {
+    const parent = site.parent;
+    if (ts.isCallExpression(parent) || ts.isNewExpression(parent) || ts.isArrayLiteralExpression(parent)) {
+      const elements = listOf(parent);
+      const before = elements.slice(0, elements.indexOf(site));
+      if (before.some((element) => ts.isSpreadElement(element))) {
+        const source = this.positionSource(parent);
+        if (!source) return [];
+        const cursor = this.cursorBefore(elements, site);
+        return cursor.exact ? source.at(cursor.position) : source.from(cursor.position);
+      }
+    }
+    // `const { a, b } = request` has no declared type: the checker types the pattern from the initializer, it does not constrain it.
+    if ((ts.isVariableDeclaration(parent) || ts.isParameter(parent)) && parent.initializer === site && (ts.isObjectBindingPattern(parent.name) || ts.isArrayBindingPattern(parent.name)) && parent.type === undefined) return [];
     if (ts.isShorthandPropertyAssignment(parent)) {
       const literal = this.checker.getContextualType(parent.parent);
       const declared = literal && this.propertyTypeOf(literal, parent.name.text);
@@ -700,11 +899,40 @@ class Scanner {
     return ts.isArrayLiteralExpression(parent) ? this.arrayElementDestination(parent) : [];
   }
 
+  /**
+   * What the positions of an argument list or an array literal are declared to hold: the parameters of the resolved
+   * signature (a tuple-typed rest parameter position by position, an array-typed one for every position from its start),
+   * or the contextual array or tuple type of a literal. A callee of type `any` takes anything: unknowable, so `any`.
+   */
+  private positionSource(list: ts.Node): PositionSource | undefined {
+    if (ts.isArrayLiteralExpression(list)) {
+      const declared = this.checker.getContextualType(list);
+      return declared === undefined ? undefined : { at: (position) => this.positionTypes(declared, position, false), from: (position) => this.positionTypes(declared, position, true) };
+    }
+    if (!ts.isCallExpression(list) && !ts.isNewExpression(list)) return undefined;
+    if (this.checker.getTypeAtLocation(list.expression).flags & ts.TypeFlags.Any) {
+      const anything = [this.checker.getAnyType()];
+      return { at: () => anything, from: () => anything };
+    }
+    const signature = this.checker.getResolvedSignature(list);
+    if (!signature) return undefined;
+    const parameters = signature.getParameters();
+    const last = parameters[parameters.length - 1];
+    const hasRest = last !== undefined && !!last.valueDeclaration && ts.isParameter(last.valueDeclaration) && !!last.valueDeclaration.dotDotDotToken;
+    const fixed = (hasRest ? parameters.slice(0, -1) : parameters).map((parameter) => this.checker.getTypeOfSymbol(parameter));
+    const restType = hasRest ? this.checker.getTypeOfSymbol(last) : undefined;
+    return {
+      at: (position) => (position < fixed.length ? [fixed[position]] : restType ? this.positionTypes(restType, position - fixed.length, false) : []),
+      from: (position) => [...fixed.slice(position), ...(restType ? this.positionTypes(restType, Math.max(0, position - fixed.length), true) : [])],
+    };
+  }
+
   /** An element of an array literal takes its type from the array's declared element type. */
   private arrayElementDestination(array: ts.ArrayLiteralExpression): ts.Type[] {
     const declared = this.checker.getContextualType(array);
     return declared === undefined ? [] : [declared.getNumberIndexType() ?? this.checker.getAnyType()];
   }
+
   /** The interface or namespace a TypeScript lib function is declared in (`Reflect`, `CallableFunction`, `WeakMap`), or undefined. */
   private libContainerOf(call: ts.CallExpression, owners: ReadonlySet<string>): string | undefined {
     const declaration = this.checker.getResolvedSignature(call)?.declaration;
@@ -2049,6 +2277,227 @@ const BAD_SNIPPETS: Array<Snippet & { rule: string }> = [
     source: `
       type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
       export async function f(ctx: MutationCtx) { const w: Patcher = await ctx.db; return w; }`,
+  },
+  // PR 689 round 5. One rule: a database value reaches only destinations all of whose members (after dropping
+  // null/undefined/void/optional) are Convex database types, at every property, union member, tuple and rest position.
+  {
+    // Seat 1 M1: a holder whose `db` is a Convex view unioned with a foreign Patcher.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(c: { db: Pick<QueryCtx["db"], "get"> | Patcher }, id: Id<"suppliers">) { const d = c.db; if ("patch" in d) await d.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) { return use(ctx, id); }`,
+  },
+  {
+    // Seat 1 M1: a holder whose `db` is the Convex reader unioned with a Patcher.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(c: { db: QueryCtx["db"] | Patcher }, id: Id<"suppliers">) { if ("patch" in c.db) await c.db.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) { return use(ctx, id); }`,
+  },
+  {
+    // Seat 1 M1, Seat 2 #2: an optional structural `db`.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(c: { db?: Patcher }, id: Id<"suppliers">) { await c.db?.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) { return use(ctx, id); }`,
+  },
+  {
+    // Seat 1 M1, Seat 2 #2: a nullable structural `db`.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(c: { db: Patcher | null }, id: Id<"suppliers">) { await c.db?.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) { return use(ctx, id); }`,
+  },
+  {
+    // Seat 2 #2: optional and nullable together.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(c: { db?: Patcher | null }, id: Id<"suppliers">) { await c.db?.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) { return use(ctx, id); }`,
+  },
+  {
+    // Class: the whole holder optional, a union property inside it.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(c: { db: QueryCtx["db"] | Patcher } | undefined, id: Id<"suppliers">) { if (c && "patch" in c.db) await c.db.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) { return use(ctx, id); }`,
+  },
+  {
+    // Class: a holder of a holder (depth 2), the value an object that carries a ctx.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(h: { inner: { db: Patcher } }, id: Id<"suppliers">) { await h.inner.db.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) { const h = { inner: ctx }; return use(h, id); }`,
+  },
+  {
+    // Class: depth 2 with an optional holder and a nullable property at the inner level.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(h: { inner?: { db: Patcher | undefined } }, id: Id<"suppliers">) { await h.inner?.db?.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) { const h = { inner: ctx }; return use(h, id); }`,
+  },
+  {
+    // Class: a holder under another name, reached through a variable.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(h: { database: Patcher }, id: Id<"suppliers">) { await h.database.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) { const h = { database: ctx.db }; return use(h, id); }`,
+  },
+  {
+    // Class: an array of databases handed to an array destination that is foreign.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      export function f(ctx: MutationCtx) { const dbs: MutationCtx["db"][] = [ctx.db]; const all: Patcher[] = dbs; return all; }`,
+  },
+  {
+    // Seat 2 #1: two spreads before the database, the second tuple's element lands in the Patcher parameter.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(a: QueryCtx["db"], b: QueryCtx["db"], db: Patcher, id: Id<"suppliers">) { await db.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) {
+        const a: [QueryCtx["db"], QueryCtx["db"]] = [ctx.db, ctx.db];
+        const b: [MutationCtx["db"]] = [ctx.db];
+        return use(...a, ...b, id);
+      }`,
+  },
+  {
+    // Seat 2 #1: a tuple rest element is compared with every parameter it can reach, not only the first.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      declare function use(n: number, first?: QueryCtx["db"], ...others: Patcher[]): void;
+      export function f(ctx: MutationCtx) { const args: [number, ...MutationCtx["db"][]] = [1, ctx.db]; use(...args); }`,
+  },
+  {
+    // Seat 1 L-a: an earlier spread's length shifts the position of the next one.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      async function use(n: number, a: QueryCtx["db"], w: Patcher, id: Id<"suppliers">) { await w.patch(id, {}); }
+      export function f(ctx: MutationCtx, id: Id<"suppliers">) {
+        const pre: [number, MutationCtx["db"]] = [1, ctx.db];
+        const dbs: [MutationCtx["db"]] = [ctx.db];
+        return use(...pre, ...dbs, id);
+      }`,
+  },
+  {
+    // Class: a plain argument after a spread lands at the expanded position, not at its node index.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      declare function use(a: QueryCtx["db"], b: QueryCtx["db"], w: Patcher): void;
+      export function f(ctx: MutationCtx) { const two: [QueryCtx["db"], QueryCtx["db"]] = [ctx.db, ctx.db]; use(...two, ctx.db); }`,
+  },
+  {
+    // Class: a spread after a variable-length array can land in the trailing Patcher of a leading-rest tuple.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      declare function use(...rest: [...number[], Patcher]): void;
+      export function f(ctx: MutationCtx, nums: number[]) { const one: [MutationCtx["db"]] = [ctx.db]; use(...nums, ...one); }`,
+  },
+  {
+    // Class: a variable-length array of databases before more arguments.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      declare function use(...rest: Patcher[]): void;
+      export function f(ctx: MutationCtx) { const dbs: MutationCtx["db"][] = [ctx.db]; use(...dbs, ctx.db); }`,
+  },
+  {
+    // Class: the database handed to a callee typed `any` (type unknowable: fail closed).
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `export function f(ctx: MutationCtx, fn: any) { fn(ctx.db); }`,
+  },
+  {
+    // Class: a holder handed to `unknown` (nothing to compare with: fail closed), and one handed to `{}`.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      declare function use(c: unknown): void;
+      declare function other(c: {}): void;
+      export function f(ctx: MutationCtx) { use(ctx); other(ctx); }`,
+  },
+  {
+    // Class: an array of databases handed to `unknown`, and a holder inside an `object` property.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      declare function use(c: { dbs: unknown }): void;
+      export function f(ctx: MutationCtx) { const dbs: MutationCtx["db"][] = [ctx.db]; use({ dbs }); }`,
+  },
+  {
+    // Class: a spread of databases into a callee typed `any`.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `export function f(ctx: MutationCtx, fn: any) { const dbs: MutationCtx["db"][] = [ctx.db]; fn(...dbs); }`,
+  },
+  {
+    // Class: a spread of databases into a callee whose rest parameter is a union with a Patcher member.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      declare function use(...rest: (QueryCtx["db"] | Patcher)[]): void;
+      export function f(ctx: MutationCtx) { const one: [MutationCtx["db"]] = [ctx.db]; use(...one); }`,
+  },
+  {
+    // Class: a spread of databases into an array literal whose declared tuple has a foreign second position.
+    rule: "db-indirect-call",
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+      export function f(ctx: MutationCtx) { const one: [MutationCtx["db"]] = [ctx.db]; const out: [QueryCtx["db"], Patcher] = [ctx.db, ...one]; return out; }`,
   },];
 
 const GOOD_SNIPPETS: Snippet[] = [
@@ -2328,6 +2777,100 @@ const GOOD_SNIPPETS: Snippet[] = [
       export function f(ctx: QueryCtx) {
         const args: [QueryCtx["db"], number] = [ctx.db, 1];
         use(...args);
+      }`,
+  },
+  // PR 689 round 5, the matching good cases.
+  {
+    // An optional Convex `db`, and a `db` that is Convex or nothing, on a holder.
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      declare function use(c: { db?: QueryCtx["db"] }): void;
+      declare function other(c: { db: QueryCtx["db"] | MutationCtx["db"] | null | undefined } | undefined): void;
+      export function f(ctx: MutationCtx) { use(ctx); other(ctx); }`,
+  },
+  {
+    // `void` is nullish like `undefined`.
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      declare function use(db: QueryCtx["db"] | void): void;
+      export function f(ctx: QueryCtx) { use(ctx.db); }`,
+  },
+  {
+    // A holder of a holder, every level Convex.
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      declare function use(h: { inner?: { db: QueryCtx["db"] | undefined } }): void;
+      export function f(ctx: QueryCtx) { const h = { inner: ctx }; use(h); }`,
+  },
+  {
+    // Several spreads, every destination position is a Convex database.
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      declare function use(a: QueryCtx["db"], b: QueryCtx["db"], c: QueryCtx["db"], id: string): void;
+      export function f(ctx: MutationCtx, id: string) {
+        const a: [QueryCtx["db"], QueryCtx["db"]] = [ctx.db, ctx.db];
+        const b: [MutationCtx["db"]] = [ctx.db];
+        use(...a, ...b, id);
+      }`,
+  },
+  {
+    // A tuple rest element reaching a Convex first parameter and a Convex rest parameter.
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      declare function use(n: number, first?: QueryCtx["db"], ...others: QueryCtx["db"][]): void;
+      export function f(ctx: MutationCtx) { const args: [number, ...MutationCtx["db"][]] = [1, ctx.db]; use(...args); }`,
+  },
+  {
+    // Seat 2 LOW: a callee whose rest parameter is a tuple takes element i at position i.
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      declare function use(...args: [QueryCtx["db"], number]): void;
+      export function f(ctx: QueryCtx) { const args: [QueryCtx["db"], number] = [ctx.db, 1]; use(...args); }`,
+  },
+  {
+    // A plain Convex argument after a spread.
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      declare function use(a: QueryCtx["db"], b: QueryCtx["db"], w: QueryCtx["db"]): void;
+      export function f(ctx: QueryCtx) { const two: [QueryCtx["db"], QueryCtx["db"]] = [ctx.db, ctx.db]; use(...two, ctx.db); }`,
+  },
+  {
+    // A spread after a variable-length array, into a leading-rest tuple whose last element is Convex.
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      declare function use(...rest: [...number[], QueryCtx["db"]]): void;
+      export function f(ctx: QueryCtx, nums: number[]) { const one: [QueryCtx["db"]] = [ctx.db]; use(...nums, ...one); }`,
+  },
+  {
+    // Destructuring a holder without an annotation constrains nothing: the pattern is typed from the value.
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      export function f(ctx: MutationCtx, request: Readonly<{ reader: QueryCtx; dbs: [QueryCtx["db"]] }>) {
+        const { db } = ctx;
+        const { reader, dbs } = request;
+        const [first] = dbs;
+        return [db, reader, first];
+      }`,
+  },
+  {
+    // Arrays of databases into arrays of Convex databases.
+    file: "convex/other.ts",
+    typed: true,
+    source: `
+      export function f(ctx: MutationCtx) {
+        const dbs: MutationCtx["db"][] = [ctx.db];
+        const all: QueryCtx["db"][] = dbs;
+        const ro: ReadonlyArray<QueryCtx["db"]> = dbs;
+        return [all, ro];
       }`,
   },];
 
