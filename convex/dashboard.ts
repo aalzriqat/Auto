@@ -1443,8 +1443,7 @@ const DEFAULT_ORG_TIMEZONE = "Asia/Amman";
 /**
  * The org's configured business timezone and currency, read from the same
  * `orgSettings` row other Convex modules already use for this (see
- * `getOrgCurrency` in `convex/accounting/workflowHooks.ts` and
- * `getOrgCurrencyForReports` in `convex/accountingReports.ts`), so "today"
+ * `getOrgCurrency` in `convex/utils/orgCurrency.ts`), so "today"
  * boundary math and amount labeling both reflect the org's actual settings
  * rather than the server process's own timezone or a hardcoded currency.
  */

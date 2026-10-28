@@ -18,7 +18,7 @@ import { Id } from "./_generated/dataModel";
 import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { getOrgCurrency } from "./accounting/workflowHooks";
+import { getOrgCurrency } from "./utils/orgCurrency";
 import { requireFeature } from "./subscriptions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { getPostedLines } from "./accountingReports";
