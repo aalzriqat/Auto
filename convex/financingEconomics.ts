@@ -51,6 +51,7 @@ import {
   assertMinorAmount,
   buildRuleSnapshot,
   classifyGapResolution,
+  composeCustomerGapToDealer,
   deriveEconomics,
   economicsStamp,
   evaluateQuotationException,
@@ -64,6 +65,7 @@ import {
   shortfallState,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
+import { assertApplicationGapCollectable } from "./utils/financedGapPilotRule";
 import {
   FIRST_PAYMENT_CORRECTION_PERMISSIONS,
   FIRST_PAYMENT_CORRECTION_REFUSALS,
@@ -3263,6 +3265,10 @@ export const resolveAppraisalGap = mutation({
     // outright. Not a local re-implementation: a second copy of the two
     // identities is how the destination fields get dropped.
     assertGapResolutionValid(shortfallMinor, settlement);
+    // SCRUM-571 ruling 10: the only writer of the customer's dealership-bound gap R refuses a route that would leave
+    // R > 0 on a financed deal, here at the choice, because handover seals these figures and a deal that can never
+    // close must not be handed over. Refused before any write; the pilot switch turns it off.
+    assertApplicationGapCollectable(app, composeCustomerGapToDealer(settlement));
 
     const resolution = classifyGapResolution(
       shortfallMinor,

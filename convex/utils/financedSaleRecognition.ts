@@ -47,8 +47,9 @@ import { heldDepositRowsForVehicle } from "./saleCompletion";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { toMinorUnits } from "./money";
 import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
-import { isManualFinanceApplication } from "./manualFinancePayer";
-import { requireCustomerGapToDealer } from "./financingEconomics";
+import { applicationHasFinancier, isManualFinanceApplication } from "./manualFinancePayer";
+import { composeCustomerGapToDealer, requireCustomerGapToDealer } from "./financingEconomics";
+import { customerGapToDealerIsUncollectable } from "./financedGapPilotRule";
 import { customerPaymentEvidenceOf, loadCustomerFinanceCompanyPayments } from "./customerFinanceCompanyPayments";
 import { summarizeFees } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
@@ -135,7 +136,7 @@ export function financedSaleRecognitionApplies(
 ): boolean {
   // SCRUM-27: a MANUAL finance company is a counterparty too - identified by the
   // name on its approval letter rather than by a configured row.
-  const hasFinancier = app.companyId !== undefined || isManualFinanceApplication(app);
+  const hasFinancier = applicationHasFinancier(app);
   // SCRUM-411 (plan v3): the direct route is recognised under the same convention
   // as every other financed deal - K = A + R, the contribution D as contra-revenue,
   // dated on the handover. The finance company pays the SUPPLIER there, so the
@@ -814,6 +815,41 @@ export async function evaluateClosingReadiness(
   } else {
     add("RECOGNITION_PERIOD_OPEN", "READY", null);
   }
+
+  // SCRUM-571 ruling 10: the screen must not offer Finalize on a financed deal whose customer still owes the dealership
+  // a gap, because `finalizeDeal` (and handover, and the choice that created the gap) refuse it. The same pure rule
+  // the doors ask, so readiness and the doors cannot disagree. With the pilot switch off the rule reads nothing as
+  // uncollectable, so the check is READY. APPENDED LAST.
+  // The remedy is stated truthfully for where the deal stands: the agreement can only be changed before the vehicle is
+  // handed over (handover seals it), and "the customer pays the finance company" exists only for a configured one.
+  planOnly("CUSTOMER_GAP_COLLECTABLE", () => {
+    const gap = composeCustomerGapToDealer(app);
+    if (!customerGapToDealerIsUncollectable(gap)) return ["READY", null];
+    if (!gap.readable) {
+      return [
+        "BLOCKED",
+        reasonOf(
+          "CUSTOMER_GAP_UNREADABLE",
+          "The customer's gap contribution to the dealership is not a readable amount, so this deal cannot be finalized until the gap resolution is corrected."
+        ),
+      ];
+    }
+    return app.vehicleHandoverAt === undefined
+      ? [
+          "BLOCKED",
+          reasonOf(
+            "CUSTOMER_GAP_UNCOLLECTABLE",
+            "The customer is recorded as owing the dealership part of the finance shortfall, and no certified route can collect it yet, so this deal cannot be finalized. Before the vehicle is handed over, agree that the dealership absorbs the difference or, where the finance company is a configured one, that the customer pays it to the finance company; reopen the approved purchase amount first if an agreement is already recorded."
+          ),
+        ]
+      : [
+          "BLOCKED",
+          reasonOf(
+            "CUSTOMER_GAP_UNCOLLECTABLE_AFTER_HANDOVER",
+            "The customer is recorded as owing the dealership part of the finance shortfall, no certified route can collect it yet, and the vehicle has already been handed over, so the agreement can no longer be changed here. This deal cannot be finalized; contact support."
+          ),
+        ];
+  });
 
   const state = overallReadinessState(checks);
   const readiness: ClosingReadiness = { state, checks };

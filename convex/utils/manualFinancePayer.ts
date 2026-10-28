@@ -45,6 +45,14 @@ export function isManualFinanceApplication(app: Pick<ManualFinanceApplicationSha
 }
 
 /**
+ * Does a finance company stand behind this application, configured or manual? The population a financed sale plan covers
+ * (`financedSaleRecognitionApplies`) and the SCRUM-571 customer-gap rule (`financedGapPilotRule.ts`) both start here.
+ */
+export function applicationHasFinancier(app: Pick<ManualFinanceApplicationShape, "companyId" | "quoteModeAtSubmission">): boolean {
+  return app.companyId !== undefined || isManualFinanceApplication(app);
+}
+
+/**
  * The payer of a manual application whose letter has been entered, or null when
  * the application is not manual or nothing has been entered. A null here is
  * "not known yet" and must never be read as "no payer".

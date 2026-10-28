@@ -1493,6 +1493,8 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_FIRST_PAYMENT_RECORDED: ["The agreed first payment is known", "الدفعة الأولى المتفق عليها معروفة"],
   ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice (optional) agrees with the deal", "الفاتورة القانونية (اختيارية) تطابق الصفقة"],
   ClosingCheck_RECOGNITION_PERIOD_OPEN: ["The handover date falls in an open accounting period", "تاريخ التسليم يقع في فترة محاسبية مفتوحة"],
+  // SCRUM-571 ruling 10.
+  ClosingCheck_CUSTOMER_GAP_COLLECTABLE: ["The customer owes the dealership no uncollectable gap", "لا يوجد على العميل للمعرض فرق غير قابل للتحصيل"],
   // SCRUM-420 — generic fallback for a check this bundle has no copy for (S420-01).
   ClosingCheck_UNKNOWN: ["Another closing check", "شرط إغلاق آخر"],
   ClosingReason_UNKNOWN: [
@@ -1659,6 +1661,23 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_WITHHELD_RECOGNITION_PERIOD_OPEN: [
     "The accounting period for the handover date is not open.",
     "الفترة المحاسبية لتاريخ التسليم غير مفتوحة.",
+  ],
+  // SCRUM-571 ruling 10: no figure in either sentence; the gap is a finance-tier field.
+  ClosingReason_CUSTOMER_GAP_UNCOLLECTABLE: [
+    "The customer is recorded as owing the dealership part of the finance shortfall, and no certified route can collect it yet, so this deal cannot be finalized. Before the vehicle is handed over, agree that the dealership absorbs the difference or, where the finance company is a configured one, that the customer pays it to the finance company; reopen the approved purchase amount first if an agreement is already recorded.",
+    "سُجّل أن على العميل للمعرض جزءًا من فرق التمويل، ولا توجد حاليًا طريقة معتمدة لتحصيله، لذلك لا يمكن إغلاق هذه الصفقة. قبل تسليم المركبة، اتفقوا على أن يتحمّل المعرض الفرق، أو على أن يدفعه العميل لشركة التمويل إذا كانت شركة التمويل مُعدّة في النظام؛ وأعيدوا فتح مبلغ الشراء المعتمد أولًا إذا كان الاتفاق مسجّلًا بالفعل.",
+  ],
+  ClosingReason_CUSTOMER_GAP_UNCOLLECTABLE_AFTER_HANDOVER: [
+    "The customer is recorded as owing the dealership part of the finance shortfall, no certified route can collect it yet, and the vehicle has already been handed over, so the agreement can no longer be changed here. This deal cannot be finalized; contact support.",
+    "سُجّل أن على العميل للمعرض جزءًا من فرق التمويل، ولا توجد حاليًا طريقة معتمدة لتحصيله، وقد سُلّمت المركبة بالفعل، لذلك لا يمكن تغيير الاتفاق هنا. لا يمكن إغلاق هذه الصفقة؛ تواصلوا مع الدعم.",
+  ],
+  ClosingReason_CUSTOMER_GAP_UNREADABLE: [
+    "The customer's gap contribution to the dealership is not a readable amount, so this deal cannot be finalized until the gap resolution is corrected.",
+    "مساهمة العميل في الفرق للمعرض ليست مبلغًا صالحًا للقراءة، لذلك لا يمكن إغلاق هذه الصفقة قبل تصحيح تسوية الفرق.",
+  ],
+  ClosingReason_WITHHELD_CUSTOMER_GAP_COLLECTABLE: [
+    "A condition on the finance shortfall is not met.",
+    "شرط يتعلق بفرق التمويل غير مستوفى.",
   ],
   ClosingReason_CHECK_REFUSED: [
     "This condition could not be confirmed from the deal's records. Have the deal reviewed before closing.",

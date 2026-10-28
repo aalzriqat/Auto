@@ -1,6 +1,7 @@
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 import { outstandingFromReceivableDoc } from "../subledger";
+import { assertCustomerGapToDealerCollectable } from "./financedGapPilotRule";
 import { FINANCED_CUSTOMER_GAP_COLLECTION_PILOT_REQUIRED } from "./financedGapPilotSwitch";
 import { refuseSaleDebt } from "./saleDebtContainment";
 
@@ -18,12 +19,15 @@ import { refuseSaleDebt } from "./saleDebtContainment";
  * resolved and before any other refusal that would ask the operator to spend money (the finance-company forward), so a
  * deal that cannot close is never asked to pay first. An absent plan (cash, no named financier) is not this rule's
  * business. Anything but exactly zero refuses, so an unreadable (NaN, fractional, negative) gap fails closed.
+ *
+ * The rule itself is `financedGapPilotRule.ts`, which the earlier doors (choosing the route, handover) and the readiness
+ * check ask as well. This is the completion door's copy, for a deal whose gap was agreed before those refusals existed.
  */
 export function assertFinancedCustomerGapCollectable(
   plan: { customerReceivableMinor: number } | null | undefined
 ): void {
-  if (!FINANCED_CUSTOMER_GAP_COLLECTION_PILOT_REQUIRED || !plan) return;
-  if (plan.customerReceivableMinor !== 0) refuseSaleDebt("FINANCED_CUSTOMER_GAP_UNCOLLECTABLE_REFUSED");
+  if (!plan) return;
+  assertCustomerGapToDealerCollectable({ readable: true, amountMinor: plan.customerReceivableMinor });
 }
 
 /**
