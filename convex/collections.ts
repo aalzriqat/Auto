@@ -43,6 +43,7 @@ import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP, FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertClearedChequeReturnAllowed } from "./utils/postDeliveryDoorContainment";
+import { assertLegacyCollectionRefundAllowed } from "./utils/legacyCollectionRefundContainment";
 import { RETAINED_CREDIT_MESSAGES } from "./utils/retainedCreditMessages";
 import {
   areSaleInvoiceReceiptDoorsDisabled,
@@ -3218,6 +3219,9 @@ export const requestApproval = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const receivable = await requireOwnedRow(ctx, args.orgId, "receivables", args.receivableId, "Receivable not found.");
     await assertOpeningReceivableChangeAllowed(ctx, receivable);
+    // SCRUM-760 ruling 11: a collection refund is not a pilot route. Refused before any write
+    // (this mutation has not written yet). See utils/legacyCollectionRefundContainment.ts.
+    if (args.requestType === "REFUND") assertLegacyCollectionRefundAllowed();
     if (!args.reason.trim()) throw new ConvexError("Reason is required.");
     if (args.requestType === "REFUND") {
       assertPositiveAmount(args.requestedAmount ?? 0, "Refund amount");
@@ -3326,6 +3330,11 @@ export const respondToApproval = mutation({
     // This immutable source policy applies even to a retained replay identity.
     // Rejecting a stale request is still allowed; generic changes are not.
     if (args.status === "APPROVED") await assertOpeningReceivableChangeAllowed(ctx, receivable);
+    // SCRUM-760 ruling 11: an APPROVED REFUND would pay out, reopen the receivable and post a
+    // COLLECTION_REFUND journal. Refused before the idempotency wrapper and before any write, so a
+    // request created before the switch is not payable and a stored replay is refused too.
+    // REJECTED is never refused: rejecting spends nothing.
+    if (args.status === "APPROVED" && request.requestType === "REFUND") assertLegacyCollectionRefundAllowed();
     return await runWithIdempotency(
       ctx,
       {

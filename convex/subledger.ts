@@ -16,6 +16,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { scaleForCurrency, assertValidMinorAmount, assertSameCurrency } from "./utils/money";
 import { requireFeature } from "./subscriptions";
 import { assertSourceIsNotSaleDebt } from "./utils/saleDebtContainment";
+import { assertLegacyCollectionRefundAllowed } from "./utils/legacyCollectionRefundContainment";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -539,6 +540,9 @@ export const recordPayment = internalMutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
+    // SCRUM-760 ruling 11: an OUT payment to a customer is a refund payout. Refused before the only
+    // write. An IN payment, or an OUT payment that names no customer, is not refund-shaped.
+    if (args.direction === "OUT" && args.customerId !== undefined) assertLegacyCollectionRefundAllowed();
     return createCanonicalPayment(ctx, { ...args, actorId: user._id });
   },
 });
@@ -568,6 +572,11 @@ export const reverseAllocationMutation = internalMutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
+    // SCRUM-760 ruling 11: reversing an allocation is the receivable-reopening half of a collection
+    // refund, and a call here cannot be told apart from one. No production code calls this operator
+    // door: cancel, unwind and cheque return call the `reverseAllocation` helper directly, which is
+    // not gated. Refused before the only write.
+    assertLegacyCollectionRefundAllowed();
     return reverseAllocation(ctx, { ...args, actorId: user._id });
   },
 });
