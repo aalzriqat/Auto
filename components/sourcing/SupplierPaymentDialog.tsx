@@ -26,6 +26,7 @@ export function SupplierPaymentDialog({
   bankAccountId,
   bankOptions,
   taxAmount,
+  vatAllowed,
   t,
   onOpenChange,
   onNotesChange,
@@ -42,6 +43,8 @@ export function SupplierPaymentDialog({
   bankAccountId: Id<"bankAccounts"> | null;
   bankOptions: { banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean } | undefined;
   taxAmount: string;
+  /** The server's verdict for this payable (`vatReclassAllowed`); false hides the VAT field. */
+  vatAllowed: boolean;
   t: Translate;
   onOpenChange: (open: boolean) => void;
   onNotesChange: (notes: string) => void;
@@ -91,18 +94,24 @@ export function SupplierPaymentDialog({
                 {bankOptions && !bankOptions.truncated && bankOptions.banks.length === 0 ? <p className="text-sm text-destructive">{locale === "ar" ? "لا يوجد حساب مصرفي نشط بهذه العملة." : "No active bank account is available in this currency."}</p> : null}
               </div>
             ) : null}
-            <div className="space-y-1.5">
-              <Label>{t("VatAmount" as any)} ({t("Optional" as any)})</Label>
-              <Input
-                type="number"
-                step="0.01"
-                min="0"
-                max={payable.amountDue}
-                placeholder="0"
-                value={taxAmount}
-                onChange={(event) => onTaxAmountChange(event.target.value)}
-              />
-            </div>
+            {vatAllowed ? (
+              <div className="space-y-1.5">
+                <Label>{t("VatAmount" as any)} ({t("Optional" as any)})</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max={payable.amountDue}
+                  placeholder="0"
+                  value={taxAmount}
+                  onChange={(event) => onTaxAmountChange(event.target.value)}
+                />
+              </div>
+            ) : (
+              <p className="rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground" role="note">
+                {t("PayableNoVatReclass" as any)}
+              </p>
+            )}
             <div className="space-y-1.5">
               <Label>{t("PaymentNotes" as any)} ({t("Optional" as any)})</Label>
               <Textarea
