@@ -81,6 +81,7 @@ import {
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
+import { assertFinancedCustomerGapCollectable } from "./utils/financedGapPilotGate";
 import { MAX_IDEMPOTENCY_KEY_LENGTH, runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
 import {
@@ -5015,6 +5016,16 @@ export const finalizeDeal = mutation({
           depositTreatment: args.depositResolution?.treatment,
           mayReadMoney,
         });
+
+        // SCRUM-571 ruling 10 (owner, SCRUM-760 c23812). No certified door applies a
+        // customer's payment to the sale invoice yet (SCRUM-722/723/724), so a deal whose
+        // customer still owes the dealership a gap would open an invoice nobody can
+        // collect. Refused here, before the first write, and BEFORE the forward-payment
+        // refusal below so a deal that cannot close is never first asked to pay the
+        // finance company. Not inside `resolveFinancedSalePlan`: the readiness read and
+        // `prospectiveForwardPlan` call it too and must keep answering. The early return
+        // for an already-CLOSED application sits above, so a replay is never refused.
+        assertFinancedCustomerGapCollectable(financedSalePlan);
 
         // SCRUM-411 P2-01. The deposit and the contribution are paid to the finance
         // company BEFORE the sale, so the CURRENT amount must already be on the books

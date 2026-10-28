@@ -25,6 +25,11 @@ import { seedBank } from "../test-utils/bankFixture";
 import { deriveManagementProfit } from "./utils/financingEconomics";
 import { FORWARD_VERSIONS_ONLY, deriveForwardState, forwardPostKey } from "./utils/financeCompanyForward";
 
+// SCRUM-571 financed-gap-collection opt-out: fixture only, policy and allowed list in scripts/scrum571FinancedGapOptOutCensus.test.ts.
+vi.mock("./utils/financedGapPilotSwitch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/financedGapPilotSwitch")>()),
+  FINANCED_CUSTOMER_GAP_COLLECTION_PILOT_REQUIRED: false,
+}));
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),

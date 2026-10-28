@@ -59,6 +59,8 @@ export const SALE_DEBT_CONTAINMENT_REFUSALS = {
     "A cash sale that includes tax, fees, a warranty or GAP cannot be completed yet, because its full amount cannot be recorded as a deposit. Complete it without them. Nothing has been changed.",
   UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED:
     "This customer has a sale invoice that is not fully paid. A payment cannot be recorded without linking it to a sale yet. Record the payment as a deposit instead. Nothing has been changed.",
+  FINANCED_CUSTOMER_GAP_UNCOLLECTABLE_REFUSED:
+    "This financed deal cannot be completed because the customer still owes the dealership part of the gap, and no payment can be recorded against the sale invoice yet. The gap must be paid to the finance company or absorbed by the dealership. Nothing has been changed.",
 } as const satisfies Record<string, string>;
 
 export function refuseSaleDebt(code: keyof typeof SALE_DEBT_CONTAINMENT_REFUSALS): never {

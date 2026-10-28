@@ -35,6 +35,12 @@ import { financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
 // template whose placeholders are never filled.
 import { renderNotification } from "../lib/notifications/render";
 
+// SCRUM-571 financed-gap-collection opt-out: fixture only, policy and allowed list in scripts/scrum571FinancedGapOptOutCensus.test.ts.
+vi.mock("./utils/financedGapPilotSwitch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/financedGapPilotSwitch")>()),
+  FINANCED_CUSTOMER_GAP_COLLECTION_PILOT_REQUIRED: false,
+}));
+
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
 // itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification

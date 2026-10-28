@@ -225,6 +225,8 @@ import type * as utils_financeApplicationProjection from "../utils/financeApplic
 import type * as utils_financeCompanyForward from "../utils/financeCompanyForward.js";
 import type * as utils_financeDisbursementKeys from "../utils/financeDisbursementKeys.js";
 import type * as utils_financeStatuses from "../utils/financeStatuses.js";
+import type * as utils_financedGapPilotGate from "../utils/financedGapPilotGate.js";
+import type * as utils_financedGapPilotSwitch from "../utils/financedGapPilotSwitch.js";
 import type * as utils_financedSalePostingPlan from "../utils/financedSalePostingPlan.js";
 import type * as utils_financedSaleRecognition from "../utils/financedSaleRecognition.js";
 import type * as utils_financialGuards from "../utils/financialGuards.js";
@@ -556,6 +558,8 @@ declare const fullApi: ApiFromModules<{
   "utils/financeCompanyForward": typeof utils_financeCompanyForward;
   "utils/financeDisbursementKeys": typeof utils_financeDisbursementKeys;
   "utils/financeStatuses": typeof utils_financeStatuses;
+  "utils/financedGapPilotGate": typeof utils_financedGapPilotGate;
+  "utils/financedGapPilotSwitch": typeof utils_financedGapPilotSwitch;
   "utils/financedSalePostingPlan": typeof utils_financedSalePostingPlan;
   "utils/financedSaleRecognition": typeof utils_financedSaleRecognition;
   "utils/financialGuards": typeof utils_financialGuards;
