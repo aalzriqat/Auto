@@ -594,11 +594,12 @@ describe("SCRUM-560 H1: a fixed-asset posting already queued in the outbox must 
     test("control: an UNRELATED REVERSE row still posts while the lifecycle is off", async () => {
       const d = await seedDealer();
       const posted = await d.asOwner.mutation(internal.accountingLedger.post, expensePost(d));
+      const postedEventId = requireEventId(posted.eventId);
       vi.useFakeTimers({ toFake: [...FAKE] });
-      const id = await queueReverseRow(d, posted.eventId, "expenses");
+      const id = await queueReverseRow(d, postedEventId, "expenses");
       await cronTick(d);
       expect((await getRow(d, id))?.status).toBe("POSTED");
-      expect((await eventOf(d, posted.eventId))?.status).toBe("REVERSED");
+      expect((await eventOf(d, postedEventId))?.status).toBe("REVERSED");
     });
 
     test("retryFailed cannot revive a dead-lettered fixed-asset REVERSE row, and the list does not offer Retry", async () => {
@@ -623,7 +624,7 @@ describe("SCRUM-560 H1: a fixed-asset posting already queued in the outbox must 
     test("control: a dead-lettered UNRELATED REVERSE row is still revivable", async () => {
       const d = await seedDealer();
       const posted = await d.asOwner.mutation(internal.accountingLedger.post, expensePost(d));
-      const id = await queueReverseRow(d, posted.eventId, "expenses");
+      const id = await queueReverseRow(d, requireEventId(posted.eventId), "expenses");
       await d.t.run((ctx) => ctx.db.patch(id, { status: "FAILED", attempts: 10, lastError: "dead-lettered" }));
       await expect(
         d.asOwner.mutation(api.accountingOutbox.retryFailed, { orgId: d.orgId, pendingEventId: id })
@@ -631,6 +632,17 @@ describe("SCRUM-560 H1: a fixed-asset posting already queued in the outbox must 
     });
   });
 });
+
+/**
+ * `internal.accountingLedger.post` returns `eventId: Id<"accountingEvents"> | null` (null when the engine
+ * writes nothing). A control that goes on to reverse or read that id must fail loudly on null rather
+ * than pass a nullable value on, so the narrowing is an explicit assertion, not a cast.
+ */
+function requireEventId(eventId: Id<"accountingEvents"> | null): Id<"accountingEvents"> {
+  expect(eventId).not.toBeNull();
+  if (eventId === null) throw new Error("expected the posting to return an accountingEvents id");
+  return eventId;
+}
 
 /** An unrelated, certified-shape posting (a paid expense) that the reversal controls reverse. */
 function expensePost(d: Dealer) {
@@ -681,7 +693,7 @@ describe("SCRUM-560 round 3: the posting engine itself refuses fixed-asset event
   test("control: an unrelated posting still posts while the lifecycle is off", async () => {
     const d = await seedDealer();
     const posted = await d.asOwner.mutation(internal.accountingLedger.post, expensePost(d));
-    expect(posted.eventId).toBeDefined();
+    requireEventId(posted.eventId);
   });
 
   test("internal.accountingLedger.reverse refuses the reversal of a fixed-asset entry and writes nothing", async () => {
@@ -704,10 +716,11 @@ describe("SCRUM-560 round 3: the posting engine itself refuses fixed-asset event
   test("control: internal.accountingLedger.reverse of an UNRELATED entry still posts while the lifecycle is off", async () => {
     const d = await seedDealer();
     const posted = await d.asOwner.mutation(internal.accountingLedger.post, expensePost(d));
+    const postedEventId = requireEventId(posted.eventId);
     await d.asOwner.mutation(internal.accountingLedger.reverse, {
-      orgId: d.orgId, originalEventId: posted.eventId, reversalDate: Date.now(), reason: "S560",
+      orgId: d.orgId, originalEventId: postedEventId, reversalDate: Date.now(), reason: "S560",
       idempotencyKey: `s560_rev_${crypto.randomUUID()}`,
     });
-    expect((await d.t.run((ctx) => ctx.db.get(posted.eventId)))?.status).toBe("REVERSED");
+    expect((await d.t.run((ctx) => ctx.db.get(postedEventId)))?.status).toBe("REVERSED");
   });
 });
