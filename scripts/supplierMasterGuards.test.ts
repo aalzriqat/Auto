@@ -478,7 +478,21 @@ function skipWrappers(node: ts.Expression): ts.Expression {
 type ValueCandidate = ts.Identifier | ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.ArrowFunction | ts.FunctionExpression | ts.ObjectLiteralExpression | ts.ArrayLiteralExpression | ts.CallExpression | ts.NewExpression | ts.TaggedTemplateExpression;
 
 function isValueCandidate(node: ts.Node): node is ValueCandidate {
-  return ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node) || ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node) || ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node);
+  switch (node.kind) {
+    case ts.SyntaxKind.Identifier:
+    case ts.SyntaxKind.PropertyAccessExpression:
+    case ts.SyntaxKind.ElementAccessExpression:
+    case ts.SyntaxKind.ArrowFunction:
+    case ts.SyntaxKind.FunctionExpression:
+    case ts.SyntaxKind.ObjectLiteralExpression:
+    case ts.SyntaxKind.ArrayLiteralExpression:
+    case ts.SyntaxKind.CallExpression:
+    case ts.SyntaxKind.NewExpression:
+    case ts.SyntaxKind.TaggedTemplateExpression:
+      return true;
+    default:
+      return false;
+  }
 }
 
 /** `null`, `undefined` and `void` are not a place a database can be put: a destination ignores them (an optional or nullable member). */
@@ -519,17 +533,27 @@ function valueSite(node: ts.Expression): ts.Expression {
   let site = node;
   for (;;) {
     const parent = site.parent;
-    const passesThrough =
-      ts.isParenthesizedExpression(parent) ||
-      ts.isNonNullExpression(parent) ||
-      ts.isSatisfiesExpression(parent) ||
-      ts.isAwaitExpression(parent) ||
-      (ts.isConditionalExpression(parent) && parent.condition !== site) ||
-      (ts.isBinaryExpression(parent) &&
-        (parent.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
-          parent.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
-          (parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken && parent.right === site)));
-    if (!passesThrough) return site;
+    // These are exactly the transparent wrappers/branches; all other kinds
+    // are value boundaries. A kind switch avoids repeated predicates per AST node.
+    switch (parent.kind) {
+      case ts.SyntaxKind.ParenthesizedExpression:
+      case ts.SyntaxKind.NonNullExpression:
+      case ts.SyntaxKind.SatisfiesExpression:
+      case ts.SyntaxKind.AwaitExpression:
+        break;
+      case ts.SyntaxKind.ConditionalExpression:
+        if ((parent as ts.ConditionalExpression).condition === site) return site;
+        break;
+      case ts.SyntaxKind.BinaryExpression: {
+        const binary = parent as ts.BinaryExpression;
+        if (binary.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken &&
+          binary.operatorToken.kind !== ts.SyntaxKind.BarBarToken &&
+          !(binary.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken && binary.right === site)) return site;
+        break;
+      }
+      default:
+        return site;
+    }
     site = parent as ts.Expression;
   }
 }
@@ -541,18 +565,32 @@ function valueSite(node: ts.Expression): ts.Expression {
  */
 function isValuePosition(site: ts.Expression): boolean {
   const parent = site.parent;
-  return (
-    ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression !== site) ||
-    ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isPropertyDeclaration(parent) || ts.isPropertyAssignment(parent)) && parent.initializer === site) ||
-    (ts.isShorthandPropertyAssignment(parent) && parent.name === site) ||
-    (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && parent.right === site) ||
-    (ts.isArrowFunction(parent) && parent.body === site) ||
-    ts.isArrayLiteralExpression(parent) ||
-    ts.isSpreadElement(parent) ||
-    ts.isReturnStatement(parent) ||
-    ts.isAsExpression(parent) ||
-    ts.isTypeAssertionExpression(parent)
-  );
+  switch (parent.kind) {
+    case ts.SyntaxKind.CallExpression:
+    case ts.SyntaxKind.NewExpression:
+      return (parent as ts.CallExpression | ts.NewExpression).expression !== site;
+    case ts.SyntaxKind.VariableDeclaration:
+    case ts.SyntaxKind.Parameter:
+    case ts.SyntaxKind.PropertyDeclaration:
+    case ts.SyntaxKind.PropertyAssignment:
+      return (parent as ts.VariableDeclaration | ts.ParameterDeclaration | ts.PropertyDeclaration | ts.PropertyAssignment).initializer === site;
+    case ts.SyntaxKind.ShorthandPropertyAssignment:
+      return (parent as ts.ShorthandPropertyAssignment).name === site;
+    case ts.SyntaxKind.BinaryExpression: {
+      const binary = parent as ts.BinaryExpression;
+      return binary.operatorToken.kind === ts.SyntaxKind.EqualsToken && binary.right === site;
+    }
+    case ts.SyntaxKind.ArrowFunction:
+      return (parent as ts.ArrowFunction).body === site;
+    case ts.SyntaxKind.ArrayLiteralExpression:
+    case ts.SyntaxKind.SpreadElement:
+    case ts.SyntaxKind.ReturnStatement:
+    case ts.SyntaxKind.AsExpression:
+    case ts.SyntaxKind.TypeAssertionExpression:
+      return true;
+    default:
+      return false;
+  }
 }
 
 function isConstDeclaration(declaration: ts.VariableDeclaration): boolean {
@@ -588,6 +626,27 @@ class Scanner {
   private readonly lockParameters = new Map<ts.Symbol, LockParameter[]>();
 
   constructor(private readonly checker: ts.TypeChecker) {}
+
+  // The scanner owns one immutable Program. Cache by node, never by identifier text:
+  // two occurrences of the same name can have different flow-narrowed types.
+  private readonly nodeTypes = new WeakMap<ts.Node, ts.Type>();
+  private readonly contextualTypes = new WeakMap<ts.Expression, ts.Type | undefined>();
+
+  private contextualTypeAt(node: ts.Expression): ts.Type | undefined {
+    if (this.contextualTypes.has(node)) return this.contextualTypes.get(node);
+    const type = this.checker.getContextualType(node);
+    this.contextualTypes.set(node, type);
+    return type;
+  }
+
+  private typeAt(node: ts.Node): ts.Type {
+    const known = this.nodeTypes.get(node);
+    if (known !== undefined) return known;
+    const type = this.checker.getTypeAtLocation(node);
+    this.nodeTypes.set(node, type);
+    return type;
+  }
+
   private readonly databaseTypes = new Map<ts.Type, boolean>();
   private readonly databaseCarriers = new Map<ts.Type, boolean>();
   // Recursive generic signatures can produce fresh instantiated types forever. Re-entering the same
@@ -598,7 +657,7 @@ class Scanner {
     const literal = stringLiteralValue(expression);
     if (literal !== undefined) return { tables: [literal], unresolved: false };
     const facts: TableFacts = { tables: [], unresolved: false };
-    tablesOfType(this.checker, this.checker.getTypeAtLocation(expression), expression, facts);
+    tablesOfType(this.checker, this.typeAt(expression), expression, facts);
     return facts;
   }
 
@@ -668,7 +727,7 @@ class Scanner {
   }
 
   private isDatabaseValue(expression: ts.Expression): boolean {
-    return this.isDatabaseType(this.checker.getTypeAtLocation(expression));
+    return this.isDatabaseType(this.typeAt(expression));
   }
 
   /** The type of the property `name` of `type`, or undefined when it has none (the shorthand `{ db }` reads the literal's declared property). */
@@ -908,20 +967,24 @@ class Scanner {
   private escapesDatabaseType(node: ValueCandidate): boolean {
     const site = valueSite(node);
     if (!isValuePosition(site)) return false;
-    let type = this.checker.getTypeAtLocation(node);
+    const spread = ts.isSpreadElement(site.parent) ? site.parent : undefined;
+    const destinations = spread ? [] : this.destinationTypes(site);
+    // With no declared destination the rule accepts unconditionally. Avoid asking for
+    // a call/new/tagged result type here: that can infer an entire function body.
+    if (!spread && destinations.length === 0) return false;
+    let type = this.typeAt(node);
     // An awaited result hands on the fulfilled value, not the Promise holder. Preserve the
     // candidate's own type through other wrappers (a conditional may include another branch).
     for (let current: ts.Node = node; current !== site; current = current.parent) {
       if (ts.isAwaitExpression(current.parent)) type = this.checker.getAwaitedType(type) ?? type;
     }
     // `use(...dbs)`: what flows is each element of the spread array or tuple.
-    const spread = ts.isSpreadElement(site.parent) ? site.parent : undefined;
     const items = spread ? this.spreadItems(type) : [{ type, offset: undefined, lowerBound: 0 }];
     // A WeakMap/WeakSet KEY (argument 0) is only ever compared by identity: it cannot be read back or called
     // (convex/utils/depositCancellationPending.ts). A database stored as a VALUE can be read back, so it is not exempt.
     const parent = site.parent;
     if (ts.isCallExpression(parent) && parent.arguments[0] === site && this.libContainerOf(parent, WEAK_KEY_OWNERS) !== undefined) return false;
-    if (!spread) return this.destinationTypes(site).some((declared) => !this.keepsConvex(type, declared));
+    if (!spread) return destinations.some((declared) => !this.keepsConvex(type, declared));
     const source = this.positionSource(spread.parent);
     if (!source) return false;
     const cursor = this.cursorBefore(listOf(spread.parent), spread);
@@ -945,7 +1008,7 @@ class Scanner {
         cursor = { position: cursor.position + 1, exact: cursor.exact };
         continue;
       }
-      const type = this.checker.getTypeAtLocation(element.expression);
+      const type = this.typeAt(element.expression);
       if (this.checker.isTupleType(type)) {
         const flags = (type as ts.TupleTypeReference).target.elementFlags;
         const required = flags.filter((flag) => flag & ts.ElementFlags.Required).length;
@@ -978,11 +1041,11 @@ class Scanner {
     if (ts.isVariableDeclaration(parent) && parent.initializer === site && (ts.isObjectBindingPattern(parent.name) || ts.isArrayBindingPattern(parent.name)) && parent.type === undefined) return [];
     if (this.isSatisfiesOperand(site)) return [];
     if (ts.isShorthandPropertyAssignment(parent)) {
-      const literal = this.checker.getContextualType(parent.parent);
+      const literal = this.contextualTypeAt(parent.parent);
       const declared = literal && this.propertyTypeOf(literal, parent.name.text);
       return declared ? [declared] : [];
     }
-    const declared = this.checker.getContextualType(site);
+    const declared = this.contextualTypeAt(site);
     if (declared !== undefined) {
       const returningFunction = ts.isReturnStatement(parent)
         ? ts.findAncestor(parent, ts.isFunctionLike)
@@ -1021,11 +1084,11 @@ class Scanner {
    */
   private positionSource(list: ts.Node): PositionSource | undefined {
     if (ts.isArrayLiteralExpression(list)) {
-      const declared = this.checker.getContextualType(list);
+      const declared = this.contextualTypeAt(list);
       return declared === undefined ? undefined : { at: (position) => this.positionTypes(declared, position, false), from: (position) => this.positionTypes(declared, position, true) };
     }
     if (!ts.isCallExpression(list) && !ts.isNewExpression(list)) return undefined;
-    if (this.checker.getTypeAtLocation(list.expression).flags & ts.TypeFlags.Any) {
+    if (this.typeAt(list.expression).flags & ts.TypeFlags.Any) {
       const anything = [this.checker.getAnyType()];
       return { at: () => anything, from: () => anything };
     }
@@ -1049,7 +1112,7 @@ class Scanner {
 
   /** An element of an array literal takes its type from the array's declared element type. */
   private arrayElementDestination(array: ts.ArrayLiteralExpression): ts.Type[] {
-    const declared = this.checker.getContextualType(array);
+    const declared = this.contextualTypeAt(array);
     return declared === undefined ? [] : [declared.getNumberIndexType() ?? this.checker.getAnyType()];
   }
 
@@ -1232,7 +1295,7 @@ class Scanner {
     if (argument === undefined) return false;
     const bare = skipParentheses(argument);
     if (ts.isAsExpression(bare) || ts.isTypeAssertionExpression(bare)) return true;
-    const type = this.checker.getTypeAtLocation(argument);
+    const type = this.typeAt(argument);
     // `never` is assignable to every type, so a lock laundered through `as never` must not pass either.
     if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Never)) return true;
     return !this.checker.isTypeAssignableTo(type, this.checker.getTypeFromTypeNode(parameter.typeNode));
@@ -3227,6 +3290,10 @@ describe("supplier master source guards", () => {
     // program build and the scan. CI runs it in a coverage batch with v8 instrumentation and several
     // workers (the earlier AST-only version overran vitest's default 5 s there: run 40525208382,
     // "Test timed out in 5000ms", 1.4 s uncovered). The timeout is about 4x the measured time, 75 s, which is also the ceiling we accept for this guard; a CI run that exceeds it should be investigated, not given a larger number. Tests
+    // SCRUM-871 round 8: under V8 coverage the file takes about 60 s on one worker (TypeScript's own
+    // checker is what coverage slows), so scripts/coverageWorkload.json lists it at 90 s and the shard
+    // runner gives it a process of its own instead of a shared 32-file Sonar batch (run 40681383147
+    // timed out there). Tests
     // that need the program share it through getScanner(); each carries the explicit timeout, as in
     // the sibling AST guards (organizationReactivationGuard, orgFinancialResetReferenceCoverage).
   }, SCAN_TIMEOUT_MS);
