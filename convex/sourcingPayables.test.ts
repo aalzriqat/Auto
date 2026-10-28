@@ -4,8 +4,10 @@
  * markPaid always debits/credits ACCOUNTS_PAYABLE_SUPPLIERS and cash/bank in
  * full (the liability was originally booked at the full gross amount back at
  * SALE_COMPLETED, so netting it here would leave a residual balance). When a
- * VAT portion is supplied, it's reclassified out of COST_OF_VEHICLES_SOLD
- * into VAT_RECEIVABLE as a separate, self-balancing pair.
+ * VAT portion is supplied on an OWNED car's payable, it's reclassified out of
+ * VEHICLE_INVENTORY (or COST_OF_VEHICLES_SOLD once the car has sold) into
+ * VAT_RECEIVABLE as a separate, self-balancing pair. A consigned payable
+ * refuses VAT entirely (SCRUM-781).
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
@@ -109,7 +111,7 @@ async function seedDealerWithPayable(amountDue = 5000) {
     );
   }
 
-  return { t, orgId, asOwner, payableId, bankAccountId, accountBySystemKey };
+  return { t, orgId, asOwner, payableId, bankAccountId, vehicleId, accountBySystemKey };
 }
 
 describe("sourcingPayables.markPaid VAT reclassification", () => {
@@ -192,8 +194,31 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
     expect(lines.find((l) => l.accountId === bank!._id)?.bankAccountId).toBe(bankAccountId);
   });
 
-  test("with a VAT amount, AP and cash still settle in full, plus a self-balancing VAT reclass pair", async () => {
-    const { t, orgId, asOwner, payableId, bankAccountId, accountBySystemKey } = await seedDealerWithPayable(5000);
+  test("a consigned (sale-linked) payable refuses a VAT amount and stays unpaid (SCRUM-781)", async () => {
+    // The default fixture is the production shape of a consigned payable: written at sale time,
+    // carrying the saleId. Owner ruling SCRUM-773 c22401 — no reclaimable VAT on it. This test used to
+    // assert Dr VAT_RECEIVABLE / Cr COST_OF_VEHICLES_SOLD on this very fixture, which encoded the defect.
+    const { t, orgId, asOwner, payableId, bankAccountId } = await seedDealerWithPayable(5000);
+
+    await expect(
+      asOwner.mutation(api.sourcingPayables.markPaid, {
+        idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "BANK_TRANSFER", bankAccountId, taxAmount: 500,
+      })
+    ).rejects.toThrow(/consigned.*gross amount.*VAT/i);
+
+    const payable = await t.run((ctx) => ctx.db.get(payableId));
+    expect(payable?.status).toBe("PENDING");
+    expect(payable?.taxAmount).toBeUndefined();
+  });
+
+  test("with a VAT amount on an owned ON_ACCOUNT payable, AP and cash still settle in full, plus a self-balancing VAT reclass pair", async () => {
+    const { t, orgId, asOwner, payableId, bankAccountId, vehicleId, accountBySystemKey } = await seedDealerWithPayable(5000);
+    // The shape postVehicleAcquisitionIfOwned writes for an owned car bought on account: no sale,
+    // dealer-owned stock, not yet sold, so the cost still sits in Vehicle Inventory.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(payableId, { saleId: undefined });
+      await ctx.db.patch(vehicleId, { status: "AVAILABLE", sourceType: "STOCK" });
+    });
 
     await asOwner.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(),
       orgId, payableId, paymentMethod: "BANK_TRANSFER", bankAccountId, taxAmount: 500,
@@ -223,6 +248,7 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
     const ap = await accountBySystemKey("ACCOUNTS_PAYABLE_SUPPLIERS");
     const bank = await accountBySystemKey("BANK_ACCOUNT");
     const vat = await accountBySystemKey("VAT_RECEIVABLE");
+    const inventory = await accountBySystemKey("VEHICLE_INVENTORY");
     const cogs = await accountBySystemKey("COST_OF_VEHICLES_SOLD");
 
     // AP + cash settle for the FULL gross amount — not netted by the VAT portion.
@@ -231,7 +257,8 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
     expect(lines.find((l) => l.accountId === bank!._id)?.bankAccountId).toBe(bankAccountId);
     // VAT reclass is a separate, self-balancing pair.
     expect(lines.find((l) => l.accountId === vat!._id)?.debitMinor).toBe(500_000);
-    expect(lines.find((l) => l.accountId === cogs!._id)?.creditMinor).toBe(500_000);
+    expect(lines.find((l) => l.accountId === inventory!._id)?.creditMinor).toBe(500_000);
+    expect(lines.some((l) => l.accountId === cogs!._id)).toBe(false);
   });
 
   test("rejects a VAT amount greater than the amount due", async () => {
