@@ -325,6 +325,10 @@ export const AppErrorCode = {
   // Translated under ServerError_<code>.
   DEPOSIT_OTHER_TREATMENT_DISABLED: "DEPOSIT_OTHER_TREATMENT_DISABLED",
   OPENING_BALANCE_AFTER_LEDGER_ACTIVITY: "OPENING_BALANCE_AFTER_LEDGER_ACTIVITY",
+  // SCRUM-781 (owner rulings SCRUM-773 c22401, SCRUM-760 c23812): `sourcingPayables.markPaid` refuses a
+  // nonzero VAT on a consigned supplier payable. Message in convex/sourcingPayables.ts; translated
+  // under ServerError_<code>.
+  CONSIGNED_PAYABLE_VAT_REFUSED: "CONSIGNED_PAYABLE_VAT_REFUSED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

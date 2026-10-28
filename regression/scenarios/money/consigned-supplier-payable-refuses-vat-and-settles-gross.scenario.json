@@ -65,7 +65,7 @@
   ],
   "impl": {
     "file": "convex/consignedPayableVat.scrum781.test.ts",
-    "testName": "markPaid refuses VAT 2,000 on a consigned payable; nothing is written and the refusal is not cached"
+    "testName": "scenario consigned-supplier-payable-refuses-vat-and-settles-gross: VAT 2,000 is refused, then the same payable settles gross at taxAmount 0"
   },
   "matrixRow": "SCRUM781-consigned-payable-vat"
 }
