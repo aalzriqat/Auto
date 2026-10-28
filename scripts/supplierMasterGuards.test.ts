@@ -211,15 +211,14 @@
  * the real tree, as virtual files beside the real ones, so they get real types. A probe marked `typed` must also
  * compile with zero TypeScript errors, so a miss is the scanner's and not a broken fixture.
  */
-import { readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { describe, expect, test } from "vitest";
-import schema from "../convex/schema";
-import { ORGANIZATION_DELETION_STEPS } from "../convex/adminOrgs";
-import { CHILD_TABLES_FOR_TEST, RESET_TABLES_FOR_TEST } from "../convex/orgFinancialReset";
 
-const ROOT = path.resolve(__dirname, "..");
+const THIS_FILE = fileURLToPath(import.meta.url);
+const ROOT = path.resolve(path.dirname(THIS_FILE), "..");
 const SUPPLIER_TABLES = ["suppliers", "supplierAliases"] as const;
 const REGISTRY_TABLE = "supplierRegistryState";
 const ALL_TABLES: readonly string[] = [...SUPPLIER_TABLES, REGISTRY_TABLE];
@@ -239,7 +238,8 @@ interface Scan {
   supplierWrites: number;
 }
 
-const SCHEMA_TABLES = Object.keys(schema.tables);
+// Supplied by the real schema in Vitest, and transported to the scan-only child over stdin.
+let SCHEMA_TABLES: readonly string[];
 
 /**
  * The exact functions allowed a database call whose table is typed as every table (or as a union that
@@ -625,7 +625,11 @@ function functionLikeOf(declaration: ts.Declaration): ts.SignatureDeclaration | 
 class Scanner {
   private readonly lockParameters = new Map<ts.Symbol, LockParameter[]>();
 
-  constructor(private readonly checker: ts.TypeChecker) {}
+  private readonly checker: ts.TypeChecker;
+
+  constructor(checker: ts.TypeChecker) {
+    this.checker = checker;
+  }
 
   // The scanner owns one immutable Program. Cache by node, never by identifier text:
   // two occurrences of the same name can have different flow-narrowed types.
@@ -1530,6 +1534,73 @@ function scanReal(source: { relPath: string; absPath: string }, usedAllowances: 
   const sourceFile = program.getSourceFile(source.absPath);
   if (!sourceFile) throw new Error(`${source.relPath} is not in the program`);
   return scanner.scan(sourceFile, source.relPath, usedAllowances);
+}
+
+interface RealTreeResult {
+  violations: string[];
+  supplierWrites: number;
+  used: string[];
+  sources: number;
+}
+
+function scanRealTree(): RealTreeResult {
+  let supplierWrites = 0;
+  const violations: string[] = [];
+  const used = new Set<string>();
+  for (const source of REAL_SOURCES) {
+    let scan: Scan;
+    try {
+      scan = scanReal(source, used);
+    } catch (error) {
+      throw new Error(`Scanner failed in ${source.relPath}`, { cause: error });
+    }
+    supplierWrites += scan.supplierWrites;
+    for (const v of scan.violations) violations.push(`${source.relPath}:${v.line} ${v.rule} ${v.text}`);
+  }
+  return { violations, supplierWrites, used: [...used].sort(), sources: REAL_SOURCES.length };
+}
+
+function scanRealTreeInChild(): RealTreeResult {
+  // V8 precise coverage de-optimises TypeScript even though node_modules is omitted from the report.
+  // spawnSync starts a fresh Node runtime, without the worker's inspector session or execArgv.
+  // Also remove automatic coverage/debugger hooks (NODE_OPTIONS can preload either one).
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (/^(NODE_OPTIONS|NODE_V8_COVERAGE|NODE_INSPECT_RESUME_ON_START|VSCODE_INSPECTOR_OPTIONS|VSCODE_JS_DEBUG_OPTIONS)$|^(VITEST|COVERAGE|C8_|NYC_)/i.test(key)) {
+      delete env[key];
+    }
+  }
+  // Node propagates NODE_V8_COVERAGE even with a custom env when the key is absent.
+  // An explicit empty value disables that propagation and coverage in the child.
+  env.NODE_V8_COVERAGE = "";
+  const child = spawnSync(process.execPath, [THIS_FILE, "--supplier-master-scan"], {
+    cwd: ROOT,
+    env,
+    input: JSON.stringify(SCHEMA_TABLES),
+    encoding: "utf8",
+    timeout: 60_000, // Below SCAN_TIMEOUT_MS; leave time for transport and assertions.
+    maxBuffer: 8 * 1024 * 1024,
+    windowsHide: true,
+  });
+  const failure = (reason: string): Error => new Error(`Supplier scan child ${reason}\nstderr:\n${child.stderr ?? ""}`);
+  if (child.error || child.status !== 0 || child.signal !== null) {
+    throw failure(`failed (status=${child.status}, signal=${child.signal}): ${child.error?.message ?? "unsuccessful exit"}`);
+  }
+  let result: unknown;
+  try {
+    result = JSON.parse(child.stdout);
+  } catch (error) {
+    throw failure(`returned invalid JSON: ${String(error)}`);
+  }
+  // Treat absent or malformed evidence as a failed scan, never an empty violation list.
+  if (typeof result !== "object" || result === null ||
+    !("violations" in result) || !Array.isArray(result.violations) || !result.violations.every((value: unknown) => typeof value === "string") ||
+    !("used" in result) || !Array.isArray(result.used) || !result.used.every((value: unknown) => typeof value === "string") ||
+    !("supplierWrites" in result) || typeof result.supplierWrites !== "number" || !Number.isSafeInteger(result.supplierWrites) || result.supplierWrites < 0 ||
+    !("sources" in result) || result.sources !== REAL_SOURCES.length || result.sources === 0) {
+    throw failure("returned incomplete or malformed scan evidence");
+  }
+  return { violations: result.violations, supplierWrites: result.supplierWrites, used: result.used, sources: result.sources };
 }
 
 /** The adminData guard and id-proof helper, declared so the checker resolves them in a snippet that does not import adminData. */
@@ -3228,6 +3299,22 @@ const ROUND7_PROBES: Array<Snippet & { name: string; bad: boolean }> = [
   },
 ].map((probe) => ({ ...probe, file: "convex/other.ts", typed: true, source: ROUND6_PRELUDE + probe.source }));
 
+// Node 22.21.1 strips erasable TypeScript by default. Keep this entry point in the existing
+// *.test.ts coverage exclusion; importing Vitest/the runtime schema is reserved for the parent.
+if (process.argv[2] === "--supplier-master-scan") {
+  const tables: unknown = JSON.parse(readFileSync(0, "utf8"));
+  if (!Array.isArray(tables) || tables.length === 0 || !tables.every((table: unknown) => typeof table === "string")) {
+    throw new Error("Supplier scan requires the real schema table names");
+  }
+  SCHEMA_TABLES = tables;
+  process.stdout.write(JSON.stringify(scanRealTree()));
+} else {
+const { describe, expect, test } = await import("vitest");
+const { default: schema } = await import("../convex/schema");
+const { ORGANIZATION_DELETION_STEPS } = await import("../convex/adminOrgs");
+const { CHILD_TABLES_FOR_TEST, RESET_TABLES_FOR_TEST } = await import("../convex/orgFinancialReset");
+SCHEMA_TABLES = Object.keys(schema.tables);
+
 describe("supplier master source guards", () => {
   test.each(ROUND7_PROBES)("round 7: $name", (probe) => {
     expect(typeErrors(probe), "probe must compile before its verdict is evidence").toEqual([]);
@@ -3262,19 +3349,10 @@ describe("supplier master source guards", () => {
   }, SCAN_TIMEOUT_MS);
 
   test("lock coverage: no insert, patch or replace on suppliers or supplierAliases happens outside a function holding a RegistryLock, and nothing deletes either table", () => {
-    let supplierWrites = 0;
-    const problems: string[] = [];
-    const used = new Set<string>();
-    for (const source of REAL_SOURCES) {
-      let scan: Scan;
-      try {
-        scan = scanReal(source, used);
-      } catch (error) {
-        throw new Error(`Scanner failed in ${source.relPath}`, { cause: error });
-      }
-      supplierWrites += scan.supplierWrites;
-      for (const v of scan.violations) problems.push(`${source.relPath}:${v.line} ${v.rule} ${v.text}`);
-    }
+    const result = scanRealTreeInChild();
+    const { supplierWrites, violations: problems } = result;
+    const used = new Set(result.used);
+    expect(result.sources).toBe(REAL_SOURCES.length);
     // The scan must have looked at the real writers: insert and patch on both tables.
     expect(supplierWrites).toBeGreaterThanOrEqual(4);
     expect(problems).toEqual([]);
@@ -3284,18 +3362,9 @@ describe("supplier master source guards", () => {
       entry.methods.filter((method) => !used.has(`${entry.file}#${entry.fn}#${method}`)).map((method) => `${entry.file}#${entry.fn}#${method}`),
     );
     expect(unused, "allowances that matched no real call").toEqual([]);
-    // The first test to run builds one TypeScript program over every non-test source under convex/
-    // plus the synthetic snippets, so the type checker can read table and lock types. Measured on a
-    // developer machine (SCRUM-868 PR 687, round 2): the whole file takes about 16 s (a second reviewer measured 15.8 s), almost all of it that
-    // program build and the scan. CI runs it in a coverage batch with v8 instrumentation and several
-    // workers (the earlier AST-only version overran vitest's default 5 s there: run 40525208382,
-    // "Test timed out in 5000ms", 1.4 s uncovered). The timeout is about 4x the measured time, 75 s, which is also the ceiling we accept for this guard; a CI run that exceeds it should be investigated, not given a larger number. Tests
-    // SCRUM-871 round 8: under V8 coverage the file takes about 60 s on one worker (TypeScript's own
-    // checker is what coverage slows), so scripts/coverageWorkload.json lists it at 90 s and the shard
-    // runner gives it a process of its own instead of a shared 32-file Sonar batch (run 40681383147
-    // timed out there). Tests
-    // that need the program share it through getScanner(); each carries the explicit timeout, as in
-    // the sibling AST guards (organizationReactivationGuard, orgFinancialResetReferenceCoverage).
+    // SCRUM-871 round 9: the child builds the same program and runs every real-tree rule outside
+    // the Vitest worker's V8 precise coverage. Cheap snippet probes still share getScanner() here.
+    // Keep the 75 s ceiling: investigate an overrun rather than enlarging it.
   }, SCAN_TIMEOUT_MS);
 
   test("generic functions: the Data Browser allowlist names no supplier table, and the purge runner is driven only by its steps", () => {
@@ -3425,3 +3494,4 @@ describe("supplier master purge and reset registration", () => {
     }
   });
 });
+}
