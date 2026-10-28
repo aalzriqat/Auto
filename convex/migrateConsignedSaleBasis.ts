@@ -719,8 +719,8 @@ export const migrateConsignedSaleBasis = internalMutation({
           sale,
           recognizedRevenue: fromMinorUnits(
             assessment.dealershipMarginMinor ?? 0,
-            // Non-null: isAutomaticallyCorrectable above requires a posted currency.
-            assessment.currency!
+            // A string: the isAutomaticallyCorrectable guard above requires a posted currency.
+            assessment.currency
           ),
           dryRun: true,
         });

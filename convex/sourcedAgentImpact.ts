@@ -307,8 +307,13 @@ export async function assessConsignedSale(
  * Whether the migration may correct this row without a human first looking at
  * it. Any flag disqualifies it, and a row already on agent basis has nothing to
  * correct.
+ *
+ * A type guard: a correctable assessment always states the currency it was posted in (SCRUM-85),
+ * so callers read `assessment.currency` as a `string` without a non-null assertion.
  */
-export function isAutomaticallyCorrectable(assessment: ConsignedSaleAssessment): boolean {
+export function isAutomaticallyCorrectable(
+  assessment: ConsignedSaleAssessment
+): assessment is ConsignedSaleAssessment & { currency: string } {
   return (
     assessment.flags.length === 0 &&
     !assessment.alreadyAgentBasis &&

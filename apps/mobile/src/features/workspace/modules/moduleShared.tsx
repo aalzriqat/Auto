@@ -2,7 +2,7 @@ import { isConvexError } from "@autoflow/shared";
 import { calculateUnifiedMurabaha } from "@autoflow/shared/financing";
 import { useRouter } from "expo-router";
 import { useQuery } from "convex/react";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View, type StyleProp, type ViewStyle } from "react-native";
 import { EmptyState } from "../../../components/EmptyState";
 import { FormField as SharedFormField, type FormFieldProps as SharedFormFieldProps } from "../../../components/FormField";
@@ -269,22 +269,79 @@ function fractionDigitsForCurrency(currency: string): number {
  * screen publishes it with `useSyncActiveOrgCurrency`; `money()` calls that omit a
  * currency read it. `null` until the stored value is known, or when the
  * organization has none.
+ *
+ * It is a small external store, not a value written during render: render must stay pure, and a
+ * write from render outlived the screen, so an organization switch could format the next
+ * tenant's figures in the previous tenant's currency. It is written from a layout effect and
+ * cleared on unmount, and components that must follow it subscribe (`useActiveOrgCurrency`).
  */
 let activeOrgCurrency: string | null = null;
+const activeOrgCurrencyListeners = new Set<() => void>();
 
 export function setActiveOrgCurrency(code: string | null | undefined): void {
   const trimmed = typeof code === "string" ? code.trim() : "";
-  activeOrgCurrency = trimmed === "" ? null : trimmed;
+  const next = trimmed === "" ? null : trimmed;
+  if (next === activeOrgCurrency) return;
+  activeOrgCurrency = next;
+  for (const listener of [...activeOrgCurrencyListeners]) listener();
 }
 
 /**
- * Publish the organization's stored currency to `money()` for this screen's
- * subtree. Assigned during render (an idempotent module value, not React state)
- * so children rendered in the same pass already see it.
+ * Each mounted screen that publishes is an owner; the published currency is the most recently
+ * published owner's, and an owner leaving falls back to the one beneath it. Screens stack
+ * (a detail screen over the module screen), so closing the top one must not unpublish the
+ * currency the screen below still formats in.
+ */
+const currencyPublishers = new Map<symbol, string | null>();
+
+function publishOrgCurrency(owner: symbol, code: string | null | undefined): void {
+  currencyPublishers.delete(owner);
+  currencyPublishers.set(owner, typeof code === "string" && code.trim() !== "" ? code : null);
+  settleOrgCurrency();
+}
+
+function unpublishOrgCurrency(owner: symbol): void {
+  currencyPublishers.delete(owner);
+  settleOrgCurrency();
+}
+
+function settleOrgCurrency(): void {
+  let latest: string | null = null;
+  for (const code of currencyPublishers.values()) latest = code;
+  setActiveOrgCurrency(latest);
+}
+
+function subscribeActiveOrgCurrency(listener: () => void): () => void {
+  activeOrgCurrencyListeners.add(listener);
+  return () => {
+    activeOrgCurrencyListeners.delete(listener);
+  };
+}
+
+const readActiveOrgCurrency = (): string | null => activeOrgCurrency;
+
+/**
+ * The published currency, subscribed: the calling component re-renders when it changes. For a
+ * component that formats money but may not re-render with its screen (a memoised list row).
+ */
+export function useActiveOrgCurrency(): string | null {
+  return useSyncExternalStore(subscribeActiveOrgCurrency, readActiveOrgCurrency, readActiveOrgCurrency);
+}
+
+/**
+ * Publish the organization's stored currency to `money()` for this screen's subtree. Published
+ * from a layout effect (before paint, so no frame shows the not-configured text) and cleared on
+ * unmount. The screen subscribes, so it and its children re-render once the value is published.
  */
 export function useSyncActiveOrgCurrency(orgId: string | null | undefined, enabled = true): void {
   const status = useQuery(api.orgSettings.getCurrencyStatus, enabled && orgId ? { orgId } : "skip");
-  setActiveOrgCurrency(status?.currency ?? null);
+  const storedCurrency = status?.currency ?? null;
+  const [owner] = useState(() => Symbol("orgCurrencyPublisher"));
+  useActiveOrgCurrency();
+  useLayoutEffect(() => {
+    publishOrgCurrency(owner, storedCurrency);
+  }, [owner, storedCurrency]);
+  useLayoutEffect(() => () => unpublishOrgCurrency(owner), [owner]);
 }
 
 export function currencyNotConfiguredLabel(locale: "en" | "ar"): string {
@@ -1402,6 +1459,9 @@ const ModuleListRow = memo(function ModuleListRow<T>({
   render: (item: T) => React.ReactElement;
   rowStyle: StyleProp<ViewStyle>;
 }) {
+  // A row formats money through `money()`, which reads the published org currency. Subscribe so a
+  // memoised row re-renders when that currency is published after the row first rendered.
+  useActiveOrgCurrency();
   const content = render(item);
   return highlighted ? <View style={rowStyle}>{content}</View> : content;
 }) as <T>(props: {
