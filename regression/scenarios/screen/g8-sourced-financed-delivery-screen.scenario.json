@@ -1,0 +1,46 @@
+{
+  "id": "g8-sourced-financed-delivery-screen",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "local-g8-plan-runtime-pending",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "deals.financedWizard",
+      "input": {
+        "vehicle": "SOURCED",
+        "approved": 12500,
+        "supplierCost": 10000,
+        "firstPayment": 1250,
+        "deposit": 0,
+        "payment": "BANK_TRANSFER",
+        "route": "THROUGH_DEALERSHIP"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "screen.journeyOutcome",
+      "value": "closedDealRemainsVisibleAfterReload"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "playwright/scenarios/pilot-sourced.spec.ts",
+    "testName": "pilot SOURCED configured finance reaches delivery and full financier receipt with agency-only books"
+  },
+  "fingerprint": "90c5fd7b3e21ad28bd32dfc647089c85760b63ebd286ed296687595562ab1e27"
+}

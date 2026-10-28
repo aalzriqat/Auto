@@ -413,3 +413,26 @@ The `SCRUM-50-opening-balance-paths` scenarios `opening-reset-large-retained-his
 The same matrix row also includes `opening-reset-recovery-checkpoint-org-delete`: a public, verified JOD supplier-recovery opening enters a real suspended reset reference scan, then authorized org deletion clears that obsolete checkpoint at initialization. Natural deletion batches remove the recovery while the org and RUNNING request still exist, without retaining its ID. Existing admin reference-scan continuation remains covered separately. `opening-cleanup-discovery-split-required-refusal` and `opening-cleanup-reference-split-required-refusal` bind literal adverse-result controls: substituting the database's incomplete `SplitRequired` page contract makes the real helper refuse with checkpoint, draft references and source unchanged. Literal `SplitRecommended` controls still advance. Both scans request 50 items while retaining the 100-row and 512,000-byte ceilings; the ordinary 101-rejected-plus-late-POSTED scenario still progresses. These substituted database results prove local fail-closed behavior, not actual Convex page splitting, large-document resource usage or concurrency; the required large-history preview remains unavailable until measured on the platform.
 
 The recovery checkpoint scenario additionally invokes an internal destructive reset continuation after public deletion admission. It must refuse without recreating the abandoned checkpoint; natural deletion still removes the recovery without leaving a retained organization reference. Literal sibling controls cover public approval and a FAILED deletion followed by a new hard-delete retry. Dry-run inspection remains available. A bounded request-pointer read reserves destructive progress for RUNNING/FAILED deletion, including persisted start/purge markers; missing, foreign or closed request metadata refuses before writes. Verified same-org PENDING_REVIEW/APPROVED requests without destruction markers preserve ordinary reset continuation, so the existing reset-completion prerequisite for rejection does not become stranded. These are serial lifecycle harness controls, not platform/OCC proof or evidence that operators have used the interleaving in a deployment.
+
+
+## SCRUM-760-G8-SOURCED — hunter bindings, runtime pending
+
+G8 reuses three literal public-API certification tests in
+`convex/scrum486Certification.test.ts`. These tests already existed; this binding
+adds no financial capability and does not certify a real Convex deployment.
+
+| Route | Public completion | Independent expected JOD amounts | Permanent record |
+| --- | --- | --- | --- |
+| SOURCED CASH, THROUGH_DEALERSHIP | Full 12,500 deposit, then completeFromQuote | Supplier payable 10,000; agency revenue 2,500; COGS 0; customer AR settled by deposit | g8-sourced-cash-agency-certification |
+| SOURCED configured finance, THROUGH_DEALERSHIP | finalizeDeal, approved 12,500, no deposit | Full financier AR 12,500; supplier payable 10,000; agency revenue 2,500; COGS 0 | g8-sourced-financed-agency-certification |
+| SOURCED configured finance, DIRECT_TO_SUPPLIER | finalizeDeal and external supplier advice | Supplier AR and agency income 2,500; no financier AR or supplier AP; advice posts no dealership journal | g8-sourced-direct-agency-certification |
+
+The exact backend titles are in those records. The paired browser witnesses in
+`playwright/scenarios/pilot-sourced.spec.ts` reach delivery using the existing
+wizard/cockpit controls. CASH checks the three literal journal shapes (receipt,
+sale, deposit application). FINANCED checks the sale journal, then the full
+12,500 bank receipt, and reloads the closed deal. None of these witnesses pays a
+supplier, refunds a deposit, corrects a cost, or enables an excluded door.
+The direct-route browser witness records the supplier advice and asserts no
+bank movement. G9/G10 supplier identity and settlement certification remain
+independent obligations; these rows do not stand for them.

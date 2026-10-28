@@ -1,0 +1,44 @@
+{
+  "id": "g8-explorer-sales",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "explorer",
+    "runId": "local-g8-plan-runtime-pending",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.explore",
+      "input": {
+        "steps": 40,
+        "locales": "EN_AR",
+        "widths": "320_1440",
+        "commits": "REFUSED",
+        "identity": "SEEDED_OWNER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "screen.journeyOutcome",
+      "value": "fourWalkReportsWithObservedBackendAndFindings"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "playwright/scenarios/jev-explorer.spec.ts",
+    "testName": "pilot explorer starts on Sales in both languages and widths"
+  },
+  "fingerprint": "f68c19f936ddbc2605349112bdebc6dfc4d5816fef993038861bfa4952d3cdc5"
+}

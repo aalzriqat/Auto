@@ -11,7 +11,7 @@ import { SCREEN_AUDIT_ROUTES } from "../playwright/fixtures/screenAuditRoutes";
 // No key or recovery copy survives the suite, and nothing enters the user keyring.
 const gpg = process.platform === "win32" ? "C:/Program Files/Git/usr/bin/gpg.exe" : "/usr/bin/gpg";
 const tar = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/tar";
-const parent = realpathSync(path.resolve(".."));
+const parent = realpathSync(path.resolve("."));
 const root = mkdtempSync(path.join(parent, "pilot-evidence-synthetic-controls-"));
 const keyHome = path.join(root, "synthetic-keyring");
 let keyHomeArgument = keyHome;
@@ -342,6 +342,9 @@ const roleTitles = [
   "lead screen and create dialog respect actual audited role authority",
   "approval screen renders authorized queue or explicit role refusal",
   "sales quote picker respects audited role and tenant choice authority",
+  "pilot Accounting traversal paints every section and nested reader",
+  "pilot Sales opens CASH and configured FINANCED entry panels for each audited role",
+  "pilot Deals opens owned and SOURCED cash and configured financed detail screens",
 ];
 
 function roleReport(statuses: readonly string[] = roleTitles.map(() => "passed")) {
@@ -353,15 +356,15 @@ function roleReport(statuses: readonly string[] = roleTitles.map(() => "passed")
 }
 
 test.each([
-  ["all four passed", roleReport(), true, "PASS"],
+  ["all seven passed", roleReport(), true, "PASS"],
   ["no cases", { errors: [], suites: [] }, false, "UNAVAILABLE"],
   ["missing case", roleReport(["passed", "passed", "passed"]), false, "UNAVAILABLE"],
-  ["skipped case", roleReport(["passed", "skipped", "passed", "passed"]), false, "FAIL"],
+  ["skipped case", roleReport(roleTitles.map((_, index) => index === 1 ? "skipped" : "passed")), false, "FAIL"],
   ["duplicate case", { errors: [], suites: [{ ...roleReport().suites[0], specs: [...roleReport().suites[0].specs, roleReport().suites[0].specs[0]] }] }, false, "FAIL"],
   ["nested duplicate case", { errors: [], suites: [{ ...roleReport().suites[0], suites: [{ specs: [roleReport().suites[0].specs[0]] }] }] }, false, "FAIL"],
   ["unparseable", null, false, "UNAVAILABLE"],
 ] as const)("real-role case census measures %s", (_name, report, verified, measurement) => {
-  expect(roleRegressionOutcome(report)).toMatchObject({ expected: 4, verified, measurement });
+  expect(roleRegressionOutcome(report)).toMatchObject({ expected: 7, verified, measurement });
 });
 
 test.each([
@@ -399,7 +402,7 @@ test.each([
   }
   const stub = path.join(repo, "synthetic-browser.cjs");
   const failureMarker = "\nPreview attestation failed: [Request ID: 42e39a239aecaeb1]\n";
-  const report = reportMode === "skipped" ? roleReport(["passed", "skipped", "passed", "passed"]) : roleReport();
+  const report = reportMode === "skipped" ? roleReport(roleTitles.map((_, index) => index === 1 ? "skipped" : "passed")) : roleReport();
   const reportBytes = reportMode === "malformed" ? "{invalid report" : JSON.stringify(report);
   const reportWrite = reportMode === "missing" ? "" : `fs.writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE,${JSON.stringify(reportBytes)});`;
   writeFileSync(stub, `const fs=require("node:fs"),path=require("node:path");const output=process.argv.find(arg=>arg.startsWith("--output="));fs.cpSync(path.join(process.cwd(),"synthetic-inputs"),output?output.slice(9):path.join(process.cwd(),"test-results"),{recursive:true});${reportWrite}process.stdout.write(process.env.AUDIT_CANARY);process.stderr.write(process.env.AUDIT_CANARY.toLowerCase());if(${exitCode}!==0)process.stderr.write(${JSON.stringify(failureMarker)});process.exit(${exitCode});`);

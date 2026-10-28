@@ -32,6 +32,16 @@ export default defineConfig({
       : base.webServer,
   projects: [
     { ...base.projects![0], testDir: "./playwright/tests" },
-    ...base.projects!.slice(1),
+    {
+      ...base.projects![1],
+      name: "pilot-scripted",
+      testDir: "./playwright/tests",
+      testMatch: ["sales.spec.ts", "financed-deal-economics.spec.ts", "accounting.spec.ts"],
+      testIgnore: [],
+      dependencies: ["setup"],
+    },
+    ...base.projects!.slice(1).map(project => ({
+      ...project, dependencies: [...(project.dependencies ?? []), "pilot-scripted"],
+    })),
   ],
 });

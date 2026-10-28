@@ -23,6 +23,9 @@ const ROLE_REGRESSION_TITLES = new Set([
   "lead screen and create dialog respect actual audited role authority",
   "approval screen renders authorized queue or explicit role refusal",
   "sales quote picker respects audited role and tenant choice authority",
+  "pilot Accounting traversal paints every section and nested reader",
+  "pilot Sales opens CASH and configured FINANCED entry panels for each audited role",
+  "pilot Deals opens owned and SOURCED cash and configured financed detail screens",
 ]);
 const DEFAULT_GPG = process.platform === "win32" ? "C:/Program Files/Git/usr/bin/gpg.exe" : "/usr/bin/gpg";
 const DEFAULT_TAR = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/tar";

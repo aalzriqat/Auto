@@ -8,7 +8,7 @@ export default defineConfig({
   retries: 0,
   // Default local output stays on the private process stream. The packaged
   // audit adds Playwright's JSON reporter to a fresh private invocation path
-  // so its four role cases are measured before completeness is published.
+  // so its seven role cases are measured before completeness is published.
   reporter: "line",
   // Public evidence is limited to explicit post-login captures and summaries.
   // Auth setup must never record credentials or tokens into traces or video.
@@ -23,8 +23,8 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { ...base.projects![1].use, storageState: "playwright/.auth/approver.json", trace: "off", video: "off", screenshot: "off" },
     },
-    ...base.projects!.slice(1).map((project) => ({
-      ...project, dependencies: [...(project.dependencies ?? []), "role-regressions"],
+    ...base.projects!.slice(1).filter(project => project.name !== "pilot-scripted").map((project) => ({
+      ...project, dependencies: [...(project.dependencies ?? []).filter(dependency => dependency !== "pilot-scripted"), "role-regressions"],
       use: { ...project.use, storageState: "playwright/.auth/approver.json" },
     })),
     {
