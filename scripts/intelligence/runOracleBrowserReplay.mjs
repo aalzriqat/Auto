@@ -99,7 +99,8 @@ function findObservation(directory, basename, report) {
 async function runBrowserSubject({ directory, root }) {
   if (process.env.GITHUB_ACTIONS !== "true" || process.env.GITHUB_REF !== "refs/heads/main" ||
       !isPreviewDeployKey(process.env.CONVEX_PREVIEW_DEPLOY_KEY) ||
-      !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.startsWith("pk_test_")) return unavailable("TRUSTED_MAIN_PREVIEW_DISPATCH_REQUIRED");
+      !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.startsWith("pk_test_") ||
+      !process.env.CLERK_SECRET_KEY?.startsWith("sk_test_")) return unavailable("TRUSTED_MAIN_PREVIEW_DISPATCH_REQUIRED");
   const started = Date.now();
   const previewName = `g6-${process.env.GITHUB_RUN_ID}-${randomBytes(5).toString("hex")}`;
   const env = Object.fromEntries(["PATH", "HOME", "TMPDIR", "CI"].filter(key => process.env[key]).map(key => [key, process.env[key]]));
@@ -162,12 +163,12 @@ async function runBrowserSubject({ directory, root }) {
     const results = path.join(output, "results.json");
     writeFileSync(config, `import {defineConfig} from ${JSON.stringify(path.join(root, "node_modules/@playwright/test/index.mjs"))};
 import base from ${JSON.stringify(path.join(root, "playwright.scenarios.config.ts"))};
-export default defineConfig({...base, retries:0, workers:1, outputDir:${JSON.stringify(output)},
+export default defineConfig({...base, testDir:${JSON.stringify(path.join(root, "playwright/scenarios"))}, retries:0, workers:1, outputDir:${JSON.stringify(output)},
  reporter:[["json",{outputFile:${JSON.stringify(results)}}]],
  webServer:undefined,
- projects:[{...base.projects[0]},
+ projects:[{...base.projects[0],testDir:${JSON.stringify(path.join(root, "playwright/tests"))}},
  {...base.projects[1],name:"period",testDir:${JSON.stringify(path.join(root, "playwright/tests"))},testMatch:"**/browser-swarm-accounting-period.spec.ts"},
- {...base.projects[1],dependencies:["period"],testMatch:${JSON.stringify(BROWSER_FILES.map(name => "**/" + name))}},
+ {...base.projects[1],dependencies:["period"],testDir:${JSON.stringify(path.join(root, "playwright/scenarios"))},testMatch:${JSON.stringify(BROWSER_FILES.map(name => "**/" + name))}},
  {...base.projects[1],name:"swarm",dependencies:["period"],testDir:${JSON.stringify(path.join(root, "scripts/intelligence"))},testMatch:"**/oracleReplaySwarm.spec.ts"}]});`);
     const browserStatus = await runBrowserProcess([path.join(root, "node_modules/@playwright/test/cli.js"), "test", "--config", config, "--workers=1"], directory, {
       ...env, ...credentials, CROSS_SCREEN_ORACLE: "1", JEV_FORM_EXPLORER: "1", JEV_EXPLORER_SEED: "344", JEV_FORM_EXPLORER_SEED: "344",

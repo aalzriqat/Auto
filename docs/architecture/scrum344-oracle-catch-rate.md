@@ -156,6 +156,25 @@ does not replace SCRUM-760's independent verification, existing hunters or relea
 
 ## Verification and practice
 
+The [saved local report](evidence/scrum344-local-replay.json) was measured at
+`b5a394279cf4b809f6d1b7d413a8defd34a227a1`, before subsequent cloud-only
+directory/key checks and the test-only native-I/O timeout correction. It reports
+**FAIL**: baseline misses g6-01,
+g6-04 and g6-05; seven unavailable baselines; ten unavailable browser results.
+Witnesses g6-01, g6-02, g6-04 and g6-05 reproduced fixed-green/inverse-red. The
+other six did not reproduce cleanly. Conservative baseline and explorer recall
+are 0/10; precision is unavailable. These are not measured browser false negatives.
+
+The final focused command passed 157 tests across seven named files. The root
+`tsc --noEmit` passed and excludes `convex/`; backend production code is unchanged.
+Named-file ESLint passed. No production or local Playwright execution is claimed.
+One repeat of the native Git integration test exceeded Vitest's five-second
+default while completing its assertions. Its allowance is now 30 seconds for
+bounded Git and tar subprocesses; its assertions and scenarios are unchanged.
+The cloud-only correction makes the trusted test directories absolute because
+[Playwright resolves test paths relative to its generated configuration](https://playwright.dev/docs/api/class-testconfig#test-config-test-dir).
+Its runtime verification remains the coordinator's dispatch.
+
 The initial harness run had **8 failed tests** before implementation. The Git
 integration test proves real inverse-patch application outside the source tree.
 Subsequent negative controls cover malformed reports, generic crashes, skipped

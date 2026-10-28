@@ -163,5 +163,5 @@ describe("historical oracle replay evidence", () => {
       rmSync(repository, { recursive: true, force: true });
       rmSync(scratch, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });
