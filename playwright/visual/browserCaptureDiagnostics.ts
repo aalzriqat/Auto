@@ -87,8 +87,8 @@ async function documentFacts(page: Page) {
   });
 }
 
-/** One original screenshot request. Optional document observations yield before it;
- * their timing can perturb capture and is not evidence of a causal repair. */
+/** Capture without changing image scope. SCRUM-861 allows one logged recovery
+ * for Chromium's empty-image transport failure; other failures remain terminal. */
 export async function captureWithDiagnostics(
   page: Page,
   options: Parameters<Page["screenshot"]>[0],
@@ -108,7 +108,7 @@ export async function captureWithDiagnostics(
     return true;
   });
   let documentBefore: Awaited<ReturnType<typeof documentFacts>> | undefined;
-  let captureStatus: "CAPTURE_FAILED" | "CAPTURE_SUCCEEDED" = "CAPTURE_FAILED";
+  let captureStatus: "CAPTURE_FAILED" | "CAPTURE_SUCCEEDED" | "CAPTURE_SUCCEEDED_AFTER_RETRY" = "CAPTURE_FAILED";
   try {
     if (documentReceiptPath) documentBefore = await documentFacts(page);
     const image = await page.screenshot(options);
@@ -141,6 +141,28 @@ export async function captureWithDiagnostics(
     } catch {
       // Fixed metadata only; even a broken diagnostic sink cannot replace error.
       readSafely(() => console.error("BROWSER_CAPTURE_DIAGNOSTIC_UNAVAILABLE"));
+    }
+    // Chromium emits this exact response when its capture produced no image.
+    // Keep the first failure above, and retry the read once, not the test or its
+    // assertions. A crash, timeout, other protocol response or persistent failure
+    // must still fail. See docs/testing/scrum-861-screenshot-capture.md.
+    const recoverable = readSafely(() =>
+      error instanceof Error &&
+      /^page\.screenshot: Protocol error \(Page\.captureScreenshot\): Unable to capture screenshot(?:\r?\n|$)/.test(error.message) &&
+      browser.status === "AVAILABLE" && browser.value?.browserType().name() === "chromium" &&
+      browser.value.isConnected() && !page.isClosed() && !pageCrashed && !browserDisconnected,
+    );
+    if (recoverable.status === "AVAILABLE" && recoverable.value) {
+      readSafely(() => console.warn("BROWSER_CAPTURE_RETRY attempt=2/2 reason=chromium-empty-image"));
+      try {
+        const image = await page.screenshot({ ...options, timeout: Math.min(options?.timeout || 5_000, 5_000) });
+        captureStatus = "CAPTURE_SUCCEEDED_AFTER_RETRY";
+        readSafely(() => console.warn("BROWSER_CAPTURE_RETRY_SUCCEEDED attempt=2/2"));
+        return image;
+      } catch {
+        readSafely(() => console.warn("BROWSER_CAPTURE_RETRY_FAILED attempt=2/2"));
+        // Retain the original call site and error even if recovery/telemetry fails.
+      }
     }
     throw error;
   } finally {
