@@ -135,6 +135,9 @@ export const AppErrorCode = {
   ASSET_PURCHASE_DATE_IN_FUTURE: "ASSET_PURCHASE_DATE_IN_FUTURE",
   ASSET_PURCHASE_DATE_INVALID: "ASSET_PURCHASE_DATE_INVALID",
   ASSET_DEPRECIATION_START_DATE_INVALID: "ASSET_DEPRECIATION_START_DATE_INVALID",
+  // SCRUM-560 / SCRUM-760 c23812: the whole fixed-asset lifecycle is off for the pilot
+  // (utils/fixedAssetLifecycleContainment.ts). Translated under ServerError_<code>.
+  FIXED_ASSET_LIFECYCLE_DISABLED: "FIXED_ASSET_LIFECYCLE_DISABLED",
   // SCRUM-651. Sale / deal teardown refuses while any supplier payable on the sale carries a
   // recorded payment (whole or part). Translated under ServerError_<code>.
   SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED: "SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED",

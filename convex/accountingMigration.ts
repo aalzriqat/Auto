@@ -32,6 +32,7 @@ import { computeVehicleCapitalizedCost, CAPITALIZABLE_EXPENSE_CATEGORIES } from 
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { hasVehicleAcquisitionAccountingExposure } from "./vehicles";
 import { listOpeningStockEvidence, openingVehicleEvidence } from "./utils/openingVehicleBasis";
+import { assertFixedAssetLifecycleAllowed } from "./utils/fixedAssetLifecycleContainment";
 
 // ─── Snapshot / classification helpers ───────────────────────────────────────
 
@@ -349,6 +350,8 @@ export const backfillFixedAssetMinorUnits = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-560: it writes fixed-asset rows, so it is part of the lifecycle that is off for the pilot.
+    assertFixedAssetLifecycleAllowed();
     const currency = await getOrgCurrency(ctx, args.orgId);
 
     const assets = await ctx.db

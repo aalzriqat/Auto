@@ -13,6 +13,7 @@ import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { PLANS, PlanId } from "./subscriptions";
 import { Doc, Id } from "./_generated/dataModel";
 import { findOrgOwnerUser } from "./utils/orgOwner";
+import { isFixedAssetLifecycleDisabled } from "./utils/fixedAssetLifecycleContainment";
 import { toYearMonth } from "./utils/expenseAmortization";
 import type { DepreciationSkipReason } from "./fixedAssets";
 import type { RecognitionSkipReason } from "./dealerProductDeferrals";
@@ -881,6 +882,7 @@ async function getCachedOrgOwnerUserId(
  * `abnormal` reason is surfaced in the run summary.
  */
 export const DEPRECIATION_REASON_CLASS: Record<DepreciationSkipReason, ReasonClass> = {
+  lifecycle_disabled: "done",
   org_lifecycle_blocked: "done",
   not_found: "done",
   not_active: "done",
@@ -918,9 +920,28 @@ const depreciationSpec: MonthlyCronSpec<Doc<"fixedAssets">, DepreciationSkipReas
 // across every org (shared engine above). depreciateAssetForMonth is idempotent
 // per (assetId, yearMonth), so a redrive/redeploy can't double-post.
 
+// SCRUM-560 / SCRUM-760 ruling c23812: the fixed-asset lifecycle is OFF for the pilot, so this run
+// posts nothing. It RETURNS rather than throws: a throw in a cross-tenant cron is logged as an error
+// and would read as a failed month for every org. Convex fixes cron definitions at deploy, so the
+// switch is read at run time (convex/utils/fixedAssetLifecycleContainment.ts).
+const FIXED_ASSET_DEPRECIATION_DISABLED_SUMMARY =
+  "Fixed-asset depreciation skipped: the fixed-asset lifecycle is off during the pilot. Nothing was posted.";
+
+const runFixedAssetDepreciation = monthlyCronHandler(depreciationSpec);
+
 export const triggerFixedAssetDepreciation = internalAction({
   args: {},
-  handler: monthlyCronHandler(depreciationSpec),
+  handler: async (ctx): Promise<string> => {
+    if (isFixedAssetLifecycleDisabled()) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: depreciationSpec.source,
+        status: "success",
+        summary: FIXED_ASSET_DEPRECIATION_DISABLED_SUMMARY,
+      });
+      return FIXED_ASSET_DEPRECIATION_DISABLED_SUMMARY;
+    }
+    return await runFixedAssetDepreciation(ctx);
+  },
 });
 
 // ─── GL Phase 19: monthly F&I commission recognition cron ────────────────────

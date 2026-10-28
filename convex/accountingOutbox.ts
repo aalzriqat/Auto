@@ -30,6 +30,7 @@ import { internalMutation, mutation } from "./functions";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
+import { fixedAssetPostingRefusal } from "./utils/fixedAssetLifecycleContainment";
 import { PostCommand, postAccountingEvent, findPostedAccountingEvent, retiredPostingRefusal, supplierPaymentVatPostingRefusal } from "./accounting/postingEngine";
 import {
   isReservedReceiptKey,
@@ -1377,9 +1378,15 @@ const CLEARED_CLAIM = {
 export function isOutboxRowRevivable(
   row: Pick<Doc<"pendingAccountingEvents">, "kind" | "eventType" | "sourceType">
 ): boolean {
+  const cmd = { eventType: row.eventType ?? "", sourceType: row.sourceType };
+  // SCRUM-560: while the fixed-asset lifecycle is off, a fixed-asset row is as unrevivable as a
+  // retired one: reviving it would only buy more refusals. Unlike the retired case this covers
+  // REVERSE rows too, because a fixed-asset reversal is refused by the worker and the engine.
+  // A REVERSE row carries its original's source family in `sourceType`; the worker also
+  // classifies the original event itself, which this pure predicate cannot read.
   return !(
-    row.kind === "POST" &&
-    retiredPostingRefusal({ eventType: row.eventType ?? "", sourceType: row.sourceType })
+    (row.kind === "POST" && retiredPostingRefusal(cmd)) ||
+    fixedAssetPostingRefusal(cmd)
   );
 }
 
@@ -1804,6 +1811,22 @@ export const postOutboxRow = internalMutation({
       });
       if (retired) return await failOutboxRow(ctx, row, retired);
 
+      // ⚠️ SCRUM-560 / SCRUM-760 RULING 4 — A FIXED-ASSET POSTING QUEUED BEFORE THE LIFECYCLE
+      // WENT OFF MUST NOT POST AFTERWARDS. Every wake route (cron, period open or reopen, chart
+      // init, redrive) lands here, so this is the one server-side block for queued work. It sits
+      // with the permanent refusals and BEFORE the period check, on purpose: a held row would sit
+      // PENDING for ever behind a period that may never open, with no attempt ever recorded; a
+      // refusal burns an attempt per wake, records the reason in `lastError`, and reaches FAILED
+      // after MAX_ATTEMPTS. ⚠️ That does NOT unblock period close: `computeCloseChecklist` counts
+      // FAILED rows exactly as it counts PENDING ones, so an org holding such a row still needs an
+      // owner override (or a post-pilot reviewed disposition) to close the period. What the refusal
+      // buys is a visible, terminal reason instead of a silent hold. `isOutboxRowRevivable` keeps
+      // `retryFailed` from reviving it while the switch is on. Same disposition as SCRUM-782 / PR #694.
+      const fixedAssetRefusal = fixedAssetPostingRefusal({
+        eventType: row.eventType ?? "",
+        sourceType: row.sourceType,
+      });
+      if (fixedAssetRefusal) return await failOutboxRow(ctx, row, fixedAssetRefusal);
       // A proven replay acknowledges existing history before today's VAT or
       // period eligibility. Shared proof retains receipt authority and collision
       // checks; marking the queue complete creates no new financial records.
@@ -1872,6 +1895,22 @@ export const postOutboxRow = internalMutation({
         (await commissionPostingBlockedReason(ctx, row)) ??
         (await custodyPostingBlockedReason(ctx, row));
       if (blockedReason) return await holdOutboxRow(ctx, row, blockedReason);
+    }
+
+    if (row.kind === "REVERSE") {
+      // ⚠️ SCRUM-560 / SCRUM-760 RULING 4 — A FIXED-ASSET REVERSAL IS REFUSED TOO. The POST-only
+      // block above does not see REVERSE rows, and `reverseAccountingEvent` would otherwise post
+      // the unwinding journal. The row's own source family is checked first, then the ORIGINAL
+      // event (the row may name a different source than the event it reverses). Refused through
+      // `failOutboxRow` like the POST case, so the engine's own throw (the backstop) is never
+      // the first thing to meet it; reversals of every other family fall through untouched.
+      const original = row.originalEventId ? await ctx.db.get(row.originalEventId) : null;
+      const reverseRefusal =
+        fixedAssetPostingRefusal({ eventType: row.eventType ?? "", sourceType: row.sourceType }) ??
+        (original && original.orgId === row.orgId
+          ? fixedAssetPostingRefusal({ eventType: original.eventType, sourceType: original.sourceType })
+          : null);
+      if (reverseRefusal) return await failOutboxRow(ctx, row, reverseRefusal);
     }
 
     // ⚠️ REVERSE RE-PROVES NOTHING ABOUT THE DOMAIN SOURCE, AND THAT IS
