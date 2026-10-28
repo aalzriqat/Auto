@@ -42,6 +42,9 @@ const OWNER_PERMS = [
 /** The customer gap R the showroom is owed on a financed deal: 500 JOD. */
 const R = 500_000;
 const FIRST_PAGE = { numItems: 50, cursor: null };
+type AgingBucket = { count: number; amount: number };
+const agingTotals = (aging: { current: AgingBucket; days1To30: AgingBucket; days31To60: AgingBucket; days61To90: AgingBucket; over90: AgingBucket }) =>
+  [aging.current, aging.days1To30, aging.days31To60, aging.days61To90, aging.over90].reduce((n, bucket) => ({ count: n.count + bucket.count, amount: n.amount + bucket.amount }), { count: 0, amount: 0 });
 
 async function seed(tag: string, sourced = false) {
   return await seedFinancedDealership(tag, {
@@ -256,10 +259,11 @@ describe("SCRUM-56: no duplicate of a sale-linked legacy receivable beside its c
 
     const legacy = await s.owner.as.query(api.collections.listReceivables, { orgId: s.orgId, paginationOpts: FIRST_PAGE });
     expect(legacy.page).toEqual([]);
+    // The headline total and aging count the debt once (500 from the canonical invoice), not twice (legacy 500 + canonical 500).
     const summary = await s.owner.as.query(api.collections.summary, { orgId: s.orgId });
-    expect(summary.totalOutstanding).toBe(0);
+    expect(summary.totalOutstanding).toBe(500);
     const aging = await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId });
-    expect(Object.values(aging).reduce((n, bucket) => n + bucket.count, 0)).toBe(0);
+    expect(agingTotals(aging)).toEqual({ count: 1, amount: 500 });
 
     // The debt is still shown, once, from the canonical side.
     const canonical = await list(s);
@@ -281,6 +285,61 @@ describe("SCRUM-56: no duplicate of a sale-linked legacy receivable beside its c
   });
 });
 
+describe("SCRUM-56: the headline total and the aging report include the canonical sale debt (ruling 8: queue/aging)", () => {
+  test("a financed customer gap R=500 is in Outstanding and in aging once; a manual legacy receivable adds to it", async () => {
+    const s = await seed("agg1");
+    await closeFinancedWithGap(s);
+    await s.t.run(async (ctx) => {
+      const now = Date.now();
+      await ctx.db.insert("receivables", {
+        orgId: s.orgId, customerId: s.customerId, sourceType: "OTHER", title: "Manual", originalAmount: 40, outstandingAmount: 40,
+        dueDate: now + 86_400_000, status: "OPEN", createdBy: s.owner.userId, createdAt: now, updatedAt: now,
+      });
+    });
+
+    const summary = await s.owner.as.query(api.collections.summary, { orgId: s.orgId });
+    expect(summary.totalOutstanding).toBe(540);
+    expect(summary.saleDebtComplete).toBe(true);
+    const aging = await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId });
+    expect(agingTotals(aging)).toEqual({ count: 2, amount: 540 });
+    expect(aging.saleDebtComplete).toBe(true);
+  });
+
+  test("a partial payment lowers the totals; the full payment removes the debt from both", async () => {
+    const s = await seed("agg2");
+    const { invoice } = await closeFinancedWithGap(s);
+    const receivableId = invoice[0]._id;
+    const pay = (amountMinor: number) =>
+      s.t.run((ctx) => payInvoice(ctx, { orgId: s.orgId, userId: s.owner.userId, customerId: s.customerId, receivableId, amountMinor }));
+
+    await pay(200_000);
+    expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).totalOutstanding).toBe(300);
+    expect(agingTotals(await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId }))).toEqual({ count: 1, amount: 300 });
+
+    await pay(300_000);
+    expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).totalOutstanding).toBe(0);
+    expect(agingTotals(await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId }))).toEqual({ count: 0, amount: 0 });
+  });
+
+  test("a cancelled sale invoice and another organization's debt are not counted", async () => {
+    const s = await seed("agg3");
+    const { invoice } = await closeFinancedWithGap(s);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(invoice[0]._id, { status: "CANCELLED", cancelledAt: Date.now() });
+      // Another organization's open sale invoice must never reach this organization's totals.
+      const now = Date.now();
+      const otherOrg = await ctx.db.insert("organizations", { name: "Other dealer", createdAt: now });
+      await ctx.db.insert("receivableDocuments", {
+        orgId: otherOrg, documentType: "INVOICE", documentNumber: "INV-OTHER", payerType: "CUSTOMER", sourceType: "sales",
+        sourceId: "someSale", originalAmountMinor: 900_000, currency: "JOD", scale: 3, issueDate: now, dueDate: now, status: "OPEN",
+        createdAt: now, createdBy: s.owner.userId,
+      });
+    });
+
+    expect((await s.owner.as.query(api.collections.summary, { orgId: s.orgId })).totalOutstanding).toBe(0);
+    expect(agingTotals(await s.owner.as.query(api.collections.agingReport, { orgId: s.orgId }))).toEqual({ count: 0, amount: 0 });
+  });
+});
 describe("SCRUM-56: tenancy and permission", () => {
   test("another organization never sees the debt, and cannot read this organization's list", async () => {
     const s = await seed("ten1");

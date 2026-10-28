@@ -238,6 +238,9 @@ export function CollectionsTab() {
         <Metric icon={HandCoins} label={t("CollectionCollectedToday" as any)} value={formatCurrency(summary?.collectedToday ?? 0)} tone="success" />
         <Metric icon={FileCheck2} label={t("CollectionUpcomingCheques" as any)} value={formatCurrency(summary?.upcomingChequeTotal ?? 0)} />
       </div>
+      {(summary?.saleDebtComplete === false || aging?.saleDebtComplete === false) && (
+        <p role="status" className="text-sm text-amber-700 dark:text-amber-300">{t("CollectionSaleDebtIncomplete" as any)}</p>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
