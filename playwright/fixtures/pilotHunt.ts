@@ -1,3 +1,5 @@
+import type { BrowserContext, Page } from "@playwright/test";
+
 /** G8 web hunt scope. These are entry points, never evidence of execution. */
 export const PILOT_HUNT_LOCALES = ["en", "ar"] as const;
 export const PILOT_HUNT_VIEWPORTS = [
@@ -34,4 +36,34 @@ export const PILOT_ACCOUNTING_VIEWS = [
 export function pilotExplorerStarts() {
   return PILOT_HUNT_LOCALES.flatMap(locale => PILOT_HUNT_VIEWPORTS.flatMap(viewport =>
     PILOT_EXPLORER_ROUTES.map(route => ({ locale, viewport, route }))));
+}
+
+/**
+ * Runs one locale/viewport cell on its own page from the caller's (already
+ * authenticated) context, with exactly one locale init script installed.
+ *
+ * Playwright documents that the evaluation order of multiple init scripts on a
+ * page is not defined (Page.addInitScript), so calling addInitScript once per
+ * cell on a shared page makes the locale under test non-deterministic: every
+ * earlier locale's script still runs on each navigation. A fresh page per cell
+ * from BrowserContext.newPage shares the context's cookies and storage state
+ * but carries no earlier scripts, routes or listeners. The page is closed when
+ * the cell ends, so nothing leaks into the next cell.
+ */
+export async function withLocalePage<T>(
+  context: BrowserContext,
+  locale: (typeof PILOT_HUNT_LOCALES)[number],
+  viewport: { width: number; height: number },
+  run: (page: Page) => Promise<T>,
+  onPageError?: (message: string) => void,
+): Promise<T> {
+  const page = await context.newPage();
+  try {
+    if (onPageError) page.on("pageerror", error => onPageError(error.message));
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.addInitScript(language => localStorage.setItem("autoflow-locale", language), locale);
+    return await run(page);
+  } finally {
+    await page.close();
+  }
 }

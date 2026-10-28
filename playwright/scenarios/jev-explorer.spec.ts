@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { callJev } from "../../scripts/intelligence/jevImpact.mjs";
 import { resolveOrgId } from "../utils";
-import { pilotExplorerStarts } from "../fixtures/pilotHunt";
+import { pilotExplorerStarts, withLocalePage } from "../fixtures/pilotHunt";
 import { isCommitActionName } from "./jevExplorerActions";
 import { namesProduction, servesOtherThan } from "./productionGuard";
 
@@ -262,9 +262,13 @@ test.describe("Jev explorer (advisory)", () => {
 
   // The seed stays out of the title: unset, it is time-derived and differs
   // between the runner and the worker, which then cannot find the test.
-  async function walk(page: Page, baseURL: string | undefined, start: ReturnType<typeof pilotExplorerStarts>[number]) {
-    await page.setViewportSize(start.viewport);
-    await page.addInitScript(locale => localStorage.setItem("autoflow-locale", locale), start.locale);
+  // Every start gets its own page with exactly one locale init script: several
+  // addInitScript calls on one page run in an order Playwright does not define.
+  function walk(context: BrowserContext, baseURL: string | undefined, start: ReturnType<typeof pilotExplorerStarts>[number]) {
+    return withLocalePage(context, start.locale, start.viewport, page => explore(page, baseURL, start));
+  }
+
+  async function explore(page: Page, baseURL: string | undefined, start: ReturnType<typeof pilotExplorerStarts>[number]) {
     test.info().annotations.push({ type: "seed", description: `${SEED} (${STEPS} steps)` });
     const host = new URL(baseURL ?? "http://localhost:3000").hostname;
     expect(["localhost", "127.0.0.1"], "Explorer runs against a local app only.").toContain(host);
@@ -390,16 +394,16 @@ test.describe("Jev explorer (advisory)", () => {
     });
   }
 
-  test("random walk", async ({ page, baseURL }) => {
-    await walk(page, baseURL, pilotExplorerStarts()[0]);
+  test("random walk", async ({ context, baseURL }) => {
+    await walk(context, baseURL, pilotExplorerStarts()[0]);
   });
-  test("pilot explorer starts on Deals in both languages and widths", async ({ page, baseURL }) => {
-    for (const start of pilotExplorerStarts().filter(s => s.route === "deals")) await walk(page, baseURL, start);
+  test("pilot explorer starts on Deals in both languages and widths", async ({ context, baseURL }) => {
+    for (const start of pilotExplorerStarts().filter(s => s.route === "deals")) await walk(context, baseURL, start);
   });
-  test("pilot explorer starts on Sales in both languages and widths", async ({ page, baseURL }) => {
-    for (const start of pilotExplorerStarts().filter(s => s.route === "sales")) await walk(page, baseURL, start);
+  test("pilot explorer starts on Sales in both languages and widths", async ({ context, baseURL }) => {
+    for (const start of pilotExplorerStarts().filter(s => s.route === "sales")) await walk(context, baseURL, start);
   });
-  test("pilot explorer starts on Accounting in both languages and widths", async ({ page, baseURL }) => {
-    for (const start of pilotExplorerStarts().filter(s => s.route === "accounting")) await walk(page, baseURL, start);
+  test("pilot explorer starts on Accounting in both languages and widths", async ({ context, baseURL }) => {
+    for (const start of pilotExplorerStarts().filter(s => s.route === "accounting")) await walk(context, baseURL, start);
   });
 });

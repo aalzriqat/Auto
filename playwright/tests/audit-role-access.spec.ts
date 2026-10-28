@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { newContainedContext } from "../containedContext";
-import { PILOT_ACCOUNTING_VIEWS, PILOT_HUNT_LOCALES, PILOT_HUNT_VIEWPORTS } from "../fixtures/pilotHunt";
+import { PILOT_ACCOUNTING_VIEWS, PILOT_HUNT_LOCALES, PILOT_HUNT_VIEWPORTS, withLocalePage } from "../fixtures/pilotHunt";
 import { ensureFinanceCompany, ZERO_FEE_COMPANY, CUSTOMER_STATUS } from "../fixtures/financedDeal";
 import { test, expect, type Page, type TestInfo } from "@playwright/test";
 import { api } from "../../convex/_generated/api";
@@ -95,7 +95,8 @@ test("sales quote picker respects audited role and tenant choice authority", asy
 // G8 additions run in role-regressions, before the route matrix isolates the
 // approver. The owner prepares QA rows; the audited seat never gains authority.
 async function pilotPaint(page: Page, path: string, allowed: boolean, locale: "en" | "ar") {
-  const denied = page.getByRole("heading", { name: /^(Access Not Allowed|الوصول غير مسموح)$/ });
+  // Bound to the requested locale: an Arabic page showing the English denial is a failure.
+  const denied = page.getByRole("heading", { name: locale === "ar" ? "الوصول غير مسموح" : "Access Not Allowed", exact: true });
   if (allowed) {
     await requireReadyScreen(page, 20_000, path);
     await expect(denied).toHaveCount(0);
@@ -113,66 +114,66 @@ async function pilotCapture(page: Page, testInfo: TestInfo, cell: string) {
   await page.screenshot({ path: file, fullPage: true });
 }
 
-test("pilot Accounting traversal paints every section and nested reader", async ({ page, baseURL }, testInfo) => {
+// Each locale/viewport cell runs on its own page (withLocalePage) so exactly one
+// locale init script is installed; pageerrors from every cell are collected.
+test("pilot Accounting traversal paints every section and nested reader", async ({ context, baseURL }, testInfo) => {
   const errors: string[] = [];
-  page.on("pageerror", error => errors.push(error.message));
   for (const locale of PILOT_HUNT_LOCALES) for (const viewport of PILOT_HUNT_VIEWPORTS) {
-    await page.setViewportSize(viewport);
-    await page.addInitScript(language => localStorage.setItem("autoflow-locale", language), locale);
-    const { allowed, orgId, permissions } = await visit(page, baseURL, "accounting");
-    for (const [index, view] of PILOT_ACCOUNTING_VIEWS.entries()) {
-      const path = `/${orgId}/accounting`;
-      await openHuntPage(page, baseURL, `${path}?section=${view.section}`);
-      await pilotPaint(page, path, allowed, locale);
-      if (allowed) {
-        // Radix tab IDs encode the stable tab value in both locales.
-        for (const tab of view.tabs) {
-          const trigger = page.locator(`[role="tab"][id$="-trigger-${tab}"]:visible`);
-          if (tab === "approvals" && !permissions.some(permission => permission === "approve:requests" || permission === "manage:finance")) {
-            await expect(trigger).toHaveCount(0);
-            continue;
+    await withLocalePage(context, locale, viewport, async page => {
+      const { allowed, orgId, permissions } = await visit(page, baseURL, "accounting");
+      for (const [index, view] of PILOT_ACCOUNTING_VIEWS.entries()) {
+        const path = `/${orgId}/accounting`;
+        await openHuntPage(page, baseURL, `${path}?section=${view.section}`);
+        await pilotPaint(page, path, allowed, locale);
+        if (allowed) {
+          // Radix tab IDs encode the stable tab value in both locales.
+          for (const tab of view.tabs) {
+            const trigger = page.locator(`[role="tab"][id$="-trigger-${tab}"]:visible`);
+            if (tab === "approvals" && !permissions.some(permission => permission === "approve:requests" || permission === "manage:finance")) {
+              await expect(trigger).toHaveCount(0);
+              continue;
+            }
+            await trigger.click();
+            await expect(trigger).toHaveAttribute("aria-selected", "true");
+            const panelId = await trigger.getAttribute("aria-controls");
+            expect(panelId).toBeTruthy();
+            await expect(page.locator(`[id="${panelId}"]`)).toBeVisible();
           }
-          await trigger.click();
-          await expect(trigger).toHaveAttribute("aria-selected", "true");
-          const panelId = await trigger.getAttribute("aria-controls");
-          expect(panelId).toBeTruthy();
-          await expect(page.locator(`[id="${panelId}"]`)).toBeVisible();
+          await pilotPaint(page, path, true, locale);
+          if (view.section === "journal" && view.tabs.some(tab => tab === "manual")) {
+            await expect(page.getByTestId("manual-journals-pilot-off-notice")).toBeVisible();
+            await expect(page.getByTestId("new-manual-journal-btn")).toBeDisabled();
+          }
         }
-        await pilotPaint(page, path, true, locale);
-        if (view.section === "journal" && view.tabs.some(tab => tab === "manual")) {
-          await expect(page.getByTestId("manual-journals-pilot-off-notice")).toBeVisible();
-          await expect(page.getByTestId("new-manual-journal-btn")).toBeDisabled();
-        }
+        await pilotCapture(page, testInfo, `${locale}-${viewport.name}-accounting-${index}`);
       }
-      await pilotCapture(page, testInfo, `${locale}-${viewport.name}-accounting-${index}`);
-    }
+    }, message => errors.push(message));
   }
   expect(errors).toEqual([]);
 });
 
-test("pilot Sales opens CASH and configured FINANCED entry panels for each audited role", async ({ page, baseURL }, testInfo) => {
+test("pilot Sales opens CASH and configured FINANCED entry panels for each audited role", async ({ context, baseURL }, testInfo) => {
   const errors: string[] = [];
-  page.on("pageerror", error => errors.push(error.message));
   for (const locale of PILOT_HUNT_LOCALES) for (const viewport of PILOT_HUNT_VIEWPORTS) {
-    await page.setViewportSize(viewport);
-    await page.addInitScript(language => localStorage.setItem("autoflow-locale", language), locale);
-    const { allowed, orgId } = await visit(page, baseURL, "sales");
-    for (const mode of ["cash", "installment"] as const) {
-      await openHuntPage(page, baseURL, `/${orgId}/sales`);
-      const button = page.locator(`#btn-new-${mode}-sale`);
-      if (allowed) {
-        await button.click();
-        await requireReadyScreen(page, 20_000, `/${orgId}/sales`);
-        await expect(page.getByRole("button", { name: /Select an available vehicle|اختر.*مركبة|اختيار.*مركبة/ }).first()).toBeVisible();
-      } else await expect(button).toHaveCount(0);
-      await pilotPaint(page, `/${orgId}/sales`, allowed, locale);
-      await pilotCapture(page, testInfo, `${locale}-${viewport.name}-${mode}`);
-    }
+    await withLocalePage(context, locale, viewport, async page => {
+      const { allowed, orgId } = await visit(page, baseURL, "sales");
+      for (const mode of ["cash", "installment"] as const) {
+        await openHuntPage(page, baseURL, `/${orgId}/sales`);
+        const button = page.locator(`#btn-new-${mode}-sale`);
+        if (allowed) {
+          await button.click();
+          await requireReadyScreen(page, 20_000, `/${orgId}/sales`);
+          await expect(page.getByRole("button", { name: /Select an available vehicle|اختر.*مركبة|اختيار.*مركبة/ }).first()).toBeVisible();
+        } else await expect(button).toHaveCount(0);
+        await pilotPaint(page, `/${orgId}/sales`, allowed, locale);
+        await pilotCapture(page, testInfo, `${locale}-${viewport.name}-${mode}`);
+      }
+    }, message => errors.push(message));
   }
   expect(errors).toEqual([]);
 });
 
-test("pilot Deals opens owned and SOURCED cash and configured financed detail screens", async ({ page, browser, baseURL }, testInfo) => {
+test("pilot Deals opens owned and SOURCED cash and configured financed detail screens", async ({ context, browser, baseURL }, testInfo) => {
   const ownerContext = await newContainedContext(browser, { storageState: USER_AUTH_FILE });
   const paths: string[] = [];
   try {
@@ -216,21 +217,20 @@ test("pilot Deals opens owned and SOURCED cash and configured financed detail sc
       }
     }
     const errors: string[] = [];
-    page.on("pageerror", error => errors.push(error.message));
     for (const locale of PILOT_HUNT_LOCALES) for (const viewport of PILOT_HUNT_VIEWPORTS) {
-      await page.setViewportSize(viewport);
-      await page.addInitScript(language => localStorage.setItem("autoflow-locale", language), locale);
-      const { allowed } = await visit(page, baseURL, "deals");
-      for (const [index, path] of paths.entries()) {
-        if (allowed) {
-          // Follow the actual row link: a direct URL alone misses list/cockpit integration.
-          await openHuntPage(page, baseURL, `/${orgId}/deals`);
-          const link = page.locator(`main a[href="${path}"]`).first();
-          await link.click();
-        } else await openHuntPage(page, baseURL, path);
-        await pilotPaint(page, path, allowed, locale);
-        await pilotCapture(page, testInfo, `${locale}-${viewport.name}-deal-${index}`);
-      }
+      await withLocalePage(context, locale, viewport, async page => {
+        const { allowed } = await visit(page, baseURL, "deals");
+        for (const [index, path] of paths.entries()) {
+          if (allowed) {
+            // Follow the actual row link: a direct URL alone misses list/cockpit integration.
+            await openHuntPage(page, baseURL, `/${orgId}/deals`);
+            const link = page.locator(`main a[href="${path}"]`).first();
+            await link.click();
+          } else await openHuntPage(page, baseURL, path);
+          await pilotPaint(page, path, allowed, locale);
+          await pilotCapture(page, testInfo, `${locale}-${viewport.name}-deal-${index}`);
+        }
+      }, message => errors.push(message));
     }
     expect(errors).toEqual([]);
   } finally { await ownerContext.close(); }
