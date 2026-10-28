@@ -187,3 +187,22 @@ test("request maps inside unrelated wrapper calls cannot authorize relocation", 
   const site = `app/query.tsx:1:${text.indexOf("api.a.b") + 1}`;
   assert.equal(callExpressionAt(parsed, site), null);
 });
+
+test("an empty baseline is refused, not reported as matching zero entries", () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "baseline.json"), JSON.stringify({ version: 1, entries: [] }, null, 2) + "\n");
+  const refused = run(checker, root);
+  assert.equal(refused.status, 3, refused.output);
+  assert.match(refused.output, /no baseline entries/i);
+  assert.doesNotMatch(refused.output, /0 baseline entries matched/);
+  // Retiring all debt is a reviewed decision, named on the command line, never a silent pass.
+  const allowed = run(checker, root, ["--allow-empty"]);
+  assert.equal(allowed.status, 0, allowed.output);
+  assert.match(allowed.output, /empty baseline allowed/i);
+});
+
+test("--allow-empty does not excuse a non-empty baseline that has drifted", () => {
+  const { root } = fixture();
+  const checked = run(checker, root, ["--allow-empty"]);
+  assert.equal(checked.status, 10, checked.output);
+});
