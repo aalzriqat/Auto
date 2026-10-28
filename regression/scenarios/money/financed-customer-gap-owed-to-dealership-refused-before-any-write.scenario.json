@@ -1,0 +1,56 @@
+{
+  "id": "financed-customer-gap-owed-to-dealership-refused-before-any-write",
+  "steps": [
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "financingEconomics.resolveAppraisalGap",
+      "input": {
+        "quotedMinor": 12500000,
+        "approvedMinor": 11500000,
+        "financedPercent": 85,
+        "customerGapCashToDealerMinor": 850000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "resolve.refusalCode",
+      "value": "FINANCED_CUSTOMER_GAP_UNCOLLECTABLE_REFUSED"
+    },
+    {
+      "observable": "application.gapResolution",
+      "value": "PENDING_NEGOTIATION"
+    },
+    {
+      "observable": "application.customerGapToDealershipMinor",
+      "value": 0
+    },
+    {
+      "observable": "db.rowsChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum486Certification.test.ts",
+    "testName": "owned configured financier x customer would owe the dealership 850: refused at the choice with the specific code, every table untouched, and the allowed route still settles it"
+  },
+  "matrixRow": "pilot-financed-customer-gap-refused",
+  "fingerprint": "0fcaa0f7ce3ea33f866d4da385c23114d4808e6bf8fd0bca9c53de207f273d85",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum571b-gap-refuse-early",
+    "firstSeen": "2026-10-28"
+  }
+}

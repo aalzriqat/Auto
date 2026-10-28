@@ -190,8 +190,12 @@ describe("the composition boundary at every real caller", () => {
         return await resolveFinancedSalePlan(ctx, app, { settlesDirect: false, currency: "JOD", mayReadMoney: true });
       });
     };
-    const readable = await plan({ cash: 100_000, installment: 200_000 });
+    // A readable pair that sums to zero builds. A readable pair that leaves the customer owing the dealership is
+    // no longer plannable at all (owner ruling SCRUM-760 c23812 #10: no certified route collects that receivable),
+    // so it refuses with the uncollectable code rather than with the unreadable-amount message.
+    const readable = await plan({ cash: 0, installment: 0 });
     expect(readable).toBeDefined();
+    await expect(plan({ cash: 100_000, installment: 200_000 })).rejects.toThrow(/CUSTOMER_GAP_UNCOLLECTABLE/);
     for (const [, pair] of CORRUPT_PAIRS) {
       await expect(plan(pair)).rejects.toThrow(/gap contribution .* not a readable amount/);
     }

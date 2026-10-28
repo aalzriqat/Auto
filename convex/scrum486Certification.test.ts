@@ -15,6 +15,9 @@ import {
 import { seedBank } from "../test-utils/bankFixture";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
+import {
+  appOf, approvedDeal, CUSTOMER_PAYS_DEALER, DEALER_ABSORBS, refusedWithCode, resolveGap, seedGapDealership,
+} from "../test-utils/gapDealFixture";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -3623,5 +3626,29 @@ describe("SCRUM-854 deal commission lines: the salesperson is refused a second S
     expect(await scopedRows(s.orgId, saleId)).toEqual(rows);
     expect(await readTotal()).toEqual({ totalMinor: 340_000, saleCommissionMinor: 250_000, lines: 3 });
     await expectForeignUntouched();
+  }, 30_000);
+});
+
+describe("SCRUM-486 / SCRUM-571 ruling 10 cell: a financed customer gap the dealership cannot collect (harness only)", () => {
+  // Literal figures (JOD): 12,500 quoted, 11,500 approved, 85% LTV => net shortfall 850. The customer would owe the
+  // dealership 850 in cash. No certified door applies a customer payment to the sale invoice, so the choice is refused
+  // where it is made (owner ruling SCRUM-760 c23812 #10) and nothing at all changes: no journal, no invoice, no row.
+  test("owned configured financier x customer would owe the dealership 850: refused at the choice with the specific code, every table untouched, and the allowed route still settles it", async () => {
+    const s = await seedGapDealership("c486gap", MODULES);
+    const applicationId = await approvedDeal(s, 11_500);
+    const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+
+    expect(await refusedWithCode(resolveGap(s, applicationId, CUSTOMER_PAYS_DEALER))).toBe("FINANCED_CUSTOMER_GAP_UNCOLLECTABLE_REFUSED");
+
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+    const refused = await appOf(s, applicationId);
+    expect(refused?.gapResolution).toBe("PENDING_NEGOTIATION");
+    expect((refused?.customerGapCashToDealerMinor ?? 0) + (refused?.customerGapInstallmentToDealerMinor ?? 0)).toBe(0);
+
+    // The dealership absorbing the 850 is the allowed route: it records no customer debt to the dealership.
+    await resolveGap(s, applicationId, DEALER_ABSORBS);
+    const settled = await appOf(s, applicationId);
+    expect(settled?.gapResolution).toBe("DEALER_ABSORBS");
+    expect((settled?.customerGapCashToDealerMinor ?? 0) + (settled?.customerGapInstallmentToDealerMinor ?? 0)).toBe(0);
   }, 30_000);
 });

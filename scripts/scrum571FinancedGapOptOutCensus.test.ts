@@ -29,11 +29,13 @@ const SWITCH_MODULE = "financedGapPilotSwitch";
 const ALLOWED_OPT_OUTS: readonly string[] = [
   "convex/commissionMarginBase.test.ts",
   "convex/financedConsignedSettlement.test.ts",
+  "convex/financingEconomics.test.ts",
   "convex/manualFinanceSettlement.test.ts",
   "convex/scrum350Cons1V3PriceBasis.test.ts",
   "convex/scrum411DirectRoute.test.ts",
   "convex/scrum411ForwardOrdering.test.ts",
   "convex/scrum411ReportBasis.test.ts",
+  "convex/scrum571bGapRefusedEarlyOptOut.test.ts",
   "convex/scrum571s2FinancedSettledRead.test.ts",
   "convex/scrum766CustomerPaysFinanceCompany.test.ts",
 ];
@@ -60,19 +62,66 @@ function testFiles(dir: string, out: string[] = []): string[] {
 }
 
 const QUOTE = "[\"'`]";
-const MOCKS_GATE_MODULE = new RegExp(
-  `vi\\.(?:mock|doMock|unmock|doUnmock)\\s*\\(\\s*(?:import\\s*\\(\\s*)?${QUOTE}[^"'\`]*${SWITCH_MODULE}`
-);
+// The modules whose replacement turns the refusal off: the switch itself, and the two modules that read it (the pure rule
+// and the completion door). Mocking either of the latter replaces the refusal without touching the switch.
+const GATE_MODULES = "financedGapPilotGate|financedGapPilotRule";
+const MOCK_CALL_OPEN = /vi\.(mock|doMock|unmock|doUnmock)\s*\(/g;
+const TARGETS_SWITCH = new RegExp(`^\\s*(?:import\\s*\\(\\s*)?${QUOTE}[^"'\`]*${SWITCH_MODULE}`);
+const TARGETS_GATE = new RegExp(`^\\s*(?:import\\s*\\(\\s*)?${QUOTE}[^"'\`]*(?:${GATE_MODULES})`);
 const SETS_SWITCH_NOT_TRUE = new RegExp(`${SWITCH}\\s*:\\s*(?!\\s|true\\b)`);
 /** The switch set to a literal that really turns it off, as the LAST key (a spread after it would restore the real value). */
 const SETS_SWITCH_OFF = new RegExp(`${SWITCH}\\s*:\\s*(?:false|null|undefined|0|!1)\\s*,?\\s*\\}\\s*\\)\\s*\\)`);
 
-function turnsSwitchOff(src: string): boolean {
-  return MOCKS_GATE_MODULE.test(src) || SETS_SWITCH_NOT_TRUE.test(src);
+/** The source with block and line comments removed, so a commented-out mock is not a mock. (`://` is kept: it is not a comment.) */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`\\])\/\/[^\n]*/g, "$1");
 }
 
+type MockCall = { kind: string; text: string };
+
+/** Every executable `vi.mock`-family call: its kind, and its argument text through the balancing close paren. */
+function mockCalls(src: string): MockCall[] {
+  const code = stripComments(src);
+  const calls: MockCall[] = [];
+  for (const open of code.matchAll(MOCK_CALL_OPEN)) {
+    const start = open.index + open[0].length;
+    let depth = 1;
+    let quote = "";
+    let end = start;
+    for (; end < code.length && depth > 0; end++) {
+      const ch = code[end];
+      if (quote) {
+        if (ch === "\\") end++;
+        else if (ch === quote) quote = "";
+      } else if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+      else if (ch === "(") depth++;
+      else if (ch === ")") depth--;
+    }
+    calls.push({ kind: open[1], text: code.slice(start, end) });
+  }
+  return calls;
+}
+
+function turnsSwitchOff(src: string): boolean {
+  return (
+    mockCalls(src).some((call) => TARGETS_SWITCH.test(call.text) || TARGETS_GATE.test(call.text)) ||
+    SETS_SWITCH_NOT_TRUE.test(stripComments(src))
+  );
+}
+
+/**
+ * An opt-out: at least one executable mock of the switch module, EVERY such mock's own factory sets the switch to a falsy
+ * literal last, and nothing replaces the rule or the door instead. A pass-through mock, a restored switch, a false value
+ * that only a comment or another object mentions, and a mock of the gate or rule module all fail.
+ */
 function isRealOptOut(src: string): boolean {
-  return MOCKS_GATE_MODULE.test(src) && SETS_SWITCH_OFF.test(src);
+  const calls = mockCalls(src);
+  const switchMocks = calls.filter((call) => (call.kind === "mock" || call.kind === "doMock") && TARGETS_SWITCH.test(call.text));
+  return (
+    switchMocks.length > 0 &&
+    switchMocks.every((call) => SETS_SWITCH_OFF.test(call.text)) &&
+    !calls.some((call) => TARGETS_GATE.test(call.text))
+  );
 }
 
 describe("SCRUM-571 financed-gap opt-out census", () => {
@@ -146,5 +195,41 @@ describe("SCRUM-571 financed-gap opt-out census", () => {
     expect(isRealOptOut(real)).toBe(true);
     expect(isRealOptOut(passThrough)).toBe(false);
     expect(isRealOptOut(restored)).toBe(false);
+  });
+
+  const SWITCH_OFF_MOCK = `vi.mock("./utils/financedGapPilotSwitch", async (o) => ({ ...(await o()), ${SWITCH}: false }));`;
+  const PASS_THROUGH_MOCK = `vi.mock("./utils/financedGapPilotSwitch", async (o) => ({ ...(await o()) }));`;
+
+  test("a commented-out mock is not a mock (self-test)", () => {
+    const lineComment = `// ${SWITCH_OFF_MOCK}\nconst x = 1;`;
+    const blockComment = `/* ${SWITCH_OFF_MOCK} */\nconst x = 1;`;
+    const docComment = `/**\n * ${SWITCH_OFF_MOCK}\n */`;
+    for (const src of [lineComment, blockComment, docComment]) {
+      expect(turnsSwitchOff(src), src).toBe(false);
+      expect(isRealOptOut(src), src).toBe(false);
+    }
+    // A comment after code on the same line is stripped too, but code before it is kept.
+    expect(turnsSwitchOff(`${SWITCH_OFF_MOCK} // keep`)).toBe(true);
+  });
+
+  test("a pass-through mock does not become an opt-out because a comment or another object says false (self-test)", () => {
+    const commentedFalse = `${PASS_THROUGH_MOCK}\n// ${SWITCH_OFF_MOCK}\n`;
+    const elsewhereFalse = `${PASS_THROUGH_MOCK}\nconst unrelated = { ${SWITCH}: false };\n`;
+    const trailingBlock = `${PASS_THROUGH_MOCK}\n/* vi.mock("./utils/financedGapPilotSwitch", () => ({ ${SWITCH}: false })); */`;
+    for (const src of [commentedFalse, elsewhereFalse, trailingBlock]) expect(isRealOptOut(src), src).toBe(false);
+    // Two executable mocks: the opt-out only counts when EVERY one sets the switch off.
+    expect(isRealOptOut(`${SWITCH_OFF_MOCK}\n${PASS_THROUGH_MOCK}`)).toBe(false);
+    expect(isRealOptOut(`${SWITCH_OFF_MOCK}\n${SWITCH_OFF_MOCK}`)).toBe(true);
+  });
+
+  test("a mock of the gate or the rule module turns the refusal off and is never a valid opt-out (self-test)", () => {
+    const gate = `vi.mock("./utils/financedGapPilotGate", () => ({ assertFinancedCustomerGapCollectable: () => undefined }));`;
+    const rule = `vi.doMock("../utils/financedGapPilotRule", async (o) => ({ ...(await o()), customerGapToDealerIsUncollectable: () => false }));`;
+    for (const src of [gate, rule]) {
+      expect(turnsSwitchOff(src), src).toBe(true);
+      expect(isRealOptOut(src), src).toBe(false);
+      // Carrying a real switch opt-out beside it does not launder it.
+      expect(isRealOptOut(`${SWITCH_OFF_MOCK}\n${src}`), src).toBe(false);
+    }
   });
 });

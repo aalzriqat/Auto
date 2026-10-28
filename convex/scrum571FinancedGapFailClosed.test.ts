@@ -16,13 +16,16 @@
  */
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import {
-  finalizeAsOwner, newApplication, payForwardAsOwner, readyDeal, refusalDataOf, seedFinancedDealership,
+  finalizeAsOwner, payForwardAsOwner, readyDeal, refusalDataOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
+import {
+  appOf, approvedDeal, GAP_DEAL_PERMS, jod, makeFinalizeReady, refusedWithCode, resolveGap, seedGapDealership,
+  writeLegacySplit, type GapAppId, type GapDealSeed, type GapSplit,
+} from "../test-utils/gapDealFixture";
 import { getReceivableOutstandingMinor } from "./subledger";
 import {
   assertFinancedCustomerGapCollectable,
@@ -39,79 +42,39 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const MODULES = import.meta.glob("./**/*.ts");
-const jod = (major: number) => major * 1_000;
 const REFUSAL_CODE = "FINANCED_CUSTOMER_GAP_UNCOLLECTABLE_REFUSED";
+const ALL_PERMS = GAP_DEAL_PERMS;
 
-const ALL_PERMS = [
-  "create:sales", "view:sales", "edit:sales",
-  "view:vehicles", "create:vehicles", "edit:vehicles",
-  "view:customers", "create:customers",
-  "approve:requests",
-  "view:finance_applications", "create:finance_application",
-  "review:finance_application", "approve:finance_application",
-  "manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement",
-  "verify:finance_documents", "register:vehicle_handover",
-  "register:expected_payment",
-  "manage:finance", "view:finance",
-  "view:commissions", "manage:commissions",
-  "view:reports", "manage:settings",
-];
+const seed = (tag: string) => seedGapDealership(tag, MODULES);
+type Seeded = GapDealSeed;
+type AppId = GapAppId;
+type Split = GapSplit;
 
-async function seed(tag: string) {
-  const s = await seedFinancedDealership(tag, {
-    modules: MODULES, ownerPerms: ALL_PERMS, label: "S571G", vinPrefix: "VIN571G", actors: {},
-  });
-  // The fixture company lends 100%, which leaves the showroom nothing to contribute.
-  await s.t.run((ctx) => ctx.db.patch(s.companyId, { defaultLtvPercent: 85 }));
-  return s;
-}
-type Seeded = Awaited<ReturnType<typeof seed>>;
-type AppId = Id<"financeApplications">;
-
-/** How the 850 shortfall is shared, in minor units. customer = cash + instalment + financeCompany. */
-type Split = { customer: number; dealer: number; cash: number; installment: number; financeCompany: number };
-
-async function appOf(s: Seeded, applicationId: AppId) {
-  return await s.t.run((ctx) => ctx.db.get(applicationId));
-}
-
-/** Approved at 11,500 against a 12,500 quotation (shortfall 850), the split agreed, the vehicle handed over. */
+/**
+ * Approved at 11,500 against a 12,500 quotation (shortfall 850), the split agreed, the vehicle handed over.
+ *
+ * Since the early refusal (scrum571bGapRefusedEarly.test.ts) `resolveAppraisalGap` cannot record a split that leaves the
+ * customer owing the dealership, so a deal with R > 0 is built the way a row agreed BEFORE that refusal looks: the gap
+ * is resolved with R = 0 (the customer's finance-company part kept, the rest absorbed), the vehicle is handed over, and
+ * the full split is then written straight to the row. This suite is about the completion door's backstop for exactly such
+ * rows.
+ */
 async function resolvedDeal(s: Seeded, split: Split): Promise<AppId> {
-  const { owner, approver, orgId } = s;
-  const { applicationId } = await newApplication(s);
-  await owner.as.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
-  await approver.as.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
-  await owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
-    orgId, applicationId, submittedQuotationMinor: jod(12_500), source: "MANUAL_ENTRY", customerFirstPaymentMinor: jod(500),
-  });
-  await approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId, applicationId, approvedAmountMinor: jod(11_500), basis: "MANUAL", notes: "Approved below the quotation.",
-  });
+  const applicationId = await approvedDeal(s, 11_500);
+  const collectable = split.cash + split.installment === 0;
+  await resolveGap(
+    s,
+    applicationId,
+    collectable
+      ? split
+      : { customer: split.financeCompany, dealer: jod(850) - split.financeCompany, cash: 0, installment: 0, financeCompany: split.financeCompany }
+  );
+  await registerHandover(s.owner.as, api, s.orgId, applicationId);
+  if (!collectable) await writeLegacySplit(s, applicationId, split);
+  await makeFinalizeReady(s, applicationId);
   expect((await appOf(s, applicationId))?.netShortfallMinor).toBe(jod(850));
-  const served = await approver.as.query(api.applications.get, { orgId, applicationId });
-  await approver.as.mutation(api.financingEconomics.resolveAppraisalGap, {
-    orgId, applicationId, economicsStamp: served!.economicsStamp as string,
-    customerGapShareMinor: split.customer,
-    dealerGapShareMinor: split.dealer,
-    customerGapCashToDealerMinor: split.cash,
-    customerGapInstallmentToDealerMinor: split.installment,
-    customerGapToFinanceCompanyMinor: split.financeCompany,
-  });
-  await registerHandover(owner.as, api, orgId, applicationId);
-  await owner.as.mutation(api.applications.registerExpectedPayment, {
-    orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-  });
-  const feeId = await owner.as.mutation(api.financeDealCosts.recordDealFee, {
-    expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId, applicationId,
-    feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
-    deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
-  });
-  await owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
-    orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
-  });
   return applicationId;
 }
-
 /** Records the customer's payment to the finance company as confirmed evidence, as the approver. */
 function confirmFinanceCompanyPayment(s: Seeded, applicationId: AppId, amountMinor: number) {
   return s.approver.as.mutation(api.customerFinanceCompanyPayments.confirmPayment, {
@@ -124,12 +87,6 @@ const finalizeKeyed = (s: Pick<Seeded, "owner" | "orgId">, applicationId: AppId,
   s.owner.as.mutation(api.applications.finalizeDeal, { idempotencyKey, orgId: s.orgId, applicationId });
 
 const everyTable = (s: Pick<Seeded, "t">) => dbSnapshot(s.t, Object.keys(schema.tables));
-
-/** The refusal's code, or a loud marker when the call was accepted. */
-async function refusedWithCode(promise: Promise<unknown>): Promise<string> {
-  const refusal = await refusalDataOf(promise);
-  return refusal === null ? "<<ACCEPTED - NO REFUSAL>>" : (refusal.code ?? `<<NO CODE: ${refusal.message}>>`);
-}
 
 /** Finalizes a deal that must refuse, and proves the refusal wrote nothing in any table of any tenant. */
 async function expectGapRefusalWithZeroWrites(s: Seeded, applicationId: AppId) {
@@ -228,6 +185,17 @@ describe("SCRUM-571 ruling 10: controls - a deal whose customer owes the dealers
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
   });
 
+  test("a DIRECT_TO_SUPPLIER settlement with no gap (R = 0) closes with the switch ON: the gate does not over-refuse that route", async () => {
+    // A DIRECT_TO_SUPPLIER route exists only for a consigned (SOURCED) car.
+    const s = await seedFinancedDealership("direct", {
+      modules: MODULES, ownerPerms: ALL_PERMS, label: "S571G", vinPrefix: "VIN571G", actors: {}, sourced: true,
+    });
+    const { applicationId } = await readyDeal(s, { route: "DIRECT_TO_SUPPLIER", deposit: false });
+    expect((await appOf(s, applicationId))?.supplierSettlementRoute).toBe("DIRECT_TO_SUPPLIER");
+    await finalizeAsOwner(s, applicationId);
+    expect((await appOf(s, applicationId))?.status).toBe("CLOSED");
+  });
+
   test("replaying a finalize that already closed returns the same sale and is never refused afterwards", async () => {
     const s = await seed("replay");
     const applicationId = await resolvedDeal(s, { customer: 0, dealer: jod(850), cash: 0, installment: 0, financeCompany: 0 });
@@ -240,11 +208,15 @@ describe("SCRUM-571 ruling 10: controls - a deal whose customer owes the dealers
     expect(await finalizeKeyed(s, applicationId, crypto.randomUUID())).toBe(first);
   });
 
-  test("the readiness read still answers for a deal that finalize will refuse (the gate is not inside the read path)", async () => {
+  test("the readiness read still answers for a deal that finalize will refuse, and says the deal is NOT ready", async () => {
     const s = await seed("read");
     const applicationId = await resolvedDeal(s, { customer: jod(850), dealer: 0, cash: jod(850), installment: 0, financeCompany: 0 });
     const readiness = await s.owner.as.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
-    expect(Array.isArray(readiness.checks)).toBe(true);
+    expect(readiness.state).toBe("BLOCKED");
+    // The vehicle is handed over, so the agreement can no longer be changed: the reason says so.
+    expect(readiness.checks.find((c) => c.key === "CUSTOMER_GAP_COLLECTABLE")).toMatchObject({
+      status: "BLOCKED", reasonCode: "CUSTOMER_GAP_UNCOLLECTABLE_AFTER_HANDOVER",
+    });
   });
 });
 
