@@ -299,6 +299,8 @@ const FIELD_VISIBILITY: Record<
   financingTermsShortfallMinor: "FINANCE",
   customerGapShareMinor: "FINANCE",
   dealerGapShareMinor: "FINANCE",
+  supplierGapShareMinor: "FINANCE",
+  supplierGapBasis: "FINANCE",
   customerGapCashToDealerMinor: "FINANCE",
   customerGapInstallmentToDealerMinor: "FINANCE",
   customerGapToFinanceCompanyMinor: "FINANCE",

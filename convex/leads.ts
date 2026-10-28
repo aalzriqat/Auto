@@ -3,6 +3,7 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { projectSaleRow } from "./utils/saleRowProjection";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
@@ -195,7 +196,7 @@ export const checkExistingOpenLead = query({
 export const getLinkedSale = query({
   args: { orgId: v.id("organizations"), leadId: v.id("leads") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
 
     const lead = await ctx.db.get(args.leadId);
     if (!lead || lead.orgId !== args.orgId) {
@@ -208,7 +209,7 @@ export const getLinkedSale = query({
       .withIndex("by_lead", (q) => q.eq("leadId", args.leadId))
       .filter((q) => q.neq(q.field("isDeleted"), true))
       .first();
-    if (linkedSale) return linkedSale;
+    if (linkedSale) return projectSaleRow(linkedSale, role);
 
     const sale = await ctx.db
       .query("sales")
@@ -221,7 +222,7 @@ export const getLinkedSale = query({
       )
       .first();
 
-    return sale;
+    return sale ? projectSaleRow(sale, role) : sale;
   },
 });
 

@@ -30,6 +30,7 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 }));
 
 import { ResolveGapDialog } from "./ResolveGapDialog";
+import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
 
 afterEach(() => cleanup());
 
@@ -349,6 +350,207 @@ describe("the figures are a snapshot", () => {
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("must equal the shortfall");
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+});
+
+describe("the supplier's concession on a SOURCED vehicle (SCRUM-766 PR-C)", () => {
+  const BASIS = { entitlementMinor: 9_500 * FACTOR, currency: "JOD", supplierName: "Al Noor Motors" };
+  const supplierBox = () => screen.getByLabelText(/GapSupplierConcession/) as HTMLInputElement;
+
+  test("no basis from the server: no supplier field at all, in any mode (stock cars stay refused)", () => {
+    renderDialog({ supplierBasis: null });
+    expect(screen.queryByTestId("gap-supplier")).toBeNull();
+    fireEvent.click(radio(/^GapSplit/));
+    expect(screen.queryByTestId("gap-supplier")).toBeNull();
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    expect(screen.queryByTestId("gap-supplier")).toBeNull();
+  });
+
+  test("with a basis the field is offered when the dealership bears some of it, never when the customer covers it all", () => {
+    renderDialog({ supplierBasis: BASIS });
+    expect(screen.queryByTestId("gap-supplier")).toBeNull();
+    fireEvent.click(radio(/^GapSplit/));
+    expect(screen.getByTestId("gap-supplier")).toBeTruthy();
+    expect(screen.getByTestId("gap-supplier-entitlement").textContent).toBe("9,500 JOD");
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    expect(screen.getByTestId("gap-supplier")).toBeTruthy();
+    fireEvent.click(radio(/GapCustomerAbsorbs/));
+    expect(screen.queryByTestId("gap-supplier")).toBeNull();
+  });
+
+  test("blank is no concession: the request carries no supplier keys at all", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit, supplierBasis: BASIS });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    expect(readiness()).toBe("GapAllocationComplete");
+    fireEvent.click(confirmButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      customerGapShareMinor: 0,
+      dealerGapShareMinor: GAP_MINOR,
+      customerGapCashToDealerMinor: 0,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 0,
+      notes: "",
+      economicsStamp: "v2|3",
+    });
+  });
+
+  test("dealer-absorbs with a 300 concession on an 850 shortfall: the dealership covers 550 and the observed basis rides along", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit, supplierBasis: BASIS });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "300" } });
+    expect(screen.getByTestId("gap-dealer-remainder").textContent).toBe("550 JOD");
+    expect(readiness()).toBe("GapAllocationComplete");
+    fireEvent.click(confirmButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      customerGapShareMinor: 0,
+      dealerGapShareMinor: 550 * FACTOR,
+      customerGapCashToDealerMinor: 0,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 0,
+      supplierGapShareMinor: 300 * FACTOR,
+      observedSupplierEntitlementMinor: 9_500 * FACTOR,
+      observedSupplierName: "Al Noor Motors",
+      notes: "",
+      economicsStamp: "v2|3",
+    });
+  });
+
+  test("a split takes three parts: customer 400 + supplier 300 + dealership 150 = 850", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit, supplierBasis: BASIS });
+    fireEvent.click(radio(/^GapSplit/));
+    fireEvent.change(input("GapCustomerShare"), { target: { value: "400" } });
+    fireEvent.change(supplierBox(), { target: { value: "300" } });
+    expect(screen.getByText("GapDealerShare").parentElement?.textContent).toContain("150 JOD");
+    fireEvent.change(input("GapCashToDealer"), { target: { value: "400" } });
+    fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
+    expect(readiness()).toBe("GapAllocationComplete");
+    fireEvent.click(confirmButton());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      customerGapShareMinor: 400 * FACTOR,
+      dealerGapShareMinor: 150 * FACTOR,
+      supplierGapShareMinor: 300 * FACTOR,
+    });
+  });
+
+  test("shares that overshoot the shortfall are a mismatch, not a submission", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit, supplierBasis: BASIS });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "900" } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("GapAllocationMismatch");
+    fireEvent.click(confirmButton());
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  test("a concession that is not a usable figure, or is finer than the currency, is named and blocks", () => {
+    renderDialog({ supplierBasis: BASIS });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "abc" } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("GapSupplierInvalid");
+    fireEvent.change(supplierBox(), { target: { value: "300.0004" } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("AmountTooPrecise");
+  });
+
+  test("a concession that is not smaller than the entitlement is refused before the server is asked", () => {
+    renderDialog({ supplierBasis: { ...BASIS, entitlementMinor: 200 * FACTOR } });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "200" } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("GapSupplierTooLarge");
+  });
+
+  test("the observed basis is the one the dialog OPENED against, not a later rerender's", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    const view = renderDialog({ onSubmit, supplierBasis: BASIS });
+    view.rerender(
+      <ResolveGapDialog
+        {...props({ onSubmit, supplierBasis: { ...BASIS, entitlementMinor: 8_000 * FACTOR } })}
+      />
+    );
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "300" } });
+    fireEvent.click(confirmButton());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ observedSupplierEntitlementMinor: 9_500 * FACTOR });
+  });
+
+  test("switching back to customer-absorbs drops a typed concession from the request", () => {
+    renderDialog({ supplierBasis: BASIS });
+    fireEvent.click(radio(/GapDealerAbsorbs/));
+    fireEvent.change(supplierBox(), { target: { value: "300" } });
+    fireEvent.click(radio(/GapCustomerAbsorbs/));
+    // Back in customer-absorbs the gap is the customer's alone; the readiness
+    // is about the destinations, not about a hidden supplier box.
+    expect(readiness()).toBe("GapDestinationsIncomplete");
+  });
+});
+
+/**
+ * Both seats (PR #697 review): with "the dealership covers it" selected and a supplier
+ * concession of 850 on an 850 shortfall, the server records SUPPLIER_ABSORBS and the
+ * dealership share is 0, yet the option still said the dealership covers the whole
+ * difference. The option's text must follow the allocation actually being submitted, in
+ * English and in Arabic. These use the REAL dictionaries, not key echoes, because the
+ * defect was in the sentence, not in the key.
+ */
+describe.each([
+  ["English", salesEn],
+  ["Arabic", salesAr],
+] as const)("the no-customer-part option tells the truth about who covers the shortfall (%s)", (_name, dict) => {
+  const BASIS = { entitlementMinor: 9_500 * FACTOR, currency: "JOD", supplierName: "Al Noor Motors" };
+  const words = dict as Record<string, string>;
+  const t = (key: string) => words[key] ?? key;
+  const optionText = () => document.getElementById("gap-mode-DEALER_ABSORBS")?.textContent ?? "";
+  const supplierBox = () => screen.getByTestId("gap-supplier").querySelector("input") as HTMLInputElement;
+  const open = () => {
+    renderDialog({ supplierBasis: BASIS, t });
+    fireEvent.click(document.getElementById("gap-mode-DEALER_ABSORBS") as HTMLElement);
+  };
+
+  test("no supplier share: the dealership covers the whole difference, and the option says so", () => {
+    open();
+    expect(optionText()).toContain(words.GapDealerAbsorbs);
+    expect(optionText()).toContain(words.GapDealerAbsorbsHint);
+  });
+
+  test("a partial supplier share (300 of 850): the option no longer claims the dealership covers the whole difference", () => {
+    open();
+    fireEvent.change(supplierBox(), { target: { value: "300" } });
+    expect(screen.getByTestId("gap-dealer-remainder").textContent).toBe("550 JOD");
+    expect(optionText()).not.toContain(words.GapDealerAbsorbs);
+    expect(optionText()).not.toContain(words.GapDealerAbsorbsHint);
+    expect(optionText()).toContain(words.GapNoCustomerPart);
+    expect(optionText()).toContain(words.GapNoCustomerPartHintShared);
+  });
+
+  test("the supplier covers the whole shortfall (850 of 850): the option says the dealership covers nothing", () => {
+    open();
+    fireEvent.change(supplierBox(), { target: { value: String(GAP_MAJOR) } });
+    expect(screen.getByTestId("gap-dealer-remainder").textContent).toBe("0 JOD");
+    expect(optionText()).not.toContain(words.GapDealerAbsorbs);
+    expect(optionText()).not.toContain(words.GapDealerAbsorbsHint);
+    expect(optionText()).toContain(words.GapNoCustomerPart);
+    expect(optionText()).toContain(words.GapNoCustomerPartHintSupplier);
+  });
+
+  test("clearing the supplier share restores the dealership-covers-it wording", () => {
+    open();
+    fireEvent.change(supplierBox(), { target: { value: "300" } });
+    fireEvent.change(supplierBox(), { target: { value: "" } });
+    expect(optionText()).toContain(words.GapDealerAbsorbsHint);
+  });
+
+  test("the wording keys exist and differ, so the test above cannot pass on identical or missing text", () => {
+    for (const key of ["GapNoCustomerPart", "GapNoCustomerPartHintShared", "GapNoCustomerPartHintSupplier"]) {
+      expect(words[key]).toBeTruthy();
+    }
+    expect(new Set([words.GapDealerAbsorbsHint, words.GapNoCustomerPartHintShared, words.GapNoCustomerPartHintSupplier]).size).toBe(3);
   });
 });
 
