@@ -722,10 +722,10 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
     ] as const)("%s: the localized refusal is shown and nothing is sent", async (_label, pinned, discrepancyCurrency) => {
       showDiscrepancy(pinned, discrepancyCurrency);
       renderCockpit();
+      vi.mocked(toast.error).mockClear();
       submitCorrection();
-      await waitFor(() =>
-        expect(screen.getAllByText("ServerError_DEAL_CURRENCY_UNSUPPORTED").length).toBeGreaterThan(0)
-      );
+      // The dialog reports a refused correction through the toast, as the server's own refusals are.
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("ServerError_DEAL_CURRENCY_UNSUPPORTED"));
       expect(mutationCalls.get(AMEND)).toBeUndefined();
     });
 
