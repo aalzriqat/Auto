@@ -633,6 +633,111 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
     expect(mutationCalls.get("applications:confirmDisbursement")).toBeUndefined();
   });
 
+  // SCRUM-85 c23823: the supplier advice is a minor-unit amount, so the deal's OWN currency has to be
+  // usable before the screen offers to record it. ABSENT is withheld too (unlike the dealership receipt
+  // above, whose server door resolves an absent pin as the org currency): the supplier-advice doors
+  // refuse it, and a button whose only outcome is a refusal is not offered.
+  describe("SCRUM-85: the supplier advice is withheld on a deal with no usable currency", () => {
+    const SUPPLIER = "applications:confirmSupplierDisbursement";
+    const showSupplier = (economicsCurrency: string | undefined) => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages }));
+      queryResults.set(
+        GET_QUERY,
+        application({
+          status: "CLOSED",
+          economicsCurrency,
+          vehicle: { sourceType: "SOURCED", sourcedFromName: "أبو خالد" },
+          supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+          canSettleDirectToSupplier: true,
+        })
+      );
+    };
+
+    test.each([
+      ["absent", undefined],
+      ["unrecognised JD", "JD"],
+      ["lowercase jod", "jod"],
+      ["empty", ""],
+    ] as const)("%s currency: no confirm button, the localized reason is shown, nothing is sent", (_label, bad) => {
+      showSupplier(bad);
+      renderCockpit();
+      expect(within(focusRow()).queryByRole("button", { name: "ConfirmSupplierDisbursement" })).toBeNull();
+      expect(within(focusRow()).getByText("ServerError_DEAL_CURRENCY_UNSUPPORTED")).toBeTruthy();
+      expect(mutationCalls.get(SUPPLIER)).toBeUndefined();
+    });
+
+    test("control: a USD-pinned deal still records the advice, scaled by USD's two decimals", async () => {
+      showSupplier("USD");
+      renderCockpit();
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmSupplierDisbursement" }));
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmRecorded" }));
+      await waitFor(() => expect(mutationCalls.get(SUPPLIER)).toHaveLength(1));
+      // 16,500,000 minor USD is 165,000.00: prefilled as 165000 and sent back as the same minor figure.
+      expect(mutationCalls.get(SUPPLIER)![0]).toMatchObject({ applicationId: APP, disbursedAmountMinor: 16_500_000 });
+    });
+  });
+
+  describe("SCRUM-85: the advice correction is refused on the screen when the deal currency is unusable", () => {
+    const AMEND = "applications:amendSupplierDisbursementAdvice";
+    const showDiscrepancy = (economicsCurrency: string | undefined, discrepancyCurrency: string | null) => {
+      permissions.add(PERMISSIONS.MANAGE_FINANCE);
+      queryResults.set(
+        COCKPIT_QUERY,
+        cockpit({
+          status: "CLOSED",
+          stages: closedStages,
+          settlementAdviceRequiresReconciliation: true,
+          settlementAdviceDiscrepancy: {
+            recordedMinor: 16_000_000,
+            approvedMinor: 16_500_000,
+            currency: discrepancyCurrency,
+          },
+        })
+      );
+      queryResults.set(
+        GET_QUERY,
+        application({
+          status: "CLOSED",
+          economicsCurrency,
+          vehicle: { sourceType: "SOURCED", sourcedFromName: "أبو خالد" },
+          supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+          supplierDisbursementStatus: "REQUIRES_RECONCILIATION",
+        })
+      );
+    };
+    const submitCorrection = () => {
+      fireEvent.click(screen.getByRole("button", { name: "CorrectSettlementAdvice" }));
+      fireEvent.change(screen.getByLabelText("SettlementAdviceAmountLabel"), { target: { value: "16500" } });
+      fireEvent.change(screen.getByLabelText("SettlementAdviceReasonLabel"), {
+        target: { value: "Advice re-read: the amount was transposed on entry." },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "SaveCorrection" }));
+    };
+
+    test.each([
+      ["absent on both", undefined, null],
+      ["unrecognised JD", "JD", "JD"],
+      ["lowercase jod", "jod", "jod"],
+    ] as const)("%s: the localized refusal is shown and nothing is sent", async (_label, pinned, discrepancyCurrency) => {
+      showDiscrepancy(pinned, discrepancyCurrency);
+      renderCockpit();
+      submitCorrection();
+      await waitFor(() =>
+        expect(screen.getAllByText("ServerError_DEAL_CURRENCY_UNSUPPORTED").length).toBeGreaterThan(0)
+      );
+      expect(mutationCalls.get(AMEND)).toBeUndefined();
+    });
+
+    test("control: a JOD deal sends the correction scaled by JOD's three decimals", async () => {
+      showDiscrepancy("JOD", "JOD");
+      renderCockpit();
+      submitCorrection();
+      await waitFor(() => expect(mutationCalls.get(AMEND)).toHaveLength(1));
+      expect(mutationCalls.get(AMEND)![0]).toMatchObject({ applicationId: APP, disbursedAmountMinor: 16_500_000 });
+    });
+  });
+
   test("without the permission the step names the person, not a button", () => {
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages }));
     queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
