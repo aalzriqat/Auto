@@ -12,6 +12,8 @@ import { internalMutation, mutation } from "./functions";
 import { vehiclesByOrg, LIVE, OWN_STOCK, SOURCED, SUM_EPOCH } from "./aggregates";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
+import { projectSaleRow } from "./utils/saleRowProjection";
+import { assertNoHeldSupplierConcession } from "./utils/supplierConcession";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
@@ -1481,6 +1483,14 @@ export const update = mutation({
           }
         }
       }
+    }
+
+    // SCRUM-766 PR-C: the supplier terms (cost, supplier, type) are what an open deal's supplier
+    // concession was agreed against. `patch` holds only the keys whose value actually changes, so
+    // this fires on a real change. Refused up front with the reason; completion revalidates
+    // regardless, so a direct write that bypasses this still cannot close the deal on stale terms.
+    if ("sourceCost" in patch || "sourcedFromName" in patch || "sourceType" in patch) {
+      await assertNoHeldSupplierConcession(ctx, args.orgId, args.vehicleId);
     }
 
     // A SOURCED vehicle flipping to owned stock (or a STOCK vehicle whose
@@ -3151,7 +3161,7 @@ export const getRelations = query({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
     // 1. Fetch Sales (a vehicle has at most a handful of sales)
     // Soft-deleted rows are excluded from all three lists below: this is the
@@ -3171,7 +3181,7 @@ export const getRelations = query({
         const customer = await ctx.db.get(sale.customerId);
         const salesperson = await ctx.db.get(sale.salespersonId);
         return {
-          ...sale,
+          ...projectSaleRow(sale, role),
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
           salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
         };

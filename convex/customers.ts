@@ -4,6 +4,7 @@ import { mutation, socialBulkMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
+import { projectSaleRow } from "./utils/saleRowProjection";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
@@ -657,7 +658,7 @@ export const getRelations = query({
     customerId: v.id("customers"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
 
     // 1. Fetch Sales
     const sales = await ctx.db
@@ -671,7 +672,7 @@ export const getRelations = query({
         const vehicle = await ctx.db.get(sale.vehicleId);
         const salesperson = await ctx.db.get(sale.salespersonId);
         return {
-          ...sale,
+          ...projectSaleRow(sale, role),
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
           salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
         };
