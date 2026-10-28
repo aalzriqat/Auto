@@ -86,6 +86,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This organization has no currency configured, so no amount can be recorded or shown. The owner must choose the organization currency in Settings first. Nothing has been changed.",
     "لم يتم تعيين عملة لهذه المنشأة، لذا لا يمكن تسجيل أي مبلغ أو عرضه. يجب أن يختار المالك عملة المنشأة من الإعدادات أولاً. لم يتم تغيير أي شيء.",
   ],
+  // SCRUM-85 c23823. The English text must equal DEAL_CURRENCY_UNSUPPORTED_MESSAGE in convex/utils/money.ts.
+  ServerError_DEAL_CURRENCY_UNSUPPORTED: [
+    "This deal has no supported currency recorded, so the company's payment to the supplier cannot be recorded or amended. Nothing has been changed. Ask an administrator to restate the deal in a supported currency first.",
+    "لا توجد عملة مدعومة مسجّلة لهذه الصفقة، لذا لا يمكن تسجيل دفعة الشركة إلى المورّد أو تعديلها. لم يتم تغيير أي شيء. اطلب من المسؤول إعادة تسجيل الصفقة بعملة مدعومة أولاً.",
+  ],
   // SCRUM-85: shown in place of an amount while the organization has no stored currency.
   CurrencyNotConfigured: ["Currency not configured", "العملة غير مُعدّة"],
   CurrencyNotConfiguredChoose: ["Choose the organization currency", "اختر عملة المنشأة"],

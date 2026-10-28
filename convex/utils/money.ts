@@ -150,6 +150,30 @@ export function assertSupportedDenomination(
   }
 }
 
+/**
+ * The refusal text when a deal has no usable `economicsCurrency`. The English must equal
+ * `ServerError_DEAL_CURRENCY_UNSUPPORTED` in lib/i18n/domains/common.ts. It names no code and no amount.
+ */
+export const DEAL_CURRENCY_UNSUPPORTED_MESSAGE =
+  "This deal has no supported currency recorded, so the company's payment to the supplier cannot be recorded or amended. Nothing has been changed. Ask an administrator to restate the deal in a supported currency first.";
+
+/**
+ * The deal's own denomination, or a typed refusal. For money-write doors that store a minor-unit amount
+ * for a deal (SCRUM-85 c23823).
+ *
+ * Stricter than `assertSupportedDenomination`, which lets ABSENT through because the economics writers
+ * fill it in. A door that records an amount against an EXISTING deal has no writer left to fill it, and the
+ * organization's current currency is NOT a safe fallback: the org can change currency after the deal's
+ * figures were recorded. So absent, unrecognised ("JD") and non-canonical ("jod", "") are all refused.
+ */
+export function requireSupportedDealCurrency(currency: string | undefined): string {
+  const denomination = denominationOf(currency);
+  if (denomination === null) {
+    throwAppError(AppErrorCode.DEAL_CURRENCY_UNSUPPORTED, DEAL_CURRENCY_UNSUPPORTED_MESSAGE);
+  }
+  return denomination.code;
+}
+
 export function scaleForCurrency(currency: string): CurrencyScale {
   const scale = supportedCurrencyScale(currency);
   if (scale === null) {

@@ -333,6 +333,10 @@ export const AppErrorCode = {
   // nonzero VAT on a consigned supplier payable. Message in convex/sourcingPayables.ts; translated
   // under ServerError_<code>.
   CONSIGNED_PAYABLE_VAT_REFUSED: "CONSIGNED_PAYABLE_VAT_REFUSED",
+  // SCRUM-85 c23823: the deal's own `economicsCurrency` is absent or not a supported canonical code, so a
+  // supplier-payment advice (minor units) cannot be recorded or amended. See `requireSupportedDealCurrency`.
+  // Translated under ServerError_<code>.
+  DEAL_CURRENCY_UNSUPPORTED: "DEAL_CURRENCY_UNSUPPORTED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];
