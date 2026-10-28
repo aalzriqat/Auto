@@ -98,15 +98,19 @@ test("a different function at the old coordinates does not satisfy the identity 
   const { root } = fixture(source(150).replace("sourcingPayables.markPaid", "sourcingPayables.cancel"));
   const checked = run(checker, root);
   assert.equal(checked.status, 10, checked.output);
+  assert.match(checked.output, /STRANDED:.*sourcingPayables:markPaid/);
 });
 
 test("unreadable baseline or base revision cannot pass or rewrite evidence", () => {
   const { root, baseline } = fixture();
   const refused = run(helper, root, ["--base", "missing-base", "--write"]);
   assert.equal(refused.status, 3, refused.output);
+  assert.match(refused.output, /Relocation UNAVAILABLE:?.*missing-base/s);
   assert.equal(fs.readFileSync(path.join(root, "baseline.json"), "utf8"), baseline);
   fs.writeFileSync(path.join(root, "baseline.json"), "broken json");
-  assert.equal(run(checker, root).status, 3);
+  const malformed = run(checker, root);
+  assert.equal(malformed.status, 3, malformed.output);
+  assert.match(malformed.output, /Call identity check UNAVAILABLE:.*JSON/s);
 });
 
 test("two old calls cannot both relocate onto one surviving identical call", () => {
@@ -123,6 +127,7 @@ test("two old calls cannot both relocate onto one surviving identical call", () 
   fs.writeFileSync(path.join(root, file), source(156));
   const refused = run(helper, root, ["--base", "HEAD", "--write"]);
   assert.equal(refused.status, 10, refused.output);
+  assert.match(refused.output, /NEEDS HUMAN REVIEW \(changed, absent, ambiguous or occupied call\)/);
   assert.equal(fs.readFileSync(path.join(root, "baseline.json"), "utf8"), baseline);
 });
 
@@ -169,6 +174,7 @@ test("CRLF normalisation does not hide a real change inside a multi-line call", 
   fs.writeFileSync(path.join(root, file), source(156, multiLine.replace("amount", "0")).replace(/\n/g, "\r\n"));
   const refused = run(helper, root, ["--base", multiBase, "--write"]);
   assert.equal(refused.status, 10, refused.output);
+  assert.match(refused.output, /NEEDS HUMAN REVIEW \(changed, absent, ambiguous or occupied call\)/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, "baseline.json"), "utf8")).entries[0].callSiteId, entries[0].callSiteId);
 });
 
@@ -205,4 +211,5 @@ test("--allow-empty does not excuse a non-empty baseline that has drifted", () =
   const { root } = fixture();
   const checked = run(checker, root, ["--allow-empty"]);
   assert.equal(checked.status, 10, checked.output);
+  assert.match(checked.output, /STRANDED:.*sourcingPayables:markPaid/);
 });

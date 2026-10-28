@@ -279,8 +279,16 @@ function main(argv) {
   const reviewed = resolveHistoryCommit(args.reviewed, "reviewed revision");
   // Source attribution is read from the working tree and compared by HEAD's blobs.
   const headSha = resolveCommit(git, "HEAD", root);
+  /** @param {string} revision @param {string} role */
+  const requireAncestor = (revision, role) => {
+    try {
+      runGitText(git, ["merge-base", "--is-ancestor", revision, headSha], { cwd: root });
+    } catch {
+      throw new Error(`HISTORY_ANCESTRY_REFUSED: ${role} ${revision} is not a verified ancestor of HEAD; check the revision and available Git history before retrying`);
+    }
+  };
   // A reviewed revision that is not an ancestor of HEAD says nothing about HEAD's history.
-  runGitText(git, ["merge-base", "--is-ancestor", reviewed, headSha], { cwd: root });
+  requireAncestor(reviewed, "reviewed revision");
   const dirty = new Set(runGitText(git, ["diff", "--name-only", "-z", "HEAD"], { cwd: root }).split("\0").filter(Boolean));
 
   const baselineText = fs.readFileSync(baseline, "utf8");
@@ -298,7 +306,7 @@ function main(argv) {
       let comparison = evidenceComparisons.get(sha);
       if (!comparison) {
         const evidenceHead = resolveHistoryCommit(sha, "recorded evidence revision");
-        runGitText(git, ["merge-base", "--is-ancestor", evidenceHead, headSha], { cwd: root });
+        requireAncestor(evidenceHead, "recorded evidence revision");
         comparison = gitCompare({ git, cwd: root, reviewed: evidenceHead, head: headSha });
         evidenceComparisons.set(sha, comparison);
       }

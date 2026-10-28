@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { resolveGit } from "./gitExecutable.mjs";
 import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
 import { createImportClosure } from "./importClosure.mjs";
@@ -561,7 +561,7 @@ describe("gitCompare (real git)", () => {
     fs.writeFileSync(path.join(dir, "app", "(d)", "[orgId]", "edited.tsx"), "v2");
     fs.writeFileSync(path.join(dir, "added.ts"), "y");
     fs.rmSync(path.join(dir, "gone.ts"));
-    run("add", "-A");
+    run("add", "--", ".");
     run("commit", "-q", "-m", "later");
     const compare = gitCompare({ git: String(git), cwd: dir, reviewed, head: "HEAD" });
     expect(compare("app/(d)/[orgId]/same.tsx")).toBe("identical");
@@ -573,55 +573,123 @@ describe("gitCompare (real git)", () => {
 });
 
 describe("renewal evidence CLI missing history (SCRUM-866 round 8)", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-evidence-history-"));
+  // Keep package resolution local while giving the CLI its own root and Git history.
+  const cache = path.resolve("node_modules/.cache");
+  fs.mkdirSync(cache, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(cache, "cs-evidence-history-"));
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = resolveGit();
+  const run = (...args: string[]) => execFileSync(String(git), [
+    "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args,
+  ], { cwd: dir, encoding: "utf8", stdio: "pipe", timeout: 10_000 }).trim();
+  const write = (file: string, text: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), text);
+  };
+  const baseline = path.join(dir, "scripts/contractSkew/needs-evidence-baseline.json");
+  const cli = path.join(dir, "scripts/contractSkew/renewBaselineReviewed.mjs");
+  let reviewed: string;
+  let unrelated: string;
+  const check = (revision: string, ...args: string[]) => spawnSync(process.execPath, [cli,
+    "--reviewed", revision, "--check-evidence", "--baseline", baseline, ...args,
+  ], { cwd: dir, encoding: "utf8", timeout: 20_000 });
+  const renewed = (sha: string) => serialize([entry({
+    expires: RENEWED_EXPIRES,
+    renewal: `SCRUM-866 round 10 review against origin/main ${sha}: app/page.tsx, convex/vehicles.ts and convex/definition.ts reviewed.`,
+  })]);
+  beforeAll(() => {
+    expect(git, "git must be locatable; cannot-run is a failure, not a skip").toBeTruthy();
+    for (const file of fs.readdirSync(path.resolve("scripts/contractSkew")).filter((file) => file.endsWith(".mjs"))) {
+      write(`scripts/contractSkew/${file}`, fs.readFileSync(path.resolve("scripts/contractSkew", file), "utf8"));
+    }
+    write("convex/tsconfig.json", JSON.stringify({ compilerOptions: { moduleResolution: "bundler", module: "esnext", types: [] } }));
+    write("convex/definition.ts", 'declare function mutation(options: unknown): unknown; export const update = mutation({ args: { orgId: "string" } });');
+    write("convex/vehicles.ts", 'export { update } from "./definition";');
+    write("app/page.tsx", "export const payload: unknown = {};");
+    write("scripts/contractSkew/needs-evidence-baseline.json", serialize([entry()]));
+    run("init", "-q");
+    run("config", "core.longpaths", "true");
+    run("add", "--", "app", "convex", "scripts/contractSkew");
+    run("commit", "-q", "-m", "reviewed fixture");
+    reviewed = run("rev-parse", "HEAD");
+    // An existing but unrelated root commit exercises ancestry, not resolution.
+    unrelated = run("commit-tree", "HEAD^{tree}", "-m", "unrelated fixture root");
+  });
   const missingSha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
   test.each([
-    ["truncated", '{"version": 1, "entries": ['],
-    ["malformed", "{ invalid JSON }"],
-    ["missing entries", JSON.stringify({ version: 1 }, null, 2) + "\n"],
-    ["non-array entries", JSON.stringify({ version: 1, entries: {} }, null, 2) + "\n"],
-    ["empty entries", serialize([])],
-  ])("refuses %s evidence input without writing", (_name, text) => {
-    const baseline = path.join(dir, "invalid.json");
+    ["truncated", '{"version": 1, "entries": [', "Unexpected end of JSON input"],
+    ["malformed", "{ invalid JSON }", "JSON"],
+    ["missing entries", JSON.stringify({ version: 1 }, null, 2) + "\n", "the baseline has no entries array"],
+    ["non-array entries", JSON.stringify({ version: 1, entries: {} }, null, 2) + "\n", "the baseline has no entries array"],
+    ["empty entries", serialize([]), "baseline has no entries to check"],
+  ])("refuses %s evidence input without writing", (_name, text, diagnostic) => {
     fs.writeFileSync(baseline, text);
-    const result = spawnSync(process.execPath, ["scripts/contractSkew/renewBaselineReviewed.mjs", "--reviewed", "c82890bd", "--check-evidence", "--baseline", baseline], {
-      encoding: "utf8", timeout: 20_000,
-    });
+    const result = check("HEAD");
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(3);
+    expect(result.stderr).toContain(diagnostic);
     expect(result.stdout).not.toContain("entries checked");
     expect(fs.readFileSync(baseline, "utf8")).toBe(text);
   });
   test.each(["--write", "--expires", "--renewal"])("evidence check refuses mutation option %s", (option) => {
-    const baseline = path.join(dir, "read-only.json");
     const text = serialize([entry()]);
     fs.writeFileSync(baseline, text);
-    const result = spawnSync(process.execPath, ["scripts/contractSkew/renewBaselineReviewed.mjs", "--reviewed", "c82890bd", "--check-evidence", "--baseline", baseline,
-      option, ...(option === "--write" ? [] : [option === "--expires" ? RENEWED_EXPIRES : "reason"])], {
-      encoding: "utf8", timeout: 20_000,
-    });
+    const result = check("HEAD", option, ...(option === "--write" ? [] : [option === "--expires" ? RENEWED_EXPIRES : "reason"]));
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(3);
     expect(result.stderr).toContain("--check-evidence is read-only");
     expect(fs.readFileSync(baseline, "utf8")).toBe(text);
   });
   test.each(["reviewed revision", "recorded evidence revision"])("refuses unavailable %s with a history diagnostic", (role) => {
-    const baseline = path.join(dir, "baseline.json");
-    const document = JSON.parse(fs.readFileSync("scripts/contractSkew/needs-evidence-baseline.json", "utf8"));
-    const recorded = document.entries[480];
-    recorded.renewal = `SCRUM-866 round 8 review against origin/main ${missingSha}: source reviewed.`;
-    fs.writeFileSync(baseline, serialize([recorded]));
-    const result = spawnSync(process.execPath, ["scripts/contractSkew/renewBaselineReviewed.mjs", "--reviewed",
-      role === "reviewed revision" ? missingSha : "c82890bd", "--check-evidence", "--baseline", baseline], {
-      encoding: "utf8", timeout: 20_000,
-    });
+    const text = renewed(missingSha);
+    fs.writeFileSync(baseline, text);
+    const result = check(role === "reviewed revision" ? missingSha : "HEAD");
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(3);
     expect(result.stderr).toContain(`${role} ${missingSha} is unavailable`);
     expect(result.stderr).toContain("fetch full Git history");
     expect(result.stdout).not.toContain("entries checked");
-    expect(fs.readFileSync(baseline, "utf8")).toBe(serialize([recorded]));
+    expect(fs.readFileSync(baseline, "utf8")).toBe(text);
+  }, 25_000);
+
+  test.each(["reviewed revision", "recorded evidence revision"])("refuses non-ancestor %s with a coded diagnostic", (role) => {
+    const text = renewed(role === "reviewed revision" ? reviewed : unrelated);
+    fs.writeFileSync(baseline, text);
+    const result = check(role === "reviewed revision" ? unrelated : reviewed);
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain(`HISTORY_ANCESTRY_REFUSED: ${role} ${unrelated} is not a verified ancestor of HEAD`);
+    expect(result.stderr).not.toContain("Command failed");
+    expect(fs.readFileSync(baseline, "utf8")).toBe(text);
+  });
+
+  test.each([
+    ["named re-export", 'export { update } from "./definition";'],
+    ["imported alias", 'import { update as registered } from "./definition"; export const update = registered;'],
+  ])("UNKNOWN evidence becomes stale when the defining file behind a %s changes", (_name, exported) => {
+    write("convex/vehicles.ts", exported);
+    run("add", "--", "convex/vehicles.ts");
+    run("commit", "-q", "--allow-empty", "-m", "export fixture");
+    const evidence = run("rev-parse", "HEAD");
+    const text = renewed(evidence);
+    fs.writeFileSync(baseline, text);
+    const before = check(reviewed);
+    expect(before.error).toBeUndefined();
+    expect(before.status, before.stderr).toBe(0);
+    expect(before.stdout).toContain("1 renewed entries checked, 0 unrenewed, 0 stale");
+    const exportSource = fs.readFileSync(path.join(dir, "convex/vehicles.ts"), "utf8");
+    const definition = fs.readFileSync(path.join(dir, "convex/definition.ts"), "utf8");
+    write("convex/definition.ts", definition + "\n// definition changed after evidence\n");
+    run("add", "--", "convex/definition.ts");
+    run("commit", "-q", "-m", "definition changed");
+    const after = check(reviewed);
+    expect(after.error).toBeUndefined();
+    expect(after.status, after.stderr).toBe(10);
+    expect(after.stdout).toContain("1 renewed entries checked, 0 unrenewed, 1 stale");
+    expect(after.stdout).toContain("changed after review convex/definition.ts");
+    expect(after.stdout).toContain("unresolved \n");
+    expect(fs.readFileSync(path.join(dir, "convex/vehicles.ts"), "utf8")).toBe(exportSource);
+    expect(fs.readFileSync(baseline, "utf8")).toBe(text);
   }, 25_000);
 });
 
