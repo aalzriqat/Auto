@@ -267,3 +267,27 @@ describe("RecordDepositDialog — the amount field (SCRUM-628 F-05)", () => {
     expect(stubs.calls).toEqual([]);
   });
 });
+describe("RecordDepositDialog — no guessed currency (SCRUM-85 c23823)", () => {
+  // The amount is converted to minor units under the currency's scale. A currency that is not
+  // configured, or not one AutoFlow can scale, used to fall back to 3 decimals; it is now refused.
+  test.each([
+    ["not configured", ""],
+    ["unsupported", "XYZ"],
+  ])("a currency that is %s blocks the form: a refusal is shown and nothing is sent", async (_label, currency) => {
+    stubs.currency = currency;
+    stubs.permissions = [CONFIRM];
+    renderDialog();
+    fireEvent.change(screen.getByTestId("method-select"), { target: { value: "CASH" } });
+
+    expect(screen.getByRole("alert").textContent).toContain("CurrencyNotConfigured");
+    await submitAmount("5");
+
+    expect((screen.getByRole("button", { name: "RecordDeposit" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(stubs.calls).toEqual([]);
+  });
+
+  test("control: a configured, supported currency shows no refusal", () => {
+    renderDialog();
+    expect(screen.queryByText("CurrencyNotConfigured")).toBeNull();
+  });
+});
