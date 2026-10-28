@@ -124,6 +124,18 @@ describe("SCRUM-85 c23823: confirmSupplierDisbursement refuses a deal with no us
     expect((await refusalDataOf(confirm(s, confirmArgs(s, applicationId))))?.code).toBe("DEAL_CURRENCY_UNSUPPORTED");
   });
 
+  test("confirming a deal whose economicsCurrency is the unrecognised code JD is refused and writes nothing", async () => {
+    const s = await seed("c-literal-jd");
+    const applicationId = await finalizedDirectDeal(s);
+    await setEconomicsCurrency(s, applicationId, "JD");
+    const before = await dbSnapshot(s.t, ALL_TABLES);
+
+    const refusal = await refusalDataOf(confirm(s, confirmArgs(s, applicationId)));
+
+    expect(refusal?.code).toBe("DEAL_CURRENCY_UNSUPPORTED");
+    expect(await dbSnapshot(s.t, ALL_TABLES)).toEqual(before);
+  });
+
   test("control: a canonical JOD deal still records the advice, with the stored evidence and ledger exactly as before", async () => {
     const s = await seed("c-valid");
     const applicationId = await finalizedDirectDeal(s);
@@ -160,6 +172,21 @@ describe("SCRUM-85 c23823: amendSupplierDisbursementAdvice refuses a deal with n
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(app?.supplierDisbursedAmountMinor).toBe(G);
     expect(app?.supplierDisbursementReference).toBe("WIRE-85");
+  });
+
+  test("amending a deal whose economicsCurrency is absent is refused and keeps the confirmed evidence", async () => {
+    const s = await seed("a-literal-absent");
+    const applicationId = await finalizedDirectDeal(s);
+    await confirm(s, confirmArgs(s, applicationId));
+    await setEconomicsCurrency(s, applicationId, undefined);
+    const before = await dbSnapshot(s.t, ALL_TABLES);
+
+    const refusal = await refusalDataOf(amend(s, amendArgs(s, applicationId, G - 1_000)));
+
+    expect(refusal?.code).toBe("DEAL_CURRENCY_UNSUPPORTED");
+    expect(await dbSnapshot(s.t, ALL_TABLES)).toEqual(before);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.supplierDisbursedAmountMinor).toBe(G);
   });
 
   test("control: a canonical JOD deal still amends, flagging the disagreement with the approval", async () => {

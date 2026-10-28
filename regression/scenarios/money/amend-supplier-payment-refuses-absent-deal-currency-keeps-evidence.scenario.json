@@ -1,0 +1,49 @@
+{
+  "id": "amend-supplier-payment-refuses-absent-deal-currency-keeps-evidence",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.amendSupplierDisbursementAdvice",
+      "input": {
+        "Current": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "amend.refusalCode",
+      "value": "DEAL_CURRENCY_UNSUPPORTED"
+    },
+    {
+      "observable": "database.changedRows",
+      "value": 0
+    },
+    {
+      "observable": "application.supplierDisbursedAmountMinor",
+      "value": 12500000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-85#c23823",
+      "digest": "07949892785cfd7f0f0250bd05c5eb9b4051669a54658aececa6834924286683"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum85SupplierDisbursementCurrency.test.ts",
+    "testName": "amending a deal whose economicsCurrency is absent is refused and keeps the confirmed evidence"
+  },
+  "matrixRow": "SCRUM85-currency-no-default",
+  "fingerprint": "ba8833052bc3df562b4a9af2d5b9787792f23396a8ff739aef220f6f7bacb9b8",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum85-supplier-disbursement-currency",
+    "firstSeen": "2026-10-28"
+  }
+}
