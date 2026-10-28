@@ -1854,6 +1854,10 @@ const dealOverviewMessages = defineBilingualMessages({
   CustodyQueuedNote: ["No accounting period is open for today; postings will queue until one is opened.", "لا توجد فترة محاسبية مفتوحة لليوم؛ ستُصفّ الترحيلات حتى تُفتح فترة."],
   CustodySaved: ["Custody updated", "تم تحديث العهدة"],
   CustodyNoPermission: ["You can view custody but not move money on it.", "يمكنك عرض العهدة دون تحريك المال فيها."],
+  CustodyCurrencyUnusable: [
+    "This deal has no supported currency recorded, so custody cash cannot be issued or moved here. Ask an administrator to restate the deal in a supported currency.",
+    "لا توجد عملة مدعومة مسجّلة لهذه الصفقة، فلا يمكن صرف نقد العهدة أو تحريكه من هنا. اطلب من المسؤول إعادة تسجيل الصفقة بعملة مدعومة.",
+  ],
   CustodyPlanWithheld: ["Who handles the payments is visible to finance and disbursement roles.", "من يتولّى المدفوعات يظهر لأدوار المالية وصرف الدفعات فقط."],
   CustodyLegacyNote: [
     "This custody record predates ledger posting: its movements are not on the books, so no money can move on it from here until the custody cutover.",

@@ -2986,9 +2986,7 @@ function DealCockpitContent({
     }
   };
   const custodyActions: DealCustodyActions | undefined =
-    // SCRUM-85: no custody form (which converts typed amounts to minor units) is offered while the
-    // deal's currency is unusable; `scaleOf` below is strict and not reachable from the UI then.
-    app && custodyCommandsOffered && strictScaleOf(dealCosts?.currency ?? economicsCurrencyCode) !== null
+    app && custodyCommandsOffered
       ? {
           members: custodyCandidates?.candidates,
           bankOptions: custodyBankOptions,
@@ -3000,7 +2998,9 @@ function DealCockpitContent({
               actualAmountMinor: fee.actualAmountMinor as number,
               currency: fee.currency,
             })),
-          scaleOf: requireScaleOf,
+          // SCRUM-85: null for a currency whose scale is unknown; the custody panel then offers no
+          // money command and says why, rather than reading the amount under a guessed scale.
+          scaleOf: strictScaleOf,
           onPlan: (values) =>
             custodyPlain(() =>
               planCustodyHandler({

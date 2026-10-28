@@ -668,3 +668,20 @@ describe("DealCustodyPanel", () => {
     expect(figure.getAttribute("dir")).toBe("ltr");
   });
 });
+describe("DealCustodyPanel — no guessed currency scale (SCRUM-85 c23823)", () => {
+  // The dialogs convert typed cash to minor units under the currency's scale. A currency whose
+  // scale is unknown used to read as 3 decimals; the money doors now stay shut with the reason.
+  test("control: a usable scale offers the money commands", () => {
+    renderPanel(wiring({ actions: actions({ scaleOf: () => 3 }), accounting: { ready: true } }));
+    expect(screen.getByRole("button", { name: salesEn.CustodyRecordReturn })).toBeTruthy();
+    expect(screen.getByTestId("custody-posted-note").textContent).toBe(salesEn.CustodyPostedNote);
+  });
+
+  test("an unusable scale offers no money command and says why, not 'no permission'", () => {
+    renderPanel(wiring({ actions: actions({ scaleOf: () => null }), accounting: { ready: true } }));
+    expect(screen.queryByRole("button", { name: salesEn.CustodyRecordReturn })).toBeNull();
+    expect(screen.getByTestId("custody-posted-note").textContent).toBe(salesEn.CustodyCurrencyUnusable);
+    expect(salesEn.CustodyCurrencyUnusable).toMatch(/currency/i);
+    expect(salesAr.CustodyCurrencyUnusable).toMatch(/[\u0600-\u06FF]/);
+  });
+});
