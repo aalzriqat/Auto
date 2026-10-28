@@ -28,6 +28,25 @@
  *
  * ⚠️ The monitor never writes the baseline and this is not the monitor: it is
  * run by a person, against a revision they name, and its diff is reviewed.
+ *
+ * --check-evidence has a deliberately NARROWER scope (owner 2026-10-28): the
+ * entry's own client file and the declaration file of its backend export only.
+ * Re-exports and registered-function aliases resolve via TypeScript symbols;
+ * missing/moved modules, missing exports, cycles and unsupported definitions
+ * refuse. Entries sharing a client file still resolve their own function.
+ * Star re-exports (including intermediate modules), computed forwarded values,
+ * direct default export assignments, declaration-only/external targets and
+ * syntax errors over-refuse conservatively. Module roots use `.ts` only.
+ * A missing current file refuses even if named. Renames need a fresh review;
+ * a path absent only at the original base can pass when named and present at
+ * the recorded ancestor SHA. Whole-file changes can over-refuse unrelated edits.
+ * Wrapper hooks, shared validators, handler helpers, custom registration factory
+ * bodies, re-export wiring, resolution/config/dependency changes and runtime
+ * loaders are outside this check. Mechanical contract comparison uses exported
+ * validators (sharedValidator.test.ts), but UNKNOWN payloads and handler semantics
+ * remain limits. Prose truth, review quality, and arbitrary baseline tampering
+ * require review; this check proves file coverage/freshness only. Import-closure
+ * loader refusals still apply unchanged to mechanical renewal, not this mode.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -39,6 +58,7 @@ import { DEFAULT_BASELINE, EXIT_UNAVAILABLE } from "./baselineIdentity.mjs";
 import { parseCanonicalBaseline, serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
 import { createImportClosure } from "./importClosure.mjs";
 import { identityOf } from "./baseline.mjs";
+import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
 
 const MODULE_FUNCTION_ID = /^([A-Za-z0-9_]+):([A-Za-z0-9_]+)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -47,8 +67,10 @@ const IMPLICIT_INPUTS = ["package.json", "pnpm-lock.yaml", "convex/schema.ts"];
 const PATH_TOKEN = /[\w@()[\]/.-]+\.(?:tsx?|jsx?|mjs|cjs|json|md|ya?ml)\b/g;
 
 /**
- * @param {string} functionId  e.g. `sourcingPayables:markPaid`
- * @returns {string | undefined} `convex/<module>.ts`, or undefined when the id is not `module:function`
+ * Mechanical renewal keeps its existing module-id policy. Evidence attribution
+ * resolves nested module paths separately in backendDefinition.mjs.
+ * @param {string} functionId
+ * @returns {string | undefined}
  */
 export function backendModuleOf(functionId) {
   const match = MODULE_FUNCTION_ID.exec(String(functionId));
@@ -181,13 +203,13 @@ export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
 }
 
 /**
- * A human renewal must name each changed file in the two current closures.
+ * A human renewal must name each changed client/defining backend file.
  * This checks evidence coverage, not whether the prose's interpretation is true.
  * @param {string} text
- * @param {{ reviewedText: string, compare: (file: string) => "identical" | "changed" | "missing", closureOf: (file: string) => { files: string[], unresolved: string[] }, evidenceChanged: (sha: string, file: string) => "identical" | "changed" | "missing" }} options
+ * @param {{ reviewedText: string, compare: (file: string) => "identical" | "changed" | "missing", backendDefinitionOf: (functionId: string) => { file?: string, unresolved: string[] }, evidenceChanged: (sha: string, file: string) => "identical" | "changed" | "missing" }} options
  * @returns {Array<{ index: number, entry: string, missing: string[], changedSinceEvidence: string[], unresolved: string[], renewalProblem?: "malformed" | "missing" }>}
  */
-export function renewalEvidenceGaps(text, { reviewedText, compare, closureOf, evidenceChanged }) {
+export function renewalEvidenceGaps(text, { reviewedText, compare, backendDefinitionOf, evidenceChanged }) {
   if (typeof evidenceChanged !== "function") throw new Error("evidenceChanged is required: a renewal review SHA must be compared with HEAD");
   const document = parseCanonicalBaseline(text);
   if (!document || !Array.isArray(document.entries)) throw new Error("the baseline has no entries array");
@@ -206,17 +228,15 @@ export function renewalEvidenceGaps(text, { reviewedText, compare, closureOf, ev
       return [{ index, entry: label(entry), missing: [hasRenewal ? "(malformed renewal text)" : "(changed expiry or new identity requires renewal text)"],
         changedSinceEvidence: [], unresolved: [], renewalProblem: hasRenewal ? "malformed" : "missing" }];
     }
-    const backend = backendModuleOf(entry.functionId);
-    if (!backend || typeof entry.file !== "string") {
+    if (typeof entry.file !== "string" || !entry.file.trim()) {
       return [{ index, entry: label(entry), missing: ["(invalid client or backend root)"], changedSinceEvidence: [], unresolved: [] }];
     }
     const reviewHeads = [...entry.renewal.matchAll(/SCRUM-866 round \d+ review against origin\/main ([0-9a-f]{8,40})/g)];
     const reviewHead = reviewHeads.at(-1)?.[1];
     if (!reviewHead) return [{ index, entry: label(entry), missing: ["(no reviewed source SHA in renewal)"], changedSinceEvidence: [], unresolved: [], renewalProblem: "malformed" }];
-    const clientClosure = closureOf(entry.file);
-    const backendClosure = closureOf(backend);
-    const unresolved = [...new Set([...clientClosure.unresolved, ...backendClosure.unresolved])];
-    const files = [...new Set([...clientClosure.files, ...backendClosure.files])];
+    const definition = backendDefinitionOf(entry.functionId);
+    const unresolved = definition.file ? definition.unresolved : [...definition.unresolved, "backend definition is unavailable"];
+    const files = [...new Set([entry.file, ...(definition.file ? [definition.file] : [])])];
     const changed = files.filter((file) => compare(file) !== "identical");
     const changedSinceEvidence = files.filter((file) => evidenceChanged(reviewHead, file) !== "identical");
     const named = new Set(rationalePaths(entry.renewal));
@@ -257,31 +277,19 @@ function main(argv) {
     }
   };
   const reviewed = resolveHistoryCommit(args.reviewed, "reviewed revision");
-  // The closure is read from the working tree and compared by HEAD's blobs, so HEAD is the only head there is.
+  // Source attribution is read from the working tree and compared by HEAD's blobs.
   const headSha = resolveCommit(git, "HEAD", root);
   // A reviewed revision that is not an ancestor of HEAD says nothing about HEAD's history.
   runGitText(git, ["merge-base", "--is-ancestor", reviewed, headSha], { cwd: root });
   const dirty = new Set(runGitText(git, ["diff", "--name-only", "-z", "HEAD"], { cwd: root }).split("\0").filter(Boolean));
 
   const baselineText = fs.readFileSync(baseline, "utf8");
-  const entries = JSON.parse(baselineText).entries ?? [];
-  const projects = [
-    ...CLIENT_SURFACES.map((surface) => ({
-      tsconfig: surface.tsconfig,
-      rootFiles: [...new Set(entries.filter((e) => e.surface === surface.name).map((e) => e.file))],
-    })),
-    { tsconfig: "convex/tsconfig.json", rootFiles: [...new Set(entries.map((e) => backendModuleOf(e.functionId)).filter(Boolean))] },
-  ];
-  const resolveClosure = createImportClosure({ root, projects, implicitInputs: IMPLICIT_INPUTS });
-  const closureOf = (file) => {
-    const closure = resolveClosure(file);
-    const edited = closure.files.find((f) => dirty.has(f));
-    if (edited) throw new Error(`${edited} has uncommitted changes; commit or discard them before renewing`);
-    return closure;
-  };
-
+  const entries = parseCanonicalBaseline(baselineText)?.entries;
+  if (!Array.isArray(entries)) throw new Error("the baseline has no entries array");
   const compare = gitCompare({ git, cwd: root, reviewed, head: headSha });
   if (args["check-evidence"]) {
+    if (entries.length === 0) throw new Error("baseline has no entries to check");
+    const backendDefinitionOf = createBackendDefinitionResolver({ root, functionIds: entries.map((entry) => entry.functionId) });
     const reviewedText = runGitText(git, ["show", `${reviewed}:${DEFAULT_BASELINE}`], { cwd: root });
     /** @type {Map<string, ReturnType<typeof gitCompare>>} */
     const evidenceComparisons = new Map();
@@ -296,9 +304,12 @@ function main(argv) {
       }
       return comparison(file);
     };
-    const gaps = renewalEvidenceGaps(baselineText, { reviewedText, compare, closureOf, evidenceChanged });
+    const compareRequiredFile = (file) => {
+      if (dirty.has(file)) throw new Error(`${file} has uncommitted changes; commit or discard them before checking evidence`);
+      return compare(file);
+    };
+    const gaps = renewalEvidenceGaps(baselineText, { reviewedText, compare: compareRequiredFile, backendDefinitionOf, evidenceChanged });
     const renewedEntries = entries.filter((entry) => Object.hasOwn(entry, "renewal")).length;
-    if (entries.length === 0) throw new Error("baseline has no entries to check");
     const malformed = gaps.filter((gap) => gap.renewalProblem === "malformed").length;
     const missing = gaps.filter((gap) => gap.renewalProblem === "missing").length;
     console.log(`renewal evidence: ${renewedEntries} renewed entries checked, ${entries.length - renewedEntries} unrenewed, ${gaps.length} stale, ${malformed} malformed, ${missing} missing`);
@@ -308,6 +319,20 @@ function main(argv) {
     return;
   }
 
+  const projects = [
+    ...CLIENT_SURFACES.map((surface) => ({
+      tsconfig: surface.tsconfig,
+      rootFiles: [...new Set(entries.filter((e) => e.surface === surface.name).map((e) => e.file))],
+    })),
+    { tsconfig: "convex/tsconfig.json", rootFiles: [...new Set(entries.map((e) => backendModuleOf(e.functionId)).filter(Boolean))] },
+  ];
+  const resolveClosure = createImportClosure({ root, projects, implicitInputs: IMPLICIT_INPUTS });
+  const closureOf = (file) => {
+    const closure = resolveClosure(file);
+    const edited = closure.files.find((f) => dirty.has(f));
+    if (edited) throw new Error(`${edited} has uncommitted changes; commit or discard them before renewing`);
+    return closure;
+  };
   const result = renewBaseline(baselineText, {
     compare,
     closureOf,

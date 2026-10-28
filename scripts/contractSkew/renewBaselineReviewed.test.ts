@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
 import { resolveGit } from "./gitExecutable.mjs";
+import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
 import { createImportClosure } from "./importClosure.mjs";
 import {
   backendModuleOf,
@@ -159,6 +160,7 @@ describe("member loader renewal refuses a changed worker (SCRUM-866 round 6)", (
 
 const serialize = (entries: unknown[], eol = "\n") => JSON.stringify({ version: 1, entries }, null, 2).replace(/\n/g, eol) + eol;
 const allIdentical: Compare = () => "identical";
+const directDefinition = (functionId: string) => ({ file: backendModuleOf(functionId), unresolved: [] as string[] });
 const changedOnly =
   (...changed: string[]): Compare =>
   (file) =>
@@ -187,53 +189,158 @@ describe("backendModuleOf / rationalePaths", () => {
   });
 });
 
+describe("narrow renewal evidence (SCRUM-866 round 9)", () => {
+  const renewed = (over: Record<string, unknown> = {}) => entry({ expires: RENEWED_EXPIRES,
+    renewal: "SCRUM-866 round 9 review against origin/main fa4bdab2: reviewed source.", ...over });
+  const evidenceOptions = {
+    reviewedText: serialize([entry()]), compare: allIdentical, evidenceChanged: allIdentical,
+    backendDefinitionOf: () => ({ file: "convex/vehicles.ts", unresolved: [] as string[] }),
+  };
+  test("ignores helper, wrapper-hook and loader changes outside the two required files", () => {
+    expect(renewalEvidenceGaps(serialize([renewed()]), { ...evidenceOptions,
+      compare: changedOnly("convex/shared.ts", "hooks/useUpdate.ts"),
+      evidenceChanged: (_sha: string, file: string) => file === "convex/shared.ts" ? "changed" : "identical",
+    })).toEqual([]);
+  });
+  test("requires the defining helper file for a re-export or imported registered-function alias", () => {
+    const gaps = renewalEvidenceGaps(serialize([renewed()]), { ...evidenceOptions,
+      compare: changedOnly("convex/helpers/update.ts"),
+      backendDefinitionOf: () => ({ file: "convex/helpers/update.ts", unresolved: [] }),
+    });
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].missing).toEqual(["convex/helpers/update.ts"]);
+  });
+  test.each(["app/page.tsx", "convex/vehicles.ts"])("refuses a missing current required file even if its path is named: %s", (missing) => {
+    const gaps = renewalEvidenceGaps(serialize([renewed({ renewal: `SCRUM-866 round 9 review against origin/main fa4bdab2: ${missing}` })]), {
+      ...evidenceOptions, compare: (file: string) => file === missing ? "missing" : "identical",
+      evidenceChanged: (_sha: string, file: string) => file === missing ? "missing" : "identical",
+    });
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].changedSinceEvidence).toContain(missing);
+  });
+  test("refuses a moved module or missing function definition", () => {
+    const gaps = renewalEvidenceGaps(serialize([renewed()]), { ...evidenceOptions,
+      backendDefinitionOf: () => ({ unresolved: ["backend module or export missing"] }),
+    });
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].unresolved).toContain("backend module or export missing");
+  });
+  test("several functions in one client file keep separate backend evidence", () => {
+    const gaps = renewalEvidenceGaps(serialize([renewed(), renewed({ functionId: "customers:update" })]), { ...evidenceOptions,
+      compare: changedOnly("convex/customers.ts"),
+      backendDefinitionOf: (id: string) => ({ file: id === "customers:update" ? "convex/customers.ts" : "convex/vehicles.ts", unresolved: [] }),
+    });
+    expect(gaps.map((gap) => gap.index)).toEqual([1]);
+    expect(gaps[0].missing).toEqual(["convex/customers.ts"]);
+  });
+});
+
+describe("backend definition attribution for narrow evidence", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-definition-"));
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const write = (file: string, source: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), source);
+  };
+  const declaration = "declare function mutation(x: unknown): unknown; export const update = mutation({ args: {} });";
+  write("tsconfig.json", JSON.stringify({ compilerOptions: { module: "esnext", moduleResolution: "bundler", strict: true } }));
+  write("convex/helpers/registered.ts", declaration);
+  write("convex/helpers/forwarded.ts", 'export { update } from "./registered";');
+  write("convex/helpers/star.ts", 'export * from "./registered";');
+  test.each([
+    ["direct", declaration, "convex/direct.ts"],
+    ["reexport", 'export { update } from "./helpers/registered";', "convex/helpers/registered.ts"],
+    ["chained", 'export { update } from "./helpers/forwarded";', "convex/helpers/registered.ts"],
+    ["imported", 'import { update as registered } from "./helpers/registered"; export const update = registered;', "convex/helpers/registered.ts"],
+    ["namespace", 'import * as registered from "./helpers/registered"; export const update = registered.update;', "convex/helpers/registered.ts"],
+    ["local", 'declare function mutation(x: unknown): unknown; const registered = mutation({}); export const update = (registered);', "convex/local.ts"],
+    ["nested/module", declaration, "convex/nested/module.ts"],
+  ])("attributes %s to its definition", (module, source, expected) => {
+    write(`convex/${module}.ts`, source);
+    const resolve = createBackendDefinitionResolver({ root: dir, functionIds: [`${module}:update`], tsconfig: "tsconfig.json" });
+    expect(resolve(`${module}:update`)).toEqual({ file: expected, unresolved: [] });
+  });
+  test.each([
+    ["missingModule", undefined],
+    ["missingExport", "export const other = 1;"],
+    ["missingImport", 'export { update } from "./gone";'],
+    ["cycle", "export const update = update;"],
+    ["computed", 'declare const registered: Record<string, unknown>; export const update = registered["update"];'],
+    ["star", 'export * from "./helpers/registered";'],
+    ["indirectStar", 'export { update } from "./helpers/star";'],
+    ["namespaceStar", 'import * as registered from "./helpers/star"; export const update = registered.update;'],
+    ["malformed", 'export const update = mutation({'],
+    ["ambient", "export declare const update: unknown;"],
+    ["defaultAssignment", "declare function mutation(x: unknown): unknown; export default mutation({});"],
+  ])("refuses unsupported or unavailable %s", (module, source) => {
+    if (source) write(`convex/${module}.ts`, source);
+    const functionId = `${module}:${module === "defaultAssignment" ? "default" : "update"}`;
+    const resolve = createBackendDefinitionResolver({ root: dir, functionIds: [functionId], tsconfig: "tsconfig.json" });
+    expect(resolve(functionId).unresolved).toEqual([`cannot resolve backend definition ${functionId}`]);
+    expect(resolve(functionId).file).toBeUndefined();
+  });
+  test("a moved function module passes only after its function identity is updated", () => {
+    write("convex/moved.ts", declaration);
+    const resolve = createBackendDefinitionResolver({ root: dir, functionIds: ["old:update", "moved:update"], tsconfig: "tsconfig.json" });
+    expect(resolve("old:update").file).toBeUndefined();
+    expect(resolve("moved:update")).toEqual({ file: "convex/moved.ts", unresolved: [] });
+  });
+  test("a changed required path absent only from the original base can pass after review at its new path", () => {
+    expect(renewalEvidenceGaps(serialize([entry({ expires: RENEWED_EXPIRES,
+      renewal: "SCRUM-866 round 9 review against origin/main fa4bdab2: reviewed convex/moved.ts and app/page.tsx.",
+      functionId: "moved:update",
+    })]), { reviewedText: serialize([entry()]), compare: () => "missing", evidenceChanged: () => "identical",
+      backendDefinitionOf: () => ({ file: "convex/moved.ts", unresolved: [] }),
+    })).toEqual([]);
+  });
+});
+
 describe("renewBaseline", () => {
-  test("renewal evidence names every changed closure file by full path", () => {
+  test("renewal evidence names each changed required file by full path", () => {
     const e = entry({ renewal: "SCRUM-866 round 7 review against origin/main 549267ae: Reviewed convex/a.ts; a same-basename elsewhere is not evidence." });
-    const closure: Closure = (file) => ({ files: [file, "convex/a.ts", "lib/a.ts"], unresolved: [] });
-    const stale = renewalEvidenceGaps(serialize([e]), { reviewedText: serialize([entry()]), compare: changedOnly("convex/a.ts", "lib/a.ts"), closureOf: closure, evidenceChanged: () => "identical" });
+    const stale = renewalEvidenceGaps(serialize([e]), { reviewedText: serialize([entry()]), compare: changedOnly("convex/vehicles.ts", "app/page.tsx"), backendDefinitionOf: directDefinition, evidenceChanged: () => "identical" });
     expect(stale).toHaveLength(1);
-    expect(stale[0].missing).toEqual(["lib/a.ts"]);
-    expect(renewalEvidenceGaps(serialize([{ ...e, renewal: "SCRUM-866 round 7 review against origin/main 549267ae: Reviewed convex/a.ts and lib/a.ts." }]), {
-      reviewedText: serialize([entry()]), compare: changedOnly("convex/a.ts", "lib/a.ts"), closureOf: closure, evidenceChanged: () => "identical",
+    expect(stale[0].missing).toEqual(["app/page.tsx", "convex/vehicles.ts"]);
+    expect(renewalEvidenceGaps(serialize([{ ...e, renewal: "SCRUM-866 round 7 review against origin/main 549267ae: Reviewed convex/vehicles.ts and app/page.tsx." }]), {
+      reviewedText: serialize([entry()]), compare: changedOnly("convex/vehicles.ts", "app/page.tsx"), backendDefinitionOf: directDefinition, evidenceChanged: () => "identical",
     })).toEqual([]);
   });
   test("a file changed again after the named review SHA is stale even when its path is present", () => {
-    const e = entry({ renewal: "SCRUM-866 round 7 review against origin/main 549267ae: convex/a.ts was reviewed." });
+    const e = entry({ renewal: "SCRUM-866 round 7 review against origin/main 549267ae: convex/vehicles.ts was reviewed." });
     const gaps = renewalEvidenceGaps(serialize([e]), {
       reviewedText: serialize([entry()]),
-      compare: changedOnly("convex/a.ts"),
-      closureOf: (file) => ({ files: [file, "convex/a.ts"], unresolved: [] }),
-      evidenceChanged: (_sha, file) => file === "convex/a.ts" ? "changed" : "identical",
+      compare: changedOnly("convex/vehicles.ts"),
+      backendDefinitionOf: directDefinition,
+      evidenceChanged: (_sha, file) => file === "convex/vehicles.ts" ? "changed" : "identical",
     });
     expect(gaps).toHaveLength(1);
-    expect(gaps[0].changedSinceEvidence).toEqual(["convex/a.ts"]);
+    expect(gaps[0].changedSinceEvidence).toEqual(["convex/vehicles.ts"]);
   });
   test.each([{}, 42, "", "   ", null])("rejects malformed renewal evidence %j even with unchanged expiry", (renewal) => {
     expect(renewalEvidenceGaps(serialize([entry({ renewal })]), {
-      reviewedText: serialize([entry()]), compare: allIdentical, closureOf: selfOnly, evidenceChanged: allIdentical,
+      reviewedText: serialize([entry()]), compare: allIdentical, backendDefinitionOf: directDefinition, evidenceChanged: allIdentical,
     })).toHaveLength(1);
   });
   test("an expiry change requires evidence even when the renewal field was deleted", () => {
     expect(renewalEvidenceGaps(serialize([entry({ expires: RENEWED_EXPIRES })]), {
-      reviewedText: serialize([entry()]), compare: allIdentical, closureOf: selfOnly, evidenceChanged: allIdentical,
+      reviewedText: serialize([entry()]), compare: allIdentical, backendDefinitionOf: directDefinition, evidenceChanged: allIdentical,
     })).toHaveLength(1);
   });
   test("matches reviewed entries by full identity, independently of array order", () => {
     const other = entry({ contractPath: "price", expires: RENEWED_EXPIRES });
     const current = serialize([other, entry()]);
     expect(renewalEvidenceGaps(current, {
-      reviewedText: serialize([entry(), other]), compare: allIdentical, closureOf: selfOnly, evidenceChanged: allIdentical,
+      reviewedText: serialize([entry(), other]), compare: allIdentical, backendDefinitionOf: directDefinition, evidenceChanged: allIdentical,
     })).toEqual([]);
     const gaps = renewalEvidenceGaps(current, {
       reviewedText: serialize([entry(), { ...other, expires: "2026-11-01" }]),
-      compare: allIdentical, closureOf: selfOnly, evidenceChanged: allIdentical,
+      compare: allIdentical, backendDefinitionOf: directDefinition, evidenceChanged: allIdentical,
     });
     expect(gaps).toHaveLength(1);
     expect(gaps[0].index).toBe(0);
   });
   test("a new identity needs evidence; valid evidence satisfies an extended expiry", () => {
-    const options = { reviewedText: serialize([entry()]), compare: allIdentical, closureOf: selfOnly, evidenceChanged: allIdentical };
+    const options = { reviewedText: serialize([entry()]), compare: allIdentical, backendDefinitionOf: directDefinition, evidenceChanged: allIdentical };
     expect(renewalEvidenceGaps(serialize([entry({ contractPath: "price" })]), options)).toHaveLength(1);
     expect(renewalEvidenceGaps(serialize([entry({ expires: RENEWED_EXPIRES,
       renewal: "SCRUM-866 round 8 review against origin/main 99b175f7: reviewed source.",
@@ -469,6 +576,36 @@ describe("renewal evidence CLI missing history (SCRUM-866 round 8)", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-evidence-history-"));
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
   const missingSha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+  test.each([
+    ["truncated", '{"version": 1, "entries": ['],
+    ["malformed", "{ invalid JSON }"],
+    ["missing entries", JSON.stringify({ version: 1 }, null, 2) + "\n"],
+    ["non-array entries", JSON.stringify({ version: 1, entries: {} }, null, 2) + "\n"],
+    ["empty entries", serialize([])],
+  ])("refuses %s evidence input without writing", (_name, text) => {
+    const baseline = path.join(dir, "invalid.json");
+    fs.writeFileSync(baseline, text);
+    const result = spawnSync(process.execPath, ["scripts/contractSkew/renewBaselineReviewed.mjs", "--reviewed", "c82890bd", "--check-evidence", "--baseline", baseline], {
+      encoding: "utf8", timeout: 20_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(3);
+    expect(result.stdout).not.toContain("entries checked");
+    expect(fs.readFileSync(baseline, "utf8")).toBe(text);
+  });
+  test.each(["--write", "--expires", "--renewal"])("evidence check refuses mutation option %s", (option) => {
+    const baseline = path.join(dir, "read-only.json");
+    const text = serialize([entry()]);
+    fs.writeFileSync(baseline, text);
+    const result = spawnSync(process.execPath, ["scripts/contractSkew/renewBaselineReviewed.mjs", "--reviewed", "c82890bd", "--check-evidence", "--baseline", baseline,
+      option, ...(option === "--write" ? [] : [option === "--expires" ? RENEWED_EXPIRES : "reason"])], {
+      encoding: "utf8", timeout: 20_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain("--check-evidence is read-only");
+    expect(fs.readFileSync(baseline, "utf8")).toBe(text);
+  });
   test.each(["reviewed revision", "recorded evidence revision"])("refuses unavailable %s with a history diagnostic", (role) => {
     const baseline = path.join(dir, "baseline.json");
     const document = JSON.parse(fs.readFileSync("scripts/contractSkew/needs-evidence-baseline.json", "utf8"));
