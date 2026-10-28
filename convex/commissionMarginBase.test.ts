@@ -8,7 +8,8 @@
  * completes the sale, (2) the car is dealer-owned, and (3) finalize froze a
  * financed-sale plan of VERSION 2. G and C are frozen onto the sale row at
  * completion, and `recalculateCommission` reads ONLY those frozen values.
- * Everything else (cash, `sales.create`, consigned, MANUAL mode) is unchanged.
+ * Everything else (cash, `sales.create`, MANUAL mode) is unchanged. A consigned financed
+ * completion pays on M = K - E_eff - contra (SCRUM-766 c23841), see control 6a.
  *
  * Worked figure: 12,500 - 1,375 - 10,000 = 1,125; at 10% that is 112.5.
  *
@@ -309,7 +310,7 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     expect(sale?.commissionAmount).toBeCloseTo(300, 6);
     expect(sale?.commissionBase).toBeUndefined();
   });
-  test("6a. control: a consigned financed v2 deal through finalizeDeal keeps today's basis and freezes no commissionBase", async () => {
+  test("6a. a consigned financed v3 deal through finalizeDeal pays on the approved basis M = K - E_eff - contra (SCRUM-766 c23841) and freezes no commissionBase", async () => {
     const s = await seedDealership("consigned", { cost: 10_000, price: CONFIGURED.price, sourced: true });
     const { applicationId } = await readyConfiguredDeal(s, CONFIGURED);
     await s.t.run((ctx) => ctx.db.patch(applicationId, { supplierSettlementRoute: "THROUGH_DEALERSHIP" }));
@@ -319,9 +320,15 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     expect(app?.financedSalePlanVersion).toBe(3);
     const sale = await saleOf(s, applicationId);
     expect(sale?.commissionBase).toBeUndefined();
-    // Today's consigned basis: sale price 13,000 - entitlement 10,000 = 3,000 at 10%.
-    // (The new base would give 112.5.)
-    expect(sale?.commissionAmount).toBeCloseTo(300, 6);
+    // SCRUM-766 owner ruling c23841 (PR-C): a consigned financed completion pays on
+    // M = K - E_eff - contra, whoever covers the gap. This replaces the SCRUM-390 consigned
+    // figure (sale price - entitlement = 3,000 -> 300), which that ruling superseded.
+    // Independent derivation from the fixture, not from the observed output:
+    //   K      = consideration = approved G 12,500 + customer gap cash (13,000 - 12,500 = 500) = 13,000
+    //   E_eff  = entitlement 10,000 (no supplier concession, so S = 0)
+    //   contra = showroom contribution C = 1,375
+    //   M      = 13,000 - 10,000 - 1,375 = 1,625; at the 10% member rate = 162.5.
+    expect(sale?.commissionAmount).toBeCloseTo(162.5, 6);
   });
 
   async function frozenNoCostSale(tag: string) {

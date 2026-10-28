@@ -144,6 +144,7 @@ import {
 import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { summarizeFees } from "./financeDealCosts";
+import { effectiveSupplierEntitlementMinor, storedConcessionMinor } from "./utils/supplierConcession";
 import {
   consignedSettlementRoute,
   consignedSettlementRouteValidator,
@@ -4568,7 +4569,12 @@ export const setSupplierSettlementRoute = mutation({
           const currency = app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId));
           const refusal = directSettlementBelowEntitlementRefusal({
             approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
-            supplierEntitlementMinor: toMinorUnits(costAmount, currency),
+            // SCRUM-766 PR-C: what the supplier is owed is his entitlement LESS any
+            // concession recorded on this application (0 when none, so unchanged).
+            supplierEntitlementMinor: effectiveSupplierEntitlementMinor({
+              entitlementMinor: toMinorUnits(costAmount, currency),
+              concessionMinor: storedConcessionMinor(app),
+            }),
             supplierName: vehicle.sourcedFromName,
           });
           if (refusal) throw new ConvexError(refusal);

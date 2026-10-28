@@ -836,6 +836,12 @@ export interface GapShareSettlement {
   customerGapInstallmentToDealerMinor: number;
   /** Customer's share paid directly to the financing company — creates no dealer AR. */
   customerGapToFinanceCompanyMinor: number;
+  /**
+   * SCRUM-766 PR-C: the part of the net shortfall the SUPPLIER of a SOURCED vehicle
+   * absorbs by conceding part of his entitlement. Absent means 0, which is every
+   * stock car and every resolution recorded before this existed.
+   */
+  supplierGapShareMinor?: number;
 }
 
 export interface GapShareViolation {
@@ -850,7 +856,7 @@ export interface GapShareViolation {
  * Checks the two gap invariants the dealer confirmed.
  *
  * ```
- * customerGapShare + dealerGapShare = shortfall (the net shortfall, SCRUM-766)
+ * customerGapShare + dealerGapShare + supplierGapShare = shortfall (the net shortfall, SCRUM-766)
  * customerCash + customerInstallments + customerToFinanceCompany = customerGapShare
  * ```
  *
@@ -865,9 +871,11 @@ export function validateGapShares(
   settlement: GapShareSettlement
 ): GapShareViolation[] {
   const violations: GapShareViolation[] = [];
+  const supplierShareMinor = settlement.supplierGapShareMinor ?? 0;
 
   const amounts: Array<[number, string]> = [
     [shortfallMinor, "Shortfall"],
+    [supplierShareMinor, "Supplier gap share"],
     [settlement.customerGapShareMinor, "Customer gap share"],
     [settlement.dealerGapShareMinor, "Dealer gap share"],
     [settlement.customerGapCashToDealerMinor, "Customer gap cash to dealer"],
@@ -884,11 +892,11 @@ export function validateGapShares(
   }
   if (violations.length > 0) return violations;
 
-  const sharesTotal = settlement.customerGapShareMinor + settlement.dealerGapShareMinor;
+  const sharesTotal = settlement.customerGapShareMinor + settlement.dealerGapShareMinor + supplierShareMinor;
   if (sharesTotal !== shortfallMinor) {
     violations.push({
       code: "SHARES_DO_NOT_SUM_TO_GAP",
-      message: `Customer share (${settlement.customerGapShareMinor}) plus dealer share (${settlement.dealerGapShareMinor}) is ${sharesTotal}, which must equal the shortfall of ${shortfallMinor}.`,
+      message: `Customer share (${settlement.customerGapShareMinor}), dealer share (${settlement.dealerGapShareMinor}) and supplier share (${supplierShareMinor}) total ${sharesTotal}, which must equal the shortfall of ${shortfallMinor}.`,
     });
   }
 
@@ -1010,14 +1018,24 @@ export type GapResolutionOutcome =
   | "NOT_REQUIRED"
   | "CUSTOMER_ABSORBS"
   | "DEALER_ABSORBS"
+  | "SUPPLIER_ABSORBS"
   | "SPLIT";
 
+/**
+ * One party covering the whole shortfall is that party's "ABSORBS"; any mix is a SPLIT.
+ * `supplierGapShareMinor` (SCRUM-766 PR-C) defaults to 0, so every caller that predates it
+ * classifies exactly as before.
+ */
 export function classifyGapResolution(
   rawAppraisalGapMinor: number,
   customerGapShareMinor: number,
-  dealerGapShareMinor: number
+  dealerGapShareMinor: number,
+  supplierGapShareMinor = 0
 ): GapResolutionOutcome {
   if (rawAppraisalGapMinor <= 0) return "NOT_REQUIRED";
+  if (supplierGapShareMinor > 0) {
+    return customerGapShareMinor === 0 && dealerGapShareMinor === 0 ? "SUPPLIER_ABSORBS" : "SPLIT";
+  }
   if (dealerGapShareMinor === 0) return "CUSTOMER_ABSORBS";
   if (customerGapShareMinor === 0) return "DEALER_ABSORBS";
   return "SPLIT";
