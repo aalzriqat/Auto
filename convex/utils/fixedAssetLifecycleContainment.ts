@@ -25,13 +25,22 @@ import { AppErrorCode, throwAppError } from "./errors";
  * queued BEFORE the switch shipped must not post afterwards either. Every route that wakes
  * a queued row (the every-minute `dispatch-outbox-work` cron, a period open or reopen,
  * chart initialisation, `accountingOutbox.redrive`) ends in `postOutboxRow`, which asks
- * `fixedAssetPostingRefusal` for every POST row before the period hold and dead-letters
- * the row through `failOutboxRow` (not a hold: a held row would sit PENDING for ever and
- * block period close, the SCRUM-234 shape; the same disposition SCRUM-782 / PR #694 uses
- * for a refused queued consigned-VAT event). `retryFailed` and the prepaid redrive revive
+ * `fixedAssetPostingRefusal` for every POST row before the period hold and refuses the
+ * row through `failOutboxRow` (not a hold: a held row would sit PENDING for ever with no
+ * recorded reason, the SCRUM-234 shape; the same disposition SCRUM-782 / PR #694 uses
+ * for a refused queued consigned-VAT event). A refused row burns an attempt per wake and
+ * reaches FAILED after ten. FAILED still BLOCKS period close exactly as PENDING does
+ * (`computeCloseChecklist`), so such a row needs an owner override to close; the refusal
+ * only gives it a terminal, visible reason. `retryFailed` and the prepaid redrive revive
  * through `reviveFailedEntry`, which refuses such a row via `isOutboxRowRevivable`, and the
- * failed-events list reports it as not retryable. REVERSE rows are exempt, as for every
- * other refusal there: a reversal unwinds something that already posted.
+ * failed-events list reports it as not retryable.
+ *
+ * Engine level (defence in depth): `postAccountingEvent` refuses any fixed-asset event and
+ * `reverseAccountingEvent` refuses the reversal of any fixed-asset ORIGINAL event, both
+ * with the coded `FIXED_ASSET_LIFECYCLE_DISABLED` error and before any write. That closes
+ * `internal.accountingLedger.post` / `.reverse`, every workflow hook, and REVERSE outbox
+ * rows (which the worker also refuses through `failOutboxRow`, and which are likewise not
+ * revivable). Reversals of every other event family are untouched.
  *
  * NOT gated, on purpose: the read queries (`fixedAssets.list`, `listEvents`,
  * `listBankOptions`). They write nothing and show an org its own rows. The

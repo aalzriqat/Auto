@@ -530,4 +530,184 @@ describe("SCRUM-560 H1: a fixed-asset posting already queued in the outbox must 
     });
     expect((await getRow(d, id))?.status).toBe("POSTED");
   });
+
+  describe("REVERSE rows (round 3, Seat 2 finding 2): the reversal of a fixed-asset entry is refused too", () => {
+    const eventOf = async (d: Dealer, id: Id<"accountingEvents">) => d.t.run((ctx) => ctx.db.get(id));
+
+    /** A fixed-asset REVERSE row, enqueued the way `enqueuePendingReverse` writes it. */
+    function queueReverseRow(
+      d: Dealer, originalEventId: Id<"accountingEvents">, sourceType: string
+    ): Promise<Id<"pendingAccountingEvents">> {
+      return d.t.run((ctx) =>
+        ctx.db.insert("pendingAccountingEvents", {
+          orgId: d.orgId, kind: "REVERSE", status: "PENDING", idempotencyKey: `s560_rev_${crypto.randomUUID()}`,
+          accountingDate: Date.now(), actorId: d.userId, reason: "S560 reversal", attempts: 0, createdAt: Date.now(),
+          sourceType, sourceId: "s560", originalEventId,
+        })
+      );
+    }
+
+    /** A POSTED pre-pilot capitalization to reverse (asset created while the lifecycle was open). */
+    async function postedCapitalization(d: Dealer): Promise<Id<"accountingEvents">> {
+      await capitalizedAsset(d);
+      const event = (await d.t.run((ctx) => ctx.db.query("accountingEvents").collect())).find(
+        (e) => e.eventType === "ASSET_CAPITALIZED" && e.status === "POSTED"
+      );
+      expect(event).toBeDefined();
+      vi.useFakeTimers({ toFake: [...FAKE] });
+      return event!._id;
+    }
+
+    test("a REVERSE row for a fixed-asset entry is refused by the cron: not POSTED, no lines, entry still POSTED", async () => {
+      const d = await seedDealer();
+      const originalId = await postedCapitalization(d);
+      const id = await queueReverseRow(d, originalId, "fixedAssets");
+      const before = await ledger(d);
+      await cronTick(d);
+      const row = await getRow(d, id);
+      expect(row?.status).not.toBe("POSTED");
+      expect(row?.attempts).toBeGreaterThanOrEqual(1);
+      expect(row?.lastError ?? "").toMatch(/pilot/i);
+      expect(await ledger(d)).toEqual(before);
+      expect((await eventOf(d, originalId))?.status).toBe("POSTED");
+    });
+
+    test("the ORIGINAL event decides, not the row's own source label (a mislabeled row is still refused)", async () => {
+      const d = await seedDealer();
+      const originalId = await postedCapitalization(d);
+      const id = await queueReverseRow(d, originalId, "expenses");
+      const before = await ledger(d);
+      await cronTick(d);
+      expect((await getRow(d, id))?.status).not.toBe("POSTED");
+      expect(await ledger(d)).toEqual(before);
+    });
+
+    test("control: with the lifecycle open the same REVERSE row posts and reverses the entry", async () => {
+      const d = await seedDealer();
+      const originalId = await postedCapitalization(d);
+      const id = await queueReverseRow(d, originalId, "fixedAssets");
+      await withLifecycleOpen(() => cronTick(d));
+      expect((await getRow(d, id))?.status).toBe("POSTED");
+      expect((await eventOf(d, originalId))?.status).toBe("REVERSED");
+    });
+
+    test("control: an UNRELATED REVERSE row still posts while the lifecycle is off", async () => {
+      const d = await seedDealer();
+      const posted = await d.asOwner.mutation(internal.accountingLedger.post, expensePost(d));
+      vi.useFakeTimers({ toFake: [...FAKE] });
+      const id = await queueReverseRow(d, posted.eventId, "expenses");
+      await cronTick(d);
+      expect((await getRow(d, id))?.status).toBe("POSTED");
+      expect((await eventOf(d, posted.eventId))?.status).toBe("REVERSED");
+    });
+
+    test("retryFailed cannot revive a dead-lettered fixed-asset REVERSE row, and the list does not offer Retry", async () => {
+      const d = await seedDealer();
+      const originalId = await postedCapitalization(d);
+      const id = await queueReverseRow(d, originalId, "fixedAssets");
+      await d.t.run((ctx) => ctx.db.patch(id, { status: "FAILED", attempts: 10, lastError: "dead-lettered" }));
+      const before = await ledger(d);
+      const failed = await d.asOwner.query(api.accountingSetup.listFailedEvents, {
+        orgId: d.orgId, paginationOpts: { numItems: 20, cursor: null },
+      });
+      expect(failed.page.find((row) => row._id === id)?.retryable).toBe(false);
+      await expect(
+        d.asOwner.mutation(api.accountingOutbox.retryFailed, { orgId: d.orgId, pendingEventId: id })
+      ).rejects.toThrow(/could not be revived/);
+      await pump(d);
+      await laterCronTick(d);
+      expect((await getRow(d, id))?.status).toBe("FAILED");
+      expect(await ledger(d)).toEqual(before);
+    });
+
+    test("control: a dead-lettered UNRELATED REVERSE row is still revivable", async () => {
+      const d = await seedDealer();
+      const posted = await d.asOwner.mutation(internal.accountingLedger.post, expensePost(d));
+      const id = await queueReverseRow(d, posted.eventId, "expenses");
+      await d.t.run((ctx) => ctx.db.patch(id, { status: "FAILED", attempts: 10, lastError: "dead-lettered" }));
+      await expect(
+        d.asOwner.mutation(api.accountingOutbox.retryFailed, { orgId: d.orgId, pendingEventId: id })
+      ).resolves.toEqual({ retryQueued: true });
+    });
+  });
+});
+
+/** An unrelated, certified-shape posting (a paid expense) that the reversal controls reverse. */
+function expensePost(d: Dealer) {
+  return {
+    orgId: d.orgId, eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: "s560_expense",
+    eventVersion: 1, accountingDate: Date.now(), occurredAt: Date.now(), currency: "JOD",
+    idempotencyKey: `s560_expense_${crypto.randomUUID()}`,
+    payload: { expenseId: "s560_expense", amountMinor: 5_000, currency: "JOD", paymentMethod: "CASH", category: "OTHER" },
+  };
+}
+
+describe("SCRUM-560 round 3: the posting engine itself refuses fixed-asset events (Seat 2 finding 1)", () => {
+  const ledgerTables = ["accountingEvents", "journalEntries", "journalLines"];
+  const fixedAssetPost = (d: Dealer, eventType = "ASSET_CAPITALIZED") => ({
+    orgId: d.orgId, eventType, sourceType: "fixedAssets", sourceId: "s560_asset", eventVersion: 1,
+    accountingDate: Date.now(), occurredAt: Date.now(), currency: "JOD",
+    idempotencyKey: `s560_engine_${crypto.randomUUID()}`,
+    payload: { assetId: "s560_asset", costMinor: 100_000, amountMinor: 100_000, currency: "JOD", paymentMethod: "CASH" },
+  });
+
+  test("internal.accountingLedger.post refuses every fixed-asset event type and writes nothing", async () => {
+    const d = await seedDealer();
+    for (const eventType of ["ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED"]) {
+      await expectRefusedAndUnchanged(d, () =>
+        d.asOwner.mutation(internal.accountingLedger.post, fixedAssetPost(d, eventType))
+      );
+    }
+    const ledgerRows = await dbSnapshot(d.t, ledgerTables);
+    expect((ledgerRows as { journalLines: unknown[] }).journalLines).toHaveLength(0);
+  });
+
+  test("a fixed-asset SOURCE is refused even under another event type's name", async () => {
+    const d = await seedDealer();
+    await expectRefusedAndUnchanged(d, () =>
+      d.asOwner.mutation(internal.accountingLedger.post, { ...expensePost(d), sourceType: "fixedAssets" })
+    );
+  });
+
+  test("control: with the lifecycle open the same call posts the capitalization journal", async () => {
+    const d = await seedDealer();
+    const lines = async () =>
+      ((await dbSnapshot(d.t, ledgerTables)) as { journalLines: unknown[] }).journalLines.length;
+    const before = await lines();
+    await withLifecycleOpen(() => d.asOwner.mutation(internal.accountingLedger.post, fixedAssetPost(d)));
+    expect(await lines()).toBe(before + 2);
+  });
+
+  test("control: an unrelated posting still posts while the lifecycle is off", async () => {
+    const d = await seedDealer();
+    const posted = await d.asOwner.mutation(internal.accountingLedger.post, expensePost(d));
+    expect(posted.eventId).toBeDefined();
+  });
+
+  test("internal.accountingLedger.reverse refuses the reversal of a fixed-asset entry and writes nothing", async () => {
+    const d = await seedDealer();
+    await capitalizedAsset(d);
+    const original = (await d.t.run((ctx) => ctx.db.query("accountingEvents").collect())).find(
+      (e) => e.eventType === "ASSET_CAPITALIZED"
+    )!;
+    const args = {
+      orgId: d.orgId, originalEventId: original._id, reversalDate: Date.now(), reason: "S560",
+      idempotencyKey: `s560_rev_${crypto.randomUUID()}`,
+    };
+    await expectRefusedAndUnchanged(d, () => d.asOwner.mutation(internal.accountingLedger.reverse, args));
+    expect((await d.t.run((ctx) => ctx.db.get(original._id)))?.status).toBe("POSTED");
+    // The mutation attack: with the switch off the very same reversal succeeds.
+    await withLifecycleOpen(() => d.asOwner.mutation(internal.accountingLedger.reverse, args));
+    expect((await d.t.run((ctx) => ctx.db.get(original._id)))?.status).toBe("REVERSED");
+  });
+
+  test("control: internal.accountingLedger.reverse of an UNRELATED entry still posts while the lifecycle is off", async () => {
+    const d = await seedDealer();
+    const posted = await d.asOwner.mutation(internal.accountingLedger.post, expensePost(d));
+    await d.asOwner.mutation(internal.accountingLedger.reverse, {
+      orgId: d.orgId, originalEventId: posted.eventId, reversalDate: Date.now(), reason: "S560",
+      idempotencyKey: `s560_rev_${crypto.randomUUID()}`,
+    });
+    expect((await d.t.run((ctx) => ctx.db.get(posted.eventId)))?.status).toBe("REVERSED");
+  });
 });

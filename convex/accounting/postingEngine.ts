@@ -10,6 +10,10 @@ import { isRemainingOpeningKind } from "../utils/openingAccountPolicy";
 // app edges is safe to initialize before anything that can participate in
 // a cycle, so it goes above every local import.
 import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
+import {
+  fixedAssetPostingRefusal,
+  refuseFixedAssetLifecycle,
+} from "../utils/fixedAssetLifecycleContainment";
 import { ConvexError } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
@@ -405,6 +409,19 @@ export async function postAccountingEvent(
   const retired = retiredPostingRefusal(cmd);
   if (retired) {
     throw new ConvexError(retired);
+  }
+
+  // ⚠️ SCRUM-560 / SCRUM-760 RULING 4 — FIXED-ASSET POSTINGS ARE REFUSED HERE TOO, WHILE THE
+  // PILOT SWITCH IS ON. The domain doors (`fixedAssets.*`), the monthly cron and the outbox
+  // worker each refuse earlier, but `internal.accountingLedger.post` and every workflow hook
+  // reach this function directly, so the engine is the one seam no fixed-asset event can
+  // bypass. Same placement and reasoning as the retired refusal above: before currency
+  // handling and the idempotency probe, so a refused command writes nothing, even for a caller
+  // that catches and continues. Throws the coded `FIXED_ASSET_LIFECYCLE_DISABLED` refusal. The
+  // outbox worker classifies the same event earlier and dead-letters it through `failOutboxRow`
+  // without entering here, so a queued row is never double-handled.
+  if (fixedAssetPostingRefusal(cmd)) {
+    refuseFixedAssetLifecycle("FIXED_ASSET_LIFECYCLE_DISABLED");
   }
 
   // ⚠️ ORGANIZATION LIFECYCLE IS REFUSED HERE FOR THE SAME REASON — SCRUM-302.
