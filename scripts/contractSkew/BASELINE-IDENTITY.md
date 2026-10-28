@@ -423,6 +423,14 @@ The existing workflow command and its original review base remain unchanged:
 node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence
 ```
 
+A renewal may also record its review as `<JIRA-KEY> review of PR #<n> head <sha>`
+(for example `SCRUM-778 review of PR #693 head 8f12a47f61e3`), for a change that
+legitimately edits a required file and was reviewed at its own PR head before
+reaching `origin/main`. It follows every rule above: the SHA is 8 to 40 hex digits,
+the last review reference of either form in the text is the one used, it must be a
+verified ancestor of HEAD, and each required file must be named and unchanged
+since it.
+
 Failing-first scope tests reported 4 failed and 2 passed: imported helpers and
 wrapper changes over-refused; defining-file attribution and per-function scope
 were not observed. An additional intermediate-star-export control failed with
