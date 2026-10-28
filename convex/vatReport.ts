@@ -18,7 +18,7 @@ import { Id } from "./_generated/dataModel";
 import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { requireConfiguredCurrency } from "./utils/money";
+import { getOrgCurrency } from "./accounting/workflowHooks";
 import { requireFeature } from "./subscriptions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { getPostedLines } from "./accountingReports";
@@ -101,12 +101,8 @@ export const generateVatSummary = query({
       netDueMinor: v2.outputVatMinor - v2.inputVatMinor,
     }));
 
-    const orgSettings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .unique();
     // SCRUM-85: the stored currency or a typed refusal; never a JOD zero line.
-    const primaryCurrency = requireConfiguredCurrency(orgSettings);
+    const primaryCurrency = await getOrgCurrency(ctx, args.orgId);
     const primary = lines.find((l) => l.currency === primaryCurrency) ?? {
       currency: primaryCurrency,
       outputVatMinor: 0,
