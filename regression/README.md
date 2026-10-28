@@ -5,6 +5,27 @@ public snapshot of the owner rulings they cite: comment id, digest, date only.
 Never put ruling text or customer data here. Format, validators and rules live in
 `scripts/regression/scenarioRecord.ts`; run `pnpm test:regression-library`.
 
+## RT11-DOORS pilot containment
+
+The `rt11-*` records cite the whole-comment digest of owner ruling
+`SCRUM-760#c23862` (RT11-DOORS, 2026-10-28). Public-mutation refusal tests in
+`convex/rt11DoorContainment.test.ts` use the shipped switches and compare full
+contents of every application schema table plus the scheduler, including
+journals, outbox, audits and command identities. Component tables are outside
+that snapshot; guards precede idempotency and rate-limit component writes by
+construction. The allowed controls cover pre-final reimbursement, balanced
+closure, correction before payout, ordinary vehicle edits and new cost additions.
+Duplicate, reorder and informational SOURCED-cost controls cover the paid-cost
+boundary. UI component tests supplement these records; browser execution is a
+separate certification obligation.
+
+Historical lifecycle suites explicitly call `openRt11Doors` from
+`test-utils/rt11DoorSwitches.ts`; their underlying posting/correction assertions
+remain useful, but they do not certify availability during the pilot. The
+RT11 backend refusal suite has no such opt-out. All evidence here is local,
+serial harness/component evidence. Platform, browser and release certification
+remain separate obligations under SCRUM-760/762.
+
 ## Known limits (S1)
 
 - Prose is refused structurally (actions/observables are dotted tokens, input/value strings are short space-free tokens), but a single-word token can still be a name. A human reviews every scenario PR for public-data hygiene.
@@ -79,3 +100,6 @@ Their `SCRUM-760#description` digest now covers the entire approved October 25 M
 
 - SCRUM-760#c23812 (owner ruling consolidation, 2026-10-28): the digested text is ruling 8 (SCRUM-56), the paragraph after the `8. SCRUM-56:` label, verbatim including its Markdown emphasis, whitespace-normalised by `digestRulingText`. Two SCRUM-56 money records cite it (the canonical sale debt is listed once in Collections, and the totals and aging count it once).
 
+## Supplier concession records (SCRUM-766 PR-C)
+
+Fourteen backend records bind exact titles in `convex/supplierConcession.scrum766c.test.ts` (ten money, four permission). They cite SCRUM-407#c21031 (consigned financed economics), SCRUM-760#description (pilot scope) and, for the permission records, SCRUM-760#c22465 (R-PERMISSION). The rulings that govern them are SCRUM-760 c23812 (ruling 3: the concession is in the pilot, for SOURCED vehicles only, split against the server-computed total net shortfall) and SCRUM-766 c23841 (the owner approved the commission basis M = K - E_eff - contra, 77.5 in the worked example, and accepted Q2-Q8 as implemented). All fourteen records cite c23812, and the commission record also cites c23841; both are in `rulings.json` with a whole-comment digest (the convention above), refreshed 2026-10-28 with `refreshRulings.mjs`. The digest covers all eleven rulings in c23812, so a change to any of them changes it.  A ruling change updates these records in the same change.  Harness evidence only.

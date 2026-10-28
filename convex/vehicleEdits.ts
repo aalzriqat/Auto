@@ -3,6 +3,7 @@ import { mutation } from "./functions";
 import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { requireTenantAuth } from "./utils/tenancy";
+import { assertNoHeldSupplierConcession } from "./utils/supplierConcession";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { ConvexError } from "convex/values";
@@ -504,6 +505,17 @@ export const resolve = mutation({
           nextStatus: payload.status,
         });
         await assertVehicleImagesAllowed(ctx, payload.imageIds);
+        // SCRUM-766 PR-C: the same refusal `vehicles.update` makes. A request is approved later,
+        // so a supplier concession can have been recorded since it was written; the approval is
+        // not a second door around the guard. Only a payload that CHANGES a supplier term counts.
+        if (
+          (payload.sourceCost !== undefined && payload.sourceCost !== previousVehicle.sourceCost) ||
+          (payload.sourcedFromName !== undefined &&
+            payload.sourcedFromName.trim() !== (previousVehicle.sourcedFromName ?? "").trim()) ||
+          (payload.sourceType !== undefined && payload.sourceType !== previousVehicle.sourceType)
+        ) {
+          await assertNoHeldSupplierConcession(ctx, args.orgId, request.vehicleId);
+        }
         if (
           typeof payload.sellingPrice === "number" &&
           payload.sellingPrice !== previousVehicle.sellingPrice

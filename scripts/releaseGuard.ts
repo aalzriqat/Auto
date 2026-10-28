@@ -1257,3 +1257,36 @@ export function bankRefusalMessage(result: BankRebuildResult): string | null {
     `refused the bank balance rebuild; their bank balances stay unavailable. A re-run retries them.`
   );
 }
+
+/** SCRUM-782: same serial, bounded rollout pattern as rebuildBankBalances.
+ * The backend persists its own cursor, so a failed CLI call can be retried
+ * without losing a committed page or trusting a cursor printed into public logs.
+ */
+export function recoverSupplierVatHolds(input: {
+  runPage: () => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  maxPages: number;
+}): { ok: true; pages: number; reclassified: number } | Refusal {
+  let reclassified = 0;
+  for (let pageNumber = 0; pageNumber < input.maxPages; pageNumber += 1) {
+    if (input.now() - input.startedAt > input.timeoutMs) {
+      return { ok: false, reason: "Production is DEPLOYED, but the supplier VAT hold migration reached the rollout deadline. A re-run resumes it." };
+    }
+    const result = input.runPage();
+    if (!result.ok) {
+      return { ok: false, reason: "Production is DEPLOYED, but the supplier VAT hold migration call failed. See backend logs; a re-run resumes it." };
+    }
+    const page = result.value;
+    if (typeof page !== "object" || page === null ||
+        !("status" in page) || (page.status !== "READY" && page.status !== "MORE") ||
+        !("reclassified" in page) || typeof page.reclassified !== "number" ||
+        !Number.isSafeInteger(page.reclassified) || page.reclassified < 0 || page.reclassified > 100) {
+      return { ok: false, reason: "Production is DEPLOYED, but the supplier VAT hold migration returned an unrecognised result." };
+    }
+    reclassified += page.reclassified;
+    if (page.status === "READY") return { ok: true, pages: pageNumber + 1, reclassified };
+  }
+  return { ok: false, reason: "Production is DEPLOYED, but the supplier VAT hold migration reached its page cap. A re-run resumes it." };
+}

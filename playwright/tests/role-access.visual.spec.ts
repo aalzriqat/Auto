@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { test, expect, type TestInfo } from "@playwright/test";
 import { newContainedContext } from "../containedContext";
+import { captureWithDiagnostics } from "../visual/browserCaptureDiagnostics";
 
 // Actual component markup and compiled app CSS. No authentication, app shell,
 // hydration or backend is claimed. Live role replays remain separate tests.
@@ -97,7 +98,9 @@ async function paint(browser: Parameters<typeof newContainedContext>[0], info: T
             await expect(page.getByRole("listbox")).toHaveCount(0);
           }
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${state} fits ${width}px`).toBe(true);
-          await page.screenshot({ path: info.outputPath(`role-access-${state}-${locale}-${width}.png`), fullPage: true, animations: "disabled" });
+          await captureWithDiagnostics(page, {
+            path: info.outputPath(`role-access-${state}-${locale}-${width}.png`), fullPage: true, animations: "disabled",
+          }, () => info.outputPath(`role-access-${state}-${locale}-${width}-capture-failure.json`));
         } finally { await context.close(); }
       }
     }

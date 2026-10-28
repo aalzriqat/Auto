@@ -1,0 +1,41 @@
+{
+  "id": "rt11-ordinary-vehicle-edit-remains-allowed",
+  "fingerprint": "63f1b5920d6ed23096fa8ac19c1c23827c7ab40f2d44418ada0a4a544e86bc0c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "color": "Blue"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicle.color",
+      "value": "Blue"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 ordinary vehicle edit remains allowed"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

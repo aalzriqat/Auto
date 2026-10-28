@@ -1,0 +1,49 @@
+{
+  "id": "rt11-legacy-custody-migration-refuses-without-writes",
+  "fingerprint": "dc55f257e81e3e26cd9ec6265bdf50def9a54bc492d8eb4fc8f42ae102abd39d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeDealCosts.migrateLegacyCustodyToLedger",
+      "input": {
+        "custodyState": "LEGACY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "CUSTODY_MIGRATION_PILOT_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "step1.schedulerChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 legacy custody migration refuses without writes"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

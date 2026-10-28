@@ -1,6 +1,17 @@
 import { ConvexError } from "convex/values";
 
 export const AppErrorCode = {
+  // RT11-DOORS / SCRUM-760#c23862. Localized under ServerError_<code>.
+  CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED: "CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED",
+  CUSTODY_WRITEOFF_PILOT_DISABLED: "CUSTODY_WRITEOFF_PILOT_DISABLED",
+  CUSTODY_MIGRATION_PILOT_DISABLED: "CUSTODY_MIGRATION_PILOT_DISABLED",
+  CUSTODY_REOPEN_PILOT_DISABLED: "CUSTODY_REOPEN_PILOT_DISABLED",
+  MANUAL_FINANCE_APPROVAL_PILOT_DISABLED: "MANUAL_FINANCE_APPROVAL_PILOT_DISABLED",
+  EXPECTED_PAYMENT_PAID_PILOT_DISABLED: "EXPECTED_PAYMENT_PAID_PILOT_DISABLED",
+  SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED: "SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED",
+  DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED: "DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED",
+  VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED: "VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED",
+  PAID_LANDED_COST_CHANGE_PILOT_DISABLED: "PAID_LANDED_COST_CHANGE_PILOT_DISABLED",
   // Auth
   UNAUTHENTICATED: "UNAUTHENTICATED",
   UNAUTHORIZED: "UNAUTHORIZED",
@@ -122,6 +133,9 @@ export const AppErrorCode = {
   // SCRUM-760 decision B: the cleared-cheque return is blocked for the narrow pilot
   // (utils/postDeliveryDoorContainment.ts). Translated under ServerError_<code>.
   CLEARED_CHEQUE_RETURN_PILOT_DISABLED: "CLEARED_CHEQUE_RETURN_PILOT_DISABLED",
+  // SCRUM-760 ruling 11: the legacy collection REFUND request/approval is blocked for the narrow
+  // pilot (utils/legacyCollectionRefundContainment.ts). Translated under ServerError_<code>.
+  LEGACY_COLLECTION_REFUND_PILOT_DISABLED: "LEGACY_COLLECTION_REFUND_PILOT_DISABLED",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",
@@ -132,6 +146,9 @@ export const AppErrorCode = {
   ASSET_PURCHASE_DATE_IN_FUTURE: "ASSET_PURCHASE_DATE_IN_FUTURE",
   ASSET_PURCHASE_DATE_INVALID: "ASSET_PURCHASE_DATE_INVALID",
   ASSET_DEPRECIATION_START_DATE_INVALID: "ASSET_DEPRECIATION_START_DATE_INVALID",
+  // SCRUM-560 / SCRUM-760 c23812: the whole fixed-asset lifecycle is off for the pilot
+  // (utils/fixedAssetLifecycleContainment.ts). Translated under ServerError_<code>.
+  FIXED_ASSET_LIFECYCLE_DISABLED: "FIXED_ASSET_LIFECYCLE_DISABLED",
   // SCRUM-651. Sale / deal teardown refuses while any supplier payable on the sale carries a
   // recorded payment (whole or part). Translated under ServerError_<code>.
   SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED: "SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED",
@@ -325,6 +342,10 @@ export const AppErrorCode = {
   // Translated under ServerError_<code>.
   DEPOSIT_OTHER_TREATMENT_DISABLED: "DEPOSIT_OTHER_TREATMENT_DISABLED",
   OPENING_BALANCE_AFTER_LEDGER_ACTIVITY: "OPENING_BALANCE_AFTER_LEDGER_ACTIVITY",
+  // SCRUM-781 (owner rulings SCRUM-773 c22401, SCRUM-760 c23812): `sourcingPayables.markPaid` refuses a
+  // nonzero VAT on a consigned supplier payable. Message in convex/sourcingPayables.ts; translated
+  // under ServerError_<code>.
+  CONSIGNED_PAYABLE_VAT_REFUSED: "CONSIGNED_PAYABLE_VAT_REFUSED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

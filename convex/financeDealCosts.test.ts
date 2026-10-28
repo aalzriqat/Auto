@@ -1,6 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
@@ -1875,3 +1875,10 @@ describe("every live fee type can be taken from blocking to closable", () => {
     expect(await feeRow(seed, feeId)).toMatchObject({ actualAmountMinor: jod(80) });
   });
 });
+
+// RT11-DOORS: historical lifecycle mechanics with the pilot doors explicitly open.
+// Shipped-state refusals and controls live in rt11DoorContainment.test.ts.
+vi.mock("./utils/rt11DoorContainment", async (importOriginal) =>
+  (await import("../test-utils/rt11DoorSwitches")).openRt11Doors(
+    await importOriginal<typeof import("./utils/rt11DoorContainment")>()
+  ));

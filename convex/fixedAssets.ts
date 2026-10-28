@@ -29,6 +29,7 @@ import { AppErrorCode, throwAppError } from "./utils/errors";
 import { interpolate } from "../lib/i18n/interpolate";
 import { isFutureUtcDay, isRepresentableTimestamp, utcDateLabel, utcDay } from "./utils/ledgerCalendar";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { assertFixedAssetLifecycleAllowed, isFixedAssetLifecycleDisabled } from "./utils/fixedAssetLifecycleContainment";
 
 const methodValidator = v.literal("STRAIGHT_LINE");
 
@@ -215,6 +216,9 @@ export const capitalize = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-560: the fixed-asset lifecycle is off for the pilot. Before validation and before
+    // runWithIdempotency, so a stored replay is refused too.
+    assertFixedAssetLifecycleAllowed();
 
     if (!Number.isSafeInteger(args.costMinor) || args.costMinor <= 0) {
       throw new ConvexError("Cost must be a positive integer minor-unit amount.");
@@ -358,6 +362,7 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    assertFixedAssetLifecycleAllowed(); // SCRUM-560
     const { orgId, assetId, ...updates } = args;
 
     const asset = await ctx.db.get(assetId);
@@ -386,6 +391,7 @@ export const remove = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    assertFixedAssetLifecycleAllowed(); // SCRUM-560
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.orgId !== args.orgId) {
       throw new ConvexError("Fixed asset not found in this organization.");
@@ -428,6 +434,7 @@ export const impair = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    assertFixedAssetLifecycleAllowed(); // SCRUM-560
 
     const asset = await requireOwnedRow(ctx, args.orgId, "fixedAssets", args.assetId, "Fixed asset not found in this organization.");
     if (asset.isDeleted) {
@@ -494,6 +501,7 @@ export const dispose = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    assertFixedAssetLifecycleAllowed(); // SCRUM-560
 
     const asset = await requireOwnedRow(ctx, args.orgId, "fixedAssets", args.assetId, "Fixed asset not found in this organization.");
     if (asset.isDeleted) {
@@ -568,6 +576,7 @@ export const dispose = mutation({
  * reason here without classifying it fails typecheck.
  */
 export type DepreciationSkipReason =
+  | "lifecycle_disabled"
   | "org_lifecycle_blocked"
   | "not_found"
   | "not_active"
@@ -604,6 +613,10 @@ export const depreciateAssetForMonth = internalMutation({
     systemActorId: v.id("users"),
   },
   handler: async (ctx, args): Promise<DepreciateAssetResult> => {
+    // SCRUM-560: the fixed-asset lifecycle is off for the pilot. A counted skip, never a throw: this
+    // runs inside a cross-tenant cron batch. First, so nothing is read or written.
+    if (isFixedAssetLifecycleDisabled()) return { posted: false, reason: "lifecycle_disabled" };
+
     // ⚠️ SCRUM-302 — classified HERE, ahead of every other check, rather than
     // left to the engine's throw. This mutation is called once per asset from a
     // CROSS-ORG cron batch, and an uncaught throw inside such a batch aborts the

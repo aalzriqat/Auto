@@ -479,6 +479,12 @@ async function allDoors(seeded: Seeded, caller: Caller) {
     await call("financingEconomics.suggestQuotationForApplication", () =>
       caller.query(api.financingEconomics.suggestQuotationForApplication, { orgId, applicationId })
     ),
+    // SCRUM-766 PR-C: the dialog's supplier-concession basis. Finance-only by
+    // its own gate; swept like every other public application query so a
+    // caller below the finance tier is shown to receive a refusal, not a figure.
+    await call("financingEconomics.supplierConcessionBasis", () =>
+      caller.query(api.financingEconomics.supplierConcessionBasis, { orgId, applicationId })
+    ),
     /**
      * Deliberately NOT called with this deal's sentinels.
      *

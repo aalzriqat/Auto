@@ -762,3 +762,10 @@ describe("Phase 8 — schema fields", () => {
     expect(app?.disbursementIdempotencyKey).toBe("disb_idem_001");
   });
 });
+
+// RT11-DOORS: historical lifecycle mechanics with the pilot doors explicitly open.
+// Shipped-state refusals and controls live in rt11DoorContainment.test.ts.
+vi.mock("./utils/rt11DoorContainment", async (importOriginal) =>
+  (await import("../test-utils/rt11DoorSwitches")).openRt11Doors(
+    await importOriginal<typeof import("./utils/rt11DoorContainment")>()
+  ));

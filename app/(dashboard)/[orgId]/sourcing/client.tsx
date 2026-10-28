@@ -13,7 +13,7 @@ import { Truck, CheckCircle2, Clock, XCircle } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
 import { Doc, Id } from "@/convex/_generated/dataModel";
-import { getErrorMessage } from "@/lib/errors";
+import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { SupplierPaymentDialog } from "@/components/sourcing/SupplierPaymentDialog";
 import { SupplierCostRecoveriesSection } from "@/components/sourcing/SupplierCostRecoveriesSection";
@@ -26,6 +26,8 @@ type SourcingPayable = Doc<"vehicleSupplierPayables"> & {
   customerName: string | null;
   paidByName: string | null | undefined;
   daysOutstanding: number;
+  /** Server verdict from the same predicate markPaid enforces; absent means no VAT. */
+  vatReclassAllowed?: boolean;
 };
 
 function payableMethodLabel(t: (key: any) => string, method?: PaymentMethod) {
@@ -128,6 +130,8 @@ export function SourcingClient() {
     }
   };
 
+  const vatAllowed = payDialogPayable?.vatReclassAllowed === true;
+
   const handleMarkPaid = async () => {
     if (!activeOrgId || !payDialogPayable) return;
     if (bankMethod && (!bankAccountId || paymentBanks?.truncated || !paymentBanks?.banks.some((bank) => bank._id === bankAccountId))) {
@@ -137,8 +141,10 @@ export function SourcingClient() {
     setIsPaying(true);
     try {
       const trimmedTax = taxAmount.trim();
-      let parsedTaxAmount: number | undefined;
-      if (trimmedTax) {
+      // A consigned payable settles at its gross amount: send an explicit 0
+      // rather than whatever was typed before the dialog showed it.
+      let parsedTaxAmount: number | undefined = vatAllowed ? undefined : 0;
+      if (vatAllowed && trimmedTax) {
         parsedTaxAmount = Number(trimmedTax);
         if (!Number.isFinite(parsedTaxAmount) || parsedTaxAmount < 0) {
           toast.error(t("InvalidVatAmount" as any));
@@ -165,7 +171,7 @@ export function SourcingClient() {
       setBankAccountId(null);
       setTaxAmount("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("UnexpectedError" as any));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setIsPaying(false);
     }
@@ -445,6 +451,7 @@ export function SourcingClient() {
         bankAccountId={bankAccountId}
         bankOptions={paymentBanks}
         taxAmount={taxAmount}
+        vatAllowed={vatAllowed}
         t={t as any}
         onNotesChange={setPaymentNotes}
         onPaymentMethodChange={(method) => { setPaymentMethod(method); setBankAccountId(null); }}

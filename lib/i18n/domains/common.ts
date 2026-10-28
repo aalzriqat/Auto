@@ -1,6 +1,17 @@
 import { defineBilingualMessages } from "../defineBilingualMessages";
 
 const workspaceMessages = defineBilingualMessages({
+  // RT11-DOORS / SCRUM-760#c23862; English matches rt11DoorContainment.ts.
+  ServerError_CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED: ["Reversing or reimbursing custody on a finalized deal is not available during the pilot. Nothing has been changed.", "عكس حركة عهدة أو سداد مستحقاتها بعد إتمام الصفقة غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء."],
+  ServerError_CUSTODY_WRITEOFF_PILOT_DISABLED: ["Writing off a custody shortage is not available during the pilot. Resolve the shortage before closing the custody record. Nothing has been changed.", "شطب عجز العهدة غير متاح خلال المرحلة التجريبية. عالج العجز قبل إغلاق العهدة. لم يتم تغيير أي شيء."],
+  ServerError_CUSTODY_MIGRATION_PILOT_DISABLED: ["Migrating legacy custody to the ledger is not available during the pilot. Nothing has been changed.", "ترحيل العهد القديمة إلى دفتر الأستاذ غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء."],
+  ServerError_CUSTODY_REOPEN_PILOT_DISABLED: ["Reopening custody is not available during the pilot. Nothing has been changed.", "إعادة فتح العهدة غير متاحة خلال المرحلة التجريبية. لم يتم تغيير أي شيء."],
+  ServerError_MANUAL_FINANCE_APPROVAL_PILOT_DISABLED: ["Manual finance approval is not available during the pilot. Use a configured financier. Nothing has been changed.", "اعتماد التمويل اليدوي غير متاح خلال المرحلة التجريبية. استخدم جهة تمويل مُعدّة في النظام. لم يتم تغيير أي شيء."],
+  ServerError_EXPECTED_PAYMENT_PAID_PILOT_DISABLED: ["Correcting an expected payment after payout is not available during the pilot. Nothing has been changed.", "تصحيح الدفعة المتوقعة بعد الصرف غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء."],
+  ServerError_SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED: ["Amending supplier disbursement advice is not available during the pilot. Nothing has been changed.", "تعديل إشعار الصرف للمورد غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء."],
+  ServerError_DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED: ["Direct commission payout is not available during the pilot. Pay commissions through payroll. Nothing has been changed.", "دفع العمولة مباشرة غير متاح خلال المرحلة التجريبية. ادفع العمولات عبر الرواتب. لم يتم تغيير أي شيء."],
+  ServerError_VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED: ["Changing vehicle ownership is not available during the pilot. Ordinary vehicle edits remain available. Nothing has been changed.", "تغيير ملكية المركبة غير متاح خلال المرحلة التجريبية. تبقى تعديلات المركبة العادية متاحة. لم يتم تغيير أي شيء."],
+  ServerError_PAID_LANDED_COST_CHANGE_PILOT_DISABLED: ["Editing, removing or moving a paid landed cost is not available during the pilot. You can add a new cost. Nothing has been changed.", "تعديل تكلفة تجهيز مدفوعة أو حذفها أو نقلها غير متاح خلال المرحلة التجريبية. يمكنك إضافة تكلفة جديدة. لم يتم تغيير أي شيء."],
   OpeningCommissionNotEffective: ["Not yet effective", "لم يحن تاريخ الاستحقاق بعد"],
   OpeningEmployeeCommissions: ["Opening employee commissions", "عمولات الموظفين الافتتاحية"],
   OpeningCommissionPayrollOnly: ["Opening debt is settled through payroll. It is separate from sale commissions.", "تُسدد الالتزامات الافتتاحية عبر الرواتب، وهي منفصلة عن عمولات المبيعات."],
@@ -120,6 +131,18 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED: [
     "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Use a manual accounting correction.",
     "لا يمكن إلغاء البيع تلقائياً بعد سداد ذمة المورّد كلياً أو جزئياً. يلزم إجراء تصحيح محاسبي يدوي.",
+  ],
+  // SCRUM-781 (owner rulings SCRUM-773 c22401, SCRUM-760 c23812). The English text must equal
+  // CONSIGNED_PAYABLE_VAT_REFUSAL in convex/sourcingPayables.ts. PayableNoVatReclass is the neutral
+  // note the pay screen shows in place of the VAT field: the backend predicate is also false for an opening liability
+  // and for unverifiable ownership, so the note must not claim the payable is consigned.
+  ServerError_CONSIGNED_PAYABLE_VAT_REFUSED: [
+    "A consigned vehicle's supplier payable is settled at its gross amount. VAT cannot be reclassified on it.",
+    "تُسوَّى ذمة المورّد عن سيارة الأمانة بمبلغها الإجمالي، ولا يمكن إعادة تصنيف ضريبة القيمة المضافة عليها.",
+  ],
+  PayableNoVatReclass: [
+    "VAT cannot be reclassified on this payable.",
+    "لا يمكن إعادة تصنيف ضريبة القيمة المضافة على هذه الذمة.",
   ],
   // SCRUM-563. The English text must equal the server message in convex/utils/idempotency.ts,
   // and convex/adminOrgs.ts respectively.
@@ -327,6 +350,15 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_CLEARED_CHEQUE_RETURN_PILOT_DISABLED: [
     "Returning a cheque that has already cleared is not available during the pilot. Nothing has been changed.",
     "إرجاع شيك تمت تسويته بالفعل غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_FIXED_ASSET_LIFECYCLE_DISABLED: [
+    "Fixed assets are not available during the pilot. Nothing has been changed.",
+    "الأصول الثابتة غير متاحة خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
+  // SCRUM-760 ruling 11: convex/utils/legacyCollectionRefundContainment.ts.
+  ServerError_LEGACY_COLLECTION_REFUND_PILOT_DISABLED: [
+    "Recording a refund against a collection receivable is not available during the pilot. You can still reject a pending refund request. Nothing has been changed.",
+    "تسجيل استرداد على مستحقات التحصيل غير متاح خلال المرحلة التجريبية. يمكنك رفض أي طلب استرداد معلّق. لم يتم تغيير أي شيء.",
   ],
   ServerError_PAYMENT_LINKS_DISABLED: [
     "Payment links are not available yet. Nothing has been changed.",
