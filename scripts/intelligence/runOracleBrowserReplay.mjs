@@ -44,6 +44,8 @@ async function waitForApplication(server) {
   for (let attempt = 0; attempt < 90; attempt++) {
     if (server.exitCode !== null) throw new Error("HISTORICAL_APP_EXITED");
     try {
+      // Loopback health probe of the app server this runner spawned on the same host; nothing leaves the machine, so TLS adds nothing.
+      // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request
       const response = await fetch("http://127.0.0.1:3000/api/health", { signal: AbortSignal.timeout(1_000) });
       if (response.ok) return;
     } catch { /* The bounded startup window is still open. */ }
