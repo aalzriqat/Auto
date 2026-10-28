@@ -2243,6 +2243,14 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
      */
     consignedSupplierEntitlementMinor: v.optional(v.number()),
     /**
+     * SCRUM-766 PR-C: the part of his contractual entitlement the supplier conceded on this
+     * deal to cover the net shortfall, in minor units, frozen at completion. The supplier was
+     * owed `consignedSupplierEntitlementMinor` = contract - this. Absent or 0 means no
+     * concession. FINANCE-tier: the `sales` projection withholds it from a caller without
+     * view:finance.
+     */
+    consignedSupplierConcessionMinor: v.optional(v.number()),
+    /**
      * What a third party paid the supplier DIRECTLY, in minor units, frozen at
      * completion. Written only on the direct route; absent on
      * THROUGH_DEALERSHIP, where nobody pays him directly and the dealership
@@ -3426,6 +3434,24 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     financingTermsShortfallMinor: v.optional(v.number()),
     customerGapShareMinor: v.optional(v.number()),
     dealerGapShareMinor: v.optional(v.number()),
+    /**
+     * SCRUM-766 PR-C (owner ruling SCRUM-760 c23812 #3): the part of the net shortfall the
+     * SUPPLIER of a SOURCED vehicle absorbs by conceding part of his entitlement. Absent is 0.
+     * Customer + dealer + supplier shares always equal the net shortfall. FINANCE-tier: it
+     * is a figure of the deal's economics, withheld from a caller without view:finance.
+     */
+    supplierGapShareMinor: v.optional(v.number()),
+    /**
+     * The supplier terms the concession was agreed against, observed by the operator at the
+     * moment of agreement and revalidated against the vehicle when the sale completes. A
+     * vehicle whose entitlement or supplier no longer matches refuses completion instead of
+     * silently applying a concession to a different contract. Cleared with the share.
+     */
+    supplierGapBasis: v.optional(v.object({
+      contractEntitlementMinor: v.number(),
+      currency: v.string(),
+      supplierName: v.string(),
+    })),
     customerGapCashToDealerMinor: v.optional(v.number()),
     customerGapInstallmentToDealerMinor: v.optional(v.number()),
     customerGapToFinanceCompanyMinor: v.optional(v.number()),
