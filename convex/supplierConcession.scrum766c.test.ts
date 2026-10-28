@@ -27,7 +27,7 @@ import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
-import { finalizeAsOwner, newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { finalizeAsOwner, newApplication, payForwardAsOwner, seedFinancedDealership } from "../test-utils/financedDealFixture";
 import { classifyGapResolution, validateGapShares } from "../lib/financingEconomics";
 import { appraisalGapIsSettled } from "./utils/financingEconomics";
 
@@ -502,14 +502,21 @@ describe("PR-C completion: THROUGH_DEALERSHIP", () => {
   test("a finalize replay leaves one payable and one sale", async () => {
     const s = await seed("t3");
     const applicationId = await readyConsignedDeal(s, "THROUGH_DEALERSHIP", V3);
-    const key = crypto.randomUUID();
-    await finalizeAsOwner(s, applicationId);
-    // The same business command again is refused or a no-op; either way no second row appears.
-    await refusalOf(s.owner.as.mutation(api.applications.finalizeDeal, { idempotencyKey: key, orgId: s.orgId, applicationId }));
+    // The SAME key and the SAME arguments twice: the second call is a replay of the first
+    // command, not a new one. (An earlier version minted a fresh key for the first call, so
+    // its second call proved only that a finalized deal refuses to finalize again.)
+    await payForwardAsOwner(s, applicationId);
+    const command = { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId };
+    const first = await s.owner.as.mutation(api.applications.finalizeDeal, command);
+    const second = await s.owner.as.mutation(api.applications.finalizeDeal, command);
+    expect(second).toEqual(first);
     const payables = await s.t.run(async (ctx) => (await ctx.db.query("vehicleSupplierPayables").collect()).filter((p) => p.orgId === s.orgId));
     const sales = await s.t.run(async (ctx) => (await ctx.db.query("sales").collect()).filter((p) => p.orgId === s.orgId));
+    const journals = await s.t.run(async (ctx) => (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()).filter((e) => e.eventType === "SALE_COMPLETED"));
     expect(payables).toHaveLength(1);
+    expect(payables[0].amountDue).toBe(9_100);
     expect(sales).toHaveLength(1);
+    expect(journals).toHaveLength(1);
   });
 
   test("a vehicle changed behind the guard (cost) refuses finalize: the stored basis is revalidated", async () => {
@@ -529,6 +536,109 @@ describe("PR-C completion: THROUGH_DEALERSHIP", () => {
     const refusal = await refusalOf(finalizeAsOwner(s, applicationId));
     expect(refusal).not.toBeNull();
     expect((await appOf(s, applicationId))?.finalizedSaleId).toBeUndefined();
+  });
+});
+
+/**
+ * F3 (Seat 1, PR #697): a MANUAL finance company's shortfall is the GROSS quotation-minus-letter gap
+ * (`netShortfallMethod: "GROSS_MANUAL"`), and the owner accepted Q3 "as implemented" (SCRUM-766
+ * c23841), so a supplier concession is allowed against it. Literals, derived by hand:
+ *
+ *   sale price 12,500, letter G 11,650           -> gross shortfall 850
+ *   dealership sends the company S 1,225, no deposit held -> contribution C = 1,225
+ *   supplier owed E = 9,500, concedes 400        -> E_eff = 9,100; dealership covers 450
+ *   K = G = 11,650 (the customer owes no gap cash)
+ *   agency margin (GL) = K - E_eff = 2,550; commission margin M = K - E_eff - C = 1,325 -> 10% = 132.5
+ *   journal: AR-FC +11,650, contra +1,225, AP suppliers -9,100, commission -2,550, AP-FC -1,225 = 0
+ */
+describe("PR-C on a GROSS_MANUAL shortfall (a manual-letter finance company)", () => {
+  async function manualApprovedDeal(s: Seeded, route: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER") {
+    const { owner, approver, orgId } = s;
+    const quoteId = await owner.as.mutation(api.quotes.saveQuote, {
+      orgId, customerId: s.customerId, vehicleId: s.vehicleId, vehiclePrice: 12_500, downPayment: 0, termMonths: 48,
+      mode: "MANUAL_FINANCE_COMPANY", manualProviderName: "Other finance option", manualAdminFees: 0, manualProfitRate: 5,
+    });
+    const applicationId = await owner.as.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    await owner.as.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
+    await approver.as.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    await owner.as.mutation(api.applications.setSupplierSettlementRoute, { orgId, applicationId, route });
+    await approver.as.mutation(api.financingEconomics.recordManualFinanceApproval, {
+      orgId, applicationId, approvedAmountMinor: jod(11_650), financierName: "Al-Ameen Islamic Finance", dealerSendsMinor: jod(1_225),
+    });
+    return applicationId;
+  }
+
+  test("the concession is accepted: the method is GROSS_MANUAL, the shortfall 850, and the supplier share is stored", async () => {
+    const s = await seed("g1");
+    const applicationId = await manualApprovedDeal(s, "THROUGH_DEALERSHIP");
+    const before = await appOf(s, applicationId);
+    expect(before?.netShortfallMethod).toBe("GROSS_MANUAL");
+    expect(before?.netShortfallMinor).toBe(jod(850));
+
+    await resolve(s, applicationId, V3);
+    const app = await appOf(s, applicationId);
+    expect(app?.gapResolution).toBe("SPLIT");
+    expect(app?.supplierGapShareMinor).toBe(jod(400));
+    expect(app?.dealerGapShareMinor).toBe(jod(450));
+    // The shares still have to add up to the (gross) shortfall exactly.
+    const bad = await refusalOf(resolve(s, applicationId, { customer: 0, dealer: 450, supplier: 401 }));
+    expect(bad).not.toBeNull();
+  });
+
+  test("THROUGH_DEALERSHIP completion: ledger balances, payable is E_eff 9,100, commission is 132.5", async () => {
+    const s = await seed("g2");
+    await setCommissionRate(s, 10);
+    const applicationId = await manualApprovedDeal(s, "THROUGH_DEALERSHIP");
+    await resolve(s, applicationId, V3);
+    await handOver(s, applicationId);
+    await finalizeAsOwner(s, applicationId);
+
+    const sale = await saleOf(s, applicationId);
+    expect(sale.consignedSupplierEntitlementMinor).toBe(jod(9_100));
+    expect(sale.consignedSupplierConcessionMinor).toBe(jod(400));
+    expect(sale.consignedMarginMinor).toBe(jod(2_550));
+    expect(sale.financedNetRevenue?.minor).toBe(jod(1_325));
+    expect(sale.commissionAmount).toBe(132.5);
+
+    expect((await payableOf(s))?.amountDue).toBe(9_100);
+
+    const sold = await netByAccount(s, "SALE_COMPLETED");
+    expect(sold.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES).toBe(jod(11_650));
+    expect(sold.SALES_CONSIDERATION_REDUCTIONS).toBe(jod(1_225));
+    expect(sold.ACCOUNTS_PAYABLE_SUPPLIERS).toBe(-jod(9_100));
+    expect(sold.CONSIGNMENT_COMMISSION_REVENUE).toBe(-jod(2_550));
+    expect(sold.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(-jod(1_225));
+    expect(Object.values(sold).reduce((a, b) => a + b, 0)).toBe(0);
+  });
+});
+
+/**
+ * LEGACY_GROSS documents CURRENT behaviour; it is not a ruling. A row with only the pre-SCRUM-766
+ * gross gap (no method, no net total) is read as `LEGACY_GROSS` by `shortfallState`, and
+ * `resolveAppraisalGap` has no refusal keyed on it, so a supplier concession against it is accepted
+ * exactly as against NET. Adding a refusal would be a scope change for the owner.
+ */
+describe("PR-C on a LEGACY_GROSS shortfall (current behaviour, owner decision pending)", () => {
+  test("a row with only the gross gap reads as LEGACY_GROSS and still takes a supplier concession", async () => {
+    const s = await seed("lg1");
+    const applicationId = await approvedDeal(s, "THROUGH_DEALERSHIP");
+    // Rewrite the application as a pre-SCRUM-766 row: the gross gap only, no net derivation.
+    await s.t.run((ctx) =>
+      ctx.db.patch(applicationId, {
+        netShortfallMethod: undefined, netShortfallMinor: undefined,
+        valuationShortfallMinor: undefined, financingTermsShortfallMinor: undefined,
+        rawAppraisalGapMinor: jod(850),
+      })
+    );
+    const { shortfallState } = await loadUtil<{
+      shortfallState(app: unknown): { method: string; totalMinor: number | undefined };
+    }>("financingEconomics");
+    expect(shortfallState((await appOf(s, applicationId))!)).toMatchObject({ method: "LEGACY_GROSS", totalMinor: jod(850) });
+
+    await resolve(s, applicationId, V3);
+    const app = await appOf(s, applicationId);
+    expect(app?.gapResolution).toBe("SPLIT");
+    expect(app?.supplierGapShareMinor).toBe(jod(400));
   });
 });
 

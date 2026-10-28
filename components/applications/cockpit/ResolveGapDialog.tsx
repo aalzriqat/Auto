@@ -287,6 +287,21 @@ export function ResolveGapDialog({
       : gapMinor - customerShareMinor - supplierShareMinor;
 
   /**
+   * What the "customer pays nothing" option says. It follows the allocation being
+   * submitted, not the mode alone: with a supplier concession entered the dealership
+   * does NOT cover the whole difference (the server records SPLIT, or SUPPLIER_ABSORBS
+   * when the dealership's remainder is 0), so the original sentence would be false.
+   */
+  const noCustomerPartKeys =
+    draft.mode === "DEALER_ABSORBS" && supplierShareMinor !== null && supplierShareMinor > 0
+      ? {
+          label: "GapNoCustomerPart",
+          hint:
+            dealerShareMinor === 0 ? "GapNoCustomerPartHintSupplier" : "GapNoCustomerPartHintShared",
+        }
+      : { label: "GapDealerAbsorbs", hint: "GapDealerAbsorbsHint" };
+
+  /**
    * Where the customer's part is paid.
    *
    * With NO customer part (DEALER_ABSORBS) there is nothing to place, and the
@@ -506,8 +521,8 @@ export function ResolveGapDialog({
               },
               {
                 value: "DEALER_ABSORBS",
-                label: t("GapDealerAbsorbs"),
-                hint: t("GapDealerAbsorbsHint"),
+                label: t(noCustomerPartKeys.label),
+                hint: t(noCustomerPartKeys.hint),
               },
             ]}
           />
