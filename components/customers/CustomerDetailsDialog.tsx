@@ -27,6 +27,7 @@ import { Send, FileText, Phone, MessageCircle, Mail, Plus, ReceiptText, Car, Che
 import { CustomerFinancialsTab } from "@/components/customers/CustomerFinancialsTab";
 import { QuotePrintTemplate } from "@/components/sales/QuotePrintTemplate";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
+import { useCurrency } from "@/hooks/useCurrency";
 import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 import { QuoteDepositManager } from "@/components/deposits/QuoteDepositManager";
@@ -139,6 +140,7 @@ export function CustomerDetailsDialog({
   const [printingQuoteId, setPrintingQuoteId] = useState<Id<"quotes"> | null>(null);
 
   const orgSettings = useOrgSettings();
+  const { displayLabel: currencyLabel } = useCurrency();
   const logoUrl = useQuery(
     api.orgSettings.getLogoUrl,
     activeOrgId ? { orgId: activeOrgId } : "skip"
@@ -204,7 +206,7 @@ export function CustomerDetailsDialog({
         title: interpolate(t("CustomerActivitySaleTitle"), { vehicle: sale.vehicleDesc }),
         detail: interpolate(t("CustomerActivitySaleDetail"), {
           amount: sale.salePrice.toLocaleString(localeCode),
-          currency: t("JOD"),
+          currency: currencyLabel,
           salesperson: sale.salespersonName || t("NoAssigned"),
         }),
         status: translateWorkflowStatus(sale.status, t),
@@ -216,7 +218,7 @@ export function CustomerDetailsDialog({
         title: interpolate(t("CustomerActivityQuoteTitle"), { vehicle: quote.vehicleDesc }),
         detail: interpolate(t("CustomerActivityQuoteDetail"), {
           amount: customerQuoteTotalAmount(quote)?.toLocaleString(localeCode) ?? "—",
-          currency: customerQuoteTotalAmount(quote) === undefined ? "" : t("JOD"),
+          currency: customerQuoteTotalAmount(quote) === undefined ? "" : currencyLabel,
         }),
         status: translateWorkflowStatus(quote.status, t),
         timestamp: quote.createdAt,
@@ -233,7 +235,7 @@ export function CustomerDetailsDialog({
         timestamp: task._creationTime,
       })),
     ].sort((first, second) => second.timestamp - first.timestamp);
-  }, [locale, localeCode, relations, t]);
+  }, [currencyLabel, locale, localeCode, relations, t]);
 
   const whatsAppUrl = customer
     ? buildWhatsAppDeepLink(
@@ -327,7 +329,7 @@ export function CustomerDetailsDialog({
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-muted-foreground text-xs">
                             <p>{t("SaleDate" as any)}: {formatCustomerDate(sale.saleDate, locale)}</p>
-                            <p>{t("Price" as any)}: <span className="font-medium text-foreground">{sale.salePrice.toLocaleString(localeCode)} {t("JOD")}</span></p>
+                            <p>{t("Price" as any)}: <span className="font-medium text-foreground">{sale.salePrice.toLocaleString(localeCode)} {currencyLabel}</span></p>
                             <p>{t("Salesperson" as any)}: {sale.salespersonName}</p>
                           </div>
                         </div>
@@ -386,12 +388,12 @@ export function CustomerDetailsDialog({
                         <div className={`grid grid-cols-2 ${isFinancedQuotePresentation(quote) ? "md:grid-cols-4" : ""} gap-4 bg-muted/50 p-3 rounded-md`}>
                           <div>
                             <p className="text-xs text-muted-foreground">{t("VehiclePrice" as any)}</p>
-                            <p className="font-medium">{quote.vehiclePrice?.toLocaleString(localeCode)} {t("JOD")}</p>
+                            <p className="font-medium">{quote.vehiclePrice?.toLocaleString(localeCode)} {currencyLabel}</p>
                           </div>
                           {isFinancedQuotePresentation(quote) && (
                             <div>
                               <p className="text-xs text-muted-foreground">{t("DownPayment" as any)}</p>
-                              <p className="font-medium">{quote.downPayment?.toLocaleString(localeCode)} {t("JOD")}</p>
+                              <p className="font-medium">{quote.downPayment?.toLocaleString(localeCode)} {currencyLabel}</p>
                             </div>
                           )}
                           {isFinancedQuotePresentation(quote) && (
@@ -415,18 +417,18 @@ export function CustomerDetailsDialog({
                                 ? t("VehiclePrice" as any)
                                 : t("TotalAmountDueFinanced" as any)}
                             </p>
-                            <p className="font-medium">{customerQuoteTotalAmount(quote)?.toLocaleString(localeCode, { minimumFractionDigits: 2 }) ?? "—"} {customerQuoteTotalAmount(quote) !== undefined ? t("JOD") : ""}</p>
+                            <p className="font-medium">{customerQuoteTotalAmount(quote)?.toLocaleString(localeCode, { minimumFractionDigits: 2 }) ?? "—"} {customerQuoteTotalAmount(quote) !== undefined ? currencyLabel : ""}</p>
                           </div>
                           {isFinancedQuotePresentation(quote) && (
                             <div>
                               <p className="text-xs text-muted-foreground">{t("TotalProfit" as any)}</p>
-                              <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} {t("JOD")}</p>
+                              <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} {currencyLabel}</p>
                             </div>
                           )}
                           {isFinancedQuotePresentation(quote) && (
                             <div className="bg-primary/10 -m-2 p-2 rounded-md text-center">
                               <p className="text-xs text-primary font-medium">{t("MonthlyInstallment" as any)}</p>
-                              <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} <span className="text-xs font-normal">{t("JOD")}</span></p>
+                              <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(localeCode, { minimumFractionDigits: 2 })} <span className="text-xs font-normal">{currencyLabel}</span></p>
                             </div>
                           )}
                         </div>

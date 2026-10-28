@@ -12,6 +12,7 @@ import { assertOpeningPostingProof } from "../utils/openingPostingProof";
  * re-driven idempotently when a chart is initialized or a period is opened.
  */
 import { ConvexError } from "convex/values";
+import { requireConfiguredCurrency } from "../utils/money";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import {
@@ -59,12 +60,18 @@ import {
   describeOccurrence,
 } from "./receiptOccurrence";
 
+/**
+ * The organization's STORED currency, or a typed `CURRENCY_NOT_CONFIGURED`
+ * refusal. SCRUM-85 (SCRUM-760 c23812 ruling 9): this used to answer "JOD" for an
+ * org with no settings row, which let a sale, receipt or journal be minted in a
+ * currency nobody chose. There is no fallback; every caller fails closed.
+ */
 export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<string> {
   const settings = await ctx.db
     .query("orgSettings")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .unique();
-  return settings?.currency ?? "JOD";
+  return requireConfiguredCurrency(settings);
 }
 
 /**

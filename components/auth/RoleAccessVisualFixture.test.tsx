@@ -31,6 +31,8 @@ vi.mock("convex/react", async () => {
       if (name === "organizations:listMine") return [{ _id: "org-a", name: "Synthetic Dealer" }];
       if (name === "memberships:getMyMembership") return { roleName: state.overridePermissions ? "Synthetic custom lead reader" : role.name, permissions: state.overridePermissions ?? [...role.permissions] };
       if (state.values.has(name)) return state.values.get(name);
+      // The org's stored currency is read through the any-member status query (SCRUM-85).
+      if (name === "orgSettings:getCurrencyStatus") return { configured: true, currency: "JOD", currencySymbol: "JD" };
       throw new Error("Unexpected screen fixture subscription: " + name);
     },
     useQueries: () => ({}),

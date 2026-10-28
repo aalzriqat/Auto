@@ -93,6 +93,8 @@ async function execute(wanted: "U-RET" | "CC-CASH", defect?: Defect) {
   };
   const salesMust = must(primary), approverMust = must(approver);
   const orgId = await salesMust("mutation", "organizations:create", { name: "QA TEST CC-CASH control" });
+  // SCRUM-85: a new organization has no currency until its owner chooses one, exactly as the live rehearsal's E2E org does.
+  await salesMust("mutation", "orgSettings:upsert", { orgId, currency: "JOD", currencySymbol: "JD" });
   // Shaped like the live HTTP boundary (`convexCall`): the refusal's own message text plus its machine code.
   // The throwing `*Must` wrappers on a live deployment carry the message only, never the code.
   const soft = (hard: ReturnType<typeof must>) => async (kind: "query" | "mutation", name: string, args: Record<string, unknown>) => {

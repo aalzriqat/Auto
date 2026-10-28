@@ -20,6 +20,10 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 vi.mock("@/hooks/useOrgSettings", () => ({
   useOrgSettings: () => ({ currency: "JOD" }),
 }));
+// SCRUM-85: the org's currency is the stored one, read through useOrgCurrencyState.
+vi.mock("@/hooks/useOrgCurrencyState", () => ({
+  useOrgCurrencyState: () => ({ status: "configured", code: "JOD", symbol: null }),
+}));
 
 afterEach(cleanup);
 

@@ -11,6 +11,7 @@ import { VehicleDialog } from "@/components/vehicles/VehicleDialog";
 import { VehicleHistoryDialog } from "@/components/vehicles/VehicleHistoryDialog";
 import { VehicleDetailsDialog } from "@/components/vehicles/VehicleDetailsDialog";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { useCurrency } from "@/hooks/useCurrency";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useTableControls } from "@/hooks/useTableControls";
 import { useHighlightRow } from "@/hooks/useHighlightRow";
@@ -134,6 +135,7 @@ function StatusBadge({ status, t }: Readonly<{ status: string; t: Translate }>) 
 export default function VehiclesPage() {
   const { t, locale } = useLanguage();
   const localeCode = locale === "ar" ? "ar-JO" : "en-US";
+  const { displayLabel: currencyLabel } = useCurrency();
 
   const { activeOrgId } = useOrg();
   const { results: vehicles, status: vehiclesStatus, loadMore: loadMoreVehicles } = usePaginatedQuery(
@@ -769,7 +771,7 @@ export default function VehiclesPage() {
                       <p className="font-semibold truncate">{vehicle.year} {vehicle.make} {vehicle.model} {vehicle.trim}</p>
                       <p className="text-xs text-muted-foreground font-mono truncate">{vehicle.vin ?? t("VinPending")}</p>
                     </div>
-                    <p className="font-semibold whitespace-nowrap">{vehicle.sellingPrice.toLocaleString(localeCode)} {t("JOD")}</p>
+                    <p className="font-semibold whitespace-nowrap">{vehicle.sellingPrice.toLocaleString(localeCode)} {currencyLabel}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div><p className="text-xs text-muted-foreground">{t("InventoryAge")}</p><p>{interpolate(t("DaysCount"), { count: getVehicleAgeDays(vehicle) })}</p></div>
@@ -879,7 +881,7 @@ export default function VehiclesPage() {
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="font-medium">{vehicle.sellingPrice.toLocaleString(localeCode)} {t("JOD")}</TableCell>
+                  <TableCell className="font-medium">{vehicle.sellingPrice.toLocaleString(localeCode)} {currencyLabel}</TableCell>
                   <TableCell><p>{interpolate(t("DaysCount"), { count: getVehicleAgeDays(vehicle) })}</p><p className="text-xs text-muted-foreground">{interpolate(t("AddedOn"), { date: new Date(vehicle.createdAt ?? vehicle._creationTime).toLocaleDateString(localeCode) })}</p></TableCell>
                   <TableCell>
                     {warnings.length === 0 ? <Badge variant="outline" className="border-green-300 text-green-700"><Check className="h-3 w-3 me-1" />{t("Ready")}</Badge> : <div className="flex items-center gap-1 text-xs text-amber-700" title={warnings.join(", ")}><AlertTriangle className="h-4 w-4" />{interpolate(t(warnings.length === 1 ? "WarningCountOne" : "WarningCountMany"), { count: warnings.length })}</div>}

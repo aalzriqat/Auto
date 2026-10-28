@@ -89,6 +89,8 @@ beforeEach(() => {
 
   stubs.queryResults.set("documents:listRules", []);
   stubs.queryResults.set("finance:listValuations", []);
+  // SCRUM-85: the org's currency is the stored one, read through the any-member status query.
+  stubs.queryResults.set("orgSettings:getCurrencyStatus", { configured: true, currency: "JOD", currencySymbol: "JD" });
   stubs.queryResults.set("orgCustomerStatuses:listForQuotes", [{
     _id: STATUS, label: "Salary Slip",
   }]);

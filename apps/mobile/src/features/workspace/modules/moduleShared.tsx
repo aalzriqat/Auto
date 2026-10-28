@@ -1,6 +1,7 @@
 import { isConvexError } from "@autoflow/shared";
 import { calculateUnifiedMurabaha } from "@autoflow/shared/financing";
 import { useRouter } from "expo-router";
+import { useQuery } from "convex/react";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View, type StyleProp, type ViewStyle } from "react-native";
 import { EmptyState } from "../../../components/EmptyState";
@@ -218,35 +219,99 @@ export function compactNumber(value: number, locale: "en" | "ar"): string {
 
 // Decimal places to display per currency. JOD keeps this screen's existing
 // whole-currency display convention (0) rather than its ISO subdivision (the
-// ledger itself still stores JOD in 3-decimal minor units — see
-// convex/utils/money.ts's CURRENCY_SCALES — this is a display-only choice).
+// ledger itself still stores JOD in 3-decimal minor units - see
+// convex/utils/money.ts's CURRENCY_SCALES - this is a display-only choice).
 // KWD/BHD/OMR are genuinely 3-decimal currencies (1000 fils/baisa per unit),
 // so they need the extra precision or a value like "5.500" would render as
-// misleadingly-rounded "6". Everything else defaults to the standard 2.
+// misleadingly-rounded "6".
 const CURRENCY_DISPLAY_FRACTION_DIGITS: Record<string, number> = {
   JOD: 0,
   KWD: 3,
   BHD: 3,
   OMR: 3,
+  // The remaining ISO 4217 codes the backend supports (convex/utils/money.ts CURRENCY_SCALES),
+  // listed so their scale never depends on the device's Intl data.
+  USD: 2,
+  EUR: 2,
+  GBP: 2,
+  SAR: 2,
+  AED: 2,
+  QAR: 2,
+  EGP: 2,
+  JPY: 0,
 };
 
+/**
+ * The minor-unit scale to display. A currency outside the table above takes the
+ * platform's ISO 4217 data (Intl/CLDR); a code the platform does not know has NO
+ * scale and throws, instead of being shown with a guessed 2 decimals (SCRUM-85,
+ * owner ruling SCRUM-760 c23812 ruling 9: scale is never defaulted).
+ */
 function fractionDigitsForCurrency(currency: string): number {
-  return CURRENCY_DISPLAY_FRACTION_DIGITS[currency.toUpperCase()] ?? 2;
+  const known = CURRENCY_DISPLAY_FRACTION_DIGITS[currency.toUpperCase()];
+  if (known !== undefined) return known;
+  // Intl accepts ANY well-formed three-letter code and answers 2 for the ones it has
+  // no data for, so membership in its ISO 4217 list is required first. A runtime
+  // without that list cannot vouch for the code, which also throws.
+  const listed = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("currency") : [];
+  if (!listed.includes(currency.trim().toUpperCase())) {
+    throw new Error(`Unrecognised currency code "${currency}": its minor-unit scale is unknown.`);
+  }
+  const digits = new Intl.NumberFormat("en-US", { style: "currency", currency }).resolvedOptions().maximumFractionDigits;
+  if (digits === undefined) {
+    throw new Error(`Unrecognised currency code "${currency}": its minor-unit scale is unknown.`);
+  }
+  return digits;
 }
 
-export function money(value: number | undefined | null, locale: "en" | "ar", currency: string = "JOD"): string {
+/**
+ * The organization's stored currency (SCRUM-85: never a default). A workspace
+ * screen publishes it with `useSyncActiveOrgCurrency`; `money()` calls that omit a
+ * currency read it. `null` until the stored value is known, or when the
+ * organization has none.
+ */
+let activeOrgCurrency: string | null = null;
+
+export function setActiveOrgCurrency(code: string | null | undefined): void {
+  const trimmed = typeof code === "string" ? code.trim() : "";
+  activeOrgCurrency = trimmed === "" ? null : trimmed;
+}
+
+/**
+ * Publish the organization's stored currency to `money()` for this screen's
+ * subtree. Assigned during render (an idempotent module value, not React state)
+ * so children rendered in the same pass already see it.
+ */
+export function useSyncActiveOrgCurrency(orgId: string | null | undefined, enabled = true): void {
+  const status = useQuery(api.orgSettings.getCurrencyStatus, enabled && orgId ? { orgId } : "skip");
+  setActiveOrgCurrency(status?.currency ?? null);
+}
+
+export function currencyNotConfiguredLabel(locale: "en" | "ar"): string {
+  return locale === "ar" ? "العملة غير مهيأة" : "Currency not configured";
+}
+
+/**
+ * An amount in `currency`, or in the organization's stored currency when the
+ * caller passes none. With neither known it returns the "currency not
+ * configured" text instead of a number - never a guessed currency.
+ */
+export function money(value: number | undefined | null, locale: "en" | "ar", currency?: string | null): string {
+  const code = currency ?? activeOrgCurrency;
+  if (!code) return currencyNotConfiguredLabel(locale);
   const safeValue = Number.isFinite(value ?? 0) ? Number(value ?? 0) : 0;
   try {
     return new Intl.NumberFormat(locale === "ar" ? "ar-JO" : "en-US", {
-      maximumFractionDigits: fractionDigitsForCurrency(currency),
+      maximumFractionDigits: fractionDigitsForCurrency(code),
       style: "currency",
-      currency,
+      currency: code,
     }).format(safeValue);
   } catch {
-    return `${Math.round(safeValue)} ${currency}`;
+    // The code is not a currency the platform knows, so its scale is unknown:
+    // show no figure rather than one rounded at a guessed scale.
+    return currencyNotConfiguredLabel(locale);
   }
 }
-
 /**
  * An undecided commission is not a zero one. `money(undefined)` renders "0.00",
  * which reads as "this sale earns nothing" — the opposite of the truth. Shared

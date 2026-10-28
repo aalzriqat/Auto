@@ -69,8 +69,8 @@ export async function systemKeyByAccountId(
  * disqualifies a row from automatic correction. What changes is that it is
  * REPORTED rather than hidden by killing the scan around it.
  */
-function safeMinor(value: number | undefined | null, currency: string): number | null {
-  if (value === undefined || value === null) return null;
+function safeMinor(value: number | undefined | null, currency: string | null): number | null {
+  if (value === undefined || value === null || currency === null) return null;
   if (!Number.isFinite(value) || value < 0) return null;
   try {
     return toMinorUnits(value, currency);
@@ -93,7 +93,7 @@ function safeMinor(value: number | undefined | null, currency: string): number |
  */
 function supplierEntitlementMinor(
   vehicle: Doc<"vehicles">,
-  currency: string
+  currency: string | null
 ): number | null {
   return safeMinor(vehicle.sourceCost, currency);
 }
@@ -105,7 +105,8 @@ export type ConsignedSaleAssessment = {
   vehicle: string;
   vin: string | undefined;
   supplierName: string | null;
-  currency: string;
+  /** Null when no posted journal states one - never assumed (SCRUM-85). */
+  currency: string | null;
   financingType: string | null;
   /** Null when the sale price is unreadable — see UNREADABLE_AMOUNT. */
   grossTransactionMinor: number | null;
@@ -194,7 +195,11 @@ export async function assessConsignedSale(
     }
   }
 
-  const currency = live[0]?.currency ?? "JOD";
+  // SCRUM-85: the currency the books were POSTED in, or null when nothing was
+  // posted. It used to fall back to "JOD", which scaled a sale price that has no
+  // stated denomination. With null every amount here reads as unreadable, the row
+  // is flagged (NO_POSTED_JOURNAL + UNREADABLE_AMOUNT) and never auto-corrected.
+  const currency = live[0]?.currency ?? null;
   const grossMinor = safeMinor(sale.salePrice, currency);
   const entitlementMinor = supplierEntitlementMinor(vehicle, currency);
 
@@ -304,7 +309,11 @@ export async function assessConsignedSale(
  * correct.
  */
 export function isAutomaticallyCorrectable(assessment: ConsignedSaleAssessment): boolean {
-  return assessment.flags.length === 0 && !assessment.alreadyAgentBasis;
+  return (
+    assessment.flags.length === 0 &&
+    !assessment.alreadyAgentBasis &&
+    assessment.currency !== null
+  );
 }
 
 export const sourcedSaleImpactReport = internalQuery({

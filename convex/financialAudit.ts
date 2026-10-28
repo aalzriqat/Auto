@@ -13,7 +13,7 @@ import { MutationCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { assertManualJournalsEnabled } from "./utils/manualJournalContainment";
-import { scaleForCurrency } from "./utils/money";
+import { requireConfiguredCurrency, scaleForCurrency } from "./utils/money";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
@@ -292,7 +292,9 @@ async function resolveManualJournalCurrency(
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .unique();
-    effectiveCurrency = settings?.currency ?? "JOD";
+    // SCRUM-85: a manual journal with no currency-restricted account takes the
+    // org's STORED currency; an org with none is refused, never read as JOD.
+    effectiveCurrency = requireConfiguredCurrency(settings);
   }
   return { currency: effectiveCurrency, scale: scaleForCurrency(effectiveCurrency) };
 }

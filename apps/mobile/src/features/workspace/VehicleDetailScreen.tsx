@@ -32,6 +32,7 @@ import {
   money,
   parseOptionalNumber,
   useGenericError,
+  useSyncActiveOrgCurrency,
 } from "./modules/moduleShared";
 import { useStyles } from "./modules/moduleStyles";
 
@@ -162,6 +163,7 @@ function VehicleDetailContent({
     canQuery && orgId ? { orgId } : "skip",
   );
   const scopedArgs = canQuery && orgId && vehicleId ? { orgId, vehicleId } : null;
+  useSyncActiveOrgCurrency(orgId, canQuery);
   const vehicle = useQuery(api.vehicles.get, scopedArgs ?? "skip");
 
   const permissions = myMembership?.permissions ?? [];

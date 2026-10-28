@@ -74,7 +74,7 @@ async function upsertOrgSettings(
 
 describe("facebookIntegrations.createConnectUrl", () => {
   test("returns a Meta OAuth dialog URL with a state param, owner-only", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     const url = await asOwner.mutation(api.facebookIntegrations.createConnectUrl, { orgId });
@@ -93,7 +93,7 @@ describe("facebookIntegrations.createConnectUrl", () => {
   });
 
   test("rejects non-owners", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId } = await seedOwner(t);
 
     const userId2 = await t.run((ctx) =>
@@ -113,7 +113,7 @@ describe("facebookIntegrations.createConnectUrl", () => {
 
 describe("facebookIntegrations.getConnectionStatus / disconnect", () => {
   test("reports not connected by default, then connected after credentials are saved", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     const before = await asOwner.query(api.facebookIntegrations.getConnectionStatus, { orgId });
@@ -131,7 +131,7 @@ describe("facebookIntegrations.getConnectionStatus / disconnect", () => {
   });
 
   test("disconnect clears stored credentials", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     await upsertOrgSettings(t, orgId, { facebookPageId: "page_123", facebookPageAccessToken: "page_token_abc" });
@@ -145,7 +145,7 @@ describe("facebookIntegrations.getConnectionStatus / disconnect", () => {
 
 describe("facebookIntegrations.disconnectByFacebookConnectedUserId", () => {
   test("resolves the org via the connecting user's Facebook ID, not the Page ID", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId } = await seedOwner(t);
 
     await upsertOrgSettings(t, orgId, {
@@ -170,7 +170,7 @@ describe("facebookIntegrations.disconnectByFacebookConnectedUserId", () => {
 
 describe("facebookIntegrations.setFacebookLeadCreationConfig", () => {
   test("requires a connection before configuring, then persists the toggles", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     await expect(
@@ -200,7 +200,7 @@ describe("facebookIntegrations.setFacebookLeadCreationConfig", () => {
 
 describe("facebookIntegrations.consumeOAuthState", () => {
   test("returns the orgId for a valid state and consumes it (one-time use)", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     await asOwner.mutation(api.facebookIntegrations.createConnectUrl, { orgId });
@@ -223,7 +223,7 @@ describe("facebookIntegrations.consumeOAuthState", () => {
   });
 
   test("returns null for an unknown state", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const result = await t.run((ctx) =>
       ctx.runMutation(internal.facebookIntegrations.consumeOAuthState, { state: "does-not-exist" })
     );
@@ -279,7 +279,7 @@ describe("facebookIntegrations: a Page belongs to one org", () => {
   };
 
   test("refuses a Page already connected to another org, and leaves both orgs unchanged", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId: orgA } = await seedOwner(t);
     const { orgId: orgB } = await seedSecondOrg(t);
     await save(t, orgA, "page_shared");
@@ -297,14 +297,14 @@ describe("facebookIntegrations: a Page belongs to one org", () => {
   });
 
   test("the same org may reconnect its own Page", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId } = await seedOwner(t);
     await save(t, orgId, "page_mine");
     await expect(save(t, orgId, "page_mine")).resolves.toBeNull();
   });
 
   test("once the first org disconnects, another org may connect the Page", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId: orgA, asOwner } = await seedOwner(t);
     const { orgId: orgB } = await seedSecondOrg(t);
     await save(t, orgA, "page_moving");
@@ -313,7 +313,7 @@ describe("facebookIntegrations: a Page belongs to one org", () => {
   });
 
   test("picking a Page another org holds is refused before the Page is subscribed", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId: orgA } = await seedOwner(t);
     const { orgId: orgB, asOwner: asOwnerB } = await seedSecondOrg(t);
     await save(t, orgA, "page_shared");
@@ -377,7 +377,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
   }
 
   async function run(accounts: Step, overrides: Steps = {}) {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId } = await seedOwner(t);
     stubGraph(accounts, overrides);
     const settings = () =>
@@ -554,7 +554,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
   // The callback records err.message in webhookLogs, so this is the stored-row
   // boundary: drive the real route, then read what it persisted.
   test("the OAuth callback stores a fixed message, not a credential-bearing fetch failure", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.facebookIntegrations.createConnectUrl, { orgId });
     const state = await t.run(async (ctx) => (await ctx.db.query("oauthStates").first())!.state);
@@ -609,7 +609,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     test.each(["/facebook-deauthorize", "/facebook-data-deletion"])(
       "(signed route) %s erases every org the Facebook user connected, not just the first or the first few",
       async (path) => {
-        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
         const shared = [await newOrg(t, "A"), await newOrg(t, "B"), await newOrg(t, "C")];
         const orgOther = await newOrg(t, "Other");
         const connected = (suffix: string, userId: string) => ({
@@ -723,7 +723,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
 
       /** Starts selectFacebookPage and parks it inside its subscribed_apps fetch. */
       async function parkedSelect(extra: Partial<WithoutSystemFields<Doc<"orgSettings">>> = {}) {
-        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
         const { orgId, asOwner } = await seedOwner(t);
         await upsertOrgSettings(t, orgId, {
           facebookConnectedByUserId: "fb_user_1",
@@ -880,7 +880,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
           ["an empty connecting user, even when the stored id is also empty", { userId: "" }, PENDING, ""],
           ["a row with no stored connecting user", {}, PENDING, undefined],
         ] as const)("refuses %s, with fixed text, and writes nothing", async (_label, over, pending, storedUserId) => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId } = await seedOwner(t);
           await upsertOrgSettings(t, orgId, {
             facebookConnectedByUserId: storedUserId,
@@ -899,7 +899,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         // SCRUM-841: the Page, token and user can be identical across two attempts, so only
         // the attempt generation tells an old selection from the current one.
         test("refuses a different attempt generation even when the Page, token and user all match", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId } = await seedOwner(t);
           await upsertOrgSettings(t, orgId, {
             facebookConnectedByUserId: "fb_user_1",
@@ -916,7 +916,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         });
 
         test("refuses when the row has no attempt generation at all", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId } = await seedOwner(t);
           await upsertOrgSettings(t, orgId, { facebookConnectedByUserId: "fb_user_1", facebookPendingCredentials: [...PENDING] });
           const before = await settingsOf(t, orgId);
@@ -927,7 +927,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         });
 
         test("refuses when the org has no settings row at all, and creates none", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId } = await seedOwner(t);
 
           expect(await failureText(call(t, orgId))).toMatch(CHANGED);
@@ -936,7 +936,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         });
 
         test("finalizes when the pending Page, token and connecting user all still match", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId } = await seedOwner(t);
           await upsertOrgSettings(t, orgId, {
             facebookConnectedByUserId: "fb_user_1",
@@ -1002,7 +1002,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
 
       /** Runs the real callback with the exchange parked inside /me/accounts. */
       async function parkedExchange(seed?: (t: T, orgId: Id<"organizations">) => Promise<void>) {
-        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
         const { orgId, asOwner } = await seedOwner(t);
         await seed?.(t, orgId);
         const state = await startAttempt(asOwner, orgId);
@@ -1104,7 +1104,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
       });
 
       test.each(ROUTES)("(signed route + real callback) %s arriving after the attempt has stored its credentials still clears them", async (path) => {
-        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
         const { orgId, asOwner } = await seedOwner(t);
         stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
         const res = await t.fetch(callbackUrl(await startAttempt(asOwner, orgId)), { redirect: "manual" });
@@ -1129,7 +1129,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
       });
 
       test("(signed route + real callback) an attempt begun BEFORE the callback is refused even when its exchange runs entirely AFTER it", async () => {
-        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
         const { orgId, asOwner } = await seedOwner(t);
         const state = await startAttempt(asOwner, orgId);
         stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
@@ -1146,7 +1146,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
       });
 
       test.each(ROUTES)("(signed route + real callback) a genuinely new attempt begun after %s still connects", async (path) => {
-        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
         const { orgId, asOwner } = await seedOwner(t);
         stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
         expect((await postToRoute(t, path, USER)).status).toBe(200);
@@ -1191,7 +1191,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         });
 
         test("(owner disconnect + real callback) a state that was never consumed cannot proceed after the disconnect", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId, asOwner } = await seedOwner(t);
           const state = await startAttempt(asOwner, orgId);
           stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
@@ -1207,7 +1207,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         });
 
         test("(owner disconnect + real callback) a genuinely new attempt begun after the disconnect still connects", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId, asOwner } = await seedOwner(t);
           await upsertOrgSettings(t, orgId, ACTIVE);
           stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
@@ -1225,7 +1225,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         });
 
         test("(owner disconnect + real callback) a disconnect after the attempt has stored its credentials still clears them", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId, asOwner } = await seedOwner(t);
           stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
           const res = await t.fetch(callbackUrl(await startAttempt(asOwner, orgId)), { redirect: "manual" });
@@ -1256,7 +1256,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         describe("a Page selection begun on an earlier attempt cannot promote a later attempt's credentials", () => {
           /** Two real OAuth attempts (same user, Pages, token) with the first one's selection parked in between. */
           async function interleave(between: "an Owner disconnect" | "a second attempt, no disconnect" | "no second attempt") {
-            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
             const { orgId, asOwner } = await seedOwner(t);
             stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
             const graphFetch = globalThis.fetch;
@@ -1352,7 +1352,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
 
         describe("(mutation) the org fence itself", () => {
           test("with no settings row the disconnect still records it: same millisecond is refused, 1 ms later is stored", async () => {
-            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
             const { orgId, asOwner } = await seedOwner(t);
             expect(await settingsOf(t, orgId)).toBeNull();
 
@@ -1366,7 +1366,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
           });
 
           test("a later disconnect never moves the fence backwards", async () => {
-            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
             const { orgId, asOwner } = await seedOwner(t);
             const later = Date.now() + 60_000;
             await upsertOrgSettings(t, orgId, { facebookDisconnectedAt: later });
@@ -1377,7 +1377,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
           });
 
           test("it is per organization: another org's attempt of the same age is not blocked", async () => {
-            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
             const { orgId, asOwner } = await seedOwner(t);
             const otherOrg = await newOrg(t, "Other");
             await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId });
@@ -1389,7 +1389,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
           });
 
           test("only the Owner can set it: a member's disconnect is refused and records nothing", async () => {
-            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
             const { orgId } = await seedOwner(t);
             const memberUser = await t.run((ctx) =>
               ctx.db.insert("users", { clerkId: "fb_member_002", email: "fbm@test.com", name: "Member" })
@@ -1413,7 +1413,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
           t.run((ctx) => ctx.runMutation(internal.facebookIntegrations.disconnectByFacebookConnectedUserId, { facebookConnectedByUserId: userId }));
 
         test("a callback with no org row records a fence; an attempt starting in the same millisecond is refused, one starting 1 ms later connects", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId } = await seedOwner(t);
           await revoke(t);
           const [fence] = await fences(t);
@@ -1426,7 +1426,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         });
 
         test("a repeated callback keeps one row per user and advances its time", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           await revoke(t);
           const [first] = await fences(t);
           expect(first).toMatchObject({ facebookUserId: USER });
@@ -1438,7 +1438,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         });
 
         test("a callback never moves a fence's time backwards", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const later = Date.now() + 60_000;
           await t.run((ctx) => ctx.db.insert("facebookRevocations", { facebookUserId: USER, revokedAt: later }));
 
@@ -1448,7 +1448,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         });
 
         test("an attempt older than the retention window is refused as expired when no fence is on record (as after the sweep)", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId } = await seedOwner(t);
           expect(await fences(t)).toEqual([]);
 
@@ -1459,7 +1459,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         });
 
         test("an attempt still inside the retention window (59 minutes old) is not refused for age alone", async () => {
-          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
           const { orgId } = await seedOwner(t);
 
           await expect(savePending(t, orgId, Date.now() - 59 * 60 * 1000)).resolves.toBeNull();
@@ -1469,7 +1469,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
 
     describe("promoting pending credentials needs a stored Facebook user id", () => {
       async function select(fields: Partial<WithoutSystemFields<Doc<"orgSettings">>>) {
-        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
         const { orgId, asOwner } = await seedOwner(t);
         await upsertOrgSettings(t, orgId, {
           facebookPendingAttemptId: "attempt-1",
@@ -1567,7 +1567,7 @@ describe("facebookIntegrations.selectFacebookPage: subscription failure logging"
   const SYNTHETIC_PROVIDER_TEXT = "synthetic-provider-error-DO-NOT-LEAK";
 
   async function selectWith(subscribe: () => Promise<Response>) {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
     await t.run((ctx) =>
       ctx.db.insert("orgSettings", {

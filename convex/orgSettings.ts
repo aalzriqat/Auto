@@ -10,25 +10,27 @@ import { AppErrorCode, throwAppError } from "./utils/errors";
 import { effectiveCommissionMode } from "./utils/commissionMode";
 import { isCommissionOwed } from "./utils/commission";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
+import { configuredCurrencyOf } from "./utils/money";
 
 const commissionModeValidator = v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"));
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
+// SCRUM-85 (owner ruling SCRUM-760 c23812, ruling 9): the currency code and its
+// symbol are deliberately NOT here. A currency is chosen by the owner and stored,
+// or it is absent and every money path refuses; nothing stamps one on the org's
+// behalf. Only non-monetary defaults may live in this object.
 export const DEFAULT_SETTINGS = {
-  currency: "JOD",
-  currencySymbol: "د.أ",
   enabledPaymentTypes: ["CASH", "INSTALLMENT"],
 };
 
 /**
  * Currencies the app can actually denominate money in. This MUST stay a subset
- * of the scale table in `utils/money.ts` — `scaleForCurrency` silently falls
- * back to scale 2 for anything it doesn't recognise, so an unlisted code (say
- * "JD" for the Jordanian Dinar, which is really 3-decimal JOD) would store
- * every amount at the wrong scale. Combined with the change-lock below, that
- * mistake would be permanent. The settings UI offers exactly this list; this is
- * the server-side enforcement of it.
+ * of the scale table in `utils/money.ts` (the ISO 4217 minor units) —
+ * `scaleForCurrency` throws for anything it doesn't recognise, so an unlisted
+ * code (say "JD" for the Jordanian Dinar, which is really 3-decimal JOD) could
+ * never be used to record an amount. The settings UI offers exactly this list;
+ * this is the server-side enforcement of it.
  */
 export const SUPPORTED_CURRENCIES = [
   "JOD", "SAR", "AED", "KWD", "EGP", "QAR", "BHD", "OMR", "USD", "EUR", "GBP", "JPY",
@@ -70,6 +72,51 @@ export const get = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
     return settings ? toPublicOrgSettings(settings) : null;
+  },
+});
+
+/**
+ * SCRUM-85: the organization's currency as ANY member may see it, with "not
+ * configured" stated outright.
+ *
+ * `get` is gated on VIEW_SETTINGS and returns null for a caller without it, which
+ * is indistinguishable from "no settings yet". A screen that read its currency
+ * from `get` therefore fell back to JOD for every member who cannot view settings,
+ * in every org. This query is the one source the money screens read: the code and
+ * symbol are exactly what the owner stored, or `configured: false` with both null.
+ * It returns null only while signed out or when the caller is not a member (the
+ * same graceful shape as `get`), so a screen can tell "loading / no access" from
+ * "this organization has chosen no currency".
+ */
+export const getCurrencyStatus = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.union(
+    v.object({
+      configured: v.boolean(),
+      currency: v.union(v.string(), v.null()),
+      currencySymbol: v.union(v.string(), v.null()),
+    }),
+    v.null()
+  ),
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    try {
+      await requireTenantAuth(ctx, args.orgId);
+    } catch (error) {
+      // A typed refusal (not a member, suspended, stale org id from localStorage)
+      // reads as "no answer for this caller". A fault is not swallowed.
+      if (error instanceof ConvexError) return null;
+      throw error;
+    }
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    const currency = configuredCurrencyOf(settings);
+    if (currency === null) return { configured: false, currency: null, currencySymbol: null };
+    const symbol = settings?.currencySymbol?.trim();
+    return { configured: true, currency, currencySymbol: symbol ? symbol : null };
   },
 });
 
@@ -141,15 +188,19 @@ export const upsert = mutation({
     // any of them — 500.000 JOD would silently become 5,000.00 USD — so once
     // ANY financial record exists the currency is locked. (Fresh orgs can
     // still pick their currency during onboarding.)
-    // The effective current currency is the stored one, or the JOD default when
-    // no settings row exists yet (getOrgCurrency does the same). Checking this —
-    // rather than `existing && ...` — closes the bypass where a legacy org with
-    // financial records but no settings row creates its first row in a new
-    // currency.
-    const effectiveCurrentCurrency = existing?.currency ?? DEFAULT_SETTINGS.currency;
+    // SCRUM-85: the current currency is the STORED one or nothing. An org that
+    // has never chosen one is not "in JOD"; choosing one for the first time is a
+    // change like any other, so it runs through the same lock. On a fresh org
+    // that lock is open (no financial rows) and the owner simply picks. An org
+    // that already holds financial rows but never stored a currency cannot be
+    // told what those rows are denominated in, so it is refused and sent to a
+    // migration rather than guessed at. Checking this — rather than
+    // `existing && ...` — also keeps the bypass closed where an org with financial
+    // records but no settings row creates its first row in some currency.
+    const storedCurrency = configuredCurrencyOf(existing);
     if (
       args.currency !== undefined &&
-      effectiveCurrentCurrency !== args.currency
+      storedCurrency !== args.currency
     ) {
       // Any of these tables stores a minor-unit amount denominated in the org
       // currency (pendingAccountingEvents covers orgs whose chart isn't set up
@@ -267,8 +318,9 @@ export const upsert = mutation({
       // Create with defaults merged in
       const newId = await ctx.db.insert("orgSettings", {
         orgId,
-        currency: fields.currency ?? DEFAULT_SETTINGS.currency,
-        currencySymbol: fields.currencySymbol ?? DEFAULT_SETTINGS.currencySymbol,
+        // SCRUM-85: only what the owner sent. Absent stays absent.
+        currency: fields.currency,
+        currencySymbol: fields.currencySymbol,
         enabledPaymentTypes:
           fields.enabledPaymentTypes ?? DEFAULT_SETTINGS.enabledPaymentTypes,
         vatRate: fields.vatRate,
@@ -399,8 +451,6 @@ export const setCommissionMode = mutation({
       } else {
         settingsId = await ctx.db.insert("orgSettings", {
           orgId: args.orgId,
-          currency: DEFAULT_SETTINGS.currency,
-          currencySymbol: DEFAULT_SETTINGS.currencySymbol,
           enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
           commissionMode: args.commissionMode,
         });
@@ -448,8 +498,6 @@ export const setGeneratedLeadAutoAssignmentEnabled = mutation({
 
     return await ctx.db.insert("orgSettings", {
       orgId: args.orgId,
-      currency: DEFAULT_SETTINGS.currency,
-      currencySymbol: DEFAULT_SETTINGS.currencySymbol,
       enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
       generatedLeadAutoAssignmentEnabled: args.enabled,
     });

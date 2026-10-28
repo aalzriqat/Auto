@@ -76,7 +76,7 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 
 describe("socialIntegrations.createConnectUrl", () => {
   test("returns a Meta OAuth dialog URL with a state param, owner-only", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     const url = await asOwner.mutation(
@@ -98,7 +98,7 @@ describe("socialIntegrations.createConnectUrl", () => {
   });
 
   test("rejects non-owners", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId } = await seedOwner(t);
 
     const userId2 = await t.run((ctx) =>
@@ -128,7 +128,7 @@ describe("socialIntegrations.createConnectUrl", () => {
 
 describe("socialIntegrations.getConnectionStatus / disconnect", () => {
   test("reports not connected by default, then connected after credentials are saved", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     const before = await asOwner.query(
@@ -156,7 +156,7 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
   });
 
   test("disconnect clears stored credentials", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     await t.run((ctx) =>
@@ -180,7 +180,7 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
   // SCRUM-623: webhooks are routed only by the webhook account id, so a
   // connection without one can never receive a DM or comment.
   test("refuses to save credentials without a webhook account id", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId } = await seedOwner(t);
     const save = (instagramWebhookAccountId: string | undefined) =>
       t.run((ctx) =>
@@ -204,7 +204,7 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
   });
 
   test("a stored token and business id without a webhook account id is not reported connected", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
     await t.run(async (ctx) => {
       const existing = await ctx.db
@@ -256,7 +256,7 @@ describe("socialIntegrations.refreshInstagramToken", () => {
     );
   }
 
-  const makeT = () => convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  const makeT = () => convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
   const readRow = (t: ReturnType<typeof makeT>, orgId: Id<"organizations">) =>
     t.run((ctx) =>
       ctx.db
@@ -266,7 +266,7 @@ describe("socialIntegrations.refreshInstagramToken", () => {
     );
 
   test("refreshes the token of the connection it read", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId } = await seedConnected(t);
     stubRefresh(async () => {});
 
@@ -279,7 +279,7 @@ describe("socialIntegrations.refreshInstagramToken", () => {
   });
 
   test("a refresh finishing after Disconnect does not restore the token", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedConnected(t);
     stubRefresh(() => asOwner.mutation(api.socialIntegrations.disconnect, { orgId }));
 
@@ -294,7 +294,7 @@ describe("socialIntegrations.refreshInstagramToken", () => {
   });
 
   test("a refresh finishing after a reconnect does not overwrite the new connection's token", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedConnected(t);
     stubRefresh(async () => {
       await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
@@ -319,7 +319,7 @@ describe("socialIntegrations.refreshInstagramToken", () => {
   test.each(["instagramWebhookAccountId", "instagramBusinessAccountId"] as const)(
     "does not keep a legacy connection without %s alive",
     async (missing) => {
-      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
       const { orgId } = await seedConnected(t);
       await t.run(async (ctx) => {
         const row = await ctx.db
@@ -340,7 +340,7 @@ describe("socialIntegrations.refreshInstagramToken", () => {
 
 describe("socialIntegrations.setAutoPostEnabled", () => {
   test("rejects enabling auto-post when Instagram isn't connected", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     await expect(
@@ -352,7 +352,7 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
   });
 
   test("allows enabling once connected", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     await t.run((ctx) =>
@@ -377,7 +377,7 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
   });
 
   test("allows enabling when only Facebook is connected (shared flag, not Instagram-specific)", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     await t.run((ctx) =>
@@ -406,7 +406,7 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
 
 describe("socialIntegrations.setInstagramLeadCreationConfig", () => {
   test("requires a connection before configuring, then persists the toggles", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     await expect(
@@ -449,7 +449,7 @@ describe("socialIntegrations.setInstagramLeadCreationConfig", () => {
 
 describe("socialIntegrations.consumeOAuthState", () => {
   test("returns the orgId for a valid state and consumes it (one-time use)", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
 
     await asOwner.mutation(api.socialIntegrations.createConnectUrl, { orgId });
@@ -470,7 +470,7 @@ describe("socialIntegrations.consumeOAuthState", () => {
   });
 
   test("returns null for an unknown state", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const result = await t.run((ctx) =>
       ctx.runMutation(internal.socialIntegrations.consumeOAuthState, {
         state: "does-not-exist",
@@ -482,7 +482,7 @@ describe("socialIntegrations.consumeOAuthState", () => {
 
 describe("socialIntegrations.exchangeCodeForToken", () => {
   test("retries long-lived token exchange with POST when Meta rejects GET", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", {
         name: "Instagram Org",
@@ -601,7 +601,7 @@ describe("socialIntegrations: an Instagram account belongs to one org", () => {
     );
 
   test("refuses a business account already connected to another org", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const orgA = await newOrg(t);
     const orgB = await newOrg(t);
     await save(t, orgA, "ig_biz", "ig_hook");
@@ -609,7 +609,7 @@ describe("socialIntegrations: an Instagram account belongs to one org", () => {
   });
 
   test("refuses a webhook account id already connected to another org", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const orgA = await newOrg(t);
     const orgB = await newOrg(t);
     await save(t, orgA, "ig_biz_a", "ig_hook");
@@ -624,14 +624,14 @@ describe("socialIntegrations: an Instagram account belongs to one org", () => {
   });
 
   test("the same org may reconnect its own account", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const orgA = await newOrg(t);
     await save(t, orgA, "ig_biz", "ig_hook");
     await expect(save(t, orgA, "ig_biz", "ig_hook")).resolves.toBeNull();
   });
 
   test("once the first org's account is deauthorized, another org may connect it", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const orgA = await newOrg(t);
     const orgB = await newOrg(t);
     await save(t, orgA, "ig_biz", "ig_hook");
@@ -645,7 +645,7 @@ describe("socialIntegrations: an Instagram account belongs to one org", () => {
     // The refusal above tells the second org to disconnect in the first one.
     // That has to be possible even after the holder dropped below the plan
     // that includes the Social Inbox, or the account is locked for good.
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId: orgA, asOwner } = await seedOwner(t);
     const orgB = await newOrg(t);
     await save(t, orgA, "ig_biz", "ig_hook");
@@ -675,7 +675,7 @@ describe("socialIntegrations: an Instagram account belongs to one org", () => {
       }),
     );
     try {
-      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
       const orgA = await newOrg(t);
       const orgB = await newOrg(t);
       await save(t, orgA, "ig_biz", "ig_hook");

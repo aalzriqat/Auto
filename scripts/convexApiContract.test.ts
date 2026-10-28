@@ -44,7 +44,10 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // mobile deposit receipts. The backend query is included in this contract check.
 // 199 -> 200: `orgSettings:setCommissionMode`, the only door that changes the
 // commission mode (SCRUM-778). A real reference, checked against the backend.
-const EXPECTED_REFERENCE_COUNT = 200;
+// 200 -> 201: `orgSettings:getCurrencyStatus`, the any-member read that tells a
+// screen whether the organization stored a currency (SCRUM-85). A real
+// reference, checked against the backend.
+const EXPECTED_REFERENCE_COUNT = 201;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {

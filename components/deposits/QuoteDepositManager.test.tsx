@@ -95,6 +95,8 @@ let permissions: string[] = [];
 // DepositAllocationPanel formats through useMoneyDisplay (SCRUM-684), which
 // reads the org's settings; every mount in the app sits under OrgProvider.
 vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({ currency: "JOD" }) }));
+// SCRUM-85: the org's currency is the stored one, read through useOrgCurrencyState.
+vi.mock("@/hooks/useOrgCurrencyState", () => ({ useOrgCurrencyState: () => ({ status: "configured", code: "JOD", symbol: null }) }));
 vi.mock("@/hooks/use-permissions", () => ({
   usePermissions: () => ({
     permissions,

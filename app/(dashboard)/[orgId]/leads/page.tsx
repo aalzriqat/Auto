@@ -725,7 +725,8 @@ function LeadsContent() {
               legalName: orgSettings?.legalCompanyName,
               logoUrl,
               primaryColor: orgSettings?.primaryColor,
-              currencySymbol: orgSettings?.currencySymbol,
+              // The stored symbol, else the stored ISO code - both are the owner's own value (SCRUM-85).
+              currencySymbol: orgSettings?.currencySymbol || orgSettings?.currency,
             }}
           />
         )}

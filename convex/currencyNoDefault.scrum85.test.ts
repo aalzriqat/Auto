@@ -44,7 +44,8 @@ async function codeOf(attempt: Promise<unknown>): Promise<string | undefined> {
 
 /** An org with an owner, an accounting plan and NO orgSettings row at all. */
 async function seedUnconfiguredOrg() {
-  const t = convexTestWithComponents(schema, MODULE_GLOB);
+  // The shared harness seeds a stored currency on every org it inserts; this suite's subject is the org that has none.
+  const t = convexTestWithComponents(schema, MODULE_GLOB, { storedOrgCurrency: false });
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "No Currency Dealer", createdAt: Date.now() })
   );

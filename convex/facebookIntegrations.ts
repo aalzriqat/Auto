@@ -282,8 +282,6 @@ export const disconnect = mutation({
     if (!settings) {
       await ctx.db.insert("orgSettings", {
         orgId: args.orgId,
-        currency: DEFAULT_SETTINGS.currency,
-        currencySymbol: DEFAULT_SETTINGS.currencySymbol,
         enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
         facebookDisconnectedAt: now,
       });
@@ -636,8 +634,6 @@ export const saveFacebookPendingPages = internalMutation({
     } else {
       await ctx.db.insert("orgSettings", {
         orgId,
-        currency: DEFAULT_SETTINGS.currency,
-        currencySymbol: DEFAULT_SETTINGS.currencySymbol,
         enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
         ...patch,
       });

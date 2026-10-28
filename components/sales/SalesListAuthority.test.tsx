@@ -18,6 +18,8 @@ vi.mock("convex/react", async () => {
       if (name === "organizations:listMine") return [{ _id: "org-a", name: "Synthetic Dealer" }];
       if (name === "memberships:getMyMembership") return { roleName: role.name, permissions: [...role.permissions] };
       if (name === "orgSettings:get") return null;
+      // The org's stored currency is read through the any-member status query (SCRUM-85).
+      if (name === "orgSettings:getCurrencyStatus") return { configured: true, currency: "JOD", currencySymbol: "JD" };
       if (name === "orgCustomerStatuses:list") throw new Error("Synthetic customer-status settings authority refusal");
       if (["vehicles:listAll", "finance:listCompanies", "documents:listRules", "orgCustomerStatuses:listForQuotes"].includes(name)) return [];
       throw new Error("Unexpected network query: " + name);

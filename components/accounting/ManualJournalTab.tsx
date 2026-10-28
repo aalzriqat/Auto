@@ -10,6 +10,8 @@ import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { requireStoredCurrencyCode } from "@/lib/storedCurrency";
+import { RequireOrgCurrency } from "@/components/layout/RequireOrgCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, CheckCircle2, XCircle, Loader2, ScrollText } from "lucide-react";
@@ -47,9 +49,17 @@ function emptyLine() {
 }
 
 export function ManualJournalTab() {
+  return (
+    <RequireOrgCurrency>
+      <ManualJournalTabContent />
+    </RequireOrgCurrency>
+  );
+}
+
+function ManualJournalTabContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { code: currencyCode } = useCurrency();
+  const currencyCode = requireStoredCurrencyCode(useCurrency().code);
   const formatCurrency = useCurrencyFormatter();
   const scale = scaleForCurrency(currencyCode);
   const factor = Math.pow(10, scale);

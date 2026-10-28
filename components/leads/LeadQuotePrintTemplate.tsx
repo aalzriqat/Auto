@@ -20,7 +20,9 @@ export function LeadQuotePrintTemplate({
   orgBranding,
 }: LeadQuotePrintTemplateProps) {
   const { t, isRtl } = useLanguage();
-  const currencyLabel = orgBranding?.currencySymbol ?? "JOD";
+  // SCRUM-85: the organization's own stored symbol, never a guessed "JOD". With none,
+  // the figure is replaced by "currency not configured" rather than printed in a currency nobody chose.
+  const currencyLabel = orgBranding?.currencySymbol?.trim() || null;
 
   return (
     <div
@@ -47,7 +49,9 @@ export function LeadQuotePrintTemplate({
       <div className="mb-8">
         <h2 className="text-sm font-semibold uppercase text-gray-500 mb-2">{t("EstimatedPricing")}</h2>
         <p className="text-xl font-bold">
-          {estimatedPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencyLabel}
+          {currencyLabel === null
+            ? t("CurrencyNotConfigured")
+            : `${estimatedPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })} ${currencyLabel}`}
         </p>
       </div>
 

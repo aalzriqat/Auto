@@ -8,6 +8,8 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { requireStoredCurrencyCode } from "@/lib/storedCurrency";
+import { RequireOrgCurrency } from "@/components/layout/RequireOrgCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 
 function safeScaleForCurrency(currency: string | null | undefined, fallback = 2): number {
@@ -816,7 +818,16 @@ export type { DealCockpitData } from "./DealStagePresentation";
  * and a component welded to `useQuery` can only be checked against whatever
  * happens to be in a deployment.
  */
-export function DealCockpit({
+/** The cockpit reads money in the org's stored currency; without one it shows the not-configured panel (SCRUM-85). */
+export function DealCockpit(props: Readonly<React.ComponentProps<typeof DealCockpitContent>>) {
+  return (
+    <RequireOrgCurrency>
+      <DealCockpitContent {...props} />
+    </RequireOrgCurrency>
+  );
+}
+
+function DealCockpitContent({
   orgId,
   applicationId,
   canonicalizeUrl = true,
@@ -1157,8 +1168,9 @@ export function DealCockpit({
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
   const orgCurrency = useCurrency();
+  const orgCode = requireStoredCurrencyCode(orgCurrency.code);
   const currencyMarker = (cur: string) => {
-    if (cur === orgCurrency.code) {
+    if (cur === orgCode) {
       if (locale === "ar") {
         return orgCurrency.symbol ?? (cur === "JOD" ? "د.أ" : orgCurrency.displayLabel);
       }
@@ -1406,9 +1418,9 @@ export function DealCockpit({
   // currency, not the org's current one; the customer's principal is read at
   // the org scale, as the dialog reads it. Absent means the row predates the
   // field, and the org's currency is then the only reading available.
-  const orgScale = safeScaleForCurrency(orgCurrency.code, 2);
+  const orgScale = scaleForCurrency(orgCode);
   const orgFactor = Math.pow(10, orgScale);
-  const economicsCurrencyCode = app?.economicsCurrency ?? orgCurrency.code;
+  const economicsCurrencyCode = app?.economicsCurrency ?? orgCode;
   const economicsScale = safeScaleForCurrency(economicsCurrencyCode, 2);
   const economicsFactor = Math.pow(10, economicsScale);
   /**
@@ -1436,7 +1448,7 @@ export function DealCockpit({
   const supplierName = app?.vehicle?.sourcedFromName ?? undefined;
   const formatEconomics = (minor: number) => {
     return `${formatMinorAmount(minor, economicsFactor)} ${
-      economicsCurrencyCode === orgCurrency.code ? currencyMarker(economicsCurrencyCode) : economicsCurrencyCode
+      economicsCurrencyCode === orgCode ? currencyMarker(economicsCurrencyCode) : economicsCurrencyCode
     }`;
   };
   /**
@@ -1580,7 +1592,7 @@ export function DealCockpit({
           scaleOf: (cur: string) => safeScaleForCurrency(cur, 2),
           money: (minor: number, currency: string) =>
             `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${
-              currency === orgCurrency.code ? currencyMarker(currency) : currency
+              currency === orgCode ? currencyMarker(currency) : currency
             }`,
           // Frozen once the sale is recognized (`economicsFrozen`): the server
           // refuses every posting-bearing edit, so none is offered, and the
@@ -1859,7 +1871,7 @@ export function DealCockpit({
   const formatPlanMajor = (major: number, currency: string) => {
     const scale = safeScaleForCurrency(currency, 2);
     return `${formatMoneyAmount(major, currency, scale)} ${
-      currency === orgCurrency.code ? currencyMarker(currency) : currency
+      currency === orgCode ? currencyMarker(currency) : currency
     }`;
   };
   /**
@@ -1885,7 +1897,7 @@ export function DealCockpit({
    * that receipt, and the one refusal left on it is an unrecognised pin.
    */
   const finalizeDenominationBlock = app
-    ? finalizeDenominationRefusal(app.economicsCurrency, orgCurrency.code)
+    ? finalizeDenominationRefusal(app.economicsCurrency, orgCode)
     : undefined;
   const disbursementDenominationBlock =
     app?.companyId && !settlesDirectToSupplier
@@ -1900,9 +1912,9 @@ export function DealCockpit({
     finalizeDenominationBlock && app
       ? {
           recordedLabel: t("RecordedEconomicsCurrency"),
-          recordedAmount: app.economicsCurrency ?? orgCurrency.code,
+          recordedAmount: app.economicsCurrency ?? orgCode,
           orgLabel: t("OrganisationCurrencyLabel"),
-          orgCurrency: orgCurrency.code,
+          orgCurrency: orgCode,
         }
       : undefined;
   const disbursementDenominationDetail = disbursementDenominationBlock
@@ -1910,7 +1922,7 @@ export function DealCockpit({
         recordedLabel: t("RecordedSettlementAmount"),
         recordedAmount: expectedDisbursementLabel,
         orgLabel: t("OrganisationCurrencyLabel"),
-        orgCurrency: orgCurrency.code,
+        orgCurrency: orgCode,
       }
     : undefined;
   // The route is a decision about a deal that has not posted yet; once it
@@ -2899,7 +2911,7 @@ export function DealCockpit({
    */
   const custodyMoney = (minor: number, currency: string) =>
     `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${
-      currency === orgCurrency.code ? currencyMarker(currency) : currency
+      currency === orgCode ? currencyMarker(currency) : currency
     }`;
   // One intent per dialog attempt. The deal, record and kind are named for
   // legibility only; the attempt's `intentId` is what makes it one command.
@@ -3947,6 +3959,12 @@ export function DealCockpit({
       documentsActionable={!permissionsLoading && documentsStepReason === undefined}
       recordedFeedback={{ recorded: recordedFeedback, track: trackRecorded, onDismiss: clearRecorded }}
       onCorrectSettlementAdvice={async (correction) => {
+        // SCRUM-85: the scale comes from a currency the server pinned on this deal.
+        // With none there is no scale to convert the typed amount by, so refuse
+        // instead of assuming JOD's.
+        const adviceCurrency =
+          deal?.settlementAdviceDiscrepancy?.currency ?? deal?.money?.currency;
+        if (!adviceCurrency) throw new Error(t("ServerError_CURRENCY_NOT_CONFIGURED"));
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
         await amendAdvice({
           orgId,
@@ -3956,13 +3974,7 @@ export function DealCockpit({
           // reason this deal is flagged is a disagreement about an amount, and
           // rescaling it on the way in would manufacture a second one.
           disbursedAmountMinor: Math.round(
-            correction.amountMajor *
-              Math.pow(
-                10,
-                scaleForCurrency(
-                  deal?.settlementAdviceDiscrepancy?.currency ?? deal?.money?.currency ?? "JOD"
-                )
-              )
+            correction.amountMajor * Math.pow(10, scaleForCurrency(adviceCurrency))
           ),
           reference: correction.reference,
           // Distinct from omitting it. An emptied field used to arrive as
@@ -4054,8 +4066,8 @@ export function DealCockpit({
           open={recordingLegalInvoice}
           submitting={legalInvoiceSubmitting}
           error={legalInvoiceError}
-          scale={scaleForCurrency(dealCosts?.currency ?? orgCurrency.code)}
-          currency={dealCosts?.currency ?? orgCurrency.code}
+          scale={scaleForCurrency(dealCosts?.currency ?? orgCode)}
+          currency={dealCosts?.currency ?? orgCode}
           vehicleIsConsigned={isConsignedDeal}
           existing={
             dealCosts?.legalInvoiceAmountMinor !== undefined

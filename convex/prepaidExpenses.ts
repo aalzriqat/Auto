@@ -1249,19 +1249,24 @@ export const listPendingCorrectionRequests = query({
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
       .collect();
 
-    const enriched = await Promise.all(
+    const enrichedOrNull = await Promise.all(
       requests.map(async (r) => {
         const schedule = await ctx.db.get(r.scheduleId);
-        const expense = schedule && schedule.kind !== "OPENING" ? await ctx.db.get(schedule.expenseId) : null;
+        // SCRUM-85: a request whose schedule no longer exists has no denomination
+        // and cannot be approved (approval re-validates the schedule), so it is left
+        // out rather than shown in an invented "USD".
+        if (!schedule) return null;
+        const expense = schedule.kind !== "OPENING" ? await ctx.db.get(schedule.expenseId) : null;
         const requester = await ctx.db.get(r.requestedBy);
         return {
           ...r,
-          expenseTitle: schedule?.kind === "OPENING" ? schedule.title : expense?.title ?? "Prepaid expense",
-          currency: schedule?.currency ?? "USD",
+          expenseTitle: schedule.kind === "OPENING" ? schedule.title : expense?.title ?? "Prepaid expense",
+          currency: schedule.currency,
           requestedByName: requester?.name ?? requester?.email ?? "Unknown",
         };
       })
     );
+    const enriched = enrichedOrNull.filter((row): row is NonNullable<typeof row> => row !== null);
     return enriched.sort((a, b) => b.createdAt - a.createdAt);
   },
 });

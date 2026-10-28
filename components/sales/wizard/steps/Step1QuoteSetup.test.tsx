@@ -34,9 +34,11 @@ vi.mock("@/hooks/useCurrency", () => ({
   useCurrency: () => ({
     code: "USD",
     symbol: "$",
+    configured: true,
     displayLabel: "USD",
     format: (n: number) => `${n}`,
     formatCompact: (n: number) => `${n}`,
+    formatLocale: (n: number) => `${n}`,
   }),
 }));
 vi.mock("convex/react", async () => {
@@ -49,6 +51,8 @@ vi.mock("convex/react", async () => {
       if (name === "orgCustomerStatuses:listForQuotes" && stubs.restrictSettings) return [{ _id: "status-a", label: "Synthetic eligibility" }];
       if (name === "approvals:profitApprovalStatus") return stubs.verdict;
       if (name === "vehicles:listAll") return [];
+      // SCRUM-85: the org's currency is the stored one, read through the any-member status query.
+      if (name === "orgSettings:getCurrencyStatus") return { configured: true, currency: "JOD", currencySymbol: "JD" };
       return null;
     },
     useQueries: () => ({}),

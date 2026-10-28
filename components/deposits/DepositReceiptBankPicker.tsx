@@ -14,11 +14,12 @@ export function depositNeedsPhysicalBank(method: PaymentMethod | undefined): boo
 export function useDepositReceiptBankOptions(
   orgId: Id<"organizations"> | undefined,
   method: PaymentMethod | undefined,
-  currency: string,
+  currency: string | null,
 ) {
   const required = depositNeedsPhysicalBank(method);
+  // SCRUM-85: no stored currency means no bank list to filter by. Skip the query rather than guess one.
   const options = useQuery(api.deposits.listReceiptBankOptions,
-    orgId && required ? { orgId, currency } : "skip");
+    orgId && required && currency ? { orgId, currency } : "skip");
   return { required, options };
 }
 

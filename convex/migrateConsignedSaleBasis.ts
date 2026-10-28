@@ -345,6 +345,12 @@ async function correctOneSale(
   reportingBasisNeedsHuman: boolean;
 }> {
   const { sale, assessment, actorId } = args;
+  // A correctable assessment always states the currency it was posted in
+  // (isAutomaticallyCorrectable); asserted here rather than assumed (SCRUM-85).
+  const currency = assessment.currency;
+  if (currency === null) {
+    throw new Error(`Refusing to correct sale ${sale._id}: no posted currency.`);
+  }
   const revenueMinor = assessment.posted.revenueMinor;
   const cogsMinor = assessment.posted.cogsMinor;
   // Not null: a null margin raises NO_SOURCE_COST, which disqualifies the row.
@@ -366,7 +372,7 @@ async function correctOneSale(
     saleId: sale._id,
     vehicleId: sale.vehicleId,
     customerId: sale.customerId,
-    currency: assessment.currency,
+    currency,
     revenueMinor,
     commissionMinor,
     cogsMinor,
@@ -388,7 +394,7 @@ async function correctOneSale(
   // up. `commissionMinor` is the same margin the journal recognizes.
   const basis = await backfillReportingBasis(ctx, {
     sale,
-    recognizedRevenue: fromMinorUnits(commissionMinor, assessment.currency),
+    recognizedRevenue: fromMinorUnits(commissionMinor, currency),
     dryRun: false,
   });
 
@@ -404,7 +410,7 @@ async function correctOneSale(
     orgId: sale.orgId,
     saleId: sale._id,
     vehicleId: sale.vehicleId,
-    currency: assessment.currency,
+    currency,
     originalJournalEntryIds: assessment.journalEntryIds,
     status,
     statusReason,
@@ -713,7 +719,8 @@ export const migrateConsignedSaleBasis = internalMutation({
           sale,
           recognizedRevenue: fromMinorUnits(
             assessment.dealershipMarginMinor ?? 0,
-            assessment.currency
+            // Non-null: isAutomaticallyCorrectable above requires a posted currency.
+            assessment.currency!
           ),
           dryRun: true,
         });

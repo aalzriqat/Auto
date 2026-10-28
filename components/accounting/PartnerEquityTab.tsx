@@ -13,6 +13,8 @@ import { partnerEquityNeedsBank } from "@/convex/utils/partnerEquityBank";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { requireStoredCurrencyCode } from "@/lib/storedCurrency";
+import { RequireOrgCurrency } from "@/components/layout/RequireOrgCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
@@ -108,9 +110,17 @@ const MOVEMENT_META: Record<MovementType, { titleKey: string; descKey: string; n
 };
 
 export function PartnerEquityTab() {
+  return (
+    <RequireOrgCurrency>
+      <PartnerEquityTabContent />
+    </RequireOrgCurrency>
+  );
+}
+
+function PartnerEquityTabContent() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
-  const { code: currencyCode } = useCurrency();
+  const currencyCode = requireStoredCurrencyCode(useCurrency().code);
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission } = usePermissions();
   const canManage = hasPermission(PERMISSIONS.MANAGE_FINANCE);

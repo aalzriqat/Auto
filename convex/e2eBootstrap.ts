@@ -954,6 +954,9 @@ async function bindMembership(
 
 // ─── Org-level baseline ──────────────────────────────────────────────────────
 
+const E2E_ORG_CURRENCY = "JOD";
+const E2E_ORG_CURRENCY_SYMBOL = "د.أ";
+
 /**
  * The minimum an authenticated page needs to render — and no more.
  *
@@ -969,8 +972,10 @@ async function seedOrgBaseline(ctx: MutationCtx, orgId: Id<"organizations">): Pr
   if (!settings) {
     await ctx.db.insert("orgSettings", {
       orgId,
-      currency: DEFAULT_SETTINGS.currency,
-      currencySymbol: DEFAULT_SETTINGS.currencySymbol,
+      // SCRUM-85: the e2e fixture org states its own currency explicitly (class (b):
+      // seed data for the disposable test org, not a default any real org inherits).
+      currency: E2E_ORG_CURRENCY,
+      currencySymbol: E2E_ORG_CURRENCY_SYMBOL,
       enabledPaymentTypes: [...DEFAULT_SETTINGS.enabledPaymentTypes],
       dealershipName: E2E_ORGANIZATION_NAME,
     });

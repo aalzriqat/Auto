@@ -15,7 +15,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
+import { fromMinorUnits, requireConfiguredCurrency, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { liveAppliedMinorForDeposit } from "./utils/depositApplications";
 import { requireFeature } from "./subscriptions";
@@ -63,13 +63,17 @@ function translateMinor(amountMinor: number, rate: number, fromCurrency: string,
   return Math.round(amountMinor * rate * Math.pow(10, scaleForCurrency(toCurrency) - scaleForCurrency(fromCurrency)));
 }
 
-/** Resolve the organization's display currency (defaults to JOD). */
+/**
+ * Resolve the organization's STORED currency, or refuse with
+ * `CURRENCY_NOT_CONFIGURED` (SCRUM-85: a report never labels figures "JOD" for an
+ * org that has not chosen a currency).
+ */
 async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations">): Promise<string> {
   const settings = await ctx.db
     .query("orgSettings")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .unique();
-  return settings?.currency ?? "JOD";
+  return requireConfiguredCurrency(settings);
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────

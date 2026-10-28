@@ -8,6 +8,8 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { requireStoredCurrencyCode } from "@/lib/storedCurrency";
+import { RequireOrgCurrency } from "@/components/layout/RequireOrgCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/components/ui/sonner";
@@ -18,9 +20,17 @@ import { ReconciliationPanel } from "./bankAccounts/ReconciliationPanel";
 import { dateInputToMs, defaultCreateBankAccountForm, type CreateBankAccountFormState } from "./bankAccounts/types";
 
 export function BankAccountsTab() {
+  return (
+    <RequireOrgCurrency>
+      <BankAccountsTabContent />
+    </RequireOrgCurrency>
+  );
+}
+
+function BankAccountsTabContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { code: orgCurrency } = useCurrency();
+  const orgCurrency = requireStoredCurrencyCode(useCurrency().code);
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   const [createOpen, setCreateOpen] = useState(false);

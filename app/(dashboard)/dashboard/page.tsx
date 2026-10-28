@@ -35,7 +35,8 @@ function Onboarding({ onComplete }: { onComplete: (orgId: string) => void }) {
   const [step, setStep] = useState(0);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [currency, setCurrency] = useState("JOD");
+  // SCRUM-85: no preselected currency. The owner chooses one; "Continue" stays disabled until they do.
+  const [currency, setCurrency] = useState("");
 
   const createOrg = useMutation(api.organizations.create);
   const upsertSettings = useMutation(api.orgSettings.upsert);
@@ -62,9 +63,10 @@ function Onboarding({ onComplete }: { onComplete: (orgId: string) => void }) {
   // Step 1: save currency
   const handleSaveCurrency = async () => {
     if (!orgId) return;
+    const cur = CURRENCIES.find((c) => c.code === currency);
+    if (!cur) return;
     setIsBusy(true);
     try {
-      const cur = CURRENCIES.find((c) => c.code === currency)!;
       await upsertSettings({
         orgId: orgId as Id<"organizations">,
         currency: cur.code,
@@ -166,7 +168,7 @@ function Onboarding({ onComplete }: { onComplete: (orgId: string) => void }) {
               <Label>{t("Currency")}</Label>
               <Select value={currency} onValueChange={setCurrency}>
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder={t("CurrencyNotConfiguredChoose")} />
                 </SelectTrigger>
                 <SelectContent>
                   {CURRENCIES.map((c) => (
@@ -175,7 +177,7 @@ function Onboarding({ onComplete }: { onComplete: (orgId: string) => void }) {
                 </SelectContent>
               </Select>
             </div>
-            <Button className="w-full" onClick={handleSaveCurrency} disabled={isBusy}>
+            <Button className="w-full" onClick={handleSaveCurrency} disabled={isBusy || currency === ""}>
               {isBusy ? t("OnboardingSaving") : t("Continue")}
             </Button>
           </div>

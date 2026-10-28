@@ -31,6 +31,9 @@ vi.mock("convex/react", async () => {
       if (name === "leadActivities:listForLead") return emptyRows;
       if (name === "leads:checkExistingOpenLead") return null;
       if (name === "leads:customerMessages") return emptyMessages;
+      // The org's stored currency is read through the any-member status query (SCRUM-85).
+      if (name === "orgSettings:get") return null;
+      if (name === "orgSettings:getCurrencyStatus") return { configured: true, currency: "JOD", currencySymbol: "JD" };
       if (["customers:selectorOptions", "customers:get", "vehicles:listAll", "orgLeadSources:listForLeads", "orgPipelineStages:list", "orgCustomFields:list", "orgCustomFields:getValues", "customers:getRelations"].includes(name)) {
         if (!state.canEdit) throw new Error(`Synthetic backend picker refusal: ${name}`);
         if (name === "customers:getRelations") return relations;

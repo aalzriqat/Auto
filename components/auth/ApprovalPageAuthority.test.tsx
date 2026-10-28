@@ -19,6 +19,8 @@ vi.mock("convex/react", async () => {
       if (name === "organizations:listMine") return [{ _id: "org-a", name: "Synthetic Dealer" }];
       if (name === "memberships:getMyMembership") return { roleName: role?.name ?? "Synthetic request approver", permissions: [...permissions] };
       if (name === "orgSettings:get") return null;
+      // The org's stored currency is read through the any-member status query (SCRUM-85).
+      if (name === "orgSettings:getCurrencyStatus") return { configured: true, currency: "JOD", currencySymbol: "JD" };
       if (name === "approvals:listPendingApprovals") {
         if (!permissions.includes("approve:requests")) throw new Error("Synthetic approval refusal");
         return [];

@@ -22,15 +22,29 @@ const ARABIC_SYMBOLS: Record<string, string> = {
   JOD: "د.أ",
 };
 
-/** The currency's minor-unit scale: AutoFlow's own table first, then Intl, then 2. */
+/**
+ * The currency's minor-unit scale: AutoFlow's own ISO 4217 table first, then the
+ * platform's ISO 4217 data (Intl/CLDR). A currency neither knows has NO scale: this
+ * throws, exactly as the backend's `scaleForCurrency` does, instead of guessing 2
+ * (SCRUM-85, owner ruling SCRUM-760 c23812 ruling 9: scale is never defaulted).
+ */
 export function moneyDisplayScale(currency: string): number {
   const known = supportedCurrencyScale(currency);
   if (known !== null) return known;
+  let digits: number | undefined;
   try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
+    // Intl accepts ANY well-formed three-letter code and answers 2 for the ones it
+    // has no data for, so membership in its ISO 4217 list is checked first.
+    if (Intl.supportedValuesOf("currency").includes(currency.trim().toUpperCase())) {
+      digits = new Intl.NumberFormat("en-US", { style: "currency", currency }).resolvedOptions().maximumFractionDigits;
+    }
   } catch {
-    return 2;
+    digits = undefined;
   }
+  if (digits === undefined) {
+    throw new Error(`Unrecognised currency code "${currency}": its minor-unit scale is unknown.`);
+  }
+  return digits;
 }
 
 /** The suffix shown beside a figure: "JOD" in English, "د.أ" in Arabic. */

@@ -512,8 +512,6 @@ export const saveInstagramCredentials = internalMutation({
     } else {
       await ctx.db.insert("orgSettings", {
         orgId,
-        currency: DEFAULT_SETTINGS.currency,
-        currencySymbol: DEFAULT_SETTINGS.currencySymbol,
         enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
         ...fields,
       });

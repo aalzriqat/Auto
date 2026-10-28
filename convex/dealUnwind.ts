@@ -1019,7 +1019,7 @@ export const unwindStatus = query({
     // would reveal the protected contribution) nor any free text.
     const financeReader = mayReadFinanceEconomics(role);
     const unwindActor = holds(role, START_PERMS) || mayRecordForwardReturn(role);
-    let customerReceiptPreview: { amountMinor: number; currency: string } | null = null;
+    let customerReceiptPreview: { amountMinor: number; currency: string | null } | null = null;
     if (unwind?.status === "ACTIVE" && (financeReader || unwindActor)) {
       const sale = await ctx.db.get(unwind.saleId);
       if (sale?.orgId === args.orgId) {
@@ -1027,7 +1027,8 @@ export const unwindStatus = query({
           const plan = await planSaleInvoiceReceiptReversal(ctx, args.orgId, sale);
           customerReceiptPreview = {
             amountMinor: plan.totalMinor,
-            currency: plan.applications[0]?.application.currency ?? "",
+            // SCRUM-85: null (not "") when no application states a currency.
+            currency: plan.applications[0]?.application.currency ?? null,
           };
         } catch (error) {
           console.error("Could not preview customer receipt disposition for deal unwind", error);

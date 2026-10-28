@@ -63,6 +63,7 @@ import {
   assertFiniteNumber,
   toMinorSameCurrencyOrUndefined,
   outstandingMinorFromMajor,
+  requireConfiguredCurrency,
 } from "./utils/money";
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
 import { pendingDepositResolution, resolveSettlement } from "./applications";
@@ -2421,7 +2422,8 @@ export const recalculateCommission = mutation({
       // than silently falling back to the old base.
       let financedMargin: CommissionBase | undefined;
       if (sale.commissionBase && !isConsignedAgentSale(vehicle)) {
-        const margin = financedMarginOf(sale.commissionBase, orgSettings?.currency ?? "JOD");
+        // SCRUM-85: the org's stored currency; an org with none is refused, never read as JOD.
+        const margin = financedMarginOf(sale.commissionBase, requireConfiguredCurrency(orgSettings));
         if (!margin) {
           throw new ConvexError({
             code: COMMISSION_BASE_UNUSABLE_RECALC_CODE,

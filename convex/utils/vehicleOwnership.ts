@@ -371,7 +371,9 @@ export function recordedConsignedMargin(sale: Doc<"sales">): number | undefined 
  */
 export function recordedFinancedNetRevenue(
   sale: Doc<"sales">,
-  orgCurrency: string
+  // `null` is an org with no stored currency (SCRUM-85): nothing can match it, so
+  // a frozen figure is withheld rather than read against an assumed currency.
+  orgCurrency: string | null
 ): number | null | undefined {
   const frozen = sale.financedNetRevenue;
   if (frozen === undefined) return undefined;

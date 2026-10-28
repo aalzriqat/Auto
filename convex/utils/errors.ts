@@ -325,6 +325,10 @@ export const AppErrorCode = {
   // Translated under ServerError_<code>.
   DEPOSIT_OTHER_TREATMENT_DISABLED: "DEPOSIT_OTHER_TREATMENT_DISABLED",
   OPENING_BALANCE_AFTER_LEDGER_ACTIVITY: "OPENING_BALANCE_AFTER_LEDGER_ACTIVITY",
+  // SCRUM-85 (SCRUM-760 c23812 ruling 9): the organization has no stored currency, and the
+  // currency is never defaulted. See `requireConfiguredCurrency`. Translated under
+  // ServerError_<code>.
+  CURRENCY_NOT_CONFIGURED: "CURRENCY_NOT_CONFIGURED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];
