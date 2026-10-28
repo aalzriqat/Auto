@@ -104,21 +104,29 @@ targets: `import()`, `require()` or `import x = require()` whose specifier is no
 string literal after wrappers are skipped (`"a" + "b"`, a template with a substitution,
 an identifier, no argument); every use of `require` other than a call (allowlist: only a
 called `require.resolve(...)` and `typeof require` are inert, so `const r = require`,
-`require.call/apply/bind`, `require["call"]` and `require.context` refuse); and any call
-whose callee is a member named `require` whatever the receiver (`module.require(x)`,
-`(globalThis as any).require(x)`).
+`require.call/apply/bind`, `require["call"]` and `require.context` refuse); every
+property access named `require` and every element access with a plain string key
+`"require"`, whatever the receiver and in any position (called, extracted, passed,
+or used via `.call`, `.apply` or `.bind`); and every non-literal element key on
+`module`, `require` or `globalThis`. Receivers and keys are unwrapped first.
+String, numeric, bigint, regexp and no-substitution template literals are literal
+keys. The rule deliberately refuses an unrelated object's `.require` too.
+Direct literal `require("...")` calls remain traced. Called `require.resolve(...)`
+and `typeof require` remain accepted. Node documents
+[`module.require`](https://nodejs.org/api/modules.html#modulerequireid) as a loader;
+checking the member access itself also catches indirect invocation and extraction.
 Parentheses, `as`, `satisfies`, `<T>x`, `x!` and `f<T>` are looked through before every
 decision, so a wrapped load or reference is judged like the plain one (the public
 TypeScript predicates are used; `ts.skipOuterExpressions` is not in `typescript.d.ts`).
-At this revision no shipped (non-test) file does any of these: the real-tree dry run
-refuses 1012 and none for an unresolved reference.
+At this revision the real-tree baseline dry run refuses 1012 entries and reports 0
+unresolved closures. This measures the baseline closures, not every repo file.
 
 Still outside the closure and not detected: ambient declarations (`declare global`, a
-`.d.ts` nobody imports); code that loads by other means (`eval`, `new Function`, a
-loader obtained under another name such as `const load = createRequire(url)`, type-only
-`import("x")` types); what a
-dependency's code does inside `node_modules` (the
-lockfile and package.json pin the version, nothing reviews its behaviour);
+`.d.ts` nobody imports); `eval`; `new Function`; `createRequire` under another
+name such as `const load = createRequire(url); load(x)`; and type-only `import("x")`
+types. The scan does not track arbitrary loader aliases. Other limits are what a
+dependency's code does inside `node_modules` (the lockfile and package.json pin the
+version, nothing reviews its behaviour);
 handler-only behaviour that no edge reaches (a trigger, an HTTP route, a cron table, a
 scheduled job, a function named through a string built at run time); `components.*`
 references; and a local variable that shadows `api` or `internal`, which is treated as
@@ -213,3 +221,68 @@ the separate baseline repair/review lane, and run the normal PR/review gates.
 Documentation supports these design choices; the executable regression and
 detector typecheck provide implementation evidence. CI, independent review and
 production verification are separate evidence surfaces.
+
+
+## Round 6 loader refusal evidence, 2026-10-28
+
+Local implementation boundary: `claude/scrum866-baseline-renewal`, HEAD
+`7cadeb9af647edefae1539c9e2c9a17633bd9d72`, with the round 6 edits uncommitted.
+Finding accepted; conservative refusal adopted. No baseline file was edited.
+
+Before the implementation change, the new temporary Git fixture committed each
+loader and `{ run: 1 }`, then committed only the worker changing to `{ run: 2 }`.
+Node executed the `.call` fixture and returned `{ run: 2 }`. Each renewal test
+failed with `AssertionError: expected 1 to be +0`:
+
+| Loader form | Before fix | After fix |
+| --- | --- | --- |
+| `module.require.call(module, "./worker.js")` | renewed 1 | renewed 0, refused 1 |
+| `module.require.apply(module, ["./worker.js"])` | renewed 1 | renewed 0, refused 1 |
+| `module.require.bind(module)("./worker.js")` | renewed 1 | renewed 0, refused 1 |
+| `module["require"]["call"](module, "./worker.js")` | renewed 1 | renewed 0, refused 1 |
+| `const load = module.require; load("./worker.js")` | renewed 1 | renewed 0, refused 1 |
+| `module[k]("./worker.js")`, with `k = "require"` | renewed 1 | renewed 0, refused 1 |
+
+The failing-first command was:
+
+```sh
+pnpm vitest run scripts/contractSkew/renewBaselineReviewed.test.ts --maxWorkers=1 -t 'member loader renewal'
+# 6 failed, 1 passed, 74 filtered out
+```
+
+Final commands and observed outputs:
+
+```sh
+pnpm typecheck:contract-skew
+# tsc -p scripts/contractSkew/tsconfig.json --noEmit; exit 0
+node scripts/contractSkew/checkBaselineIdentity.mjs
+# Call identity check: 1012 baseline entries matched (surface, file, callSiteId, functionId).
+# Backend finding identity was not checked.
+node --test --test-concurrency=1 scripts/contractSkew/baselineIdentity.test.mjs
+# tests 14; pass 14; fail 0; skipped 0
+pnpm vitest run scripts/contractSkew/renewBaselineReviewed.test.ts scripts/contractSkew/baseline.test.ts scripts/contractSkew/acceptance.test.ts --maxWorkers=1
+# Test Files 3 passed (3); Tests 169 passed (169)
+node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --expires 2027-01-01 --renewal 'SCRUM-866 round 6 dry run; do not write baseline'
+# reviewed c82890bd726a067774766d6723467a8b8fbc21c1
+# head     7cadeb9af647edefae1539c9e2c9a17633bd9d72
+# renewed 0, already current 0, refused 1012
+# dry run; pass --write to apply
+# exit 0; unresolved refusal lines 0
+```
+
+The January date exercises refusal because the current baseline already expires
+on December 1. No `--write` was used. Separately, every one of the 228 distinct
+client/backend roots for the 1012 entries was traversed with `createImportClosure`,
+the surface tsconfigs, and the same implicit inputs as the renewal CLI. That
+measurement reported 0 unresolved roots, including roots whose renewal refuses
+before it reads their closure. Direct closure checks of
+`scripts/contractSkew/convexInventory.mjs` and `scripts/pilotRoleAuditEvidence.mjs`
+also reported 0 unresolved each. This confirms their called `require.resolve`
+forms remain accepted. Existing inert controls passed alongside new controls for
+direct literal `require` and unrelated computed keys.
+
+The dedicated detector typecheck includes `.mjs` with `checkJs` and detector
+TypeScript tests; it is not the root application or Convex backend typecheck.
+These are local tooling results, not CI, release, production, or review-seat
+certification. Fetch and shell GitHub access were denied. The coordinator owns
+commits and the subsequent independent reviews.

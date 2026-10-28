@@ -33,6 +33,91 @@ const entry = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+describe("member loader renewal refuses a changed worker (SCRUM-866 round 6)", () => {
+  const git = resolveGit();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-member-loader-"));
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const write = (file: string, source: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), source);
+  };
+  const run = (...args: string[]) =>
+    execFileSync(String(git), ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
+      cwd: dir,
+      encoding: "utf8",
+    }).trim();
+  const forms: Array<[string, string]> = [
+    ["call", 'module.exports = module.require.call(module, "./worker.js");'],
+    ["apply", 'module.exports = module.require.apply(module, ["./worker.js"]);'],
+    ["bind", 'module.exports = module.require.bind(module)("./worker.js");'],
+    ["element_call", 'module.exports = module["require"]["call"](module, "./worker.js");'],
+    ["extracted", 'const load = module.require; module.exports = load("./worker.js");'],
+    ["computed", 'const k = "require"; module.exports = module[k]("./worker.js");'],
+  ];
+  let reviewed = "";
+  let compare: Compare;
+  let closureOf: Closure;
+
+  test("setup: commit each loader, then change only its worker", () => {
+    expect(git, "git must be locatable; cannot-run is a failure, not a skip").toBeTruthy();
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { module: "commonjs", target: "esnext", types: [] } }));
+    write("package.json", '{"name":"member-loader-fixture","type":"commonjs"}');
+    write("app/page.tsx", "export const page = 1;");
+    write("convex/worker.js", "module.exports = { run: 1 };");
+    for (const [name, source] of forms) write(`convex/${name}.ts`, source);
+    run("init", "-q");
+    run("add", "--", "."); // only this isolated temporary repository
+    run("commit", "-q", "-m", "reviewed loaders and worker");
+    reviewed = run("rev-parse", "HEAD");
+    write("convex/worker.js", "module.exports = { run: 2 };");
+    run("add", "--", "convex/worker.js");
+    run("commit", "-q", "-m", "worker changed after review");
+    compare = gitCompare({ git: String(git), cwd: dir, reviewed, head: "HEAD" });
+    closureOf = createImportClosure({
+      root: dir,
+      projects: [{ tsconfig: "tsconfig.json", rootFiles: ["app/page.tsx", ...forms.map(([name]) => `convex/${name}.ts`)] }],
+    });
+    expect(compare("convex/worker.js")).toBe("changed");
+    // Execute the reported reproduction with Node's actual CommonJS loader.
+    const loaded = execFileSync(process.execPath, ["-p", 'JSON.stringify(require("./convex/call.ts"))'], { cwd: dir, encoding: "utf8" });
+    expect(JSON.parse(loaded)).toEqual({ run: 2 });
+  });
+
+  test.each([
+    ["unrelated object's property", "declare const obj: any; export const load = obj.require;", /member named require/],
+    ["passed property", "declare const module: any; declare function take(x: unknown): void; take(module.require);", /member named require/],
+    ["wrapped literal element", 'declare const obj: any; export const load = obj[("require" as string)];', /member named require/],
+    ["template literal element", 'declare const obj: any; export const load = obj[`require`];', /member named require/],
+    ["computed globalThis", "declare const k: string; export const load = (globalThis as any)[k];", /computed member of globalThis/],
+    ["computed require", "declare const require: any; declare const k: string; export const load = require[k];", /computed member of require/],
+    ["computed wrapped module", "declare const module: any; declare const k: string; export const load = (module as any)[(k)];", /computed member of module/],
+  ] as const)("refuses a loader access in any position: %s", (_name, source, reason) => {
+    write("convex/access.ts", source);
+    const closure = createImportClosure({ root: dir, projects: [{ tsconfig: "tsconfig.json", rootFiles: ["convex/access.ts"] }] });
+    expect(closure("convex/access.ts").unresolved).toEqual(expect.arrayContaining([expect.stringMatching(reason)]));
+  });
+
+  test("CONTROL: direct require traces the worker, and inert uses and unrelated computed keys stay accepted", () => {
+    write("convex/direct.ts", 'const worker = require("./worker.js");');
+    write("convex/inert.ts", 'declare const obj: any; declare const k: string; require.resolve("./worker.js"); typeof require; module["exports"]; module[0]; obj[k];');
+    const closure = createImportClosure({ root: dir, projects: [{ tsconfig: "tsconfig.json", rootFiles: ["convex/direct.ts", "convex/inert.ts"] }] });
+    expect(closure("convex/direct.ts")).toEqual({ files: expect.arrayContaining(["convex/worker.js"]), unresolved: [] });
+    expect(closure("convex/inert.ts").unresolved).toEqual([]);
+  });
+
+  test.each(forms)("refuses renewal through %s", (name) => {
+    const file = `convex/${name}.ts`;
+    expect(compare(file)).toBe("identical");
+    const text = serialize([entry({ functionId: `${name}:update` })]);
+    const result = renewBaseline(text, opts(compare, closureOf));
+    expect(result.renewed).toBe(0);
+    expect(result.refused).toHaveLength(1);
+    expect(result.refused[0].reason).toMatch(/cannot resolve .*cannot be traced/);
+    expect(closureOf(file).unresolved.length).toBeGreaterThan(0);
+    expect(result.text).toBe(text);
+  });
+});
+
 const serialize = (entries: unknown[], eol = "\n") => JSON.stringify({ version: 1, entries }, null, 2).replace(/\n/g, eol) + eol;
 const allIdentical: Compare = () => "identical";
 const changedOnly =
@@ -569,9 +654,9 @@ describe("closure ownership is decided by the resolved module, and a function re
     ["wrapped require.call", "declare const require: any;\nexport const f = () => (require as any).call(null, \"convex/server\");", /require used without a call/],
     ["require.resolve as a value", "declare const require: any;\nexport const f = require.resolve;", /require used without a call/],
     ["element access on require", 'declare const require: any;\nexport const f = () => require["call"](null, "convex/server");', /require used without a call/],
-    ["module.require", 'declare const module: any;\nexport const f = () => module.require("convex/server");', /call of a member named require/],
-    ["globalThis.require behind as", 'export const f = () => (globalThis as any).require("convex/server");', /call of a member named require/],
-    ["element access named require", 'declare const x: any;\nexport const f = () => x["require"]("convex/server");', /call of a member named require/],
+    ["module.require", 'declare const module: any;\nexport const f = () => module.require("convex/server");', /member named require/],
+    ["globalThis.require behind as", 'export const f = () => (globalThis as any).require("convex/server");', /member named require/],
+    ["element access named require", 'declare const x: any;\nexport const f = () => x["require"]("convex/server");', /member named require/],
     ["makeFunctionReference with a satisfies name", 'import { makeFunctionReference } from "convex/server"; export const r = makeFunctionReference<"query">("worker:run" satisfies string);', /^$/],
     ["makeFunctionReference with a concatenated name", 'import { makeFunctionReference } from "convex/server"; export const r = makeFunctionReference<"query">("wor" + "ker:run");', /makeFunctionReference with a non-literal name/],
     ["makeFunctionReference with a template substitution", 'import { makeFunctionReference } from "convex/server"; declare const n: string; export const r = makeFunctionReference<"query">(`${n}:run`);', /makeFunctionReference with a non-literal name/],

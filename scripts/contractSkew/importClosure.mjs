@@ -49,8 +49,13 @@
  *       `convex/server`; every use of `require` other than a call, by ALLOWLIST: only a
  *       called `require.resolve(...)` and `typeof require` are inert, so `const r = require`,
  *       `require.call/apply/bind`, `require["call"]` and `require.resolve` as a value
- *       refuse; and any call whose callee is a member named `require`, whatever the
- *       receiver (`module.require(x)`, `(globalThis as any).require(x)`, `o["require"](x)`);
+ *       refuse; every property access named `require` and every element access with a
+ *       plain string key `"require"`, in any position (called, extracted, passed, or
+ *       used via `.call`/`.apply`/`.bind`), whatever the receiver; and every non-literal
+ *       element key on `module`, `require` or `globalThis`. Receivers and keys are
+ *       unwrapped first; string, numeric, bigint, regexp and no-substitution template
+ *       literals are literal keys. A direct literal `require("x")` is still traced,
+ *       and called `require.resolve(...)` and `typeof require` remain accepted;
  *     Wrappers are looked through before every decision above (parentheses, `as`,
  *     `satisfies`, `<T>x`, `x!`, `f<T>`, partially emitted expressions): load specifiers,
  *     makeFunctionReference names and callees, `api`/`internal` chain links and keys,
@@ -58,11 +63,8 @@
  *     public typescript.d.ts, so the public predicates are used instead.
  *     A namespace import of `convex/server` whose only use is
  *     `ns.makeFunctionReference("mod:fn")` IS traced like the named import.
- *   At the revision this was written no shipped file does any of the refused forms
- *   (checked by ripgrep over the whole working tree, which skips ignored paths such as
- *   node_modules, excluding `*.test.*` and `*.spec.*`; test files do use
- *   `await import("convex/server")` for `getFunctionName`, and no baseline closure
- *   reaches them), so today these only fire on a future change, which is the point.
+ *   The real-tree dry run at this revision reports 1012 refused entries and 0
+ *   unresolved baseline closures. This measures those closures, not every repo file.
  *   3. Inputs that decide HOW the first two resolve and type: the tsconfig each
  *      program was built from and its relative `extends` chain, that directory's
  *      package.json, and the `implicitInputs` the caller names (package.json,
@@ -82,10 +84,10 @@
  *   - dependency behaviour inside `node_modules` (only the lockfile and package.json
  *     pin it; a changed version with an unchanged lockfile entry cannot exist, but
  *     what the code of that version does is not reviewed here);
- *   - code that loads by other means: `eval`, `new Function`, a loader obtained under
- *     another name (`const load = createRequire(url); load(x)`: only the names
- *     `require` and `import` are read), and type-only `import("x")` type nodes.
- *     (`require.context` and `module.require` are NOT in this list: they refuse.);
+ *   - code that loads by other means: `eval`, `new Function`, `createRequire` under
+ *     another name (`const load = createRequire(url); load(x)`), and type-only
+ *     `import("x")` type nodes. `require.context` and member accesses named `require`
+ *     refuse under the rules above; the scan does not track arbitrary loader aliases;
  *   - handler-only behaviour not reached by an edge: a database trigger, an
  *     `internal` function reached through a string built at run time, an HTTP route,
  *     a cron table or a scheduled job that runs code this file never names;
@@ -303,6 +305,26 @@ function scan(source, ownerOf) {
     return ts.isIdentifier(receiver) && serverNamespaces.has(receiver.text) ? node : undefined;
   };
 
+  // Scan every member access independently: reference-chain handling below can stop traversal at an outer node.
+  // Node's module.require is itself a loader, even when extracted or used via call/apply/bind:
+  // https://nodejs.org/api/modules.html#modulerequireid
+  /** @param {import("typescript").Node} node */
+  const visitLoaderAccess = (node) => {
+    if (ts.isPropertyAccessExpression(node) && node.name.text === "require") {
+      opaque.push("member named require cannot be traced");
+    } else if (ts.isElementAccessExpression(node)) {
+      const key = unwrap(node.argumentExpression);
+      const receiver = unwrap(node.expression);
+      if (plainText(node.argumentExpression) === "require") {
+        opaque.push("member named require cannot be traced");
+      } else if (!ts.isLiteralExpression(key) && ts.isIdentifier(receiver) && ["module", "require", "globalThis"].includes(receiver.text)) {
+        opaque.push(`computed member of ${receiver.text} cannot be traced`);
+      }
+    }
+    ts.forEachChild(node, visitLoaderAccess);
+  };
+  visitLoaderAccess(source);
+
   /** @param {import("typescript").Node} node */
   const visit = (node) => {
     const specifier = specifierOf(node);
@@ -318,9 +340,6 @@ function scan(source, ownerOf) {
       // convex/_generated/api or convex/server.
       const callee = unwrap(node.expression);
       const kind = callee.kind === ts.SyntaxKind.ImportKeyword ? "import" : ts.isIdentifier(callee) && callee.text === "require" ? "require" : undefined;
-      // `module.require(x)`, `(globalThis as any).require(x)`, `x["require"](x)`: a require reached through an object.
-      const member = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isElementAccessExpression(callee) ? plainText(callee.argumentExpression) : undefined;
-      if (member === "require") opaque.push("call of a member named require cannot be traced");
       if (kind !== undefined) {
         const target = node.arguments.length >= 1 ? plainText(node.arguments[0]) : undefined;
         if (target === undefined) {
