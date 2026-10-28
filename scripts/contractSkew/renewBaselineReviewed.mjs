@@ -179,6 +179,39 @@ export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
   return { text: serializeBaseline(document, text), renewed, skipped, refused };
 }
 
+/**
+ * A human renewal must name each changed file in the two current closures.
+ * This checks evidence coverage, not whether the prose's interpretation is true.
+ * @param {string} text
+ * @param {{ compare: (file: string) => "identical" | "changed" | "missing", closureOf: (file: string) => { files: string[], unresolved: string[] }, evidenceChanged: (sha: string, file: string) => "identical" | "changed" | "missing" }} options
+ * @returns {Array<{ index: number, entry: string, missing: string[], changedSinceEvidence: string[], unresolved: string[] }>}
+ */
+export function renewalEvidenceGaps(text, { compare, closureOf, evidenceChanged }) {
+  if (typeof evidenceChanged !== "function") throw new Error("evidenceChanged is required: a renewal review SHA must be compared with HEAD");
+  const document = parseCanonicalBaseline(text);
+  if (!document || !Array.isArray(document.entries)) throw new Error("the baseline has no entries array");
+  return document.entries.flatMap((entry, index) => {
+    if (typeof entry.renewal !== "string") return [];
+    const backend = backendModuleOf(entry.functionId);
+    if (!backend || typeof entry.file !== "string") {
+      return [{ index, entry: label(entry), missing: ["(invalid client or backend root)"], changedSinceEvidence: [], unresolved: [] }];
+    }
+    const reviewHeads = [...entry.renewal.matchAll(/SCRUM-866 round \d+ review against origin\/main ([0-9a-f]{8,40})/g)];
+    const reviewHead = reviewHeads.at(-1)?.[1];
+    if (!reviewHead) return [{ index, entry: label(entry), missing: ["(no reviewed source SHA in renewal)"], changedSinceEvidence: [], unresolved: [] }];
+    const clientClosure = closureOf(entry.file);
+    const backendClosure = closureOf(backend);
+    const unresolved = [...new Set([...clientClosure.unresolved, ...backendClosure.unresolved])];
+    const files = [...new Set([...clientClosure.files, ...backendClosure.files])];
+    const changed = files.filter((file) => compare(file) !== "identical");
+    const changedSinceEvidence = files.filter((file) => evidenceChanged(reviewHead, file) !== "identical");
+    const named = new Set(rationalePaths(entry.renewal));
+    const missing = changed.filter((file) => !named.has(file));
+    return missing.length || changedSinceEvidence.length || unresolved.length
+      ? [{ index, entry: label(entry), missing, changedSinceEvidence, unresolved }] : [];
+  });
+}
+
 function main(argv) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   // node:util parseArgs is strict by default: an unknown option, a positional, or an option missing its value throws.
@@ -189,12 +222,14 @@ function main(argv) {
       baseline: { type: "string" },
       expires: { type: "string" },
       renewal: { type: "string" },
+      "check-evidence": { type: "boolean" },
       write: { type: "boolean" },
     },
   });
   if (!args.reviewed) throw new Error("--reviewed <rev> is required");
-  if (!args.expires) throw new Error("--expires <YYYY-MM-DD> is required: the new expiry is a decision, never defaulted");
-  if (!args.renewal) throw new Error('--renewal "<reason>" is required: a renewal records why, it is never defaulted');
+  if (!args["check-evidence"] && !args.expires) throw new Error("--expires <YYYY-MM-DD> is required: the new expiry is a decision, never defaulted");
+  if (!args["check-evidence"] && !args.renewal) throw new Error('--renewal "<reason>" is required: a renewal records why, it is never defaulted');
+  if (args["check-evidence"] && (args.write || args.expires || args.renewal)) throw new Error("--check-evidence is read-only and takes only --reviewed and --baseline");
   const git = resolveGit();
   if (!git) throw new Error("git could not be located (set CONTRACT_SKEW_GIT to an absolute path)");
   const baseline = path.resolve(args.baseline ?? path.join(root, DEFAULT_BASELINE));
@@ -223,11 +258,36 @@ function main(argv) {
     return closure;
   };
 
+  const compare = gitCompare({ git, cwd: root, reviewed, head: headSha });
+  if (args["check-evidence"]) {
+    /** @type {Map<string, ReturnType<typeof gitCompare>>} */
+    const evidenceComparisons = new Map();
+    /** @param {string} sha @param {string} file */
+    const evidenceChanged = (sha, file) => {
+      let comparison = evidenceComparisons.get(sha);
+      if (!comparison) {
+        const evidenceHead = resolveCommit(git, sha, root);
+        runGitText(git, ["merge-base", "--is-ancestor", evidenceHead, headSha], { cwd: root });
+        comparison = gitCompare({ git, cwd: root, reviewed: evidenceHead, head: headSha });
+        evidenceComparisons.set(sha, comparison);
+      }
+      return comparison(file);
+    };
+    const gaps = renewalEvidenceGaps(baselineText, { compare, closureOf, evidenceChanged });
+    const renewedEntries = entries.filter((entry) => typeof entry.renewal === "string").length;
+    if (renewedEntries === 0) throw new Error("baseline has no renewed entries to check");
+    console.log(`renewal evidence: ${renewedEntries} renewed entries checked, ${entries.length - renewedEntries} unrenewed, ${gaps.length} stale`);
+    for (const gap of gaps.slice(0, 20)) console.log(`STALE entry #${gap.index + 1} ${gap.entry}: unnamed ${gap.missing.join(", ")}; changed after review ${gap.changedSinceEvidence.join(", ")}; unresolved ${gap.unresolved.join(", ")}`);
+    if (gaps.length > 20) console.log(`... ${gaps.length - 20} more stale entries`);
+    if (gaps.length) process.exitCode = 10;
+    return;
+  }
+
   const result = renewBaseline(baselineText, {
-    compare: gitCompare({ git, cwd: root, reviewed, head: headSha }),
+    compare,
     closureOf,
-    expires: args.expires,
-    renewal: args.renewal,
+    expires: String(args.expires),
+    renewal: String(args.renewal),
   });
   console.log(`reviewed ${reviewed}\nhead     ${headSha}`);
   console.log(`renewed ${result.renewed}, already current ${result.skipped}, refused ${result.refused.length}`);

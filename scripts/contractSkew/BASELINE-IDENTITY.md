@@ -108,7 +108,12 @@ called `require.resolve(...)` and `typeof require` are inert, so `const r = requ
 property access named `require` and every element access with a plain string key
 `"require"`, whatever the receiver and in any position (called, extracted, passed,
 or used via `.call`, `.apply` or `.bind`); and every non-literal element key on
-`module`, `require` or `globalThis`. Receivers and keys are unwrapped first.
+`module`, `require` or `globalThis`; and any reference to a free identifier
+`module`, `global`, `globalThis` or `Reflect`, except the exact CommonJS export
+access `module.exports` and the shipped Web Crypto access `globalThis.crypto`.
+This catches destructuring, `Reflect.get`, constructor
+loads and simple aliases without a new rule for each loader syntax. A locally
+bound identifier does not trigger the latter rule. Receivers and keys are unwrapped first.
 String, numeric, bigint, regexp and no-substitution template literals are literal
 keys. The rule deliberately refuses an unrelated object's `.require` too.
 Direct literal `require("...")` calls remain traced. Called `require.resolve(...)`
@@ -124,7 +129,8 @@ unresolved closures. This measures the baseline closures, not every repo file.
 Still outside the closure and not detected: ambient declarations (`declare global`, a
 `.d.ts` nobody imports); `eval`; `new Function`; `createRequire` under another
 name such as `const load = createRequire(url); load(x)`; and type-only `import("x")`
-types. The scan does not track arbitrary loader aliases. Other limits are what a
+types. The scan does not track arbitrary loader aliases originating without those
+free identifiers. Other limits are what a
 dependency's code does inside `node_modules` (the lockfile and package.json pin the
 version, nothing reviews its behaviour);
 handler-only behaviour that no edge reaches (a trigger, an HTTP route, a cron table, a
@@ -286,3 +292,45 @@ TypeScript tests; it is not the root application or Convex backend typecheck.
 These are local tooling results, not CI, release, production, or review-seat
 certification. Fetch and shell GitHub access were denied. The coordinator owns
 commits and the subsequent independent reviews.
+
+## Round 7 renewal evidence after #697
+
+The `--check-evidence` mode of `renewBaselineReviewed.mjs` is read-only. For each
+entry with a `renewal` string, it derives the current client and backend closures,
+compares each member's Git blob to the reviewed revision, and requires the
+renewal text to name every changed or missing member by its complete repository
+path. It also reads the latest `SCRUM-866 round N review against origin/main <sha>`
+marker in each renewal and refuses when any closure member changed again after
+that SHA, including a member already named in the prose. A missing marker, a
+non-ancestor review SHA or an unresolved closure fails. The existing Tests workflow runs:
+
+```sh
+node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence
+```
+
+This catches new closure files and edits to already named files after a merge to
+main without changing an expiry or a contract field. The check cannot judge whether the prose's description of a
+diff is true, whether the original UNKNOWN finding has become proven, or whether
+an untraced runtime dependency changed. The reviewed revision is fixed in the CI
+invocation to the original `c82890bd` evidence base; passing a later revision by
+hand would ask a different, weaker question.
+
+At round 7, #697 (`549267ae`) added supplier-concession handling, sale-row
+projection and schema fields. The renewal text of each entry was extended with
+the #697 files in its current closure and a short description of each diff.
+The three `vehicles:update` entries for `sourceType`, `sourcedFromName` and
+`sourceCost` explicitly state that the backend now refuses a real supplier-term
+change while an open deal holds a concession. The earlier schema description is
+scoped to `ffe284917`; #697 extended existing tables after that revision.
+The three sourcing `markPaid` entries also now name the full
+`app/(dashboard)/[orgId]/sourcing/client.tsx` path. Their prior short-path
+mention was readable to a person but insufficient for an exact-path check.
+
+The loader scan refuses free `module`, `global`, `globalThis` and `Reflect`
+identifier references at the source AST level. It allows only `module.exports`
+for CommonJS exports and `globalThis.crypto` for shipped Web Crypto usage; direct
+literal `require`, called `require.resolve` and `typeof require` retain their
+existing treatment. Node documents `module.exports` and `module.require` in its
+[CommonJS module API](https://nodejs.org/api/modules.html); TypeScript documents
+the CommonJS export syntax in its [module handbook](https://www.typescriptlang.org/docs/handbook/2/modules.html).
+Locally declared names are checked in their enclosing lexical scopes.

@@ -10,6 +10,7 @@ import {
   gitCompare,
   rationalePaths,
   renewBaseline,
+  renewalEvidenceGaps,
 } from "./renewBaselineReviewed.mjs";
 
 type Compare = (file: string) => "identical" | "changed" | "missing";
@@ -53,6 +54,13 @@ describe("member loader renewal refuses a changed worker (SCRUM-866 round 6)", (
     ["element_call", 'module.exports = module["require"]["call"](module, "./worker.js");'],
     ["extracted", 'const load = module.require; module.exports = load("./worker.js");'],
     ["computed", 'const k = "require"; module.exports = module[k]("./worker.js");'],
+    ["destructured_computed_literal", 'const { ["require"]: load } = module; module.exports = load("./worker.js");'],
+    ["destructured_computed_key", 'const k = "require"; const { [k]: load } = module; module.exports = load("./worker.js");'],
+    ["destructured_string", 'const { "require": load } = module; module.exports = load("./worker.js");'],
+    ["reflect", 'module.exports = Reflect.get(module, "require")("./worker.js");'],
+    ["constructor", 'module.exports = module.constructor._load("./worker.js");'],
+    ["aliased_module", 'const k = "require"; const m = module; module.exports = m[k]("./worker.js");'],
+    ["global_key", 'const k = "require"; global[k]("./worker.js");'],
   ];
   let reviewed = "";
   let compare: Compare;
@@ -99,10 +107,16 @@ describe("member loader renewal refuses a changed worker (SCRUM-866 round 6)", (
 
   test("CONTROL: direct require traces the worker, and inert uses and unrelated computed keys stay accepted", () => {
     write("convex/direct.ts", 'const worker = require("./worker.js");');
-    write("convex/inert.ts", 'declare const obj: any; declare const k: string; require.resolve("./worker.js"); typeof require; module["exports"]; module[0]; obj[k];');
+    write("convex/inert.ts", 'declare const obj: any; declare const k: string; require.resolve("./worker.js"); typeof require; module.exports = {}; globalThis.crypto.randomUUID(); obj[k];');
     const closure = createImportClosure({ root: dir, projects: [{ tsconfig: "tsconfig.json", rootFiles: ["convex/direct.ts", "convex/inert.ts"] }] });
     expect(closure("convex/direct.ts")).toEqual({ files: expect.arrayContaining(["convex/worker.js"]), unresolved: [] });
     expect(closure("convex/inert.ts").unresolved).toEqual([]);
+  });
+
+  test("CONTROL: locally bound names and CommonJS module.exports remain accepted", () => {
+    write("convex/local.ts", 'const module = { value: 1 }; const global = { value: 2 }; const Reflect = { value: 3 }; export const n = module.value + global.value + Reflect.value;');
+    const closure = createImportClosure({ root: dir, projects: [{ tsconfig: "tsconfig.json", rootFiles: ["convex/local.ts"] }] });
+    expect(closure("convex/local.ts").unresolved).toEqual([]);
   });
 
   test.each(forms)("refuses renewal through %s", (name) => {
@@ -149,6 +163,26 @@ describe("backendModuleOf / rationalePaths", () => {
 });
 
 describe("renewBaseline", () => {
+  test("renewal evidence names every changed closure file by full path", () => {
+    const e = entry({ renewal: "SCRUM-866 round 7 review against origin/main 549267ae: Reviewed convex/a.ts; a same-basename elsewhere is not evidence." });
+    const closure: Closure = (file) => ({ files: [file, "convex/a.ts", "lib/a.ts"], unresolved: [] });
+    const stale = renewalEvidenceGaps(serialize([e]), { compare: changedOnly("convex/a.ts", "lib/a.ts"), closureOf: closure, evidenceChanged: () => "identical" });
+    expect(stale).toHaveLength(1);
+    expect(stale[0].missing).toEqual(["lib/a.ts"]);
+    expect(renewalEvidenceGaps(serialize([{ ...e, renewal: "SCRUM-866 round 7 review against origin/main 549267ae: Reviewed convex/a.ts and lib/a.ts." }]), {
+      compare: changedOnly("convex/a.ts", "lib/a.ts"), closureOf: closure, evidenceChanged: () => "identical",
+    })).toEqual([]);
+  });
+  test("a file changed again after the named review SHA is stale even when its path is present", () => {
+    const e = entry({ renewal: "SCRUM-866 round 7 review against origin/main 549267ae: convex/a.ts was reviewed." });
+    const gaps = renewalEvidenceGaps(serialize([e]), {
+      compare: changedOnly("convex/a.ts"),
+      closureOf: (file) => ({ files: [file, "convex/a.ts"], unresolved: [] }),
+      evidenceChanged: (_sha, file) => file === "convex/a.ts" ? "changed" : "identical",
+    });
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].changedSinceEvidence).toEqual(["convex/a.ts"]);
+  });
   test("renews an entry whose client file and backend module are unchanged", () => {
     const e = entry();
     const result = renewBaseline(serialize([e]), opts(allIdentical));
@@ -670,7 +704,7 @@ describe("closure ownership is decided by the resolved module, and a function re
     const file = `convex/wrap_${name.replace(/\W+/g, "_")}.ts`;
     write(file, source);
     const closure = closureOfFile(file);
-    expect(closure.unresolved).toEqual([expect.stringMatching(pattern)]);
+    expect(closure.unresolved).toEqual(expect.arrayContaining([expect.stringMatching(pattern)]));
   });
   test.each(wrapped.filter(([, , pattern]) => pattern.source === "^$"))("a wrapped but literal reference is still traced to convex/worker.ts: %s", (name, source) => {
     const file = `convex/wrapT_${name.replace(/\W+/g, "_")}.ts`;

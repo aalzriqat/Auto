@@ -28,8 +28,8 @@
  *      the module TypeScript resolves the specifier to (so `./_generated/api.js`, a
  *      path alias and a re-targeted tsconfig are seen), with the specifier text as a
  *      fallback that can only add ownership.
- *   Every form below is NOT traced and is reported in `unresolved`, which REFUSES
- *   mechanical renewal (none passes silently). This is the complete list:
+ *   The forms below are NOT traced and are reported in `unresolved`, which REFUSES
+ *   mechanical renewal:
  *     - `api`/`internal` used other than as a static chain: bare (`const a = internal`),
  *       destructured, a dynamic key (`api[k]`), a chain that stops at a module
  *       (`internal.worker`) or names no function;
@@ -52,10 +52,15 @@
  *       refuse; every property access named `require` and every element access with a
  *       plain string key `"require"`, in any position (called, extracted, passed, or
  *       used via `.call`/`.apply`/`.bind`), whatever the receiver; and every non-literal
- *       element key on `module`, `require` or `globalThis`. Receivers and keys are
- *       unwrapped first; string, numeric, bigint, regexp and no-substitution template
- *       literals are literal keys. A direct literal `require("x")` is still traced,
- *       and called `require.resolve(...)` and `typeof require` remain accepted;
+ *       element key on `module`, `require` or `globalThis`; any reference to a free
+ *       `module`, `global`, `globalThis` or `Reflect` identifier, except the exact
+ *       CommonJS export access `module.exports` and the shipped Web Crypto
+ *       access `globalThis.crypto`. This also refuses destructured,
+ *       reflected, constructor and aliased loader acquisition without tracking the alias.
+ *       Receivers and keys are unwrapped first; string, numeric, bigint, regexp and
+ *       no-substitution template literals are literal keys. A direct literal
+ *       `require("x")` is still traced, and called `require.resolve(...)` and
+ *       `typeof require` remain accepted;
  *     Wrappers are looked through before every decision above (parentheses, `as`,
  *     `satisfies`, `<T>x`, `x!`, `f<T>`, partially emitted expressions): load specifiers,
  *     makeFunctionReference names and callees, `api`/`internal` chain links and keys,
@@ -286,6 +291,52 @@ function scan(source, ownerOf) {
     return ts.isPropertyAccessExpression(parent) && parent.expression === outer && parent.name.text === "resolve" && isCallee(parent);
   };
 
+  // A lexical declaration in this file can shadow a runtime global. Check the
+  // enclosing scopes, rather than matching source text, so local `module` data
+  // does not become a loader claim. Ambient Node globals have no local binding.
+  /** @param {import("typescript").BindingName} name @param {string} wanted */
+  const binds = (name, wanted) => ts.isIdentifier(name)
+    ? name.text === wanted
+    : name.elements.some((part) => ts.isBindingElement(part) && binds(part.name, wanted));
+  /** @param {import("typescript").Node} scope @param {string} wanted */
+  const declares = (scope, wanted) => {
+    if (ts.isFunctionLike(scope) && scope.parameters.some((param) => binds(param.name, wanted))) return true;
+    if (ts.isCatchClause(scope) && scope.variableDeclaration && binds(scope.variableDeclaration.name, wanted)) return true;
+    const statements = ts.isSourceFile(scope) || ts.isBlock(scope) || ts.isModuleBlock(scope)
+      ? scope.statements : undefined;
+    if (!statements) return false;
+    for (const statement of statements) {
+      if (ts.isVariableStatement(statement) && statement.declarationList.declarations.some((decl) => binds(decl.name, wanted))) return true;
+      if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isImportEqualsDeclaration(statement)) && statement.name?.text === wanted) return true;
+      if (ts.isImportDeclaration(statement) && statement.importClause) {
+        const clause = statement.importClause;
+        if (clause.name?.text === wanted) return true;
+        if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings) && clause.namedBindings.name.text === wanted) return true;
+        if (clause.namedBindings && ts.isNamedImports(clause.namedBindings) && clause.namedBindings.elements.some((element) => element.name.text === wanted)) return true;
+      }
+    }
+    return false;
+  };
+  /** @param {import("typescript").Identifier} node */
+  const isLocallyBound = (node) => {
+    for (let scope = node.parent; scope; scope = scope.parent) {
+      if (declares(scope, node.text)) return true;
+    }
+    return false;
+  };
+  /** @param {import("typescript").Identifier} node */
+  const isModuleExports = (node) => {
+    const outer = outermost(node);
+    const parent = outer.parent;
+    return parent !== undefined && ts.isPropertyAccessExpression(parent) && parent.expression === outer && parent.name.text === "exports";
+  };
+  /** The shipped client uses Web Crypto through this exact built-in property. @param {import("typescript").Identifier} node */
+  const isGlobalCrypto = (node) => {
+    const outer = outermost(node);
+    const parent = outer.parent;
+    return parent !== undefined && ts.isPropertyAccessExpression(parent) && parent.expression === outer && parent.name.text === "crypto";
+  };
+
   /** The call `makeFunctionReference(...)` or `ns.makeFunctionReference(...)`, wrappers skipped. @param {import("typescript").Expression} expression */
   const isMakerCallee = (expression) => {
     const callee = unwrap(expression);
@@ -393,6 +444,11 @@ function scan(source, ownerOf) {
       // An ALLOWLIST: only a called `require.resolve(...)` and `typeof require` are inert. Every other use
       // (`require.call/apply/bind`, `require["x"]`, `require.resolve` as a value, an alias) can reach a load.
       if (node.text === "require" && !isCallee(node) && !isInertRequire(node)) opaque.push("require used without a call cannot be traced");
+      if (["module", "global", "globalThis", "Reflect"].includes(node.text) && !isLocallyBound(node) &&
+        !(node.text === "module" && isModuleExports(node)) &&
+        !(node.text === "globalThis" && isGlobalCrypto(node))) {
+        opaque.push(`free ${node.text} reference cannot be traced`);
+      }
     }
     ts.forEachChild(node, visit);
   };
