@@ -94,6 +94,36 @@ async function queuedRow(t: T, orgId: Id<"organizations">, key: string) {
 }
 
 describe("SCRUM-782 queued consigned supplier VAT", () => {
+  test("cron ticks with only valid period holds schedule no work or parked-range scans", async () => {
+    const t = newTest();
+    const { orgId, userId } = await seedOrg(t);
+    const owned = await legacyPayment(t, orgId, userId);
+    const zeroVat = await legacyPayment(t, orgId, userId);
+    zeroVat.cmd.payload.taxMinor = 0;
+    await t.run(async (ctx) => {
+      await ctx.db.patch(owned.payableId, { saleId: undefined });
+      await ctx.db.patch(owned.vehicleId, { sourceType: "STOCK" });
+      await ctx.db.patch(zeroVat.payableId, { taxAmount: 0 });
+      for (const payment of [owned, zeroVat]) {
+        await ctx.db.insert("pendingAccountingEvents", {
+          ...payment.cmd, kind: "POST", status: "PENDING", attempts: 0,
+          createdAt: Date.now(), dispatchState: "PERIOD_HELD", holdKind: "PERIOD",
+        });
+      }
+    });
+    const before = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    await withFrozenScheduler(async () => {
+      for (let tick = 0; tick < 3; tick += 1) {
+        expect(await t.mutation(internal.accountingOutbox.dispatchDueOutboxWork, {}))
+          .toEqual({ dispatched: 0, observed: 0 });
+        await t.finishAllScheduledFunctions(vi.runAllTimers);
+      }
+    });
+    // SCRUM-807 measures persisted scheduler work, including scans that never
+    // claim a row. Checking only claim generations missed the round-2 defect.
+    expect(await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect())).toEqual(before);
+  });
+
   test("legacy queued consigned VAT dead-letters visibly without a VAT or COGS journal", async () => {
     const t = newTest();
     const { orgId, userId, as } = await seedOrg(t);
@@ -169,7 +199,7 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
     expect((await footprint(t, orgId)).lines).toEqual([]);
   });
 
-  test.each(["drain", "cron"] as const)("already period-held consigned VAT reaches quarantine through automatic %s", async (door) => {
+  test.each(["drain", "migration"] as const)("already period-held consigned VAT reaches quarantine through %s", async (door) => {
     const t = newTest();
     const { orgId, userId, periodId } = await seedOrg(t);
     const bad = await legacyPayment(t, orgId, userId);
@@ -198,7 +228,8 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
 
     await withFrozenScheduler(async () => {
       if (door === "drain") await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
-      else await t.mutation(internal.accountingOutbox.dispatchDueOutboxWork, {});
+      else expect(await t.mutation(internal.accountingOutbox.recoverPeriodHeldSupplierVat, {}))
+        .toEqual({ status: "READY", reclassified: 1 });
       await t.finishAllScheduledFunctions(vi.runAllTimers);
     });
 
@@ -210,9 +241,19 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
     expect(await footprint(t, orgId)).toEqual(before);
     expect(await t.run((ctx) => ctx.db.get(bad.payableId))).toEqual(payableBefore);
     expect(await Promise.all([zeroVat, owned].map((p) => queuedRow(t, orgId, p.cmd.idempotencyKey)))).toEqual(controlsBefore);
+    if (door === "migration") {
+      const checkpoint = await t.run((ctx) => ctx.db.query("supplierVatHoldMigration").unique());
+      expect(checkpoint?.completedAt).toEqual(expect.any(Number));
+      const jobsBefore = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+      expect(await t.mutation(internal.accountingOutbox.recoverPeriodHeldSupplierVat, {}))
+        .toEqual({ status: "READY", reclassified: 0 });
+      expect(await t.run((ctx) => ctx.db.query("supplierVatHoldMigration").unique())).toEqual(checkpoint);
+      expect(await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect())).toEqual(jobsBefore);
+      expect(await footprint(t, orgId)).toEqual(before);
+    }
   });
 
-  test("cron recovery reaches consigned VAT beyond the first page of valid period holds", async () => {
+  test("rollout migration resumes beyond the first page of valid period holds", async () => {
     const t = newTest();
     const { orgId, userId, periodId } = await seedOrg(t);
     const valid = await legacyPayment(t, orgId, userId);
@@ -233,8 +274,15 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
       await ctx.db.patch(row._id, { dispatchState: "PERIOD_HELD", holdKind: "PERIOD" });
     });
     const before = await footprint(t, orgId);
+    expect(await t.mutation(internal.accountingOutbox.recoverPeriodHeldSupplierVat, {}))
+      .toEqual({ status: "MORE", reclassified: 0 });
+    const checkpoint = await t.run((ctx) => ctx.db.query("supplierVatHoldMigration").unique());
+    expect(checkpoint?.cursor).toEqual(expect.any(String));
+    expect(checkpoint?.completedAt).toBeUndefined();
+    expect((await queuedRow(t, orgId, bad.cmd.idempotencyKey))?.dispatchState).toBe("PERIOD_HELD");
     await withFrozenScheduler(async () => {
-      await t.mutation(internal.accountingOutbox.dispatchDueOutboxWork, {});
+      expect(await t.mutation(internal.accountingOutbox.recoverPeriodHeldSupplierVat, {}))
+        .toEqual({ status: "READY", reclassified: 1 });
       await t.finishAllScheduledFunctions(vi.runAllTimers);
     });
     expect(await queuedRow(t, orgId, bad.cmd.idempotencyKey)).toMatchObject({ attempts: 1 });
@@ -285,7 +333,10 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
   test("historical taxed settlement exact replay through direct returns the posted occurrence", () => historicalTaxedReplay("direct"));
   test("historical taxed settlement exact replay through outbox returns the posted occurrence", () => historicalTaxedReplay("outbox"));
 
-  test.each(["economics", "source", "key", "reserved key"] as const)("historical taxed settlement refuses a replay collision in %s", async (collision) => {
+  async function historicalReplayCollision(
+    door: "direct" | "outbox",
+    collision: "economics" | "source" | "key" | "reserved key",
+  ): Promise<void> {
     const t = newTest();
     const { orgId, userId } = await seedOrg(t);
     const { payableId, vehicleId, cmd } = await legacyPayment(t, orgId, userId);
@@ -305,9 +356,25 @@ describe("SCRUM-782 queued consigned supplier VAT", () => {
       await t.run((ctx) => ctx.db.patch(eventId, { idempotencyKey: cmd.idempotencyKey }));
     }
     const before = await footprint(t, orgId);
-    await expect(t.run((ctx) => postAccountingEvent(ctx, cmd))).rejects.toThrow(/SCRUM-249|reserved/i);
+    if (door === "direct") {
+      await expect(t.run((ctx) => postAccountingEvent(ctx, cmd))).rejects.toThrow(/SCRUM-249|reserved/i);
+    } else {
+      await t.run((ctx) => enqueuePendingPost(ctx, cmd, "Legacy non-exact replay"));
+      await settleOutbox(t, orgId);
+      expect(await queuedRow(t, orgId, cmd.idempotencyKey)).toMatchObject({
+        attempts: 1, lastError: expect.stringMatching(/^SUPPLIER_REPLAY_REFUSED:/),
+      });
+    }
     expect(await footprint(t, orgId)).toEqual(before);
-  });
+  }
+
+  // The library requires a literal test registration for its executable binding.
+  test("historical taxed settlement through outbox refuses a replay collision in economics", () =>
+    historicalReplayCollision("outbox", "economics"));
+  test.each([
+    ["direct", "economics"], ["direct", "source"], ["direct", "key"], ["direct", "reserved key"],
+    ["outbox", "source"], ["outbox", "key"], ["outbox", "reserved key"],
+  ] as const)("historical taxed settlement through %s refuses a replay collision in %s", historicalReplayCollision);
 
   test("valid zero-VAT consigned payment posts gross beside a quarantined predecessor and does not duplicate", async () => {
     const t = newTest();

@@ -1336,8 +1336,9 @@ const OUTBOX_HOLD_DELAY_MS = 60_000;
  * table and a recovery cron would only duplicate the platform. What remains is a
  * developer error or a manually cancelled schedule: `redrive` re-wakes the org.
  * SCRUM-782 additionally reclassifies legacy invalid supplier VAT holds through
- * the cron and eager drains. Valid period holds stay parked. Other holds
- * (dependencies, org lifecycle) have no wake route and keep the flat delay.
+ * a one-time rollout migration and eager drains. Valid period holds stay
+ * parked. Other holds (dependencies, org lifecycle) have no wake route and
+ * keep the flat delay.
  */
 
 /**
@@ -1541,11 +1542,6 @@ export const dispatchDueOutboxWork = internalMutation({
     const limit = Math.min(args.limit ?? 50, 200);
 
     const { unclaimed, awaitingObservation } = await selectDueOutboxRows(ctx, now, limit);
-
-    // SCRUM-782: rows parked before the VAT refusal are absent from both due
-    // ranges. Recover them in separate bounded transactions, even when no org
-    // opens a period or requests a drain again.
-    await ctx.scheduler.runAfter(0, internal.accountingOutbox.recoverPeriodHeldSupplierVat, {});
 
     // ⚠️ SCHEDULED, NOT CALLED — every one of them. Calling inline would put
     // each row's work back inside THIS transaction, which is the defect with
@@ -1812,7 +1808,16 @@ export const postOutboxRow = internalMutation({
       // period eligibility. Shared proof retains receipt authority and collision
       // checks; marking the queue complete creates no new financial records.
       if (row.eventType === "SUPPLIER_PAYMENT_SETTLED") {
-        const replay = await findPostedAccountingEvent(ctx, pendingPostCommand(row));
+        let replay: Awaited<ReturnType<typeof findPostedAccountingEvent>>;
+        try {
+          // Read-only proof ONLY. Catching a financial writer here would commit
+          // its partial writes; postPendingEntry below deliberately still throws.
+          replay = await findPostedAccountingEvent(ctx, pendingPostCommand(row));
+        } catch (error) {
+          console.error("[outbox] supplier replay proof refused", { rowId: row._id, error });
+          return await failOutboxRow(ctx, row,
+            "SUPPLIER_REPLAY_REFUSED: The queued settlement could not be verified against its recorded occurrence. Operator review is required before retrying.");
+        }
         if (replay) {
           await markEntryPosted(ctx, row, replay.eventId);
           return { outcome: "POSTED" as const };
@@ -2047,21 +2052,37 @@ export async function drainEntries(
   return { scheduled, alreadyInFlight, periodHeld };
 }
 
-/** Reclassify legacy period holds without reopening valid holds or writing GL. */
+/**
+ * One-time SCRUM-782 rollout migration, following bankBalanceBackfill.runPage:
+ * persist the cursor with each batch, return MORE/READY, and let rolloutRelease
+ * call the next page. No recurring scan or background migration chain.
+ * https://stack.convex.dev/migrating-data-with-mutations
+ * New invalid VAT rows are refused BEFORE holdOutboxRow, so this population is
+ * closed. Completion is deployment-wide and survives organization resets.
+ */
 export const recoverPeriodHeldSupplierVat = internalMutation({
-  args: { cursor: v.optional(v.string()) },
-  returns: v.null(),
-  handler: async (ctx, args): Promise<null> => {
+  args: {},
+  returns: v.object({ status: v.union(v.literal("MORE"), v.literal("READY")), reclassified: v.number() }),
+  handler: async (ctx): Promise<{ status: "MORE" | "READY"; reclassified: number }> => {
+    const state = await ctx.db.query("supplierVatHoldMigration").unique();
+    if (state?.completedAt !== undefined) return { status: "READY", reclassified: 0 };
     const page = await ctx.db.query("pendingAccountingEvents")
       .withIndex("by_dispatch_next_action", (q) => q.eq("status", "PENDING").eq("dispatchState", "PERIOD_HELD"))
-      .paginate({ cursor: args.cursor ?? null, numItems: 100 });
-    await drainEntries(ctx, page.page);
-    if (!page.isDone) {
-      await ctx.scheduler.runAfter(0, internal.accountingOutbox.recoverPeriodHeldSupplierVat, {
-        cursor: page.continueCursor,
-      });
+      .paginate({ cursor: state?.cursor ?? null, numItems: 100 });
+    const result = await drainEntries(ctx, page.page);
+    const checkpoint = {
+      cursor: page.isDone ? undefined : page.continueCursor,
+      completedAt: page.isDone ? Date.now() : undefined,
+      updatedAt: Date.now(),
+    };
+    // Cursor, release metadata and scheduled claims commit together. Any throw
+    // rolls back the entire page, leaving it resumable at the previous cursor.
+    if (state) {
+      await ctx.db.patch(state._id, checkpoint);
+    } else {
+      await ctx.db.insert("supplierVatHoldMigration", checkpoint);
     }
-    return null;
+    return { status: page.isDone ? "READY" : "MORE", reclassified: result.scheduled };
   },
 });
 
