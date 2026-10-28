@@ -50,7 +50,11 @@
  *    declaration only if EVERY member of the destination does, null/undefined/void/optional aside. A holder is compared
  *    property by property with the destination's property of the same name (an index signature stands in for a missing one),
  *    asking the same question of each property, each member of a union property, and each element and rest position of an
- *    array or tuple. `QueryCtx["db"] | undefined` and `{ db?: QueryCtx["db"] }` are fine; `QueryCtx["db"] | Patcher`,
+ *    array or tuple. Functions are compared through their call signatures: each destination input flows into the
+ *    supplied callback's parameter, so the same verdict runs in reverse, including holders and rest positions.
+ *    Arrow/function expressions, method-bearing object literals and named callbacks are judged. Callback parameters
+ *    may discard an argument; overload pairs are conservative. Return types and getter results remain NOT proven.
+ *    `QueryCtx["db"] | undefined` and `{ db?: QueryCtx["db"] }` are fine; `QueryCtx["db"] | Patcher`,
  *    `Pick<QueryCtx["db"], "get"> | Patcher`, `{ db?: Patcher }`, `{ db: Patcher | null }` and `{ inner: { db: Patcher } }` are not,
  *    because narrowing them reaches the foreign member. A destination whose database-method members ALL resolve into Convex,
  *    such as `Pick<QueryCtx["db"], "get">`, is a Convex type. `any`, an unconstrained type parameter, `unknown`, `object`, `{}`
@@ -62,11 +66,18 @@
  *    array spread or a tuple with optional/rest elements makes every later position (a rest parameter included) a possible
  *    destination, narrowed to those the element is assignable to (`isTypeAssignableTo`). A tuple-typed rest parameter is read
  *    position by position. Plain arguments after a spread use the same expanded position. A callee of type `any` takes anything.
- *    A position with no declared type keeps the value's own type and is not an escape; so does the pattern of an unannotated
- *    destructuring in a variable declaration or parameter (`const { reader } = request`), which the checker types from the value (a destructuring assignment, `for...of` or `catch` pattern gets the checker's synthesized type and could be flagged; none is in the tree). One exemption: the KEY argument of a
+ *    A position with no declared type keeps the value's own type and is not an escape. An unannotated destructuring
+ *    VARIABLE is exempt when its initializer is the carrying value (`const { reader } = request`). The exemption does
+ *    not cover parameter defaults, which may be contextually typed by a foreign signature, or a database inside a
+ *    literal initializer (`const [db, n] = [ctx.db, 1]`, `const { db } = { db: ctx.db }` may fail closed). Other pattern
+ *    positions (destructuring assignment, `for...of`, `catch`) use the checker's synthesized type and may fail closed.
+ *    A `satisfies` constraint is not storage: its operand keeps its type, but a destination beyond it is still judged
+ *    (https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-9.html#the-satisfies-operator).
+ *    `console.log(ctx)` and loggers taking `unknown[]`/`any[]` fail closed with `db-indirect-call` too.
+ *    One exemption: the KEY argument of a
  *    `WeakMap`/`WeakSet` method (the database as a key, as convex/utils/depositCancellationPending.ts does), found by the lib
- *    declaration; a database stored as a value is not exempt. The real tree passes `ctx.db` and `ctx` only to Convex-typed or
- *    `normalizeId`-only destinations, so its scan stays at zero.
+ *    declaration; a database stored as a value is not exempt. The real-tree test requires zero violations and fails
+ *    when any allowance stops matching a real call.
  *
  * CASTS OF A SUPPLIER ID (SCRUM-871 L6). `supplierId as any`, `as unknown as Id<"vehicles">`, `<any>supplierId`,
  * `"suppliers" as any` and `ids as unknown as Id<"vehicles">[]` hide the table from every rule above: after the cast
@@ -115,7 +126,7 @@
  *  The rules for the database leaving its type and for casts are TRIPWIRES for the shapes they name, not proofs that
  *  no database value or supplier id is retyped: see the list below.
  *  NOT proven. This is a best-effort tripwire for an honest mistake, NOT a sealed boundary and not a defence
- *  against someone writing code to evade it. Known ways past it, none of them used in the tree:
+ *  against someone writing code to evade it. Known unproven routes (no exhaustive absence claim about the tree):
  *   - the database retyped where the checker does not look. `escapesDatabaseType` reads the declared type at the
  *     positions and wrappers listed above and nothing else: a route through another construct (a comma expression, a
  *     `yield`, a class-field default, a destructuring default, an object spread `{ ...ctx }`, a `for...of` over databases,
@@ -130,6 +141,16 @@
  *     (`use<D extends Patcher>(db: D)` called with `ctx.db`: the call site sees the inferred Convex type, and the foreign
  *     constraint is visible only inside the callee); and an `Object.assign({}, ctx.db, extra)` or `ctx.db & Extra`
  *     intersection holder;
+ *   - M1 residue: function return types (`use(() => ctx.db)` into `() => Patcher`), thunks stored in holder
+ *     properties, and getter return signatures are not independently compared covariantly. A literal getter can
+ *     still be caught by the holder's property comparison. The input checks do cover the
+ *     callback-receives-ctx pattern used by commitments.ts makeSourceLive, accountingOutbox.ts makeSourceLive and
+ *     aggregates.ts#createSocialBulkMutation. Callable objects' attached properties are not followed. Type cycles
+ *     and recursive generic parameter declarations stop carrier discovery on re-entry; a deeper instantiation
+ *     may therefore go unseen. Construct signatures are not callback inputs and are not compared here;
+ *   - a CONTEXTUALLY TYPED PARAMETER DEFAULT is not covered in every pattern position. The whole initializer
+ *     (`async ({ db } = ctx) => ...`) is judged now; a default INSIDE a binding element (`async ({ db = ctx.db } = {})`
+ *     under `(c?: { db?: Patcher }) => Promise<void>`) has no value position in this scan and can still erase the type;
  *   - the holder comparison pairs properties BY NAME with the destination. A destination with no property of that name has
  *     nothing to compare (`use(ctx)` into `{ other: number }` passes), a holder inside a type ARGUMENT (`Map<string, QueryCtx>`,
  *     `Promise<QueryCtx>`) is not a property and is not followed, and the exemption for a methodless `db` destination
@@ -435,11 +456,11 @@ function skipWrappers(node: ts.Expression): ts.Expression {
   return current;
 }
 
-/** A name or member access: the only expressions that can BE a database value, and so the only starting points of the escape rule. */
-type ValueCandidate = ts.Identifier | ts.PropertyAccessExpression | ts.ElementAccessExpression;
+/** Expressions that can carry a database or receive one through a callback signature. */
+type ValueCandidate = ts.Identifier | ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.ArrowFunction | ts.FunctionExpression | ts.ObjectLiteralExpression | ts.ArrayLiteralExpression;
 
 function isValueCandidate(node: ts.Node): node is ValueCandidate {
-  return ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node);
+  return ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node) || ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node);
 }
 
 /** `null`, `undefined` and `void` are not a place a database can be put: a destination ignores them (an optional or nullable member). */
@@ -551,6 +572,9 @@ class Scanner {
   constructor(private readonly checker: ts.TypeChecker) {}
   private readonly databaseTypes = new Map<ts.Type, boolean>();
   private readonly databaseCarriers = new Map<ts.Type, boolean>();
+  // Recursive generic signatures can produce fresh instantiated types forever. Re-entering the same
+  // parameter declaration is the signature equivalent of the type-cycle check in databaseCarriers.
+  private readonly activeDatabaseParameters = new Set<ts.Declaration>();
 
   private tablesOfExpression(expression: ts.Expression): TableFacts {
     const literal = stringLiteralValue(expression);
@@ -639,7 +663,9 @@ class Scanner {
    * Can a value of `type` hand out a Convex database? It is one (a union is one when a member is), or an array or tuple
    * with an element that can, or an object with a property that can: a `ctx` through `db`, `{ inner: ctx }` and
    * `{ database: ctx.db }` through their property, at any depth. Answered once per type; a type that mentions itself
-   * counts for nothing the second time round. TS Compiler API: Type.getProperties, TypeChecker.getTypeOfSymbol.
+   * counts for nothing the second time round. Function parameters also carry incoming databases; recursive generic
+   * parameter declarations stop on re-entry. Returns and callable objects' attached properties are not followed.
+   * TS Compiler API: Type.getProperties / getCallSignatures, Signature.getParameters, TypeChecker.getTypeOfSymbol.
    */
   private carriesDatabase(type: ts.Type): boolean {
     const known = this.databaseCarriers.get(type);
@@ -657,7 +683,17 @@ class Scanner {
       return this.checker.getTypeArguments(type as ts.TypeReference).some((item) => this.carriesDatabase(item));
     }
     if (!(type.flags & ts.TypeFlags.Object) && !type.isIntersection()) return false;
-    if (type.getCallSignatures().length > 0) return false; // a function type is not a holder; a database METHOD was matched above
+    const signatures = type.getCallSignatures();
+    if (signatures.length > 0) return signatures.some((signature) => signature.getParameters().some((parameter) => {
+      const declaration = parameter.valueDeclaration ?? parameter.declarations?.[0];
+      if (declaration && this.activeDatabaseParameters.has(declaration)) return false;
+      if (declaration) this.activeDatabaseParameters.add(declaration);
+      try {
+        return this.carriesDatabase(this.checker.getTypeOfSymbol(parameter));
+      } finally {
+        if (declaration) this.activeDatabaseParameters.delete(declaration);
+      }
+    }));
     return type.getProperties().some((property) => this.carriesDatabase(this.checker.getTypeOfSymbol(property)));
   }
 
@@ -707,14 +743,15 @@ class Scanner {
    */
   private keepsConvex(value: ts.Type, destination: ts.Type, inHolder = false, depth = 0): boolean {
     if (depth > MAX_HOLDER_DEPTH) return false;
-    const members = this.destinationMembers(destination);
-    if (members.length === 0) return false;
     const parts = this.destinationMembers(value);
+    if (parts.length === 0) return true;
+    const members = this.destinationMembers(destination);
+    if (members.length === 0) return !this.carriesDatabase(value);
     return members.every((member) => parts.every((part) => this.partKeepsConvex(part, member, inHolder, depth)));
   }
 
   private partKeepsConvex(part: ts.Type, member: ts.Type, inHolder: boolean, depth: number): boolean {
-    if (!this.carriesDatabase(part)) return true;
+    if (!this.carriesDatabase(part) && !this.carriesDatabase(member)) return true;
     if (member.flags & ts.TypeFlags.Any) return false;
     if (member.flags & ts.TypeFlags.TypeParameter) {
       const constraint = this.usableConstraint(member);
@@ -724,14 +761,37 @@ class Scanner {
       return this.isDatabaseType(member) || (inHolder && this.isMethodlessObject(member));
     }
     if (this.isOpaque(member)) return false;
+    if (!this.parametersKeepConvex(part, member, depth)) return false;
     if (this.checker.isArrayType(part) || this.checker.isTupleType(part)) return this.elementsKeepConvex(part, member, inHolder, depth);
     return part.getProperties().every((property) => {
       const carried = this.checker.getTypeOfSymbol(property);
-      if (!this.carriesDatabase(carried)) return true;
       const counterpart = member.getProperty(property.name);
       const declared = counterpart ? this.checker.getTypeOfSymbol(counterpart) : member.getStringIndexType();
       return declared === undefined || this.keepsConvex(carried, declared, true, depth + 1);
     });
+  }
+
+  /**
+   * A callback receives the destination signature's inputs: compare them in the reverse direction with the same
+   * verdict used for ordinary hand-overs. An omitted callback parameter discards the input. Rest parameters use
+   * the same expanded positions as calls. Overload pairs are checked conservatively; returns are not followed.
+   * TypeScript's function compatibility permits a structural parameter here; assignability alone is insufficient.
+   * https://www.typescriptlang.org/docs/handbook/type-compatibility.html#comparing-two-functions
+   */
+  private parametersKeepConvex(value: ts.Type, destination: ts.Type, depth: number): boolean {
+    return destination.getCallSignatures().every((incoming) => value.getCallSignatures().every((callback) => {
+      const receiver = this.signaturePositions(callback);
+      return incoming.getParameters().every((parameter, index) => {
+        const type = this.checker.getTypeOfSymbol(parameter);
+        const declaration = parameter.valueDeclaration;
+        const rest = declaration !== undefined && ts.isParameter(declaration) && !!declaration.dotDotDotToken;
+        const items = rest ? this.spreadItems(type) : [{ type, offset: 0, lowerBound: 0 }];
+        return items.every((item) => {
+          const landing = item.offset === undefined ? this.assignableTo(item.type, receiver.from(index + item.lowerBound)) : receiver.at(index + item.offset);
+          return landing.every((declared) => this.keepsConvex(item.type, declared, false, depth + 1));
+        });
+      });
+    }));
   }
 
   /** An object with at least one property and no database method among them: it cannot read or write, whatever else it offers. */
@@ -747,7 +807,6 @@ class Scanner {
   /** Each element of an array or tuple that carries a database, against the position(s) of `member` it lands in. */
   private elementsKeepConvex(part: ts.Type, member: ts.Type, inHolder: boolean, depth: number): boolean {
     return this.spreadItems(part).every((item) => {
-      if (!this.carriesDatabase(item.type)) return true;
       const landing = item.offset === undefined ? this.assignableTo(item.type, this.positionTypes(member, item.lowerBound, true)) : this.positionTypes(member, item.offset, false);
       return landing.every((declared) => this.keepsConvex(item.type, declared, inHolder, depth + 1));
     });
@@ -824,11 +883,9 @@ class Scanner {
     const site = valueSite(node);
     if (!isValuePosition(site)) return false;
     const type = this.checker.getTypeAtLocation(node);
-    if (!ts.isSpreadElement(site.parent) && !this.carriesDatabase(type)) return false;
     // `use(...dbs)`: what flows is each element of the spread array or tuple.
     const spread = ts.isSpreadElement(site.parent) ? site.parent : undefined;
     const items = spread ? this.spreadItems(type) : [{ type, offset: undefined, lowerBound: 0 }];
-    if (!items.some((item) => this.carriesDatabase(item.type))) return false;
     // A WeakMap/WeakSet KEY (argument 0) is only ever compared by identity: it cannot be read back or called
     // (convex/utils/depositCancellationPending.ts). A database stored as a VALUE can be read back, so it is not exempt.
     const parent = site.parent;
@@ -838,7 +895,6 @@ class Scanner {
     if (!source) return false;
     const cursor = this.cursorBefore(listOf(spread.parent), spread);
     return items.some((item) => {
-      if (!this.carriesDatabase(item.type)) return false;
       const exact = item.offset !== undefined && cursor.exact;
       const landing = exact ? source.at(cursor.position + (item.offset ?? 0)) : this.assignableTo(item.type, source.from(cursor.position + item.lowerBound));
       return landing.some((declared) => !this.keepsConvex(item.type, declared));
@@ -888,7 +944,8 @@ class Scanner {
       }
     }
     // `const { a, b } = request` has no declared type: the checker types the pattern from the initializer, it does not constrain it.
-    if ((ts.isVariableDeclaration(parent) || ts.isParameter(parent)) && parent.initializer === site && (ts.isObjectBindingPattern(parent.name) || ts.isArrayBindingPattern(parent.name)) && parent.type === undefined) return [];
+    if (ts.isVariableDeclaration(parent) && parent.initializer === site && (ts.isObjectBindingPattern(parent.name) || ts.isArrayBindingPattern(parent.name)) && parent.type === undefined) return [];
+    if (this.isSatisfiesOperand(site)) return [];
     if (ts.isShorthandPropertyAssignment(parent)) {
       const literal = this.checker.getContextualType(parent.parent);
       const declared = literal && this.propertyTypeOf(literal, parent.name.text);
@@ -897,6 +954,24 @@ class Scanner {
     const declared = this.checker.getContextualType(site);
     if (declared !== undefined) return [declared];
     return ts.isArrayLiteralExpression(parent) ? this.arrayElementDestination(parent) : [];
+  }
+
+  /**
+   * A satisfies constraint checks an operand but is not its storage type. Suppress its inward contextual type;
+   * the literal/function candidate at the outside still checks any actual destination beyond satisfies.
+   * Stop at calls, assignments and other value boundaries so a nested hand-over is still judged.
+   */
+  private isSatisfiesOperand(site: ts.Expression): boolean {
+    let current: ts.Node = site;
+    while (current.parent) {
+      const parent = current.parent;
+      if (ts.isSatisfiesExpression(parent) && parent.expression === current) return true;
+      if (ts.isPropertyAssignment(parent) && parent.initializer === current) current = parent.parent;
+      else if (ts.isShorthandPropertyAssignment(parent) && parent.name === current) current = parent.parent;
+      else if (ts.isArrayLiteralExpression(parent) || ts.isParenthesizedExpression(parent) || ts.isNonNullExpression(parent)) current = parent;
+      else return false;
+    }
+    return false;
   }
 
   /**
@@ -916,6 +991,11 @@ class Scanner {
     }
     const signature = this.checker.getResolvedSignature(list);
     if (!signature) return undefined;
+    return this.signaturePositions(signature);
+  }
+
+  /** One position model for call arguments and callback inputs, including array and tuple rest parameters. */
+  private signaturePositions(signature: ts.Signature): PositionSource {
     const parameters = signature.getParameters();
     const last = parameters[parameters.length - 1];
     const hasRest = last !== undefined && !!last.valueDeclaration && ts.isParameter(last.valueDeclaration) && !!last.valueDeclaration.dotDotDotToken;
@@ -1316,7 +1396,7 @@ let scannerState: { scanner: Scanner; program: ts.Program; snippets: readonly Sn
 /** Built once, on first use: the program is the expensive part. Snippet i is virtual file i. */
 function getScanner(): { scanner: Scanner; program: ts.Program; snippets: readonly Snippet[] } {
   if (!scannerState) {
-    const snippets: readonly Snippet[] = [...BAD_SNIPPETS, ...GOOD_SNIPPETS];
+    const snippets: readonly Snippet[] = [...BAD_SNIPPETS, ...GOOD_SNIPPETS, ...ROUND6_PROBES];
     scannerState = { ...buildScanner(snippets), snippets };
   }
   return scannerState;
@@ -2874,7 +2954,124 @@ const GOOD_SNIPPETS: Snippet[] = [
       }`,
   },];
 
+// PR 689 round 6: parameters flow from the destination signature into the supplied callback.
+// Named cases bind failing-first evidence to a finding; each must compile beside the real tree.
+const ROUND6_PRELUDE = `
+  type Patcher = { patch(id: Id<"suppliers">, value: {}): Promise<void> };
+  async function withDb(ctx: MutationCtx, cb: (db: MutationCtx["db"]) => Promise<void>) { await cb(ctx.db); }
+  async function withCtx(ctx: MutationCtx, cb: (ctx: MutationCtx) => Promise<void>) { await cb(ctx); }
+`;
+const ROUND6_PROBES: Array<Snippet & { name: string; bad: boolean }> = [
+  {
+    name: "M1 arrow callback receives a foreign database", bad: true,
+    source: `export async function f(ctx: MutationCtx, id: Id<"suppliers">) { await withDb(ctx, async (db: Patcher) => { await db.patch(id, {}); }); }`,
+  },
+  {
+    name: "M1 named callback receives a foreign database", bad: true,
+    source: `export async function f(ctx: MutationCtx, id: Id<"suppliers">) { async function markInactive(db: Patcher) { await db.patch(id, {}); } await withDb(ctx, markInactive); }`,
+  },
+  {
+    name: "M1 callback receives a foreign ctx holder", bad: true,
+    source: `export async function f(ctx: MutationCtx, id: Id<"suppliers">) { await withCtx(ctx, async (inner: { db: Patcher }) => { await inner.db.patch(id, {}); }); }`,
+  },
+  {
+    name: "M1 interface method receives a foreign database", bad: true,
+    source: `interface Job { run(db: MutationCtx["db"]): Promise<void> } export async function f(ctx: MutationCtx, id: Id<"suppliers">) { const job: Job = { async run(db: Patcher) { await db.patch(id, {}); } }; await job.run(ctx.db); }`,
+  },
+  {
+    name: "M1 holder callback uses the tree makeSourceLive shape", bad: true,
+    source: `declare function use(options: { makeSourceLive?: (ctx: MutationCtx) => Promise<void> }): void; export function f(id: Id<"suppliers">) { use({ makeSourceLive: async (inner: { db: Patcher }) => { await inner.db.patch(id, {}); } }); }`,
+  },
+  {
+    name: "M1 named holder callback remains foreign", bad: true,
+    source: `declare function use(options: { nested: { run(ctx: MutationCtx): Promise<void> } }): void; export function f(id: Id<"suppliers">) { const job = { nested: { run: async (inner: { db: Patcher }) => { await inner.db.patch(id, {}); } } }; use(job); }`,
+  },
+  {
+    name: "M1 callback rest tuple receives a foreign database", bad: true,
+    source: `declare function use(cb: (n: number, db: MutationCtx["db"]) => Promise<void>): void; export function f(id: Id<"suppliers">) { use(async (...args: [number, Patcher]) => { await args[1].patch(id, {}); }); }`,
+  },
+  {
+    name: "M1 callback array receives foreign ctx holders", bad: true,
+    source: `declare function use(callbacks: ((ctx: MutationCtx) => Promise<void>)[]): void; export function f(id: Id<"suppliers">) { const callbacks = [async (inner: { db: Patcher }) => { await inner.db.patch(id, {}); }]; use(callbacks); }`,
+  },
+  {
+    name: "exemption contextually typed destructured parameter default", bad: true,
+    source: `export async function f(ctx: MutationCtx, id: Id<"suppliers">) { const run: (c?: { db: Patcher }) => Promise<void> = async ({ db } = ctx) => { await db.patch(id, {}); }; await run(); }`,
+  },
+  {
+    name: "M1 Convex arrow callback", bad: false,
+    source: `export async function f(ctx: MutationCtx) { await withDb(ctx, async (db: MutationCtx["db"]) => { await db.query("vehicles").take(1); }); }`,
+  },
+  {
+    name: "M1 Convex named callback", bad: false,
+    source: `async function read(db: QueryCtx["db"]) { await db.query("vehicles").take(1); } export async function f(ctx: MutationCtx) { await withDb(ctx, read); }`,
+  },
+  {
+    name: "M1 Convex interface method", bad: false,
+    source: `interface Job { run(db: MutationCtx["db"]): Promise<void> } export function f() { const job: Job = { async run(db: QueryCtx["db"]) { await db.query("vehicles").take(1); } }; return job; }`,
+  },
+  {
+    name: "M1 contextually typed makeSourceLive callback", bad: false,
+    source: `declare function use(options: { makeSourceLive?: (ctx: MutationCtx) => Promise<void> }): void; export function f() { use({ makeSourceLive: async (inner) => { await inner.db.query("vehicles").take(1); } }); }`,
+  },
+  {
+    name: "M1 Convex nested holder callback", bad: false,
+    source: `declare function use(options: { nested: { run(ctx: MutationCtx): Promise<void> } }): void; export function f() { const job = { nested: { run: async (inner: QueryCtx) => { await inner.db.query("vehicles").take(1); } } }; use(job); }`,
+  },
+  {
+    name: "M1 Convex callback rest tuple", bad: false,
+    source: `declare function use(cb: (n: number, db: MutationCtx["db"]) => Promise<void>): void; export function f() { use(async (...args: [number, QueryCtx["db"]]) => { await args[1].query("vehicles").take(1); }); }`,
+  },
+  {
+    name: "M1 callback may discard database arguments", bad: false,
+    source: `export async function f(ctx: MutationCtx) { await withDb(ctx, async () => {}); }`,
+  },
+  {
+    name: "exemption Convex contextually typed parameter default", bad: false,
+    source: `export async function f(ctx: MutationCtx) { const run: (c?: QueryCtx) => Promise<void> = async ({ db } = ctx) => { await db.query("vehicles").take(1); }; await run(); }`,
+  },
+  {
+    name: "LOW satisfies retains the holder operand type", bad: false,
+    source: `export function f(ctx: MutationCtx) { const h = { db: ctx.db } satisfies { db: Patcher }; return h; }`,
+  },
+  {
+    name: "LOW satisfies shorthand retains the holder operand type", bad: false,
+    source: `export function f(ctx: MutationCtx) { const db = ctx.db; const h = { db } satisfies { db: Patcher }; return h; }`,
+  },
+  {
+    name: "LOW satisfies still judges a foreign destination outside its operand", bad: true,
+    source: `declare function use(h: { db: Patcher }): void; export function f(ctx: MutationCtx) { use({ db: ctx.db } satisfies { db: Patcher }); }`,
+  },
+  {
+    name: "LOW satisfies does not exempt an inner foreign call", bad: true,
+    source: `declare function use(db: Patcher): void; export function f(ctx: MutationCtx) { const h = { result: use(ctx.db) } satisfies { result: void }; return h; }`,
+  },
+  {
+    name: "M1 function expression callback receives a foreign database", bad: true,
+    source: `export async function f(ctx: MutationCtx, id: Id<"suppliers">) { await withDb(ctx, async function(db: Patcher) { await db.patch(id, {}); }); }`,
+  },
+  {
+    name: "M1 recursive generic callback types terminate without a database", bad: false,
+    source: `type Recursive<T> = { run(cb: Recursive<T[]>): void }; export function f(value: Recursive<number>) { const copy: Recursive<number> = value; return copy; }`,
+  },
+  {
+    name: "LOW console logger fails closed", bad: true,
+    source: `export function f(ctx: MutationCtx) { console.log(ctx); }`,
+  },
+  {
+    name: "LOW unknown array logger fails closed", bad: true,
+    source: `declare function log(...values: unknown[]): void; export function f(ctx: MutationCtx) { log(ctx); }`,
+  },
+].map((probe) => ({ ...probe, file: "convex/other.ts", typed: true, source: ROUND6_PRELUDE + probe.source }));
+
 describe("supplier master source guards", () => {
+  test.each(ROUND6_PROBES)("round 6: $name", (probe) => {
+    expect(typeErrors(probe), "probe must compile before its verdict is evidence").toEqual([]);
+    const violations = scanSnippet(probe).violations;
+    if (probe.bad) expect(violations.map((violation) => violation.rule)).toContain("db-indirect-call");
+    else expect(violations).toEqual([]);
+  }, SCAN_TIMEOUT_MS);
+
   test("lock coverage: the scanner rejects every synthetic bad source and accepts the good ones", () => {
     const missed: string[] = [];
     for (const bad of BAD_SNIPPETS) {
@@ -2898,7 +3095,12 @@ describe("supplier master source guards", () => {
     const problems: string[] = [];
     const used = new Set<string>();
     for (const source of REAL_SOURCES) {
-      const scan = scanReal(source, used);
+      let scan: Scan;
+      try {
+        scan = scanReal(source, used);
+      } catch (error) {
+        throw new Error(`Scanner failed in ${source.relPath}`, { cause: error });
+      }
       supplierWrites += scan.supplierWrites;
       for (const v of scan.violations) problems.push(`${source.relPath}:${v.line} ${v.rule} ${v.text}`);
     }
