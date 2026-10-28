@@ -1120,17 +1120,22 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(workflow.permissions).toEqual({
       contents: "read",
     });
+    // SCRUM-757: `checks: read` only, so the arming assertion can see a standing
+    // success. These jobs never hold `checks: write`; only the two gate publishers do.
     expect(job("prepare").permissions).toEqual({
       contents: "read",
       actions: "read",
       "pull-requests": "read",
+      checks: "read",
       statuses: "write",
     });
     expect(job("candidate-build").permissions).toEqual({
       contents: "read",
+      checks: "read",
     });
     expect(job("trusted-e2e").permissions).toEqual({
       contents: "read",
+      checks: "read",
     });
     expect(job("attack-worker").permissions).toEqual({
       contents: "read",

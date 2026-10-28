@@ -133,6 +133,9 @@ describe("SCRUM-757 workflow security and coverage wiring", () => {
       expect.arrayContaining(["opened", "synchronize", "reopened"]),
     );
     expect(listener.on.pull_request_target.paths).toBeUndefined();
+    // An edit of title or body changes nothing the gate judges; a queued
+    // finish must not be cancelled by a pending admission in the shared group.
+    expect(listener.on.pull_request_target.types).not.toContain("edited");
     expect(listener.jobs.admission.if).toBeUndefined();
     expect(
       listener.jobs.admission.steps.find((step) =>
@@ -150,18 +153,66 @@ describe("SCRUM-757 workflow security and coverage wiring", () => {
     );
     expect(finish.steps.at(-1)?.if).toBe("always()");
     expect(JSON.stringify(finish)).not.toContain("secrets.");
+    // Only the two publishers hold `checks: write`. Jobs that run or feed
+    // candidate code hold at most `checks: read` (see the arming test below).
     expect(
-      Object.values(workflow.jobs).filter(
-        (job) => job.permissions?.checks === "write",
-      ),
-    ).toHaveLength(2);
-    expect(
-      Object.values(workflow.jobs).some(
-        (job) => (job as { name?: string }).name === "authenticated-pr-e2e",
-      ),
-    ).toBe(false);
-  });
+      Object.entries(workflow.jobs)
+        .filter(([, job]) => job.permissions?.checks === "write")
+        .map(([name]) => name)
+        .sort(),
+    ).toEqual(["e2e-gate-begin", "e2e-gate-finish"]);  });
 
+  it("never works beside a standing success after a job-level rerun that skips e2e-gate-begin", () => {
+    // GitHub re-runs the selected job and its dependents, never its ancestors:
+    // https://docs.github.com/en/rest/actions/workflow-runs#re-run-a-job-from-a-workflow-run
+    const jobs = read("browser-attack-swarm").jobs;
+    expect(jobs.prepare.needs).toContain("e2e-gate-begin");
+    const firstWork = (name: string, marker: string) => {
+      const steps = jobs[name].steps;
+      const index = steps.findIndex((step) => step.run?.includes(marker));
+      expect(index, name).toBeGreaterThan(-1);
+      expect(
+        steps
+          .slice(0, index)
+          .every(
+            (step) =>
+              step.uses?.startsWith("actions/checkout@") ||
+              step.uses?.startsWith("actions/setup-node@"),
+          ),
+        name,
+      ).toBe(true);
+      expect(Object.keys(steps[index].env ?? {}), name).toEqual([
+        "GITHUB_TOKEN",
+      ]);
+      expect(JSON.stringify(steps[index]), name).not.toContain("secrets.");
+    };
+    for (const name of [
+      "prepare",
+      "candidate-source",
+      "candidate-build",
+      "trusted-e2e",
+    ]) {
+      // Least privilege: read-only, so a branch cannot use it to write a check.
+      expect(jobs[name].permissions?.checks, name).toBe("read");
+      firstWork(name, "trustedPrE2eGateCli.mjs armed");
+    }
+    // The publisher resets (writes failure) before anything else, so a rerun of
+    // finish alone cannot leave the previous success standing.
+    firstWork("e2e-gate-finish", "trustedPrE2eGateCli.mjs reset");
+  });
+  it("serialises publishers per head without the unbounded pull_requests[0] and without a pending-job cancel risk", () => {
+    const jobs = read("browser-attack-swarm").jobs;
+    const admission = read("authenticated-pr-e2e").jobs.admission;
+    expect(jobs["e2e-gate-begin"].concurrency?.group).toBe(
+      "g5-publish-${{ github.event.workflow_run.head_sha }}",
+    );
+    expect(jobs["e2e-gate-finish"].concurrency?.group).toBe(
+      jobs["e2e-gate-begin"].concurrency?.group,
+    );
+    expect(admission.concurrency?.group).toBe(
+      "g5-publish-${{ github.event.pull_request.head.sha }}",
+    );
+  });
   it("guards every workflow_run checkout job with the same-repository condition (Sonar S7631)", () => {
     const jobs = read("browser-attack-swarm").jobs;
     for (const name of ["e2e-gate-begin", "candidate-source", "e2e-gate-finish"])

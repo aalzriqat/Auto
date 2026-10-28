@@ -126,92 +126,337 @@ describe("SCRUM-757 counted execution", () => {
   });
 });
 
+type Run = {
+  id: number;
+  path: string;
+  event: string;
+  head_branch: string;
+};
+type Rec = {
+  id: number;
+  name: string;
+  head_sha: string;
+  status: string;
+  conclusion: string | null;
+  external_id?: string;
+  app: { slug: string };
+  check_suite?: { id: number };
+  output?: { title?: string };
+};
+const REPOSITORY = "aalzriqat/Auto";
+const ADMISSION_PATH = ".github/workflows/authenticated-pr-e2e.yml";
+const SWARM_PATH = ".github/workflows/browser-attack-swarm.yml";
+const admission = (id: number): Run => ({
+  id,
+  path: ADMISSION_PATH,
+  event: "pull_request_target",
+  head_branch: "feature",
+});
+const swarm = (id: number): Run => ({
+  id,
+  path: SWARM_PATH,
+  event: "workflow_run",
+  head_branch: "main",
+});
+const forgedRun: Run = {
+  id: 7,
+  path: ".github/workflows/forge.yml",
+  event: "push",
+  head_branch: "feature",
+};
+
+/** A GitHub fake that reproduces what the publisher can observe: records, and the
+ * workflow run that owns each record's check suite. A forged writer's suite
+ * resolves to the forger's own workflow, never to a trusted one. */
+function github() {
+  const records: Rec[] = [];
+  const runsBySuite = new Map<number, Run>();
+  const calls: string[] = [];
+  let writer: Run = swarm(100);
+  let nextId = 9;
+  let runLookup: "ok" | "fail" = "ok";
+  const api = async (
+    method: string,
+    route: string,
+    body?: Record<string, unknown>,
+  ) => {
+    calls.push(`${method} ${route.split("?")[0]}`);
+    if (method === "GET" && route.startsWith("/commits/"))
+      return { check_runs: records };
+    if (method === "GET" && route.startsWith("/actions/runs?")) {
+      if (runLookup === "fail") throw new Error("GitHub gate request failed.");
+      const suite = Number(
+        new URL(`https://x${route}`).searchParams.get("check_suite_id"),
+      );
+      const run = runsBySuite.get(suite);
+      return {
+        total_count: run ? 1 : 0,
+        workflow_runs: run
+          ? [{ ...run, check_suite_id: suite, repository: { full_name: REPOSITORY } }]
+          : [],
+      };
+    }
+    if (method === "POST") {
+      const id = nextId++;
+      runsBySuite.set(1000 + id, writer);
+      const record = {
+        id,
+        app: { slug: "github-actions" },
+        check_suite: { id: 1000 + id },
+        ...body,
+      } as Rec;
+      records.push(record);
+      return record;
+    }
+    const record = records.find((entry) => `/check-runs/${entry.id}` === route);
+    if (!record) throw new Error("no such check");
+    Object.assign(record, body);
+    return record;
+  };
+  const insert = (
+    overrides: Partial<Rec>,
+    run: Run | undefined,
+    suite = 2000 + records.length,
+  ) => {
+    if (run) runsBySuite.set(suite, run);
+    const record = {
+      id: 500 + records.length,
+      name: "authenticated-pr-e2e",
+      head_sha: identity.headSha,
+      status: "completed",
+      conclusion: "success",
+      app: { slug: "github-actions" },
+      check_suite: { id: suite },
+      ...overrides,
+    } as Rec;
+    records.push(record);
+    return record;
+  };
+  return {
+    api,
+    records,
+    calls,
+    insert,
+    asWriter: (run: Run) => {
+      writer = run;
+    },
+    breakRunLookup: () => {
+      runLookup = "fail";
+    },
+    writes: () => calls.filter((call) => !call.startsWith("GET")),
+  };
+}
+const publishInput = (runId: number, attempt = 1) => ({
+  headSha: identity.headSha,
+  prNumber: 42,
+  repository: REPOSITORY,
+  runId,
+  runKey: `${runId}:${attempt}`,
+  summary: "counts pending",
+  detailsUrl: `https://github.com/${REPOSITORY}/actions/runs/${runId}`,
+});
+const success = { conclusion: "success", reason: "counted suite passed" };
+
 describe("SCRUM-757 check publication", () => {
-  it("updates one GitHub Actions check on reruns and refuses an older attempt's late verdict", async () => {
-    const records: Array<Record<string, unknown>> = [];
-    const api = async (
-      method: string,
-      route: string,
-      body?: Record<string, unknown>,
-    ) => {
-      if (method === "GET") return { check_runs: records };
-      if (method === "POST") {
-        records.push({ id: 9, app: { slug: "github-actions" }, ...body });
-        return records[0];
-      }
-      Object.assign(records[0], body);
-      return records[0];
-    };
+  it("updates one proven check on reruns and never lets a late success outlive a restart", async () => {
+    const hub = github();
     const gate = await load();
-    const input = {
-      headSha: identity.headSha,
-      prNumber: 42,
-      runKey: "100:1",
-      summary: "counts pending",
-      detailsUrl: "https://github.com/aalzriqat/Auto/actions/runs/100",
-    };
-    await gate.publishPrE2eCheck(api, { ...input, mode: "begin" });
-    await gate.publishPrE2eCheck(api, {
-      ...input,
-      runKey: "100:2",
+    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
+    await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100, 2),
       mode: "begin",
     });
-    await expect(
-      gate.publishPrE2eCheck(api, {
-        ...input,
-        mode: "finish",
-        verdict: { conclusion: "success", reason: "obsolete" },
-      }),
-    ).rejects.toThrow();
-    await gate.publishPrE2eCheck(api, {
-      ...input,
-      runKey: "100:2",
+    await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100, 2),
       mode: "finish",
-      verdict: { conclusion: "failure", reason: "cannot run" },
+      verdict: success,
     });
-    await gate.publishPrE2eCheck(api, {
-      ...input,
-      runKey: "100:2",
-      mode: "finish",
-      verdict: { conclusion: "success", reason: "counted suite passed" },
+    expect(hub.records[0].conclusion).toBe("success");
+    // A job-only rerun resets before its work starts, then publishes its result.
+    await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100, 3),
+      mode: "reset",
     });
-    // Re-running only the E2E job does not re-run its upstream begin job.
-    // Its later red verdict must still revoke the preceding green result.
-    await gate.publishPrE2eCheck(api, {
-      ...input,
-      runKey: "100:3",
+    expect(hub.records[0].conclusion).toBe("failure");
+    await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100, 3),
       mode: "finish",
       verdict: { conclusion: "failure", reason: "job-only rerun failed" },
     });
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
+    expect(hub.records).toHaveLength(1);
+    expect(hub.records[0]).toMatchObject({
       head_sha: identity.headSha,
       name: "authenticated-pr-e2e",
       conclusion: "failure",
     });
   });
 
-  it("does not let a late PR listener overwrite the consumer verdict", async () => {
-    const api = async () => ({
-      check_runs: [
-        {
-          id: 9,
-          app: { slug: "github-actions" },
-          name: "authenticated-pr-e2e",
-          external_id: "g5:42:100:1",
-          conclusion: "success",
-        },
-      ],
+  it.each([
+    ["a higher run number claimed in external_id", { external_id: "g5:42:99999999:1" }, forgedRun],
+    ["a foreign external_id prefix", { external_id: "other:1" }, forgedRun],
+    ["a trusted-looking external_id from a branch workflow", { external_id: "g5:42:100:1" }, forgedRun],
+    ["no check suite", { check_suite: undefined }, undefined],
+    ["a suite that resolves to no workflow run", {}, undefined],
+    ["the trusted swarm path under a non-workflow_run event", {}, { ...swarm(100), event: "workflow_dispatch" }],
+    ["the trusted swarm path from a branch", {}, { ...swarm(100), head_branch: "feature" }],
+    ["the trusted admission path under pull_request", {}, { ...admission(100), event: "pull_request" }],
+    ["a trusted path suffixed with a branch ref", {}, { ...swarm(100), path: SWARM_PATH + "@refs/heads/feature" }],
+  ])(
+    "fails closed on a success record with %s, for every writer mode",
+    async (_label, overrides, run) => {
+      const gate = await load();
+      for (const mode of ["initialize", "begin", "reset", "finish"] as const) {
+        const hub = github();
+        const forged = hub.insert(
+          { external_id: "g5:42:100:1", ...overrides } as Partial<Rec>,
+          run as Run | undefined,
+        );
+        const result = await gate.publishPrE2eCheck(hub.api, {
+          ...publishInput(100),
+          mode,
+          verdict: success,
+        });
+        expect(result.outcome, mode).toBe("quarantined");
+        expect(forged.conclusion, mode).toBe("failure");
+        expect(forged.status, mode).toBe("completed");
+        expect(hub.records, mode).toHaveLength(1);
+      }
+    },
+  );
+
+  it("fails closed when the origin lookup itself is unavailable", async () => {
+    const hub = github();
+    hub.insert({ external_id: "g5:42:100:1" }, swarm(100));
+    hub.breakRunLookup();
+    const result = await (
+      await load()
+    ).publishPrE2eCheck(hub.api, {
+      ...publishInput(100),
+      mode: "finish",
+      verdict: success,
     });
-    expect(
-      await (
-        await load()
-      ).publishPrE2eCheck(api, {
-        headSha: identity.headSha,
-        prNumber: 42,
-        mode: "initialize",
-      }),
-    ).toMatchObject({ conclusion: "success" });
+    expect(result.outcome).toBe("quarantined");
+    expect(hub.records[0].conclusion).toBe("failure");
+  });
+
+  it("revokes every duplicate same-app record and never certifies success while any exists", async () => {
+    const hub = github();
+    const gate = await load();
+    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
+    // A second record that even carries a trusted suite still counts as a duplicate.
+    hub.insert({ external_id: "g5:42:100:1" }, swarm(100));
+    const result = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100),
+      mode: "finish",
+      verdict: success,
+    });
+    expect(result.outcome).toBe("quarantined");
+    expect(hub.records.map((record) => record.conclusion)).toEqual([
+      "failure",
+      "failure",
+    ]);
+    // The state is sticky: nothing later turns this head green or adds a record.
+    await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(101),
+      mode: "finish",
+      verdict: success,
+    });
+    expect(hub.records.map((record) => record.conclusion)).toEqual([
+      "failure",
+      "failure",
+    ]);
+    expect(hub.records).toHaveLength(2);
+  });
+
+  it("refuses an older run without writing, so a newer proven verdict is not clobbered", async () => {
+    const hub = github();
+    const gate = await load();
+    hub.asWriter(swarm(200));
+    await gate.publishPrE2eCheck(hub.api, { ...publishInput(200), mode: "begin" });
+    await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(200),
+      mode: "finish",
+      verdict: success,
+    });
+    const before = JSON.stringify(hub.records);
+    hub.calls.length = 0;
+    for (const mode of ["begin", "reset", "finish"] as const) {
+      const result = await gate.publishPrE2eCheck(hub.api, {
+        ...publishInput(100),
+        mode,
+        verdict: { conclusion: "success", reason: "obsolete" },
+      });
+      expect(result.outcome, mode).toBe("obsolete");
+    }
+    expect(hub.writes()).toEqual([]);
+    expect(JSON.stringify(hub.records)).toBe(before);
+  });
+
+  it("lets a later swarm run overwrite an admission record regardless of run-id order", async () => {
+    const hub = github();
+    const gate = await load();
+    hub.asWriter(admission(900));
+    await gate.publishPrE2eCheck(hub.api, { ...publishInput(900), mode: "initialize" });
+    hub.asWriter(swarm(100));
+    const result = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100),
+      mode: "finish",
+      verdict: success,
+    });
+    expect(result.outcome).toBe("written");
+    expect(hub.records).toHaveLength(1);
+    expect(hub.records[0].conclusion).toBe("success");
+  });
+
+  it("keeps a proven existing result on admission and creates nothing", async () => {
+    const hub = github();
+    const gate = await load();
+    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
+    await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100),
+      mode: "finish",
+      verdict: success,
+    });
+    hub.calls.length = 0;
+    hub.asWriter(admission(300));
+    const result = await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(300),
+      mode: "initialize",
+    });
+    expect(result.outcome).toBe("kept");
+    expect(hub.writes()).toEqual([]);
+    expect(hub.records[0].conclusion).toBe("success");
+  });
+
+  it("is armed only while no GitHub Actions success stands for the head", async () => {
+    const hub = github();
+    const gate = await load();
+    expect(await gate.gateIsArmed(hub.api, identity.headSha)).toBe(true);
+    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
+    expect(await gate.gateIsArmed(hub.api, identity.headSha)).toBe(true);
+    await gate.publishPrE2eCheck(hub.api, {
+      ...publishInput(100),
+      mode: "finish",
+      verdict: success,
+    });
+    expect(await gate.gateIsArmed(hub.api, identity.headSha)).toBe(false);
+    // A forged success disarms too: the rerun refuses to start beside it.
+    const forged = github();
+    forged.insert({}, undefined);
+    expect(await gate.gateIsArmed(forged.api, identity.headSha)).toBe(false);
+    expect(hub.writes().length).toBeGreaterThan(0);
+  });
+  it("never resets a head that has no record and ignores same-name checks from other apps", async () => {
+    const hub = github();
+    const gate = await load();
+    await expect(
+      gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "reset" }),
+    ).rejects.toThrow();
+    expect(hub.writes()).toEqual([]);
+    const foreign = hub.insert({ app: { slug: "other-app" } }, undefined);
+    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
+    expect(foreign.conclusion).toBe("success");
+    expect(hub.records).toHaveLength(2);
   });
 });
 

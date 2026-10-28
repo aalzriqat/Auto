@@ -36,10 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
-      group: g5-publish-${{ github.event.workflow_run.pull_requests[0].head.sha || github.event.workflow_run.head_sha }}
+      group: g5-publish-${{ github.event.workflow_run.head_sha }}
       cancel-in-progress: false
     permissions:
       contents: read
+      actions: read
       pull-requests: read
       checks: write
     steps:
@@ -57,6 +58,9 @@ jobs:
 
   prepare:
     name: trusted-plan
+    # Starts only after the serialised gate reset, so a stale success from an
+    # earlier run on this head is already revoked when the armed check below runs.
+    needs: e2e-gate-begin
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
@@ -68,6 +72,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
+      checks: read
       statuses: write
     outputs:
       should_run: ${{ steps.plan.outputs.should_run }}
@@ -98,6 +103,18 @@ jobs:
           # Status publication is performed explicitly by trusted steps.
           persist-credentials: true
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+      # Least privilege: this job runs or feeds candidate code, so it holds only
+      # checks: read. GitHub re-runs a selected job and its dependents, never its
+      # ancestors, so e2e-gate-begin does not run again. The job refuses to start
+      # while a success stands, instead of working beside a stale green.
+      - name: Refuse to start while a success stands on this head
+        working-directory: trusted
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs armed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Fetch and verify exact PR head and tested merge commit as data only
         id: provenance
         working-directory: trusted
@@ -406,6 +423,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      checks: read
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
     steps:
@@ -414,6 +432,24 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tested_sha }}
           persist-credentials: false
+      - name: Checkout trusted gate controller from immutable workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+      # Least privilege: this job runs or feeds candidate code, so it holds only
+      # checks: read. GitHub re-runs a selected job and its dependents, never its
+      # ancestors, so e2e-gate-begin does not run again. The job refuses to start
+      # while a success stands, instead of working beside a stale green.
+      - name: Refuse to start while a success stands on this head
+        working-directory: trusted
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs armed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Archive candidate source as data without executing it
         run: |
           set -euo pipefail
@@ -443,6 +479,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      checks: read
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
@@ -467,6 +504,15 @@ jobs:
         with:
           node-version: "22.21.1"
 
+      # Least privilege: this job runs or feeds candidate code, so it holds only
+      # checks: read. GitHub re-runs a selected job and its dependents, never its
+      # ancestors, so e2e-gate-begin does not run again. The job refuses to start
+      # while a success stands, instead of working beside a stale green.
+      - name: Refuse to start while a success stands on this head
+        working-directory: trusted
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs armed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Resolve public Clerk JWT verification material for build
         working-directory: trusted
         env:
@@ -567,6 +613,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      checks: read
     outputs:
       evidence_artifact_id: ${{ steps.g5-upload.outputs.artifact-id }}
 
@@ -578,6 +625,18 @@ jobs:
           path: trusted
           persist-credentials: false
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+      # Least privilege: this job runs or feeds candidate code, so it holds only
+      # checks: read. GitHub re-runs a selected job and its dependents, never its
+      # ancestors, so e2e-gate-begin does not run again. The job refuses to start
+      # while a success stands, instead of working beside a stale green.
+      - name: Refuse to start while a success stands on this head
+        working-directory: trusted
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs armed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Download exact candidate source data
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -2351,7 +2410,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
-      group: g5-publish-${{ github.event.workflow_run.pull_requests[0].head.sha || github.event.workflow_run.head_sha }}
+      group: g5-publish-${{ github.event.workflow_run.head_sha }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -2366,6 +2425,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22.21.1"
+      - name: Reset the PR-head gate before any work in this job
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs reset
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Download this attempt's counted evidence as data
         if: needs.trusted-e2e.outputs.evidence_artifact_id != ''
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4

@@ -223,7 +223,19 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // job condition, so a fork's workflow_run skips them. This only NARROWS where
     // those jobs run; no step, secret, permission or checkout ref changed. Fork
     // PRs are judged by the pull_request_target admission workflow instead.
-    "aa713e3deee8f66fa5f9ae532ac7190275a9c2c0a20ab51a942f2296e4ff27c3",
+    // SCRUM-757 review remediation (PR #704, Seat 1 F2/F3/F4, Seat 2 P1/P2).
+    // NOT yet reviewed by an independent seat; read the hunks. Hunks: (1) the gate
+    // concurrency group keys on workflow_run.head_sha, not pull_requests[0];
+    // (2) e2e-gate-begin gains `actions: read` (origin proof); (3) prepare gains
+    // `needs: e2e-gate-begin` and `checks: read`; candidate-source, candidate-build
+    // and trusted-e2e gain `checks: read` only (never write); (4) each of those
+    // four runs a first `trustedPrE2eGateCli.mjs armed` step that refuses to start
+    // while a success stands; candidate-source also checks out the immutable
+    // workflow revision as `trusted` for that step; (5) e2e-gate-finish gains a
+    // `reset` step before its evidence download. No secret, credential command or
+    // candidate checkout ref changed. Previous: 118099 bytes (LF), pin aa713e3d;
+    // new: 121298 bytes (LF), pin below.
+    "4532ddcf64ae4f37e24dd73dca6efe6e3190bbb843b85ba96acba1a35f108181",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":

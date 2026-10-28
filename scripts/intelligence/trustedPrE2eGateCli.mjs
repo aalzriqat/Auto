@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { resolveGit } from "../contractSkew/gitExecutable.mjs";
 import {
   executionEvidence,
+  gateIsArmed,
   planPrE2e,
   prE2eVerdict,
   publishPrE2eCheck,
@@ -20,6 +21,36 @@ const safeJson = (value) =>
   JSON.stringify(value, null, 2)
     .replaceAll("`", "\\u0060")
     .replaceAll("<", "\\u003c");
+
+const REFUSALS = {
+  quarantined: "The PR gate has unproven or duplicate records; it stays failed.",
+  obsolete: "A newer run owns the PR gate; this run published nothing.",
+};
+// A job that publishes nothing must not look green.
+const refusal = (outcome) => ({
+  conclusion: "failure",
+  reason: REFUSALS[outcome] ?? "The PR gate could not be updated.",
+});
+
+// Identity comes from the triggering event only if its entry is the PR into main
+// at the exact head the run reports. A branch can have several PRs, so `[0]` is
+// never used on trust; anything not exactly one match is resolved through the
+// commit lookup or refused.
+async function resolveSnapshot(event, api) {
+  if (event.pull_request) return event.pull_request;
+  const headSha = event.workflow_run?.head_sha;
+  if (!sha(headSha)) return undefined;
+  const isTarget = (pr) =>
+    pr?.base?.ref === "main" &&
+    pr?.head?.sha === headSha &&
+    Number.isSafeInteger(pr?.number) &&
+    pr.number > 0;
+  const listed = (event.workflow_run.pull_requests ?? []).filter(isTarget);
+  if (listed.length === 1) return listed[0];
+  const looked = await api("GET", `/commits/${headSha}/pulls?per_page=100`);
+  const matches = Array.isArray(looked) ? looked.filter(isTarget) : [];
+  return matches.length === 1 ? matches[0] : undefined;
+}
 
 /** @param {string} mode @param {Record<string, string | undefined>} [env] @param {typeof fetch} [fetchImpl] */
 export async function runGate(mode, env = process.env, fetchImpl = fetch) {
@@ -35,6 +66,8 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
   };
+  if (!["evidence", "initialize", "begin", "reset", "armed", "finish"].includes(mode))
+    throw new Error("Unknown gate mode.");
   const controllerSha = env.GITHUB_WORKFLOW_SHA;
   if (!sha(controllerSha) || git("rev-parse", "HEAD") !== controllerSha)
     throw new Error("Trusted controller checkout mismatch.");
@@ -77,18 +110,19 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
     return response.json();
   };
   const event = json(env.GITHUB_EVENT_PATH);
-  let snapshot = event.pull_request ?? event.workflow_run?.pull_requests?.[0];
-  if (!snapshot && sha(event.workflow_run?.head_sha)) {
-    const prs = await api(
-      "GET",
-      `/commits/${event.workflow_run.head_sha}/pulls?per_page=100`,
-    );
-    const matches = prs.filter(
-      (pr) =>
-        pr.base?.ref === "main" && pr.head?.sha === event.workflow_run.head_sha,
-    );
-    if (matches.length === 1) snapshot = matches[0];
+  if (mode === "armed") {
+    // Identity is the reported head only; this mode is read-only and holds no PR scope.
+    const reported = event.workflow_run?.head_sha;
+    if (!sha(reported)) throw new Error("Exact triggering head unavailable.");
+    return (await gateIsArmed(api, reported))
+      ? undefined
+      : {
+          conclusion: "failure",
+          reason:
+            "A success already stands for this head. Re-run all jobs so the gate is reset first.",
+        };
   }
+  const snapshot = await resolveSnapshot(event, api);
   const headSha = snapshot?.head?.sha;
   const prNumber = snapshot?.number;
   if (!sha(headSha) || !Number.isSafeInteger(prNumber) || prNumber <= 0)
@@ -97,19 +131,34 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
   const publication = {
     headSha,
     prNumber,
+    repository: env.GITHUB_REPOSITORY,
+    runId: Number(env.GITHUB_RUN_ID),
     runKey: `${env.GITHUB_RUN_ID}:${env.GITHUB_RUN_ATTEMPT}`,
-    mode,
     detailsUrl,
   };
-  // Initialize a red check before scope I/O. Failure, timeout or absent workflow_run
-  // must never leave an old success as the evidence for a new attempt.
-  const initial =
-    mode !== "finish"
-      ? await publishPrE2eCheck(api, {
-          ...publication,
-          summary: "Trusted scope evaluation pending.",
-        })
-      : undefined;
+  // Initialize (or reset) a red check before scope I/O. Failure, timeout or an
+  // absent workflow_run must never leave an old success as the evidence for a
+  // new attempt. `reset` runs first in every job a job-level rerun can start
+  // without re-running `begin` (GitHub re-runs the selected job and its
+  // dependents, never its ancestors).
+  if (mode === "begin" || mode === "reset") {
+    const { outcome } = await publishPrE2eCheck(api, {
+      ...publication,
+      mode,
+      summary: "Trusted scope evaluation pending.",
+    });
+    return outcome === "written" ? undefined : refusal(outcome);
+  }
+  if (mode === "initialize") {
+    const { outcome } = await publishPrE2eCheck(api, {
+      ...publication,
+      mode,
+      summary: "Trusted scope evaluation pending.",
+    });
+    // A delayed admission run must not revoke a consumer's newer execution.
+    if (outcome !== "written")
+      return outcome === "kept" ? undefined : refusal(outcome);
+  }
   let verdict = {
     conclusion: "failure",
     reason: "Trusted scope or counted authenticated execution is unavailable.",
@@ -190,29 +239,17 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
     console.error(
       "Trusted PR scope or execution evidence could not be verified.",
     );
-  }
-  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ?? null)}\n\`\`\`\n`;
+  }  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ?? null)}\n\`\`\`\n`;
   appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
-  if (mode === "begin") {
-    // The final job alone can certify execution. Scope success remains recorded
-    // in the summary until then; initialize handles docs without a consumer.
-    return;
-  }
-  // A delayed admission run must not revoke a consumer's newer execution.
-  if (
-    mode !== "initialize" ||
-    initial?.external_id === `g5:${prNumber}:${publication.runKey}`
-  ) {
-    await publishPrE2eCheck(api, {
-      ...publication,
-      mode: "finish",
-      verdict,
-      summary,
-    });
-  }
+  const { outcome } = await publishPrE2eCheck(api, {
+    ...publication,
+    mode: "finish",
+    verdict,
+    summary,
+  });
+  if (outcome !== "written") return refusal(outcome);
   return verdict;
 }
-
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href

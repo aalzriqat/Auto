@@ -5,7 +5,10 @@ name: Authenticated PR E2E admission
 on:
   pull_request_target:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    # No "edited": a title or body edit changes nothing this gate judges, and a
+    # pending admission in the shared per-head concurrency group would cancel a
+    # queued finish publication (GitHub keeps one pending job per group).
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions: {}
 
@@ -19,6 +22,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      actions: read
       pull-requests: read
       checks: write
     steps:

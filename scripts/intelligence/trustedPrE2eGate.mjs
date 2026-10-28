@@ -172,23 +172,72 @@ export function prE2eVerdict({
   };
 }
 
-// The caller serializes all writers for a PR with one Actions concurrency group.
-// Reuse a check rather than creating duplicate producer/name results on reruns.
-/** @param {(method: string, route: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>} api
- * @param {{headSha: string, prNumber: number, runKey?: string, mode: string,
- * verdict?: {conclusion: string, reason: string} | null, summary?: string, detailsUrl?: string}} options */
-export async function publishPrE2eCheck(
-  api,
-  {
-    headSha,
-    prNumber,
-    runKey = "",
-    mode,
-    verdict = null,
-    summary = "",
-    detailsUrl = "",
-  },
-) {
+// ---------------------------------------------------------------------------
+// Publication. Origin of an existing record is PROVEN, never read from fields a
+// writer chooses. `external_id`, `output` and `details_url` are writable by any
+// workflow token in the repository, so they are informational only. The proof
+// follows scripts/releaseChecks.mjs: check suite -> workflow run -> workflow
+// path, event and branch. Only `workflow_run` and `pull_request_target` load the
+// workflow definition from the default branch; a run of the same path under any
+// other event ran the branch's own copy and is refused.
+//
+// This is detection and neutralisation by trusted code, NOT a barrier: any
+// workflow of this repository holding `checks: write` shares the GitHub Actions
+// app identity and can still write or patch the check after this code runs.
+// Docs: Checks API (create/update a check run), List workflow runs
+// (`check_suite_id` filter), workflow-syntax `permissions`.
+// ---------------------------------------------------------------------------
+export const TRUSTED_WRITERS = Object.freeze([
+  Object.freeze({
+    kind: "admission",
+    path: ".github/workflows/authenticated-pr-e2e.yml",
+    event: "pull_request_target",
+    branch: undefined,
+  }),
+  Object.freeze({
+    kind: "swarm",
+    path: ".github/workflows/browser-attack-swarm.yml",
+    event: "workflow_run",
+    branch: "main",
+  }),
+]);
+const MODES = new Set(["initialize", "begin", "reset", "finish"]);
+
+/** @returns {Promise<{ok: true, kind: string, runId: number} | {ok: false, reason: string}>} */
+async function establishOrigin(api, record, repository) {
+  const unproven = (reason) => ({ ok: false, reason });
+  const suiteId = record.check_suite?.id;
+  if (!Number.isSafeInteger(suiteId) || suiteId <= 0)
+    return unproven("the record has no check suite");
+  let payload;
+  try {
+    payload = await api(
+      "GET",
+      `/actions/runs?check_suite_id=${suiteId}&per_page=2`,
+    );
+  } catch {
+    return unproven("the owning workflow run could not be read");
+  }
+  const runs = payload?.workflow_runs;
+  if (!Array.isArray(runs) || runs.length !== 1)
+    return unproven("the check suite does not resolve to exactly one run");
+  const run = runs[0];
+  const writer = TRUSTED_WRITERS.find(
+    (entry) => entry.path === run.path && entry.event === run.event,
+  );
+  if (
+    !writer ||
+    run.check_suite_id !== suiteId ||
+    !Number.isSafeInteger(run.id) ||
+    run.id <= 0 ||
+    run.repository?.full_name !== repository ||
+    (writer.branch !== undefined && run.head_branch !== writer.branch)
+  )
+    return unproven("the owning run is not a default-branch gate workflow");
+  return { ok: true, kind: writer.kind, runId: run.id };
+}
+
+async function listGateRecords(api, headSha) {
   const matches = [];
   for (let page = 1; page <= 100; page++) {
     const payload = await api(
@@ -206,36 +255,97 @@ export async function publishPrE2eCheck(
     if (payload.check_runs.length < 100) break;
     if (page === 100) throw new Error("Check inventory exceeded its bound.");
   }
-  if (matches.length > 1)
-    throw new Error("Duplicate GitHub Actions PR gates require investigation.");
-  const previous = matches[0];
-  const prefix = `g5:${prNumber}:`;
-  if (previous && !previous.external_id?.startsWith(prefix))
-    throw new Error("PR gate has an unexpected writer.");
-  if (mode === "initialize" && previous) return previous;
-  const externalId = prefix + runKey;
-  const [oldRun, oldAttempt] = (previous?.external_id ?? "")
-    .slice(prefix.length)
-    .split(":")
-    .map(Number);
-  const [newRun, newAttempt] = runKey.split(":").map(Number);
-  // GitHub can rerun a failed job and its dependents without rerunning begin.
-  // Accept that run's later attempt; never accept an older attempt or run.
-  const laterJobRerun = oldRun === newRun && newAttempt > oldAttempt;
-  if (
-    mode === "finish" &&
-    previous?.external_id !== externalId &&
-    !laterJobRerun
-  )
-    throw new Error("An obsolete attempt cannot publish a verdict.");
-  if (mode === "begin" && previous) {
-    if (oldRun > newRun || (oldRun === newRun && oldAttempt > newAttempt))
-      throw new Error("An obsolete attempt cannot restart the gate.");
+  return matches;
+}
+
+/**
+ * Read-only arming assertion for jobs that run or feed candidate code and hold
+ * only `checks: read`. A job-level rerun starts without re-running
+ * `e2e-gate-begin` (GitHub re-runs a selected job and its dependents, never its
+ * ancestors), so such a job must not work beside a standing success. Any
+ * same-app success counts, proven or not: nothing here needs origin to refuse.
+ */
+export async function gateIsArmed(api, headSha) {
+  const records = await listGateRecords(api, headSha);
+  return !records.some(
+    (record) => record.status === "completed" && record.conclusion === "success",
+  );
+}
+
+async function quarantine(api, records, reasons, detailsUrl) {
+  const body = {
+    status: "completed",
+    conclusion: "failure",
+    details_url: detailsUrl,
+    output: {
+      title: "Authenticated PR gate records are unproven or duplicated",
+      summary:
+        "This head has a same-name GitHub Actions check that trusted code cannot prove it wrote, or more than one such check. GitHub cannot delete check runs, so this head stays failed. Push a new commit. Reasons: " +
+        reasons.join("; "),
+    },
+  };
+  for (const record of records) {
+    if (record.status === "completed" && record.conclusion === "failure")
+      continue;
+    await api("PATCH", `/check-runs/${record.id}`, body);
   }
-  const pending = mode === "begin";
+  return { outcome: "quarantined", record: records[0] };
+}
+
+// The caller serializes initialize, begin and finish for a head with one Actions
+// concurrency group; reset only updates a record that already exists.
+/** @param {(method: string, route: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>} api
+ * @param {{headSha: string, prNumber: number, repository: string, runId: number, runKey?: string,
+ * mode: "initialize" | "begin" | "reset" | "finish",
+ * verdict?: {conclusion: string, reason: string} | null, summary?: string, detailsUrl?: string}} options
+ * @returns {Promise<{outcome: "written" | "kept" | "obsolete" | "quarantined", record?: Record<string, unknown>}>} */
+export async function publishPrE2eCheck(
+  api,
+  {
+    headSha,
+    prNumber,
+    repository,
+    runId,
+    runKey = "",
+    mode,
+    verdict = null,
+    summary = "",
+    detailsUrl = "",
+  },
+) {
+  if (!MODES.has(mode)) throw new Error("Unknown gate publication mode.");
+  if (!Number.isSafeInteger(runId) || runId <= 0)
+    throw new Error("Trusted run identity is unavailable.");
+  const records = await listGateRecords(api, headSha);
+  const origins = [];
+  for (const record of records)
+    origins.push(await establishOrigin(api, record, repository));
+  const reasons = origins.flatMap((origin) => (origin.ok ? [] : [origin.reason]));
+  if (records.length > 1) reasons.push("more than one same-name record exists");
+  // Any unexpected or unprovable record is failure at this head, never a throw
+  // that leaves an existing success standing.
+  if (reasons.length) return quarantine(api, records, reasons, detailsUrl);
+
+  const previous = records[0];
+  const origin = origins[0];
+  if (previous && mode === "initialize") return { outcome: "kept", record: previous };
+  // Run ids only order two swarm runs. Admission and swarm ids are not
+  // comparable evidence of recency, and attempts of one run are serial.
+  if (
+    previous &&
+    mode !== "initialize" &&
+    origin?.ok &&
+    origin.kind === "swarm" &&
+    origin.runId > runId
+  )
+    return { outcome: "obsolete", record: previous };
+  if (!previous && mode === "reset")
+    throw new Error("There is no gate record to reset.");
+
+  const pending = mode === "begin" || mode === "reset" || mode === "initialize";
   const body = {
     name: PR_E2E_CHECK,
-    external_id: externalId,
+    external_id: `g5:${prNumber}:${runKey}`,
     details_url: detailsUrl,
     // A retry revokes an older success before I/O. Completed failure is also
     // blocking if this workflow is then cancelled or its final job never starts.
@@ -245,10 +355,11 @@ export async function publishPrE2eCheck(
       title: pending
         ? "Authenticated PR execution pending"
         : (verdict?.reason ?? "Authenticated PR execution unavailable"),
-      summary: summary ?? "No counted authenticated evidence is available.",
+      summary: summary || "No counted authenticated evidence is available.",
     },
   };
-  return previous
-    ? api("PATCH", `/check-runs/${previous.id}`, body)
-    : api("POST", "/check-runs", { ...body, head_sha: headSha });
+  const record = previous
+    ? await api("PATCH", `/check-runs/${previous.id}`, body)
+    : await api("POST", "/check-runs", { ...body, head_sha: headSha });
+  return { outcome: "written", record };
 }
