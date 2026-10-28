@@ -5347,6 +5347,18 @@ describe("a settlement advice that contradicts the approval", () => {
         refusal: error instanceof Error ? error.message : String(error),
       }));
 
+    // SCRUM-766 PR-C: the supplier terms behind a supplier concession. Finance-tier
+    // (`view:finance`), which this sales-only fixture does not hold, so it refuses -
+    // and a refusal is swept like any other response.
+    const supplierConcessionBasisDoor = await s.asUser
+      .query(api.financingEconomics.supplierConcessionBasis, {
+        orgId: s.orgId,
+        applicationId,
+      })
+      .catch((error: unknown) => ({
+        refusal: error instanceof Error ? error.message : String(error),
+      }));
+
     // ANTI-VACUITY. Every door must have actually returned this deal. An empty
     // page or a null document contains no evidence for the trivial reason, and
     // would let this test pass while proving nothing at all.
@@ -5395,6 +5407,7 @@ describe("a settlement advice that contradicts the approval", () => {
       ["financingEconomics.suggestQuotationForApplication", quotation],
       ["financingEconomics.suggestQuotation", suggestion],
       ["financingEconomics.previewCreationQuotation", creationPreview],
+      ["financingEconomics.supplierConcessionBasis", supplierConcessionBasisDoor],
     ];
 
     // COMPLETENESS, enforced rather than asserted in a comment. The list above
@@ -5471,6 +5484,10 @@ describe("a settlement advice that contradicts the approval", () => {
         // left this test green.
         "supplierDisbursementConfirmedAt",
         "supplierDisbursementConfirmedBy",
+        // SCRUM-766 PR-C: the supplier concession and the supplier terms it was agreed
+        // against are finance-tier, withheld from a sales-only caller on every door.
+        "supplierGapShareMinor",
+        "supplierGapBasis",
       ]) {
         expect(`${name} exposes ${field}: ${keysOf(response).has(field)}`).toBe(
           `${name} exposes ${field}: false`
