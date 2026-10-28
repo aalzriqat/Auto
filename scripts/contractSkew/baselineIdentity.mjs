@@ -7,6 +7,10 @@ import { CLIENT_SURFACES, listSurfaceFiles } from "./clientFiles.mjs";
 
 export const DEFAULT_BASELINE = "scripts/contractSkew/needs-evidence-baseline.json";
 
+/** Exit codes shared by the identity check and the relocation helper. */
+export const EXIT_IDENTITY_DRIFT = 10;
+export const EXIT_UNAVAILABLE = 3;
+
 /** @typedef {{surface: string, file: string, callSiteId: string, functionId: string, contractPath?: string, kind?: string}} CallIdentity */
 /** @param {CallIdentity} entry */
 export const callKey = (entry) => JSON.stringify([entry.surface, entry.file, entry.callSiteId, entry.functionId]);

@@ -35,9 +35,9 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { CLIENT_SURFACES } from "./clientFiles.mjs";
 import { resolveGit } from "./gitExecutable.mjs";
+import { DEFAULT_BASELINE } from "./baselineIdentity.mjs";
+import { parseCanonicalBaseline, serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
 import { createImportClosure } from "./importClosure.mjs";
-
-export const RENEWED_EXPIRES = "2026-12-01";
 
 const MODULE_FUNCTION_ID = /^([A-Za-z0-9_]+):([A-Za-z0-9_]+)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -150,12 +150,7 @@ export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
   if (!DATE.test(expires) || Number.isNaN(Date.parse(expires))) throw new Error(`expires must be YYYY-MM-DD, got ${expires}`);
   if (typeof renewal !== "string" || renewal.trim() === "") throw new Error("a non-empty renewal reason is required");
 
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  const normalized = text.replace(/\r\n/g, "\n");
-  const document = JSON.parse(normalized);
-  if (JSON.stringify(document, null, 2) + "\n" !== normalized) {
-    throw new Error("the baseline is not in canonical 2-space JSON, so a rewrite would reformat it; refusing");
-  }
+  const document = parseCanonicalBaseline(text);
   if (!document || !Array.isArray(document.entries)) throw new Error("the baseline has no entries array");
 
   let renewed = 0;
@@ -177,8 +172,7 @@ export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
     return { ...entry, expires, renewal };
   });
 
-  const out = JSON.stringify(document, null, 2) + "\n";
-  return { text: eol === "\n" ? out : out.replace(/\n/g, eol), renewed, skipped, refused };
+  return { text: serializeBaseline(document, text), renewed, skipped, refused };
 }
 
 function parseArgs(argv) {
@@ -196,11 +190,12 @@ function main(argv) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const args = parseArgs(argv);
   if (!args.reviewed) throw new Error("--reviewed <rev> is required");
+  if (!args.expires) throw new Error("--expires <YYYY-MM-DD> is required: the new expiry is a decision, never defaulted");
   if (!args.renewal) throw new Error('--renewal "<reason>" is required: a renewal records why, it is never defaulted');
   const git = resolveGit();
   if (!git) throw new Error("git could not be located (set CONTRACT_SKEW_GIT to an absolute path)");
   const head = args.head ?? "HEAD";
-  const baseline = args.baseline ? path.resolve(args.baseline) : path.join(root, "scripts", "contractSkew", "needs-evidence-baseline.json");
+  const baseline = path.resolve(args.baseline ?? path.join(root, DEFAULT_BASELINE));
 
   const resolve = (rev) => execFileSync(git, ["rev-parse", "--verify", `${rev}^{commit}`], { cwd: root, encoding: "utf8" }).trim();
   const reviewed = resolve(args.reviewed);
@@ -234,14 +229,14 @@ function main(argv) {
   const result = renewBaseline(baselineText, {
     compare: gitCompare({ git, cwd: root, reviewed, head: headSha }),
     closureOf,
-    expires: args.expires ?? RENEWED_EXPIRES,
+    expires: args.expires,
     renewal: args.renewal,
   });
   console.log(`reviewed ${reviewed}\nhead     ${headSha}`);
   console.log(`renewed ${result.renewed}, already current ${result.skipped}, refused ${result.refused.length}`);
   for (const r of result.refused) console.log(`REFUSED entry #${r.index + 1} ${r.entry}: ${r.reason}`);
   if (args.write) {
-    fs.writeFileSync(baseline, result.text);
+    writeBaselineAtomically(baseline, result.text, baselineText);
     console.log(`wrote ${baseline}`);
   } else {
     console.log("dry run; pass --write to apply");

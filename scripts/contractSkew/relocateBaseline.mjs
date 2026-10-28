@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /** Explicit author tool; never imported or invoked by the production monitor. */
 import fs from "node:fs";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import ts from "typescript";
 import { resolveGit } from "./gitExecutable.mjs";
-import { DEFAULT_BASELINE, readIdentityBaseline, inspectBaselineIdentities, callExpressionAt,
+import { serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
+import { DEFAULT_BASELINE, EXIT_IDENTITY_DRIFT, EXIT_UNAVAILABLE, readIdentityBaseline, inspectBaselineIdentities, callExpressionAt,
   callKey, describeStranded } from "./baselineIdentity.mjs";
+
+// Fatal decoding prevents different invalid UTF-8 bytes comparing equal as replacement characters.
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 try {
   const { values } = parseArgs({ options: {
@@ -28,11 +30,10 @@ try {
   const proposals = stranded.map((finding) => {
     const { entry, candidates } = finding;
     if (!sources.has(entry.file)) {
-      // Fatal decoding prevents different invalid UTF-8 bytes comparing equal as replacement characters.
-      const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(runGit(["show", `${base}:${entry.file}`]));
+      const text = strictUtf8.decode(runGit(["show", `${base}:${entry.file}`]));
       const source = ts.createSourceFile(entry.file, text, ts.ScriptTarget.Latest, true);
       sources.set(entry.file, source);
-      const headText = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(fs.readFileSync(entry.file));
+      const headText = strictUtf8.decode(fs.readFileSync(entry.file));
       headSources.set(entry.file, ts.createSourceFile(entry.file, headText, ts.ScriptTarget.Latest, true));
     }
     const original = callExpressionAt(sources.get(entry.file), entry.callSiteId);
@@ -62,25 +63,13 @@ try {
   }
   if (values.write && proposals.length > refused) {
     // Preserve all review metadata; the only semantic edits permitted here are callSiteId values.
-    if (fs.readFileSync(values.baseline, "utf8") !== before) throw new Error("Baseline changed while checking; refusing write");
     const document = JSON.parse(before);
     document.entries = entries;
-    const temporary = path.join(path.dirname(values.baseline), `.${path.basename(values.baseline)}.${randomUUID()}.tmp`);
-    try {
-      // Keep the file's existing line endings (a Windows autocrlf checkout holds it as CRLF) so the diff is
-      // limited to the moved callSiteId values.
-      const serialized = JSON.stringify(document, null, 2) + "\n";
-      fs.writeFileSync(temporary, before.includes("\r\n") ? serialized.replace(/\n/g, "\r\n") : serialized,
-        { flag: "wx", mode: fs.statSync(values.baseline).mode });
-      fs.renameSync(temporary, values.baseline);
-    } finally {
-      // This file is created by this invocation; never remove the original baseline on failure.
-      fs.rmSync(temporary, { force: true });
-    }
+    writeBaselineAtomically(values.baseline, serializeBaseline(document, before), before);
   }
   console.log(`${proposals.length - refused} safe relocation(s), ${refused} requiring human review. ${values.write ? "Write requested." : "Dry run; baseline unchanged."}`);
-  process.exitCode = refused ? 10 : 0;
+  process.exitCode = refused ? EXIT_IDENTITY_DRIFT : 0;
 } catch (error) {
   console.error(`Relocation UNAVAILABLE; inspect the baseline before retrying: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 3;
+  process.exitCode = EXIT_UNAVAILABLE;
 }

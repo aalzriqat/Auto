@@ -6,7 +6,6 @@ import { afterAll, describe, expect, test } from "vitest";
 import { resolveGit } from "./gitExecutable.mjs";
 import { createImportClosure } from "./importClosure.mjs";
 import {
-  RENEWED_EXPIRES,
   backendModuleOf,
   gitCompare,
   rationalePaths,
@@ -15,6 +14,7 @@ import {
 
 type Compare = (file: string) => "identical" | "changed" | "missing";
 
+const RENEWED_EXPIRES = "2026-12-01";
 const RENEWAL = "SCRUM-866: client and backend unchanged since reviewed revision c82890bd; fingerprint and cause matched in production run 40647249580";
 
 const entry = (over: Record<string, unknown> = {}) => ({
