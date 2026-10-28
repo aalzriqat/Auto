@@ -7,6 +7,7 @@ import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireOrgMember, requireOwnedRow, requireOwner, requireTenantAuth } from "./utils/tenancy";
 import { AppErrorCode } from "./utils/errors";
 import { runWithIdempotency } from "./utils/idempotency";
+import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import {
   getOrgCurrency,
@@ -388,9 +389,10 @@ function assertNotFuture(value: number | undefined, now: number, label: string):
  * a correction journal on record. There is no immutable correction path in
  * this bounded change, so every such edit is REFUSED here with the reason,
  * and the screen reads the same predicate (`listDealCosts.economicsFrozen`)
- * to explain a disabled control. What is still allowed: settling custody that
- * already exists (return, reimburse, reverse a cash leg, reconcile, write
- * off, reopen), reconciling a recorded figure, and every read.
+ * to explain a disabled control. Returns and balanced reconciliation of existing
+ * custody, reconciliation of recorded figures and reads remain available.
+ * RT11-DOORS additionally blocks reimbursement/reversal after finalization,
+ * shortage write-off, legacy migration and reopening during the pilot.
  */
 export function dealEconomicsFrozen(
   app: Pick<Doc<"financeApplications">, "status" | "finalizedSaleId">
@@ -423,9 +425,9 @@ function assertDealEconomicsOpen(
  * issuing command's idempotent section, so an exact replay of an issuance
  * that succeeded before the deal stopped still returns its stored result.
  *
- * NEW cash only. Settling custody that already exists — a return, a
- * reimbursement, a reversal, a reconciliation, a write-off, a reopen — is
- * what a stopped deal still needs, and stays open.
+ * NEW cash only. Separate RT11-DOORS pilot guards govern settlement:
+ * reimbursement/reversal refuse after finalization; write-off, migration and
+ * reopen refuse outright. Returns and balanced reconciliation stay available.
  */
 export function dealAcceptsNewCustodyCash(
   app: Pick<Doc<"financeApplications">, "status" | "finalizedSaleId">
@@ -3495,13 +3497,20 @@ export const recordCustodyMovement = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
     ]);
-    await requireOwnedRow(
+    const ownedCustody = await requireOwnedRow(
       ctx,
       args.orgId,
       "financeDealCustody",
       args.custodyId,
       CUSTODY_NOT_FOUND
     );
+    // RT11-DOORS: before the idempotency claim, which itself writes.
+    if (args.kind === "REVERSAL" || args.kind === "REIMBURSED") {
+      const parent = await requireOwnedRow(ctx, args.orgId, "financeApplications", ownedCustody.applicationId, APPLICATION_NOT_FOUND);
+      if (dealEconomicsFrozen(parent).frozen) {
+        assertRt11DoorAllowed("CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED");
+      }
+    }
     assertMinorAmount(args.amountMinor, "Amount");
     if (args.amountMinor <= 0) {
       throw new ConvexError("The amount must be greater than zero.");
@@ -3520,7 +3529,8 @@ export const recordCustodyMovement = mutation({
     // `reimbursementOverpaidMinor` rather than clamping it away, which is right
     // — but detecting a double payment is a worse outcome than not making one.
     //
-    // ⚠️ EVERY STATE-DEPENDENT ADMISSIBILITY CHECK IS INSIDE THE CALLBACK. A
+    // Other state-dependent checks stay inside the callback. RT11-DOORS
+    // containment above deliberately precedes even a stored replay. A
     // replay of a movement that already SUCCEEDED must return the stored
     // result, not a refusal describing the state that success created: a
     // RETURNED whose own first attempt filled the advance ("would return more
@@ -3599,8 +3609,9 @@ export const recordCustodyMovement = mutation({
         }
         // More cash against an EXISTING record is still fresh cash on a
         // recognized deal — the same door `openDealCustody` closes. Settling
-        // what the employee already holds (return, reimburse, reverse) stays
-        // open; only ISSUED is new. Inside the section, like every other
+        // what the employee already holds is separate from fresh issuance;
+        // RT11-DOORS above gates finalized reimbursement/reversal. Inside the
+        // section, like every other
         // state check here, so a replay of an issuance that succeeded before
         // the deal froze still returns its stored result. The parent is
         // loaded through the owned-row check, never optionally: an anchor
@@ -3720,6 +3731,14 @@ export const reconcileDealCustody = mutation({
       throw new ConvexError("Record what was checked before closing this custody record.");
     }
     const writeOffReason = args.writeOffReason?.trim() || undefined;
+    // A balanced closure stays allowed even when a reason was supplied.
+    if (writeOffReason) {
+      const summary = summarizeReadableCustody(owned, await loadActiveFees(ctx, owned.applicationId), "closing this custody record");
+      if (!summary.settled && summary.employeeOwesDealerMinor > 0 && summary.overReturnedMinor === 0 &&
+          summary.reimbursementOutstandingMinor === 0 && summary.reimbursementOverpaidMinor === 0) {
+        assertRt11DoorAllowed("CUSTODY_WRITEOFF_PILOT_DISABLED");
+      }
+    }
 
     // A closure that writes off posts a journal, and a closure at all is
     // what lets the deal classify — so a lost response must replay the
@@ -3857,6 +3876,7 @@ export const migrateLegacyCustodyToLedger = mutation({
       CUSTODY_NOT_FOUND
     );
     assertNotCustodian(owned, user._id, "Migrating a custody record to the ledger");
+    assertRt11DoorAllowed("CUSTODY_MIGRATION_PILOT_DISABLED");
 
     return await runWithIdempotency(
       ctx,
@@ -4079,6 +4099,7 @@ export const reopenDealCustody = mutation({
       args.custodyId,
       CUSTODY_NOT_FOUND
     );
+    assertRt11DoorAllowed("CUSTODY_REOPEN_PILOT_DISABLED");
     if (custody.status === "OPEN") return args.custodyId;
     // Reopening puts the record back where its holder can be reimbursed
     // from it; the holder does not reopen their own (final round E).

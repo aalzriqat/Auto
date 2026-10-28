@@ -767,12 +767,15 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // retireAlias, internal initialiseRegistry, internal backfillRegistry), +7 analysed (all but
   // the org-less backfill), +1 skippedNoOrgId (backfillRegistry paginates every organization).
   // Every caller-supplied supplier or alias id goes through requireOwnedRow.
+  // SCRUM-782: recoverPeriodHeldSupplierVat is an internal deployment-wide
+  // migration with no orgId argument. Re-measured at 23fb6282 and round 3:
+  // +1 total and skippedNoOrgId; analysed tenant handlers remain 380.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 562,
+      totalMutations: 563,
       analysed: 380,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 167,
+      skippedNoOrgId: 168,
     });
   });
 });

@@ -52,6 +52,12 @@ import {
   type FinancedSalePlanPayload,
 } from "../accounting/postingRules";
 import { isServerDerivedPlanVersion } from "./financedSalePostingPlan";
+import {
+  effectiveSupplierEntitlementMinor,
+  financedConsignedNetMinor,
+  resolveEffectiveEntitlementForCompletion,
+  SUPPLIER_CONCESSION_REFUSALS,
+} from "./supplierConcession";
 import { isChartInitialized } from "../chartOfAccounts";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
 import { effectiveCommissionMode } from "./commissionMode";
@@ -334,6 +340,14 @@ type PreparedSaleCompletion = {
   /** The frozen OR-5 operands, present only when they apply to this completion. */
   commissionBase?: CommissionBase;
   currency: string;
+  /**
+   * SCRUM-766 PR-C: the supplier's concession S on a sourced vehicle, read from the finalizing
+   * application (0 when none). Apply subtracts it from the cost basis so everything downstream
+   * (payable, claim, margin, GL) inherits E_eff = E - S.
+   */
+  supplierConcessionMinor: number;
+  /** M = K - E_eff - contra, signed, when the commission basis was derived at prepare time. */
+  consignedFinancedNetMinor?: number;
   // True when the commission amount is already known at completion, in EITHER
   // mode. MANUAL used to defer accrual to payment time so the amount stayed
   // editable; it no longer does — recognition follows measurability, and a
@@ -548,6 +562,8 @@ async function prepareSaleCompletion(
     }
   }
 
+  // SCRUM-766 PR-C: the application this sale finalizes, kept for the supplier concession.
+  let financeApplication: Doc<"financeApplications"> | null = null;
   if (args.applicationId) {
     const app = await ctx.db.get(args.applicationId);
     if (app?.orgId !== args.orgId) {
@@ -560,6 +576,7 @@ async function prepareSaleCompletion(
     ) {
       throw new ConvexError("Finance application does not match the sale source records.");
     }
+    financeApplication = app;
     // SCRUM-495: the mode the application froze at submission is the one its
     // deal reads everywhere, so it is refused on the same footing as the quote.
     assertOperatedDealMode(app.quoteModeAtSubmission);
@@ -613,6 +630,48 @@ async function prepareSaleCompletion(
     throw new ConvexError(FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT);
   }
 
+  // SCRUM-766 PR-C: the supplier's concession, read from the APPLICATION row (never a client
+  // argument) and applied only if the vehicle is still the contract it was agreed against.
+  // A deal with no concession gets 0 and the entitlement untouched.
+  const supplierTerms =
+    intent === "COMPLETION" && financeApplication !== null
+      ? resolveEffectiveEntitlementForCompletion({ app: financeApplication, vehicle, currency })
+      : { concessionMinor: 0, contractEntitlementMinor: undefined };
+  const supplierConcessionMinor = supplierTerms.concessionMinor;
+
+  // The ONE commission basis of a financed consigned deal: M = K - E_eff - contra
+  // (owner c22421: whoever covers the gap, the margin is the same). Computed here from the
+  // plan and the effective entitlement, frozen on the sale at apply time (where it is asserted
+  // equal), and read back by recalculation. This replaces the earlier basis for ALL consigned
+  // financed completions on a server-derived plan, not only those with a concession.
+  let consignedFinancedNet: { netMinor: number; currency: string } | undefined;
+  if (
+    intent === "COMPLETION" &&
+    isConsignedAgentSale(vehicle) &&
+    args.financedSalePlan &&
+    isServerDerivedPlanVersion(args.financedSalePlan.version) &&
+    vehicleHasCostBasis(vehicle)
+  ) {
+    const capitalizedCost = await computeVehicleCapitalizedCost(ctx, vehicle);
+    if (capitalizedCost > 0) {
+      const entitlementMinor = toMinorUnits(capitalizedCost, currency);
+      if (supplierConcessionMinor > 0 && supplierTerms.contractEntitlementMinor !== entitlementMinor) {
+        throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+      }
+      consignedFinancedNet = {
+        netMinor: financedConsignedNetMinor({
+          considerationMinor: planConsiderationMinor(args.financedSalePlan),
+          entitlementMinor: effectiveSupplierEntitlementMinor({
+            entitlementMinor,
+            concessionMinor: supplierConcessionMinor,
+          }),
+          contraMinor: planContraRevenueMinor(args.financedSalePlan),
+        }),
+        currency,
+      };
+    }
+  }
+
   // SCRUM-390 (OR-5): applies to a completion of a dealer-owned car only; a consigned
   // sale keeps its frozen-margin basis and a draft commits nothing.
   let commissionBase: CommissionBase | undefined;
@@ -655,6 +714,7 @@ async function prepareSaleCompletion(
       settlementRoute: args.supplierSettlementRoute,
       externallyFinanced: args.financingType === "FINANCED" || args.financingType === "LEASE",
       financedMargin,
+      consignedFinancedNet,
     });
     accrueAtCompletion = commissionAmount != null;
   }
@@ -719,7 +779,17 @@ async function prepareSaleCompletion(
     }
   }
 
-  return { vehicle, customer, leadId, commissionAmount, commissionBase, currency, accrueAtCompletion };
+  return {
+    vehicle,
+    customer,
+    leadId,
+    commissionAmount,
+    commissionBase,
+    currency,
+    accrueAtCompletion,
+    supplierConcessionMinor,
+    consignedFinancedNetMinor: consignedFinancedNet?.netMinor,
+  };
 }
 
 /**
@@ -781,10 +851,24 @@ export async function computeAutoCommissionAmount(
      * values; nothing is read from the application.
      */
     financedMargin?: CommissionBase;
+    /**
+     * SCRUM-766 PR-C: M = K - E_eff - contra of a financed CONSIGNED deal on a server-derived
+     * plan, signed, in integer minor units. When given it is the commissionable earning (never
+     * below 0), whichever way the supplier is settled. Completion derives it from the plan and
+     * the effective entitlement; recalculation passes the frozen figure as
+     * `frozenRecognizedEarnings` instead.
+     */
+    consignedFinancedNet?: { netMinor: number; currency: string };
   }
 ): Promise<number | undefined> {
   let grossProfit: number;
-  if (args.frozenRecognizedEarnings !== undefined) {
+  if (args.consignedFinancedNet !== undefined && args.frozenRecognizedEarnings === undefined) {
+    if (!vehicleHasCostBasis(args.vehicle)) return undefined;
+    grossProfit = fromMinorUnits(
+      Math.max(0, args.consignedFinancedNet.netMinor),
+      args.consignedFinancedNet.currency
+    );
+  } else if (args.frozenRecognizedEarnings !== undefined) {
     // The sale already recorded what it earned, and that figure is what the
     // ledger booked. Nothing is re-derived from the vehicle here — not even
     // its cost — because the vehicle is a live row and the earning is not.
@@ -1497,7 +1581,19 @@ async function applySaleCompletionSideEffects(
   // Hoisted above the deposit resolution because the settlement treatment is
   // capped at the margin, and the margin cannot be known without the cost.
   const costAmount = await computeVehicleCapitalizedCost(ctx, prepared.vehicle);
-  const costMinor = costAmount > 0 ? toMinorUnits(costAmount, prepared.currency) : undefined;
+  const contractCostMinor = costAmount > 0 ? toMinorUnits(costAmount, prepared.currency) : undefined;
+  // SCRUM-766 PR-C: on a sourced vehicle the supplier is owed E - S, not E. This is the single
+  // choke point: the payable, the claim, the margin, the frozen net and the GL below all read
+  // `costMinor`, so subtracting here lets them inherit the effective entitlement. S comes from
+  // `prepared` (read from the application row), never from an argument; it is 0 for stock cars
+  // and for deals with no concession, so those paths are byte-identical.
+  const costMinor =
+    contractCostMinor !== undefined && prepared.supplierConcessionMinor > 0
+      ? effectiveSupplierEntitlementMinor({
+          entitlementMinor: contractCostMinor,
+          concessionMinor: prepared.supplierConcessionMinor,
+        })
+      : contractCostMinor;
 
   // The ONE derivation of this deal's supplier economics. Everything downstream
   // — the recognized revenue, the margin recorded on the sale, the supplier
@@ -1610,6 +1706,18 @@ async function applySaleCompletionSideEffects(
         (isSourced ? (costMinor ?? 0) : 0) -
         planContraRevenueMinor(args.financedSalePlan)
       : undefined;
+
+  // SCRUM-766 PR-C: the commission basis prepare derived and the net revenue frozen here are
+  // the same quantity (M = K - E_eff - contra). They are computed in two places because the
+  // commission is needed before any write; a disagreement would pay payroll on a figure the
+  // books do not carry, so it stops the completion.
+  if (
+    prepared.consignedFinancedNetMinor !== undefined &&
+    frozenNetRevenueMinor !== undefined &&
+    prepared.consignedFinancedNetMinor !== frozenNetRevenueMinor
+  ) {
+    throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+  }
 
   const { previouslyCollected, appliedDeposits, appliedToSupplierSettlement } =
     await resolveReservationDeposits(ctx, {
@@ -1778,7 +1886,7 @@ async function applySaleCompletionSideEffects(
           console.error(error);
           const paidLabel = fromMinorUnits(supplierGrossReceiptMinor, prepared.currency);
           throw new ConvexError(
-            `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but he is only being paid ${paidLabel} against an entitlement of ${costAmount} — the amount he is owed for it. The deal would leave him short by money somebody has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
+            `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but he is only being paid ${paidLabel} against an entitlement of ${fromMinorUnits(costMinor, prepared.currency)} — the amount he is owed for it. The deal would leave him short by money somebody has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
           );
         }
         // A financed deal settled directly with the supplier used to be refused
@@ -2107,6 +2215,12 @@ async function applySaleCompletionSideEffects(
       // and cancellation reverses against it, and both would otherwise have to
       // recompute it from a vehicle cost that is editable after the sale.
       ...(costMinor !== undefined ? { consignedSupplierEntitlementMinor: costMinor } : {}),
+      // The concession that produced that effective entitlement, frozen beside it so the
+      // contract entitlement stays derivable (E = entitlement + concession). Absent = none.
+      // FINANCE tier: withheld from view:sales callers by `projectSaleRow`.
+      ...(prepared.supplierConcessionMinor > 0
+        ? { consignedSupplierConcessionMinor: prepared.supplierConcessionMinor }
+        : {}),
       // Only on the direct route: on THROUGH_DEALERSHIP nobody pays him
       // directly, and writing the sale price here would assert a receipt that
       // never happened.
@@ -2129,7 +2243,7 @@ async function applySaleCompletionSideEffects(
     });
   }
 
-  if (isSourced && costAmount > 0 && dealershipCollectsGross(settlementRoute)) {
+  if (isSourced && costMinor !== undefined && dealershipCollectsGross(settlementRoute)) {
     const now = Date.now();
     await ctx.db.insert("vehicleSupplierPayables", {
       orgId: args.orgId,
@@ -2141,7 +2255,8 @@ async function applySaleCompletionSideEffects(
       // stored raw this becomes a payable no payment can close: `recordPayment`
       // refuses to overpay, which leaves the last fraction of a fils unpayable
       // and the row permanently short of PAID.
-      amountDue: fromMinorUnits(toMinorUnits(costAmount, prepared.currency), prepared.currency),
+      // E_eff = E - S on a deal with a supplier concession (SCRUM-766 PR-C); E otherwise.
+      amountDue: fromMinorUnits(costMinor, prepared.currency),
       currency: prepared.currency,
       status: "PENDING",
       createdBy: args.actorId,

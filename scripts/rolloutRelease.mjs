@@ -33,6 +33,7 @@ import {
   bankRebuildStopMessage,
   bankRefusalMessage,
   rebuildBankBalances,
+  recoverSupplierVatHolds,
   renderBankRebuildSummary,
   renderReleaseSummary,
   requireBoundProductionKey,
@@ -41,6 +42,9 @@ import {
 const REPORT_FN = "adminSystem:materializationReportForRelease";
 const START_FN = "migrations:startSocialConversationBackfills";
 const BANK_BACKFILL_FN = "bankBalanceBackfill:runPage";
+const SUPPLIER_VAT_HOLD_FN = "accountingOutbox:recoverPeriodHeldSupplierVat";
+/** At most two parked rows per page, with a durable completion marker. */
+const MAX_SUPPLIER_VAT_HOLD_PAGES = 10_000;
 /** 16 journal lines per page, so this bounds one org at 160,000 bank lines. */
 const MAX_BANK_PAGES_PER_ORG = 10_000;
 
@@ -71,6 +75,7 @@ const CONVEX_CLI = path.join(process.cwd(), "node_modules", "convex", "bin", "ma
 let lastVerdict = null;
 let lastOutcome = "continue";
 let bankSummary = null;
+let supplierVatSummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -91,6 +96,7 @@ function writeSummary(extra) {
     outcome: lastOutcome === "continue" ? "failed" : lastOutcome,
   });
   if (bankSummary) body += `\n### Bank balances\n\n${bankSummary}\n`;
+  if (supplierVatSummary) body += `\n### Supplier VAT holds\n\n${supplierVatSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -222,6 +228,25 @@ if (!before.ok) fail(before.reason);
 const baseline = captureRunBaseline(before.orgs);
 console.log(`  baseline captured for ${before.orgs.length} organizations`);
 
+// SCRUM-782: run the one-time migration after identity verification, including
+// on an empty deployment. Like the bank rebuild, the backend owns its cursor
+// and each call commits one page. READY means reclassification is complete;
+// scheduled claims still use the ordinary outbox worker/refusal retry budget.
+// One deadline covers this phase, the bank rebuild and Inbox verification.
+const rolloutStartedAt = Date.now();
+lastVerdict = before.verdict;
+console.log(`Reclassifying legacy supplier VAT holds…`);
+const supplierVat = recoverSupplierVatHolds({
+  runPage: () => convex(["run", SUPPLIER_VAT_HOLD_FN, "{}"]),
+  now: Date.now,
+  startedAt: rolloutStartedAt,
+  timeoutMs: TIMEOUT_MS,
+  maxPages: MAX_SUPPLIER_VAT_HOLD_PAGES,
+});
+if (!supplierVat.ok) fail(supplierVat.reason);
+supplierVatSummary = `${supplierVat.reclassified} legacy holds released for worker review in ${supplierVat.pages} page call(s). This does not certify settlement repair.`;
+console.log(`  ${supplierVatSummary}`);
+
 // ─── 1b. A deployment with NO organizations has nothing to roll out ─────────
 
 // A fresh production deployment (SCRUM-231's clean slate) holds no
@@ -272,7 +297,6 @@ console.log(`  fan-out: ${JSON.stringify(started.value)}`);
 console.log(`Rebuilding bank balance aggregates…`);
 // ONE deadline covers this phase and the verification below, so the two can
 // never add up past the job's own timeout and kill it before the summary.
-const rolloutStartedAt = Date.now();
 // Until verification runs, the summary shows the pre-rollout report rather
 // than an empty "0/0" that reads as if the Social Inbox had been checked.
 lastVerdict = before.verdict;

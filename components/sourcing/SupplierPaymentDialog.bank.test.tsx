@@ -35,7 +35,7 @@ test.each(["en", "ar"] as const)("%s supplier payment requires a selected bank",
       payable={{ vehicleDesc: "Camry", sourcedFromName: "Supplier", amountDue: 100, currency: "JOD" }}
       open isPaying={false} notes="" paymentMethod={paymentMethod} bankAccountId={bankAccountId}
       bankOptions={{ banks: [{ _id: "bank_1" as Id<"bankAccounts">, name: "Operating", currency: "JOD" }], truncated: false }}
-      taxAmount="" t={(key) => key} onOpenChange={() => undefined} onNotesChange={() => undefined}
+      taxAmount="" vatAllowed t={(key) => key} onOpenChange={() => undefined} onNotesChange={() => undefined}
       onPaymentMethodChange={setPaymentMethod} onBankAccountChange={setBankAccountId}
       onTaxAmountChange={() => undefined} onConfirm={confirm}
     />;

@@ -630,3 +630,10 @@ describe("guide-required opening stock, bank, and cash replay", () => {
     expect(afterReadback).toEqual({ entries: 1, transactions: 0, events: 0, movements: 0 });
   });
 });
+
+// RT11-DOORS: historical lifecycle mechanics with the pilot doors explicitly open.
+// Shipped-state refusals and controls live in rt11DoorContainment.test.ts.
+vi.mock("./utils/rt11DoorContainment", async (importOriginal) =>
+  (await import("../test-utils/rt11DoorSwitches")).openRt11Doors(
+    await importOriginal<typeof import("./utils/rt11DoorContainment")>()
+  ));

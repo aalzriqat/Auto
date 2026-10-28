@@ -1,4 +1,5 @@
 import { ConvexError, v, type Value } from "convex/values";
+import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
 import { resolveDealCurrency, settlementDeductedTotalMinor } from "./utils/settlementDeductions";
 import {
   customerPaymentEvidenceOf,
@@ -23,6 +24,14 @@ import { PERMISSIONS } from "./utils/permissions";
 import { assertForwardAllowsEconomicsChange } from "./utils/financeCompanyForward";
 import { isManualFinanceApplication, isManualLetterUnitIntact, MANUAL_GAP_TO_FINANCIER_REFUSAL, normalizeManualPayerName } from "./utils/manualFinancePayer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
+import {
+  applicationVehicleIds,
+  assertObservedBasisMatchesVehicle,
+  contractEntitlementMinorOf,
+  SUPPLIER_CONCESSION_ALLOWS_GROSS_MANUAL,
+  SUPPLIER_CONCESSION_REFUSALS,
+  type SupplierConcessionBasis,
+} from "./utils/supplierConcession";
 import {
   computeAppraisalGap,
   computeSubmittedQuotation,
@@ -3073,6 +3082,19 @@ export const resolveAppraisalGap = mutation({
     economicsStamp: v.string(),
     customerGapShareMinor: v.number(),
     dealerGapShareMinor: v.number(),
+    /**
+     * SCRUM-766 PR-C: the part of the shortfall the SUPPLIER of a sourced vehicle concedes
+     * from his own entitlement. Optional (absent = 0) so existing callers are unchanged.
+     * Owner ruling SCRUM-760 c23812 ruling 3. Sourced vehicles only; a stock car is refused.
+     */
+    supplierGapShareMinor: v.optional(v.number()),
+    /**
+     * The supplier terms the operator OBSERVED when agreeing the concession (the entitlement
+     * and the supplier's name, from `supplierConcessionBasis`). Required with a concession;
+     * only ever COMPARED to the vehicle, never used as a figure.
+     */
+    observedSupplierEntitlementMinor: v.optional(v.number()),
+    observedSupplierName: v.optional(v.string()),
     customerGapCashToDealerMinor: v.number(),
     customerGapInstallmentToDealerMinor: v.number(),
     customerGapToFinanceCompanyMinor: v.number(),
@@ -3231,7 +3253,8 @@ export const resolveAppraisalGap = mutation({
     const alreadyResolved =
       app.gapResolution === "CUSTOMER_ABSORBS" ||
       app.gapResolution === "SPLIT" ||
-      app.gapResolution === "DEALER_ABSORBS";
+      app.gapResolution === "DEALER_ABSORBS" ||
+      app.gapResolution === "SUPPLIER_ABSORBS";
     if (alreadyResolved) {
       throw new ConvexError(
         "Who covers this difference has already been agreed and recorded on this deal. To change it, reopen the approved purchase amount — that clears the agreement and puts the deal back into negotiation."
@@ -3254,9 +3277,42 @@ export const resolveAppraisalGap = mutation({
       );
     }
 
+    // SCRUM-766 PR-C: the supplier's share. Absent = 0. A positive share is a CONCESSION by
+    // the supplier of a sourced vehicle against his own entitlement, so it is allowed only
+    // where that entitlement exists and was observed by the operator; everything else about
+    // it (amount bounds, shares summing to the shortfall) is the shared engine's.
+    // Pending owner ruling Q3: GROSS_MANUAL shortfalls are allowed by default (flip with
+    // SUPPLIER_CONCESSION_ALLOWS_GROSS_MANUAL); UNAVAILABLE was refused above.
+    const supplierShare = args.supplierGapShareMinor ?? 0;
+    let supplierBasis: SupplierConcessionBasis | undefined;
+    if (supplierShare !== 0) {
+      if (!SUPPLIER_CONCESSION_ALLOWS_GROSS_MANUAL && shortfall.method === "GROSS_MANUAL") {
+        throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.UNAVAILABLE_SHORTFALL);
+      }
+      if (!Number.isSafeInteger(supplierShare) || supplierShare < 0) {
+        throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.INVALID_AMOUNT);
+      }
+      if (applicationVehicleIds(app).length !== 1) {
+        throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.MULTI_VEHICLE);
+      }
+      const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", app.vehicleId);
+      const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+      if (app.economicsCurrency !== orgCurrency) {
+        throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+      }
+      supplierBasis = assertObservedBasisMatchesVehicle({
+        vehicle,
+        currency: orgCurrency,
+        concessionMinor: supplierShare,
+        observedEntitlementMinor: args.observedSupplierEntitlementMinor,
+        observedSupplierName: args.observedSupplierName,
+      });
+    }
+
     const settlement = {
       customerGapShareMinor: args.customerGapShareMinor,
       dealerGapShareMinor: args.dealerGapShareMinor,
+      supplierGapShareMinor: supplierShare,
       customerGapCashToDealerMinor: args.customerGapCashToDealerMinor,
       customerGapInstallmentToDealerMinor: args.customerGapInstallmentToDealerMinor,
       customerGapToFinanceCompanyMinor: args.customerGapToFinanceCompanyMinor,
@@ -3273,13 +3329,18 @@ export const resolveAppraisalGap = mutation({
     const resolution = classifyGapResolution(
       shortfallMinor,
       args.customerGapShareMinor,
-      args.dealerGapShareMinor
+      args.dealerGapShareMinor,
+      supplierShare
     );
 
     const notes = args.notes?.trim();
     await ctx.db.patch(args.applicationId, {
       gapResolution: resolution,
       ...settlement,
+      // Stored only when positive; absent means no concession (a stored 0 would be a claim).
+      // These two keys come after the spread so they override its `supplierGapShareMinor: 0`.
+      supplierGapShareMinor: supplierShare > 0 ? supplierShare : undefined,
+      supplierGapBasis: supplierBasis,
       gapResolvedAt: Date.now(),
       gapResolvedBy: user._id,
       // Distinct from omitting it: an emptied note clears the previous one
@@ -3308,7 +3369,7 @@ export const resolveAppraisalGap = mutation({
       applicationId: args.applicationId,
       field: "gapResolution",
       previousValue: app.gapResolution,
-      newValue: `${resolution} (customer ${args.customerGapShareMinor}, dealer ${args.dealerGapShareMinor}; customer share as cash ${args.customerGapCashToDealerMinor}, installments ${args.customerGapInstallmentToDealerMinor}, to the finance company ${args.customerGapToFinanceCompanyMinor}; against a ${shortfall.method === "GROSS_MANUAL" ? "gross" : "net"} shortfall of ${shortfallMinor})`,
+      newValue: `${resolution} (customer ${args.customerGapShareMinor}, dealer ${args.dealerGapShareMinor}, supplier ${supplierShare}; customer share as cash ${args.customerGapCashToDealerMinor}, installments ${args.customerGapInstallmentToDealerMinor}, to the finance company ${args.customerGapToFinanceCompanyMinor}; against a ${shortfall.method === "GROSS_MANUAL" ? "gross" : "net"} shortfall of ${shortfallMinor})`,
       // `notes ? notes : …`, NOT `??`: a whitespace-only note trims to "", which
       // is defined, so nullish coalescing would write an EMPTY reason onto the
       // one audit row that explains why money moved.
@@ -3317,6 +3378,42 @@ export const resolveAppraisalGap = mutation({
     });
 
     return args.applicationId;
+  },
+});
+
+/**
+ * SCRUM-766 PR-C: the supplier terms an operator reviews before agreeing a supplier
+ * concession, and the same terms `resolveAppraisalGap` demands back as the OBSERVED basis.
+ * Finance-tier (the entitlement is what the supplier is owed): `view:finance` AND
+ * `view:finance_applications`, the same pair the cockpit's money rail needs. `eligible` is
+ * false (never an error) for a stock car, a multi-vehicle application or a vehicle with no
+ * recorded entitlement, so the dialog can simply not offer the field.
+ */
+export const supplierConcessionBasis = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+      PERMISSIONS.VIEW_FINANCE,
+    ]);
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
+    if (applicationVehicleIds(app).length !== 1) return { eligible: false as const };
+    const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", app.vehicleId);
+    // A stock car has no supplier name: answer before the currency read.
+    const supplierName = (vehicle.sourcedFromName ?? "").trim();
+    if (supplierName === "") return { eligible: false as const };
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    const entitlementMinor = contractEntitlementMinorOf(vehicle, currency);
+    if (entitlementMinor === undefined) return { eligible: false as const };
+    return {
+      eligible: true as const,
+      entitlementMinor,
+      currency,
+      supplierName,
+    };
   },
 });
 
@@ -3462,6 +3559,7 @@ export const recordManualFinanceApproval = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.APPROVE_FINANCE_APPLICATION,
     ]);
+    assertRt11DoorAllowed("MANUAL_FINANCE_APPROVAL_PILOT_DISABLED");
     assertMinorAmount(args.approvedAmountMinor, "Approved amount");
     if (args.approvedAmountMinor <= 0) {
       throw new ConvexError("The approved amount must be greater than zero.");

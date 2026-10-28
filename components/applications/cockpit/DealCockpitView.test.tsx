@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { DealCockpitData } from "./DealCockpit";
+import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 
 const language = vi.hoisted(() => ({ locale: "ar" as "ar" | "en" }));
 
@@ -17,7 +18,7 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
     // Identity `t` so a MISSING translation shows up as its key rather than
     // silently rendering something plausible.
-    t: (key: string) => key,
+    t: (key: string) => rt11.disabled ? ((language.locale === "en" ? commonEn : commonAr) as Record<string, string>)[key] ?? key : key,
     isRtl: language.locale === "ar",
     locale: language.locale,
   }),
@@ -1899,4 +1900,27 @@ describe("last updated on a phone", () => {
       within(screen.getByTestId("deal-identity-mobile")).getByTestId("deal-essentials-last-updated").textContent
     ).toContain("—");
   });
+});
+
+
+// Historical UI mechanics keep these doors open; RT11 tests below use the REAL shipped switch.
+const rt11 = vi.hoisted(() => ({ disabled: false }));
+vi.mock("@/convex/utils/rt11DoorContainment", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/convex/utils/rt11DoorContainment")>();
+  return { ...original, isRt11DoorDisabled: (code: import("@/convex/utils/rt11DoorContainment").Rt11DoorCode) => rt11.disabled && original.isRt11DoorDisabled(code) };
+});
+afterEach(() => { rt11.disabled = false; });
+
+test("RT11 supplier advice correction stays disabled with a localized reason", () => {
+  rt11.disabled = true;
+  for (const locale of ["en", "ar"] as const) {
+    language.locale = locale;
+    render(<DealCockpitView deal={dealFixture({ settlementAdviceDiscrepancy: DISCREPANCY })} canCorrectAdvice onCorrectSettlementAdvice={async () => {}} onRecordSupplierReceipt={async () => {}} />);
+    const button = screen.getByRole("button", { name: "CorrectSettlementAdvice" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText((locale === "en" ? commonEn : commonAr).ServerError_SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED)).toBeTruthy();
+    fireEvent.click(button);
+    expect(screen.queryByLabelText("SettlementAdviceAmountLabel")).toBeNull();
+    cleanup();
+  }
 });

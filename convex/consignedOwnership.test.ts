@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -232,3 +232,10 @@ describe("conversion to dealer-owned stock", () => {
     expect(vehicle?.sourceType).toBe("SOURCED");
   });
 });
+
+// RT11-DOORS: historical lifecycle mechanics with the pilot doors explicitly open.
+// Shipped-state refusals and controls live in rt11DoorContainment.test.ts.
+vi.mock("./utils/rt11DoorContainment", async (importOriginal) =>
+  (await import("../test-utils/rt11DoorSwitches")).openRt11Doors(
+    await importOriginal<typeof import("./utils/rt11DoorContainment")>()
+  ));

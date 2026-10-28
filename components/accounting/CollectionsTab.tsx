@@ -61,9 +61,17 @@ import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { RetainedCreditRefundsSection } from "./RetainedCreditRefundsSection";
 import { MoneySurfaceErrorBoundary } from "./MoneySurfaceErrorBoundary";
 import { isClearedChequeReturnDisabled } from "@/convex/utils/postDeliveryDoorContainment";
+import { isLegacyCollectionRefundDisabled } from "@/convex/utils/legacyCollectionRefundContainment";
 
 /** SCRUM-760: returning a cheque the bank already CLEARED is blocked server-side for the pilot. */
 const returnBlockedByPilot = (cheque: { status: string }) => cheque.status === "CLEARED" && isClearedChequeReturnDisabled();
+
+/**
+ * SCRUM-760 ruling 11: a refund against a collection receivable is blocked server-side for the pilot
+ * (`collections.requestApproval` / `respondToApproval` APPROVED). The screen does not offer the action and
+ * says why; the server refusal stays the guarantee. Rejecting a pending refund request stays offered.
+ */
+const REFUND_BLOCKED_KEY = "ServerError_LEGACY_COLLECTION_REFUND_PILOT_DISABLED" as const;
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -215,7 +223,7 @@ export function CollectionsTab() {
       commandId.retire(intent);
       toast.success(status === "APPROVED" ? t("CollectionToastRequestApproved" as any) : t("CollectionToastRequestRejected" as any));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     }
   }
 
@@ -300,6 +308,12 @@ export function CollectionsTab() {
             </div>
           </div>
 
+          {isLegacyCollectionRefundDisabled() && canManage && (
+            <p role="status" className="text-xs text-muted-foreground" data-testid="collection-refund-pilot-notice">
+              {t(REFUND_BLOCKED_KEY as any)}
+            </p>
+          )}
+
           {receivablesView === "calendar" ? (
             <InstallmentCalendar />
           ) : (
@@ -344,7 +358,7 @@ export function CollectionsTab() {
                           <Button aria-label={t("Reschedule" as any)} title={t("Reschedule" as any)} size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "RESCHEDULE" })}>
                             <CalendarClock className="h-3.5 w-3.5" />
                           </Button>
-                          <Button aria-label={t("Refund" as any)} title={t("Refund" as any)} size="sm" variant="outline" onClick={() => setApprovalTarget({ receivable: row, type: "REFUND" })}>
+                          <Button aria-label={t((isLegacyCollectionRefundDisabled() ? REFUND_BLOCKED_KEY : "Refund") as any)} title={t((isLegacyCollectionRefundDisabled() ? REFUND_BLOCKED_KEY : "Refund") as any)} size="sm" variant="outline" disabled={isLegacyCollectionRefundDisabled()} onClick={() => setApprovalTarget({ receivable: row, type: "REFUND" })}>
                             <RotateCcw className="h-3.5 w-3.5" />
                           </Button>
                         </div>}
@@ -658,9 +672,14 @@ export function CollectionsTab() {
                         <TableCell className="text-right">{row.requestedAmount ? formatCurrency(row.requestedAmount) : "-"}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
-                            <Button size="sm" variant="outline" onClick={() => decideApproval(row, "APPROVED")}>{t("Approve" as any)}</Button>
+                            <Button size="sm" variant="outline" disabled={row.requestType === "REFUND" && isLegacyCollectionRefundDisabled()} title={row.requestType === "REFUND" && isLegacyCollectionRefundDisabled() ? t(REFUND_BLOCKED_KEY as any) : undefined} onClick={() => decideApproval(row, "APPROVED")}>{t("Approve" as any)}</Button>
                             <Button size="sm" variant="outline" onClick={() => decideApproval(row, "REJECTED")}>{t("Reject" as any)}</Button>
                           </div>
+                          {row.requestType === "REFUND" && isLegacyCollectionRefundDisabled() && (
+                            <p className="mt-1 text-xs text-muted-foreground" data-testid="collection-refund-pilot-disabled">
+                              {t(REFUND_BLOCKED_KEY as any)}
+                            </p>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))
@@ -1197,7 +1216,7 @@ export function ApprovalRequestDialog({ target, onOpenChange }: { target: { rece
       setDisbursementMethod(undefined);
       setRefundBankAccountId("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setSubmitting(false);
     }
