@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * The rehearsal runner's REFUSALS, proved rather than asserted.
  *
@@ -820,15 +821,16 @@ test("a run that both FAILED and left cases UNPROVEN names BOTH lists in the ban
 
 describe("SCRUM-486 case order: U-RET runs after the S858 cleanup cases", () => {
   // Rationale: see runRehearsalSequence in accountingPreviewRehearsal.mjs (run 40521502331).
-  test("cases, then cleanup with the inventory as it stands, then unwind; unwind organizations never reach the inventory", async () => {
+  test("cases, then cleanup, then unwind and ruling 11; their organizations never reach the cleanup inventory", async () => {
     const order: string[] = [];
     const created = new Set<string>(["baseline"]);
     await runRehearsalSequence(() => [...created], {
       runCases: async () => { order.push("cases"); created.add("shared-case-org"); },
       runCleanup: async (ids: string[]) => { order.push(`cleanup:${ids.join(",")}`); },
       runUnwind: async () => { order.push("unwind"); created.add("uret-org-1"); created.add("uret-org-2"); },
+      runPilotRoutes: async () => { order.push("pilot-routes"); created.add("ruling11-org"); },
     });
-    expect(order).toEqual(["cases", "cleanup:baseline,shared-case-org", "unwind"]);
+    expect(order).toEqual(["cases", "cleanup:baseline,shared-case-org", "unwind", "pilot-routes"]);
   });
 
   test("a failing earlier group stops the sequence so no later group runs on a half-built preview", async () => {
@@ -837,6 +839,7 @@ describe("SCRUM-486 case order: U-RET runs after the S858 cleanup cases", () => 
       runCases: async () => { order.push("cases"); throw new Error("cases failed"); },
       runCleanup: async () => { order.push("cleanup"); },
       runUnwind: async () => { order.push("unwind"); },
+      runPilotRoutes: async () => { order.push("pilot-routes"); },
     })).rejects.toThrow("cases failed");
     expect(order).toEqual(["cases"]);
   });

@@ -132,7 +132,7 @@ async function retry(must, f, operation) {
   return first;
 }
 
-async function prepare(ctx) {
+async function prepare(ctx, { cash = false, beforeReceipt = false } = {}) {
   const must = ctx.salesMust, approver = object(await ctx.approverMust("query", "users:getMe", {}));
   const primary = object(await must("query", "users:getMe", {}));
   equal(String(primary.email).toLowerCase(), ctx.config.salesEmail.toLowerCase(), "actual primary identity");
@@ -166,6 +166,17 @@ async function prepare(ctx) {
   const vehicleId = await must("mutation", "vehicles:create", { orgId, vin: `1HGCM82633A${key().replaceAll("-", "").slice(0, 6).toUpperCase()}`,
     make: "Kia", model: "Sportage", year: 2024, mileage: 10, color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
     sellingPrice: 12500, status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 10000, purchasePaymentMethod: "CASH", idempotencyKey: key() });
+  if (cash) {
+    const quoteId = await must("mutation", "quotes:saveQuote", { orgId, customerId, vehicleId,
+      mode: "CASH", vehiclePrice: 12500, downPayment: 0, termMonths: 0 });
+    const depositId = await must("mutation", "deposits:create", { orgId, quoteId, amount: 12500, method: "CASH", idempotencyKey: key() });
+    const saleId = await must("mutation", "sales:create", { orgId, quoteId, vehicleId, customerId, salespersonId: primary._id,
+      salePrice: 12500, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH", idempotencyKey: key() });
+    const sale = object(await must("query", "sales:get", { orgId, saleId }));
+    if (!sale.canonicalReceivableDocumentId) throw new Error("CANCEL-SALE canonical invoice unavailable");
+    return { orgId, periodId, periodStart: Date.UTC(year, month, 1), periodEnd: Date.UTC(year, month + 1, 1) - 1,
+      codes, bankId, customerId, vehicleId, quoteId, depositId, saleId, invoiceId: sale.canonicalReceivableDocumentId };
+  }
   const quoteId = await must("mutation", "quotes:saveQuote", { orgId, customerId, vehicleId, mode: "CONFIGURED_FINANCE_COMPANY",
     companyId, customerEligibilityStatusIds: [eligibility], vehiclePrice: 12500, downPayment: 200, totalFinancedAmount: 12300, termMonths: 48 });
   const depositId = await must("mutation", "deposits:create", { orgId, quoteId, amount: 200, method: "CASH", idempotencyKey: key() });
@@ -184,7 +195,7 @@ async function prepare(ctx) {
     feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
     deductedFromSettlement: false, actualAmountMinor: 0, description: "QA TEST no closing cost" });
   await must("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes: "QA TEST zero cost", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
-  await must("mutation", "financeCompanyForward:recordFinanceCompanyForward", { orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: bankId,
+  const forwardId = await must("mutation", "financeCompanyForward:recordFinanceCompanyForward", { orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: bankId,
     paidAt: Date.now(), expectedAmountMinor: 1575000, reference: "QA-URET-FORWARD", idempotencyKey: key() });
   const saleId = await must("mutation", "applications:finalizeDeal", { orgId, applicationId, idempotencyKey: key() });
   const invoices = array(await must("query", "subledger:listReceivables", { orgId, limit: 200 }))
@@ -192,11 +203,125 @@ async function prepare(ctx) {
   equal(invoices.length, 1, "one exact financier invoice");
   const invoiceId = invoices[0]._id;
   await must("mutation", "bankAccounts:setReconciliationTarget", { orgId, bankAccountId: bankId });
-  await ctx.approverMust("mutation", "applications:confirmDisbursement", { orgId, applicationId, disbursedAmountMinor: 12500000,
+  if (!beforeReceipt) await ctx.approverMust("mutation", "applications:confirmDisbursement", { orgId, applicationId, disbursedAmountMinor: 12500000,
     bankAccountId: bankId, idempotencyKey: key() });
   await must("mutation", "sales:setCommissionAmount", { orgId, saleId, commissionAmount: 250 });
   return { orgId, periodId, periodStart: Date.UTC(year, month, 1), periodEnd: Date.UTC(year, month + 1, 1) - 1,
-    codes, bankId, customerId, companyId, vehicleId, quoteId, depositId, applicationId, saleId, invoiceId };
+    codes, bankId, customerId, companyId, vehicleId, quoteId, depositId, applicationId, saleId, invoiceId, forwardId };
+}
+
+/** c23812(11): three independent native scenarios; each owns a fresh public-command organization.
+ * No database fixture API and no changed product switch. Expected amounts are worked JOD literals.
+ */
+export async function runPilotRouteRehearsalCases(ctx) {
+  const native = () => Boolean(ctx.config?.salesEmail && ctx.config?.approverEmail);
+  const must = ctx.salesMust;
+  await ctx.recordCase(ctx.results, "CANCEL-SALE", "Ruling 11: completed CASH sale cancellation preserves the paid deposit and reverses sale debt", async () => {
+    if (!native()) return ctx.unproven("CANCEL-SALE actual two-identity native context unavailable");
+    const f = await prepare(ctx, { cash: true });
+    const read = async () => {
+      const inventory = object(await must("query", "accountingLedger:listJournalEntries", { orgId: f.orgId, paginationOpts: page }));
+      equal(inventory.isDone, true, "CANCEL-SALE complete journal census");
+      const details = [];
+      for (const entry of array(inventory.page)) details.push(object(await must("query", "accountingLedger:getJournalEntry", {
+        orgId: f.orgId, journalEntryId: entry._id,
+      })));
+      return { details, trial: await must("query", "accountingReports:trialBalance", { orgId: f.orgId }),
+        income: await must("query", "accountingReports:incomeStatement", { orgId: f.orgId, fromDate: f.periodStart, toDate: f.periodEnd }),
+        sale: await must("query", "sales:get", { orgId: f.orgId, saleId: f.saleId }),
+        vehicle: await must("query", "vehicles:get", { orgId: f.orgId, vehicleId: f.vehicleId }),
+        invoice: await must("query", "subledger:getReceivableBalance", { orgId: f.orgId, receivableDocumentId: f.invoiceId }),
+        allocations: await must("query", "subledger:listAllocations", { orgId: f.orgId, receivableDocumentId: f.invoiceId }),
+        deposits: await must("query", "deposits:listByVehicle", { orgId: f.orgId, vehicleId: f.vehicleId }) };
+    };
+    const deposit = [J("1100", 12500000, 0), J("2100", 0, 12500000)];
+    const sale = [J("1200", 12500000, 0), J("4100", 0, 12500000), J("5100", 10000000, 0), J("1400", 0, 10000000)];
+    const applied = [J("2100", 12500000, 0), J("1200", 0, 12500000)];
+    const before = await read();
+    equal(sorted(journalRows(before, f)), sorted([...PURCHASE, ...deposit, ...sale, ...applied]), "CANCEL-SALE paid journal precondition");
+    equal(before.sale.status, "COMPLETED", "CANCEL-SALE starts completed");
+    equal(before.invoice.outstandingMinor, 0, "CANCEL-SALE starts fully paid");
+    const cancel = () => ctx.approverMust("mutation", "sales:update", { orgId: f.orgId, saleId: f.saleId, status: "CANCELLED" });
+    await cancel();
+    const after = await read();
+    equal(sorted(journalRows(after, f)), sorted([...PURCHASE, ...deposit, ...reversed(sale), ...reversed(applied)]), "CANCEL-SALE literal reversals");
+    equal(after.trial.isBalanced, true, "CANCEL-SALE trial balanced");
+    equal(sorted(array(after.trial.rows).filter(row => row.netMinor !== 0).map(row => [row.code, row.currency, row.netMinor])),
+      sorted([["1100", "JOD", 2500000], ["1400", "JOD", 10000000], ["2100", "JOD", 12500000]]), "CANCEL-SALE literal trial");
+    equal(after.income.netIncome, 0, "CANCEL-SALE no surviving profit");
+    equal(after.sale.status, "CANCELLED", "CANCEL-SALE terminal sale");
+    for (const [field, expected] of Object.entries({ _id: f.invoiceId, customerId: f.customerId,
+      sourceType: "sales", sourceId: f.saleId, payerType: "CUSTOMER", documentType: "INVOICE",
+      currency: "JOD", scale: 3, originalAmountMinor: 12500000 })) {
+      equal(after.invoice.doc[field], expected, `CANCEL-SALE canonical invoice ${field}`);
+    }
+    equal(after.invoice.doc.status, "CANCELLED", "CANCEL-SALE invoice cancelled");
+    equal(after.invoice.outstandingMinor, 0, "CANCEL-SALE no collectible debt");
+    equal(array(after.allocations).filter(row => row.status === "ACTIVE").length, 0, "CANCEL-SALE no active allocations");
+    const held = array(after.deposits).find(row => row._id === f.depositId);
+    equal(held?.status, "HELD", "CANCEL-SALE paid money stays held");
+    equal(held?.amount, 12500, "CANCEL-SALE full paid amount survives");
+    equal(held?.customerId, f.customerId, "CANCEL-SALE same deposit customer");
+    equal(held?.quoteId, f.quoteId, "CANCEL-SALE same deposit quote");
+    equal(after.vehicle.purchasePrice, 10000, "CANCEL-SALE original vehicle basis survives");
+    await cancel();
+    equal(await read(), after, "CANCEL-SALE replay leaves all witnesses unchanged");
+    return { saleId: f.saleId, depositId: f.depositId, heldMinor: 12500000, debtMinor: 0,
+      commandsExercised: ["sales.create", "sales.update"], boundary: "public-command oracle; actual run determines runtime evidence" };
+  });
+  await ctx.recordCase(ctx.results, "CANCEL-CLOSED", "Ruling 11: closed financed-deal cancellation reverses debt and keeps the deposit held", async () => {
+    if (!native()) return ctx.unproven("CANCEL-CLOSED actual two-identity native context unavailable");
+    const f = await prepare(ctx, { beforeReceipt: true });
+    const before = await books(must, f);
+    equal(before.application.status, "CLOSED", "CANCEL-CLOSED starts closed");
+    equal(before.invoice.outstandingMinor, 12500000, "CANCEL-CLOSED finance payment not received");
+    // A closed but unpaid deal must recover the outstanding forward before cancellation.
+    await must("mutation", "financeCompanyForward:reverseFinanceCompanyForward", { orgId: f.orgId, applicationId: f.applicationId,
+      forwardId: f.forwardId, reason: "QA TEST company returned the forward before cancellation", idempotencyKey: key() });
+    await must("mutation", "applications:cancelApplication", { orgId: f.orgId, applicationId: f.applicationId,
+      reason: "QA TEST closed deal cancelled", idempotencyKey: key() });
+    const after = await books(must, f);
+    assertBooks(after, f, [...PURCHASE, ...DEPOSIT, ...reversed(FORWARD), ...reversed(SALE), ...reversed(COMMISSION)], 0, 0);
+    equal(after.application.status, "CANCELLED", "CANCEL-CLOSED application cancelled");
+    equal(after.sale.status, "CANCELLED", "CANCEL-CLOSED sale cancelled");
+    equal(after.invoice.doc.status, "CANCELLED", "CANCEL-CLOSED invoice cancelled");
+    equal(array(after.allocations).filter(row => row.status === "ACTIVE").length, 0, "CANCEL-CLOSED no active allocations");
+    equal(array(after.deposits).find(row => row._id === f.depositId)?.status, "HELD", "CANCEL-CLOSED paid deposit survives");
+    equal(array(after.deposits).find(row => row._id === f.depositId)?.amount, 200, "CANCEL-CLOSED exact deposit amount");
+    return { applicationId: f.applicationId, saleId: f.saleId, heldMinor: 200000, debtMinor: 0,
+      commandsExercised: ["financeCompanyForward.reverseFinanceCompanyForward", "applications.cancelApplication"] };
+  });
+  await ctx.recordCase(ctx.results, "RESTORE-HELD", "Ruling 11: paid-deal unwind restores the exact deposit to HELD with a pending operator decision", async () => {
+    if (!native()) return ctx.unproven("RESTORE-HELD actual two-identity native context unavailable");
+    const f = await prepare(ctx);
+    const paid = await books(must, f);
+    assertBooks(paid, f, PAID, 10925000, 875000, PAID_TRIAL);
+    const remittance = array(paid.allocations).filter(row => row.status === "ACTIVE");
+    equal(remittance.length, 1, "RESTORE-HELD one paid financier allocation");
+    f.unwindId = await must("mutation", "dealUnwind:startDealUnwind", startArgs(f));
+    await must("mutation", "dealUnwind:recordDealUnwindForwardReturn", forwardArgs(f));
+    await must("mutation", "dealUnwind:finishDealUnwind", finishArgs(f));
+    const after = await books(must, f);
+    assertBooks(after, f, UNWOUND, 0, 0);
+    const held = array(after.deposits).find(row => row._id === f.depositId);
+    equal(held?.status, "HELD", "RESTORE-HELD restored status");
+    equal(held?.holdActive, true, "RESTORE-HELD active hold");
+    equal(held?.amount, 200, "RESTORE-HELD exact paid amount");
+    equal(held?.quoteId, f.quoteId, "RESTORE-HELD same customer quote");
+    equal(held?.customerId, f.customerId, "RESTORE-HELD same deposit customer");
+    equal(after.vehicle.status, "IN_INSPECTION", "RESTORE-HELD returned vehicle inspection");
+    equal(after.invoice.doc.status, "CANCELLED", "RESTORE-HELD old debt retired");
+    equal(array(after.allocations).filter(row => row.status === "ACTIVE").length, 0, "RESTORE-HELD remittance not orphaned");
+    const payment = object(await must("query", "subledger:getPaymentBalance", { orgId: f.orgId, paymentId: remittance[0].paymentId }));
+    equal(payment.payment.status, "VOIDED", "RESTORE-HELD remittance payment retired");
+    equal(payment.payment.amountMinor, 12500000, "RESTORE-HELD full paid remittance accounted for");
+    equal(array(object(after.applicationList).page).find(row => row._id === f.applicationId)?.hasPendingDepositResolution,
+      true, "RESTORE-HELD pending decision visible to operator");
+    await refused(must, f, () => ctx.asSales("mutation", "vehicles:update", { orgId: f.orgId, vehicleId: f.vehicleId, status: "AVAILABLE" }),
+      "still needs a refund or forfeiture decision");
+    return { applicationId: f.applicationId, depositId: f.depositId, heldMinor: 200000, remittanceReturnedMinor: 12500000,
+      commandsExercised: ["dealUnwind.startDealUnwind", "dealUnwind.recordDealUnwindForwardReturn", "dealUnwind.finishDealUnwind"] };
+  });
 }
 
 const startArgs = f => ({ orgId: f.orgId, applicationId: f.applicationId, reason: "QA TEST customer returned vehicle", idempotencyKey: key() });

@@ -26,6 +26,7 @@ import { runOpeningRehearsalCases } from "./accountingOpeningRehearsal.mjs";
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
   "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "S853", "S811", "S858-OPENING", "S858-CONTAINMENT", "P1", "SETUP", "S858-CLEANUP-HISTORY", "S858-CLEANUP-SPLIT", "U-RET", "CC-CASH",
+  "CANCEL-SALE", "CANCEL-CLOSED", "RESTORE-HELD",
 ]);
 
 function fail(message) {
