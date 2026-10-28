@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
 import { resolveGit } from "./gitExecutable.mjs";
+import { createImportClosure } from "./importClosure.mjs";
 import {
   RENEWED_EXPIRES,
   backendModuleOf,
@@ -38,7 +39,10 @@ const changedOnly =
   (...changed: string[]): Compare =>
   (file) =>
     changed.includes(file) ? "changed" : "identical";
-const opts = (compare: Compare) => ({ compare, expires: RENEWED_EXPIRES, renewal: RENEWAL });
+type Closure = (file: string) => { files: string[]; unresolved: string[] };
+// A file whose closure is only itself: isolates the direct-file rules from the import-closure rule.
+const selfOnly: Closure = (file) => ({ files: [file], unresolved: [] });
+const opts = (compare: Compare, closureOf: Closure = selfOnly) => ({ compare, closureOf, expires: RENEWED_EXPIRES, renewal: RENEWAL });
 
 describe("backendModuleOf / rationalePaths", () => {
   test("the backend module is convex/<module>.ts for module:function", () => {
@@ -111,6 +115,36 @@ describe("renewBaseline", () => {
     expect(refused.refused[0].reason).toMatch(/rationale file lib\/money\.ts changed/);
   });
 
+  // SCRUM-866 round 3: the review also depended on what the two files IMPORT, not only on the files.
+  test("REFUSES an entry whose client file imports a changed helper", () => {
+    const closure: Closure = (file) => ({ files: file === "app/page.tsx" ? [file, "lib/helper.ts"] : [file], unresolved: [] });
+    const text = serialize([entry()]);
+    const result = renewBaseline(text, opts(changedOnly("lib/helper.ts"), closure));
+    expect(result.renewed).toBe(0);
+    expect(result.refused[0].reason).toMatch(/client file app\/page\.tsx imports lib\/helper\.ts, which changed/);
+    expect(result.text).toBe(text);
+    expect(renewBaseline(text, opts(allIdentical, closure)).renewed).toBe(1);
+  });
+
+  test("REFUSES an entry whose backend module imports a changed helper", () => {
+    const closure: Closure = (file) => ({ files: file === "convex/vehicles.ts" ? [file, "convex/utils/money.ts"] : [file], unresolved: [] });
+    const result = renewBaseline(serialize([entry()]), opts(changedOnly("convex/utils/money.ts"), closure));
+    expect(result.renewed).toBe(0);
+    expect(result.refused[0].reason).toMatch(/backend module convex\/vehicles\.ts imports convex\/utils\/money\.ts, which changed/);
+  });
+
+  test("REFUSES when an imported file is missing at either revision or an in-repo import cannot be resolved", () => {
+    const missing: Compare = (file) => (file === "lib/new.ts" ? "missing" : "identical");
+    const added: Closure = (file) => ({ files: [file, "lib/new.ts"], unresolved: [] });
+    expect(renewBaseline(serialize([entry()]), opts(missing, added)).refused[0].reason).toMatch(/imports lib\/new\.ts, which is missing/);
+    const unresolved: Closure = (file) => ({ files: [file], unresolved: ["./gone"] });
+    expect(renewBaseline(serialize([entry()]), opts(allIdentical, unresolved)).refused[0].reason).toMatch(/cannot resolve .*\.\/gone/);
+  });
+
+  test("a renewal without an import-closure resolver is refused outright", () => {
+    expect(() => renewBaseline(serialize([entry()]), { compare: allIdentical, expires: RENEWED_EXPIRES, renewal: RENEWAL } as never)).toThrow(/closureOf/);
+  });
+
   test("renews some and leaves the rest byte-identical", () => {
     const keep = entry({ callSiteId: "a:1:1", file: "app/a.tsx" });
     const drop = entry({ callSiteId: "b:1:1", file: "app/b.tsx" });
@@ -143,6 +177,82 @@ describe("renewBaseline", () => {
   test("refuses an invalid target date or an empty reason", () => {
     expect(() => renewBaseline(serialize([entry()]), { ...opts(allIdentical), expires: "soon" })).toThrow(/YYYY-MM-DD/);
     expect(() => renewBaseline(serialize([entry()]), { ...opts(allIdentical), renewal: " " })).toThrow(/renewal/);
+  });
+});
+
+describe("createImportClosure + gitCompare (real TypeScript, real git)", () => {
+  const git = resolveGit();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-closure-"));
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const write = (file: string, text: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), text);
+  };
+  const run = (...args: string[]) =>
+    execFileSync(String(git), ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
+      cwd: dir,
+      encoding: "utf8",
+    }).trim();
+  const tracked = [
+    "tsconfig.json", "app/page.tsx", "app/other.tsx", "app/broken.tsx", "app/style.css", "lib/helper.ts", "lib/deep.ts",
+    "convex/vehicles.ts", "convex/orgs.ts", "convex/_generated/api.ts",
+  ];
+  let reviewed = "";
+
+  test("builds the closure through paths aliases, css, re-exports and cycles; skips node_modules and convex/_generated", () => {
+    expect(git, "git must be locatable; cannot-run is a failure, not a skip").toBeTruthy();
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { strict: true, module: "esnext", moduleResolution: "bundler", target: "esnext", jsx: "react-jsx", types: [], baseUrl: ".", paths: { "@/*": ["./*"] } } }));
+    write("node_modules/pkg/index.d.ts", "declare const p: number; export default p;");
+    write("node_modules/pkg/package.json", JSON.stringify({ name: "pkg", types: "index.d.ts" }));
+    write("convex/_generated/api.ts", "export const api = 1;");
+    write("app/style.css", "a{}");
+    write("lib/deep.ts", "import { h } from './helper'; export const deep = 1; export const back = h;");
+    write("lib/helper.ts", "import { deep } from './deep'; export const h = deep; export * from '../lib/deep';");
+    write("app/page.tsx", 'import { h } from "@/lib/helper"; import "./style.css"; import p from "pkg"; import { api } from "../convex/_generated/api"; export const v = [h, p, api];');
+    write("app/other.tsx", "export const o = 1;");
+    write("app/broken.tsx", 'import "./missing-module"; export const b = 1;');
+    write("convex/vehicles.ts", "export const update = 1;");
+    write("convex/orgs.ts", "import { api } from './_generated/api'; export const get = api;");
+    run("init", "-q");
+    run("add", "--", ...tracked);
+    run("commit", "-q", "-m", "reviewed");
+    reviewed = run("rev-parse", "HEAD");
+
+    const closureOf = createImportClosure({
+      root: dir,
+      projects: [
+        { tsconfig: "tsconfig.json", rootFiles: ["app/page.tsx", "app/other.tsx", "app/broken.tsx"] },
+        { tsconfig: "tsconfig.json", rootFiles: ["convex/vehicles.ts", "convex/orgs.ts"] },
+      ],
+    });
+    expect(closureOf("app/page.tsx")).toEqual({
+      files: ["app/page.tsx", "app/style.css", "lib/deep.ts", "lib/helper.ts"],
+      unresolved: [],
+    });
+    expect(closureOf("convex/orgs.ts").files).toEqual(["convex/orgs.ts"]);
+    expect(closureOf("app/broken.tsx").unresolved).toEqual(["./missing-module"]);
+    expect(() => closureOf("app/not-a-root.tsx")).toThrow(/not a root/);
+  });
+
+  test("an entry whose client imports a changed helper is refused end to end; an unaffected one renews", () => {
+    write("lib/deep.ts", "import { h } from './helper'; export const deep = 2; export const back = h;");
+    run("add", "--", "lib/deep.ts");
+    run("commit", "-q", "-m", "helper changed");
+    const closureOf = createImportClosure({
+      root: dir,
+      projects: [
+        { tsconfig: "tsconfig.json", rootFiles: ["app/page.tsx", "app/other.tsx"] },
+        { tsconfig: "tsconfig.json", rootFiles: ["convex/vehicles.ts"] },
+      ],
+    });
+    const compare = gitCompare({ git: String(git), cwd: dir, reviewed, head: "HEAD" });
+    const affected = entry({ file: "app/page.tsx", callSiteId: "app/page.tsx:1:1" });
+    const unaffected = entry({ file: "app/other.tsx", callSiteId: "app/other.tsx:1:1" });
+    const result = renewBaseline(serialize([affected, unaffected]), { compare, closureOf, expires: RENEWED_EXPIRES, renewal: RENEWAL });
+    expect(result.renewed).toBe(1);
+    expect(result.refused).toHaveLength(1);
+    expect(result.refused[0].index).toBe(0);
+    expect(result.refused[0].reason).toMatch(/client file app\/page\.tsx imports lib\/deep\.ts, which changed/);
   });
 });
 

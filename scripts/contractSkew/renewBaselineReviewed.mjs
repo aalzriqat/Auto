@@ -10,8 +10,12 @@
  * expiry into decoration. So an entry is renewed here only when
  *
  *   - its client file,
- *   - its backend module (`convex/<module>.ts` from the functionId), and
- *   - every repository file its rationale names
+ *   - its backend module (`convex/<module>.ts` from the functionId),
+ *   - every repository file its rationale names, and
+ *   - every in-repo file in the transitive import closure of the client file
+ *     and of the backend module (`importClosure.mjs`: the TypeScript compiler
+ *     with each surface's real tsconfig; `node_modules` and the generated
+ *     `convex/_generated` are excluded there, with the reason)
  *
  * are byte-identical (same git blob) between the reviewed revision and HEAD.
  * Anything else, including a file that cannot be compared, is REFUSED and left
@@ -29,7 +33,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { CLIENT_SURFACES } from "./clientFiles.mjs";
 import { resolveGit } from "./gitExecutable.mjs";
+import { createImportClosure } from "./importClosure.mjs";
 
 export const RENEWED_EXPIRES = "2026-12-01";
 
@@ -72,34 +78,34 @@ const count = (text, char) => text.split(char).length - 1;
  *   `missing` = the file is not a blob at one of the two revisions.
  */
 export function gitCompare({ git, cwd, reviewed, head }) {
-  const cache = new Map();
-  const blobAt = (rev, file) => {
-    try {
-      const id = execFileSync(git, ["rev-parse", "--verify", "--quiet", `${rev}:${file}`], {
-        cwd,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-      const type = execFileSync(git, ["cat-file", "-t", id], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-      return type === "blob" ? id : undefined;
-    } catch {
-      return undefined;
+  // One `ls-tree -r` per revision, not three git processes per file: an import closure spans thousands of files.
+  const treeOf = (rev) => {
+    const out = execFileSync(git, ["ls-tree", "-r", "-z", rev], { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    const blobs = new Map();
+    for (const record of out.split("\0")) {
+      const tab = record.indexOf("\t");
+      if (tab < 0) continue;
+      const [, type, id] = record.slice(0, tab).split(" ");
+      if (type === "blob") blobs.set(record.slice(tab + 1), id);
     }
+    return blobs;
   };
+  /** @type {Map<string, string> | undefined} */
+  let before;
+  /** @type {Map<string, string> | undefined} */
+  let after;
   return (file) => {
-    if (!cache.has(file)) {
-      const before = blobAt(reviewed, file);
-      const after = blobAt(head, file);
-      cache.set(file, before === undefined || after === undefined ? "missing" : before === after ? "identical" : "changed");
-    }
-    return cache.get(file);
+    before ??= treeOf(reviewed);
+    after ??= treeOf(head);
+    const was = before.get(file);
+    const now = after.get(file);
+    return was === undefined || now === undefined ? "missing" : was === now ? "identical" : "changed";
   };
 }
-
 const label = (entry) => `${entry.functionId} ${entry.contractPath} @ ${entry.callSiteId}`;
 
 /** @returns {string | undefined} the reason this entry must not be renewed, if any */
-function refusalFor(entry, compare) {
+function refusalFor(entry, compare, closureOf) {
   const backend = backendModuleOf(entry.functionId);
   if (backend === undefined) return `functionId ${entry.functionId} names no backend module`;
   if (typeof entry.file !== "string" || entry.file.trim() === "") return "entry names no client file";
@@ -111,6 +117,18 @@ function refusalFor(entry, compare) {
   const module = compare(backend);
   if (module === "changed") return `backend module ${backend} changed since the reviewed revision`;
   if (module === "missing") return `backend module ${backend} is missing at the reviewed revision or HEAD`;
+
+  // What the two files import decides what is sent and how it is handled, so it was part of the review.
+  for (const [role, file] of [["client file", entry.file], ["backend module", backend]]) {
+    const closure = closureOf(file);
+    if (closure.unresolved.length > 0) return `cannot resolve in-repo import(s) of ${role} ${file}: ${closure.unresolved.join(", ")}`;
+    for (const imported of closure.files) {
+      if (imported === file) continue;
+      const state = compare(imported);
+      if (state === "changed") return `${role} ${file} imports ${imported}, which changed since the reviewed revision`;
+      if (state === "missing") return `${role} ${file} imports ${imported}, which is missing at the reviewed revision or HEAD`;
+    }
+  }
 
   for (const named of rationalePaths(entry.rationale)) {
     const state = compare(named);
@@ -124,10 +142,11 @@ function refusalFor(entry, compare) {
 
 /**
  * @param {string} text  the baseline file's text
- * @param {{ compare: (file: string) => "identical" | "changed" | "missing", expires: string, renewal: string }} options
+ * @param {{ compare: (file: string) => "identical" | "changed" | "missing", closureOf: (file: string) => { files: string[], unresolved: string[] }, expires: string, renewal: string }} options
  * @returns {{ text: string, renewed: number, skipped: number, refused: Array<{ index: number, entry: string, reason: string }> }}
  */
-export function renewBaseline(text, { compare, expires, renewal }) {
+export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
+  if (typeof closureOf !== "function") throw new Error("closureOf is required: a renewal without an import closure is refused");
   if (!DATE.test(expires) || Number.isNaN(Date.parse(expires))) throw new Error(`expires must be YYYY-MM-DD, got ${expires}`);
   if (typeof renewal !== "string" || renewal.trim() === "") throw new Error("a non-empty renewal reason is required");
 
@@ -149,7 +168,7 @@ export function renewBaseline(text, { compare, expires, renewal }) {
       skipped++;
       return entry;
     }
-    const reason = refusalFor(entry, compare);
+    const reason = refusalFor(entry, compare, closureOf);
     if (reason !== undefined) {
       refused.push({ index, entry: label(entry), reason });
       return entry;
@@ -189,8 +208,32 @@ function main(argv) {
   // A reviewed revision that is not an ancestor of HEAD says nothing about HEAD's history.
   execFileSync(git, ["merge-base", "--is-ancestor", reviewed, headSha], { cwd: root });
 
-  const result = renewBaseline(fs.readFileSync(baseline, "utf8"), {
+  // The closure is read from the working tree and compared by HEAD's blobs, so they must be the same thing.
+  if (headSha !== resolve("HEAD")) throw new Error("--head must be the checked-out HEAD: the import closure is read from the working tree");
+  const dirty = new Set(
+    execFileSync(git, ["diff", "--name-only", "-z", "HEAD"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean)
+  );
+
+  const baselineText = fs.readFileSync(baseline, "utf8");
+  const entries = JSON.parse(baselineText).entries ?? [];
+  const projects = [
+    ...CLIENT_SURFACES.map((surface) => ({
+      tsconfig: surface.tsconfig,
+      rootFiles: [...new Set(entries.filter((e) => e.surface === surface.name).map((e) => e.file))],
+    })),
+    { tsconfig: "convex/tsconfig.json", rootFiles: [...new Set(entries.map((e) => backendModuleOf(e.functionId)).filter(Boolean))] },
+  ];
+  const resolveClosure = createImportClosure({ root, projects });
+  const closureOf = (file) => {
+    const closure = resolveClosure(file);
+    const edited = closure.files.find((f) => dirty.has(f));
+    if (edited) throw new Error(`${edited} has uncommitted changes; commit or discard them before renewing`);
+    return closure;
+  };
+
+  const result = renewBaseline(baselineText, {
     compare: gitCompare({ git, cwd: root, reviewed, head: headSha }),
+    closureOf,
     expires: args.expires ?? RENEWED_EXPIRES,
     renewal: args.renewal,
   });
