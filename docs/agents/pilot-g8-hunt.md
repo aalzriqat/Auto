@@ -67,8 +67,9 @@ not the excluded mobile application.
   until CI executes it. Every new 320px cell is U.
 - **A**: actual role audit, `audit-role-access.spec.ts` plus the existing route matrix.
 - **S**: scripted E2E, `pilot-scripted` project, `deal-scenarios.spec.ts`, and `pilot-sourced.spec.ts`.
-- **E**: unscripted explorer, independent 40-step walks starting on each of the
-  three workspaces in both locales and widths. It records observations and
+- **E**: unscripted explorer, twelve independent 40-step walks, one Playwright
+  test per start (three workspaces × two locales × two widths), each with its own
+  page, locale script, timeout and derived seed. It records observations and
   findings; advisory findings are not a correctness verdict.
 
 For an allowed page A requires settled content. A restricted role must see the
@@ -118,6 +119,23 @@ New captures remain encrypted under the existing pinned recipient. The public
 summary still measures 136 top-level cells and now requires all seven real-role
 journey tests, instead of four. Do not report 136 as the new subview denominator.
 
+**Project structure (role audit).** The four original role tests stay in
+`role-regressions`, which the 136-cell route matrix and the tenant-isolation test
+(`chromium`) still depend on, exactly as on `main`. The three G8 journeys carry
+the `@pilot-g8` tag and run in a separate `pilot-g8-role-hunt` project (same spec
+file, `grep` on the tag; `role-regressions` takes the inverse `grepInvert`).
+Nothing depends on `pilot-g8-role-hunt`, so a red G8 journey cannot skip the matrix
+or the isolation test. Its only dependency is `setup`, the same depth as
+`role-regressions`; Playwright finishes one dependency phase before starting the
+next, so it still completes before the matrix isolates the audited seat.
+`scripts/pilotG8Coverage.test.ts` pins these facts. A red G8 journey still fails
+the run (Playwright exits non-zero), and `scripts/pilotRoleAuditEvidence.mjs`
+counts each of the seven cases under the project that must have run it, so a
+missing, skipped, duplicated or wrong-project case is not `complete`.
+The Accounting traversal scopes every inner-tab lookup to the panel opened by the
+previous step (the section's own panel first) and asserts that the requested
+section mounted, because the section navigation also has a `receivables` trigger.
+
 The role audit covers every role's UI access/refusal cells. Financial progression
 uses only authorized actors and keeps separation of duties; a receptionist is
 not asked to finalize a sale. Explorer mutation/race/tenant authority evidence is
@@ -135,7 +153,7 @@ separately provided by the trusted attack swarm, not inferred from a UI denial.
 | All Accounting readers and restricted entry states, each real role | A: new traversal, settled panel, localized authority, page reflow and capture | U | g8-accounting-workspace-traversal |
 | CASH/configured-finance entry panel, each real role | A: new entry traversal | U | g8-sales-mode-entry |
 | Four owned/SOURCED cash/finance draft/detail links, each real role | A: new list-to-cockpit traversal | U | g8-deals-list-to-detail |
-| Separate exploratory walks on Deals, Sales and Accounting | E: three named pilot tests, each four displays, existing action filters and backend attestation retained | U | g8-explorer-deals, g8-explorer-sales, g8-explorer-accounting |
+| Separate exploratory walks on Deals, Sales and Accounting | E: twelve named pilot tests, one per route, locale and width (`pilot explorer <route> <en\|ar> <desktop\|phone>`), existing action filters and backend attestation retained | U | twelve records `g8-explorer-<route>[-<locale>-<width>]`; the EN desktop walk of each route keeps the plain id `g8-explorer-deals`, `-sales` or `-accounting` |
 
 The three new money records bind existing public-API tests in
 `convex/scrum486Certification.test.ts` and oracle row `SCRUM-760-G8-SOURCED`.
@@ -145,7 +163,13 @@ test names. Fingerprints and ruling digests use the existing validator.
 
 The form explorer remains enabled for the full dispatch and retains its
 side-effect observations. Existing assertions in the ledger matrix, screen audit
-and trusted attack swarm remain. The original random walk also remains.
+and trusted attack swarm remain. The original random walk also remains,
+starting on Dashboard at the default viewport and locale with its base seed, as on
+`main`. The twelve pilot walks derive their own seeds from that base seed and the
+start's title (recorded in each test's `seed` annotation and report), so a
+failing seed reproduces from the base seed alone. The titles are literals because
+a scenario record binds to exactly one active, non-parameterized test title;
+`scripts/pilotG8Coverage.test.ts` requires them to equal `pilotExplorerStarts()`.
 Missing preview/identity evidence now fails the random explorer. Missing second
 identity now fails the owned financed journey, instead of silently omitting it.
 
@@ -219,8 +243,15 @@ single existing workflow dispatch that runs all three controllers.
   [retrying assertions](https://playwright.dev/docs/test-assertions): retain
   observable readiness/selected-panel assertions; never replace them with sleep.
 - [Playwright project dependencies](https://playwright.dev/docs/test-projects#dependencies):
-  run the shared-ledger scenarios after scripted witnesses; keep role-specific
-  execution separate from the seeded approver's broader scripted authority.
+  a project that nothing depends on cannot skip other projects when it fails.
+  In `playwright.scenarios.config.ts` the new `pilot-scripted` project depends only
+  on `setup` and is listed after `chromium` (the ledger matrix keeps its original
+  dependencies); in the same phase at one worker the matrix therefore runs first.
+  Role-specific execution stays separate from the seeded approver's broader
+  scripted authority.
+- [Playwright page.addInitScript](https://playwright.dev/docs/api/class-page#page-add-init-script):
+  the order of several init scripts is not defined, so each locale cell uses its
+  own page from `BrowserContext.newPage` with one script.
 - [WCAG 2.2 reflow](https://www.w3.org/WAI/WCAG22/Understanding/reflow.html): add
   320 CSS-pixel probes and fail page-level horizontal overflow. Scrollable tables
   are permitted; this check is not a complete WCAG conformance audit.
@@ -247,6 +278,7 @@ seats, CodeRabbit, CI and PR publication. No review seat is claimed here.
 | Failing-first coverage contract, `pnpm exec vitest run scripts/pilotG8Coverage.test.ts --maxWorkers=1` | Before explorer wiring: 1 failed / 1 passed. Failure: actual explorer source did not call `pilotExplorerStarts`. This measures configuration consumption, not browser execution. |
 | Final G8 + role workflow tests, named two files, one worker | 18 passed. Includes explicit project dependency closure, the 12-start manifest and 21-reader inventory. |
 | Native audit evidence suite, `scripts/pilotRoleAuditEvidence.test.ts`, one worker | 39 passed, including encryption/decryption, exact seven-case census and refusal of missing/skipped/duplicate cases. |
+| Round 2 (project split, per-start explorer, scoped tabs), one worker | `pilotG8Coverage`, `pilotRoleAuditWorkflow`, `explorerProductionGuard`, `playwrightContainedContext`, `convexCredentialBoundary`, `scenarioRecord` (incl. the 12 explorer records): 108 passed. `pilotRoleAuditEvidence` (`os.tmpdir()`): 40 passed. Scratch `tsc` over the changed specs, configs and tests, and ESLint on them: clean. Browser behaviour of the scoped tab lookups is unexecuted (no local Playwright). |
 | Full regression validator suite, initial named run | 60 passed; 2 failed with EPERM creating `C:/tmp/scenario-read-*` and `scenario-fresh-*`, outside writable roots. This is not a green full-suite result. |
 | Committed-library validation after adding records | Initially red for an overlong token and the existing financed spec's conditional omission; corrected token inputs and mandatory second-identity prerequisite. Final committed-library tests: 2 passed, 60 other tests filtered by `-t`. All 14 new records validate. |
 | Selected certification bindings, `convex/scrum486Certification.test.ts`, one worker | 3 passed, 56 other tests filtered by `-t`; in-memory harness only, no real-backend or concurrency claim. |
@@ -255,9 +287,12 @@ seats, CodeRabbit, CI and PR publication. No review seat is claimed here.
 | `git diff --check` | Passed. |
 | Playwright / production build / new CI runs | Not run; local browser execution prohibited, CI and reviews coordinator-owned. |
 
-The native evidence fixture now creates its temporary directory within the
-worktree instead of its parent. Synthetic key material still stays in its
-private temporary keyring and is cleaned by the existing bounded cleanup.
+The native evidence fixture creates its temporary directory under
+`os.tmpdir()` (the Node standard). An earlier revision of this branch placed it
+inside the worktree because that author's sandbox could not write elsewhere (see the
+EPERM note in the table above);
+`main` used the worktree's parent directory. Synthetic key material still stays in
+its private temporary keyring and is cleaned by the existing bounded cleanup.
 No real recipient key was read or exported.
 
 `git fetch origin` was refused at the existing FETCH_HEAD file. The GitHub

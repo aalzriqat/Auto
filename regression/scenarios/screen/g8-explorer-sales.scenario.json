@@ -17,8 +17,8 @@
       "action": "sales.explore",
       "input": {
         "steps": 40,
-        "locales": "EN_AR",
-        "widths": "320_1440",
+        "locales": "EN",
+        "widths": "1440",
         "commits": "REFUSED",
         "identity": "SEEDED_OWNER"
       }
@@ -27,7 +27,7 @@
   "expected": [
     {
       "observable": "screen.journeyOutcome",
-      "value": "fourWalkReportsWithObservedBackendAndFindings"
+      "value": "oneWalkReportWithObservedBackendAndFindings"
     }
   ],
   "rulings": [
@@ -38,7 +38,7 @@
   ],
   "impl": {
     "file": "playwright/scenarios/jev-explorer.spec.ts",
-    "testName": "pilot explorer starts on Sales in both languages and widths"
+    "testName": "pilot explorer sales en desktop"
   },
-  "fingerprint": "f68c19f936ddbc2605349112bdebc6dfc4d5816fef993038861bfa4952d3cdc5"
+  "fingerprint": "96bfbb6fd578f70f03ea14ef21b42d3af8144afe61ec17c399217a95d6e8d429"
 }

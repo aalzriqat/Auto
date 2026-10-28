@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { callJev } from "../../scripts/intelligence/jevImpact.mjs";
 import { resolveOrgId } from "../utils";
-import { pilotExplorerStarts, withLocalePage } from "../fixtures/pilotHunt";
+import { pilotExplorerSeed, pilotExplorerStarts, pilotExplorerTitle, withLocalePage, type PilotExplorerStart } from "../fixtures/pilotHunt";
 import { isCommitActionName } from "./jevExplorerActions";
 import { namesProduction, servesOtherThan } from "./productionGuard";
 
@@ -262,14 +262,23 @@ test.describe("Jev explorer (advisory)", () => {
 
   // The seed stays out of the title: unset, it is time-derived and differs
   // between the runner and the worker, which then cannot find the test.
-  // Every start gets its own page with exactly one locale init script: several
-  // addInitScript calls on one page run in an order Playwright does not define.
-  function walk(context: BrowserContext, baseURL: string | undefined, start: ReturnType<typeof pilotExplorerStarts>[number]) {
-    return withLocalePage(context, start.locale, start.viewport, page => explore(page, baseURL, start));
+  // One walk of the pilot plan. The original random walk keeps its Dashboard
+  // start, default viewport and default locale (no locale script, no viewport).
+  type Walk = { label: string; attachment?: string; route: string; seed: number; locale?: PilotExplorerStart["locale"]; viewport?: PilotExplorerStart["viewport"] };
+
+  // Every pilot start gets its own page with exactly one locale init script:
+  // several addInitScript calls on one page run in an order Playwright does not
+  // define. One test per start, so a failing start never skips the others and
+  // each walk has its own timeout and seed.
+  function pilotWalk(context: BrowserContext, baseURL: string | undefined, route: PilotExplorerStart["route"], locale: PilotExplorerStart["locale"], viewportName: PilotExplorerStart["viewport"]["name"]) {
+    const start = pilotExplorerStarts().find(s => s.route === route && s.locale === locale && s.viewport.name === viewportName);
+    if (!start) throw new Error(`No pilot explorer start ${route} ${locale} ${viewportName} in the plan.`);
+    const walk: Walk = { label: pilotExplorerTitle(start), route, locale, viewport: start.viewport, seed: pilotExplorerSeed(SEED, start) };
+    return withLocalePage(context, locale, start.viewport, page => explore(page, baseURL, walk));
   }
 
-  async function explore(page: Page, baseURL: string | undefined, start: ReturnType<typeof pilotExplorerStarts>[number]) {
-    test.info().annotations.push({ type: "seed", description: `${SEED} (${STEPS} steps)` });
+  async function explore(page: Page, baseURL: string | undefined, start: Walk) {
+    test.info().annotations.push({ type: "seed", description: `${start.seed} (${STEPS} steps; ${start.label}; base seed ${SEED})` });
     const host = new URL(baseURL ?? "http://localhost:3000").hostname;
     expect(["localhost", "127.0.0.1"], "Explorer runs against a local app only.").toContain(host);
     expect(
@@ -324,12 +333,14 @@ test.describe("Jev explorer (advisory)", () => {
       (route) => route.abort(),
     );
 
-    const random = rng(SEED);
+    const random = rng(start.seed);
     const findings: Finding[] = [];
     const orgId = await resolveOrgId(page);
     await page.goto(`/${orgId}/${start.route}`);
-    await expect(page.locator("html")).toHaveAttribute("lang", start.locale);
-    await expect(page.locator("html")).toHaveAttribute("dir", start.locale === "ar" ? "rtl" : "ltr");
+    if (start.locale) {
+      await expect(page.locator("html")).toHaveAttribute("lang", start.locale);
+      await expect(page.locator("html")).toHaveAttribute("dir", start.locale === "ar" ? "rtl" : "ltr");
+    }
     const visited = new Set<string>();
     let step = 0;
     page.on("pageerror", (e) => findings.push({ step, url: page.url(), check: "uncaught", detail: e.message }));
@@ -384,9 +395,9 @@ test.describe("Jev explorer (advisory)", () => {
     for (const f of findings) {
       test.info().annotations.push({ type: `advisory:${f.check}`, description: `#${f.step} ${f.url} ${f.detail}` });
     }
-    await test.info().attach(`jev-explorer-${start.route}-${start.locale}-${start.viewport.name}.json`, {
+    await test.info().attach(start.attachment ?? `jev-explorer-${start.label.replaceAll(" ", "-")}.json`, {
       body: JSON.stringify(
-        { start, seed: SEED, steps: STEPS, jev: Boolean(process.env.TYPESAFE_API_KEY), jevStats, visited: [...visited].sort(), findings },
+        { start: { route: start.route, locale: start.locale, viewport: start.viewport }, seed: start.seed, baseSeed: SEED, steps: STEPS, jev: Boolean(process.env.TYPESAFE_API_KEY), jevStats, visited: [...visited].sort(), findings },
         null,
         2,
       ),
@@ -394,16 +405,23 @@ test.describe("Jev explorer (advisory)", () => {
     });
   }
 
-  test("random walk", async ({ context, baseURL }) => {
-    await walk(context, baseURL, pilotExplorerStarts()[0]);
+  test("random walk", async ({ page, baseURL }) => {
+    await explore(page, baseURL, { label: "random walk", attachment: "jev-explorer-findings.json", route: "dashboard", seed: SEED });
   });
-  test("pilot explorer starts on Deals in both languages and widths", async ({ context, baseURL }) => {
-    for (const start of pilotExplorerStarts().filter(s => s.route === "deals")) await walk(context, baseURL, start);
-  });
-  test("pilot explorer starts on Sales in both languages and widths", async ({ context, baseURL }) => {
-    for (const start of pilotExplorerStarts().filter(s => s.route === "sales")) await walk(context, baseURL, start);
-  });
-  test("pilot explorer starts on Accounting in both languages and widths", async ({ context, baseURL }) => {
-    for (const start of pilotExplorerStarts().filter(s => s.route === "accounting")) await walk(context, baseURL, start);
-  });
-});
+
+  // One test per pilot start (pilotExplorerStarts). The titles are literals on
+  // purpose: each scenario record binds to exactly one active test title, which
+  // a computed title cannot satisfy. scripts/pilotG8Coverage.test.ts requires
+  // this list to equal the plan, so a start cannot be dropped or left untested.
+  test("pilot explorer deals en desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "deals", "en", "desktop"));
+  test("pilot explorer deals en phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "deals", "en", "phone"));
+  test("pilot explorer deals ar desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "deals", "ar", "desktop"));
+  test("pilot explorer deals ar phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "deals", "ar", "phone"));
+  test("pilot explorer sales en desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "sales", "en", "desktop"));
+  test("pilot explorer sales en phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "sales", "en", "phone"));
+  test("pilot explorer sales ar desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "sales", "ar", "desktop"));
+  test("pilot explorer sales ar phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "sales", "ar", "phone"));
+  test("pilot explorer accounting en desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "accounting", "en", "desktop"));
+  test("pilot explorer accounting en phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "accounting", "en", "phone"));
+  test("pilot explorer accounting ar desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "accounting", "ar", "desktop"));
+  test("pilot explorer accounting ar phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "accounting", "ar", "phone"));});

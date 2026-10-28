@@ -32,6 +32,11 @@ export default defineConfig({
       : base.webServer,
   projects: [
     { ...base.projects![0], testDir: "./playwright/tests" },
+    ...base.projects!.slice(1),
+    // SCRUM-760 G8 scripted witnesses. Nothing depends on this project, so a red
+    // witness never skips the ledger matrix, and it is listed last so that, in
+    // the same dependency phase at one worker, the matrix runs first and sees
+    // exactly the state it saw before G8. Its failure still fails the run.
     {
       ...base.projects![1],
       name: "pilot-scripted",
@@ -40,8 +45,5 @@ export default defineConfig({
       testIgnore: [],
       dependencies: ["setup"],
     },
-    ...base.projects!.slice(1).map(project => ({
-      ...project, dependencies: [...(project.dependencies ?? []), "pilot-scripted"],
-    })),
   ],
 });

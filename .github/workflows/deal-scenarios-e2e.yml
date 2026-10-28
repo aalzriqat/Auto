@@ -28,7 +28,10 @@ jobs:
   scenarios:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # ~10 min setup + ~45 min library + up to 30 min form explorer (no retry).
+    # ~10 min setup + ~45 min library + the SCRUM-760 G8 additions (the scripted
+    # witnesses, plus 13 explorer walks of 40 steps at ~3 min each, one test per
+    # start) + up to 30 min form explorer (no retry). The G8 scripted time is not
+    # yet measured; 180 minutes is a ceiling with headroom, not a measured run.
     timeout-minutes: 180
 
     steps:

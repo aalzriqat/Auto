@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { AuditEvidenceError, captureAuditProcess, gpgArgumentPath, importAuditRecipient, packageAuditEvidence, publicAuditSummary, roleRegressionOutcome, runRoleAudit, withEvidenceCleanup } from "./pilotRoleAuditEvidence.mjs";
 import { SCREEN_AUDIT_ROUTES } from "../playwright/fixtures/screenAuditRoutes";
@@ -11,7 +12,7 @@ import { SCREEN_AUDIT_ROUTES } from "../playwright/fixtures/screenAuditRoutes";
 // No key or recovery copy survives the suite, and nothing enters the user keyring.
 const gpg = process.platform === "win32" ? "C:/Program Files/Git/usr/bin/gpg.exe" : "/usr/bin/gpg";
 const tar = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/tar";
-const parent = realpathSync(path.resolve("."));
+const parent = realpathSync(os.tmpdir());
 const root = mkdtempSync(path.join(parent, "pilot-evidence-synthetic-controls-"));
 const keyHome = path.join(root, "synthetic-keyring");
 let keyHomeArgument = keyHome;
@@ -350,15 +351,21 @@ const roleTitles = [
 function roleReport(statuses: readonly string[] = roleTitles.map(() => "passed")) {
   return { errors: [], suites: [{ file: "../tests/audit-role-access.spec.ts", specs: statuses.map((status, index) => ({
     title: roleTitles[index] ?? roleTitles[0], file: "../tests/audit-role-access.spec.ts", ok: status === "passed",
-    tests: [{ projectName: "role-regressions", status: status === "passed" ? "expected" : status,
+    tests: [{ projectName: index < 4 ? "role-regressions" : "pilot-g8-role-hunt", status: status === "passed" ? "expected" : status,
       expectedStatus: "passed", results: status === "skipped" ? [] : [{ status }] }],
   })) }] };
+}
+
+function wrongProjectReport() {
+  const report = roleReport();
+  return { ...report, suites: [{ ...report.suites[0], specs: report.suites[0].specs.map((spec, index) => index === 6 ? { ...spec, tests: [{ ...spec.tests[0], projectName: "role-regressions" }] } : spec) }] };
 }
 
 test.each([
   ["all seven passed", roleReport(), true, "PASS"],
   ["no cases", { errors: [], suites: [] }, false, "UNAVAILABLE"],
   ["missing case", roleReport(["passed", "passed", "passed"]), false, "UNAVAILABLE"],
+  ["a G8 journey that ran in the wrong project", wrongProjectReport(), false, "FAIL"],
   ["skipped case", roleReport(roleTitles.map((_, index) => index === 1 ? "skipped" : "passed")), false, "FAIL"],
   ["duplicate case", { errors: [], suites: [{ ...roleReport().suites[0], specs: [...roleReport().suites[0].specs, roleReport().suites[0].specs[0]] }] }, false, "FAIL"],
   ["nested duplicate case", { errors: [], suites: [{ ...roleReport().suites[0], suites: [{ specs: [roleReport().suites[0].specs[0]] }] }] }, false, "FAIL"],

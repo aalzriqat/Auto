@@ -1,9 +1,9 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { newContainedContext } from "../containedContext";
-import { PILOT_ACCOUNTING_VIEWS, PILOT_HUNT_LOCALES, PILOT_HUNT_VIEWPORTS, withLocalePage } from "../fixtures/pilotHunt";
+import { PILOT_ACCOUNTING_VIEWS, PILOT_G8_ROLE_TAG, PILOT_HUNT_LOCALES, PILOT_HUNT_VIEWPORTS, withLocalePage } from "../fixtures/pilotHunt";
 import { ensureFinanceCompany, ZERO_FEE_COMPANY, CUSTOMER_STATUS } from "../fixtures/financedDeal";
-import { test, expect, type Page, type TestInfo } from "@playwright/test";
+import { test, expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { authenticatedConvexClient, USER_AUTH_FILE, testDataSuffix, testVin } from "../utils";
@@ -92,8 +92,10 @@ test("sales quote picker respects audited role and tenant choice authority", asy
 });
 
 
-// G8 additions run in role-regressions, before the route matrix isolates the
-// approver. The owner prepares QA rows; the audited seat never gains authority.
+// G8 additions are tagged and run in their own project (pilot-g8-role-hunt),
+// which nothing depends on. It sits at the same dependency depth as
+// role-regressions, so it finishes before the route matrix isolates the approver.
+// The owner prepares QA rows; the audited seat never gains authority.
 async function pilotPaint(page: Page, path: string, allowed: boolean, locale: "en" | "ar") {
   // Bound to the requested locale: an Arabic page showing the English denial is a failure.
   const denied = page.getByRole("heading", { name: locale === "ar" ? "الوصول غير مسموح" : "Access Not Allowed", exact: true });
@@ -116,7 +118,7 @@ async function pilotCapture(page: Page, testInfo: TestInfo, cell: string) {
 
 // Each locale/viewport cell runs on its own page (withLocalePage) so exactly one
 // locale init script is installed; pageerrors from every cell are collected.
-test("pilot Accounting traversal paints every section and nested reader", async ({ context, baseURL }, testInfo) => {
+test("pilot Accounting traversal paints every section and nested reader", { tag: PILOT_G8_ROLE_TAG }, async ({ context, baseURL }, testInfo) => {
   const errors: string[] = [];
   for (const locale of PILOT_HUNT_LOCALES) for (const viewport of PILOT_HUNT_VIEWPORTS) {
     await withLocalePage(context, locale, viewport, async page => {
@@ -126,9 +128,19 @@ test("pilot Accounting traversal paints every section and nested reader", async 
         await openHuntPage(page, baseURL, `${path}?section=${view.section}`);
         await pilotPaint(page, path, allowed, locale);
         if (allowed) {
+          // Radix mounts only the active TabsContent, so the one tabpanel in <main>
+          // with no tabpanel ancestor is the requested section's own panel. The
+          // section id is part of its generated id (`<base>-content-<section>`);
+          // AccountingClient silently falls back to Overview for an unknown or
+          // unmounted section, which this assertion refuses, with or without tabs.
+          let scope: Locator = page.locator('xpath=//main//*[@role="tabpanel"][not(ancestor::*[@role="tabpanel"])]');
+          await expect(scope).toHaveAttribute("id", new RegExp(`-content-${view.section}$`));
+          // Each inner tab is looked up only inside the panel opened by the previous
+          // step. The section nav also has a `receivables` trigger (visible from sm
+          // up) that an unscoped `-trigger-receivables` match would hit as well.
           // Radix tab IDs encode the stable tab value in both locales.
           for (const tab of view.tabs) {
-            const trigger = page.locator(`[role="tab"][id$="-trigger-${tab}"]:visible`);
+            const trigger = scope.locator(`[role="tab"][id$="-trigger-${tab}"]:visible`);
             if (tab === "approvals" && !permissions.some(permission => permission === "approve:requests" || permission === "manage:finance")) {
               await expect(trigger).toHaveCount(0);
               continue;
@@ -137,7 +149,8 @@ test("pilot Accounting traversal paints every section and nested reader", async 
             await expect(trigger).toHaveAttribute("aria-selected", "true");
             const panelId = await trigger.getAttribute("aria-controls");
             expect(panelId).toBeTruthy();
-            await expect(page.locator(`[id="${panelId}"]`)).toBeVisible();
+            scope = page.locator(`[id="${panelId}"]`);
+            await expect(scope).toBeVisible();
           }
           await pilotPaint(page, path, true, locale);
           if (view.section === "journal" && view.tabs.some(tab => tab === "manual")) {
@@ -152,7 +165,7 @@ test("pilot Accounting traversal paints every section and nested reader", async 
   expect(errors).toEqual([]);
 });
 
-test("pilot Sales opens CASH and configured FINANCED entry panels for each audited role", async ({ context, baseURL }, testInfo) => {
+test("pilot Sales opens CASH and configured FINANCED entry panels for each audited role", { tag: PILOT_G8_ROLE_TAG }, async ({ context, baseURL }, testInfo) => {
   const errors: string[] = [];
   for (const locale of PILOT_HUNT_LOCALES) for (const viewport of PILOT_HUNT_VIEWPORTS) {
     await withLocalePage(context, locale, viewport, async page => {
@@ -173,7 +186,7 @@ test("pilot Sales opens CASH and configured FINANCED entry panels for each audit
   expect(errors).toEqual([]);
 });
 
-test("pilot Deals opens owned and SOURCED cash and configured financed detail screens", async ({ context, browser, baseURL }, testInfo) => {
+test("pilot Deals opens owned and SOURCED cash and configured financed detail screens", { tag: PILOT_G8_ROLE_TAG }, async ({ context, browser, baseURL }, testInfo) => {
   const ownerContext = await newContainedContext(browser, { storageState: USER_AUTH_FILE });
   const paths: string[] = [];
   try {

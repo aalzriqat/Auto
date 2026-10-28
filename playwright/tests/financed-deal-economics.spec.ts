@@ -54,6 +54,26 @@ test.describe.configure({ timeout: 600_000 });
 test.use({ actionTimeout: 25_000 });
 
 test.describe("recording a financed deal's economics through the interface", () => {
+  /**
+   * This spec RUNS on Trusted Main E2E; it is not skipped. Since SCRUM-417 UX3
+   * the deal record sits behind a "Deal details" toggle, so it is opened with
+   * openDealDetails() before the record's controls are used.
+   *
+   * This drives the deal cockpit end to end: the quotation, the approved
+   * amount, the handover and the finalize are all entered through that screen's
+   * controls. A redesign moves every one of them.
+   *
+   * What this proves is not a layout detail: it is that an operator can REACH
+   * the economics writers at all. SCRUM-68 exists because they could not. The
+   * mutations were real and had no caller, and a configured deal stopped dead
+   * after its credit decision. It is also the only spec that exercises
+   * separation of duties across two identities end to end. A redesign that
+   * ships without keeping this gate can reintroduce exactly the defect the
+   * original ticket was filed for.
+   *
+   * Tracked with the redesign: SCRUM-63 (Unified Deal Workspace).
+   */
+
   // Both identities are mandatory in the pilot hunt. Missing setup is a
   // failed prerequisite, so the scenario cannot silently disappear.
   test.beforeAll(() => {

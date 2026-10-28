@@ -67,3 +67,34 @@ export async function withLocalePage<T>(
     await page.close();
   }
 }
+
+/** Tag that routes the G8 role-audit journeys to their own Playwright project. */
+export const PILOT_G8_ROLE_TAG = "@pilot-g8";
+export const PILOT_G8_ROLE_PROJECT = "pilot-g8-role-hunt";
+
+export type PilotExplorerStart = ReturnType<typeof pilotExplorerStarts>[number];
+
+/**
+ * Title of the one explorer test for a start. The spec writes these titles as
+ * literals (the scenario-record validator binds a record to exactly one active,
+ * non-parameterized test title), and scripts/pilotG8Coverage.test.ts pins the
+ * spec's titles to this list.
+ */
+export function pilotExplorerTitle(start: PilotExplorerStart): string {
+  return `pilot explorer ${start.route} ${start.locale} ${start.viewport.name}`;
+}
+
+/**
+ * Seed for one pilot start: FNV-1a (32-bit) of the base seed and the start's
+ * title. Reproducible from the recorded base seed, distinct per start, and not
+ * a neighbour of another start's seed (xorshift32 streams from adjacent seeds
+ * are correlated in their first outputs).
+ */
+export function pilotExplorerSeed(baseSeed: number, start: PilotExplorerStart): number {
+  let hash = 0x811c9dc5;
+  for (const character of `${baseSeed}:${pilotExplorerTitle(start)}`) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) || 1;
+}

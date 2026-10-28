@@ -18,15 +18,22 @@ const FINGERPRINT = /^[A-F0-9]{40}$/;
 const MAX_FILES = 1024;
 const MAX_BYTES = 512 * 1024 * 1024;
 const MAX_ROLE_REPORT_BYTES = 16 * 1024 * 1024;
-const ROLE_REGRESSION_TITLES = new Set([
-  "protected role routes render actual authority across audited pages",
-  "lead screen and create dialog respect actual audited role authority",
-  "approval screen renders authorized queue or explicit role refusal",
-  "sales quote picker respects audited role and tenant choice authority",
-  "pilot Accounting traversal paints every section and nested reader",
-  "pilot Sales opens CASH and configured FINANCED entry panels for each audited role",
-  "pilot Deals opens owned and SOURCED cash and configured financed detail screens",
+// Each real-role case and the Playwright project that must have run it. The G8
+// journeys run in their own project (playwright.role-audit.config.ts) so a red
+// one cannot skip the route matrix; the census still requires all of them.
+const ROLE_REGRESSION_PROJECT = "role-regressions";
+const PILOT_G8_PROJECT = "pilot-g8-role-hunt";
+const ROLE_CASE_PROJECTS = new Map([
+  ["protected role routes render actual authority across audited pages", ROLE_REGRESSION_PROJECT],
+  ["lead screen and create dialog respect actual audited role authority", ROLE_REGRESSION_PROJECT],
+  ["approval screen renders authorized queue or explicit role refusal", ROLE_REGRESSION_PROJECT],
+  ["sales quote picker respects audited role and tenant choice authority", ROLE_REGRESSION_PROJECT],
+  ["pilot Accounting traversal paints every section and nested reader", PILOT_G8_PROJECT],
+  ["pilot Sales opens CASH and configured FINANCED entry panels for each audited role", PILOT_G8_PROJECT],
+  ["pilot Deals opens owned and SOURCED cash and configured financed detail screens", PILOT_G8_PROJECT],
 ]);
+const ROLE_REGRESSION_TITLES = new Set(ROLE_CASE_PROJECTS.keys());
+const ROLE_CASE_PROJECT_NAMES = new Set(ROLE_CASE_PROJECTS.values());
 const DEFAULT_GPG = process.platform === "win32" ? "C:/Program Files/Git/usr/bin/gpg.exe" : "/usr/bin/gpg";
 const DEFAULT_TAR = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/tar";
 const POWERSHELL = path.join(process.env.SystemRoot ?? "C:/Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -50,7 +57,7 @@ function appendRoleCases(specs, observed) {
   for (const spec of specs) {
     if (typeof spec?.file !== "string" || !spec.file.replaceAll("\\", "/").endsWith("/tests/audit-role-access.spec.ts")) continue;
     for (const row of spec.tests) {
-      if (row?.projectName !== "role-regressions") continue;
+      if (typeof row?.projectName !== "string" || !ROLE_CASE_PROJECT_NAMES.has(row.projectName)) continue;
       observed.push({ title: spec.title, ok: spec.ok, row });
     }
   }
@@ -89,7 +96,8 @@ export function roleRegressionOutcome(report) {
   if (observed === null) return absent;
   const titles = new Set(observed.map((item) => item.title));
   const verified = observed.length === ROLE_REGRESSION_TITLES.size && titles.size === ROLE_REGRESSION_TITLES.size &&
-      [...titles].every((title) => ROLE_REGRESSION_TITLES.has(title)) && observed.every(({ ok, row }) =>
+      [...titles].every((title) => ROLE_REGRESSION_TITLES.has(title)) && observed.every(({ title, ok, row }) =>
+        ROLE_CASE_PROJECTS.get(title) === row.projectName &&
         ok === true && row.expectedStatus === "passed" && row.status === "expected" &&
         Array.isArray(row.results) && row.results.length === 1 && row.results[0]?.status === "passed");
   let measurement = "FAIL";

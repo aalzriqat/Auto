@@ -17,8 +17,8 @@
       "action": "deals.explore",
       "input": {
         "steps": 40,
-        "locales": "EN_AR",
-        "widths": "320_1440",
+        "locales": "EN",
+        "widths": "1440",
         "commits": "REFUSED",
         "identity": "SEEDED_OWNER"
       }
@@ -27,7 +27,7 @@
   "expected": [
     {
       "observable": "screen.journeyOutcome",
-      "value": "fourWalkReportsWithObservedBackendAndFindings"
+      "value": "oneWalkReportWithObservedBackendAndFindings"
     }
   ],
   "rulings": [
@@ -38,7 +38,7 @@
   ],
   "impl": {
     "file": "playwright/scenarios/jev-explorer.spec.ts",
-    "testName": "pilot explorer starts on Deals in both languages and widths"
+    "testName": "pilot explorer deals en desktop"
   },
-  "fingerprint": "9b6301876fab3ebee7d31661215aa26c887c20198ad700c9bf2185dc478d2322"
+  "fingerprint": "5baf2ab332f9ebceb839de803dae7760c683c5c630a7f1649da7ba401af4826d"
 }

@@ -17,8 +17,8 @@
       "action": "accounting.explore",
       "input": {
         "steps": 40,
-        "locales": "EN_AR",
-        "widths": "320_1440",
+        "locales": "EN",
+        "widths": "1440",
         "commits": "REFUSED",
         "identity": "SEEDED_OWNER"
       }
@@ -27,7 +27,7 @@
   "expected": [
     {
       "observable": "screen.journeyOutcome",
-      "value": "fourWalkReportsWithObservedBackendAndFindings"
+      "value": "oneWalkReportWithObservedBackendAndFindings"
     }
   ],
   "rulings": [
@@ -38,7 +38,7 @@
   ],
   "impl": {
     "file": "playwright/scenarios/jev-explorer.spec.ts",
-    "testName": "pilot explorer starts on Accounting in both languages and widths"
+    "testName": "pilot explorer accounting en desktop"
   },
-  "fingerprint": "4038b5c71db38dc588c68fba945996b024375020b8e0170ad0653ca760edd127"
+  "fingerprint": "20795696b0eb6b8aaa29a9f80a662ef79ba304f5ff8b738e7b2e485976211841"
 }
