@@ -155,11 +155,11 @@ async function scenario({
     head_branch: "feature",
   };
   try {
-    let verdict: { conclusion: string; reason: string } | undefined;
     writer = mode === "initialize" ? admissionWriter : swarmWriter;
     if (mode === "finish" || mode === "reset")
       await runGate("begin", env, fakeFetch);
-    verdict = await runGate(mode, env, fakeFetch);
+    const verdict: { conclusion: string; reason: string } | undefined =
+      await runGate(mode, env, fakeFetch);
     return {
       records,
       verdict,
@@ -190,7 +190,7 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
       expect(summary).toContain("Main test definitions");
     },
   );
-  it.each([
+  it.each<NonNullable<Parameters<typeof scenario>[0]>>([
     { files: ["app/page.tsx"], fork: true },
     { files: ["app/page.tsx"] },
     { incomplete: true },
