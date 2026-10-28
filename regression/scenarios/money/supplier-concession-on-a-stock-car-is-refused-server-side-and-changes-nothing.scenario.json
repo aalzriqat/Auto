@@ -1,0 +1,57 @@
+{
+  "id": "supplier-concession-on-a-stock-car-is-refused-server-side-and-changes-nothing",
+  "steps": [
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "financingEconomics.resolveAppraisalGap",
+      "input": {
+        "netShortfallMinor": 850000,
+        "supplierShareMinor": 400000,
+        "dealerShareMinor": 450000,
+        "observedEntitlementMinor": 9500000,
+        "vehicleSourceType": "STOCK"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "resolve.refused",
+      "value": true
+    },
+    {
+      "observable": "resolve.refusalNamesSupplierConcession",
+      "value": true
+    },
+    {
+      "observable": "db.rowsChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierConcession.scrum766c.test.ts",
+    "testName": "a stock car cannot take a supplier concession, server-side, and nothing changes"
+  },
+  "matrixRow": "pilot-supplier-concession-refusals",
+  "fingerprint": "4593eec8e4e8ed03edf7184161fc5e58e3d7336cf22328127fe98b93caa2d938",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum766c-supplier-concession",
+    "firstSeen": "2026-10-28"
+  }
+}
