@@ -1,0 +1,63 @@
+{
+  "id": "financed-customer-gap-is-listed-once-in-collections-from-canonical-debt",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.finalize",
+      "input": {
+        "financingType": "FINANCED",
+        "customerGapMinor": 500000,
+        "currency": "JOD"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "collections.listOpenSaleReceivables",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "collections.saleReceivables.count",
+      "value": 1
+    },
+    {
+      "observable": "collections.saleReceivables.outstandingMinor",
+      "value": 500000
+    },
+    {
+      "observable": "collections.saleReceivables.currency",
+      "value": "JOD"
+    },
+    {
+      "observable": "receivables.legacyRowCount",
+      "value": 0
+    }
+  ],
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum56-collections-canonical-debt",
+    "firstSeen": "2026-10-28"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "06972fe884d7321a513f43265b8df810cd93cac3ccf3512b8654e055b3e5a041"
+    }
+  ],
+  "matrixRow": "SCRUM56-collections-canonical-debt",
+  "impl": {
+    "file": "convex/collectionsCanonicalDebt.scrum56.test.ts",
+    "testName": "a FINANCED deal with customer gap R=500 lists its canonical invoice once, at the canonical outstanding"
+  },
+  "fingerprint": "371f833b5be18dfb6c5d743b70432a626d2f3d167dbc2075c6ddef2e997f4912"
+}
