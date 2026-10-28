@@ -1711,6 +1711,12 @@ export const upsertLandedCosts = mutation({
         if (count === 0) assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED");
         else remaining.set(key, count - 1);
       }
+      // A negative addition reverses settlement even when all paid rows survive.
+      // Keep historical signed rows intact; only unmatched occurrences are new.
+      // Nonnegative additions cannot reduce any method/bank settlement total.
+      if (items.some((item) => item.amount < 0 && (remaining.get(itemKey(item)) ?? 0) > 0)) {
+        assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED");
+      }
     }
 
     if (vehicle.sourceType !== "SOURCED") {

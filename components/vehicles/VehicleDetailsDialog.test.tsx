@@ -189,6 +189,21 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("vehicle landed-cost bank choice", () => {
+  test("RT11 a new owned landed cost keeps its last nonnegative amount", async () => {
+    render(ui());
+    fireEvent.click(screen.getByRole("button", { name: "AddCostItem", hidden: true }));
+    const amount = screen.getByText("CostItemAmount").parentElement?.querySelector("input") as HTMLInputElement;
+    fireEvent.change(amount, { target: { value: "-100" } });
+    expect(amount.value).toBe("0");
+    fireEvent.change(amount, { target: { value: "20" } });
+    fireEvent.change(amount, { target: { value: "-100" } });
+    expect(amount.value).toBe("20");
+    fireEvent.change(screen.getByTestId("method-undefined"), { target: { value: "CASH" } });
+    fireEvent.click(screen.getByRole("button", { name: "SaveLandedCost", hidden: true }));
+    await waitFor(() => expect(state.landedCostCalls).toHaveLength(1));
+    expect(state.landedCostCalls[0]?.items).toEqual([expect.objectContaining({ amount: 20, paymentMethod: "CASH" })]);
+  });
+
   test("RT11 paid landed cost controls lock while a new item stays editable", async () => {
     state.landedCosts = { items: [{ label: "Transport", amount: 100, paymentMethod: "CASH" }], total: 100 };
     render(ui());

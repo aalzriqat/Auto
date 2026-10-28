@@ -963,7 +963,11 @@ export function VehicleDetailsDialog({
                           min="0"
                           value={item.amount}
                           disabled={!canEditVehicles || hasLegacyUnattributedBank || item.pilotPaid}
-                          onChange={(event) => updateLandedCostItem(index, { amount: Number(event.target.value) })}
+                          onChange={(event) => {
+                            const amount = Number(event.target.value);
+                            if (amount < 0 && vehicle.sourceType !== "SOURCED" && isRt11DoorDisabled("PAID_LANDED_COST_CHANGE_PILOT_DISABLED")) return;
+                            updateLandedCostItem(index, { amount });
+                          }}
                         />
                       </div>
                       <div className="space-y-1">

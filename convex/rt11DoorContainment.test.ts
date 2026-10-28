@@ -186,6 +186,44 @@ const paidCost = { label: "Transport", amount: 100, paymentMethod: "CASH" as con
 async function cost(s: Seed) {
   await s.as.mutation(api.vehicles.upsertLandedCosts, { orgId: s.orgId, vehicleId: s.vehicleId, items: [paidCost] });
 }
+
+async function bank(s: Seed, name: string) {
+  return s.t.run(ctx => ctx.db.insert("bankAccounts", {
+    orgId: s.orgId, name, currency: "JOD", openingBalanceMinor: 0,
+    openingBalanceDate: Date.now(), isActive: true, isReconciliationTarget: false,
+    createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+  }));
+}
+
+test("RT11 negative landed cost offset on the same method refuses without writes", async () => {
+  const s = await seed(); await cost(s);
+  await refused(s, "PAID_LANDED_COST_CHANGE_PILOT_DISABLED", () => s.as.mutation(api.vehicles.upsertLandedCosts, {
+    orgId: s.orgId, vehicleId: s.vehicleId,
+    items: [paidCost, { label: "Offset", amount: -100, paymentMethod: "CASH" }],
+  }));
+});
+
+test("RT11 negative landed cost offset with a positive bank move refuses without writes", async () => {
+  const s = await seed(); await cost(s);
+  const bankAccountId = await bank(s, "Operating bank");
+  await refused(s, "PAID_LANDED_COST_CHANGE_PILOT_DISABLED", () => s.as.mutation(api.vehicles.upsertLandedCosts, {
+    orgId: s.orgId, vehicleId: s.vehicleId,
+    items: [paidCost, { label: "Offset", amount: -100, paymentMethod: "CASH" },
+      { label: "Replacement", amount: 100, paymentMethod: "BANK_TRANSFER", bankAccountId }],
+  }));
+});
+
+test("RT11 negative landed cost on another physical bank refuses without writes", async () => {
+  const s = await seed();
+  const paidBank = await bank(s, "Paid bank");
+  const otherBank = await bank(s, "Other bank");
+  const paidBankCost = { ...paidCost, paymentMethod: "BANK_TRANSFER" as const, bankAccountId: paidBank };
+  await s.as.mutation(api.vehicles.upsertLandedCosts, { orgId: s.orgId, vehicleId: s.vehicleId, items: [paidBankCost] });
+  await refused(s, "PAID_LANDED_COST_CHANGE_PILOT_DISABLED", () => s.as.mutation(api.vehicles.upsertLandedCosts, {
+    orgId: s.orgId, vehicleId: s.vehicleId,
+    items: [paidBankCost, { label: "Offset", amount: -100, paymentMethod: "BANK_TRANSFER", bankAccountId: otherBank }],
+  }));
+});
 test("RT11 editing paid landed cost refuses without writes", async () => {
   const s = await seed(); await cost(s);
   await refused(s, "PAID_LANDED_COST_CHANGE_PILOT_DISABLED", () => s.as.mutation(api.vehicles.upsertLandedCosts, { orgId: s.orgId, vehicleId: s.vehicleId, items: [{ ...paidCost, amount: 120 }] }));
@@ -204,6 +242,31 @@ test("RT11 adding new landed cost preserves the paid item", async () => {
   const result = await s.as.mutation(api.vehicles.upsertLandedCosts, { orgId: s.orgId, vehicleId: s.vehicleId, items: [paidCost, { label: "Inspection", amount: 20, paymentMethod: "CASH" }] });
   expect(result.total).toBe(120);
   expect((await s.t.run(ctx => ctx.db.get(s.vehicleId)))?.landedCostTotal).toBe(120);
+});
+
+test("RT11 preserving legacy signed landed costs still allows a positive addition", async () => {
+  const s = await seed();
+  const legacyOffset = { label: "Historical offset", amount: -10 };
+  await s.t.run(async (ctx) => {
+    await ctx.db.insert("vehicleLandedCosts", {
+      orgId: s.orgId, vehicleId: s.vehicleId, items: [paidCost, legacyOffset], total: 90,
+      updatedBy: s.userId, updatedAt: Date.now(),
+    });
+    await ctx.db.patch(s.vehicleId, { landedCostTotal: 90 });
+  });
+  const before = await s.t.run(ctx => ctx.db.query("journalEntries").collect());
+  // Reorder and make the legacy CASH default explicit without changing settlement.
+  const preservedOffset = { ...legacyOffset, paymentMethod: "CASH" as const };
+  await s.as.mutation(api.vehicles.upsertLandedCosts, {
+    orgId: s.orgId, vehicleId: s.vehicleId, items: [preservedOffset, paidCost],
+  });
+  expect(await s.t.run(ctx => ctx.db.query("journalEntries").collect())).toEqual(before);
+  const result = await s.as.mutation(api.vehicles.upsertLandedCosts, {
+    orgId: s.orgId, vehicleId: s.vehicleId,
+    items: [preservedOffset, paidCost, { label: "Inspection", amount: 20, paymentMethod: "CASH" }],
+  });
+  expect(result.total).toBe(110);
+  expect((await s.t.run(ctx => ctx.db.get(s.vehicleId)))?.landedCostTotal).toBe(110);
 });
 
 test("RT11 duplicate paid landed costs cannot be collapsed", async () => {
@@ -226,5 +289,10 @@ test("RT11 informational sourced landed costs remain editable", async () => {
   const before = await s.t.run(ctx => ctx.db.query("journalEntries").collect());
   const result = await s.as.mutation(api.vehicles.upsertLandedCosts, { orgId: s.orgId, vehicleId: s.vehicleId, items: [{ ...paidCost, amount: 120 }] });
   expect(result.total).toBe(120);
+  expect(await s.t.run(ctx => ctx.db.query("journalEntries").collect())).toEqual(before);
+  const negative = await s.as.mutation(api.vehicles.upsertLandedCosts, {
+    orgId: s.orgId, vehicleId: s.vehicleId, items: [{ ...paidCost, amount: -20 }],
+  });
+  expect(negative.total).toBe(-20);
   expect(await s.t.run(ctx => ctx.db.query("journalEntries").collect())).toEqual(before);
 });

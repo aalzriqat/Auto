@@ -1,6 +1,6 @@
 {
   "id": "rt11-informational-sourced-landed-costs-remain-editable",
-  "fingerprint": "fedc331881183b58336ebe24132c99beab2015ce01ac4125990616c24299f888",
+  "fingerprint": "45c80d4ae543423f9fd758c50cdad6cc1f69dda4437283f39b187ac12218a67f",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -21,6 +21,18 @@
         "previousAmount": 100,
         "amount": 120
       }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.upsertLandedCosts",
+      "input": {
+        "sourceType": "SOURCED",
+        "previousAmount": 120,
+        "amount": -20
+      }
     }
   ],
   "expected": [
@@ -31,6 +43,10 @@
     {
       "observable": "journal.rowsChanged",
       "value": 0
+    },
+    {
+      "observable": "negativeLandedCost.total",
+      "value": -20
     }
   ],
   "rulings": [
