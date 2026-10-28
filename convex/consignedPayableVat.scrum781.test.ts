@@ -33,6 +33,19 @@ const newTest = () => convexTestWithComponents(schema, MODULE_GLOB);
 type T = ReturnType<typeof newTest>;
 
 const CONSIGNED_VAT_REFUSAL = /consigned.*gross amount.*VAT/i;
+/** The coded refusal the web and mobile screens translate (ServerError_<code>). */
+const CONSIGNED_VAT_CODE = "CONSIGNED_PAYABLE_VAT_REFUSED";
+
+/** The machine code a rejected call carried, `UNCODED: ...` when it was a plain-string error, `RESOLVED` when it did not reject. */
+async function refusalCode(attempt: Promise<unknown>): Promise<string> {
+  try {
+    await attempt;
+  } catch (caught) {
+    const error = caught as { data?: { code?: string }; message?: string };
+    return error.data?.code ?? `UNCODED: ${error.message}`;
+  }
+  return "RESOLVED";
+}
 
 async function seedOrg(t: T, tag: string) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S781 ${tag}`, createdAt: Date.now() }));
@@ -98,8 +111,10 @@ async function seedOwnedOnAccountPayable(t: T, orgId: Id<"organizations">, userI
       supplierName: "Wholesale Motors", vehicleLabel: "2022 Toyota Corolla", vin: "S781OWNED0000001", actorId: userId,
     })
   );
-  const payable = await t.run((ctx) =>
-    ctx.db.query("vehicleSupplierPayables").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()
+  const payable = await t.run(async (ctx) =>
+    (await ctx.db.query("vehicleSupplierPayables").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).find(
+      (row) => row.origin !== "OPENING" && row.vehicleId === vehicleId
+    )
   );
   expect(payable && "saleId" in payable ? payable.saleId : undefined).toBeUndefined();
   return { vehicleId, payableId: payable!._id };
@@ -159,12 +174,82 @@ describe("SCRUM-781: a consigned supplier payable is settled gross, never with V
     // Not cached: the same command is refused again for the same reason, not
     // replayed as a success and not blocked as "already being processed".
     await expect(call()).rejects.toThrow(CONSIGNED_VAT_REFUSAL);
+    // Coded, so the screens can show it in the user's language instead of the English server text.
+    expect(await refusalCode(call())).toBe(CONSIGNED_VAT_CODE);
 
     expect(await writeSurface(t, orgId, payableId)).toEqual(before);
     const payable = await t.run((ctx) => ctx.db.get(payableId));
     expect(payable?.status).toBe("PENDING");
     expect(payable?.taxAmount).toBeUndefined();
     expect((await settlementLines(t, orgId, payableId)).events).toHaveLength(0);
+  });
+
+  test("the same command key is refused again with zero writes, then settles gross once VAT is removed", async () => {
+    const t = newTest();
+    const { orgId, userId, as } = await seedOrg(t, "samekey");
+    const { payableId } = await seedConsignedPayable(t, orgId, userId);
+    const before = await writeSurface(t, orgId, payableId);
+    // The web screen keeps its key after a failed submit and resends it; so does mobile.
+    const idempotencyKey = crypto.randomUUID();
+    const withVat = () =>
+      as.mutation(api.sourcingPayables.markPaid, { idempotencyKey, orgId, payableId, paymentMethod: "CASH", taxAmount: 2000 });
+
+    expect(await refusalCode(withVat())).toBe(CONSIGNED_VAT_CODE);
+    expect(await writeSurface(t, orgId, payableId)).toEqual(before);
+    expect(await refusalCode(withVat())).toBe(CONSIGNED_VAT_CODE);
+    expect(await writeSurface(t, orgId, payableId)).toEqual(before);
+
+    // The corrected retry under the SAME key: the refusal left no stored command to conflict with.
+    await as.mutation(api.sourcingPayables.markPaid, { idempotencyKey, orgId, payableId, paymentMethod: "CASH", taxAmount: 0 });
+
+    const payable = await t.run((ctx) => ctx.db.get(payableId));
+    expect(payable?.status).toBe("PAID");
+    const { lines } = await settlementLines(t, orgId, payableId);
+    expect(lines).toHaveLength(2);
+    expect(lines.some((l) => l.key === "VAT_RECEIVABLE" || l.key === "COST_OF_VEHICLES_SOLD")).toBe(false);
+    // And now that it settled, a further resend of the corrected command replays; it books nothing twice.
+    await as.mutation(api.sourcingPayables.markPaid, { idempotencyKey, orgId, payableId, paymentMethod: "CASH", taxAmount: 0 });
+    expect((await settlementLines(t, orgId, payableId)).lines).toHaveLength(2);
+  });
+
+  test("a payable whose vehicle belongs to another organization is not provably owned: VAT is refused", async () => {
+    const t = newTest();
+    const { orgId, userId, as } = await seedOrg(t, "xorg");
+    const { payableId } = await seedConsignedPayable(t, orgId, userId);
+    const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "S781 other", createdAt: Date.now() }));
+    // An OWNED, unsold vehicle that lives in the other organization: reading it would allow the reclass.
+    const foreignOwned = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: otherOrgId, vin: "S781FOREIGN00001", make: "Toyota", model: "Camry", year: 2021, mileage: 10, color: "Black",
+        fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 9000, purchasePrice: 8000, status: "AVAILABLE",
+      })
+    );
+    await t.run((ctx) => ctx.db.patch(payableId, { saleId: undefined, vehicleId: foreignOwned }));
+    const before = await writeSurface(t, orgId, payableId);
+
+    expect(
+      await refusalCode(
+        as.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "CASH", taxAmount: 2000 })
+      )
+    ).toBe(CONSIGNED_VAT_CODE);
+    expect(await writeSurface(t, orgId, payableId)).toEqual(before);
+  });
+
+  test("the payables list tells the screens which rows may carry VAT, from the same predicate the mutation uses", async () => {
+    const t = newTest();
+    const { orgId, userId, as } = await seedOrg(t, "listflag");
+    const consigned = await seedConsignedPayable(t, orgId, userId);
+    const owned = await seedOwnedOnAccountPayable(t, orgId, userId);
+
+    const rows = await as.query(api.sourcingPayables.list, { orgId });
+    const flagOf = (id: Id<"vehicleSupplierPayables">) => rows.find((row) => row._id === id)?.vatReclassAllowed;
+    expect(flagOf(consigned.payableId)).toBe(false);
+    expect(flagOf(owned.payableId)).toBe(true);
+    const detail = await as.query(api.sourcingPayables.get, { orgId, payableId: consigned.payableId });
+    expect(detail?.vatReclassAllowed).toBe(false);
+    // A consigned payable whose sale link was lost is still consigned (SOURCED vehicle).
+    await t.run((ctx) => ctx.db.patch(consigned.payableId, { saleId: undefined }));
+    expect((await as.query(api.sourcingPayables.list, { orgId })).find((row) => row._id === consigned.payableId)?.vatReclassAllowed).toBe(false);
   });
 
   test("after the refusal the same payable still settles gross with a fresh command", async () => {
@@ -326,6 +411,22 @@ describe("SCRUM-781: a consigned supplier payable is settled gross, never with V
     expect(lines.some((l) => l.key === "COST_OF_VEHICLES_SOLD")).toBe(false);
   });
 
+  test("control: an owned ON_ACCOUNT payable resent under the same command key posts its VAT once", async () => {
+    const t = newTest();
+    const { orgId, userId, as } = await seedOrg(t, "ownedkey");
+    const { payableId } = await seedOwnedOnAccountPayable(t, orgId, userId);
+    const idempotencyKey = crypto.randomUUID();
+    const settle = () => as.mutation(api.sourcingPayables.markPaid, { idempotencyKey, orgId, payableId, paymentMethod: "CASH", taxAmount: 1000 });
+
+    await settle();
+    await settle();
+
+    const { events, lines } = await settlementLines(t, orgId, payableId);
+    expect(events).toHaveLength(1);
+    expect(lines).toHaveLength(4);
+    expect(lines.filter((l) => l.key === "VAT_RECEIVABLE")).toEqual([{ key: "VAT_RECEIVABLE", debit: 1_000_000, credit: 0 }]);
+  });
+
   test("control: an owned ON_ACCOUNT payable reclassifies VAT out of COGS once the car has sold", async () => {
     const t = newTest();
     const { orgId, userId, as } = await seedOrg(t, "ownedsold");
@@ -339,4 +440,38 @@ describe("SCRUM-781: a consigned supplier payable is settled gross, never with V
     expect(lines.find((l) => l.key === "COST_OF_VEHICLES_SOLD")?.credit).toBe(1_000_000);
     expect(lines.some((l) => l.key === "VEHICLE_INVENTORY")).toBe(false);
   });
+});
+
+// Top level on purpose: scripts/regression/runLocalExecution.mjs anchors the bound title as ^title$, and Vitest matches the
+// full name including enclosing suites, so a nested scenario test would be skipped instead of executed.
+test("scenario consigned-supplier-payable-refuses-vat-and-settles-gross: VAT 2,000 is refused, then the same payable settles gross at taxAmount 0", async () => {
+  const t = newTest();
+  const { orgId, userId, as } = await seedOrg(t, "scenario");
+  const { payableId } = await seedConsignedPayable(t, orgId, userId);
+  const before = await writeSurface(t, orgId, payableId);
+
+  // Step 1: OWNER, org A, markPaid with taxAmount 2000 on the consigned payable.
+  const code = await refusalCode(
+    as.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "CASH", taxAmount: 2000 })
+  );
+  expect(code).toBe(CONSIGNED_VAT_CODE); // markPaid.withVat.refused
+  expect(await writeSurface(t, orgId, payableId)).toEqual(before); // markPaid.withVat.rowsWritten = 0
+  expect((await settlementLines(t, orgId, payableId)).events).toHaveLength(0); // markPaid.withVat.eventsPosted = 0
+
+  // Step 2: the same payable, taxAmount 0.
+  await as.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "CASH", taxAmount: 0 });
+
+  const payable = await t.run((ctx) => ctx.db.get(payableId));
+  expect(payable?.status).toBe("PAID");
+  expect(payable?.amountPaid).toBe(18000);
+  expect(payable?.taxAmount).toBe(0);
+  const { events, lines } = await settlementLines(t, orgId, payableId);
+  expect(events).toHaveLength(1);
+  expect(lines.filter((l) => l.key === "VAT_RECEIVABLE")).toHaveLength(0); // markPaid.gross.vatReceivableLines = 0
+  expect(lines).toHaveLength(2); // markPaid.gross.journalLines = 2
+  expect(lines.find((l) => l.key === "ACCOUNTS_PAYABLE_SUPPLIERS")?.debit).toBe(18_000_000);
+  expect(lines.find((l) => l.key === "CASH_ON_HAND")?.credit).toBe(18_000_000);
+  // Balanced, and no cost of sales was touched on a consignment.
+  expect(lines.reduce((sum, l) => sum + l.debit, 0)).toBe(lines.reduce((sum, l) => sum + l.credit, 0));
+  expect(lines.some((l) => l.key === "COST_OF_VEHICLES_SOLD")).toBe(false);
 });
