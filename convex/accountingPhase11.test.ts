@@ -15,6 +15,12 @@ import { seedBank } from "../test-utils/bankFixture";
 
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
+// SCRUM-560: the fixed-asset lifecycle is OFF for the pilot. This file tests the lifecycle itself
+// (the behaviour that returns on activation), so it opens the switch. The shipped state is pinned,
+// and every door's refusal proven, in fixedAssetLifecycleContainment.scrum560.test.ts.
+vi.mock("./utils/fixedAssetLifecycleContainment", async (importOriginal) =>
+  (await import("../test-utils/fixedAssetLifecycleSwitch")).openFixedAssetLifecycle(await importOriginal()));
+
 // Tests that depreciate hardcoded "2026-XX" months need a purchase date at or
 // before those months, or the schedule-start guard (correctly) skips them.
 const PAST_PURCHASE_DATE = Date.UTC(2025, 11, 1);
