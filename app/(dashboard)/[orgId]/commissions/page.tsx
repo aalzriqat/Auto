@@ -1,4 +1,5 @@
 "use client";
+import { isRt11DoorDisabled } from "@/convex/utils/rt11DoorContainment";
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
@@ -627,6 +628,9 @@ function CommissionPaymentAction({
         <Pencil className="h-3.5 w-3.5 me-1" /> {t("SetCommission")}
       </Button>
     );
+  }
+  if (isRt11DoorDisabled("DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED")) {
+    return <p className="max-w-xs text-xs text-muted-foreground">{t("ServerError_DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED")}</p>;
   }
   return (
     <Button

@@ -1,4 +1,5 @@
 import { v, ConvexError } from "convex/values";
+import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
 import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
@@ -1910,6 +1911,8 @@ export const markCommissionPaid = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+    await requireOwnedRow(ctx, args.orgId, "sales", args.saleId, "Sale not found.");
+    assertRt11DoorAllowed("DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED");
     const paymentMethod = normalizePaymentMethod(args.paymentMethod);
 
     return await runWithIdempotency(

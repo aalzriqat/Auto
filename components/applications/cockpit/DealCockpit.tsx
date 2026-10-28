@@ -1,4 +1,5 @@
 "use client";
+import { isRt11DoorDisabled } from "@/convex/utils/rt11DoorContainment";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
@@ -3062,6 +3063,7 @@ export function DealCockpit({
           recommended: dealCosts?.recommendedCustody ?? null,
           openPeriodToday: dealCosts?.custodyPostsNow,
           reopenLocked: unwindBars,
+          finalized: (dealCosts?.economicsFrozen?.frozen ?? false) || app.status === "CLOSED",
           dealStopped:
             // The issuing commands' own predicate, when the read has it;
             // the local status check stays as the fallback while it loads.
@@ -7269,11 +7271,14 @@ export function DealCockpitView({
                 variant="outline"
                 size="sm"
                 className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                disabled={isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED")}
+                title={isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") ? t("ServerError_SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") : undefined}
                 onClick={() => setCorrectingAdvice(true)}
               >
                 {t("CorrectSettlementAdvice")}
               </Button>
             )}
+            {canCorrectAdvice && isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") && <p className="text-xs text-muted-foreground">{t("ServerError_SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED")}</p>}
           </div>
           )}
         </div>
@@ -7801,7 +7806,7 @@ export function DealCockpitView({
         </>
       )}
 
-      {discrepancy && canCorrectAdvice && (
+      {discrepancy && canCorrectAdvice && !isRt11DoorDisabled("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED") && (
         <SettlementAdviceCorrectionDialog
           open={correctingAdvice}
           submitting={correctionSubmitting}

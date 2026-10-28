@@ -1,0 +1,55 @@
+{
+  "id": "rt11-preserve-legacy-signed-landed-cost-positive-addition",
+  "fingerprint": "56da5599ccee4ebbc85aa19aef1c2cce3b093155d5760fae0587348157dafe7d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors-round2",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.upsertLandedCosts",
+      "input": {
+        "sourceType": "STOCK",
+        "previousPaidCash": 100,
+        "previousOffset": -10,
+        "previousOffsetMethodAbsent": true,
+        "reorder": true,
+        "explicitOffsetMethod": "CASH",
+        "newAmount": 20
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reorder.journalRowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "landedCost.total",
+      "value": 110
+    },
+    {
+      "observable": "vehicle.landedCostTotal",
+      "value": 110
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 preserving legacy signed landed costs still allows a positive addition"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

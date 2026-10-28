@@ -1,0 +1,50 @@
+{
+  "id": "rt11-custody-shortage-write-off-refuses-without-writes",
+  "fingerprint": "beb4e5087e3ffeb2d7a35eb52d7fa33cdea209e96c0d592f4ea2028fdda32f67",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeDealCosts.reconcileDealCustody",
+      "input": {
+        "shortageMinor": 100000,
+        "writeOffReason": "unaccounted"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "CUSTODY_WRITEOFF_PILOT_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "step1.schedulerChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 custody shortage write-off refuses without writes"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}

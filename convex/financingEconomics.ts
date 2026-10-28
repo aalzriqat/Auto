@@ -1,4 +1,5 @@
 import { ConvexError, v, type Value } from "convex/values";
+import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
 import { resolveDealCurrency, settlementDeductedTotalMinor } from "./utils/settlementDeductions";
 import {
   customerPaymentEvidenceOf,
@@ -3552,6 +3553,7 @@ export const recordManualFinanceApproval = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.APPROVE_FINANCE_APPLICATION,
     ]);
+    assertRt11DoorAllowed("MANUAL_FINANCE_APPROVAL_PILOT_DISABLED");
     assertMinorAmount(args.approvedAmountMinor, "Approved amount");
     if (args.approvedAmountMinor <= 0) {
       throw new ConvexError("The approved amount must be greater than zero.");

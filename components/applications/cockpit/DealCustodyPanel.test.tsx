@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { Id } from "@/convex/_generated/dataModel";
 import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
+import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import {
   DealCustodyPanel,
   accountingBlockMessage,
@@ -667,4 +668,49 @@ describe("DealCustodyPanel", () => {
     expect(figure.tagName).toBe("BDI");
     expect(figure.getAttribute("dir")).toBe("ltr");
   });
+});
+
+
+// Historical UI mechanics keep these doors open; RT11 tests below use the REAL shipped switch.
+const rt11 = vi.hoisted(() => ({ disabled: false }));
+vi.mock("@/convex/utils/rt11DoorContainment", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/convex/utils/rt11DoorContainment")>();
+  return { ...original, isRt11DoorDisabled: (code: import("@/convex/utils/rt11DoorContainment").Rt11DoorCode) => rt11.disabled && original.isRt11DoorDisabled(code) };
+});
+afterEach(() => { rt11.disabled = false; });
+
+test("RT11 finalized custody controls show the localized pilot refusal", () => {
+  rt11.disabled = true;
+  for (const locale of ["en", "ar"] as const) {
+    const dictionary: Record<string, string> = locale === "en" ? { ...salesEn, ...commonEn } : { ...salesAr, ...commonAr };
+    const r = record({ summary: { actualExpensesMinor: 750000, employeeOwesDealerMinor: 0, reimbursementOutstandingMinor: 50000, reimbursementOverpaidMinor: 0, overReturnedMinor: 0, settled: false } });
+    renderPanel(wiring({ records: [r], actions: actions(), accounting: { ready: true }, finalized: true, dealStopped: true }), key => dictionary[key] ?? key);
+    expect((screen.getByRole("button", { name: dictionary.CustodyReimburse }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(dictionary.ServerError_CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED)).toBeTruthy();
+    expect((screen.getByRole("button", { name: dictionary.CustodyRecordReturn }) as HTMLButtonElement).disabled).toBe(false);
+    cleanup();
+  }
+});
+
+test("RT11 custody shortage cannot offer a write-off", () => {
+  rt11.disabled = true;
+  for (const locale of ["en", "ar"] as const) {
+    const dictionary: Record<string, string> = locale === "en" ? { ...salesEn, ...commonEn } : { ...salesAr, ...commonAr };
+    renderPanel(wiring({ actions: actions(), accounting: { ready: true } }), key => dictionary[key] ?? key);
+    fireEvent.click(screen.getByRole("button", { name: dictionary.CustodyClose }));
+    expect(screen.queryByTestId("custody-write-off-toggle")).toBeNull();
+    expect(screen.getByText(dictionary.ServerError_CUSTODY_WRITEOFF_PILOT_DISABLED)).toBeTruthy();
+    cleanup();
+  }
+});
+
+test("RT11 custody reopen stays disabled with a localized reason", () => {
+  rt11.disabled = true;
+  for (const locale of ["en", "ar"] as const) {
+    const dictionary: Record<string, string> = locale === "en" ? { ...salesEn, ...commonEn } : { ...salesAr, ...commonAr };
+    renderPanel(wiring({ records: [record({ status: "RECONCILED" })], actions: actions(), accounting: { ready: true } }), key => dictionary[key] ?? key);
+    expect((screen.getByRole("button", { name: dictionary.CustodyReopen }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(dictionary.ServerError_CUSTODY_REOPEN_PILOT_DISABLED)).toBeTruthy();
+    cleanup();
+  }
 });

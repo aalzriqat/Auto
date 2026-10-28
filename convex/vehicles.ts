@@ -1,3 +1,4 @@
+import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
 import {
   acquireVehicle,
   assertAcquirable,
@@ -1336,16 +1337,19 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
+    validateInput(UpdateVehicleSchema, args);
+
+    const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId, "Vehicle not found in this organization.");
+    if (vehicle.isDeleted) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+    // The limiter writes component state, so refuse ownership changes before it.
+    if (requestedVehicleSourceTypeChange(vehicle, args)) {
+      assertRt11DoorAllowed("VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED");
+    }
     const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-
-    validateInput(UpdateVehicleSchema, args);
-
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
     }
     assertDirectVehicleStatusTransition(vehicle.status, args.status);
     await assertNoPendingBeforeAvailable(ctx, {
@@ -1687,6 +1691,33 @@ export const upsertLandedCosts = mutation({
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
       .unique();
     const previousItems = existing?.items ?? [];
+
+    // RT11-DOORS: owned nonzero items already carry settlement (legacy method
+    // absence means CASH). Preserve every occurrence, including duplicate items.
+    // SOURCED items are informational and have never capitalized or paid cash.
+    if (vehicle.sourceType !== "SOURCED") {
+      const itemKey = (item: Doc<"vehicleLandedCosts">["items"][number]) => JSON.stringify([
+        item.label, item.amount, normalizePaymentMethod(item.paymentMethod), item.bankAccountId ?? null,
+      ]);
+      const remaining = new Map<string, number>();
+      for (const item of items) {
+        const key = itemKey(item);
+        remaining.set(key, (remaining.get(key) ?? 0) + 1);
+      }
+      for (const previous of previousItems) {
+        if (previous.amount === 0) continue;
+        const key = itemKey(previous);
+        const count = remaining.get(key) ?? 0;
+        if (count === 0) assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED");
+        else remaining.set(key, count - 1);
+      }
+      // A negative addition reverses settlement even when all paid rows survive.
+      // Keep historical signed rows intact; only unmatched occurrences are new.
+      // Nonnegative additions cannot reduce any method/bank settlement total.
+      if (items.some((item) => item.amount < 0 && (remaining.get(itemKey(item)) ?? 0) > 0)) {
+        assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED");
+      }
+    }
 
     if (vehicle.sourceType !== "SOURCED") {
       // An old dimensionless bank cost cannot be reversed or reallocated to a

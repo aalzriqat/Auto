@@ -1,0 +1,42 @@
+{
+  "id": "rt11-balanced-custody-closure-remains-allowed",
+  "fingerprint": "4a0e3863919f0f1281054a8420a73e9d245a5fc1d9a73690e4f4e89cd660ae73",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-rt11-doors",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeDealCosts.reconcileDealCustody",
+      "input": {
+        "shortageMinor": 0,
+        "writeOffReason": "no-shortage"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "custody.status",
+      "value": "RECONCILED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23862",
+      "digest": "2cd7b696658c09ccef0ed99cc763c485d29a15224f2d7682b3a9582bf6812e42"
+    }
+  ],
+  "impl": {
+    "file": "convex/rt11DoorContainment.test.ts",
+    "testName": "RT11 balanced custody closure remains allowed"
+  },
+  "matrixRow": "SCRUM-760-RT11-DOORS"
+}
