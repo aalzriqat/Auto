@@ -2376,7 +2376,7 @@ jobs:
   # only after all of them — whatever their outcome — have finished with it.
   preview-cleanup:
     name: disposable-preview-cleanup
-    needs: [prepare, candidate-build, trusted-e2e, attack-worker, opening-prepare, opening-build, opening-proof, opening-cleanup, verdict]
+    needs: [e2e-gate-begin, prepare, candidate-source, candidate-build, trusted-e2e, e2e-gate-finish, attack-worker, opening-prepare, opening-build, opening-proof, opening-cleanup, verdict]
     # The same-repository conditions repeat `prepare`'s own: only such a run can
     # have created a preview, and they keep fork-triggered runs out of a job
     # that holds the preview deploy key.

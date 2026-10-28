@@ -214,7 +214,11 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // SCRUM-757: counted authenticated PR-head verdict, default-branch-only
     // publishers and a secret-free source archive replace privileged candidate
     // checkouts. Canonical deploy/audit commands and their tamper tests remain.
-    "f307f6e0cb806f8551d8be802a798d10d349f1bbfc51fe8c72fbe8d650067e15",
+    // SCRUM-757 follow-up: preview-cleanup `needs` now lists the three new
+    // jobs (e2e-gate-begin, candidate-source, e2e-gate-finish) so the
+    // disposable preview is deleted only after every other job (SCRUM-377).
+    // A `needs` list only; no step, secret or checkout changed.
+    "5ad28e758fb249a856a572f87fd298700611c13bbe33a80606014ed91e713e1c",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
