@@ -563,6 +563,15 @@ describe("closure ownership is decided by the resolved module, and a function re
     ["identifier specifier of an unrelated load", "declare const n: string;\nexport const f = async () => import(n);", /computed import\(\) specifier/],
     ["require aliased to a variable", 'declare const require: (s: string) => any;\nconst r = require;\nexport const f = r("convex/server");', /require used without a call/],
     ["import = require with a computed specifier", 'declare const m: string;\nimport cv = require(m);\nexport const x = cv;', /computed require\(\) specifier/],
+    ["require.call", "declare const require: any;\ndeclare const n: string;\nexport const f = () => require.call(null, n);", /require used without a call/],
+    ["require.apply", 'declare const require: any;\nexport const f = () => require.apply(null, ["./_generated/api"]);', /require used without a call/],
+    ["require.bind then call", 'declare const require: any;\nexport const f = () => require.bind(null)("./_generated/api");', /require used without a call/],
+    ["wrapped require.call", "declare const require: any;\nexport const f = () => (require as any).call(null, \"convex/server\");", /require used without a call/],
+    ["require.resolve as a value", "declare const require: any;\nexport const f = require.resolve;", /require used without a call/],
+    ["element access on require", 'declare const require: any;\nexport const f = () => require["call"](null, "convex/server");', /require used without a call/],
+    ["module.require", 'declare const module: any;\nexport const f = () => module.require("convex/server");', /call of a member named require/],
+    ["globalThis.require behind as", 'export const f = () => (globalThis as any).require("convex/server");', /call of a member named require/],
+    ["element access named require", 'declare const x: any;\nexport const f = () => x["require"]("convex/server");', /call of a member named require/],
     ["makeFunctionReference with a satisfies name", 'import { makeFunctionReference } from "convex/server"; export const r = makeFunctionReference<"query">("worker:run" satisfies string);', /^$/],
     ["makeFunctionReference with a concatenated name", 'import { makeFunctionReference } from "convex/server"; export const r = makeFunctionReference<"query">("wor" + "ker:run");', /makeFunctionReference with a non-literal name/],
     ["makeFunctionReference with a template substitution", 'import { makeFunctionReference } from "convex/server"; declare const n: string; export const r = makeFunctionReference<"query">(`${n}:run`);', /makeFunctionReference with a non-literal name/],
@@ -584,6 +593,11 @@ describe("closure ownership is decided by the resolved module, and a function re
     const closure = closureOfFile(file);
     expect(closure.unresolved).toEqual([]);
     expect(closure.files).toContain("convex/worker.ts");
+  });
+
+  test("CONTROL: a called require.resolve and typeof require load nothing and are not refused", () => {
+    write("convex/requireInert.ts", 'declare const require: any;\nexport const a = require.resolve("./worker");\nexport const b = typeof require === "function";\nexport const c = (require as any).resolve("./lone");');
+    expect(closureOfFile("convex/requireInert.ts").unresolved).toEqual([]);
   });
 
   test("the whole renewal path refuses when a wrapped load of convex/server hides a changed worker (Seat 2 reproduction)", () => {

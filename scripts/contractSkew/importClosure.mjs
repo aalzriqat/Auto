@@ -46,8 +46,11 @@
  *       literal (a no-substitution template counts as plain) after wrappers are
  *       skipped (`"a" + "b"`, a template with a substitution, an identifier, no
  *       argument), because it cannot be proved not to reach `_generated/api` or
- *       `convex/server`; and a bare `require` that is not called (`const r = require`;
- *       `require.resolve` and `typeof require` are inert and allowed);
+ *       `convex/server`; every use of `require` other than a call, by ALLOWLIST: only a
+ *       called `require.resolve(...)` and `typeof require` are inert, so `const r = require`,
+ *       `require.call/apply/bind`, `require["call"]` and `require.resolve` as a value
+ *       refuse; and any call whose callee is a member named `require`, whatever the
+ *       receiver (`module.require(x)`, `(globalThis as any).require(x)`, `o["require"](x)`);
  *     Wrappers are looked through before every decision above (parentheses, `as`,
  *     `satisfies`, `<T>x`, `x!`, `f<T>`, partially emitted expressions): load specifiers,
  *     makeFunctionReference names and callees, `api`/`internal` chain links and keys,
@@ -79,9 +82,10 @@
  *   - dependency behaviour inside `node_modules` (only the lockfile and package.json
  *     pin it; a changed version with an unchanged lockfile entry cannot exist, but
  *     what the code of that version does is not reviewed here);
- *   - code that loads by other means: `eval`, `new Function`, `module.require`,
- *     `require.context`, `createRequire(...)(x)` (a called require is read, but not
- *     one reached through another object), and type-only `import("x")` type nodes;
+ *   - code that loads by other means: `eval`, `new Function`, a loader obtained under
+ *     another name (`const load = createRequire(url); load(x)`: only the names
+ *     `require` and `import` are read), and type-only `import("x")` type nodes.
+ *     (`require.context` and `module.require` are NOT in this list: they refuse.);
  *   - handler-only behaviour not reached by an edge: a database trigger, an
  *     `internal` function reached through a string built at run time, an HTTP route,
  *     a cron table or a scheduled job that runs code this file never names;
@@ -264,6 +268,22 @@ function scan(source, ownerOf) {
     return current.parent !== undefined && ts.isCallExpression(current.parent) && current.parent.expression === current;
   };
 
+  /** The outermost transparent wrapper around `node` (the node itself when it is not wrapped). @param {import("typescript").Node} node */
+  const outermost = (node) => {
+    let current = node;
+    while (current.parent && isTransparent(current.parent) && current.parent.expression === current) current = current.parent;
+    return current;
+  };
+
+  /** `typeof require`, or `require.resolve(...)` that is called: neither loads a module. @param {import("typescript").Node} node */
+  const isInertRequire = (node) => {
+    const outer = outermost(node);
+    const parent = outer.parent;
+    if (parent === undefined) return false;
+    if (ts.isTypeOfExpression(parent)) return true;
+    return ts.isPropertyAccessExpression(parent) && parent.expression === outer && parent.name.text === "resolve" && isCallee(parent);
+  };
+
   /** The call `makeFunctionReference(...)` or `ns.makeFunctionReference(...)`, wrappers skipped. @param {import("typescript").Expression} expression */
   const isMakerCallee = (expression) => {
     const callee = unwrap(expression);
@@ -298,6 +318,9 @@ function scan(source, ownerOf) {
       // convex/_generated/api or convex/server.
       const callee = unwrap(node.expression);
       const kind = callee.kind === ts.SyntaxKind.ImportKeyword ? "import" : ts.isIdentifier(callee) && callee.text === "require" ? "require" : undefined;
+      // `module.require(x)`, `(globalThis as any).require(x)`, `x["require"](x)`: a require reached through an object.
+      const member = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isElementAccessExpression(callee) ? plainText(callee.argumentExpression) : undefined;
+      if (member === "require") opaque.push("call of a member named require cannot be traced");
       if (kind !== undefined) {
         const target = node.arguments.length >= 1 ? plainText(node.arguments[0]) : undefined;
         if (target === undefined) {
@@ -348,9 +371,9 @@ function scan(source, ownerOf) {
       if (makers.has(node.text) && !isCallee(node)) opaque.push("makeFunctionReference used without a call cannot be traced");
       if (serverNamespaces.has(node.text)) opaque.push("a convex/server namespace used without a static member cannot be traced");
       // `const r = require; r("x")` loads without a call the scan can read. `require.resolve` and `typeof require` load nothing.
-      const parent = node.parent;
-      const inert = parent !== undefined && ((ts.isPropertyAccessExpression(parent) && parent.expression === node) || ts.isTypeOfExpression(parent));
-      if (node.text === "require" && !isCallee(node) && !inert) opaque.push("require used without a call cannot be traced");
+      // An ALLOWLIST: only a called `require.resolve(...)` and `typeof require` are inert. Every other use
+      // (`require.call/apply/bind`, `require["x"]`, `require.resolve` as a value, an alias) can reach a load.
+      if (node.text === "require" && !isCallee(node) && !isInertRequire(node)) opaque.push("require used without a call cannot be traced");
     }
     ts.forEachChild(node, visit);
   };

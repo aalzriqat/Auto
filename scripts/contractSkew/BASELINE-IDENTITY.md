@@ -102,7 +102,11 @@ or `anyApi` on (`export { internal } from "./_generated/api"`, `export *`,
 dynamic load of `convex/server`; and any computed load in any closure file, whatever it
 targets: `import()`, `require()` or `import x = require()` whose specifier is not a plain
 string literal after wrappers are skipped (`"a" + "b"`, a template with a substitution,
-an identifier, no argument), or a bare `require` that is not called (`const r = require`).
+an identifier, no argument); every use of `require` other than a call (allowlist: only a
+called `require.resolve(...)` and `typeof require` are inert, so `const r = require`,
+`require.call/apply/bind`, `require["call"]` and `require.context` refuse); and any call
+whose callee is a member named `require` whatever the receiver (`module.require(x)`,
+`(globalThis as any).require(x)`).
 Parentheses, `as`, `satisfies`, `<T>x`, `x!` and `f<T>` are looked through before every
 decision, so a wrapped load or reference is judged like the plain one (the public
 TypeScript predicates are used; `ts.skipOuterExpressions` is not in `typescript.d.ts`).
@@ -110,8 +114,9 @@ At this revision no shipped (non-test) file does any of these: the real-tree dry
 refuses 1012 and none for an unresolved reference.
 
 Still outside the closure and not detected: ambient declarations (`declare global`, a
-`.d.ts` nobody imports); code that loads by other means (`eval`, `new Function`,
-`module.require`, `require.context`, type-only `import("x")` types); what a
+`.d.ts` nobody imports); code that loads by other means (`eval`, `new Function`, a
+loader obtained under another name such as `const load = createRequire(url)`, type-only
+`import("x")` types); what a
 dependency's code does inside `node_modules` (the
 lockfile and package.json pin the version, nothing reviews its behaviour);
 handler-only behaviour that no edge reaches (a trigger, an HTTP route, a cron table, a
