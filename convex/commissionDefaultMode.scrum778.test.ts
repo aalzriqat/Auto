@@ -248,6 +248,141 @@ describe("SCRUM-778: an unset commission mode means MANUAL", () => {
     expect((await d.t.run((ctx) => ctx.db.get(saleId)))?.commissionAmount).toBe(500);
   });
 
+  // Reproduce a historical AUTO-default accrual without changing its amount or journals.
+  async function historicalAccrual(tag: string) {
+    const d = await seedDealer(tag, "AUTO_MEMBER");
+    const saleId = await d.completeSale();
+    await d.t.run(async (ctx) => {
+      const row = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).unique();
+      if (!row) throw new Error("fixture settings missing");
+      await ctx.db.patch(row._id, { commissionMode: undefined });
+    });
+    expect(await d.as.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBe("MANUAL");
+    expect(await d.commissionPayableMinor()).toBe(50_000);
+    return { ...d, saleId };
+  }
+
+  type HistoricalDealer = Awaited<ReturnType<typeof historicalAccrual>>;
+
+  async function commissionExpenseMinor(d: HistoricalDealer) {
+    return d.t.run(async (ctx) => {
+      const account = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", d.orgId).eq("systemKey", "COMMISSION_EXPENSE")).unique();
+      if (!account) throw new Error("fixture commission expense missing");
+      const lines = await ctx.db.query("journalLines").withIndex("by_org_account", (q) => q.eq("orgId", d.orgId).eq("accountId", account._id)).collect();
+      return lines.reduce((sum, line) => sum + line.debitMinor - line.creditMinor, 0);
+    });
+  }
+
+  async function addManager(d: HistoricalDealer, tag: string) {
+    const userId = await d.t.run((ctx) => ctx.db.insert("users", { clerkId: tag, email: `${tag}@example.com`, name: "Manager" }));
+    const roleId = await d.t.run((ctx) => ctx.db.insert("roles", {
+      orgId: d.orgId, name: "Manager", permissions: ["view:commissions", "manage:commissions", "view:sales", "edit:sales", "approve:requests", "manage:finance"],
+    }));
+    await d.t.run((ctx) => ctx.db.insert("memberships", { orgId: d.orgId, userId, roleId }));
+    return { userId, as: d.t.withIdentity({ subject: tag, clerkId: tag }) };
+  }
+
+  async function payHistoricalCommission(d: HistoricalDealer, expectedMinor: number) {
+    const now = new Date();
+    const runId = await d.as.mutation(api.payroll.createRun, { orgId: d.orgId, periodYear: now.getUTCFullYear(), periodMonth: now.getUTCMonth() + 1 });
+    await d.as.mutation(api.payroll.approveRun, { orgId: d.orgId, runId });
+    expect(await d.commissionPayableMinor()).toBe(expectedMinor);
+    const item = await d.t.run((ctx) => ctx.db.query("payrollItems").withIndex("by_run", (q) => q.eq("runId", runId)).unique());
+    expect(item).toMatchObject({ orgId: d.orgId, userId: d.userId, commissionMinor: expectedMinor, netMinor: expectedMinor, commissionSaleIds: [d.saleId] });
+    await d.as.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" });
+    expect(await d.commissionPayableMinor()).toBe(0);
+    expect(await commissionExpenseMinor(d)).toBe(expectedMinor);
+    expect((await d.t.run((ctx) => ctx.db.get(d.saleId)))?.commissionPaidAt).toBeTypeOf("number");
+    const payment = await d.t.run(async (ctx) => {
+      const events = await ctx.db.query("accountingEvents").withIndex("by_org_eventType", (q) => q.eq("orgId", d.orgId).eq("eventType", "PAYROLL_PAID")).collect();
+      expect(events).toHaveLength(1);
+      if (!events[0].journalEntryId) throw new Error("payroll journal missing");
+      expect(events[0].status).toBe("POSTED");
+      const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", events[0].journalEntryId!)).collect();
+      return Promise.all(lines.map(async (line) => ({ key: (await ctx.db.get(line.accountId))?.systemKey, debitMinor: line.debitMinor, creditMinor: line.creditMinor })));
+    });
+    expect(payment).toEqual(expect.arrayContaining([
+      { key: "COMMISSION_PAYABLE", debitMinor: expectedMinor, creditMinor: 0 },
+      { key: "CASH_ON_HAND", debitMinor: 0, creditMinor: expectedMinor },
+    ]));
+    expect(payment).toHaveLength(2);
+    const beforeRetry = await dbSnapshot(d.t, ["journalEntries", "journalLines", "accountingEvents"]);
+    await expect(d.as.mutation(api.payroll.payRun, { orgId: d.orgId, runId, method: "CASH" })).rejects.toThrow(/approved payroll run/i);
+    expect(await dbSnapshot(d.t, ["journalEntries", "journalLines", "accountingEvents"])).toEqual(beforeRetry);
+  }
+
+  test("payroll pays a historical unset-org accrual once without duplicating expense", async () => {
+    const d = await historicalAccrual("historical_pay");
+    await payHistoricalCommission(d, 50_000);
+  });
+
+  async function assertHistoricalAdjustment({ amount, deltaMinor, payableMinor, debitKey, creditKey }: {
+    amount: number; deltaMinor: number; payableMinor: number; debitKey: string; creditKey: string;
+  }) {
+    const d = await historicalAccrual(`historical_adjust_${amount}`);
+    const manager = await addManager(d, `historical_manager_${amount}`);
+    const edit = () => manager.as.mutation(api.sales.setCommissionAmount, { orgId: d.orgId, saleId: d.saleId, commissionAmount: amount });
+    await edit();
+    await edit();
+    expect(await d.commissionPayableMinor()).toBe(payableMinor);
+    expect(await commissionExpenseMinor(d)).toBe(payableMinor);
+    await d.t.run(async (ctx) => {
+      const accruals = await ctx.db.query("accountingEvents").withIndex("by_org_eventType", (q) => q.eq("orgId", d.orgId).eq("eventType", "COMMISSION_ACCRUED")).collect();
+      expect(accruals).toHaveLength(1);
+      expect(accruals[0]).toMatchObject({ status: "POSTED", payload: { amountMinor: 50_000 } });
+      const adjustments = await ctx.db.query("accountingEvents").withIndex("by_org_eventType", (q) => q.eq("orgId", d.orgId).eq("eventType", "COMMISSION_ADJUSTED")).collect();
+      expect(adjustments).toHaveLength(1);
+      const adjustment = adjustments[0];
+      expect(adjustment).toMatchObject({ status: "POSTED", createdBy: manager.userId, payload: { saleId: d.saleId, deltaMinor } });
+      if (!adjustment.journalEntryId) throw new Error("adjustment journal missing");
+      const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", adjustment.journalEntryId!)).collect();
+      const actual = await Promise.all(lines.map(async (line) => ({ key: (await ctx.db.get(line.accountId))?.systemKey, debitMinor: line.debitMinor, creditMinor: line.creditMinor })));
+      expect(actual).toEqual(expect.arrayContaining([
+        { key: debitKey, debitMinor: 12_500, creditMinor: 0 },
+        { key: creditKey, debitMinor: 0, creditMinor: 12_500 },
+      ]));
+      expect(actual).toHaveLength(2);
+    });
+    await payHistoricalCommission(d, payableMinor);
+  }
+
+  test("a manager reduces a historical unset-org accrual with one signed adjustment and payroll pays it", async () => {
+    await assertHistoricalAdjustment({ amount: 375, deltaMinor: -12_500, payableMinor: 37_500, debitKey: "COMMISSION_PAYABLE", creditKey: "COMMISSION_EXPENSE" });
+  });
+
+  test("a manager increases a historical unset-org accrual with one signed adjustment and payroll pays it", async () => {
+    await assertHistoricalAdjustment({ amount: 625, deltaMinor: 12_500, payableMinor: 62_500, debitKey: "COMMISSION_EXPENSE", creditKey: "COMMISSION_PAYABLE" });
+  });
+
+  test("cancelling a historical unset-org accrual reverses its ledger exactly once", async () => {
+    const d = await historicalAccrual("historical_cancel");
+    const manager = await addManager(d, "historical_cancel_manager");
+    const cancel = () => manager.as.mutation(api.sales.update, { orgId: d.orgId, saleId: d.saleId, status: "CANCELLED" });
+    await cancel();
+    expect(await d.commissionPayableMinor()).toBe(0);
+    expect(await commissionExpenseMinor(d)).toBe(0);
+    await d.t.run(async (ctx) => {
+      const events = await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).collect();
+      const accruals = events.filter((event) => event.eventType === "COMMISSION_ACCRUED");
+      expect(accruals).toHaveLength(1);
+      expect(accruals[0].status).toBe("REVERSED");
+      const reversals = events.filter((event) => event.reversalOfEventId === accruals[0]._id);
+      expect(reversals).toHaveLength(1);
+      expect(reversals[0].status).toBe("POSTED");
+      if (!reversals[0].journalEntryId) throw new Error("commission reversal journal missing");
+      const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", reversals[0].journalEntryId!)).collect();
+      const actual = await Promise.all(lines.map(async (line) => ({ key: (await ctx.db.get(line.accountId))?.systemKey, debitMinor: line.debitMinor, creditMinor: line.creditMinor })));
+      expect(actual).toEqual(expect.arrayContaining([
+        { key: "COMMISSION_PAYABLE", debitMinor: 50_000, creditMinor: 0 },
+        { key: "COMMISSION_EXPENSE", debitMinor: 0, creditMinor: 50_000 },
+      ]));
+      expect(actual).toHaveLength(2);
+    });
+    const beforeRetry = await dbSnapshot(d.t, ["journalEntries", "journalLines", "accountingEvents"]);
+    await cancel();
+    expect(await dbSnapshot(d.t, ["journalEntries", "journalLines", "accountingEvents"])).toEqual(beforeRetry);
+  });
+
   test("an old org without a settings row reads MANUAL without stamping a mode", async () => {
     const d = await seedDealer("no_settings");
     await d.t.run(async (ctx) => {

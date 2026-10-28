@@ -1,0 +1,94 @@
+{
+  "id": "historical-unset-commission-payroll-clears-once",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum778-round2-review",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgSettings.getCommissionMode",
+      "input": {
+        "storedCommissionMode": "unset",
+        "historicalAccruedMinor": 50000,
+        "currency": "USD"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "payroll.createRun",
+      "input": {
+        "period": "sale-month"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "payroll.approveRun",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "payroll.payRun",
+      "input": {
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "payroll.payRun",
+      "input": {
+        "method": "CASH",
+        "retry": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payroll.commissionMinor",
+      "value": 50000
+    },
+    {
+      "observable": "ledger.commissionPayableMinor",
+      "value": 0
+    },
+    {
+      "observable": "ledger.commissionExpenseMinor",
+      "value": 50000
+    },
+    {
+      "observable": "ledger.payrollPaidJournals",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-778#c23819",
+      "digest": "4fb52f2f9429a99df12e17b14481ef09ca407dca41449bb77650226317e378d6"
+    }
+  ],
+  "impl": {
+    "file": "convex/commissionDefaultMode.scrum778.test.ts",
+    "testName": "payroll pays a historical unset-org accrual once without duplicating expense"
+  },
+  "matrixRow": "pilot-commission-manual-default",
+  "fingerprint": "07e1d4d12fb4d0da44acb3afa58a7ce154e4b3c2f42a45782073e602880575f3"
+}
