@@ -344,6 +344,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Fixed assets are not available during the pilot. Nothing has been changed.",
     "الأصول الثابتة غير متاحة خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
   ],
+  // SCRUM-760 ruling 11: convex/utils/legacyCollectionRefundContainment.ts.
+  ServerError_LEGACY_COLLECTION_REFUND_PILOT_DISABLED: [
+    "Recording a refund against a collection receivable is not available during the pilot. You can still reject a pending refund request. Nothing has been changed.",
+    "تسجيل استرداد على مستحقات التحصيل غير متاح خلال المرحلة التجريبية. يمكنك رفض أي طلب استرداد معلّق. لم يتم تغيير أي شيء.",
+  ],
   ServerError_PAYMENT_LINKS_DISABLED: [
     "Payment links are not available yet. Nothing has been changed.",
     "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",
