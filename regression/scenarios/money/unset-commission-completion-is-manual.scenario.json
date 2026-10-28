@@ -1,0 +1,62 @@
+{
+  "id": "unset-commission-completion-is-manual",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum778-owner-default",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "deposits.create",
+      "input": {
+        "amount": 15000,
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 15000,
+        "financingType": "CASH"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "sale.commissionAmount",
+      "value": "absent"
+    },
+    {
+      "observable": "commission.payableMinor",
+      "value": 0
+    },
+    {
+      "observable": "settings.commissionMode",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-778#c23819",
+      "digest": "4fb52f2f9429a99df12e17b14481ef09ca407dca41449bb77650226317e378d6"
+    }
+  ],
+  "impl": {
+    "file": "convex/commissionDefaultMode.scrum778.test.ts",
+    "testName": "completing a sale with no mode stored accrues no automatic commission"
+  },
+  "matrixRow": "pilot-commission-manual-default",
+  "fingerprint": "e0de174e4ee32b081541ed632ac1a4a4aa603eede04ef716bc07456dabb63821"
+}

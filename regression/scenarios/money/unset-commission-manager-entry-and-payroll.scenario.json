@@ -1,0 +1,87 @@
+{
+  "id": "unset-commission-manager-entry-and-payroll",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum778-owner-default",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "sales.setCommissionAmount",
+      "input": {
+        "commissionAmount": 250
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "sales.setCommissionAmount",
+      "input": {
+        "commissionAmount": 250
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "payroll.createRun",
+      "input": {
+        "period": "sale-month"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "payroll.approveRun",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "payroll.payRun",
+      "input": {
+        "method": "CASH"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "commission.expenseMinor",
+      "value": 25000
+    },
+    {
+      "observable": "commission.payableMinorAfterPayment",
+      "value": 0
+    },
+    {
+      "observable": "payroll.commissionMinor",
+      "value": 25000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-778#c23819",
+      "digest": "4fb52f2f9429a99df12e17b14481ef09ca407dca41449bb77650226317e378d6"
+    }
+  ],
+  "impl": {
+    "file": "convex/commissionDefaultMode.scrum778.test.ts",
+    "testName": "manager entry under the unset MANUAL default posts once and payroll clears only the payable"
+  },
+  "matrixRow": "pilot-commission-manual-default",
+  "fingerprint": "aacbc838b6261afe36f464eb88cd192c9713008514cc8d51d2f13b381d80feeb"
+}

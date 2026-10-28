@@ -1,0 +1,79 @@
+{
+  "id": "historical-unset-commission-is-preserved",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum778-owner-default",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgSettings.getCommissionMode",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.listCommissionsPaginated",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.recalculateCommission",
+      "input": {
+        "sale": "historically-accrued"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "payroll.createRun",
+      "input": {
+        "period": "sale-month"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "payroll.approveRun",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "historical.sale.commissionAmount",
+      "value": 500
+    },
+    {
+      "observable": "historical.commission.payableMinor",
+      "value": 50000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-778#c23819",
+      "digest": "4fb52f2f9429a99df12e17b14481ef09ca407dca41449bb77650226317e378d6"
+    }
+  ],
+  "impl": {
+    "file": "convex/commissionDefaultMode.scrum778.test.ts",
+    "testName": "historical AUTO-default accrual survives reads, refused recalculation, and payroll approval"
+  },
+  "matrixRow": "pilot-commission-manual-default",
+  "fingerprint": "ce01f9c240efb771f93793a1c6c616c9517c4b3ae9c50e4f694e6f1d844dc2b5"
+}
