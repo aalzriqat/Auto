@@ -16,7 +16,7 @@
  * Evidence boundary: convex-test only. It is repository behaviour, not the Convex runtime, and not
  * the real-backend replay that SCRUM-762 requires.
  */
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { seedBank } from "../test-utils/bankFixture";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
@@ -54,7 +54,7 @@ async function withLifecycleOpen<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function seedDealer() {
+async function seedDealer({ ledger = true }: { ledger?: boolean } = {}) {
   const t = convexTestWithComponents(schema, MODULES);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "S560 Dealer", createdAt: Date.now() })
@@ -86,6 +86,19 @@ async function seedDealer() {
 
   const asOwner = t.withIdentity({ subject: "s560_owner", clerkId: "s560_owner" });
   const asViewer = t.withIdentity({ subject: "s560_viewer", clerkId: "s560_viewer" });
+  // `ledger: false` is a dealer whose chart of accounts is not set up yet (for the chart-init wake cell).
+  if (ledger) {
+    await openCurrentYearLedger(t, asOwner, orgId);
+  }
+  return { t, orgId, userId, asOwner, asViewer };
+}
+
+/** Chart of accounts plus an OPEN period covering today, and a bank account. */
+async function openCurrentYearLedger(
+  t: ReturnType<typeof convexTestWithComponents>,
+  asOwner: { mutation: Dealer["asOwner"]["mutation"]; query: Dealer["asOwner"]["query"] },
+  orgId: Id<"organizations">
+) {
   await asOwner.mutation(api.chartOfAccounts.initialize, { orgId });
   const fiscalYear = new Date().getUTCFullYear();
   await asOwner.mutation(api.accountingPeriods.create, {
@@ -97,7 +110,6 @@ async function seedDealer() {
   const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
   await seedBank(t, orgId);
-  return { t, orgId, userId, asOwner, asViewer };
 }
 type Dealer = Awaited<ReturnType<typeof seedDealer>>;
 
@@ -155,6 +167,20 @@ describe("the shipped switch is ON (unmocked pin)", () => {
     expect(() => real.assertFixedAssetLifecycleAllowed(false)).not.toThrow();
     expect(real.isFixedAssetLifecycleDisabled()).toBe(true);
     expect(real.isFixedAssetLifecycleDisabled(false)).toBe(false);
+  });
+
+  test("the queued-posting classifier recognises the source and all four event types, and follows the switch", async () => {
+    const real = await vi.importActual<typeof import("./utils/fixedAssetLifecycleContainment")>(
+      "./utils/fixedAssetLifecycleContainment"
+    );
+    for (const eventType of ["ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED"]) {
+      expect(real.fixedAssetPostingRefusal({ eventType, sourceType: "other" })).toMatch(/pilot/i);
+      expect(real.fixedAssetPostingRefusal({ eventType, sourceType: "other" }, false)).toBeNull();
+    }
+    // By source alone, even with an event type this classifier does not list.
+    expect(real.fixedAssetPostingRefusal({ eventType: "", sourceType: "fixedAssets" })).toMatch(/pilot/i);
+    // Unrelated postings are untouched.
+    expect(real.fixedAssetPostingRefusal({ eventType: "EXPENSE_POSTED", sourceType: "expenses" })).toBeNull();
   });
 
   test("the refusal code is an AppErrorCode (the EN/AR client text is pinned in lib/errors.test.ts)", async () => {
@@ -310,5 +336,198 @@ describe("SCRUM-560 reads and cutover are deliberately NOT gated", () => {
     const events = await d.asOwner.query(api.fixedAssets.listEvents, { orgId: d.orgId, assetId });
     expect(events.map((e) => e.type)).toEqual(["CAPITALIZE"]);
     await expect(d.asOwner.query(api.fixedAssets.listBankOptions, { orgId: d.orgId })).resolves.toBeDefined();
+  });
+});
+
+describe("SCRUM-560 H1: a fixed-asset posting already queued in the outbox must not post while the lifecycle is off", () => {
+  const FAKE = ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] as const;
+  const HOUR = 3_600_000;
+  const LEDGER_TABLES = ["accountingEvents", "journalEntries", "journalLines"];
+  const PRIOR_YEAR = 2025;
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Let every scheduled function settle (convex-test needs the timers drained explicitly). */
+  async function pump(d: Dealer) {
+    for (let pass = 0; pass < 10; pass += 1) {
+      await d.t.finishAllScheduledFunctions(vi.runAllTimers);
+      const live = (await d.t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect())).filter(
+        (f) => f.state.kind === "pending" || f.state.kind === "inProgress"
+      );
+      if (live.length === 0) break;
+    }
+  }
+
+  /** What `dispatch-outbox-work` does every minute. */
+  async function cronTick(d: Dealer) {
+    await d.t.mutation(internal.accountingOutbox.dispatchDueOutboxWork, {});
+    await pump(d);
+  }
+
+  /** Time passes (backoff windows elapse), then the cron ticks. */
+  async function laterCronTick(d: Dealer) {
+    vi.setSystemTime(Date.now() + 2 * HOUR);
+    await cronTick(d);
+  }
+
+  /** A genuine fixed-asset posting waiting in the outbox: capitalized (pre-pilot) into a date with no period. */
+  async function queueFixedAssetRow(d: Dealer): Promise<Id<"pendingAccountingEvents">> {
+    await withLifecycleOpen(() =>
+      d.asOwner.mutation(api.fixedAssets.capitalize, {
+        idempotencyKey: crypto.randomUUID(), orgId: d.orgId, name: "Queued forklift",
+        purchaseDate: PAST_PURCHASE_DATE, costMinor: 250_000, usefulLifeMonths: 24,
+      })
+    );
+    const rows = (await d.t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect())).filter(
+      (row) => row.sourceType === "fixedAssets"
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "POST", status: "PENDING", eventType: "ASSET_CAPITALIZED" });
+    vi.useFakeTimers({ toFake: [...FAKE] });
+    return rows[0]._id;
+  }
+
+  const openPriorYearPeriod = (d: Dealer) =>
+    d.asOwner.mutation(api.accountingPeriods.create, {
+      orgId: d.orgId,
+      startDate: Date.UTC(PRIOR_YEAR, 0, 1),
+      endDate: Date.UTC(PRIOR_YEAR, 11, 31, 23, 59, 59, 999),
+      fiscalYear: PRIOR_YEAR, periodNumber: 1, openImmediately: true,
+    });
+
+  const ledger = (d: Dealer) => dbSnapshot(d.t, LEDGER_TABLES);
+  const getRow = (d: Dealer, id: Id<"pendingAccountingEvents">) => d.t.run((ctx) => ctx.db.get(id));
+
+  /** The row never posted: still not POSTED, carries the pilot reason, and the ledger is untouched. */
+  async function expectNeverPosted(d: Dealer, id: Id<"pendingAccountingEvents">, ledgerBefore: unknown) {
+    const row = await getRow(d, id);
+    expect(row?.status === "PENDING" || row?.status === "FAILED").toBe(true);
+    expect(row?.lastError ?? "").toMatch(/pilot/i);
+    expect(await ledger(d)).toEqual(ledgerBefore);
+  }
+
+  test("the cron dispatcher refuses the row BEFORE the period hold, so it is not parked behind a missing period", async () => {
+    const d = await seedDealer();
+    const id = await queueFixedAssetRow(d);
+    const before = await ledger(d);
+    await cronTick(d);
+    const row = await getRow(d, id);
+    // Refused (an attempt burned, a pilot reason), not held waiting for a period: a hold would
+    // leave it PENDING for ever, blocking close with a row no operator can resolve (SCRUM-234).
+    expect(row?.dispatchState).not.toBe("PERIOD_HELD");
+    expect(row?.attempts).toBeGreaterThanOrEqual(1);
+    await expectNeverPosted(d, id, before);
+  });
+
+  test("opening the period it was waiting for does not post it (period-open wake path)", async () => {
+    const d = await seedDealer();
+    const id = await queueFixedAssetRow(d);
+    const before = await ledger(d);
+    await openPriorYearPeriod(d);
+    await pump(d);
+    await laterCronTick(d);
+    await expectNeverPosted(d, id, before);
+  });
+
+  test("control: with the lifecycle open the same row DOES post once its period opens", async () => {
+    const d = await seedDealer();
+    const id = await queueFixedAssetRow(d);
+    const before = (await ledger(d)) as { accountingEvents: unknown[] };
+    await withLifecycleOpen(async () => {
+      await openPriorYearPeriod(d);
+      await pump(d);
+      await laterCronTick(d);
+    });
+    expect((await getRow(d, id))?.status).toBe("POSTED");
+    const after = (await ledger(d)) as { accountingEvents: unknown[] };
+    expect(after.accountingEvents.length).toBe(before.accountingEvents.length + 1);
+  });
+
+  test("setting up the chart of accounts it was waiting for does not post it (chart-init wake path), and the control does", async () => {
+    for (const lifecycleOpen of [false, true]) {
+      const d = await seedDealer({ ledger: false });
+      // No chart yet, so a pre-pilot capitalization today is queued rather than posted.
+      await withLifecycleOpen(() =>
+        d.asOwner.mutation(api.fixedAssets.capitalize, {
+          idempotencyKey: crypto.randomUUID(), orgId: d.orgId, name: "Queued forklift",
+          purchaseDate: Date.now(), costMinor: 250_000, usefulLifeMonths: 24,
+        })
+      );
+      const queued = (await d.t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect())).filter(
+        (row) => row.sourceType === "fixedAssets"
+      );
+      expect(queued).toHaveLength(1);
+      expect(queued[0].status).toBe("PENDING");
+      vi.useFakeTimers({ toFake: [...FAKE] });
+      const bring = async () => {
+        await openCurrentYearLedger(d.t, d.asOwner, d.orgId);
+        await pump(d);
+        await laterCronTick(d);
+      };
+      const before = (await ledger(d)) as { accountingEvents: unknown[] };
+      if (lifecycleOpen) {
+        await withLifecycleOpen(bring);
+        expect((await getRow(d, queued[0]._id))?.status).toBe("POSTED");
+        expect(((await ledger(d)) as typeof before).accountingEvents.length).toBe(before.accountingEvents.length + 1);
+      } else {
+        await bring();
+        await expectNeverPosted(d, queued[0]._id, before);
+      }
+      vi.useRealTimers();
+    }
+  });
+
+  test("an operator redrive cannot post it", async () => {
+    const d = await seedDealer();
+    const id = await queueFixedAssetRow(d);
+    const before = await ledger(d);
+    await openPriorYearPeriod(d);
+    await pump(d);
+    vi.setSystemTime(Date.now() + 2 * HOUR);
+    await d.asOwner.mutation(api.accountingOutbox.redrive, { orgId: d.orgId });
+    await pump(d);
+    await laterCronTick(d);
+    await expectNeverPosted(d, id, before);
+  });
+
+  test("retryFailed cannot revive a dead-lettered fixed-asset posting, and the failed list does not offer Retry", async () => {
+    const d = await seedDealer();
+    const id = await queueFixedAssetRow(d);
+    // What ten refusals leave behind: dead-lettered with the pilot reason.
+    await d.t.run((ctx) =>
+      ctx.db.patch(id, { status: "FAILED", attempts: 10, lastError: "Fixed-asset postings are off during the pilot." })
+    );
+    await openPriorYearPeriod(d);
+    await pump(d);
+    const before = await ledger(d);
+    const failed = await d.asOwner.query(api.accountingSetup.listFailedEvents, {
+      orgId: d.orgId, paginationOpts: { numItems: 20, cursor: null },
+    });
+    expect(failed.page.find((row) => row._id === id)?.retryable).toBe(false);
+
+    await expect(
+      d.asOwner.mutation(api.accountingOutbox.retryFailed, { orgId: d.orgId, pendingEventId: id })
+    ).rejects.toThrow(/could not be revived/);
+    await pump(d);
+    await laterCronTick(d);
+    expect((await getRow(d, id))?.status).toBe("FAILED");
+    expect(await ledger(d)).toEqual(before);
+  });
+
+  test("control: with the lifecycle open the same dead-lettered row is revivable and posts", async () => {
+    const d = await seedDealer();
+    const id = await queueFixedAssetRow(d);
+    await d.t.run((ctx) => ctx.db.patch(id, { status: "FAILED", attempts: 10, lastError: "dead-lettered" }));
+    await withLifecycleOpen(async () => {
+      await openPriorYearPeriod(d);
+      await pump(d);
+      await expect(
+        d.asOwner.mutation(api.accountingOutbox.retryFailed, { orgId: d.orgId, pendingEventId: id })
+      ).resolves.toEqual({ retryQueued: true });
+      await pump(d);
+      await laterCronTick(d);
+    });
+    expect((await getRow(d, id))?.status).toBe("POSTED");
   });
 });

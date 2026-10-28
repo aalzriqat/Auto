@@ -39,6 +39,10 @@ export function withFixedAssetLifecycleSwitch(
       state.lifecycleDisabled
         ? original.assertFixedAssetLifecycleAllowed()
         : original.assertFixedAssetLifecycleAllowed(false),
+    fixedAssetPostingRefusal: (cmd) =>
+      state.lifecycleDisabled
+        ? original.fixedAssetPostingRefusal(cmd)
+        : original.fixedAssetPostingRefusal(cmd, false),
   };
 }
 

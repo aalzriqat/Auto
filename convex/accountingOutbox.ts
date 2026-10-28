@@ -31,6 +31,7 @@ import { MutationCtx, QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { PostCommand, postAccountingEvent, retiredPostingRefusal } from "./accounting/postingEngine";
+import { fixedAssetPostingRefusal } from "./utils/fixedAssetLifecycleContainment";
 import {
   isReservedReceiptKey,
   isReservedReceiptTuple,
@@ -1370,10 +1371,10 @@ const CLEARED_CLAIM = {
 export function isOutboxRowRevivable(
   row: Pick<Doc<"pendingAccountingEvents">, "kind" | "eventType" | "sourceType">
 ): boolean {
-  return !(
-    row.kind === "POST" &&
-    retiredPostingRefusal({ eventType: row.eventType ?? "", sourceType: row.sourceType })
-  );
+  const cmd = { eventType: row.eventType ?? "", sourceType: row.sourceType };
+  // SCRUM-560: while the fixed-asset lifecycle is off, a fixed-asset POST is as unrevivable as a
+  // retired one: reviving it would only buy more refusals.
+  return !(row.kind === "POST" && (retiredPostingRefusal(cmd) || fixedAssetPostingRefusal(cmd)));
 }
 
 /**
@@ -1796,6 +1797,19 @@ export const postOutboxRow = internalMutation({
         sourceType: row.sourceType,
       });
       if (retired) return await failOutboxRow(ctx, row, retired);
+
+      // ⚠️ SCRUM-560 / SCRUM-760 RULING 4 — A FIXED-ASSET POSTING QUEUED BEFORE THE LIFECYCLE
+      // WENT OFF MUST NOT POST AFTERWARDS. Every wake route (cron, period open or reopen, chart
+      // init, redrive) lands here, so this is the one server-side block for queued work. It sits
+      // with the permanent refusals and BEFORE the period check, on purpose: a held row would sit
+      // PENDING for ever behind a period that may never open and block period close (SCRUM-234);
+      // a refusal burns the attempt and dead-letters. `isOutboxRowRevivable` keeps `retryFailed`
+      // from reviving it while the switch is on. Same disposition as SCRUM-782 / PR #694.
+      const fixedAssetRefusal = fixedAssetPostingRefusal({
+        eventType: row.eventType ?? "",
+        sourceType: row.sourceType,
+      });
+      if (fixedAssetRefusal) return await failOutboxRow(ctx, row, fixedAssetRefusal);
 
       // ⚠️ R8 (Sol) — A CUSTODY ROW THAT IS NOT THE POSTING ITS KEY PROMISES,
       // OR DOES NOT STAND ON ITS SOURCE, IS PERMANENTLY REFUSED — HERE, WITH
