@@ -88,7 +88,9 @@ export const MONEY_BOUNDARY_FIGURES: Readonly<MoneyBoundaryFigures> = {
   approvedMajor: 18_000,
   ltvPercent: 85,
   depositMajor: 200,
-  customerGapMajor: 1_000,
+  // SCRUM-760 c23812 #10: a customer gap owed to the dealership is refused on a financed deal, so none is seeded; the
+  // dealership absorbs the whole net shortfall. The oracle still judges a gap handed to it.
+  customerGapMajor: 0,
   adminFeeMajor: 300,
 };
 

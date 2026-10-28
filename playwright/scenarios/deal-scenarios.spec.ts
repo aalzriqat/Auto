@@ -4,8 +4,10 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { APPROVER_AUTH_FILE, authenticatedConvexClient, resolveOrgId, testDataSuffix } from "../utils";
 import { ensureFinanceCompany } from "../fixtures/financedDeal";
 import {
+  GAP_REFUSAL_RULING,
   type DepositTreatment,
   type FinancedScenario,
+  type GapAgreement,
   approveCreditDecision,
   cancelDeal,
   closeFinancedDeal,
@@ -15,6 +17,7 @@ import {
   decideDeposit,
   ensureCompany,
   ensureReceivingBank,
+  expectAppraisalGapRefused,
   quoteFinancedDeal,
   recordApproved,
   resolveAppraisalGap,
@@ -556,50 +559,12 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
   // customer receivable (1200), and the company still owes only the approved
   // amount (OR-1). Money the customer pays the finance company never touches
   // the dealership's books. The contribution formula ignores the gap entirely.
-  {
-    id: "F22",
-    title: "LTV 90, approved 12,000 of 13,000: the customer pays the 1,000 gap in cash",
-    company: LTV90,
-    ...BASE,
-    approved: 12_000,
-    gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0 },
-    expectedPayment: "BANK_TRANSFER",
-    // funded = min(10,800, 9,000) = 9,000; contribution 0. Net shortfall (SCRUM-766)
-    // = showroom remainder 13,000 at quote − 12,000 actual = 1,000 (same LTV/first payment).
-    expect: {
-      close: {
-        "1210": { dr: jod(12_000) },
-        "1200": { dr: jod(1_000) },
-        "4100": { cr: jod(13_000) },
-        ...COST_OF_SALE,
-      },
-      disbursement: { "1110": { dr: jod(12_000) }, "1210": { cr: jod(12_000) } },
-    },
-  },
-  {
-    id: "F23",
-    title: "LTV 70, approved 12,000 of 13,000: net shortfall 700 split, customer 400 by instalments, dealer 300",
-    company: LTV70,
-    ...BASE,
-    approved: 12_000,
-    gap: { mode: "SPLIT", customerShare: 400, cash: 0, installments: 400 },
-    expectedPayment: "BANK_TRANSFER",
-    forwardMethod: "BANK_TRANSFER",
-    // contribution = 12,000 − 8,400 − 3,000 = 600 (as F18). Net shortfall = remainder at quote
-    // 12,100 (contribution 900) − actual 11,400 = 700 (SCRUM-766), not the gross 1,000.
-    expect: {
-      close: {
-        "1210": { dr: jod(12_000) },
-        "1200": { dr: jod(400) },
-        "4100": { cr: jod(12_400) },
-        "4180": { dr: jod(600) },
-        "2220": { cr: jod(600) },
-        ...COST_OF_SALE,
-      },
-      forward: { "2220": { dr: jod(600) }, "1110": { cr: jod(600) } },
-      disbursement: { "1110": { dr: jod(12_000) }, "1210": { cr: jod(12_000) } },
-    },
-  },
+  //
+  // F22, F23 and F25 used to settle the gap by leaving the customer owing the
+  // dealership (cash or instalments) and then closed with a 1200 receivable. Owner
+  // ruling SCRUM-760 c23812 #10 refuses that agreement at the choice because no
+  // certified route collects the receivable, so they now live in GAP_REFUSAL_SCENARIOS
+  // below, expecting the refusal and a zero ledger delta. F24 is the allowed route.
   {
     id: "F24",
     title: "LTV 70, approved 12,000 of 13,000: net shortfall 700, customer pays 400 to the finance company, dealer 300",
@@ -625,31 +590,74 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
       disbursement: { "1110": { dr: jod(12_000) }, "1210": { cr: jod(12_000) } },
     },
   },
+];
+
+/**
+ * Owner ruling SCRUM-760 c23812 #10 (carried by every row as `gapRefusal.ruling`): a FINANCED
+ * deal whose customer would still owe the dealership part of the gap is refused when the gap is
+ * resolved, before anything is written. The rows are the former F22, F23, F25 and C13 shapes,
+ * kept as permanent checks (never skipped) that now expect the refusal, the unchanged deal and a
+ * zero ledger delta. Each keeps the gap it used to settle, so a regression that lets the
+ * agreement through fails here at the dialog instead of silently posting a 1200 receivable.
+ *   F22  customer pays all 1,000 in cash                  (R = 1,000)
+ *   F23  split, customer 400 by instalments               (R = 400)
+ *   F25  split, customer 500 as 300 cash + 200 instalments (R = 500), after a 400 cash deposit
+ *   C13  the F22 shape that used to close and then cancel (R = 1,000)
+ */
+type GapRefusalScenario = FinancedScenario & {
+  gap: GapAgreement;
+  gapRefusal: { ruling: typeof GAP_REFUSAL_RULING };
+  /** The only ledger step before the refusal: the deposit recorded on the quote. */
+  expect: { deposit?: ExpectedLedgerDelta };
+};
+
+const GAP_REFUSAL_SCENARIOS: GapRefusalScenario[] = [
+  {
+    id: "F22",
+    title: "LTV 90, approved 12,000 of 13,000: the customer paying the 1,000 gap in cash is refused",
+    company: LTV90,
+    ...BASE,
+    approved: 12_000,
+    gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0 },
+    gapRefusal: { ruling: GAP_REFUSAL_RULING },
+    expectedPayment: "BANK_TRANSFER",
+    expect: {},
+  },
+  {
+    id: "F23",
+    title: "LTV 70, approved 12,000 of 13,000: a split leaving the customer 400 by instalments is refused",
+    company: LTV70,
+    ...BASE,
+    approved: 12_000,
+    gap: { mode: "SPLIT", customerShare: 400, cash: 0, installments: 400 },
+    gapRefusal: { ruling: GAP_REFUSAL_RULING },
+    expectedPayment: "BANK_TRANSFER",
+    forwardMethod: "BANK_TRANSFER",
+    expect: {},
+  },
   {
     id: "F25",
-    title: "LTV 90, 400 cash deposit, net shortfall 900: customer 500 (300 cash + 200 instalments), dealer 400",
+    title: "LTV 90, 400 cash deposit: a split leaving the customer 500 (300 cash + 200 instalments) is refused",
     company: LTV90,
     ...BASE,
     approved: 12_000,
     deposit: { amount: 400, method: "CASH" },
     gap: { mode: "SPLIT", customerShare: 500, cash: 300, installments: 200 },
+    gapRefusal: { ruling: GAP_REFUSAL_RULING },
     expectedPayment: "CHEQUE",
     forwardMethod: "CASH",
-    // contribution 0; forward = deposit 400. Customer receivable = 300 + 200. Net shortfall =
-    // remainder at quote 12,100 (400 first payment) − actual 11,200 = 900 (SCRUM-766).
-    expect: {
-      deposit: { "1100": { dr: jod(400) }, "2100": { cr: jod(400) } },
-      close: {
-        "1210": { dr: jod(12_000) },
-        "1200": { dr: jod(500) },
-        "4100": { cr: jod(12_500) },
-        "2100": { dr: jod(400) },
-        "2220": { cr: jod(400) },
-        ...COST_OF_SALE,
-      },
-      forward: { "2220": { dr: jod(400) }, "1100": { cr: jod(400) } },
-      disbursement: { "1110": { dr: jod(12_000) }, "1210": { cr: jod(12_000) } },
-    },
+    expect: { deposit: { "1100": { dr: jod(400) }, "2100": { cr: jod(400) } } },
+  },
+  {
+    id: "C13",
+    title: "customer-paid gap (F22 shape) is refused, so there is no closed deal to cancel and no receivable to reverse",
+    company: LTV90,
+    ...BASE,
+    approved: 12_000,
+    gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0 },
+    gapRefusal: { ruling: GAP_REFUSAL_RULING },
+    expectedPayment: "BANK_TRANSFER",
+    expect: {},
   },
 ];
 
@@ -775,6 +783,68 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
         );
         await managerPage.screenshot({
           path: test.info().outputPath(`${s.id}-final.png`),
+          fullPage: true,
+        });
+      } finally {
+        await approver.close();
+      }
+    });
+  }
+});
+
+test.describe("financed deals whose gap would leave the customer owing the dealership are refused (SCRUM-760 c23812)", () => {
+  test.skip(
+    !process.env.E2E_APPROVER_USER || !process.env.E2E_APPROVER_PASSWORD,
+    "Needs the second (approver) identity: a deal's own salesperson cannot approve it.",
+  );
+
+  test.beforeAll(async ({ browser }) => {
+    console.log(
+      "GAP REFUSAL MATRIX\n" +
+        GAP_REFUSAL_SCENARIOS.map((s) => `${s.id} ruling=${s.gapRefusal.ruling} — ${s.title}`).join("\n"),
+    );
+    const context = await newContainedContext(browser, { storageState: "playwright/.auth/user.json" });
+    const page = await context.newPage();
+    const orgId = (await resolveOrgId(page)) as Id<"organizations">;
+    const seedClient = await authenticatedConvexClient(page);
+    await ensureLedgerMonthOpen(seedClient, orgId);
+    await ensureReceivingBank(seedClient, orgId);
+    await ensureFinanceCompany(page);
+    await ensureCompany(page, LTV70);
+    await context.close();
+  });
+
+  for (const s of GAP_REFUSAL_SCENARIOS) {
+    test(`${s.id} [${s.gapRefusal.ruling}]: ${s.title}`, async ({ page, browser }) => {
+      const orgId = (await resolveOrgId(page)) as Id<"organizations">;
+      const client = await authenticatedConvexClient(page);
+      await ensureLedgerMonthOpen(client, orgId);
+      const model = `QA-${s.id}-${testDataSuffix()}`;
+
+      await step(`${s.id} acquisition`, page, orgId, acquired(s.vehicle.costPaidBy), async () => {
+        await createCostedVehicle(client, orgId, { ...s.vehicle, model });
+      });
+      const customer = await scenarioCustomer(page, `QA${s.id}`);
+      await quoteFinancedDeal(page, s, { model, customer });
+      if (s.deposit) {
+        await step(`${s.id} deposit`, page, orgId, s.expect.deposit!, () =>
+          recordQuoteDeposit(page, s.deposit!),
+        );
+      }
+      const dealUrl = await startApplication(page, customer);
+
+      const approver = await newContainedContext(browser, { storageState: APPROVER_AUTH_FILE });
+      const managerPage = await approver.newPage();
+      try {
+        await approveCreditDecision(managerPage, dealUrl);
+        if (s.quotation !== undefined) await recordQuotationAmount(page, dealUrl, s.quotation);
+        await recordApproved(managerPage, dealUrl, s.approved);
+        // The refusal itself, and its zero ledger delta: nothing was written, nothing posted.
+        await noMovement(`${s.id} refused gap agreement (${s.gapRefusal.ruling})`, page, orgId, () =>
+          expectAppraisalGapRefused(managerPage, dealUrl, s.gap),
+        );
+        await managerPage.screenshot({
+          path: test.info().outputPath(`${s.id}-refused.png`),
           fullPage: true,
         });
       } finally {
@@ -1020,24 +1090,8 @@ const CANCEL_SCENARIOS: CancelScenario[] = [
       decision: { "2100": { dr: jod(500) }, "1100": { cr: jod(500) } },
     },
   },
-  {
-    id: "C13",
-    title: "customer-paid gap (F22 shape) closed then cancelled: the customer receivable reverses too",
-    company: LTV90,
-    ...BASE,
-    approved: 12_000,
-    gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0 },
-    expectedPayment: "BANK_TRANSFER",
-    cancelAfterClose: true,
-    expect: {
-      close: {
-        "1210": { dr: jod(12_000) },
-        "1200": { dr: jod(1_000) },
-        "4100": { cr: jod(13_000) },
-        ...COST_OF_SALE,
-      },
-    },
-  },
+  // C13 (customer-paid gap closed then cancelled) moved to GAP_REFUSAL_SCENARIOS: the agreement
+  // that created its 1200 receivable is refused (SCRUM-760 c23812 #10), so there is nothing to cancel.
 ];
 
 test.describe("cancelled financed deals: the reversal and the deposit decision, through the ledger", () => {

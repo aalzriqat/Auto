@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -307,16 +307,19 @@ const GAP_MODE_LABEL = {
 } as const;
 
 /**
- * An approved amount (or LTV) that leaves the showroom short of the quote-time
- * economics opens a net shortfall that blocks handover until someone decides who
- * covers it. Manager only: the
- * salesperson may not resolve the gap on their own deal.
+ * Owner ruling SCRUM-760 c23812 #10: a FINANCED deal whose customer would still owe the
+ * dealership part of the gap (cash or instalments to the dealer) is refused at the choice,
+ * before anything is written, because no certified route yet collects that receivable.
+ * Scenarios that used to settle the gap that way carry this id and now expect the refusal.
  */
-export async function resolveAppraisalGap(
+export const GAP_REFUSAL_RULING = "SCRUM-760 c23812";
+
+/** Opens the "Resolve the shortfall" dialog on the deal and enters the agreement; does not submit. */
+async function fillAppraisalGapDialog(
   managerPage: Page,
   dealUrl: string,
   agreement: GapAgreement,
-): Promise<void> {
+): Promise<Locator> {
   await managerPage.goto(dealUrl);
   await dismissOverlays(managerPage);
   await hideFloatingButtons(managerPage);
@@ -333,6 +336,46 @@ export async function resolveAppraisalGap(
     await dialog.locator("#gap-financier").fill(String(agreement.toFinanceCompany ?? 0));
   }
   await dialog.locator("#gap-notes").fill(`QA TEST: net shortfall settled as ${agreement.mode}.`);
+  return dialog;
+}
+
+/**
+ * The refusal of an agreement that leaves the customer owing the dealership (SCRUM-760 c23812):
+ * submitting it keeps the dialog open with the server's refusal ("Nothing has been changed"),
+ * and after cancelling and reloading the shortfall is still unresolved, so no half-agreement
+ * exists. The caller measures the zero ledger delta around this call.
+ */
+export async function expectAppraisalGapRefused(
+  managerPage: Page,
+  dealUrl: string,
+  agreement: GapAgreement,
+): Promise<void> {
+  const dialog = await fillAppraisalGapDialog(managerPage, dealUrl, agreement);
+  await dialog.getByRole("button", { name: "Resolve the shortfall" }).click();
+  const refusal = dialog.getByRole("alert");
+  await expect(refusal).toBeVisible();
+  await expect(refusal).toContainText("customer would still owe the dealership");
+  await expect(refusal).toContainText("Nothing has been changed");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).not.toBeVisible();
+  await managerPage.goto(dealUrl);
+  await dismissOverlays(managerPage);
+  await expect(managerPage.getByRole("button", { name: "Resolve the shortfall" }).first()).toBeVisible();
+}
+
+/**
+ * An approved amount (or LTV) that leaves the showroom short of the quote-time
+ * economics opens a net shortfall that blocks handover until someone decides who
+ * covers it. Manager only: the
+ * salesperson may not resolve the gap on their own deal.
+ */
+export async function resolveAppraisalGap(
+  managerPage: Page,
+  dealUrl: string,
+  agreement: GapAgreement,
+): Promise<void> {
+  const dialog = await fillAppraisalGapDialog(managerPage, dealUrl, agreement);
   await dialog.getByRole("button", { name: "Resolve the shortfall" }).click();
   await expect(dialog).not.toBeVisible();
 
