@@ -139,6 +139,9 @@ cases and incremental explorer catches. A baseline miss is a detector-coverage
 finding, not a claim that the already-fixed product bug is currently open.
 
 Precision uses case-level target-family detections and alerting fixed controls.
+One confirmed swarm mission is one alert group. Its RPC fingerprints provide
+attribution and do not multiply the review load. Screen checks use unique rule
+fingerprints. Groups must cover their reported fingerprints exactly.
 Unmatched mutant alerts require adjudication and withhold precision. The report also
 counts fixed-control alerts, extra review alerts, browser tests, swarm missions and
 elapsed detector time. It does not invent model token, monetary cost, reviewer
@@ -157,15 +160,15 @@ does not replace SCRUM-760's independent verification, existing hunters or relea
 ## Verification and practice
 
 The [saved local report](evidence/scrum344-local-replay.json) was measured at
-`b5a394279cf4b809f6d1b7d413a8defd34a227a1`, before subsequent cloud-only
-directory/key checks and the test-only native-I/O timeout correction. It reports
+`b5a394279cf4b809f6d1b7d413a8defd34a227a1`, before the follow-up cloud configuration,
+alert-accounting and native-I/O test-budget changes. It reports
 **FAIL**: baseline misses g6-01,
 g6-04 and g6-05; seven unavailable baselines; ten unavailable browser results.
 Witnesses g6-01, g6-02, g6-04 and g6-05 reproduced fixed-green/inverse-red. The
 other six did not reproduce cleanly. Conservative baseline and explorer recall
 are 0/10; precision is unavailable. These are not measured browser false negatives.
 
-The final focused command passed 157 tests across seven named files. The root
+The final focused command passed 158 tests across seven named files. The root
 `tsc --noEmit` passed and excludes `convex/`; backend production code is unchanged.
 Named-file ESLint passed. No production or local Playwright execution is claimed.
 One repeat of the native Git integration test exceeded Vitest's five-second

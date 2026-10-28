@@ -24,6 +24,14 @@ const observationSchema = z.object({
   state: z.enum(["complete", "malformed", "unavailable"]), tests: z.number().int().nonnegative(),
   findings: z.array(z.string()), durationMs: z.number().nonnegative().optional(), missions: z.number().int().nonnegative().optional(),
   reason: z.string().regex(/^[A-Z0-9_]+$/).optional(),
+  alertGroups: z.array(z.object({ fingerprints: z.array(z.string()).min(1) })).optional(),
+}).superRefine((observation, context) => {
+  if (!observation.alertGroups) return;
+  const grouped = new Set(observation.alertGroups.flatMap(group => group.fingerprints));
+  const findings = new Set(observation.findings);
+  if (grouped.size !== findings.size || [...grouped].some(finding => !findings.has(finding))) {
+    context.addIssue({ code: "custom", message: "Alert groups do not cover the observed findings" });
+  }
 });
 const pairSchema = z.object({ fixed: observationSchema, bug: observationSchema });
 const entryEvidenceSchema = z.object({
@@ -146,12 +154,16 @@ export function writeReplayReport(entries, directory, { browser = false } = {}) 
   if (byId.size !== entries.length || entries.some(entry => !corpus.cases.some(item => item.id === entry.id))) throw new Error("Unexpected or duplicate case result");
   const metrics = summarizeReplay(complete);
   const pairs = complete.map(entry => entry.observations?.explorer).filter(Boolean);
-  const fixedFindings = pairs.filter(pair => pair.fixed.state === "complete").reduce((sum, pair) => sum + pair.fixed.findings.length, 0);
+  const groupsOf = observation => observation.alertGroups ?? observation.findings.map(fingerprint => ({ fingerprints: [fingerprint] }));
+  const fixedFindings = pairs.filter(pair => pair.fixed.state === "complete").reduce((sum, pair) => sum + groupsOf(pair.fixed).length, 0);
   const truePositives = complete.filter(entry => entry.explorer === "caught").length;
   const completedControls = pairs.filter(pair => pair.fixed.state === "complete").length;
   const unadjudicatedMutantAlerts = complete.flatMap(entry => {
     const expected = corpus.cases.find(candidate => candidate.id === entry.id).expectedFingerprints;
-    return (entry.observations?.explorer?.bug?.findings ?? []).filter(finding => !expected.some(target => matchesFingerprint(finding, target))).map(finding => ({ caseId: entry.id, finding }));
+    const observation = entry.observations?.explorer?.bug;
+    if (!observation) return [];
+    return groupsOf(observation).filter(group => !group.fingerprints.some(finding => expected.some(target => matchesFingerprint(finding, target))))
+      .map(group => ({ caseId: entry.id, fingerprints: group.fingerprints }));
   });
   const payload = {
     version: 1, controllerSha: CONTROLLER_SHA,
@@ -164,7 +176,7 @@ export function writeReplayReport(entries, directory, { browser = false } = {}) 
       ? truePositives / (truePositives + pairs.filter(pair => pair.fixed.state === "complete" && pair.fixed.findings.length > 0).length) : null,
     precisionUnit: "case-level target-family detections versus alerting fixed controls; unadjudicated mutant alerts withhold precision",
     unadjudicatedMutantAlerts,
-    extraReviewAlerts: pairs.reduce((sum, pair) => sum + pair.fixed.findings.length + pair.bug.findings.length, 0),
+    extraReviewAlerts: pairs.reduce((sum, pair) => sum + groupsOf(pair.fixed).length + groupsOf(pair.bug).length, 0),
     fixedControlAlerts: fixedFindings,
     extraTestLoad: pairs.reduce((sum, pair) => sum + (pair.fixed.tests ?? 0) + (pair.bug.tests ?? 0), 0),
     extraMissionLoad: pairs.reduce((sum, pair) => sum + (pair.fixed.missions ?? 0) + (pair.bug.missions ?? 0), 0),

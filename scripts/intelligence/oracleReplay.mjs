@@ -97,17 +97,25 @@ export function readBrowserReport(input, observations, exitCode) {
       cross.some(row => row.verdict.result === "UNREADABLE") || forms.records.some(row => ["inconclusive"].includes(row.verdict.kind) || row.verdict.check === "setup")) {
     return unavailable("INCOMPLETE_BROWSER_RUN");
   }
-  const findings = [
+  const screenFindings = [
     ...cross.filter(row => row.verdict.result === "DISAGREE").map(row => `cross-screen:${row.verdict.fact}`),
     ...explorer.findings.filter(row => row.check !== "jev-opinion").map(row => `explorer:${row.check}`),
     ...forms.records.filter(row => row.verdict.kind === "finding").map(row => `form:${row.verdict.check}`),
-    ...swarm.results.filter(row => row.outcome === "CONFIRMED_BREACH").flatMap(row =>
-      missions.find(mission => mission.id === row.missionId).invariantIds.flatMap(id => invocations
-        .filter(call => call.missionId === row.missionId)
-        .map(call => `swarm:${id}:${call.name}${call.financingType ? ":" + call.financingType : ""}`))),
   ];
+  const swarmGroups = swarm.results.filter(row => row.outcome === "CONFIRMED_BREACH").map(row => {
+    const mission = missions.find(candidate => candidate.id === row.missionId);
+    const fingerprints = mission.invariantIds.flatMap(id => invocations
+        .filter(call => call.missionId === row.missionId)
+        .map(call => `swarm:${id}:${call.name}${call.financingType ? ":" + call.financingType : ""}`));
+    return { fingerprints: [...new Set(fingerprints.length ? fingerprints : mission.invariantIds.map(id => `swarm:${id}`))] };
+  });
+  const alertGroups = [
+    ...[...new Set(screenFindings)].map(fingerprint => ({ fingerprints: [fingerprint] })),
+    ...swarmGroups,
+  ];
+  const findings = [...new Set(alertGroups.flatMap(group => group.fingerprints))];
   if ((exitCode !== 0 || stats.unexpected) && findings.length === 0) return unavailable("BROWSER_FAILURE_WITHOUT_DETERMINISTIC_FINDING");
-  return { state: "complete", findings: [...new Set(findings)], tests: stats.expected + stats.unexpected, missions: missions.length };
+  return { state: "complete", findings, alertGroups, tests: stats.expected + stats.unexpected, missions: missions.length };
 }
 
 /** Labels join completed observations here, never in the process driving the application. */

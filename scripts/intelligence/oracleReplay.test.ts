@@ -57,6 +57,25 @@ describe("historical oracle replay evidence", () => {
       expect(report.gate).toBe("FAIL");
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
+  it("counts one swarm breach once when its RPC trace contains several calls", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "oracle-alert-groups-"));
+    try {
+      const entries = corpus.cases.map(entry => {
+        const fingerprints = [entry.expectedFingerprints[0], "swarm:AUTH-1:organizations:get"];
+        return { ...entry, reproduction: { status: "reproduced", fixed: clean, bug: broken },
+          observations: { baseline: { fixed: clean, bug: clean }, explorer: { fixed: clean,
+            bug: { ...broken, findings: fingerprints, alertGroups: [{ fingerprints }] },
+          } },
+        };
+      });
+      const report = writeReplayReport(entries, directory, { browser: true });
+      expect(report.explorerRecall).toBe(1);
+      expect(report.extraReviewAlerts).toBe(corpus.cases.length);
+      expect(report.unadjudicatedMutantAlerts).toEqual([]);
+      expect(report.precision).toBe(1);
+      expect(report.gate).toBe("PASS");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
   it("blinds descriptions without changing executable strings or empty calls", () => {
     const text = blindSource('it("revealing finding", () => { save(); expect("literal input").toBe("literal input"); }); // answer', "probe.test.ts");
     expect(text).not.toContain("revealing finding");
