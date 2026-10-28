@@ -309,6 +309,21 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(arText).not.toMatch(/قيد يدوي|يومية يدوية/);
   });
 
+  it("SCRUM-781 consigned-payable VAT refusal resolves to Arabic in ar and keeps the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const { CONSIGNED_PAYABLE_VAT_REFUSAL: serverText } = await import("../convex/sourcingPayables");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    expect(Object.values(AppErrorCode)).toContain("CONSIGNED_PAYABLE_VAT_REFUSED");
+    const error = new ConvexError({ code: "CONSIGNED_PAYABLE_VAT_REFUSED", message: serverText });
+    const arText = getLocalizedErrorMessage(error, ar);
+    expect(arText).toMatch(/[؀-ۿ]/);
+    expect(arText).not.toBe(serverText);
+    expect(arText).toBe((dictionaries.ar as Record<string, string>)["ServerError_CONSIGNED_PAYABLE_VAT_REFUSED"]);
+    expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
+  });
+
   it("SCRUM-650 purchase-cost correction refusals resolve to Arabic in ar and the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const { AppErrorCode } = await import("../convex/utils/errors");
