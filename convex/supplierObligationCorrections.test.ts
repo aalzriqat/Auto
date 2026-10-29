@@ -36,7 +36,7 @@ async function snapshot(s: SupplierDoors) {
   };
 }
 
-function expectCodedEnAr(result: { code?: string; message?: string } | undefined, code: string) {
+function expectCodedEnAr(result: { code?: string; message?: string } | null | undefined, code: string) {
   expect(result?.code, result?.message ?? "the call succeeded instead of refusing").toBe(code);
   expect(result?.message).toMatch(/pilot/i);
   expect(result?.message).toContain("Nothing has been changed.");
