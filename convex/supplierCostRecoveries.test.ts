@@ -24,6 +24,13 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
+// SCRUM-869#c23881: historical receipt-reversal mechanics with the pilot door explicitly open.
+// The shipped-state refusal lives in supplierSettlementContainment.test.ts.
+vi.mock("./utils/supplierSettlementContainment", async (importOriginal) =>
+  (await import("../test-utils/supplierSettlementSwitches")).openSupplierSettlementDoors(
+    await importOriginal<typeof import("./utils/supplierSettlementContainment")>()
+  ));
+
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 const PERMS = [

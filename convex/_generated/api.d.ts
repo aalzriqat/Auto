@@ -306,6 +306,7 @@ import type * as utils_supplierConcession from "../utils/supplierConcession.js";
 import type * as utils_supplierNames from "../utils/supplierNames.js";
 import type * as utils_supplierRegistry from "../utils/supplierRegistry.js";
 import type * as utils_supplierSettlement from "../utils/supplierSettlement.js";
+import type * as utils_supplierSettlementContainment from "../utils/supplierSettlementContainment.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
 import type * as utils_trafficSource from "../utils/trafficSource.js";
 import type * as utils_userAgent from "../utils/userAgent.js";
@@ -642,6 +643,7 @@ declare const fullApi: ApiFromModules<{
   "utils/supplierNames": typeof utils_supplierNames;
   "utils/supplierRegistry": typeof utils_supplierRegistry;
   "utils/supplierSettlement": typeof utils_supplierSettlement;
+  "utils/supplierSettlementContainment": typeof utils_supplierSettlementContainment;
   "utils/tenancy": typeof utils_tenancy;
   "utils/trafficSource": typeof utils_trafficSource;
   "utils/userAgent": typeof utils_userAgent;

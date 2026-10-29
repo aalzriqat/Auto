@@ -136,6 +136,9 @@ export const AppErrorCode = {
   // SCRUM-760 ruling 11: the legacy collection REFUND request/approval is blocked for the narrow
   // pilot (utils/legacyCollectionRefundContainment.ts). Translated under ServerError_<code>.
   LEGACY_COLLECTION_REFUND_PILOT_DISABLED: "LEGACY_COLLECTION_REFUND_PILOT_DISABLED",
+  // SCRUM-869#c23881: the supplier cost-recovery receipt reversal is blocked for the narrow pilot
+  // (utils/supplierSettlementContainment.ts). Translated under ServerError_<code>.
+  SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED: "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",

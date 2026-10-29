@@ -355,6 +355,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Fixed assets are not available during the pilot. Nothing has been changed.",
     "الأصول الثابتة غير متاحة خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
   ],
+  // SCRUM-869#c23881: convex/utils/supplierSettlementContainment.ts.
+  ServerError_SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED: [
+    "Reversing a supplier cost-recovery receipt is not available during the pilot. Record any further money received as a new receipt. Nothing has been changed.",
+    "عكس إيصال استرداد تكلفة من المورد غير متاح خلال المرحلة التجريبية. سجّل أي مبلغ إضافي مستلم كإيصال جديد. لم يتم تغيير أي شيء.",
+  ],
   // SCRUM-760 ruling 11: convex/utils/legacyCollectionRefundContainment.ts.
   ServerError_LEGACY_COLLECTION_REFUND_PILOT_DISABLED: [
     "Recording a refund against a collection receivable is not available during the pilot. You can still reject a pending refund request. Nothing has been changed.",
