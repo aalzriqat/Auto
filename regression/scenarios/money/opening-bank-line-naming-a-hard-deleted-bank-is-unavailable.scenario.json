@@ -1,11 +1,11 @@
 {
-  "id": "opening-bank-line-naming-another-orgs-bank-is-disclosed-unattributed",
+  "id": "opening-bank-line-naming-a-hard-deleted-bank-is-unavailable",
   "domain": "money",
   "level": "backend",
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum858-pr715-round2",
+    "runId": "scrum858-pr715-round3",
     "firstSeen": "2026-10-29"
   },
   "steps": [
@@ -35,7 +35,7 @@
       },
       "action": "seed.historicalLine",
       "input": {
-        "pointLineAtBankOfOrg": "B"
+        "hardDeleteBank": "B"
       }
     },
     {
@@ -49,16 +49,16 @@
   ],
   "expected": [
     {
-      "observable": "controlOpeningMinor",
-      "value": 7000000
+      "observable": "report.status",
+      "value": "OPENING_PROOF_UNAVAILABLE"
     },
     {
-      "observable": "bankLinesTotalMinor",
-      "value": 4000000
+      "observable": "controlOpeningMinor",
+      "value": "null"
     },
     {
       "observable": "unattributedOpeningMinor",
-      "value": 3000000
+      "value": "null"
     },
     {
       "observable": "writeCounts.changed",
@@ -73,8 +73,8 @@
   ],
   "impl": {
     "file": "convex/openingBankReconciliation.scrum858.test.ts",
-    "testName": "an opening line naming another organization's bank is disclosed as unattributed, so control equals bank lines plus unattributed"
+    "testName": "an opening line naming a hard-deleted bank makes the opening unavailable, never a partial or unattributed figure"
   },
   "matrixRow": "OB-G9",
-  "fingerprint": "25d8d6491827eef1c40f3aead4e06d518d85669329652f2c5ce7321802a03e76"
+  "fingerprint": "9961439cb48e8ca1c5ddb1412995308556c92db9f476b22db2765c45c144841c"
 }

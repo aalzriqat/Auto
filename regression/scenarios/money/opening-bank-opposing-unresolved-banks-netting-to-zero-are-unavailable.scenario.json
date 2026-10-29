@@ -1,11 +1,11 @@
 {
-  "id": "opening-bank-line-naming-a-hard-deleted-bank-is-disclosed-unattributed",
+  "id": "opening-bank-opposing-unresolved-banks-netting-to-zero-are-unavailable",
   "domain": "money",
   "level": "backend",
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum858-pr715-round2",
+    "runId": "scrum858-pr715-round3",
     "firstSeen": "2026-10-29"
   },
   "steps": [
@@ -19,11 +19,11 @@
         "bankLines": [
           {
             "bank": "A",
-            "debitMinor": 4000000
+            "debitMinor": 3000000
           },
           {
             "bank": "B",
-            "debitMinor": 3000000
+            "creditMinor": 3000000
           }
         ]
       }
@@ -35,7 +35,7 @@
       },
       "action": "seed.historicalLine",
       "input": {
-        "hardDeleteBank": "B"
+        "hardDeleteBank": "A_B"
       }
     },
     {
@@ -49,20 +49,24 @@
   ],
   "expected": [
     {
-      "observable": "controlOpeningMinor",
-      "value": 7000000
+      "observable": "report.status",
+      "value": "OPENING_PROOF_UNAVAILABLE"
     },
     {
-      "observable": "bankLinesTotalMinor",
-      "value": 4000000
+      "observable": "controlOpeningMinor",
+      "value": "null"
     },
     {
       "observable": "unattributedOpeningMinor",
-      "value": 3000000
+      "value": "null"
     },
     {
       "observable": "writeCounts.changed",
       "value": false
+    },
+    {
+      "observable": "unexplainedOpeningDifference",
+      "value": "null"
     }
   ],
   "rulings": [
@@ -73,8 +77,8 @@
   ],
   "impl": {
     "file": "convex/openingBankReconciliation.scrum858.test.ts",
-    "testName": "an opening line naming a hard-deleted bank is disclosed as unattributed, so control equals bank lines plus unattributed"
+    "testName": "two hard-deleted bank identities with opposing amounts that net to zero are unavailable, never OK with nothing disclosed"
   },
   "matrixRow": "OB-G9",
-  "fingerprint": "7a3695aacda2aeeb012f5ab209f151ea81ea9880970d69a6b1194c8b655cbf2f"
+  "fingerprint": "bb4c42e635e700019d355969569d1f0fcd46a7d6d028d49d6323f0c71bdfe1a0"
 }

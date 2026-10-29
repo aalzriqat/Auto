@@ -1,0 +1,43 @@
+{
+  "id": "bank-book-balance-of-a-currency-of-unknown-scale-shows-a-dash",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-round3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {
+        "locale": "en",
+        "currency": "XXX",
+        "balanceMinor": 12345
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bookBalance.shownAs",
+      "value": "dash"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/BankAccountsTab.test.tsx",
+    "testName": "a book balance in a currency whose scale is unknown shows a dash, never a guessed scale"
+  },
+  "matrixRow": "OB-G10",
+  "fingerprint": "2790f526d288e1017618a7a68ecc1c786eacb4380c1b6c60af8a382d5a0551a3"
+}
