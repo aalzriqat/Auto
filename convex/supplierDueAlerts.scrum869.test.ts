@@ -15,6 +15,7 @@ import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { NOTIFICATION_TYPES } from "../lib/notifications/types";
+import { supplierDueAlertJobName } from "./constants";
 
 const MODULES = import.meta.glob("./**/*.*s");
 const DAY = 86_400_000;
@@ -521,6 +522,8 @@ interface TransactionStep {
   sent: number;
   /** Documents written by this one worker transaction: notification inserts, plus the STARTED insert and the COMPLETED patch of each idempotency record. */
   written: number;
+  /** The arguments this transaction ran with: the first is the sweep's, every later one is the previous transaction's own continuation. */
+  args: { kind?: string; cursor?: string; recipientCursor?: string };
 }
 
 /** Runs one organisation's worker one transaction at a time, following its own scheduled continuations. */
@@ -529,17 +532,20 @@ async function driveOrganisation(t: T, orgId: Id<"organizations">): Promise<Tran
   const seen = new Set(await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).map((f) => String(f._id))));
   const steps: TransactionStep[] = [];
   let args: Record<string, unknown> = { orgId, now: NOW };
-  for (let i = 0; i < 400; i += 1) {
+  for (let i = 0; i < 60; i += 1) {
     const before = await counts(t);
     const result = await t.mutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, args as never);
     const after = await counts(t);
     steps.push({
       sent: result.alerted,
       written: after.notifications - before.notifications + 2 * (after.idempotency - before.idempotency),
+      args: args as TransactionStep["args"],
     });
+    // The continuation is whichever function this chain schedules for the organisation (the worker
+    // itself, or the action that runs it and reports its failure), so match on the shared name.
     const next = await t.run(async (ctx) =>
       (await ctx.db.system.query("_scheduled_functions").collect()).filter(
-        (f) => String(f.name).includes("processOrgSupplierDueAlerts") && !seen.has(String(f._id))
+        (f) => String(f.name).includes("OrgSupplierDueAlerts") && !seen.has(String(f._id))
       )
     );
     for (const f of next) seen.add(String(f._id));
@@ -633,5 +639,345 @@ describe("SCRUM-869 S8 - recipients beyond the first thousand memberships", () =
     expect(got).not.toContain(String(disabled));
     expect(got).not.toContain(String(impersonator));
     expect(got).toEqual([s.ownerId, s.financeId, s.accountantId].map(String).sort());
+  });
+});
+
+async function addApplication(t: T, s: OrgSeed, fields: Record<string, unknown> = {}) {
+  const customerId = await t.run((ctx) => ctx.db.insert("customers", { orgId: s.orgId, firstName: "Buyer", lastName: "A" }));
+  const companyId = await t.run((ctx) =>
+    ctx.db.insert("financeCompanies", { orgId: s.orgId, name: "Bank", isActive: true, profitRate: 5, maxTermMonths: 72, gracePeriodMonths: 3 })
+  );
+  const quoteId = await t.run((ctx) =>
+    ctx.db.insert("quotes", {
+      orgId: s.orgId, vehicleId: s.vehicleId, customerId, vehiclePrice: 12_000, downPayment: 2_000,
+      totalFinancedAmount: 10_000, termMonths: 24, status: "DRAFT", companyId, createdBy: s.ownerId, createdAt: NOW,
+    } as never)
+  );
+  return await t.run((ctx) =>
+    ctx.db.insert("financeApplications", {
+      orgId: s.orgId, customerId, vehicleId: s.vehicleId, companyId, quoteId, salespersonId: s.ownerId,
+      status: "CLOSED", createdAt: NOW, updatedAt: NOW, ...fields,
+    } as never)
+  );
+}
+
+// PR #716 round 3 (R1). Round 2 skipped only ConvexError data faults. A stored date that is finite but
+// outside the JavaScript Date range (+-8.64e15 ms, ECMAScript TimeClip,
+// https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-timeclip) made `Intl.DateTimeFormat`
+// throw `RangeError: Invalid time value` from inside the worker, before it scheduled its continuation,
+// so the organisation's later pages and kinds starved again, every day. Now every stored date the
+// worker reads is checked for being renderable before it is formatted, and a bad one makes its row an
+// unreadable row: skipped, logged, counted.
+type DateFieldCase = {
+  name: string;
+  kind: "PAYABLE" | "RECEIVABLE" | "RECOVERY";
+  seed: (t: T, s: OrgSeed, stored: number) => Promise<unknown>;
+};
+
+const DATE_FIELD_CASES: DateFieldCase[] = [
+  { name: "a payable's paymentDueDate", kind: "PAYABLE", seed: (t, s, stored) => addPayable(t, s, { paymentDueDate: stored }) },
+  {
+    name: "a receivable's agreedDueDate",
+    kind: "RECEIVABLE",
+    seed: async (t, s, stored) => addReceivable(t, s, await addSale(t, s), { agreedDueDate: stored }),
+  },
+  { name: "a cost recovery's agreedDueDate", kind: "RECOVERY", seed: (t, s, stored) => addRecovery(t, s, { agreedDueDate: stored }) },
+  {
+    name: "the handover instant of a receivable's deal",
+    kind: "RECEIVABLE",
+    seed: async (t, s, stored) => {
+      const applicationId = await addApplication(t, s, { handoverStatus: "HANDED_OVER", vehicleHandoverAt: stored });
+      return addReceivable(t, s, await addSale(t, s, { applicationId }));
+    },
+  },
+  {
+    name: "the financier funding instant of a payable's deal",
+    kind: "PAYABLE",
+    seed: async (t, s, stored) => {
+      const applicationId = await addApplication(t, s, {
+        quoteModeAtSubmission: "CONFIGURED_FINANCE_COMPANY", disbursedAt: stored, disbursedAmountMinor: 9_000_000, settlementStatus: "FULLY_SETTLED",
+      });
+      const saleId = await addSale(t, s, { supplierSettlementRoute: "THROUGH_DEALERSHIP", financingType: "FINANCED", applicationId });
+      return addPayable(t, s, { saleId });
+    },
+  },
+];
+
+const UNRENDERABLE_DATES: Array<[string, number]> = [
+  ["1e20", 1e20],
+  ["-1e20", -1e20],
+  ["NaN", Number.NaN],
+  ["Infinity", Number.POSITIVE_INFINITY],
+  ["-Infinity", Number.NEGATIVE_INFINITY],
+];
+
+describe("SCRUM-869 S8 - a stored date that cannot be rendered is an unreadable row", () => {
+  for (const field of DATE_FIELD_CASES) {
+    for (const [label, stored] of UNRENDERABLE_DATES) {
+      test(`${field.name} = ${label} is skipped and counted, not thrown`, async () => {
+        const t = newHarness();
+        const s = await seedOrg(t, "d1");
+        await field.seed(t, s, stored);
+        const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+          const result = await t.mutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW, kind: field.kind });
+          expect(result).toEqual({ alerted: 0, skipped: 1 });
+          expect(spy.mock.calls.filter((call) => /unreadable/i.test(String(call[0])))).toHaveLength(1);
+        } finally {
+          spy.mockRestore();
+        }
+        expect(await alerts(t)).toHaveLength(0);
+      });
+    }
+  }
+
+  test("the last instant a Date can hold is still a date, and one millisecond past it is not", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "d2");
+    const MAX_DATE_MS = 8.64e15;
+    await addPayable(t, s, { paymentDueDate: MAX_DATE_MS, amountDue: 10 });
+    await addPayable(t, s, { paymentDueDate: MAX_DATE_MS + 1, amountDue: 20 });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const result = await t.mutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW, kind: "PAYABLE" });
+      expect(result).toEqual({ alerted: 0, skipped: 1 });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("bad dates in every field starve nothing: later rows, pages, kinds and other organisations are still alerted", async () => {
+    const t = newHarness();
+    const bad = await seedOrg(t, "d3");
+    const other = await seedOrg(t, "d4");
+    // One unrenderable row of each date field first, then more than a page of good payables behind them.
+    for (const field of DATE_FIELD_CASES) await field.seed(t, bad, 1e20);
+    for (let i = 0; i < 52; i += 1) await addPayable(t, bad, { paymentDueDate: NOW, amountDue: 10 + i });
+    await addReceivable(t, bad, await addSale(t, bad), { agreedDueDate: NOW });
+    await addRecovery(t, bad, { agreedDueDate: NOW });
+    await addPayable(t, other, { paymentDueDate: NOW });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await sweep(t);
+      expect(spy.mock.calls.filter((call) => /unreadable/i.test(String(call[0])))).toHaveLength(DATE_FIELD_CASES.length);
+    } finally {
+      spy.mockRestore();
+    }
+    const rows = await alerts(t);
+    expect(rows.filter((r) => r.orgId === bad.orgId)).toHaveLength((52 + 1 + 1) * 3);
+    expect(rows.filter((r) => r.orgId === other.orgId)).toHaveLength(3);
+  });
+
+  test("an ordinary programming error is still not swallowed", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "d5");
+    await addPayable(t, s, { paymentDueDate: NOW });
+    await expect(
+      withNotificationFault(1, () => t.mutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW }))
+    ).rejects.toThrow(/injected fault/);
+  });
+});
+
+// PR #716 round 3 (R2, Seat 1 mutant M3). Nothing pinned the obligation-page x recipient-cursor
+// boundary: a continuation that kept the recipient cursor across an obligation page, or reused its own
+// recipient cursor, scheduled continuations for ever (every day) and the suite still passed.
+describe("SCRUM-869 S8 - the obligation page and recipient cursor boundary", () => {
+  test("100 payables x 23 recipients: every (obligation, recipient) once, the cursor resets per page, the chain ends, a replay sends nothing", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "b1");
+    const financeRole = await addRole(t, s.orgId, "Finance team b1", ["view:finance"]);
+    await addManyMembers(t, s.orgId, financeRole, "b1m", 20);
+    for (let i = 0; i < 100; i += 1) await addPayable(t, s, { paymentDueDate: NOW, amountDue: 10 + i });
+    const recipientCount = 23;
+
+    const steps = await driveOrganisation(t, s.orgId);
+
+    // The chain ends: a bounded number of transactions (the driver itself refuses after 60).
+    expect(steps.length).toBeGreaterThan(2);
+    expect(steps.length).toBeLessThanOrEqual(12);
+
+    // Each (obligation, step, occurrence, recipient) is sent exactly once.
+    const rows = await alerts(t);
+    expect(rows).toHaveLength(100 * recipientCount);
+    const pairs = rows.map((r) => `${String(r.userId)}|${String(r.data?.amount)}`);
+    expect(new Set(pairs).size).toBe(pairs.length);
+    expect(new Set(rows.map((r) => String(r.userId))).size).toBe(recipientCount);
+    expect(steps.reduce((sum, step) => sum + step.sent, 0)).toBe(100 * recipientCount);
+    const idempotencyKeys = await t.run(async (ctx) =>
+      (await ctx.db.query("commandIdempotency").collect()).map((r) => String((r as { idempotencyKey?: string }).idempotencyKey))
+    );
+    expect(new Set(idempotencyKeys).size).toBe(idempotencyKeys.length);
+
+    // The recipient cursor advances inside an obligation page and resets when the obligation page (or kind) changes.
+    expect(steps[0].args.recipientCursor).toBeUndefined();
+    let recipientHops = 0;
+    for (let i = 1; i < steps.length; i += 1) {
+      const before = steps[i - 1].args;
+      const now = steps[i].args;
+      // The sweep's own first call names no kind: it starts with the first one.
+      const samePage = (now.kind ?? "PAYABLE") === (before.kind ?? "PAYABLE") && now.cursor === before.cursor;
+      if (samePage) {
+        expect(now.recipientCursor).toBeDefined();
+        expect(now.recipientCursor).not.toBe(before.recipientCursor);
+        recipientHops += 1;
+      } else {
+        expect(now.recipientCursor).toBeUndefined();
+      }
+    }
+    expect(recipientHops).toBeGreaterThan(0);
+    // The second obligation page was reached with a fresh recipient cursor.
+    expect(steps.some((step) => step.args.cursor !== undefined && step.args.recipientCursor === undefined)).toBe(true);
+
+    // A replay (the next sweep the same day) walks the same chain, sends nothing, and also ends.
+    const replay = await driveOrganisation(t, s.orgId);
+    expect(replay.reduce((sum, step) => sum + step.sent, 0)).toBe(0);
+    expect(replay.length).toBe(steps.length);
+    expect(await alerts(t)).toHaveLength(100 * recipientCount);
+  }, 120_000);
+});
+
+async function withNotificationFault<R>(failOnRead: number, run: () => Promise<R>): Promise<R> {
+  const def = NOTIFICATION_TYPES["accounting.supplierObligationDue"] as unknown as { category: string };
+  let reads = 0;
+  Object.defineProperty(def, "category", {
+    configurable: true,
+    get() {
+      reads += 1;
+      if (reads === failOnRead) throw new Error("injected fault");
+      return "finance";
+    },
+  });
+  try {
+    return await run();
+  } finally {
+    Object.defineProperty(def, "category", { configurable: true, writable: true, value: "finance" });
+  }
+}
+
+const heartbeatsFor = (t: T, orgId: Id<"organizations">) =>
+  t.run(async (ctx) =>
+    (await ctx.db.query("cronHeartbeats").collect()).filter((row) => row.jobName === supplierDueAlertJobName(orgId))
+  );
+
+// PR #716 round 3 (R3). A worker that throws rolls back and drops its own continuation, and it cannot
+// record its own failure (that write rolls back with it). The action that runs it can: it reports the
+// failure from a separate transaction, into the existing `cronHeartbeats` table (no new table), under
+// a per-organisation job name so another organisation's success never hides this one's failure.
+describe("SCRUM-869 S8 - a worker failure leaves a durable, actionable signal", () => {
+  test("a failed worker records one failure heartbeat naming the organisation, kind and cursor, and rolls its writes back", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "h1");
+    for (let i = 0; i < 51; i += 1) await addPayable(t, s, { paymentDueDate: NOW, amountDue: 10 + i });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      // The first page (50 payables x 3 recipients = 150 sends) commits; the second page's first send faults.
+      await withNotificationFault(151, async () => {
+        await t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW });
+        await drain(t);
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await alerts(t)).toHaveLength(150);
+    const rows = await heartbeatsFor(t, s.orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].success).toBe(false);
+    const detail = rows[0].detail ?? "";
+    expect(detail).toContain(String(s.orgId));
+    expect(detail).toContain("PAYABLE");
+    expect(detail).toMatch(/cursor=\S{5,}/);
+    expect(detail).toContain("injected fault");
+    expect(detail.length).toBeLessThanOrEqual(1_000);
+  });
+
+  test("a later successful run supersedes the failure, and a clean run writes no heartbeat at all", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "h2");
+    await addPayable(t, s, { paymentDueDate: NOW });
+    await sweep(t);
+    expect(await heartbeatsFor(t, s.orgId)).toHaveLength(0);
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await withNotificationFault(1, async () => {
+        await expect(t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW + DAY })).rejects.toThrow(/injected fault/);
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    // The action wrote the failure from its own transaction; it is the newest row.
+    const failed = await heartbeatsFor(t, s.orgId);
+    expect(failed.map((r) => r.success)).toEqual([false]);
+
+    vi.setSystemTime(NOW + 2 * DAY);
+    await t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW + 2 * DAY });
+    await drain(t);
+    const after = (await heartbeatsFor(t, s.orgId)).sort((a, b) => a.ranAt - b.ranAt);
+    expect(after.map((r) => r.success)).toEqual([false, true]);
+  });
+
+  test("a repeated failure updates the one failure row instead of adding a row a day", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "h3");
+    await addPayable(t, s, { paymentDueDate: NOW });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const day of [0, 1, 2]) {
+        vi.setSystemTime(NOW + day * DAY);
+        await withNotificationFault(1, async () => {
+          await expect(t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW + day * DAY })).rejects.toThrow(/injected fault/);
+        });
+      }
+    } finally {
+      spy.mockRestore();
+    }
+    const rows = await heartbeatsFor(t, s.orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].success).toBe(false);
+    expect(rows[0].ranAt).toBe(NOW + 2 * DAY);
+  });
+
+  test("one organisation's failure is recorded against it alone, and another organisation's success does not clear it", async () => {
+    const t = newHarness();
+    const bad = await seedOrg(t, "h4");
+    const good = await seedOrg(t, "h5");
+    await addPayable(t, bad, { paymentDueDate: NOW });
+    await addPayable(t, good, { paymentDueDate: NOW });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await withNotificationFault(1, async () => {
+        await expect(t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: bad.orgId, now: NOW })).rejects.toThrow(/injected fault/);
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    await t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: good.orgId, now: NOW });
+    await drain(t);
+    expect((await heartbeatsFor(t, bad.orgId)).map((r) => r.success)).toEqual([false]);
+    expect(await heartbeatsFor(t, good.orgId)).toHaveLength(0);
+    expect((await alerts(t)).filter((r) => r.orgId === good.orgId)).toHaveLength(3);
+  });
+
+  test("the failure detail is bounded however long the error message is", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "h6");
+    await addPayable(t, s, { paymentDueDate: NOW });
+    const def = NOTIFICATION_TYPES["accounting.supplierObligationDue"] as unknown as { category: string };
+    Object.defineProperty(def, "category", {
+      configurable: true,
+      get() {
+        throw new Error("x".repeat(50_000));
+      },
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW })).rejects.toThrow();
+    } finally {
+      Object.defineProperty(def, "category", { configurable: true, writable: true, value: "finance" });
+      spy.mockRestore();
+    }
+    const rows = await heartbeatsFor(t, s.orgId);
+    expect(rows).toHaveLength(1);
+    expect((rows[0].detail ?? "").length).toBeLessThanOrEqual(1_000);
   });
 });

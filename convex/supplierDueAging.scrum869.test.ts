@@ -423,6 +423,28 @@ describe("SCRUM-869 S3a - the caller supplies the day", () => {
   });
 });
 
+// PR #716 round 3 (R1). A stored date outside the JavaScript Date range (+-8.64e15 ms, ECMAScript
+// TimeClip) used to surface as `RangeError: Invalid time value` from the formatter. The screen still
+// fails loudly (a page that silently omitted money would be worse), but with the same named data fault
+// the alert worker skips and counts.
+describe("SCRUM-869 S3a - a stored date that cannot be rendered fails loudly and by name", () => {
+  for (const [label, stored] of [["1e20", 1e20], ["-1e20", -1e20], ["NaN", Number.NaN], ["Infinity", Number.POSITIVE_INFINITY]] as const) {
+    test(`a payable with paymentDueDate ${label} is refused as an unrenderable stored date`, async () => {
+      freezeNow();
+      const s = await seed(`bad${label}`);
+      await addPayable(s, { paymentDueDate: stored });
+      await expect(list(s, "PAYABLE")).rejects.toThrow(/not a renderable instant/);
+    });
+  }
+
+  test("the last instant a Date can hold is a date and is shown", async () => {
+    freezeNow();
+    const s = await seed("maxdate");
+    await addPayable(s, { paymentDueDate: 8.64e15 });
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({ rule: "AGREED_DATE", bucket: "CURRENT" });
+  });
+});
+
 describe("SCRUM-869 S3a - schema widening (agreedDueDate is optional)", () => {
   test("a receivable and a recovery written before the field exists are valid, and one with it is valid too", async () => {
     const s = await seed("schema");
