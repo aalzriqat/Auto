@@ -477,7 +477,10 @@ describe("SCRUM-651 - sale cancellation tears down every unpaid payable and refu
   test("the refusal has English and Arabic copy", async () => {
     const { commonEn, commonAr } = await import("../lib/i18n/domains/common");
     const key = "ServerError_SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED";
-    expect((commonEn as Record<string, string>)[key]).toMatch(/manual accounting correction/);
+    // SCRUM-869 round 2: manual journals are disabled for the pilot, so the refusal must not send the user to one.
+    expect((commonEn as Record<string, string>)[key]).not.toMatch(/manual accounting correction/);
+    expect((commonEn as Record<string, string>)[key]).toMatch(/Cannot automatically cancel a sale after the supplier payable has been paid/);
     expect((commonAr as Record<string, string>)[key]).toMatch(/[؀-ۿ]/);
+    expect((commonAr as Record<string, string>)[key]).not.toMatch(/تصحيح محاسبي يدوي/);
   });
 });

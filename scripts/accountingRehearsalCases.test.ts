@@ -2878,6 +2878,48 @@ describe("SCRUM-869 F2 the fake refuses what the registered mutation's validator
   });
 });
 
+// SCRUM-869 review round 2 (P1): the lookup used to return null for a missing export or a failed import, and
+// null meant "nothing to validate", so renaming `sourcingPayables.markPaid` left every rehearsal test green and
+// SUP-PAY still reported PASS. A call the registry cannot resolve is now refused, never skipped.
+describe("SCRUM-869 the fake refuses a call whose registered function cannot be resolved", () => {
+  const unresolved = /not a registered Convex function/;
+
+  test("a missing export is refused before any handler runs", async () => {
+    await expect(makeBackend().authedCall("mutation", "sourcingPayables:noSuchDoor", {})).rejects.toThrow(unresolved);
+  });
+
+  test("a module that cannot be imported is refused", async () => {
+    await expect(makeBackend().authedCall("mutation", "noSuchModule:markPaid", {})).rejects.toThrow(unresolved);
+  });
+
+  test("an export that is not a registered function is refused", async () => {
+    // `SUPPLIER_RECEIVABLES_LIST_LIMIT` is a plain constant exported next to the registered functions.
+    await expect(makeBackend().authedCall("query", "supplierReceivables:SUPPLIER_RECEIVABLES_LIST_LIMIT", {})).rejects.toThrow(unresolved);
+  });
+
+  test("the anonymous caller and a validator-dropped run are held to the same rule", async () => {
+    await expect(makeBackend().anonymousCall("mutation", "sourcingPayables:noSuchDoor", {})).rejects.toThrow(unresolved);
+    await expect(makeBackend({ acceptUnidentified: true }).authedCall("mutation", "sourcingPayables:noSuchDoor", {})).rejects.toThrow(unresolved);
+  });
+
+  test("SUP-PAY goes red when sourcingPayables.markPaid is renamed away, and is green before", async () => {
+    expect(statusOf(await runAgainst({}), "SUP-PAY")).toBe("PASS");
+    vi.resetModules();
+    vi.doMock("../convex/sourcingPayables.ts", async (importOriginal) => {
+      const { markPaid: _renamedAway, ...rest } = (await importOriginal()) as Record<string, unknown>;
+      return rest;
+    });
+    try {
+      const results = await runAgainst({});
+      expect(statusOf(results, "SUP-PAY")).toBe("FAIL");
+      expect(String(results.find((r) => r.id === "SUP-PAY")?.detail)).toMatch(/sourcingPayables:markPaid.*not a registered Convex function/);
+    } finally {
+      vi.doUnmock("../convex/sourcingPayables.ts");
+      vi.resetModules();
+    }
+  });
+});
+
 describe("the rehearsal FAILS when the backend misbehaves — one defect per case", () => {
   test("C2 catches two distinct keys paying one free balance twice", async () => {
     // The defect the cloud run exists for: identity alone cannot stop this,
