@@ -20,6 +20,7 @@ import { fromMinorUnits, toMinorUnits } from "../utils/money";
 import { requireOwnedRow, requireTenantAuth } from "../utils/tenancy";
 import { orgResetState } from "../utils/orgResetGeneration";
 import { isSystemOwnerRole, PERMISSIONS } from "../utils/permissions";
+import { insertOpeningDeposit } from "../utils/commitmentWriters";
 import { validateOpeningPartners } from "./openingPartnerAllocations";
 import { listOpeningStockEvidence } from "../utils/openingVehicleBasis";
 import {
@@ -973,20 +974,16 @@ async function materializeOpeningRow(
     // liability and nothing more: no transaction, payment, voucher, accounting
     // event, vehicle hold or commitment claim is created (a second receipt would
     // double the cash).
-    const depositId = await ctx.db.insert("deposits", {
+    const depositId = await insertOpeningDeposit(ctx, {
       orgId: plan.orgId,
       customerId: row.customerId,
       ...(row.vehicleId !== undefined ? { vehicleId: row.vehicleId } : {}),
       amount: fromMinorUnits(row.amountMinor, plan.currency),
       amountMinor: row.amountMinor,
       currency: plan.currency,
-      status: "HELD",
-      holdActive: false,
-      usesVehicleHoldRows: false,
       notes: row.title.trim(),
       createdBy: actorId,
       createdAt: now,
-      origin: "OPENING",
       openingBalanceDraftId: draftId,
       openingRowKey: row.rowKey,
       openingDepositKind: row.depositKind,

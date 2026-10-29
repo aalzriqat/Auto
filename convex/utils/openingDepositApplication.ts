@@ -53,9 +53,10 @@ export async function applyOpeningDepositsToSale(
   const picks = await selectOpeningDepositsForSale(ctx, args);
   const applied: AppliedOpeningDeposit[] = [];
   for (const { deposit, rowMinor } of picks) {
+    // `holdActive` is not written: an opening deposit is born `holdActive: false`
+    // (`insertOpeningDeposit`) and there is no vehicle hold to lift.
     await ctx.db.patch(deposit._id, {
       status: "APPLIED",
-      holdActive: false,
       resolvedBy: args.actorId,
       resolvedAt: args.occurredAt,
       resolutionSaleId: args.saleId,

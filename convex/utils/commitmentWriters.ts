@@ -131,3 +131,31 @@ export async function reinstateDirectDepositHold(
   await ctx.db.patch(deposit._id, { holdActive: true });
   return await ctx.db.get(deposit._id);
 }
+
+/**
+ * SCRUM-858 S1: birth of a deposit that was ALREADY HELD on the opening date.
+ *
+ * ⚠️ THE LIVENESS FIELDS ARE STAMPED HERE, NOT BY THE CALLER. The cash is already
+ * inside the opening cash/bank lines, so this row has no quote, no vehicle hold
+ * and no commitment claim: `holdActive` is `false` and `usesVehicleHoldRows` is
+ * `false` (the DIRECT representation with no hold), stated explicitly because an
+ * `undefined` representation is the shape every canonical reader fails closed on.
+ * The caller cannot choose either value, so no opening door can create a deposit
+ * that holds a car, and the SCRUM-208 ratchet sees one choke site, not a new
+ * writer file.
+ */
+export async function insertOpeningDeposit(
+  ctx: MutationCtx,
+  fields: Omit<
+    Doc<"deposits">,
+    "_id" | "_creationTime" | "status" | "holdActive" | "usesVehicleHoldRows" | "origin"
+  >
+): Promise<Id<"deposits">> {
+  return await ctx.db.insert("deposits", {
+    ...fields,
+    status: "HELD",
+    holdActive: false,
+    usesVehicleHoldRows: false,
+    origin: "OPENING",
+  });
+}
