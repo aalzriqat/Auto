@@ -22,7 +22,7 @@
  * runtime (no read-limit enforcement, no OCC) and not production data.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -60,8 +60,42 @@ const ENTITLEMENT = 9_500;
 const MARGIN = SALE_PRICE - ENTITLEMENT; // 3,000 owed back by the supplier
 const SUPPLIER_COST = 200;
 
+// Every mutation the fixtures run (`chartOfAccounts.initialize`, `accountingPeriods.create`,
+// `sales.create`, the receipt writers) queues outbox work with `scheduler.runAfter(0)`. On a real
+// timer that work fires whenever the event loop first yields - for the last tests of this file,
+// after the file has finished - and its `console.log`/`console.error` output then races the
+// worker's rpc close: `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was
+// pending`, which fails the whole slice with every test green. So, as in
+// handoverDirectPayment.test.ts and supplierPayablesReconciliation.scrum651.test.ts and as the
+// convex-test docs prescribe (https://docs.convex.dev/testing/convex-test, "scheduled
+// functions"): fake timers are installed BEFORE the first scheduling mutation, and the scheduler
+// is drained with `finishAllScheduledFunctions(vi.runAllTimers)` before real timers return.
+// Only the timer functions are faked, so `Date.now()` and the dates the tests assert on are real.
+const seededConvexes: Array<ReturnType<typeof convexTestWithComponents>> = [];
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+});
+
+afterEach(async () => {
+  try {
+    for (const t of seededConvexes.splice(0)) {
+      for (let pass = 0; pass < 10; pass += 1) {
+        await t.finishAllScheduledFunctions(vi.runAllTimers);
+        const queued = (await t.run(async (ctx) => await ctx.db.system.query("_scheduled_functions").collect())).filter(
+          (f) => f.state.kind === "pending" || f.state.kind === "inProgress"
+        ).length;
+        if (queued === 0) break;
+      }
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 async function seed(tag: string) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
+  seededConvexes.push(t);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S2 ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) =>
     ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
