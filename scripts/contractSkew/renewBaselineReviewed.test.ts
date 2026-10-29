@@ -291,6 +291,10 @@ describe("PR-head review reference in renewal evidence (SCRUM-866)", () => {
     ["a SHA shorter than 8 hex digits", "SCRUM-778 review of PR #693 head 8f12a47"],
     ["a branch name instead of a SHA", "SCRUM-778 review of PR #693 head main"],
     ["a non-numeric PR number", `SCRUM-778 review of PR #abc head ${PR_HEAD}`],
+    ["a 41-digit hex token", `SCRUM-778 review of PR #693 head ${"a".repeat(41)}`],
+    ["a SHA running into letters", `SCRUM-778 review of PR #693 head ${PR_HEAD}zz`],
+    ["a SHA running into a non-ASCII digit", `SCRUM-778 review of PR #693 head ${PR_HEAD}١`],
+    ["an old-form SHA running into letters", `SCRUM-866 round 2 review against origin/main ${PR_HEAD}zz`],
   ])("refuses a lookalike with %s as having no review SHA", (_label, marker) => {
     const gaps = gapsFor(`${marker}: ${named}`);
     expect(gaps).toHaveLength(1);
