@@ -1203,6 +1203,13 @@ export const supplierPayablesReconciliation = query({
  * Report-only (OQ-10): a difference is displayed, never posted, and period close does not read this.
  * Nothing is stored: every figure is derived from the rows on each call.
  */
+export type SupplierReceivablesUnavailableReason =
+  | "OVER_LIMIT"
+  | "PENDING_POSTINGS"
+  | "OPENING_SOURCE_UNAVAILABLE"
+  /** `toDate` is earlier than now: the subledger cannot be read as of a past date (see below). */
+  | "AS_OF_DATE_UNSUPPORTED";
+
 export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, "byCurrency"> & {
   byCurrency: Record<
     string,
@@ -1218,7 +1225,7 @@ export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, 
     }
   >;
   status: "AVAILABLE" | "UNAVAILABLE";
-  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE";
+  unavailableReason?: SupplierReceivablesUnavailableReason;
   /** True only when every source was read in full; UNAVAILABLE is never complete. */
   complete: boolean;
   rowsRead?: { receivables: number; recoveries: number };
@@ -1263,9 +1270,7 @@ export async function computeSupplierReceivablesReconciliation(
   opts: { readLimit?: number } = {}
 ): Promise<SupplierReceivablesReconciliationResult> {
   const readLimit = opts.readLimit ?? SUPPLIER_RECEIVABLES_RECON_READ_LIMIT;
-  const unavailable = (
-    unavailableReason: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE"
-  ): SupplierReceivablesReconciliationResult => ({
+  const unavailable = (unavailableReason: SupplierReceivablesUnavailableReason): SupplierReceivablesReconciliationResult => ({
     currencies: [],
     byCurrency: {},
     isReconciled: false,
@@ -1273,6 +1278,14 @@ export async function computeSupplierReceivablesReconciliation(
     unavailableReason,
     complete: false,
   });
+
+  // 0. One cutoff for both sides (SCRUM-858 F1). The GL can be read as of any date, but the subledger
+  // only as it is now: a margin receivable keeps a running `amountReceived` with no receipt dates, and
+  // the dates of the other facts are not the GL's accounting dates. Rebuilding it at a past date would
+  // be a guess, and comparing a past GL with today's rows can hide a real error behind a row created
+  // after the cutoff, or invent a difference from one. So a past `toDate` is refused, not approximated.
+  const now = Date.now();
+  if (toDate !== undefined && toDate < now) return unavailable("AS_OF_DATE_UNSUPPORTED");
 
   // 1. Postings still in flight: the GL side is about to move, so a comparison now is not the truth.
   const [outbox, drafts] = await Promise.all([
@@ -1317,8 +1330,8 @@ export async function computeSupplierReceivablesReconciliation(
   }
 
   // Signed open balance in minor units, NOT clamped: an over-received row is a real negative that
-  // the GL carries. The subledger side is the current state of the rows; only the GL side is
-  // taken as of `toDate` (same convention as the A/P reconciliation).
+  // the GL carries. The subledger side is the current state of the rows and `toDate` is not in the
+  // past (step 0), so both sides are read at the same moment.
   const margin = new Map<string, number>();
   const recovery = new Map<string, number>();
   const linked = new Map<string, number>();
@@ -1331,7 +1344,7 @@ export async function computeSupplierReceivablesReconciliation(
     .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS))
     .unique();
   if (canonical) controlAccounts.add(canonical._id);
-  const cutoff = toDate ?? Date.now();
+  const cutoff = toDate ?? now;
 
   for (const row of receivables) {
     const openMinor = toMinorUnits(row.amountDue, row.currency) - toMinorUnits(row.amountReceived ?? 0, row.currency);
