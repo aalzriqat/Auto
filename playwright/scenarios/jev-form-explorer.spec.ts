@@ -157,8 +157,7 @@ const FORMS: FormSpec[] = [
     prepare: async (dialog) => {
       if (!seedId) return "this run's seed customer was not confirmed saved";
       // LeadDialog renders t("SelectCustomer") || "Select a customer".
-      // Accept both roles until the combobox change (#722) is on main; #722 removes the button branch.
-      const picker = dialog.getByRole("combobox", { name: /^Select\s?(a\s)?customer$/i }).or(dialog.getByRole("button", { name: /^Select\s?(a\s)?customer$/i }));
+      const picker = dialog.getByRole("combobox", { name: /^Select\s?(a\s)?customer$/i });
       if (!(await appeared(picker, 5_000))) return "customer picker not found";
       await picker.click();
       // Scope to this picker's own dropdown: the page has other search boxes and lists.

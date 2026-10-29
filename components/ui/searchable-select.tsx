@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useEffect, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useEffect, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ChevronDown, Search, Check } from "lucide-react";
 
@@ -72,6 +72,8 @@ export function SearchableSelect({
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const listboxId = useId();
+  const valueId = useId();
 
   const selected = value && value !== "none" ? options.find((o) => o.value === value) : null;
 
@@ -134,13 +136,16 @@ export function SearchableSelect({
       {/* Trigger — matches shadcn SelectTrigger exactly */}
       <button
         type="button"
+        role="combobox"
         id={triggerId}
         data-testid={dataTestId}
         disabled={disabled}
         onClick={() => !disabled && setOpen((o) => !o)}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={listboxId}
         aria-label={ariaLabel}
+        aria-labelledby={ariaLabel ? undefined : valueId}
         aria-invalid={invalid || undefined}
         className={cn(
           "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
@@ -149,7 +154,7 @@ export function SearchableSelect({
           open && "ring-1 ring-ring"
         )}
       >
-        <span className="line-clamp-1 text-start">
+        <span id={valueId} className="line-clamp-1 text-start">
           <bdi>
             {selected
               ? selected.label
@@ -183,10 +188,12 @@ export function SearchableSelect({
           </div>
 
           {/* Options list */}
-          <div className="max-h-60 overflow-y-auto">
+          <div id={listboxId} role="listbox" aria-label={ariaLabel ?? placeholder} className="max-h-60 overflow-y-auto">
             {noneLabel && (
               <button
                 type="button"
+                role="option"
+                aria-selected={value === "none" || value === ""}
                 onClick={() => handleSelect("none")}
                 className={cn(
                   "w-full flex items-center gap-2 px-3 py-2 text-sm text-start hover:bg-accent hover:text-accent-foreground transition-colors text-muted-foreground",
@@ -213,6 +220,8 @@ export function SearchableSelect({
                   <button
                     key={o.value}
                     type="button"
+                    role="option"
+                    aria-selected={isSelected}
                     data-testid={`searchable-option-${o.value}`}
                     onClick={() => handleSelect(o.value)}
                     className={cn(
