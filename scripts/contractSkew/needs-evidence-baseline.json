@@ -154,7 +154,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:58:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:60:15",
       "functionId": "bankAccounts:create",
       "contractPath": "name",
       "kind": "TYPE_UNKNOWN",
@@ -169,7 +169,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:58:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:60:15",
       "functionId": "bankAccounts:create",
       "contractPath": "bankName",
       "kind": "TYPE_UNKNOWN",
@@ -184,7 +184,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:58:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:60:15",
       "functionId": "bankAccounts:create",
       "contractPath": "iban",
       "kind": "TYPE_UNKNOWN",
@@ -199,7 +199,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:58:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:60:15",
       "functionId": "bankAccounts:create",
       "contractPath": "accountNumber",
       "kind": "TYPE_UNKNOWN",
@@ -214,7 +214,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:58:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:60:15",
       "functionId": "bankAccounts:create",
       "contractPath": "currency",
       "kind": "TYPE_UNKNOWN",
@@ -229,7 +229,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:58:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:60:15",
       "functionId": "bankAccounts:create",
       "contractPath": "openingBalanceMinor",
       "kind": "TYPE_UNKNOWN",
@@ -244,7 +244,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:58:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:60:15",
       "functionId": "bankAccounts:create",
       "contractPath": "openingBalanceDate",
       "kind": "TYPE_UNKNOWN",
@@ -259,7 +259,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:58:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:60:15",
       "functionId": "bankAccounts:create",
       "contractPath": "isReconciliationTarget",
       "kind": "TYPE_UNKNOWN",
@@ -274,7 +274,7 @@
     {
       "surface": "web",
       "file": "components/accounting/BankAccountsTab.tsx",
-      "callSiteId": "components/accounting/BankAccountsTab.tsx:58:15",
+      "callSiteId": "components/accounting/BankAccountsTab.tsx:60:15",
       "functionId": "bankAccounts:create",
       "contractPath": "notes",
       "kind": "TYPE_UNKNOWN",
@@ -6919,7 +6919,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDetailsDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:263:13",
+      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:264:13",
       "functionId": "vehicles:createReservation",
       "contractPath": "idempotencyKey",
       "kind": "TYPE_UNKNOWN",
@@ -6934,7 +6934,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDetailsDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:263:13",
+      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:264:13",
       "functionId": "vehicles:createReservation",
       "contractPath": "customerId",
       "kind": "TYPE_UNKNOWN",
@@ -6949,7 +6949,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDetailsDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:299:13",
+      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:300:13",
       "functionId": "vehicles:releaseReservation",
       "contractPath": "reservationId",
       "kind": "TYPE_UNKNOWN",
@@ -6964,7 +6964,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDetailsDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:365:13",
+      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:366:13",
       "functionId": "deposits:release",
       "contractPath": "depositId",
       "kind": "TYPE_UNKNOWN",
@@ -6979,7 +6979,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDetailsDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:365:13",
+      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:366:13",
       "functionId": "deposits:release",
       "contractPath": "idempotencyKey",
       "kind": "TYPE_UNKNOWN",
