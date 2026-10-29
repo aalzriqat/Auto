@@ -401,6 +401,28 @@ describe("SCRUM-869 S3a - bounded reads, tenancy, permission", () => {
   });
 });
 
+// PR #716 round 2 (LOW). The query used to read `Date.now()` itself, and a subscribed Convex query
+// does not re-run when the clock passes midnight, so an open screen kept the previous day's aging
+// (https://docs.convex.dev/understanding/best-practices/). The caller now supplies `nowMs`, so a new
+// day is a new argument and a new subscription. The server clock only bounds how far off it may be.
+describe("SCRUM-869 S3a - the caller supplies the day", () => {
+  test("aging follows the supplied nowMs, and a clock far from the server's is refused", async () => {
+    freezeNow();
+    const s = await seed("day1");
+    await addPayable(s, { paymentDueDate: NOW - 10 * DAY });
+    expect((await list(s, "PAYABLE", { nowMs: NOW })).rows[0]).toMatchObject({ daysOverdue: 10 });
+    expect((await list(s, "PAYABLE", { nowMs: NOW + DAY })).rows[0]).toMatchObject({ daysOverdue: 11 });
+    await expect(list(s, "PAYABLE", { nowMs: NOW + 5 * DAY })).rejects.toThrow(/nowMs/);
+    await expect(list(s, "PAYABLE", { nowMs: Number.NaN })).rejects.toThrow();
+  });
+
+  test("a call without nowMs is refused rather than silently reading the clock", async () => {
+    freezeNow();
+    const s = await seed("day2");
+    await expect(s.asUser.query(api.supplierDueAging.list, { orgId: s.orgId, kind: "PAYABLE" } as never)).rejects.toThrow();
+  });
+});
+
 describe("SCRUM-869 S3a - schema widening (agreedDueDate is optional)", () => {
   test("a receivable and a recovery written before the field exists are valid, and one with it is valid too", async () => {
     const s = await seed("schema");
@@ -479,6 +501,16 @@ describe("SCRUM-869 S3b (c23906) - THROUGH_DEALERSHIP payable is due on the fina
     const s = await seed("fund4");
     await financedPayable(s, { disbursedAt: FUNDED_AT });
     expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({ dueAt: null, rule: "FINANCIER_FUNDING_NOT_RECORDED" });
+  });
+
+  test("an instant with a recorded amount of zero is not a received funding (kills the > 0 to >= 0 mutant)", async () => {
+    freezeNow();
+    const s = await seed("fund9");
+    // A legacy row: the disbursement instant survives with a zero amount.
+    await financedPayable(s, { disbursedAt: FUNDED_AT, disbursedAmountMinor: 0 });
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({
+      dueAt: null, rule: "FINANCIER_FUNDING_NOT_RECORDED", daysOverdue: null, bucket: "NO_DUE_DATE",
+    });
   });
 
   test("the financier's payment to the supplier (direct route fact) is not the dealership's funding", async () => {
