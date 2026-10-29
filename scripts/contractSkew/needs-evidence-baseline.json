@@ -3664,7 +3664,7 @@
     {
       "surface": "web",
       "file": "components/sales/wizard/steps/Step1QuoteSetup.tsx",
-      "callSiteId": "components/sales/wizard/steps/Step1QuoteSetup.tsx:242:13",
+      "callSiteId": "components/sales/wizard/steps/Step1QuoteSetup.tsx:252:13",
       "functionId": "approvals:requestProfitApproval",
       "contractPath": "vehicleId",
       "kind": "TYPE_UNKNOWN",
@@ -5284,7 +5284,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:264:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:271:31",
       "functionId": "vehicles:generateUploadUrl",
       "contractPath": "mimeType",
       "kind": "TYPE_UNKNOWN",
@@ -5299,7 +5299,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:264:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:271:31",
       "functionId": "vehicles:generateUploadUrl",
       "contractPath": "sizeInBytes",
       "kind": "TYPE_UNKNOWN",
@@ -5314,7 +5314,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:357:15",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:364:15",
       "functionId": "vehicles:deleteImage",
       "contractPath": "storageId",
       "kind": "TYPE_UNKNOWN",
@@ -5329,7 +5329,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -5344,7 +5344,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "vehicleId",
       "kind": "TYPE_UNKNOWN",
@@ -5359,7 +5359,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "make",
       "kind": "TYPE_UNKNOWN",
@@ -5374,7 +5374,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "model",
       "kind": "TYPE_UNKNOWN",
@@ -5389,7 +5389,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "year",
       "kind": "TYPE_UNKNOWN",
@@ -5404,7 +5404,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "mileage",
       "kind": "TYPE_UNKNOWN",
@@ -5419,7 +5419,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "color",
       "kind": "TYPE_UNKNOWN",
@@ -5434,7 +5434,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "fuelType",
       "kind": "TYPE_UNKNOWN",
@@ -5449,7 +5449,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "transmission",
       "kind": "TYPE_UNKNOWN",
@@ -5464,7 +5464,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "sellingPrice",
       "kind": "TYPE_UNKNOWN",
@@ -5479,7 +5479,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "vin",
       "kind": "TYPE_UNKNOWN",
@@ -5494,7 +5494,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "trim",
       "kind": "TYPE_UNKNOWN",
@@ -5509,7 +5509,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "minimumProfit",
       "kind": "TYPE_UNKNOWN",
@@ -5524,7 +5524,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "status",
       "kind": "TYPE_UNKNOWN",
@@ -5539,7 +5539,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "sourceType",
       "kind": "TYPE_UNKNOWN",
@@ -5554,7 +5554,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "notes",
       "kind": "TYPE_UNKNOWN",
@@ -5569,7 +5569,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "accidentDisclosed",
       "kind": "TYPE_UNKNOWN",
@@ -5584,7 +5584,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "ownerCount",
       "kind": "TYPE_UNKNOWN",
@@ -5599,7 +5599,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "dealerGuarantee",
       "kind": "TYPE_UNKNOWN",
@@ -5614,7 +5614,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "purchasePrice",
       "kind": "TYPE_UNKNOWN",
@@ -5629,7 +5629,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "sourcedFromName",
       "kind": "TYPE_UNKNOWN",
@@ -5644,7 +5644,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "sourceCost",
       "kind": "TYPE_UNKNOWN",
@@ -5659,7 +5659,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "purchasePaymentMethod",
       "kind": "TYPE_UNKNOWN",
@@ -5674,7 +5674,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "bankAccountId",
       "kind": "TYPE_UNKNOWN",
@@ -5689,7 +5689,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "purchaseSupplierName",
       "kind": "TYPE_UNKNOWN",
@@ -5704,7 +5704,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:431:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
       "functionId": "vehicles:update",
       "contractPath": "imageIds[*]",
       "kind": "TYPE_UNKNOWN",
@@ -5719,7 +5719,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.make",
       "kind": "TYPE_UNKNOWN",
@@ -5734,7 +5734,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.model",
       "kind": "TYPE_UNKNOWN",
@@ -5749,7 +5749,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.year",
       "kind": "TYPE_UNKNOWN",
@@ -5764,7 +5764,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.mileage",
       "kind": "TYPE_UNKNOWN",
@@ -5779,7 +5779,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.color",
       "kind": "TYPE_UNKNOWN",
@@ -5794,7 +5794,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.fuelType",
       "kind": "TYPE_UNKNOWN",
@@ -5809,7 +5809,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.transmission",
       "kind": "TYPE_UNKNOWN",
@@ -5824,7 +5824,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.sellingPrice",
       "kind": "TYPE_UNKNOWN",
@@ -5839,7 +5839,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.vin",
       "kind": "TYPE_UNKNOWN",
@@ -5854,7 +5854,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.trim",
       "kind": "TYPE_UNKNOWN",
@@ -5869,7 +5869,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.minimumProfit",
       "kind": "TYPE_UNKNOWN",
@@ -5884,7 +5884,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.status",
       "kind": "TYPE_UNKNOWN",
@@ -5899,7 +5899,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.sourceType",
       "kind": "TYPE_UNKNOWN",
@@ -5914,7 +5914,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.notes",
       "kind": "TYPE_UNKNOWN",
@@ -5929,7 +5929,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.accidentDisclosed",
       "kind": "TYPE_UNKNOWN",
@@ -5944,7 +5944,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.ownerCount",
       "kind": "TYPE_UNKNOWN",
@@ -5959,7 +5959,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.dealerGuarantee",
       "kind": "TYPE_UNKNOWN",
@@ -5974,7 +5974,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.purchasePrice",
       "kind": "TYPE_UNKNOWN",
@@ -5989,7 +5989,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.sourcedFromName",
       "kind": "TYPE_UNKNOWN",
@@ -6004,7 +6004,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.sourceCost",
       "kind": "TYPE_UNKNOWN",
@@ -6019,7 +6019,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:442:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:453:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.imageIds[*]",
       "kind": "TYPE_UNKNOWN",
@@ -6034,7 +6034,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "idempotencyKey",
       "kind": "TYPE_UNKNOWN",
@@ -6049,7 +6049,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -6064,7 +6064,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "make",
       "kind": "TYPE_UNKNOWN",
@@ -6079,7 +6079,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "model",
       "kind": "TYPE_UNKNOWN",
@@ -6094,7 +6094,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "year",
       "kind": "TYPE_UNKNOWN",
@@ -6109,7 +6109,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "mileage",
       "kind": "TYPE_UNKNOWN",
@@ -6124,7 +6124,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "color",
       "kind": "TYPE_UNKNOWN",
@@ -6139,7 +6139,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "fuelType",
       "kind": "TYPE_UNKNOWN",
@@ -6154,7 +6154,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "transmission",
       "kind": "TYPE_UNKNOWN",
@@ -6169,7 +6169,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "sellingPrice",
       "kind": "TYPE_UNKNOWN",
@@ -6184,7 +6184,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "vin",
       "kind": "TYPE_UNKNOWN",
@@ -6199,7 +6199,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "trim",
       "kind": "TYPE_UNKNOWN",
@@ -6214,7 +6214,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "minimumProfit",
       "kind": "TYPE_UNKNOWN",
@@ -6229,7 +6229,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "status",
       "kind": "TYPE_UNKNOWN",
@@ -6244,7 +6244,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "sourceType",
       "kind": "TYPE_UNKNOWN",
@@ -6259,7 +6259,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "notes",
       "kind": "TYPE_UNKNOWN",
@@ -6274,7 +6274,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "accidentDisclosed",
       "kind": "TYPE_UNKNOWN",
@@ -6289,7 +6289,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "ownerCount",
       "kind": "TYPE_UNKNOWN",
@@ -6304,7 +6304,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "dealerGuarantee",
       "kind": "TYPE_UNKNOWN",
@@ -6319,7 +6319,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "purchasePrice",
       "kind": "TYPE_UNKNOWN",
@@ -6334,7 +6334,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "sourcedFromName",
       "kind": "TYPE_UNKNOWN",
@@ -6349,7 +6349,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "sourceCost",
       "kind": "TYPE_UNKNOWN",
@@ -6364,7 +6364,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "purchasePaymentMethod",
       "kind": "TYPE_UNKNOWN",
@@ -6379,7 +6379,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "bankAccountId",
       "kind": "TYPE_UNKNOWN",
@@ -6394,7 +6394,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "purchaseSupplierName",
       "kind": "TYPE_UNKNOWN",
@@ -6409,7 +6409,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:456:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:467:31",
       "functionId": "vehicles:create",
       "contractPath": "imageIds[*]",
       "kind": "TYPE_UNKNOWN",
@@ -6424,7 +6424,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.make",
       "kind": "TYPE_UNKNOWN",
@@ -6439,7 +6439,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.model",
       "kind": "TYPE_UNKNOWN",
@@ -6454,7 +6454,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.year",
       "kind": "TYPE_UNKNOWN",
@@ -6469,7 +6469,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.mileage",
       "kind": "TYPE_UNKNOWN",
@@ -6484,7 +6484,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.color",
       "kind": "TYPE_UNKNOWN",
@@ -6499,7 +6499,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.fuelType",
       "kind": "TYPE_UNKNOWN",
@@ -6514,7 +6514,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.transmission",
       "kind": "TYPE_UNKNOWN",
@@ -6529,7 +6529,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.sellingPrice",
       "kind": "TYPE_UNKNOWN",
@@ -6544,7 +6544,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.vin",
       "kind": "TYPE_UNKNOWN",
@@ -6559,7 +6559,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.trim",
       "kind": "TYPE_UNKNOWN",
@@ -6574,7 +6574,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.minimumProfit",
       "kind": "TYPE_UNKNOWN",
@@ -6589,7 +6589,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.status",
       "kind": "TYPE_UNKNOWN",
@@ -6604,7 +6604,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.sourceType",
       "kind": "TYPE_UNKNOWN",
@@ -6619,7 +6619,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.notes",
       "kind": "TYPE_UNKNOWN",
@@ -6634,7 +6634,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.accidentDisclosed",
       "kind": "TYPE_UNKNOWN",
@@ -6649,7 +6649,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.ownerCount",
       "kind": "TYPE_UNKNOWN",
@@ -6664,7 +6664,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.dealerGuarantee",
       "kind": "TYPE_UNKNOWN",
@@ -6679,7 +6679,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.purchasePrice",
       "kind": "TYPE_UNKNOWN",
@@ -6694,7 +6694,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.sourcedFromName",
       "kind": "TYPE_UNKNOWN",
@@ -6709,7 +6709,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.sourceCost",
       "kind": "TYPE_UNKNOWN",
@@ -6724,7 +6724,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.purchasePaymentMethod",
       "kind": "TYPE_UNKNOWN",
@@ -6739,7 +6739,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.bankAccountId",
       "kind": "TYPE_UNKNOWN",
@@ -6754,7 +6754,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.purchaseSupplierName",
       "kind": "TYPE_UNKNOWN",
@@ -6769,7 +6769,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:469:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:480:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.imageIds[*]",
       "kind": "TYPE_UNKNOWN",
@@ -6994,7 +6994,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleImportDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleImportDialog.tsx:934:36",
+      "callSiteId": "components/vehicles/VehicleImportDialog.tsx:955:36",
       "functionId": "vehicles:importBulk",
       "contractPath": "purchasePaymentMethod",
       "kind": "TYPE_UNKNOWN",
@@ -7009,7 +7009,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleImportDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleImportDialog.tsx:934:36",
+      "callSiteId": "components/vehicles/VehicleImportDialog.tsx:955:36",
       "functionId": "vehicles:importBulk",
       "contractPath": "vehicles",
       "kind": "SHAPE_UNKNOWN",
