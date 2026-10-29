@@ -247,7 +247,7 @@ describe("SCRUM-858 S5 per-bank opening reconciliation", () => {
     ]);
   });
 
-  test("an opening bank line that names no bank is shown as unattributed and its bank reports the difference", async () => {
+  test("an opening bank line that names no bank makes the opening unavailable even with a nonzero net", async () => {
     const s = await seed();
     const bankA = await bank(s, "Bank A", 4_000_000, true);
     const bankB = await bank(s, "Bank B", 3_000_000);
@@ -263,14 +263,14 @@ describe("SCRUM-858 S5 per-bank opening reconciliation", () => {
     const reconciliation = await s.owner.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId });
 
     expect(reconciliation).toMatchObject({
-      status: "OK",
-      controlOpeningMinor: 7_000_000,
-      bankLinesTotalMinor: 4_000_000,
-      unattributedOpeningMinor: 3_000_000,
+      status: "OPENING_PROOF_UNAVAILABLE",
+      controlOpeningMinor: null,
+      bankLinesTotalMinor: null,
+      unattributedOpeningMinor: null,
     });
     const byId = new Map(reconciliation.banks.map((row) => [row.bankAccountId, row]));
-    expect(byId.get(bankB)).toMatchObject({ openingLineMinor: 0, referenceOpeningMinor: 3_000_000, differenceMinor: 3_000_000 });
-    expect(reconciliation.unexplainedOpeningDifference).not.toBeNull();
+    expect(byId.get(bankB)).toMatchObject({ openingLineMinor: null, referenceOpeningMinor: 3_000_000, differenceMinor: null });
+    expect(reconciliation.unexplainedOpeningDifference).toBeNull();
   });
 
   test("a bank deactivated after the opening keeps its opening line in the reconciliation", async () => {
@@ -716,5 +716,51 @@ describe("SCRUM-858 S5 the report refuses figures it cannot prove", () => {
     // The bank that still resolves is listed with no figures; nothing is claimed about the opening.
     expect(result.banks.map((row) => row.bankAccountId)).toEqual([bankA]);
     expect(result.banks.every((row) => row.openingLineMinor === null && row.differenceMinor === null)).toBe(true);
+  });
+
+  test("unnamed opening bank lines that net to zero with no surviving banks are unavailable, never silently OK", async () => {
+    const { s, bankA, bankB } = await openOpposingBanks();
+    const journal = await openingJournal(s);
+    await s.t.runUnwrapped(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", journal._id)).collect();
+      expect(lines).toHaveLength(2);
+      expect(lines.map((line) => line.debitMinor - line.creditMinor).sort((a, b) => a - b)).toEqual([-3_000_000, 3_000_000]);
+      for (const line of lines) await ctx.db.patch(line._id, { bankAccountId: undefined });
+      await ctx.db.delete(bankA);
+      await ctx.db.delete(bankB);
+    });
+    const before = await writeCounts(s);
+
+    const result = await report(s);
+
+    expect(result.status).toBe("OPENING_PROOF_UNAVAILABLE");
+    expect(result.banks).toEqual([]);
+    expect(result.controlOpeningMinor).toBeNull();
+    expect(result.bankLinesTotalMinor).toBeNull();
+    expect(result.unattributedOpeningMinor).toBeNull();
+    expect(result.unexplainedOpeningDifference).toBeNull();
+    expect(await writeCounts(s)).toEqual(before);
+  });
+
+  test("one deleted named bank with two opening lines that net to zero makes the opening unavailable", async () => {
+    const { s, bankA, bankB } = await openOpposingBanks();
+    const journal = await openingJournal(s);
+    await s.t.runUnwrapped(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", journal._id)).collect();
+      expect(lines).toHaveLength(2);
+      for (const line of lines) await ctx.db.patch(line._id, { bankAccountId: bankA });
+      await ctx.db.delete(bankA);
+      await ctx.db.delete(bankB);
+    });
+    const before = await writeCounts(s);
+
+    const result = await report(s);
+
+    expect(result.status).toBe("OPENING_PROOF_UNAVAILABLE");
+    expect(result.banks).toEqual([]);
+    expect(result.controlOpeningMinor).toBeNull();
+    expect(result.unattributedOpeningMinor).toBeNull();
+    expect(result.unexplainedOpeningDifference).toBeNull();
+    expect(await writeCounts(s)).toEqual(before);
   });
 });
