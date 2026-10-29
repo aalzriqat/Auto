@@ -324,6 +324,22 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
   });
 
+  it("SCRUM-869 supplier margin-claim cancel refusal carries a stable code and resolves to Arabic in ar and the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const { SUPPLIER_RECEIVABLE_PAID_CANCEL_MESSAGE: serverText } = await import("../convex/supplierReceivables");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    expect(Object.values(AppErrorCode)).toContain("SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED");
+    const error = new ConvexError({ code: "SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED", message: serverText });
+    const arText = getLocalizedErrorMessage(error, ar);
+    expect(arText).toMatch(/[؀-ۿ]/);
+    expect(arText).not.toBe(serverText);
+    expect(arText).toBe((dictionaries.ar as Record<string, string>)["ServerError_SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED"]);
+    expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
+    // The pre-fix shape: a plain-string ConvexError has no code, so an Arabic user was shown English.
+    expect(getLocalizedErrorMessage(new ConvexError(serverText), ar)).toBe(serverText);
+  });
   it("SCRUM-650 purchase-cost correction refusals resolve to Arabic in ar and the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const { AppErrorCode } = await import("../convex/utils/errors");

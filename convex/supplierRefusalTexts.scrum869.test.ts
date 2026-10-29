@@ -11,9 +11,10 @@ import { ConvexError } from "convex/values";
 import { api } from "./_generated/api";
 import { commonAr, commonEn } from "../lib/i18n/domains/common";
 import { getLocalizedErrorMessage } from "../lib/errors";
+import { ALL_PERMISSIONS } from "./utils/permissions";
 import { refusalDataOf } from "../test-utils/financedDealFixture";
 import { insertPayable, insertReceivable, seedSupplierDoors } from "../test-utils/supplierDoorsFixture";
-import { assertNoSupplierReceiptsForSale } from "./supplierReceivables";
+import { SUPPLIER_RECEIVABLE_PAID_CANCEL_MESSAGE } from "./supplierReceivables";
 import { SUPPLIER_PAYABLE_PAID_CANCEL_MESSAGE } from "./utils/saleCancellation";
 
 vi.mock("./rateLimit", () => ({
@@ -112,17 +113,39 @@ describe("cancelling a sale after the supplier side has moved money", () => {
     expect(arabic[entry]).toMatch(/[؀-ۿ]/);
   });
 
-  test("the margin-claim refusal leaves the record as it stands and offers no manual correction", async () => {
+  test("the margin-claim refusal is refused at the sale-cancel door with a stable code, leaves the record as it stands and offers no manual correction", async () => {
     const s = await seedSupplierDoors("txt-claim");
     const receivableId = await insertReceivable(s, 500);
     await s.t.run((ctx) => ctx.db.patch(receivableId, { receiptSeq: 1, amountReceived: 100, status: "PARTIALLY_PAID" } as never));
-    const refusal = await s.t
-      .run((ctx) => assertNoSupplierReceiptsForSale(ctx, s.orgId, s.saleId))
-      .then(() => undefined, (error: unknown) => error);
-    expect(refusal).toBeInstanceOf(Error);
-    const message = String((refusal as { data?: unknown; message?: string }).data ?? (refusal as Error).message);
-    expect(message).toMatch(/supplier has paid against its commission claim/i);
-    expectNoUnavailableDoor(message, PROMISES_AN_UNAVAILABLE_DOOR, "the server text");
-    expect(message).toContain("Nothing has been changed.");
+    // The fixture's owner is the sale's salesperson, who cannot approve cancelling their own sale; use a second manager.
+    const managerId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "txt-claim_manager", email: "txt-claim-m@example.test" }));
+    const managerRoleId = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "Manager", permissions: ALL_PERMISSIONS }));
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId: managerId, roleId: managerRoleId }));
+    const asManager = s.t.withIdentity({ subject: "txt-claim_manager", clerkId: "txt-claim_manager" });
+    const refusal = await refusalDataOf(
+      asManager.mutation(api.sales.update, { orgId: s.orgId, saleId: s.saleId, status: "CANCELLED" as const })
+    );
+    expect(refusal?.code, refusal?.message).toBe("SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED");
+    expect(refusal?.message).toBe(SUPPLIER_RECEIVABLE_PAID_CANCEL_MESSAGE);
+    expect(refusal?.message).toMatch(/supplier has paid against its commission claim/i);
+    expectNoUnavailableDoor(refusal?.message, PROMISES_AN_UNAVAILABLE_DOOR, "the server text");
+    expect(refusal?.message).toContain("Nothing has been changed.");
+    // The refusal sits before any write: the claim and the sale stay exactly as they were.
+    const claim = await s.t.run((ctx) => ctx.db.get(receivableId));
+    const sale = await s.t.run((ctx) => ctx.db.get(s.saleId));
+    expect(claim?.status).toBe("PARTIALLY_PAID");
+    expect(claim?.amountReceived).toBe(100);
+    expect(sale?.status).toBe("COMPLETED");
+  });
+
+  test("the margin-claim refusal has English and Arabic entries and localizes to Arabic for an Arabic user", () => {
+    const entry = "ServerError_SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED";
+    expect(english[entry]).toBe(SUPPLIER_RECEIVABLE_PAID_CANCEL_MESSAGE);
+    expectNoUnavailableDoor(english[entry], PROMISES_AN_UNAVAILABLE_DOOR, "the English entry");
+    expectNoUnavailableDoor(arabic[entry], ARABIC_UNAVAILABLE_DOOR, "the Arabic entry");
+    expect(arabic[entry]).toMatch(/[؀-ۿ]/);
+    const error = new ConvexError({ code: "SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED", message: SUPPLIER_RECEIVABLE_PAID_CANCEL_MESSAGE });
+    expect(getLocalizedErrorMessage(error, translate(arabic))).toBe(arabic[entry]);
+    expect(getLocalizedErrorMessage(error, translate(english))).toBe(SUPPLIER_RECEIVABLE_PAID_CANCEL_MESSAGE);
   });
 });
