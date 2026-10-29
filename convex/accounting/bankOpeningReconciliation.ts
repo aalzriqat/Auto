@@ -46,6 +46,14 @@ export type BankOpeningReconciliation = {
   } | null;
 };
 
+class UnsafeMinorAmount extends Error {}
+
+/** The value itself when it is a safe integer (ECMA-262 Number.isSafeInteger: |n| <= 2^53 - 1), else a refusal. */
+function exactMinor(value: number): number {
+  if (!Number.isSafeInteger(value)) throw new UnsafeMinorAmount("A minor-unit amount is not a safe integer.");
+  return value;
+}
+
 function withoutOpening(
   status: "NO_OPENING" | "OPENING_PROOF_UNAVAILABLE",
   banks: Doc<"bankAccounts">[],
@@ -101,51 +109,69 @@ export async function computeBankOpeningReconciliation(
     }
   }
 
+  // Every operand and every running total must stay an exact integer count of minor units. Past 2^53 - 1 a sum is
+  // rounded (and 1e308 + 1e308 is Infinity), so a figure that cannot be proven exact is never reported as OK.
   let controlOpeningMinor = 0;
   let unattributedOpeningMinor = 0;
   const lineByBank = new Map<string, number>();
-  for (const line of lines) {
-    if (!bankControlIds.has(String(line.accountId))) continue;
-    if (line.orgId !== orgId || line.currency !== openingCurrency) {
-      return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
-    }
-    const net = line.debitMinor - line.creditMinor;
-    controlOpeningMinor += net;
-    if (line.bankAccountId) {
-      lineByBank.set(String(line.bankAccountId), (lineByBank.get(String(line.bankAccountId)) ?? 0) + net);
-    } else {
-      unattributedOpeningMinor += net;
-    }
-  }
-  if (!Number.isSafeInteger(controlOpeningMinor) || !Number.isSafeInteger(unattributedOpeningMinor)) {
-    return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
-  }
-
-  // A bank removed after the opening still owns its opening line, so it stays in the reconciliation.
-  const shown = allBanks.filter((bank) => !bank.isDeleted || lineByBank.has(String(bank._id)));
+  let banks: BankOpeningRow[] = [];
   let bankLinesTotalMinor = 0;
   const byCurrency = new Map<string, { net: number; absolute: number }>();
-  const banks: BankOpeningRow[] = shown.map((bank) => {
-    const openingLineMinor = lineByBank.get(String(bank._id)) ?? 0;
-    bankLinesTotalMinor += openingLineMinor;
-    // Reference metadata in another currency cannot be compared to the opening's currency.
-    const comparable = bank.currency === openingCurrency;
-    const differenceMinor = comparable ? bank.openingBalanceMinor - openingLineMinor : null;
-    if (differenceMinor !== null && differenceMinor !== 0) {
-      const entry = byCurrency.get(bank.currency) ?? { net: 0, absolute: 0 };
-      entry.net += differenceMinor;
-      entry.absolute += Math.abs(differenceMinor);
-      byCurrency.set(bank.currency, entry);
+  try {
+    for (const line of lines) {
+      if (!bankControlIds.has(String(line.accountId))) continue;
+      if (line.orgId !== orgId || line.currency !== openingCurrency) {
+        return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
+      }
+      const net = exactMinor(exactMinor(line.debitMinor) - exactMinor(line.creditMinor));
+      controlOpeningMinor = exactMinor(controlOpeningMinor + net);
+      if (line.bankAccountId) {
+        lineByBank.set(String(line.bankAccountId), exactMinor((lineByBank.get(String(line.bankAccountId)) ?? 0) + net));
+      } else {
+        unattributedOpeningMinor = exactMinor(unattributedOpeningMinor + net);
+      }
     }
-    return {
-      bankAccountId: bank._id,
-      name: bank.name,
-      currency: bank.currency,
-      openingLineMinor,
-      referenceOpeningMinor: bank.openingBalanceMinor,
-      differenceMinor,
-    };
-  });
+
+    // A bank removed after the opening still owns its opening line, so it stays in the reconciliation.
+    const shown = allBanks.filter((bank) => !bank.isDeleted || lineByBank.has(String(bank._id)));
+    const resolvedBankIds = new Set(shown.map((bank) => String(bank._id)));
+    // An opening line that names a bank this organization cannot resolve (the record is gone, or it belongs to
+    // another organization) is still part of the control. It is disclosed with the unattributed amount, never
+    // dropped, and nothing is posted or adjusted to balance it (c23884).
+    for (const [bankId, net] of lineByBank) {
+      if (!resolvedBankIds.has(bankId)) unattributedOpeningMinor = exactMinor(unattributedOpeningMinor + net);
+    }
+    banks = shown.map((bank) => {
+      const openingLineMinor = lineByBank.get(String(bank._id)) ?? 0;
+      bankLinesTotalMinor = exactMinor(bankLinesTotalMinor + openingLineMinor);
+      const referenceOpeningMinor = exactMinor(bank.openingBalanceMinor);
+      // Reference metadata in another currency cannot be compared to the opening's currency.
+      const comparable = bank.currency === openingCurrency;
+      const differenceMinor = comparable ? exactMinor(referenceOpeningMinor - openingLineMinor) : null;
+      if (differenceMinor !== null && differenceMinor !== 0) {
+        const entry = byCurrency.get(bank.currency) ?? { net: 0, absolute: 0 };
+        entry.net = exactMinor(entry.net + differenceMinor);
+        entry.absolute = exactMinor(entry.absolute + exactMinor(Math.abs(differenceMinor)));
+        byCurrency.set(bank.currency, entry);
+      }
+      return {
+        bankAccountId: bank._id,
+        name: bank.name,
+        currency: bank.currency,
+        openingLineMinor,
+        referenceOpeningMinor,
+        differenceMinor,
+      };
+    });
+    // Every minor unit of the control is either on a resolved bank or disclosed as unattributed. Anything else is
+    // an amount the report cannot explain, so it is refused rather than shown.
+    if (exactMinor(bankLinesTotalMinor + unattributedOpeningMinor) !== controlOpeningMinor) {
+      return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
+    }
+  } catch (error) {
+    if (error instanceof UnsafeMinorAmount) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
+    throw error;
+  }
 
   return {
     status: "OK",
