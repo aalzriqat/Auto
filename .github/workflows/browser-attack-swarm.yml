@@ -28,8 +28,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  e2e-gate-begin:
+    name: authenticated-pr-e2e-start
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: g5-publish-${{ github.event.workflow_run.head_sha }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      checks: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+      - name: Reopen the single PR-head gate for this attempt
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs begin
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
   prepare:
     name: trusted-plan
+    # Starts only after the serialised gate reset, so a stale success from an
+    # earlier run on this head is already revoked when the armed check below runs.
+    needs: e2e-gate-begin
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
@@ -41,6 +72,7 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
+      checks: read
       statuses: write
     outputs:
       should_run: ${{ steps.plan.outputs.should_run }}
@@ -71,6 +103,18 @@ jobs:
           # Status publication is performed explicitly by trusted steps.
           persist-credentials: true
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+      # Least privilege: this job runs or feeds candidate code, so it holds only
+      # checks: read. GitHub re-runs a selected job and its dependents, never its
+      # ancestors, so e2e-gate-begin does not run again. The job refuses to start
+      # while a success stands, instead of working beside a stale green.
+      - name: Refuse to start while a success stands on this head
+        working-directory: trusted
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs armed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Fetch and verify exact PR head and tested merge commit as data only
         id: provenance
         working-directory: trusted
@@ -366,6 +410,63 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  candidate-source:
+    name: exact-candidate-source-data
+    needs: prepare
+    # Same-repository only: the exact candidate is archived as data for jobs
+    # that hold credentials, never for a fork's run.
+    if: >-
+      needs.prepare.result == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact tested merge without reusable credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.tested_sha }}
+          persist-credentials: false
+      - name: Checkout trusted gate controller from immutable workflow revision
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+      # Least privilege: this job runs or feeds candidate code, so it holds only
+      # checks: read. GitHub re-runs a selected job and its dependents, never its
+      # ancestors, so e2e-gate-begin does not run again. The job refuses to start
+      # while a success stands, instead of working beside a stale green.
+      - name: Refuse to start while a success stands on this head
+        working-directory: trusted
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs armed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Archive candidate source as data without executing it
+        run: |
+          set -euo pipefail
+          # Candidate .gitattributes must not omit or rewrite backend bytes.
+          # info/attributes has higher precedence than committed attributes.
+          mkdir -p "$(git rev-parse --git-path info)"
+          printf '%s\n' '* -export-ignore -export-subst -text -eol -ident -filter -working-tree-encoding' > "$(git rev-parse --git-path info/attributes)"
+          GIT_ATTR_NOSYSTEM=1 git -c core.attributesFile=/dev/null -c core.autocrlf=false archive --format=tar HEAD > "$RUNNER_TEMP/candidate-source.tar"
+      - name: Upload exact candidate source data
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-candidate-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-source.tar
+          if-no-files-found: error
+          retention-days: 1
+
   candidate-build:
     name: exact-candidate-build
     needs: prepare
@@ -378,6 +479,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      checks: read
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
@@ -402,6 +504,15 @@ jobs:
         with:
           node-version: "22.21.1"
 
+      # Least privilege: this job runs or feeds candidate code, so it holds only
+      # checks: read. GitHub re-runs a selected job and its dependents, never its
+      # ancestors, so e2e-gate-begin does not run again. The job refuses to start
+      # while a success stands, instead of working beside a stale green.
+      - name: Refuse to start while a success stands on this head
+        working-directory: trusted
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs armed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Resolve public Clerk JWT verification material for build
         working-directory: trusted
         env:
@@ -492,7 +603,7 @@ jobs:
 
   trusted-e2e:
     name: trusted-e2e
-    needs: [prepare, candidate-build]
+    needs: [prepare, candidate-build, candidate-source]
     if: >-
       needs.prepare.result == 'success' &&
       needs.candidate-build.result == 'success' &&
@@ -502,6 +613,9 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      checks: read
+    outputs:
+      evidence_artifact_id: ${{ steps.g5-upload.outputs.artifact-id }}
 
     steps:
       - name: Checkout trusted E2E controller from immutable workflow revision
@@ -511,12 +625,29 @@ jobs:
           path: trusted
           persist-credentials: false
 
-      - name: Checkout exact tested PR merge as candidate application code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          ref: ${{ needs.prepare.outputs.tested_sha }}
-          path: candidate
-          persist-credentials: false
+          node-version: "22.21.1"
+      # Least privilege: this job runs or feeds candidate code, so it holds only
+      # checks: read. GitHub re-runs a selected job and its dependents, never its
+      # ancestors, so e2e-gate-begin does not run again. The job refuses to start
+      # while a success stands, instead of working beside a stale green.
+      - name: Refuse to start while a success stands on this head
+        working-directory: trusted
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs armed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Download exact candidate source data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.candidate-source.outputs.artifact_id }}
+          path: ${{ runner.temp }}/candidate-source-archive
+          merge-multiple: true
+      - name: Extract candidate data outside trusted code
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/candidate-source-data"
+          tar --extract --file "$RUNNER_TEMP/candidate-source-archive/candidate-source.tar" --directory "$RUNNER_TEMP/candidate-source-data" --no-same-owner
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
@@ -645,7 +776,7 @@ jobs:
       - name: Stage exact candidate backend as data
         run: node trusted/scripts/intelligence/stageCandidateBackend.mjs
         env:
-          CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+          CANDIDATE_ROOT: ${{ runner.temp }}/candidate-source-data
           TRUSTED_ROOT: ${{ github.workspace }}/trusted
           STAGE_ROOT: ${{ runner.temp }}/candidate-backend
           STAGE_MANIFEST_PATH: ${{ runner.temp }}/candidate-backend-manifest.json
@@ -956,17 +1087,42 @@ jobs:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
 
-      - name: Run full trusted E2E suite against exact candidate
+      # Discovery and execution use the same trusted definitions and environment.
+      # Their JSON output is separate from both period-setup runs.
+      - name: Discover the full applicable trusted suite
         working-directory: trusted
-        run: pnpm exec playwright test --project=chromium --no-deps
+        run: pnpm exec playwright test --project=chromium --no-deps --list --reporter=json
         env:
           BROWSER_EGRESS_REQUIRED: "1"
           CI: true
+          PLAYWRIGHT_JSON_OUTPUT_FILE: g5/discovery.json
           PLAYWRIGHT_SKIP_WEBSERVER: "1"
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           E2E_APPROVER_USER: trusted-attested
           E2E_APPROVER_PASSWORD: trusted-attested
+
+      - name: Run full trusted E2E suite against exact candidate
+        id: full-suite
+        working-directory: trusted
+        run: pnpm exec playwright test --project=chromium --no-deps
+        env:
+          BROWSER_EGRESS_REQUIRED: "1"
+          CI: true
+          PLAYWRIGHT_JSON_OUTPUT_FILE: g5/results.json
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          E2E_APPROVER_USER: trusted-attested
+          E2E_APPROVER_PASSWORD: trusted-attested
+
+      - name: Verify counted authenticated execution
+        if: always() && steps.full-suite.outcome != 'skipped'
+        working-directory: trusted
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs evidence
+        env:
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
 
       # SCRUM-350 G4: the preview is seeded with a chart and, on purpose, no
       # accounting period, so every swarm posting stayed QUEUED and ACC-2 could
@@ -1018,6 +1174,16 @@ jobs:
             trusted/playwright-report-swarm-period/
             trusted/test-results-swarm-period/
             trusted/egress-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload counted authenticated execution
+        id: g5-upload
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-g5-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: trusted/g5/
           if-no-files-found: warn
           retention-days: 14
 
@@ -1348,7 +1514,7 @@ jobs:
 
   opening-prepare:
     name: fresh-opening-preview
-    needs: [prepare, candidate-build, trusted-e2e, attack-worker]
+    needs: [prepare, candidate-build, candidate-source, trusted-e2e, attack-worker]
     if: >-
       !cancelled() &&
       needs.prepare.result == 'success' && needs.candidate-build.result == 'success' &&
@@ -1375,12 +1541,17 @@ jobs:
           path: trusted
           persist-credentials: false
 
-      - name: Checkout exact tested PR merge as candidate application code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Download exact candidate source data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          ref: ${{ needs.prepare.outputs.tested_sha }}
-          path: candidate
-          persist-credentials: false
+          artifact-ids: ${{ needs.candidate-source.outputs.artifact_id }}
+          path: ${{ runner.temp }}/candidate-source-archive
+          merge-multiple: true
+      - name: Extract candidate data outside trusted code
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/candidate-source-data"
+          tar --extract --file "$RUNNER_TEMP/candidate-source-archive/candidate-source.tar" --directory "$RUNNER_TEMP/candidate-source-data" --no-same-owner
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
@@ -1550,7 +1721,7 @@ jobs:
       - name: Stage exact candidate backend as data
         run: node trusted/scripts/intelligence/stageCandidateBackend.mjs
         env:
-          CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+          CANDIDATE_ROOT: ${{ runner.temp }}/candidate-source-data
           TRUSTED_ROOT: ${{ github.workspace }}/trusted
           STAGE_ROOT: ${{ runner.temp }}/candidate-backend
           STAGE_MANIFEST_PATH: ${{ runner.temp }}/candidate-backend-manifest.json
@@ -2229,11 +2400,56 @@ jobs:
             exit 1
           fi
 
+  e2e-gate-finish:
+    name: authenticated-pr-e2e-publish
+    needs: [e2e-gate-begin, prepare, candidate-build, trusted-e2e]
+    if: >-
+      always() &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: g5-publish-${{ github.event.workflow_run.head_sha }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      checks: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+      - name: Reset the PR-head gate before any work in this job
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs reset
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Download this attempt's counted evidence as data
+        if: needs.trusted-e2e.outputs.evidence_artifact_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.trusted-e2e.outputs.evidence_artifact_id }}
+          path: ${{ runner.temp }}/g5-evidence
+          merge-multiple: true
+      - name: Publish success or failure on the exact PR head
+        if: always()
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs finish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          E2E_RESULT: ${{ needs.trusted-e2e.result }}
+          TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+          EVIDENCE_PATH: ${{ runner.temp }}/g5-evidence/evidence.json
+
   # SCRUM-377: every job above shares the disposable preview, so it is deleted
   # only after all of them — whatever their outcome — have finished with it.
   preview-cleanup:
     name: disposable-preview-cleanup
-    needs: [prepare, candidate-build, trusted-e2e, attack-worker, opening-prepare, opening-build, opening-proof, opening-cleanup, verdict]
+    needs: [e2e-gate-begin, prepare, candidate-source, candidate-build, trusted-e2e, e2e-gate-finish, attack-worker, opening-prepare, opening-build, opening-proof, opening-cleanup, verdict]
     # The same-repository conditions repeat `prepare`'s own: only such a run can
     # have created a preview, and they keep fork-triggered runs out of a job
     # that holds the preview deploy key.

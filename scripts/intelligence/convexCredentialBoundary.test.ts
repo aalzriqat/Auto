@@ -211,7 +211,31 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // URL-baked build and strict cleanup-gated verdict. Canonical credential
     // commands and negative controls remain unchanged; final source reviews bind this hash.
     // Minor closure: existing bounded creation backoff and cancellation-aware opening admission only.
-    "d2d6701e7e24b904ed6cc9975014fbdcc6e285484fcb8630b3eb779526ee6d31",
+    // SCRUM-757: counted authenticated PR-head verdict, default-branch-only
+    // publishers and a secret-free source archive replace privileged candidate
+    // checkouts. Canonical deploy/audit commands and their tamper tests remain.
+    // SCRUM-757 follow-up: preview-cleanup `needs` now lists the three new
+    // jobs (e2e-gate-begin, candidate-source, e2e-gate-finish) so the
+    // disposable preview is deleted only after every other job (SCRUM-377).
+    // A `needs` list only; no step, secret or checkout changed.
+    // Sonar S7631 follow-up: e2e-gate-begin, candidate-source and e2e-gate-finish
+    // gain the same-repository `head_repository.full_name == github.repository`
+    // job condition, so a fork's workflow_run skips them. This only NARROWS where
+    // those jobs run; no step, secret, permission or checkout ref changed. Fork
+    // PRs are judged by the pull_request_target admission workflow instead.
+    // SCRUM-757 review remediation (PR #704, Seat 1 F2/F3/F4, Seat 2 P1/P2).
+    // NOT yet reviewed by an independent seat; read the hunks. Hunks: (1) the gate
+    // concurrency group keys on workflow_run.head_sha, not pull_requests[0];
+    // (2) e2e-gate-begin gains `actions: read` (origin proof); (3) prepare gains
+    // `needs: e2e-gate-begin` and `checks: read`; candidate-source, candidate-build
+    // and trusted-e2e gain `checks: read` only (never write); (4) each of those
+    // four runs a first `trustedPrE2eGateCli.mjs armed` step that refuses to start
+    // while a success stands; candidate-source also checks out the immutable
+    // workflow revision as `trusted` for that step; (5) e2e-gate-finish gains a
+    // `reset` step before its evidence download. No secret, credential command or
+    // candidate checkout ref changed. Previous: 118099 bytes (LF), pin aa713e3d;
+    // new: 121298 bytes (LF), pin below.
+    "4532ddcf64ae4f37e24dd73dca6efe6e3190bbb843b85ba96acba1a35f108181",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
