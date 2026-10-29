@@ -21,7 +21,7 @@ import { Badge } from "@/components/ui/badge";
 
 import { ArrowRight, Banknote, CreditCard, TrendingUp, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import VehiclePicker from "../components/VehiclePicker";
+import VehiclePicker, { type SourceVehicleData } from "../components/VehiclePicker";
 import { VehicleLineItemsPicker } from "../components/VehicleLineItemsPicker";
 import { usePickerAvailability } from "../hooks/usePickerAvailability";
 import type { VehicleLineItem, WizardLaunchSeed } from "../types";
@@ -40,6 +40,16 @@ import {
 } from "@/lib/financing";
 
 export type Step1Values = z.infer<typeof step1Schema>;
+
+/**
+ * SCRUM-868 P2: a sourced vehicle names its supplier by master id only. The display name the
+ * picker keeps for the screen is dropped here, and the server writes the stored snapshot.
+ */
+function toCreateSourcedArgs(orgId: Id<"organizations">, data: SourceVehicleData) {
+  const { sourcedFromName: _displayName, sourcedSupplierId, ...vehicle } = data;
+  if (!sourcedSupplierId) throw new Error("Choose a supplier from the list.");
+  return { orgId, ...vehicle, sourcedSupplierId };
+}
 
 /** The one vehicleId error that choosing a finance company answers. */
 const COMPANY_REQUIRED_ERROR = "companyRequired";
@@ -458,7 +468,7 @@ export default function Step1QuoteSetup({
                     onChange={handleVehicleItemsChange}
                     onSourceVehicle={async (data) => {
                       if (!activeOrgId) throw new Error("No org selected");
-                      return await createSourced({ orgId: activeOrgId, ...data });
+                      return await createSourced(toCreateSourcedArgs(activeOrgId, data));
                     }}
                     initialSourceData={initialSourceData}
                   />
@@ -475,10 +485,7 @@ export default function Step1QuoteSetup({
                     }}
                     onSourceVehicle={async (data) => {
                       if (!activeOrgId) throw new Error("No org selected");
-                      const newId = await createSourced({
-                        orgId: activeOrgId,
-                        ...data,
-                      });
+                      const newId = await createSourced(toCreateSourcedArgs(activeOrgId, data));
                       return newId;
                     }}
                     initialSourceData={initialSourceData}

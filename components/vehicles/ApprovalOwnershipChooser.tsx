@@ -6,6 +6,7 @@
 // `vehicleEdits.resolve` as its `ownership` argument. Nothing is pre-selected.
 
 import { Input } from "@/components/ui/input";
+import { SupplierSelect } from "@/components/suppliers/SupplierSelect";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Label } from "@/components/ui/label";
 import {
@@ -27,17 +28,21 @@ export interface OwnershipDraft {
   purchasePrice: string;
   purchasePaymentMethod?: AcquisitionPaymentMethod;
   bankAccountId?: Id<"bankAccounts">;
+  /** Display text the supplier picker sets with the id; never typed, never submitted. */
   purchaseSupplierName: string;
+  /** SCRUM-868 P2: the supplier master ids the approver picked. These are what is submitted. */
+  sourcedSupplierId?: Id<"suppliers">;
+  purchaseSupplierId?: Id<"suppliers">;
 }
 
 export interface OwnershipDecision {
   sourceType: OwnershipChoice;
-  sourcedFromName?: string;
+  sourcedSupplierId?: Id<"suppliers">;
   sourceCost?: number;
   purchasePrice?: number;
   purchasePaymentMethod?: AcquisitionPaymentMethod;
   bankAccountId?: Id<"bankAccounts">;
-  purchaseSupplierName?: string;
+  purchaseSupplierId?: Id<"suppliers">;
 }
 
 export const EMPTY_OWNERSHIP_DRAFT: OwnershipDraft = {
@@ -62,19 +67,22 @@ export function buildOwnershipDecision(draft: OwnershipDraft | undefined): Owner
   if (!draft?.sourceType) return null;
   if (ownershipGaps(draft, { typeRequired: true, costRequired: true, purchaseTerms: "required" })) return null;
   if (draft.sourceType === "SOURCED") {
-    return { sourceType: "SOURCED", sourcedFromName: draft.sourcedFromName.trim(), sourceCost: Number(draft.sourceCost) };
+    if (!draft.sourcedSupplierId) return null;
+    return { sourceType: "SOURCED", sourcedSupplierId: draft.sourcedSupplierId, sourceCost: Number(draft.sourceCost) };
   }
   const price = Number(draft.purchasePrice);
   const bankMethod = draft.purchasePaymentMethod === "BANK_TRANSFER" || draft.purchasePaymentMethod === "CARD" || draft.purchasePaymentMethod === "CHEQUE";
   if (bankMethod && !draft.bankAccountId) return null;
   if (draft.purchasePaymentMethod === "ON_ACCOUNT") {
-    return { sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: draft.purchaseSupplierName.trim() };
+    if (!draft.purchaseSupplierId) return null;
+    return { sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierId: draft.purchaseSupplierId };
   }
   return { sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: draft.purchasePaymentMethod,
     ...(bankMethod ? { bankAccountId: draft.bankAccountId } : {}) };
 }
 
 interface Props {
+  orgId?: Id<"organizations"> | null;
   bankOptions?: { banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean };
   idPrefix: string;
   draft: OwnershipDraft;
@@ -82,7 +90,7 @@ interface Props {
   t: Translate;
 }
 
-export function ApprovalOwnershipChooser({ bankOptions, idPrefix, draft, onChange, t }: Readonly<Props>) {
+export function ApprovalOwnershipChooser({ orgId, bankOptions, idPrefix, draft, onChange, t }: Readonly<Props>) {
   const bankMethod = draft.purchasePaymentMethod === "BANK_TRANSFER" || draft.purchasePaymentMethod === "CARD" || draft.purchasePaymentMethod === "CHEQUE";
   const selectedBank = bankOptions?.banks?.find((bank) => bank._id === draft.bankAccountId);
   const set = (patch: Partial<OwnershipDraft>) => onChange({ ...draft, ...patch });
@@ -117,7 +125,14 @@ export function ApprovalOwnershipChooser({ bankOptions, idPrefix, draft, onChang
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1">
             <Label htmlFor={`${idPrefix}-supplier`} className="text-xs">{t("SourceDealerName")} *</Label>
-            <Input id={`${idPrefix}-supplier`} value={draft.sourcedFromName} placeholder={t("SourceDealerPlaceholder")} onChange={(e) => set({ sourcedFromName: e.target.value })} />
+            <SupplierSelect
+              orgId={orgId}
+              value={draft.sourcedSupplierId}
+              valueLabel={draft.sourcedFromName}
+              ariaLabel={t("SourceDealerName")}
+              dataTestId={`${idPrefix}-supplier`}
+              onChange={(supplier) => set({ sourcedSupplierId: supplier.id, sourcedFromName: supplier.displayName })}
+            />
           </div>
           <div className="space-y-1">
             <Label htmlFor={`${idPrefix}-cost`} className="text-xs">{t("SupplierCost")} *</Label>
@@ -145,7 +160,14 @@ export function ApprovalOwnershipChooser({ bankOptions, idPrefix, draft, onChang
           {draft.purchasePaymentMethod === "ON_ACCOUNT" && (
             <div className="space-y-1 sm:col-span-2">
               <Label htmlFor={`${idPrefix}-creditor`} className="text-xs">{t("PurchaseSupplierName")} *</Label>
-              <Input id={`${idPrefix}-creditor`} value={draft.purchaseSupplierName} placeholder={t("SourceDealerPlaceholder")} onChange={(e) => set({ purchaseSupplierName: e.target.value })} />
+              <SupplierSelect
+                orgId={orgId}
+                value={draft.purchaseSupplierId}
+                valueLabel={draft.purchaseSupplierName}
+                ariaLabel={t("PurchaseSupplierName")}
+                dataTestId={`${idPrefix}-creditor`}
+                onChange={(supplier) => set({ purchaseSupplierId: supplier.id, purchaseSupplierName: supplier.displayName })}
+              />
             </div>
           )}
           {bankMethod && (

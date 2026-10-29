@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useEffect, useState } from "react";
+import { useMemo, useRef, useEffect, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ChevronDown, Search, Check } from "lucide-react";
 
@@ -23,6 +23,20 @@ interface SearchableSelectProps {
   onSearchChange?: (search: string) => void;
   clientSideFilter?: boolean;
   dataTestId?: string;
+  /** Shown on the trigger when `value` is not among `options` (for example a result that scrolled out of a server search). */
+  selectedFallbackLabel?: string;
+  /** Replaces the "No options available." text when the list is empty and nothing was typed. */
+  emptyLabel?: string;
+  /** Replaces the "No results found." text when the list is empty after typing. */
+  noResultsLabel?: string;
+  /** True while the options are still loading: a status line replaces the empty text. */
+  loading?: boolean;
+  loadingLabel?: string;
+  /** Rendered under the options inside the open list (for example an inline create). */
+  renderFooter?: (state: { search: string; close: () => void }) => ReactNode;
+  /** Names the field for assistive technology; also marks the trigger invalid when `invalid`. */
+  ariaLabel?: string;
+  invalid?: boolean;
 }
 
 export function SearchableSelect({
@@ -37,6 +51,14 @@ export function SearchableSelect({
   onSearchChange,
   clientSideFilter,
   dataTestId,
+  selectedFallbackLabel,
+  emptyLabel,
+  noResultsLabel,
+  loading,
+  loadingLabel,
+  renderFooter,
+  ariaLabel,
+  invalid,
 }: SearchableSelectProps) {
   const value = valueProp ?? "";
   const [open, setOpen] = useState(false);
@@ -108,14 +130,24 @@ export function SearchableSelect({
         data-testid={dataTestId}
         disabled={disabled}
         onClick={() => !disabled && setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        aria-invalid={invalid || undefined}
         className={cn(
           "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-          !selected && "text-muted-foreground",
+          !selected && !selectedFallbackLabel && "text-muted-foreground",
+          invalid && "border-destructive",
           open && "ring-1 ring-ring"
         )}
       >
         <span className="line-clamp-1 text-start">
-          {selected ? selected.label : (noneLabel && !value ? noneLabel : placeholder)}
+          <bdi>
+            {selected
+              ? selected.label
+              : (value && value !== "none" && selectedFallbackLabel) ||
+                (noneLabel && !value ? noneLabel : placeholder)}
+          </bdi>
         </span>
         <ChevronDown
           className={cn(
@@ -158,9 +190,13 @@ export function SearchableSelect({
               </button>
             )}
 
-            {filtered.length === 0 ? (
+            {loading && filtered.length === 0 ? (
+              <p role="status" className="text-center text-sm text-muted-foreground py-6">
+                {loadingLabel ?? "Loading…"}
+              </p>
+            ) : filtered.length === 0 ? (
               <p className="text-center text-sm text-muted-foreground py-6">
-                {search ? "No results found." : "No options available."}
+                {search ? (noResultsLabel ?? "No results found.") : (emptyLabel ?? "No options available.")}
               </p>
             ) : (
               filtered.map((o) => {
@@ -177,7 +213,7 @@ export function SearchableSelect({
                     )}
                   >
                     <span className="flex-1">
-                      <span className="block">{o.label}</span>
+                      <span className="block"><bdi>{o.label}</bdi></span>
                       {o.subLabel && (
                         <span className="block text-xs text-muted-foreground mt-0.5">{o.subLabel}</span>
                       )}
@@ -188,6 +224,7 @@ export function SearchableSelect({
               })
             )}
           </div>
+          {renderFooter?.({ search, close: () => setOpen(false) })}
         </div>
       )}
     </div>
