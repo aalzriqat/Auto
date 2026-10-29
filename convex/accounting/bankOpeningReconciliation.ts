@@ -136,10 +136,12 @@ export async function computeBankOpeningReconciliation(
     const shown = allBanks.filter((bank) => !bank.isDeleted || lineByBank.has(String(bank._id)));
     const resolvedBankIds = new Set(shown.map((bank) => String(bank._id)));
     // An opening line that names a bank this organization cannot resolve (the record is gone, or it belongs to
-    // another organization) is still part of the control. It is disclosed with the unattributed amount, never
-    // dropped, and nothing is posted or adjusted to balance it (c23884).
-    for (const [bankId, net] of lineByBank) {
-      if (!resolvedBankIds.has(bankId)) unattributedOpeningMinor = exactMinor(unattributedOpeningMinor + net);
+    // another organization) cannot be attributed to any bank. The report fails closed on the IDENTITY, not on an
+    // amount: two unresolved lines of +3.000 and -3.000 net to zero, and a disclosed net would read as nothing. So
+    // any unresolved identity makes the opening unavailable, whatever its net, and nothing is posted or adjusted to
+    // balance it (c23884).
+    for (const bankId of lineByBank.keys()) {
+      if (!resolvedBankIds.has(bankId)) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
     }
     banks = shown.map((bank) => {
       const openingLineMinor = lineByBank.get(String(bank._id)) ?? 0;
