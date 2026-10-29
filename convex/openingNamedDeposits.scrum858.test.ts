@@ -1111,3 +1111,64 @@ test("customers.getRelations reads a bounded page of deposits and says when it i
   expect(relations.deposits).toHaveLength(100);
   expect(relations.depositsTruncated).toBe(true);
 });
+
+test("customers.getRelations truncation edge: exactly 100 deposits is NOT truncated, 101 is (round-2 LOW)", async () => {
+  const s = await seed();
+  const insertDeposits = (count: number) =>
+    s.t.run(async (ctx) => {
+      for (let i = 0; i < count; i++) {
+        await ctx.db.insert("deposits", {
+          orgId: s.orgId,
+          customerId: s.customerA,
+          amount: 1,
+          amountMinor: 1_000,
+          currency: "JOD",
+          status: "HELD",
+          holdActive: false,
+          usesVehicleHoldRows: false,
+          createdBy: s.ownerUserId,
+          createdAt: Date.now() + i,
+        });
+      }
+    });
+  await insertDeposits(100);
+  const exact = await s.owner.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerA });
+  expect(exact.deposits).toHaveLength(100);
+  expect(exact.depositsTruncated).toBe(false);
+  await insertDeposits(1);
+  const over = await s.owner.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerA });
+  expect(over.deposits).toHaveLength(100);
+  expect(over.depositsTruncated).toBe(true);
+});
+
+test("customers.getRelations names the linked vehicle for the screen, and never one from another organization (round-2 P2)", async () => {
+  const s = await seed();
+  await postNamedDeposits(s);
+  const b = await s.owner.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerB });
+  expect(b.deposits[0].vehicleDesc).toBe("2024 Synthetic Opening reservation car");
+  const a = await s.owner.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerA });
+  expect(a.deposits[0].vehicleDesc).toBeUndefined();
+
+  // A row that points at a vehicle of ANOTHER organization names nothing: tenancy is checked on the read.
+  const foreignOrg = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "Other dealer", createdAt: Date.now() }));
+  const foreignVehicle = await s.t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId: foreignOrg,
+      make: "Foreign",
+      model: "Secret",
+      year: 2020,
+      mileage: 0,
+      color: "Red",
+      fuelType: "Gas",
+      transmission: "Auto",
+      sellingPrice: 1,
+      status: "AVAILABLE",
+    }),
+  );
+  const row = await s.t.run(async (ctx) => (await ctx.db.query("deposits").collect()).find((d) => d.customerId === s.customerA));
+  if (!row) throw new Error("Missing opening deposit");
+  await s.t.run((ctx) => ctx.db.patch(row._id, { vehicleId: foreignVehicle }));
+  const leaked = await s.owner.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerA });
+  expect(leaked.deposits[0].vehicleDesc).toBeUndefined();
+  expect(JSON.stringify(leaked)).not.toContain("Secret");
+});
