@@ -1,6 +1,6 @@
 import { createOpeningSettlementReader } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
-import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
+import { openingPayableBasis, openingRecoveryBasis, openingRecoveryReferenceCounts } from "./utils/openingSupplierBasis";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
 /**
  * Phase 5 — Ledger-backed financial reports
@@ -1355,10 +1355,21 @@ export async function computeSupplierReceivablesReconciliation(
     add(margin, row.currency, openMinor);
     add(isUnlinkedSupplierName(row.sourcedFromName) ? unlinked : linked, row.currency, openMinor);
   }
+  let openingReferences: Map<string, number> | undefined;
   for (const row of recoveries) {
+    if (row.origin !== "OPENING") {
+      // A native row is recognised by the same transaction as its expense posting, so it needs no basis.
+      // It must still not be claimed by a POSTED opening draft (the integrity check A/P applies to every
+      // payable): one read of the drafts serves all native rows.
+      try {
+        openingReferences ??= await openingRecoveryReferenceCounts(ctx, orgId);
+      } catch {
+        return unavailable("OPENING_SOURCE_UNAVAILABLE");
+      }
+      if (openingReferences.has(row._id)) return unavailable("OPENING_SOURCE_UNAVAILABLE");
+    }
     if (row.origin === "OPENING") {
-      // Only opening recoveries need their basis verified (a bounded draft scan each); a native row
-      // is recognised by the same transaction as its expense posting.
+      // An opening recovery needs its basis verified (a bounded draft scan each).
       let basis;
       try {
         basis = await openingRecoveryBasis(ctx, orgId, row);
