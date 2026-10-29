@@ -18,6 +18,8 @@ import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED } from "./utils/depositOtherCont
 import { applyOpeningDepositsToSale } from "./utils/openingDepositApplication";
 import { payOutDepositSlice } from "./utils/depositHelpers";
 import { reverseDepositApplicationsForSale } from "./utils/depositApplications";
+import { computeCustomerDepositsReconciliation } from "./accountingReports";
+import { CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING } from "./utils/closeWarnings";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -720,4 +722,119 @@ test("an organization with no opening balance still sees a plain difference, nev
   expect(result.isReconciled).toBe(false);
   expect(Math.abs(result.byCurrency.JOD.discrepancyMinor)).toBe(10_000);
   expect(result.unexplainedOpeningDifference).toBeNull();
+});
+// ── The deposits reconciliation is point-in-time, never current-vs-dated (F2, round-1 review) ─────
+//
+// The GL side is read as of `toDate`; the subledger side used to subtract CURRENT applications, so a
+// reservation applied to a LATER sale showed a false difference. The deposit side records no per-release
+// date (releasedAmountMinor is cumulative; resolvedAt is overwritten by the last event), so it cannot be
+// restated exactly to an earlier date. These tests pin the truthful alternative: UNAVAILABLE, never a
+// invented difference, and never read as reconciled.
+
+const RECON_YEAR = new Date().getUTCFullYear();
+const OPENED_AT = Date.UTC(RECON_YEAR, 0, 2, 12);
+const CUTOFF = Date.UTC(RECON_YEAR, 0, 3, 12);
+const SOLD_AT = Date.UTC(RECON_YEAR, 0, 4, 12);
+
+async function openReservationAt(s: Seed, asOfDate: number) {
+  const { draftId } = await s.owner.mutation(api.accountingCutover.draftOpeningBalance, {
+    orgId: s.orgId,
+    expectedCurrency: "JOD",
+    asOfDate,
+    lines: linesFor(s, 100_000),
+    allocations: [reservationRow(s, { amountMinor: 100_000 })] as never,
+  });
+  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, {
+    orgId: s.orgId,
+    draftId: draftId as Id<"openingBalanceDrafts">,
+  });
+}
+function sellAt(s: Seed, saleDate: number) {
+  return s.owner.mutation(api.sales.create, {
+    idempotencyKey: `od-asof-${saleDate}`,
+    orgId: s.orgId,
+    vehicleId: s.vehicleId,
+    customerId: s.customerB,
+    salespersonId: s.ownerUserId,
+    salePrice: SALE_PRICE,
+    saleDate,
+    status: "COMPLETED" as const,
+  });
+}
+function reconAt(s: Seed, toDate?: number) {
+  return s.owner.query(api.accountingReports.customerDepositsReconciliation, {
+    orgId: s.orgId,
+    ...(toDate === undefined ? {} : { toDate }),
+  });
+}
+const UNAVAILABLE_NO_CLAIM = {
+  status: "UNAVAILABLE",
+  isReconciled: false,
+  currencies: [],
+  byCurrency: {},
+  unexplainedOpeningDifference: null,
+};
+
+test("a reservation opened, then applied to a LATER sale, reconciles at a date before that sale without inventing a difference (F2 repro)", async () => {
+  const s = await seed();
+  await openReservationAt(s, OPENED_AT);
+  await sellAt(s, SOLD_AT);
+
+  // The repro: GL as of CUTOFF still carries the 100 JOD, and the application belongs to a later sale.
+  const atCutoff = await reconAt(s, CUTOFF);
+  expect(atCutoff).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+
+  // Today's comparison is unchanged: both sides are current and agree.
+  const current = await reconAt(s);
+  expect(current).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(current.byCurrency.JOD).toMatchObject({ glBalanceMinor: 0, subledgerBalanceMinor: 0, discrepancyMinor: 0 });
+  // A date after every deposit event is the same current comparison.
+  const later = await reconAt(s, Date.now() + 86_400_000);
+  expect(later).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(later.byCurrency.JOD.discrepancyMinor).toBe(0);
+});
+
+test("an application dated after the cutoff alone makes the comparison UNAVAILABLE; with no later activity the cutoff comparison is exact", async () => {
+  const s = await seed();
+  await openReservationAt(s, OPENED_AT);
+  // Isolate the application: the row itself was created and last touched on the opening date.
+  const row = await s.t.run(async (ctx) => (await ctx.db.query("deposits").collect())[0]);
+  await s.t.run((ctx) => ctx.db.patch(row._id, { createdAt: OPENED_AT }));
+
+  const before = await reconAt(s, CUTOFF);
+  expect(before).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(before.byCurrency.JOD).toMatchObject({ glBalanceMinor: 100_000, subledgerBalanceMinor: 100_000, discrepancyMinor: 0 });
+
+  await sellAt(s, SOLD_AT);
+  await s.t.run((ctx) => ctx.db.patch(row._id, { createdAt: OPENED_AT, resolvedAt: OPENED_AT }));
+  const after = await reconAt(s, CUTOFF);
+  expect(after).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+  const apps = await s.t.run((ctx) => ctx.db.query("depositApplications").collect());
+  expect(apps).toHaveLength(1);
+  expect(apps[0].appliedAt).toBeGreaterThan(CUTOFF);
+});
+
+test("a non-finite toDate is refused as UNAVAILABLE and never read against the ledger", async () => {
+  const s = await seed();
+  await openReservationAt(s, OPENED_AT);
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const result = await s.t.run((ctx) => computeCustomerDepositsReconciliation(ctx, s.orgId, bad));
+    expect(result, String(bad)).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "INVALID_DATE" });
+  }
+});
+
+test("period close reports an UNAVAILABLE deposits comparison as its own warning, never as a difference or as reconciled", async () => {
+  const s = await seed();
+  await openReservationAt(s, OPENED_AT);
+  await sellAt(s, SOLD_AT);
+  const [period] = await s.owner.query(api.accountingPeriods.list, { orgId: s.orgId });
+  await s.t.run((ctx) => ctx.db.patch(period._id, { endDate: CUTOFF }));
+
+  const checklist = await s.owner.query(api.accountingPeriods.closeChecklist, {
+    orgId: s.orgId,
+    periodId: period._id,
+  });
+  expect(checklist.warnings).toContain(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING);
+  expect(checklist.warnings.filter((w: string) => /Customer deposits subledger does not reconcile/.test(w))).toEqual([]);
+  expect(checklist.customerDepositsReconciliation).toMatchObject({ status: "UNAVAILABLE", isReconciled: false });
 });
