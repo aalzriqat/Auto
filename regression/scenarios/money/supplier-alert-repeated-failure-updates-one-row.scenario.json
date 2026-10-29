@@ -1,6 +1,6 @@
 {
   "id": "supplier-alert-repeated-failure-updates-one-row",
-  "fingerprint": "089b457b1d68829e919ea5f068225106f997ae19541df434fc1a1b965ab828e0",
+  "fingerprint": "7fb3184e4838e09577a87cf6bef3e7b89e67db9dc9f91f30da32fac5bdc9349a",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -18,7 +18,7 @@
       "action": "supplierDueAlerts.runOrgSupplierDueAlerts",
       "input": {
         "kind": "PAYABLE",
-        "fault": "fails",
+        "fault": "first-send-of-first-worker-transaction",
         "day": "D"
       }
     },
@@ -30,7 +30,7 @@
       "action": "supplierDueAlerts.runOrgSupplierDueAlerts",
       "input": {
         "kind": "PAYABLE",
-        "fault": "fails",
+        "fault": "first-send-of-first-worker-transaction",
         "day": "D+1"
       }
     },
@@ -42,7 +42,7 @@
       "action": "supplierDueAlerts.runOrgSupplierDueAlerts",
       "input": {
         "kind": "PAYABLE",
-        "fault": "fails",
+        "fault": "first-send-of-first-worker-transaction",
         "day": "D+2"
       }
     }
@@ -69,7 +69,7 @@
   ],
   "impl": {
     "file": "convex/supplierDueAlerts.scrum869.test.ts",
-    "testName": "a repeated failure updates the one failure row instead of adding a row a day"
+    "testName": "repeated first-transaction failures update one failure row while no intervening transaction succeeds"
   },
   "matrixRow": "SCRUM-869-DUE-ALERTS",
   "bugRef": {

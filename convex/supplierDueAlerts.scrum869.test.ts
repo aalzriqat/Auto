@@ -10,6 +10,7 @@
  * Evidence boundary: convex-test only (no runtime read limits, no OCC, no real scheduler clock).
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { defineSchema } from "convex/server";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
@@ -40,10 +41,10 @@ async function drain(t: T) {
   }
 }
 
-function newHarness() {
+function newHarness(testSchema = schema) {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
-  return convexTestWithComponents(schema, MODULES);
+  return convexTestWithComponents(testSchema, MODULES);
 }
 
 interface OrgSeed {
@@ -882,6 +883,51 @@ const heartbeatsFor = (t: T, orgId: Id<"organizations">) =>
 // failure from a separate transaction, into the existing `cronHeartbeats` table (no new table), under
 // a per-organisation job name so another organisation's success never hides this one's failure.
 describe("SCRUM-869 S8 - a worker failure leaves a durable, actionable signal", () => {
+  test("the dispatcher records a failure heartbeat when the first organisation worker transaction fails", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "h0");
+    await addPayable(t, s, { paymentDueDate: NOW });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await withNotificationFault(1, async () => {
+        await t.mutation(internal.supplierDueAlerts.processSupplierDueAlerts, { now: NOW });
+        await drain(t);
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await counts(t)).toEqual({ notifications: 0, idempotency: 0 });
+    const rows = await heartbeatsFor(t, s.orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ success: false, ranAt: NOW });
+    expect(rows[0].detail).toContain(String(s.orgId));
+    expect(rows[0].detail).toContain("injected fault");
+  });
+
+  test("a non-ConvexError during a fact read propagates, rolls back the worker and records a failure heartbeat", async () => {
+    // Model corrupt stored data without mocking readRow or the worker. Only this harness disables
+    // schema validation so a non-string sale reference reaches ownedSale's real db.get inside facts().
+    const t = newHarness(defineSchema(schema.tables, { schemaValidation: false }));
+    const s = await seedOrg(t, "h0f");
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: 10 });
+    await addPayable(t, s, { paymentDueDate: NOW, saleId: 42 });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW })
+      ).rejects.toThrow(/expected string but got 'number': 42/);
+    } finally {
+      spy.mockRestore();
+      await drain(t);
+    }
+    expect(await counts(t)).toEqual({ notifications: 0, idempotency: 0 });
+    const rows = await heartbeatsFor(t, s.orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].success).toBe(false);
+    expect(rows[0].detail).toContain(String(s.orgId));
+    expect(rows[0].detail).toContain("expected string but got 'number': 42");
+  });
+
   test("a failed worker records one failure heartbeat naming the organisation, kind and cursor, and rolls its writes back", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "h1");
@@ -938,7 +984,7 @@ describe("SCRUM-869 S8 - a worker failure leaves a durable, actionable signal", 
     expect(after.map((r) => r.success)).toEqual([false, true]);
     expect((await alerts(t)).filter((r) => r.orgId === s.orgId)).toHaveLength(3);
   });
-  test("a repeated failure updates the one failure row instead of adding a row a day", async () => {
+  test("repeated first-transaction failures update one failure row while no intervening transaction succeeds", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "h3");
     await addPayable(t, s, { paymentDueDate: NOW });
