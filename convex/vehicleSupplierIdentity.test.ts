@@ -23,6 +23,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SUPPLIER_ERROR, SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
+import { SUPPLIER_CONCESSION_REFUSALS } from "./utils/supplierConcession";
 import { VEHICLE_SOURCE_SHAPE_MESSAGES } from "./utils/vehicleSourceShape";
 import { SUPPLIER_LINK_FROZEN_MESSAGE, SUPPLIER_ROLE_CONFLICT_MESSAGE } from "./utils/vehicleSupplierIdentity";
 
@@ -356,21 +357,68 @@ describe("vehicles.update: changing the consignment supplier", () => {
     expect(await vehicleRow(d, id)).toMatchObject({ color: "Green", sourcedSupplierId: d.gulf });
   });
 
-  test.each([
-    ["a supplier payable", insertPayable],
-    ["a supplier-borne expense", insertSupplierExpense],
-  ] as const)("is frozen once %s exists (N11): the id and the name stay as they were", async (_label, addMoney) => {
-    const d = await seedDealer("u5");
+  /** Seeds one kind of money record on a consigned car, then proves a supplier change is refused and writes nothing. */
+  async function expectSupplierChangeRefusedAfter(
+    suffix: string,
+    addMoney: (d: Dealer, vehicleId: Id<"vehicles">) => Promise<void>,
+    refusal: "frozen" | "held-concession" = "frozen"
+  ) {
+    const d = await seedDealer(suffix);
     const id = await createSourcedVehicle(d);
     const other = await seedSupplier(d.t, { orgId: d.orgId, userId: d.ownerId, displayName: "Other Motors" });
     await addMoney(d, id);
     const before = await worldCounts(d);
+    const attempt = d.asOwner.mutation(api.vehicles.update, {
+      orgId: d.orgId, vehicleId: id, sourceType: "SOURCED", sourcedSupplierId: other,
+    });
+    if (refusal === "held-concession") {
+      // The held-concession refusal is its own (string) ConvexError, raised before the money check.
+      await expect(attempt).rejects.toMatchObject({ data: SUPPLIER_CONCESSION_REFUSALS.HELD_BY_DEAL });
+    } else {
+      await expectAppError(attempt, ...linkFrozen);
+    }
+    expect(await worldCounts(d)).toEqual(before);
+    expect(await vehicleRow(d, id)).toMatchObject({ sourcedSupplierId: d.gulf, sourcedFromName: "Gulf Motors" });
+  }
+
+  test("is frozen once a supplier payable exists (N11): the id and the name stay as they were", async () => {
+    await expectSupplierChangeRefusedAfter("u5a", insertPayable);
+  });
+
+  test("is frozen by a supplier receivable alone, as a direct-to-supplier sale leaves it with no payable (N11)", async () => {
+    await expectSupplierChangeRefusedAfter("u5b", insertReceivableOnly);
+  });
+
+  test("is frozen by a supplier cost recovery alone (N11)", async () => {
+    await expectSupplierChangeRefusedAfter("u5d", insertRecoveryOnly);
+  });
+
+  test("is frozen once a supplier-borne expense exists (N11)", async () => {
+    await expectSupplierChangeRefusedAfter("u5e", insertSupplierExpense);
+  });
+
+  test("is refused while a finance application holds a supplier concession on the car", async () => {
+    await expectSupplierChangeRefusedAfter("u5f", insertHeldConcession, "held-concession");
+  });
+  test("fails closed when the supplier-borne expense scan fills its bound (200) without a hit, and not one row earlier", async () => {
+    const d = await seedDealer("u5c");
+    const id = await createSourcedVehicle(d);
+    const other = await seedSupplier(d.t, { orgId: d.orgId, userId: d.ownerId, displayName: "Other Motors" });
+    const change = () =>
+      d.asOwner.mutation(api.vehicles.update, { orgId: d.orgId, vehicleId: id, sourceType: "SOURCED", sourcedSupplierId: other });
+    // 199 dealership-borne expenses: the scan sees them all, finds no supplier-borne row, and allows the change.
+    await insertDealershipExpenses(d, id, 199);
+    await change();
+    expect(await vehicleRow(d, id)).toMatchObject({ sourcedSupplierId: other, sourcedFromName: "Other Motors" });
+    // The 200th fills the bound: the scan cannot prove the absence of a supplier-borne row, so it refuses.
+    await insertDealershipExpenses(d, id, 1);
+    const before = await worldCounts(d);
     await expectAppError(
-      d.asOwner.mutation(api.vehicles.update, { orgId: d.orgId, vehicleId: id, sourceType: "SOURCED", sourcedSupplierId: other }),
+      d.asOwner.mutation(api.vehicles.update, { orgId: d.orgId, vehicleId: id, sourceType: "SOURCED", sourcedSupplierId: d.gulf }),
       ...linkFrozen
     );
     expect(await worldCounts(d)).toEqual(before);
-    expect(await vehicleRow(d, id)).toMatchObject({ sourcedSupplierId: d.gulf, sourcedFromName: "Gulf Motors" });
+    expect(await vehicleRow(d, id)).toMatchObject({ sourcedSupplierId: other });
   });
 
   test("a consignment id sent for an owned car is a role conflict", async () => {
@@ -565,6 +613,69 @@ async function insertPayable(d: Dealer, vehicleId: Id<"vehicles">) {
       status: "PENDING", createdBy: d.ownerId, createdAt: now, updatedAt: now,
     })
   );
+}
+
+/** A direct-to-supplier sale: a receivable from the supplier and NO payable (the supplier is paid outside the books). */
+async function insertReceivableOnly(d: Dealer, vehicleId: Id<"vehicles">) {
+  const now = Date.now();
+  await d.t.run(async (ctx) => {
+    const customerId = await ctx.db.insert("customers", { orgId: d.orgId, firstName: "Dana", lastName: "Saleh" });
+    const saleId = await ctx.db.insert("sales", {
+      orgId: d.orgId, vehicleId, customerId, salespersonId: d.ownerId, salePrice: 12000, saleDate: now, status: "COMPLETED",
+    });
+    await ctx.db.insert("vehicleSupplierReceivables", {
+      orgId: d.orgId, vehicleId, saleId, sourcedFromName: "Gulf Motors", supplierId: d.gulf, amountDue: 2500,
+      currency: "JOD", status: "OPEN", createdBy: d.ownerId, createdAt: now, updatedAt: now,
+    });
+  });
+  expect(await payablesOf(d, vehicleId)).toHaveLength(0);
+}
+
+/** A cost recovery whose source expense is NOT supplier-borne in the table, so only the recovery row can freeze the link. */
+async function insertRecoveryOnly(d: Dealer, vehicleId: Id<"vehicles">) {
+  const now = Date.now();
+  await d.t.run(async (ctx) => {
+    const expenseId = await ctx.db.insert("expenses", {
+      orgId: d.orgId, vehicleId, amount: 100, date: now, category: "REPAIR", title: "Repair", status: "PENDING",
+    });
+    await ctx.db.insert("supplierCostRecoveries", {
+      orgId: d.orgId, sourcedFromName: "Gulf Motors", supplierId: d.gulf, amountDueMinor: 100_000, amountRecoveredMinor: 0,
+      currency: "JOD", receiptSeq: 0, status: "OPEN", createdBy: d.ownerId, createdAt: now, updatedAt: now,
+      vehicleId, expenseId, sourceEventKey: `evt-${crypto.randomUUID()}`,
+    });
+  });
+  expect(await payablesOf(d, vehicleId)).toHaveLength(0);
+}
+
+/** An open finance application that holds a supplier concession against the car. */
+async function insertHeldConcession(d: Dealer, vehicleId: Id<"vehicles">) {
+  const now = Date.now();
+  await d.t.run(async (ctx) => {
+    const customerId = await ctx.db.insert("customers", { orgId: d.orgId, firstName: "Dana", lastName: "Saleh" });
+    const companyId = await ctx.db.insert("financeCompanies", {
+      orgId: d.orgId, name: "Test Bank", isActive: true, profitRate: 5.5, maxTermMonths: 72, gracePeriodMonths: 3,
+    });
+    const quoteId = await ctx.db.insert("quotes", {
+      orgId: d.orgId, vehicleId, customerId, vehiclePrice: 12000, downPayment: 2000, totalFinancedAmount: 10000,
+      termMonths: 24, status: "DRAFT", companyId, createdBy: d.ownerId, createdAt: now,
+    });
+    await ctx.db.insert("financeApplications", {
+      orgId: d.orgId, customerId, vehicleId, companyId, quoteId, salespersonId: d.ownerId, status: "APPROVED",
+      createdAt: now, updatedAt: now, supplierGapShareMinor: 400_000,
+    });
+  });
+  expect(await payablesOf(d, vehicleId)).toHaveLength(0);
+}
+
+/** Expenses that are NOT borne by the supplier, to fill the freeze scan's bound without a supplier-borne hit. */
+async function insertDealershipExpenses(d: Dealer, vehicleId: Id<"vehicles">, count: number) {
+  await d.t.run(async (ctx) => {
+    for (let i = 0; i < count; i += 1) {
+      await ctx.db.insert("expenses", {
+        orgId: d.orgId, vehicleId, amount: 1, date: Date.now(), category: "REPAIR", title: `Dealership repair ${i}`, status: "PENDING",
+      });
+    }
+  });
 }
 
 async function insertSupplierExpense(d: Dealer, vehicleId: Id<"vehicles">) {
