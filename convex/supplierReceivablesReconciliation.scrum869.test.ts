@@ -404,6 +404,17 @@ describe("SCRUM-858 F1 - no mixed-cutoff comparison", () => {
     expect(r.isReconciled).toBe(false);
   });
 
+  test("a toDate only seconds in the past is still a past cutoff and is refused", async () => {
+    const s = await seed("f1secs");
+    await directSale(s, "f1secs");
+    const r = await s.asUser.query(api.accountingReports.supplierReceivablesReconciliation, {
+      orgId: s.orgId, toDate: Date.now() - 1000,
+    });
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("AS_OF_DATE_UNSUPPORTED");
+    expect(r.isReconciled).toBe(false);
+  });
+
   test("CONTROL: an omitted toDate and a future toDate are the current state and still reconcile", async () => {
     const s = await seed("f1ok");
     await directSale(s, "f1ok");
@@ -448,6 +459,27 @@ describe("SCRUM-858 F2 - the GL read is bounded", () => {
     const r = await s.t.run((ctx) => computeSupplierReceivablesReconciliation(ctx, s.orgId, undefined, { readLimit: 10 }));
     expect(r.status).toBe("AVAILABLE");
     expect(r.byCurrency.JOD).toMatchObject({ glBalanceMinor: MARGIN * SCALE, isReconciled: true });
+  });
+
+  test("accounting periods are read against the limit too: more periods than the limit is OVER_LIMIT", async () => {
+    const s = await seed("f2periods");
+    await directSale(s, "f2periods");
+    const ar = await accountOf(s, "RECEIVABLE_FROM_SUPPLIERS");
+    const period = await periodOf(s);
+    await s.t.run(async (ctx) => {
+      for (let i = 1; i <= 10; i += 1) {
+        await ctx.db.insert("accountingPeriods", {
+          orgId: s.orgId, startDate: period.startDate - (i + 1) * 30 * DAY, endDate: period.startDate - i * 30 * DAY - 1,
+          fiscalYear: period.fiscalYear - 1, periodNumber: i, status: "CLOSED", createdAt: Date.now(),
+        });
+      }
+    });
+    const read = (readLimit: number) =>
+      s.t.run((ctx) => getControlAccountBalancesAsOf(ctx, s.orgId, [ar._id], Date.now() + DAY, readLimit));
+    expect((await read(8)).status).toBe("OVER_LIMIT");
+    const roomy = await read(100);
+    expect(roomy.status).toBe("OK");
+    if (roomy.status === "OK") expect(roomy.balances).toEqual([{ accountId: ar._id, currency: "JOD", debitMinor: MARGIN * SCALE, creditMinor: 0 }]);
   });
 
   test("the scoped read returns what the full read returns for the control account", async () => {
