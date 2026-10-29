@@ -1,0 +1,96 @@
+{
+  "id": "g8-sourced-financier-receipt-certification",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "local-g8-seat1-remediation",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "vehicle": "SOURCED",
+        "approved": 12500,
+        "supplierCost": 10000,
+        "deposit": 0,
+        "route": "THROUGH_DEALERSHIP"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "applications.confirmDisbursement",
+      "input": {
+        "disbursedAmountMinor": 12500000,
+        "payment": "BANK_TRANSFER",
+        "bank": "sameOrgJodBank"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journal.receiptLinesMinor",
+      "value": [
+        {
+          "account": "1110",
+          "debit": 12500000,
+          "credit": 0,
+          "currency": "JOD",
+          "entryStatus": "POSTED"
+        },
+        {
+          "account": "1210",
+          "debit": 0,
+          "credit": 12500000,
+          "currency": "JOD",
+          "entryStatus": "POSTED"
+        }
+      ]
+    },
+    {
+      "observable": "financierReceivable.status",
+      "value": "PAID"
+    },
+    {
+      "observable": "supplierPayable.amountDue",
+      "value": 10000
+    },
+    {
+      "observable": "incomeStatement.totalRevenueMinor",
+      "value": 2500000
+    },
+    {
+      "observable": "incomeStatement.totalCogsMinor",
+      "value": 0
+    },
+    {
+      "observable": "receipt.retry",
+      "value": "noAdditionalWrites"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    },
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum486Certification.test.ts",
+    "testName": "SOURCED through dealership × full financier bank receipt: settles financier AR without changing supplier liability or agency margin"
+  },
+  "matrixRow": "SCRUM-760-G8-SOURCED-RECEIPT",
+  "fingerprint": "7574fc8c33e8779a240fc763bdb16ee73feff0e62424cdc5f54310dbba6e7159"
+}
