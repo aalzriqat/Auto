@@ -2804,6 +2804,47 @@ describe("SCRUM-834 the rehearsal runs from main against either reconcile contra
   });
 });
 
+// SCRUM-869 F2: the fake used to accept any payload, so a case could call a registered mutation without
+// a field its validator requires (`supplierCostRecoveries.recordReceipt` needs `receivedDate`) and the
+// rehearsal stayed green while the real backend refused it. The fake now checks every call against the
+// registered function's own `exportArgs()` validator, the way Convex does before a handler runs.
+describe("SCRUM-869 F2 the fake refuses what the registered mutation's validator refuses", () => {
+  const goodReceipt = {
+    orgId: "org_1", recoveryId: "no-such-recovery", amountMinor: 80_000, method: "CASH",
+    receivedDate: 1_700_000_000_000, idempotencyKey: "f2-valid",
+  };
+  const recordReceipt = (args: Record<string, unknown>) =>
+    makeBackend().authedCall("mutation", "supplierCostRecoveries:recordReceipt", args);
+
+  test("a payload that omits a required field is refused by name, before the handler runs", async () => {
+    const { receivedDate: _omitted, ...withoutDate } = goodReceipt;
+    const result = await recordReceipt(withoutDate);
+    expect(result.ok).toBe(false);
+    expect(String((result as { error?: string }).error)).toMatch(/receivedDate/);
+  });
+
+  test("an unknown field is refused as an extra field", async () => {
+    const result = await recordReceipt({ ...goodReceipt, receivedAt: 1 });
+    expect(result.ok).toBe(false);
+    expect(String((result as { error?: string }).error)).toMatch(/extra field.*receivedAt/);
+  });
+
+  test("a value of the wrong type or outside a literal union is refused", async () => {
+    const wrongType = await recordReceipt({ ...goodReceipt, amountMinor: "80000" });
+    expect(wrongType.ok).toBe(false);
+    expect(String((wrongType as { error?: string }).error)).toMatch(/amountMinor/);
+    const wrongLiteral = await recordReceipt({ ...goodReceipt, method: "CHEQUE" });
+    expect(wrongLiteral.ok).toBe(false);
+    expect(String((wrongLiteral as { error?: string }).error)).toMatch(/method/);
+  });
+
+  test("a valid payload gets past validation to the modelled handler", async () => {
+    const result = await recordReceipt(goodReceipt);
+    expect(result.ok).toBe(false);
+    expect(String((result as { error?: string }).error)).toBe("Supplier cost recovery not found.");
+  });
+});
+
 describe("the rehearsal FAILS when the backend misbehaves — one defect per case", () => {
   test("C2 catches two distinct keys paying one free balance twice", async () => {
     // The defect the cloud run exists for: identity alone cannot stop this,
