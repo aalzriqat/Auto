@@ -69,7 +69,18 @@ Hand-computed JOD figures (1 JOD = 1,000 minor units). Control 2400 is credit-no
 | Receipt reversal (the only reversal door) | `SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED`, EN and AR, no table or scheduler change, a replay also refused, receipt stays LIVE, 1240 net 120,000 | `convex/supplierSettlementContainment.test.ts`, four tests |
 | Dispute and payment audit, idempotent dispute, completeness flags | `ALLOCATE_PAYMENT` and `SET_SUPPLIER_DISPUTE` entries; replay is a no-op; same key with a changed payload or direction is refused; list queries report `complete` | `convex/supplierSettlementAudit.test.ts`, eleven tests |
 
-Not covered here: concurrency or OCC (`convex-test` serializes), browser rendering, and the exact-SHA cloud rehearsal cases for these doors. Those remain SCRUM-762 obligations. Adjacent doors outside this ruling are not blocked by this slice: `vehicles.correctAcquisitionCost` can rewrite an unpaid payable's amount, and `expenses.reverseExpense` can close a recovery; the expense-reversal message still advises reversing receipts first, which the pilot now refuses.
+Correction doors (SCRUM-869 S1b), bound in `convex/supplierObligationCorrections.test.ts`. Two further doors could silently undo the settlement figures above, so they refuse server-side behind the same switch file, with a coded EN/AR error before any write:
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| `vehicles.correctAcquisitionCost` SUPPLIER_INVOICE_ERROR or VENDOR_CREDIT on an unpaid ON_ACCOUNT car (12,500) | `SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED`; payable stays 12,500; 2400 net 12,500,000 credit; no table or scheduler change | `refuses to rewrite the supplier payable, coded EN/AR, and changes nothing` |
+| Correction dialog context for the same car | no allowed types while unpaid; CASH_REFUND offered once paid | `the correction dialog is not offered the refused types for an unpaid ON_ACCOUNT car` |
+| CASH_REFUND on a PAID ON_ACCOUNT car (ruled pilot route) | cost corrected, payable untouched | `control: a CASH_REFUND on a PAID ON_ACCOUNT car still corrects the cost and leaves the payable alone` |
+| `expenses.reverseExpense` while a 200 cost recovery is open | `SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED`; 1240 net 200,000 debit unchanged | `refuses while the cost recovery is open, coded EN/AR, and changes nothing` |
+| Same after an 80 receipt | same code, receipt stays LIVE | `refuses with the same code once the supplier has paid part of it` |
+| Expense with no supplier obligation | still reversed | `control: an ordinary expense with no supplier obligation is still reversed` |
+
+The expense-reversal message that advised reversing every receipt first is replaced: it now says the expense cannot be reversed while those receipts stand, because the receipt reversal door is itself closed. The expenses screen disables the reverse action for a supplier-borne expense. Not covered: OCC, browser rendering of the screen and dialog, and the cloud rehearsal beyond the SCRUM-869 rehearsal cases.
 ## SCRUM-179-mobile-expense-categories
 
 One shared category tuple preserves the independently captured native twelve-value domain and order for registered create/update arguments and stored expense records. Forms without amortization inputs derive the eleven non-prepaid choices; mobile reads retain PREPAID. DETAILING, TRANSPORT and FEES are offered under their existing meanings; INSPECTION, REGISTRATION, CLEANING and INSURANCE are removed without remapping. Server payroll and prepaid business guards remain authoritative.
