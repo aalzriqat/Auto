@@ -417,3 +417,27 @@ The recovery checkpoint scenario additionally invokes an internal destructive re
 ### SCRUM-868 P2 canonical supplier identity on vehicles
 
 Matrix rows `SCRUM868-P2-supplier-identity` (money, 21 scenarios) and `SCRUM868-P2-supplier-isolation` (permission, 3 scenarios) bind literal tests in `convex/vehicleSupplierIdentity.test.ts`. Owner ruling SCRUM-868 c23794 and the SCRUM-760 pilot scope: every pilot-enabled door that sets a SOURCED vehicle's consignment supplier (`vehicles.create`, `update`, `createSourced`, `importBulk`, `vehicleEdits.requestCreate`, `requestUpdate`, `resolve`) or an OWNED ON_ACCOUNT creditor takes a supplier master id. The server resolves the id inside the caller's organization, stores the id and writes the name snapshot itself; a typed name is never trusted. Independent expected values: a name-only call (the shape the mobile app sends) refuses with `SUPPLIER_IDENTITY_REQUIRED` and no table changes; a foreign-organization id and a deleted id refuse with the same code and the same message (`SUPPLIER_NOT_FOUND`); an inactive supplier refuses with `SUPPLIER_INACTIVE`; a creditor id on a consignment car, or a consignment id on an owned car or a cash purchase, refuses with `SUPPLIER_ROLE_CONFLICT`. Once a supplier payable or a supplier-borne expense exists, changing the consignment supplier refuses with `SUPPLIER_LINK_FROZEN` at request time and at approval, while re-sending the stored id is a no-op. The on-account payable carries the creditor id, snapshot version 1 and the server name for 10,000 JOD, and the acquisition journal is the unchanged single VEHICLE_ACQUIRED event (no posting or amount change). A master rename after creation does not rewrite the stored vehicle name, and a retry of the same idempotency key replays the first vehicle. The data browser refuses a change to `sourcedSupplierId` as a locked ownership field, and a stored link that points at another organization is dropped by the buy-out conversion reader. This is serial `convex-test` harness evidence only. It does not prove concurrency (the harness has no OCC), Convex platform behaviour or production data. A legacy name-only vehicle already stored keeps its name and no id: it is not backfilled by this change, and a legacy name-only pending request cannot be approved. The mobile app is outside the pilot and is not changed; it now receives the coded refusal on a name-only supplier write. The web supplier picker, import mapping and their English and Arabic strings are covered by component tests only; no browser replay record exists for them yet and the rendered EN/AR desktop and phone screens were not inspected by this change.
+
+## SCRUM-760-G8-SOURCED — hunter bindings, runtime pending
+
+G8 binds four literal public-API certification tests in
+`convex/scrum486Certification.test.ts`: three existing completion tests and a
+financier bank receipt regression. These bindings add no financial capability
+and do not certify a real Convex deployment.
+
+| Route | Public completion | Independent expected JOD amounts | Permanent record |
+| --- | --- | --- | --- |
+| SOURCED CASH, THROUGH_DEALERSHIP | Full 12,500 deposit, then completeFromQuote | Supplier payable 10,000; agency revenue 2,500; COGS 0; customer AR settled by deposit | g8-sourced-cash-agency-certification |
+| SOURCED configured finance, THROUGH_DEALERSHIP | finalizeDeal, approved 12,500, no deposit | Full financier AR 12,500; supplier payable 10,000; agency revenue 2,500; COGS 0 | g8-sourced-financed-agency-certification |
+| SOURCED configured finance, THROUGH_DEALERSHIP, full bank receipt (`SCRUM-760-G8-SOURCED-RECEIPT`) | finalizeDeal, then confirmDisbursement for 12,500 to a same-org JOD bank | Receipt Dr1110 / Cr1210 12,500 each (12,500,000 minor); financier AR PAID and zero; supplier payable remains 10,000; revenue remains 2,500; COGS 0; retry writes nothing | g8-sourced-financier-receipt-certification |
+| SOURCED configured finance, DIRECT_TO_SUPPLIER | finalizeDeal and external supplier advice | Supplier AR and agency income 2,500; no financier AR or supplier AP; advice posts no dealership journal | g8-sourced-direct-agency-certification |
+
+The exact backend titles are in those records. The paired browser witnesses in
+`playwright/scenarios/pilot-sourced.spec.ts` reach delivery using the existing
+wizard/cockpit controls. CASH checks the three literal journal shapes (receipt,
+sale, deposit application). FINANCED checks the sale journal, then the full
+12,500 bank receipt, and reloads the closed deal. None of these witnesses pays a
+supplier, refunds a deposit, corrects a cost, or enables an excluded door.
+The direct-route browser witness records the supplier advice and asserts no
+bank movement. G9/G10 supplier identity and settlement certification remain
+independent obligations; these rows do not stand for them.

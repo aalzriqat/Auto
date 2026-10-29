@@ -1,0 +1,44 @@
+{
+  "id": "g8-deals-list-to-detail",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "local-g8-plan-runtime-pending",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "AUDITED_ROLE",
+        "org": "A"
+      },
+      "action": "deals.followRow",
+      "input": {
+        "fixtures": "OWNED_CASH_SOURCED_CASH_OWNED_CONFIGURED_SOURCED_CONFIGURED",
+        "state": "PENDING_OR_NEW_APPLICATION",
+        "roles": "OWNER_MANAGER_SALES_RECEPTION_ACCOUNTANT_SENIOR_ACCOUNTANT",
+        "locales": "EN_AR",
+        "widths": "320_1440"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "screen.journeyOutcome",
+      "value": "actualRowOpensExpectedCockpitOrRoleRefused"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "playwright/tests/audit-role-access.spec.ts",
+    "testName": "pilot Deals opens owned and SOURCED cash and configured financed detail screens"
+  },
+  "fingerprint": "5e42e755e16547923e372eb9cb65004873af12d1e301fe8f7f6be0d0e1aa4d3a"
+}

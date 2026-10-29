@@ -1,14 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { callJev } from "../../scripts/intelligence/jevImpact.mjs";
 import { resolveOrgId } from "../utils";
+import { pilotExplorerSeed, pilotExplorerStarts, pilotExplorerTitle, withLocalePage, type PilotExplorerStart } from "../fixtures/pilotHunt";
 import { isCommitActionName } from "./jevExplorerActions";
 import { namesProduction, servesOtherThan } from "./productionGuard";
 
 /**
  * A random explorer (SCRUM-595): walk the dashboard by clicking what is on
  * screen, with Jev choosing the next element when TYPESAFE_API_KEY is set and a
- * seeded random pick when it is not. ADVISORY ONLY — it never fails. Fixed code
+ * seeded random pick when it is not. Findings are advisory. Fixed code
  * checks record what they see as annotations plus a JSON report; Jev's own
  * opinion of a screen is recorded beside them and never decides anything
  * (the SCRUM-350 rule: Jev may suggest, only fixed checks may declare).
@@ -29,6 +30,9 @@ import { namesProduction, servesOtherThan } from "./productionGuard";
 
 const STEPS = Number(process.env.JEV_EXPLORER_STEPS ?? 40);
 const SEED = Number(process.env.JEV_EXPLORER_SEED ?? Date.now() % 100_000);
+if (!Number.isInteger(STEPS) || STEPS < 1 || STEPS > 100) {
+  throw new Error("JEV_EXPLORER_STEPS must be an integer from 1 to 100.");
+}
 
 /**
  * Screens that write just by being looked at: opening a conversation marks it
@@ -258,14 +262,29 @@ test.describe("Jev explorer (advisory)", () => {
 
   // The seed stays out of the title: unset, it is time-derived and differs
   // between the runner and the worker, which then cannot find the test.
-  test("random walk", async ({ page, baseURL }) => {
-    test.info().annotations.push({ type: "seed", description: `${SEED} (${STEPS} steps)` });
+  // One walk of the pilot plan. The original random walk keeps its Dashboard
+  // start, default viewport and default locale (no locale script, no viewport).
+  type Walk = { label: string; attachment?: string; route: string; seed: number; locale?: PilotExplorerStart["locale"]; viewport?: PilotExplorerStart["viewport"] };
+
+  // Every pilot start gets its own page with exactly one locale init script:
+  // several addInitScript calls on one page run in an order Playwright does not
+  // define. One test per start, so a failing start never skips the others and
+  // each walk has its own timeout and seed.
+  function pilotWalk(context: BrowserContext, baseURL: string | undefined, route: PilotExplorerStart["route"], locale: PilotExplorerStart["locale"], viewportName: PilotExplorerStart["viewport"]["name"]) {
+    const start = pilotExplorerStarts().find(s => s.route === route && s.locale === locale && s.viewport.name === viewportName);
+    if (!start) throw new Error(`No pilot explorer start ${route} ${locale} ${viewportName} in the plan.`);
+    const walk: Walk = { label: pilotExplorerTitle(start), route, locale, viewport: start.viewport, seed: pilotExplorerSeed(SEED, start) };
+    return withLocalePage(context, locale, start.viewport, page => explore(page, baseURL, walk));
+  }
+
+  async function explore(page: Page, baseURL: string | undefined, start: Walk) {
+    test.info().annotations.push({ type: "seed", description: `${start.seed} (${STEPS} steps; ${start.label}; base seed ${SEED})` });
     const host = new URL(baseURL ?? "http://localhost:3000").hostname;
-    test.skip(!["localhost", "127.0.0.1"].includes(host), "Explorer runs against a local app only.");
-    test.skip(
+    expect(["localhost", "127.0.0.1"], "Explorer runs against a local app only.").toContain(host);
+    expect(
       namesProduction(process.env.NEXT_PUBLIC_CONVEX_URL),
       "Explorer never runs against the production backend.",
-    );
+    ).toBe(false);
 
     // The guard above reads THIS process's environment, which need not be what
     // the served app was built against (PLAYWRIGHT_SKIP_WEBSERVER, a stale
@@ -274,11 +293,11 @@ test.describe("Jev explorer (advisory)", () => {
     // deployment named here, and that deployment must not be production
     // (Codex AF-430-03). Unverifiable means no run.
     const expectedDeployment = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL);
-    test.skip(!expectedDeployment, "Explorer needs NEXT_PUBLIC_CONVEX_URL naming its preview deployment.");
-    test.skip(
+    expect(expectedDeployment, "Explorer needs NEXT_PUBLIC_CONVEX_URL naming its preview deployment.").toBeTruthy();
+    expect(
       !sameUrl(attestedPreviewUrl(), process.env.NEXT_PUBLIC_CONVEX_URL),
       "NEXT_PUBLIC_CONVEX_URL is not attested as the seeded disposable preview; not exploring.",
-    );
+    ).toBe(false);
     const sockets: string[] = [];
     page.on("websocket", (ws) => sockets.push(ws.url()));
     await page.addInitScript((keys) => {
@@ -301,11 +320,11 @@ test.describe("Jev explorer (advisory)", () => {
     // Every socket that looks like Convex must name exactly the expected
     // deployment; one whose host only contains ".convex.cloud" names none.
     const served = sockets.filter((u) => u.includes(".convex.cloud")).map((u) => convexDeploymentOf(u) ?? u);
-    test.skip(served.length === 0, "Could not observe which backend the served app uses; not exploring.");
-    test.skip(
+    expect(served.length, "Could not observe which backend the served app uses; not exploring.").toBeGreaterThan(0);
+    expect(
       servesOtherThan(served, expectedDeployment!),
       `The served app talks to ${[...new Set(served)].join(", ")}, not the preview ${expectedDeployment}.`,
-    );
+    ).toBe(false);
 
     // A button can navigate as well as a link can; refusing the page itself
     // (document and RSC payload) stops either from mounting a write-on-view screen.
@@ -314,15 +333,20 @@ test.describe("Jev explorer (advisory)", () => {
       (route) => route.abort(),
     );
 
-    const random = rng(SEED);
+    const random = rng(start.seed);
     const findings: Finding[] = [];
     const orgId = await resolveOrgId(page);
+    await page.goto(`/${orgId}/${start.route}`);
+    if (start.locale) {
+      await expect(page.locator("html")).toHaveAttribute("lang", start.locale);
+      await expect(page.locator("html")).toHaveAttribute("dir", start.locale === "ar" ? "rtl" : "ltr");
+    }
     const visited = new Set<string>();
     let step = 0;
     page.on("pageerror", (e) => findings.push({ step, url: page.url(), check: "uncaught", detail: e.message }));
 
     for (step = 0; step < STEPS; step++) {
-      if (!page.url().includes(`/${orgId}/`)) await page.goto(`/${orgId}/dashboard`);
+      if (!page.url().includes(`/${orgId}/`)) await page.goto(`/${orgId}/${start.route}`);
       await page.waitForTimeout(1_200);
       // Also every frame of the app talks only to the verified backend.
       const stray = sockets
@@ -331,7 +355,7 @@ test.describe("Jev explorer (advisory)", () => {
         .find((d) => d !== expectedDeployment);
       if (stray) throw new Error(`The app opened a connection to ${stray}; stopping before Jev sees it.`);
       if (WRITES_ON_VIEW.test(new URL(page.url()).pathname)) {
-        await page.goto(`/${orgId}/dashboard`);
+        await page.goto(`/${orgId}/${start.route}`);
         continue;
       }
 
@@ -352,7 +376,7 @@ test.describe("Jev explorer (advisory)", () => {
 
       const options = await candidates(page);
       if (options.length === 0) {
-        await page.goto(`/${orgId}/dashboard`);
+        await page.goto(`/${orgId}/${start.route}`);
         continue;
       }
       const picked = (await jevPick(options.map((o) => o.name), screen)) ?? Math.floor(random() * options.length);
@@ -371,13 +395,33 @@ test.describe("Jev explorer (advisory)", () => {
     for (const f of findings) {
       test.info().annotations.push({ type: `advisory:${f.check}`, description: `#${f.step} ${f.url} ${f.detail}` });
     }
-    await test.info().attach("jev-explorer-findings.json", {
+    await test.info().attach(start.attachment ?? `jev-explorer-${start.label.replaceAll(" ", "-")}.json`, {
       body: JSON.stringify(
-        { seed: SEED, steps: STEPS, jev: Boolean(process.env.TYPESAFE_API_KEY), jevStats, visited: [...visited].sort(), findings },
+        { start: { route: start.route, locale: start.locale, viewport: start.viewport }, seed: start.seed, baseSeed: SEED, steps: STEPS, jev: Boolean(process.env.TYPESAFE_API_KEY), jevStats, visited: [...visited].sort(), findings },
         null,
         2,
       ),
       contentType: "application/json",
     });
+  }
+
+  test("random walk", async ({ page, baseURL }) => {
+    await explore(page, baseURL, { label: "random walk", attachment: "jev-explorer-findings.json", route: "dashboard", seed: SEED });
   });
-});
+
+  // One test per pilot start (pilotExplorerStarts). The titles are literals on
+  // purpose: each scenario record binds to exactly one active test title, which
+  // a computed title cannot satisfy. scripts/pilotG8Coverage.test.ts requires
+  // this list to equal the plan, so a start cannot be dropped or left untested.
+  test("pilot explorer deals en desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "deals", "en", "desktop"));
+  test("pilot explorer deals en phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "deals", "en", "phone"));
+  test("pilot explorer deals ar desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "deals", "ar", "desktop"));
+  test("pilot explorer deals ar phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "deals", "ar", "phone"));
+  test("pilot explorer sales en desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "sales", "en", "desktop"));
+  test("pilot explorer sales en phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "sales", "en", "phone"));
+  test("pilot explorer sales ar desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "sales", "ar", "desktop"));
+  test("pilot explorer sales ar phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "sales", "ar", "phone"));
+  test("pilot explorer accounting en desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "accounting", "en", "desktop"));
+  test("pilot explorer accounting en phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "accounting", "en", "phone"));
+  test("pilot explorer accounting ar desktop", ({ context, baseURL }) => pilotWalk(context, baseURL, "accounting", "ar", "desktop"));
+  test("pilot explorer accounting ar phone", ({ context, baseURL }) => pilotWalk(context, baseURL, "accounting", "ar", "phone"));});
