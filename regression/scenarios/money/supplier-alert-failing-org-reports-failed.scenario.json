@@ -1,0 +1,46 @@
+{
+  "id": "supplier-alert-failing-org-reports-failed",
+  "fingerprint": "2a3b2b11b177f4499a9533543101635215b56f8b2c594320c4c51aeb54b9651c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "currency": "XXX"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result.failed",
+      "value": "true"
+    },
+    {
+      "observable": "result.alerted",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a failing organisation reports failed and logs, instead of throwing"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

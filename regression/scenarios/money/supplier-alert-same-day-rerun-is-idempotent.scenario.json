@@ -1,0 +1,43 @@
+{
+  "id": "supplier-alert-same-day-rerun-is-idempotent",
+  "fingerprint": "68438e9d280a501c1e8e4e67a17be264d62e29c480e83852fd62d493d9400b62",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "0d",
+        "sweeps": 3
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerts",
+      "value": 3
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "running the sweep twice on the same day does not duplicate any alert"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

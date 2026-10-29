@@ -270,6 +270,35 @@ Practice and evidence boundary: the aging layout (days past the due date in 30-d
 | Caller without view:finance | refused | `a member without view:finance is refused` |
 
 Known simplifications, stated rather than hidden: `complete` is per family and per page walk (a caller must walk to the last page; totals are for the page only); a payable's ownership model is read from its sale's `supplierSettlementRoute` (no sale means OWNED ON_ACCOUNT); alerts (S8) are a separate section.
+## SCRUM-869-DUE-ALERTS
+
+Owner ruling SCRUM-869#c23883 (2026-10-29, OQ-1), the coordinator's Jira record of a chat ruling, not the owner's own text; the digest in `regression/rulings.json` covers the whole markdown body of that comment. Supplier obligations (payables, margin receivables, cost recoveries) raise in-app alerts through the existing `notifications` table: 3 days before the due date, on the due date, at 7 days overdue, then weekly. Disputed obligations and obligations with no due date are never alerted. Recipients are resolved on the server: the Owner, members holding `manage:finance` (Finance Manager) and members holding `view:finance` (authorised accounting staff), never an offboarding member and never a role of another organisation.
+
+Design facts the cells rely on:
+
+- The alert row is inserted directly. `utils/notifications.dispatch` is not used because it also fans out to email, WhatsApp and push; this ruling is in-app only.
+- Idempotency is one `commandIdempotency` record per obligation, step and occurrence (`supplier-due-alert`, key `<kind>:<id>:<step>:<occurrence>`), written in the same transaction as the alert rows.
+- The cron `supplier-due-alerts` (05:30 UTC, 08:30 Amman) pages organisations, 20 per page, and schedules one worker mutation per organisation. A worker reads one page (50 rows) of one obligation kind and schedules its own continuation. A worker failure is caught and logged per organisation.
+- The match is exact-day. A day on which the sweep did not run is a day without that alert; nothing replays it.
+
+Evidence boundary: `convex-test` only. It has no runtime read limits, no OCC and no real scheduler clock, so bounded reads and the live cron are not proven here. The page-size constant (50) is not observable in these tests, because a larger page would still alert every row.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| Payable due in 3 days | one in-app alert per recipient (Owner, manage:finance, view:finance), type due, amount `9500.000` JOD | `an obligation due in 3 days alerts each authorised recipient once, in-app` |
+| Sweep on days -4..21 around one due date | alerts only on days -3, 0, 7, 14 and 21 | `only the exact schedule days alert: 4, 3, 2, 1 days before, the due day, 6/7/8 and 14/15 days after` |
+| Receivable with an agreed date, cost recovery with an agreed date | both alert on their schedule | `a receivable with recorded delivery and a cost recovery with an agreed date alert on their schedule` |
+| Same-day re-run, three sweeps | no duplicate | `running the sweep twice on the same day does not duplicate any alert` |
+| Two obligations, then a later step | separate alerts, and the later step alerts again | `two obligations alert separately, and a later step of the same obligation alerts again` |
+| Sweep given an earlier day than the clock | the given day decides | `the sweep uses the day it is given, not the clock of whichever continuation runs it` |
+| Two organisations | each alerts only its own members | `an organisation's alerts reach only its own members`, `two organisations each alert their own members for their own obligations` |
+| Sales-only member, offboarding member, foreign role | no alert | `a member without finance access, and an offboarding member, get nothing`, `a role that belongs to another organisation grants nothing` |
+| Plan without accounting | no alert | `an organisation whose plan has no accounting is not alerted` |
+| No due date (any kind), disputed, paid or cancelled | no alert | `no due date is never alerted, however old the sale`, `a disputed obligation is not alerted`, `settled and cancelled obligations are not alerted` |
+| Channels | nothing scheduled to email, WhatsApp or push | `the sweep schedules no email, WhatsApp or push delivery` |
+| 53 obligations; 22 organisations | all alerted; all swept | `more obligations than one page are all alerted`, `more organisations than one batch are all swept` |
+| An organisation that fails | reports failed and logs; the others still alert | `a failing organisation reports failed and logs, instead of throwing`, `one organisation failing does not stop the others` |
+
 ## Implementation ledger on this branch
 
 The owned configured-financier no-deposit cancellation row drives the public cancellation door before any financier receipt. It checks a CANCELLED finance-company invoice and sale, a REVERSED sale event, literal inverse 1210/4100/5100/1400 journal lines, and zero public open-period trial balance and income. A salesperson with ordinary sales and finance-application access but without `cancel:closed_deal` is refused before the reversal, with all schema tables unchanged. It does not cover cancellation after financier payment or a closed-period reversal.
