@@ -1,0 +1,51 @@
+{
+  "id": "supplier-due-payable-through-dealership-without-agreed-date-has-no-due-date",
+  "fingerprint": "ee7bde64cbdf0498a6aa5937a07f07b4be9d5d42d30c630923e12077621c0209",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "route": "THROUGH_DEALERSHIP",
+        "saleCompleted": "true"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "CLEARED_PROCEEDS_NOT_RECORDED"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "NO_DUE_DATE"
+    },
+    {
+      "observable": "row.dueDate",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "THROUGH_DEALERSHIP payable with a completed sale but no agreed date: no due date, cleared proceeds not recorded"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

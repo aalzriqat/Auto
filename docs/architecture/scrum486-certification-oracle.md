@@ -231,6 +231,45 @@ The Phase 2 implementation must put a bounded, independently reviewed certificat
 
 Selected real-backend rows M486C1–M486C4 now have exact-SHA disposable-preview proof described above. The SCRUM-760 unwind and cost-correction rows have **no** real-backend replay yet and are **UNAVAILABLE** as real-backend proof until they are added to the trusted case registry (blocked on the financed chain being green there, SCRUM-759/FD1). The remaining matrix rows are harness-only. Fully elapsed periods need consumer-facing snapshot assertions, and these release runs cannot prove retained production-data parity without separate reconciliation.
 
+## SCRUM-869-DUE-AGING
+
+Owner ruling SCRUM-869#c23883 (2026-10-29, OQ-1), recorded in Jira by the coordinator as the record of a chat ruling; it is not the owner's own text, and the digest in `regression/rulings.json` is the sha256 of the whole markdown body of that comment. A supplier obligation's due date is derived on the server and explained: the agreed date, else the ownership-model trigger read from recorded facts only, else "No due date", which is never invented and never overdue. Aging buckets are Current, 1-30, 31-60, 61-90 and 90+ days overdue, in calendar days of `Asia/Amman`. Disputed amounts are shown separately and stay in the gross outstanding.
+
+Coordinator rulings of 2026-10-29 that fix the open points inside c23883 (the trigger table is `DUE_TRIGGERS` in `convex/utils/supplierDueDates.ts`, one entry per ownership model, so an owner answer changes one entry and its test):
+
+- A commission receivable is due on delivery only when the delivery is an explicit record: a financed application with `handoverStatus` HANDED_OVER and its `vehicleHandoverAt`. A COMPLETED sale is not delivery.
+- Cleared proceeds are not recorded anywhere, so a THROUGH_DEALERSHIP payable has no trigger and shows "No due date" unless `paymentDueDate` is set.
+- A cost recovery has an agreed date or none. An ON_ACCOUNT supplier's terms are not stored, so only `paymentDueDate` applies.
+- `agreedDueDate` (optional epoch ms) was added to margin receivables and cost recoveries. No door writes it in this slice.
+
+Practice and evidence boundary: the aging layout (days past the due date in 30-day bands, 90 read as "61-90" and "90+" as more than 90) is the usual receivables and payables aging convention, cited from general accounting knowledge. The zone is looked up through `Intl.DateTimeFormat` with the IANA identifier `Asia/Amman` (ECMA-402; IANA tz database), and the tests run against the real ICU data of the Node runtime for winter and summer 2026 (UTC+3) and for winter 2021 (UTC+2, before Jordan's October 2022 move to permanent UTC+3). No external source was fetched in this session. The Convex production runtime's ICU data was not checked, so the Amman day count is proven in `convex-test` on Node only.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| Payable with an agreed `paymentDueDate` 10 days ago | rule AGREED_DATE, 10 days overdue, bucket 1-30, outstanding 9,500,000 minor | `an agreed paymentDueDate wins and ages by Amman calendar days` |
+| THROUGH_DEALERSHIP payable, completed sale, no agreed date | No due date (CLEARED_PROCEEDS_NOT_RECORDED), never overdue | `THROUGH_DEALERSHIP payable with a completed sale but no agreed date: no due date, cleared proceeds not recorded` |
+| Payable with no sale and no agreed date | No due date (TERMS_NOT_RECORDED) | `an ON_ACCOUNT-style payable (no sale) with no agreed terms has no due date` |
+| Agreed date 5 days ahead | Current, -5 days | `an agreed date in the future is Current, with a negative day count` |
+| 20:59:59.999Z then 21:00:00.000Z on the due day | Current, 0 days; then 1 day overdue | `the Amman midnight edge: due that day is Current until 00:00 Amman, then 1 day overdue` |
+| Disputed payable | disputed part equals the gross, both stay in the 31-60 bucket total | `a disputed payable is shown separately but stays in the gross outstanding and in its aging bucket` |
+| PAID, CANCELLED payables | not outstanding | `paid and cancelled payables are not outstanding` |
+| Financed handover recorded 70 days ago | rule DELIVERY_RECORDED, 70 days, bucket 61-90 | `financed delivery recorded: due on handover and aged from it` |
+| COMPLETED sale, no application | No due date (DELIVERY_NOT_RECORDED) | `a COMPLETED sale is not delivery: no application means no due date` |
+| HANDED_OVER without `vehicleHandoverAt` | No due date, never overdue | `HANDED_OVER with no handover timestamp is a missing fact, never overdue` |
+| Receivable with `agreedDueDate` and a handover | the agreed date wins | `an agreedDueDate on the receivable beats the delivery trigger` |
+| Disputed receivable, 100 days past agreed date | gross kept, disputed shown, bucket 90+ | `a disputed receivable keeps its outstanding in gross and reports it as disputed` |
+| Application or sale of another organisation | read as a missing fact: No due date | `a sale from another organisation is not read as a fact of this one`; `a receivable whose saleId is another organisation's sale reads no delivery from it` |
+| Cancelled or fully received receivable | not outstanding | `a cancelled receivable and a fully received one are not outstanding` |
+| Status PAID or RECOVERED with open amounts | the open amount is still listed | `a status that says settled while the amounts say open does not hide the open money` |
+| Recovery with no agreed date | No due date (COLLECTIBILITY_NOT_RECORDED), 200,000 minor | `no agreed date: no due date, collectibility not recorded` |
+| Recovery, agreed date 95 days ago, 50,000 recovered | 95 days, bucket 90+, outstanding 150,000 | `an agreed date ages the outstanding minor units` |
+| RECOVERED, REVERSED recoveries | not outstanding | `recovered and reversed recoveries are not outstanding` |
+| Five rows, page size 2 | `complete` false, false, then true on the last page | `pagination is bounded and \`complete\` is only true on the last page` |
+| Page size 100,000 over 101 rows | 100 rows, not complete | `a requested page size above the cap is cut to the cap` |
+| Another organisation | its rows never returned; calling with its id is refused | `another organisation's obligations are never returned` |
+| Caller without view:finance | refused | `a member without view:finance is refused` |
+
+Known simplifications, stated rather than hidden: `complete` is per family and per page walk (a caller must walk to the last page; totals are for the page only); a payable's ownership model is read from its sale's `supplierSettlementRoute` (no sale means OWNED ON_ACCOUNT); alerts (S8) are a separate section.
 ## Implementation ledger on this branch
 
 The owned configured-financier no-deposit cancellation row drives the public cancellation door before any financier receipt. It checks a CANCELLED finance-company invoice and sale, a REVERSED sale event, literal inverse 1210/4100/5100/1400 journal lines, and zero public open-period trial balance and income. A salesperson with ordinary sales and finance-application access but without `cancel:closed_deal` is refused before the reversal, with all schema tables unchanged. It does not cover cancellation after financier payment or a closed-period reversal.

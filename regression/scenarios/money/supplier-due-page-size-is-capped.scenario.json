@@ -1,0 +1,47 @@
+{
+  "id": "supplier-due-page-size-is-capped",
+  "fingerprint": "ef6851a11f429009799c6479c88f82a2dc4f3666de97165038516a00973b358c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "rows": 101,
+        "limit": 100000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows",
+      "value": 100
+    },
+    {
+      "observable": "complete",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a requested page size above the cap is cut to the cap"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}
