@@ -13,6 +13,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/components/ui/sonner";
 import { errorMessage, LoadingAccountingState, scaleForCurrency } from "./AccountingTabShared";
 import { BankAccountsTable } from "./bankAccounts/BankAccountsTable";
+import { BankOpeningReconciliationPanel } from "./bankAccounts/BankOpeningReconciliationPanel";
 import { CreateBankAccountDialog } from "./bankAccounts/CreateBankAccountDialog";
 import { ReconciliationPanel } from "./bankAccounts/ReconciliationPanel";
 import { dateInputToMs, defaultCreateBankAccountForm, type CreateBankAccountFormState } from "./bankAccounts/types";
@@ -29,6 +30,7 @@ export function BankAccountsTab() {
 
   const accounts = useQuery(api.bankAccounts.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const bookBalance = useQuery(api.bankAccounts.getBookBalance, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const openingReconciliation = useQuery(api.bankAccounts.openingReconciliation, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createAccount = useMutation(api.bankAccounts.create);
   const setReconciliationTarget = useMutation(api.bankAccounts.setReconciliationTarget);
@@ -113,6 +115,13 @@ export function BankAccountsTab() {
             </p>
           )}
         </div>
+      )}
+
+      {openingReconciliation && (
+        <BankOpeningReconciliationPanel
+          reconciliation={openingReconciliation}
+          formatMinor={(minor, currency) => formatCurrency(minor / Math.pow(10, scaleForCurrency(currency)))}
+        />
       )}
 
       <BankAccountsTable
