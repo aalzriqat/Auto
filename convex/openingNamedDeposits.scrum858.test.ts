@@ -11,7 +11,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
 import { CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED } from "./utils/customerCreditPayoutContainment";
 import { SALE_INVOICE_RECEIPT_DOORS_PILOT_DISABLED } from "./utils/customerCreditPayoutContainment";
 import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED } from "./utils/depositOtherContainment";
@@ -837,4 +837,71 @@ test("period close reports an UNAVAILABLE deposits comparison as its own warning
   expect(checklist.warnings).toContain(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING);
   expect(checklist.warnings.filter((w: string) => /Customer deposits subledger does not reconcile/.test(w))).toEqual([]);
   expect(checklist.customerDepositsReconciliation).toMatchObject({ status: "UNAVAILABLE", isReconciled: false });
+});
+// ── Native-screen visibility (F3, round-1 review) ───────────────────────────────────────────────
+// `deposits.listByVehicle` is keyed by car, so a security deposit and a reservation that names no VIN
+// can never appear there. The customer's own record is where they are read.
+
+test("customers.getRelations lists the customer's own current deposits, opening security and VIN-less rows included, bounded and permission-gated", async () => {
+  const s = await seed();
+  await postNamedDeposits(s);
+
+  const a = await s.owner.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerA });
+  expect(a.depositsTruncated).toBe(false);
+  expect(a.deposits).toHaveLength(1);
+  expect(a.deposits[0]).toMatchObject({
+    origin: "OPENING",
+    openingDepositKind: "SECURITY",
+    status: "HELD",
+    amountMinor: 100_000,
+    currency: "JOD",
+  });
+  expect(a.deposits[0].vehicleId).toBeUndefined();
+  // Another customer's row never appears on this record.
+  const b = await s.owner.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerB });
+  expect(b.deposits.map((d: { openingDepositKind?: string }) => d.openingDepositKind)).toEqual(["RESERVATION"]);
+  expect(b.deposits[0].vehicleId).toBe(s.vehicleId);
+
+  // A deleted row is not a current deposit.
+  const row = await s.t.run(async (ctx) => (await ctx.db.query("deposits").collect()).find((d) => d.customerId === s.customerA));
+  if (!row) throw new Error("Missing opening deposit");
+  await s.t.run((ctx) => ctx.db.patch(row._id, { isDeleted: true }));
+  const afterDelete = await s.owner.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerA });
+  expect(afterDelete.deposits).toEqual([]);
+
+  // A caller who may see customers but not sales sees no deposit amounts (QuoteDepositManager's gate).
+  const readerUser = await s.t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "od_reader", email: "od_reader@test.com", name: "Reader" }),
+  );
+  const readerRole = await s.t.run((ctx) =>
+    ctx.db.insert("roles", { orgId: s.orgId, name: "CUSTOMER_READER", permissions: [PERMISSIONS.VIEW_CUSTOMERS] }),
+  );
+  await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId: readerUser, roleId: readerRole }));
+  const reader = s.t.withIdentity({ subject: "od_reader" });
+  const hidden = await reader.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerB });
+  expect(hidden.deposits).toEqual([]);
+  expect(hidden.depositsTruncated).toBe(false);
+});
+
+test("customers.getRelations reads a bounded page of deposits and says when it is truncated", async () => {
+  const s = await seed();
+  await s.t.run(async (ctx) => {
+    for (let i = 0; i < 105; i++) {
+      await ctx.db.insert("deposits", {
+        orgId: s.orgId,
+        customerId: s.customerA,
+        amount: 1,
+        amountMinor: 1_000,
+        currency: "JOD",
+        status: "HELD",
+        holdActive: false,
+        usesVehicleHoldRows: false,
+        createdBy: s.ownerUserId,
+        createdAt: Date.now(),
+      });
+    }
+  });
+  const relations = await s.owner.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerA });
+  expect(relations.deposits).toHaveLength(100);
+  expect(relations.depositsTruncated).toBe(true);
 });
