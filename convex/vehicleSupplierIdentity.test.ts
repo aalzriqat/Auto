@@ -502,6 +502,53 @@ describe("vehicles.importBulk", () => {
     expect(payables).toHaveLength(1);
     expect(payables[0]).toMatchObject({ supplierId: d.creditor, sourcedFromName: "Credit Supplier Co", amountDue: 9000 });
   });
+
+  describe("a proven replay of a purchase import after its supplier was deactivated", () => {
+    const owned = { ...row, vin: "IMPORTRPL000001", sourceType: "STOCK", purchasePrice: 9000 };
+    const sourced = { ...row, vin: "IMPORTRPL000002", sourceType: "SOURCED", sourceCost: 8000 };
+    const purchase = (d: Dealer, importId: string, vehicles: Array<Record<string, unknown>>) =>
+      d.asOwner.mutation(api.vehicles.importBulk, {
+        orgId: d.orgId, acquisitionPosting: "PURCHASE", importId, purchasePaymentMethod: "ON_ACCOUNT", vehicles,
+      } as never);
+
+    test("is recognised as already recorded and posts nothing more (a lost-response retry must not be refused)", async () => {
+      const d = await seedDealer("i3");
+      const importId = crypto.randomUUID();
+      const rows = [
+        { ...owned, rowId: 1, purchaseSupplierId: d.creditor },
+        { ...sourced, rowId: 2, sourcedSupplierId: d.gulf },
+      ];
+      expect(await purchase(d, importId, rows)).toMatchObject({ inserted: 2, alreadyRecorded: 0 });
+      const before = await worldCounts(d);
+      expect(before.payables).toBe(1);
+      await d.t.run(async (ctx) => {
+        await ctx.db.patch(d.creditor, { status: "INACTIVE" });
+        await ctx.db.patch(d.gulf, { status: "INACTIVE" });
+      });
+      // The identical call, resent: it already ran, so it is a no-op rather than SUPPLIER_INACTIVE.
+      expect(await purchase(d, importId, rows)).toMatchObject({ inserted: 0, alreadyRecorded: 2 });
+      expect(await worldCounts(d)).toEqual(before);
+      const payables = await d.t.run((ctx) => ctx.db.query("vehicleSupplierPayables").collect());
+      expect(payables).toHaveLength(1);
+      expect(payables[0]).toMatchObject({ supplierId: d.creditor, amountDue: 9000 });
+    });
+
+    test("does not excuse NEW use: another import with the same inactive creditor, or a changed replay, is still refused", async () => {
+      const d = await seedDealer("i4");
+      const importId = crypto.randomUUID();
+      const first = { ...owned, rowId: 1, purchaseSupplierId: d.creditor };
+      await purchase(d, importId, [first]);
+      await d.t.run((ctx) => ctx.db.patch(d.creditor, { status: "INACTIVE" }));
+      const before = await worldCounts(d);
+      // A different import is a new use of the inactive supplier.
+      await expectAppError(purchase(d, crypto.randomUUID(), [{ ...first, vin: "IMPORTRPL000003" }]), ...inactive);
+      // The same key with a different fact is not a replay: the fingerprint conflict still refuses it.
+      await expect(purchase(d, importId, [{ ...first, purchasePrice: 9500 }])).rejects.toThrow(/IDEMPOTENCY_CONFLICT/);
+      // The same key with another organization's supplier is still refused, never trusted as a replay.
+      await expect(purchase(d, importId, [{ ...first, purchaseSupplierId: d.foreign }])).rejects.toThrow(/IDEMPOTENCY_CONFLICT|SUPPLIER_NOT_FOUND/);
+      expect(await worldCounts(d)).toEqual(before);
+    });
+  });
 });
 
 describe("vehicleEdits: request and approval", () => {
@@ -602,6 +649,30 @@ describe("vehicleEdits: request and approval", () => {
       d.asClerk.mutation(api.vehicleEdits.requestUpdate, { orgId: d.orgId, vehicleId: id, payload: { sourcedFromName: "Someone Else" } }),
       ...identityRequired
     );
+  });
+
+  test("an UPDATE request never stores a typed creditor name: only the server's snapshot, beside the id", async () => {
+    const d = await seedDealer("e7");
+    // An owned CASH car: its acquisition already posted, so a creditor name has no role in this request.
+    const owned = await d.asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "STOCK", purchasePrice: 8000, purchasePaymentMethod: "CASH",
+    });
+    const noRole = await d.asClerk.mutation(api.vehicleEdits.requestUpdate, {
+      orgId: d.orgId, vehicleId: owned, payload: { color: "Blue", purchaseSupplierName: "Typed Creditor Co" },
+    });
+    expect((await d.t.run((ctx) => ctx.db.get(noRole)))?.payload).toEqual({ color: "Blue" });
+
+    // An owned car with no price yet: the request posts its acquisition ON_ACCOUNT, so the id and the server name are stored.
+    const unpriced = await d.asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, vin: "1HGCM82633A000002", sourceType: "STOCK",
+    });
+    const posting = await d.asClerk.mutation(api.vehicleEdits.requestUpdate, {
+      orgId: d.orgId, vehicleId: unpriced,
+      payload: { purchasePrice: 7000, purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierId: d.creditor, purchaseSupplierName: "typed by the client" },
+    });
+    expect((await d.t.run((ctx) => ctx.db.get(posting)))?.payload).toMatchObject({
+      purchaseSupplierId: d.creditor, purchaseSupplierName: "Credit Supplier Co", purchasePrice: 7000,
+    });
   });
 });
 

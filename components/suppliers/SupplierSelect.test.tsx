@@ -118,6 +118,18 @@ describe("SupplierSelect: choosing", () => {
     expect(onChange).toHaveBeenCalledWith({ id: "sup_gulf", displayName: "Gulf Motors" });
   });
 
+  test("the trigger takes the id it is given, so a label's htmlFor reaches the picker", () => {
+    render(
+      <>
+        <label htmlFor="supplier-field">Supplier</label>
+        <SupplierSelect orgId={ORG} value={undefined} onChange={vi.fn()} id="supplier-field" dataTestId="picker" ariaLabel="Supplier" />
+      </>,
+    );
+    const label = document.querySelector("label[for='supplier-field']") as HTMLLabelElement;
+    expect(screen.getByTestId("picker").id).toBe("supplier-field");
+    expect(label.control).toBe(screen.getByTestId("picker"));
+  });
+
   test("a stored supplier outside the current results still shows its stored name on the trigger", () => {
     renderPicker({ value: "sup_old", valueLabel: "Old Supplier" });
     expect(screen.getByTestId("picker").textContent).toContain("Old Supplier");

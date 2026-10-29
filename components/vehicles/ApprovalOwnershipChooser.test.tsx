@@ -27,8 +27,8 @@ vi.mock("@/components/ui/select", async () => {
 // The real picker is covered by SupplierSelect.test.tsx. Here it is a stand-in that picks a fixed supplier,
 // so this file pins what the chooser does with the id it is handed.
 vi.mock("@/components/suppliers/SupplierSelect", () => ({
-  SupplierSelect: ({ dataTestId, onChange }: { dataTestId?: string; onChange: (s: { id: string; displayName: string }) => void }) => (
-    <button type="button" data-testid={dataTestId} onClick={() => onChange({ id: "sup_atiwi", displayName: "Atiwi" })} />
+  SupplierSelect: ({ id, dataTestId, onChange }: { id?: string; dataTestId?: string; onChange: (s: { id: string; displayName: string }) => void }) => (
+    <button type="button" id={id} data-testid={dataTestId} onClick={() => onChange({ id: "sup_atiwi", displayName: "Atiwi" })} />
   ),
 }));
 
@@ -137,5 +137,17 @@ describe("ApprovalOwnershipChooser", () => {
       purchasePaymentMethod: "ON_ACCOUNT",
       purchaseSupplierId: "sup_atiwi",
     });
+  });
+
+  test("each supplier label points at its picker, so the label names the control and a click on it focuses it", () => {
+    render(<Harness onDecision={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "VehicleOwnershipConsignment" }));
+    const consignmentLabel = screen.getByText(/SourceDealerName/) as HTMLLabelElement;
+    expect(consignmentLabel.control).toBe(screen.getByTestId("own-test-supplier"));
+
+    fireEvent.click(screen.getByRole("button", { name: "VehicleOwnershipOwned" }));
+    fireEvent.click(screen.getByTestId("item-ON_ACCOUNT"));
+    const creditorLabel = screen.getByText(/PurchaseSupplierName/) as HTMLLabelElement;
+    expect(creditorLabel.control).toBe(screen.getByTestId("own-test-creditor"));
   });
 });
