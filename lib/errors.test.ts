@@ -472,6 +472,20 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(enEntry).toBe(DEPOSIT_OTHER_TREATMENT_DISABLED_MESSAGE);
   });
 
+  it("SCRUM-858 OPENING_DEPOSIT_PAYOUT_REFUSED resolves in ar and en, and EN equals the backend message", async () => {
+    const { enEntry, arEntry } = await expectCodedEntry("OPENING_DEPOSIT_PAYOUT_REFUSED");
+    const { OPENING_DEPOSIT_PAYOUT_REFUSED_MESSAGE } = await import("../convex/utils/openingDepositContainment");
+    expect(enEntry).toBe(OPENING_DEPOSIT_PAYOUT_REFUSED_MESSAGE);
+    expect(arEntry).not.toBe(enEntry);
+  });
+
+  it("SCRUM-858 OPENING_DEPOSIT_REVERSAL_REFUSED resolves in ar and en, and EN equals the backend message", async () => {
+    const { enEntry, arEntry } = await expectCodedEntry("OPENING_DEPOSIT_REVERSAL_REFUSED");
+    const { OPENING_DEPOSIT_REVERSAL_REFUSED_MESSAGE } = await import("../convex/utils/openingDepositContainment");
+    expect(enEntry).toBe(OPENING_DEPOSIT_REVERSAL_REFUSED_MESSAGE);
+    expect(arEntry).not.toBe(enEntry);
+  });
+
   it("SCRUM-413 OWNER_NAMED_ROLE_LOCKED resolves to its dictionary entry in ar and en, and EN equals the roles.ts message", async () => {
     const { enEntry } = await expectCodedEntry("OWNER_NAMED_ROLE_LOCKED");
     expect((await roleMessageConst("OWNER_NAMED_ROLE_LOCKED_MESSAGE")).message).toBe(enEntry);
