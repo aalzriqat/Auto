@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { check } from "./checkPrSkillEvidence.mjs";
+import { check, getJson, safeLogLine } from "./checkPrSkillEvidence.mjs";
 import { refresh } from "./refreshPrSkillEvidence.mjs";
 
 const env = { REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "test" };
@@ -212,5 +212,33 @@ describe("certificate carry across update-from-main (SCRUM-874)", () => {
     expect(await refresh({ ...env, COMMENT_ID: "123" }, fetchImpl)).toEqual({ refreshed: true, head, conclusion: "failure" });
     expect(writes[0]).toMatchObject({ name: "skill-evidence", head_sha: head });
     expect(writes[1]).toMatchObject({ conclusion: "failure" });
+  });
+});
+
+describe("getJson path and log hardening (Sonar S7044/S8476/S5145)", () => {
+  const ok = async () => new Response("{}", { status: 200 });
+  test.each([
+    "/repos/aalzriqat/Auto/pulls/7/../../../user",
+    "/repos/aalzriqat/Auto/./pulls/7",
+    "repos/aalzriqat/Auto/pulls/7",
+    "//evil.example/x",
+    "/repos/aalzriqat/Auto/pulls/7#frag",
+    "/repos/aalzriqat/Auto/pulls/7\nX-Injected: 1",
+    "/repos/aalzriqat/Auto/pulls/%2e%2e/user",
+  ])("refuses an unsafe API path before any request: %j", async (path) => {
+    let called = false;
+    const spy = async () => { called = true; return ok(); };
+    await expect(getJson(spy as unknown as typeof fetch, "t", path)).rejects.toThrow("Unsafe GitHub API path");
+    expect(called).toBe(false);
+  });
+  test.each([
+    "/repos/aalzriqat/Auto/compare/abc123...def456?per_page=100&page=1",
+    "/repos/aalzriqat/Auto/git/trees/abc123?recursive=1",
+    "/repos/aalzriqat/Auto/issues/comments/42",
+  ])("allows the API paths the check uses: %s", async (path) => {
+    await expect(getJson(ok as unknown as typeof fetch, "t", path)).resolves.toEqual({});
+  });
+  test("strips control characters from a printed line", () => {
+    expect(safeLogLine("a\r\nb\u001b[31mc")).toBe("a  b [31mc");
   });
 });
