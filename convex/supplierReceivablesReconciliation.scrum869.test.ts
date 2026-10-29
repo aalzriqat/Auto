@@ -27,6 +27,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { computeSupplierReceivablesReconciliation } from "./accountingReports";
+import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
 vi.mock("./rateLimit", () => ({
@@ -530,5 +531,271 @@ describe("SCRUM-858 F4 - a native recovery is checked against the opening drafts
     const r = await recon(s);
     expect(r.status).toBe("UNAVAILABLE");
     expect(r.unavailableReason).toBe("OPENING_SOURCE_UNAVAILABLE");
+  });
+});
+
+/**
+ * SCRUM-858 F3. Each test below pins one fact that a mutation of the reconciliation used to survive.
+ * Expected figures are literals worked out by hand, never recomputed with the code's own arithmetic.
+ */
+describe("SCRUM-858 F3 - the in-flight posting check", () => {
+  // The five event types whose rule touches 1240 (postingRules.ts SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE).
+  const AFFECTING = [
+    "SALE_COMPLETED", "DEPOSIT_APPLIED_TO_SETTLEMENT", "EXPENSE_POSTED", "SUPPLIER_RECEIVABLE_COLLECTED", "SUPPLIER_COST_RECOVERY_RECEIVED",
+  ] as const;
+
+  test.each(AFFECTING)("a queued %s posting reports pending", async (eventType) => {
+    const s = await seed(`f3q${eventType.slice(0, 6)}`);
+    await directSale(s, "f3q");
+    await queueEvent(s, { status: "PENDING", eventType });
+    const r = await recon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("PENDING_POSTINGS");
+  });
+
+  test.each(AFFECTING)("a FAILED %s posting reports pending too", async (eventType) => {
+    const s = await seed(`f3f${eventType.slice(0, 6)}`);
+    await directSale(s, "f3f");
+    await queueEvent(s, { status: "FAILED", eventType });
+    const r = await recon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("PENDING_POSTINGS");
+  });
+
+  test("a queued posting with no event type is treated as touching 1240", async () => {
+    const s = await seed("f3notype");
+    await directSale(s, "f3notype");
+    await s.t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId: s.orgId, kind: "POST", status: "PENDING", idempotencyKey: "f3_notype", accountingDate: Date.now(), actorId: s.userId,
+        attempts: 0, createdAt: Date.now(), sourceType: "x", sourceId: "x",
+      })
+    );
+    expect((await recon(s)).unavailableReason).toBe("PENDING_POSTINGS");
+  });
+
+  const postedEvent = (s: Seed, eventType: string) =>
+    s.t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId: s.orgId, eventType, sourceType: "x", sourceId: `f3_${eventType}`, eventVersion: 1, idempotencyKey: `f3_${eventType}_${Math.random()}`,
+        occurredAt: Date.now(), accountingDate: Date.now(), currency: "JOD", payload: {}, status: "POSTED", createdBy: s.userId, createdAt: Date.now(),
+      })
+    );
+  const queueReverse = (s: Seed, originalEventId?: Id<"accountingEvents">) =>
+    s.t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId: s.orgId, kind: "REVERSE", status: "PENDING", idempotencyKey: `f3_rev_${Math.random()}`, accountingDate: Date.now(),
+        actorId: s.userId, attempts: 0, createdAt: Date.now(), sourceType: "x", sourceId: "x", ...(originalEventId ? { originalEventId } : {}),
+      })
+    );
+
+  test("a queued reversal of an event that touches 1240 reports pending", async () => {
+    const s = await seed("f3revhit");
+    await directSale(s, "f3revhit");
+    await queueReverse(s, await postedEvent(s, "SALE_COMPLETED"));
+    expect((await recon(s)).unavailableReason).toBe("PENDING_POSTINGS");
+  });
+
+  test("a queued reversal of an event that cannot touch 1240 does not block the comparison", async () => {
+    const s = await seed("f3revmiss");
+    await directSale(s, "f3revmiss");
+    await queueReverse(s, await postedEvent(s, "COMMISSION_PAID"));
+    const r = await recon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.isReconciled).toBe(true);
+  });
+
+  test("a queued reversal that names no event, or an event that no longer exists, reports pending", async () => {
+    const s = await seed("f3revnone");
+    await directSale(s, "f3revnone");
+    const reversal = await queueReverse(s);
+    expect((await recon(s)).unavailableReason).toBe("PENDING_POSTINGS");
+    await s.t.run((ctx) => ctx.db.delete(reversal));
+
+    const gone = await postedEvent(s, "COMMISSION_PAID");
+    await queueReverse(s, gone);
+    await s.t.run((ctx) => ctx.db.delete(gone));
+    expect((await recon(s)).unavailableReason).toBe("PENDING_POSTINGS");
+  });
+});
+
+describe("SCRUM-858 F3 - the read limits", () => {
+  const cloneRecovery = (s: Seed, recovery: Awaited<ReturnType<typeof supplierBornePayment>>["recovery"], fields: Record<string, unknown>) =>
+    s.t.run((ctx) => {
+      const { _id, _creationTime, ...rest } = recovery;
+      void _id; void _creationTime;
+      return ctx.db.insert("supplierCostRecoveries", { ...rest, ...fields } as never);
+    });
+  const reconWith = (s: Seed, readLimit: number) =>
+    s.t.run((ctx) => computeSupplierReceivablesReconciliation(ctx, s.orgId, undefined, { readLimit }));
+
+  test("cost recoveries share one limit across statuses: over it is UNAVAILABLE, exactly at it is available", async () => {
+    const s = await seed("f3rec");
+    const { recovery } = await supplierBornePayment(s, "f3rec");
+    await cloneRecovery(s, recovery, { status: "OPEN" });
+    await cloneRecovery(s, recovery, { status: "RECOVERED", amountRecoveredMinor: recovery.amountDueMinor });
+    await cloneRecovery(s, recovery, { status: "RECOVERED", amountRecoveredMinor: recovery.amountDueMinor });
+    // 4 rows: two OPEN, two RECOVERED. A per-status budget would see 2 + 2 and pass at 3.
+    const over = await reconWith(s, 3);
+    expect(over.status).toBe("UNAVAILABLE");
+    expect(over.unavailableReason).toBe("OVER_LIMIT");
+    expect(over.complete).toBe(false);
+    const exact = await reconWith(s, 4);
+    expect(exact.status).toBe("AVAILABLE");
+    expect(exact.rowsRead).toEqual({ receivables: 0, recoveries: 4 });
+  });
+
+  test("margin receivables share one limit across statuses", async () => {
+    const s = await seed("f3rcv");
+    const { vehicleId, saleId } = await directSale(s, "f3rcv");
+    await insertReceivable(s, vehicleId, saleId, { amountDue: 1, status: "PAID", amountReceived: 1 });
+    await insertReceivable(s, vehicleId, saleId, { amountDue: 1, status: "PAID", amountReceived: 1 });
+    // 3 rows: one OPEN, two PAID.
+    const over = await reconWith(s, 2);
+    expect(over.unavailableReason).toBe("OVER_LIMIT");
+    expect((await reconWith(s, 3)).status).toBe("AVAILABLE");
+  });
+
+  const queueOthers = async (s: Seed, status: "PENDING" | "FAILED", count: number) => {
+    for (let i = 0; i < count; i += 1) await queueEvent(s, { status, eventType: "COMMISSION_PAID" });
+  };
+
+  test.each(["PENDING", "FAILED"] as const)("more %s outbox rows than the limit is UNAVAILABLE (OVER_LIMIT)", async (status) => {
+    const s = await seed(`f3ob${status}`);
+    await directSale(s, "f3ob");
+    await queueOthers(s, status, 3);
+    const over = await reconWith(s, 2);
+    expect(over.status).toBe("UNAVAILABLE");
+    expect(over.unavailableReason).toBe("OVER_LIMIT");
+    // Exactly at the limit all three are read, none touches 1240, so the comparison goes ahead.
+    const exact = await reconWith(s, 3);
+    expect(exact.status).toBe("AVAILABLE");
+  });
+
+  test("more pending drafts than the limit is UNAVAILABLE (OVER_LIMIT)", async () => {
+    const s = await seed("f3drafts");
+    await directSale(s, "f3drafts");
+    const other = await accountOf(s, "ACCOUNTS_PAYABLE_SUPPLIERS");
+    await s.t.run(async (ctx) => {
+      for (let i = 0; i < 3; i += 1) {
+        await ctx.db.insert("manualJournalDrafts", {
+          orgId: s.orgId, status: "PENDING_APPROVAL", memo: "m", idempotencyKey: `f3_draft_${i}`, createdBy: s.userId, createdAt: Date.now(),
+          lines: [{ accountId: other._id, debitMinor: 1, creditMinor: 0 }],
+        });
+      }
+    });
+    expect((await reconWith(s, 2)).unavailableReason).toBe("OVER_LIMIT");
+    expect((await reconWith(s, 3)).status).toBe("AVAILABLE");
+  });
+});
+
+describe("SCRUM-858 F3 - every balance-carrying status is in the subledger", () => {
+  test("OPEN, PARTIALLY_PAID, DISPUTED and PAID receivables count; CANCELLED does not", async () => {
+    const s = await seed("f3st");
+    const { vehicleId, saleId, receivable } = await directSale(s, "f3st");
+    await s.t.run((ctx) => ctx.db.delete(receivable._id));
+    await insertReceivable(s, vehicleId, saleId, { amountDue: 10, status: "OPEN" });
+    await insertReceivable(s, vehicleId, saleId, { amountDue: 20, amountReceived: 5, status: "PARTIALLY_PAID" });
+    await insertReceivable(s, vehicleId, saleId, { amountDue: 40, status: "DISPUTED" });
+    await insertReceivable(s, vehicleId, saleId, { amountDue: 80, amountReceived: 30, status: "PAID" });
+    await insertReceivable(s, vehicleId, saleId, { amountDue: 160, status: "CANCELLED" });
+    const r = await recon(s);
+    // 10 + (20 - 5) + 40 + (80 - 30) = 115 JOD.
+    expect(r.byCurrency.JOD.marginMinor).toBe(115_000);
+    expect(r.rowsRead).toEqual({ receivables: 4, recoveries: 0 });
+  });
+
+  test("OPEN, PARTIALLY_RECOVERED and RECOVERED recoveries count; REVERSED does not", async () => {
+    const s = await seed("f3strec");
+    const { recovery } = await supplierBornePayment(s, "f3strec");
+    const clone = (fields: Record<string, unknown>) =>
+      s.t.run((ctx) => {
+        const { _id, _creationTime, ...rest } = recovery;
+        void _id; void _creationTime;
+        return ctx.db.insert("supplierCostRecoveries", { ...rest, ...fields } as never);
+      });
+    await s.t.run((ctx) => ctx.db.patch(recovery._id, { amountDueMinor: 10_000, amountRecoveredMinor: 0, status: "OPEN" }));
+    await clone({ amountDueMinor: 20_000, amountRecoveredMinor: 5_000, status: "PARTIALLY_RECOVERED" });
+    await clone({ amountDueMinor: 40_000, amountRecoveredMinor: 30_000, status: "RECOVERED" });
+    await clone({ amountDueMinor: 80_000, amountRecoveredMinor: 0, status: "REVERSED" });
+    const r = await recon(s);
+    // 10,000 + (20,000 - 5,000) + (40,000 - 30,000) = 35,000 minor units.
+    expect(r.byCurrency.JOD.recoveryMinor).toBe(35_000);
+    expect(r.rowsRead).toEqual({ receivables: 0, recoveries: 3 });
+  });
+});
+
+/**
+ * SCRUM-858 F3 - opening recoveries. An OPENING recovery is the cutover's own 1240-family claim: it
+ * posts to a declared control account (here a synthetic 1999), not necessarily to 1240, and is
+ * verified against the POSTED opening draft that created it.
+ */
+describe("SCRUM-858 F3 - opening cost recoveries", () => {
+  const OPENING_MINOR = 100_000; // 100 JOD
+
+  async function openingRecovery(s: Seed, asOfDate: number) {
+    const owner = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "OWNER")!;
+    await s.t.run(async (ctx) => {
+      const membership = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).first();
+      await ctx.db.patch(membership!.roleId, { isSystemOwnerRole: true, permissions: [...owner.permissions] });
+    });
+    const accountId = await s.asUser.mutation(api.chartOfAccounts.create, {
+      orgId: s.orgId, code: "1999", name: "Synthetic declared opening control", type: "ASSET", normalBalance: "DEBIT",
+      currencyRestriction: "JOD", isControlAccount: true, allowManualPosting: false,
+    });
+    const retained = (await s.asUser.query(api.chartOfAccounts.list, { orgId: s.orgId })).find((a) => a.systemKey === "RETAINED_EARNINGS")!;
+    await s.asUser.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: s.orgId, expectedCurrency: "JOD", asOfDate,
+      lines: [
+        { accountId, debitMinor: OPENING_MINOR, creditMinor: 0 },
+        { accountId: retained._id, debitMinor: 0, creditMinor: OPENING_MINOR },
+      ],
+      allocations: [
+        { kind: "SUPPLIER_RECOVERABLE", counterpartyName: "Synthetic supplier", title: "Synthetic opening claim", purpose: "CLAIM",
+          rowKey: "open-1", accountId, amountMinor: OPENING_MINOR },
+      ],
+    });
+    const row = (await s.t.run((ctx) =>
+      ctx.db.query("supplierCostRecoveries").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).filter((q) => q.eq(q.field("origin"), "OPENING")).unique()
+    ))!;
+    return { accountId, row };
+  }
+  const at = (s: Seed, toDate: number) =>
+    s.asUser.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId, toDate });
+
+  test("an opening recovery posts to its declared account and reconciles", async () => {
+    const s = await seed("f3open");
+    const { row } = await openingRecovery(s, Date.now() - 1_000);
+    expect(row.origin).toBe("OPENING");
+    const r = await recon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.byCurrency.JOD).toMatchObject({
+      glBalanceMinor: OPENING_MINOR, subledgerBalanceMinor: OPENING_MINOR, discrepancyMinor: 0, isReconciled: true, recoveryMinor: OPENING_MINOR,
+    });
+  });
+
+  test("an opening recovery dated after the cutoff is on neither side; a later toDate brings it in on both", async () => {
+    const s = await seed("f3openfut");
+    await openingRecovery(s, Date.now() + 2 * DAY);
+    const current = await recon(s);
+    expect(current.status).toBe("AVAILABLE");
+    expect(current.currencies).toEqual([]);
+    expect(current.isReconciled).toBe(true);
+
+    const later = await at(s, Date.now() + 5 * DAY);
+    expect(later.byCurrency.JOD).toMatchObject({
+      glBalanceMinor: OPENING_MINOR, subledgerBalanceMinor: OPENING_MINOR, isReconciled: true, recoveryMinor: OPENING_MINOR,
+    });
+  });
+
+  test("an opening recovery whose row no longer matches its POSTED draft is UNAVAILABLE", async () => {
+    const s = await seed("f3openbad");
+    const { row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run((ctx) => ctx.db.patch(row._id, { amountDueMinor: OPENING_MINOR - 1 }));
+    const r = await recon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("OPENING_SOURCE_UNAVAILABLE");
+    expect(r.isReconciled).toBe(false);
+    expect(r.complete).toBe(false);
   });
 });
