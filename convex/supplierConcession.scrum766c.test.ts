@@ -27,6 +27,7 @@ import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import { finalizeAsOwner, newApplication, payForwardAsOwner, seedFinancedDealership } from "../test-utils/financedDealFixture";
 import { classifyGapResolution, validateGapShares } from "../lib/financingEconomics";
 import { appraisalGapIsSettled } from "./utils/financingEconomics";
@@ -442,15 +443,19 @@ describe("PR-C resolution: the supplier share of the net shortfall", () => {
     const s = await seed("r13");
     const applicationId = await approvedDeal(s, "THROUGH_DEALERSHIP");
     await resolve(s, applicationId, V3);
-    const edit = (over: { sourceCost?: number; sourcedFromName?: string }) =>
-      s.owner.as.mutation(api.vehicles.update, {
-        orgId: s.orgId, vehicleId: s.vehicleId, sourceType: "SOURCED", sourcedFromName: SUPPLIER, sourceCost: 9_500, ...over,
+    // The supplier is sent as a master id (SCRUM-868 P2); `supplier` names which master row the edit points at.
+    const edit = async (over: { sourceCost?: number; supplier?: string }) => {
+      const { supplier = SUPPLIER, ...rest } = over;
+      return s.owner.as.mutation(api.vehicles.update, {
+        orgId: s.orgId, vehicleId: s.vehicleId, sourceType: "SOURCED",
+        sourcedSupplierId: await supplierIdFor(s.t, s.orgId, supplier), sourceCost: 9_500, ...rest,
       });
+    };
     const refused = await refusalOf(edit({ sourceCost: 9_600 }));
     expect(refused?.message.toLowerCase()).toContain("supplier concession");
     // The refusal states no figures: the caller may hold no finance view.
     expect(refused?.message).not.toMatch(/\d{3}/);
-    expect((await refusalOf(edit({ sourcedFromName: "Another Supplier" })))?.message.toLowerCase()).toContain("supplier concession");
+    expect((await refusalOf(edit({ supplier: "Another Supplier" })))?.message.toLowerCase()).toContain("supplier concession");
     expect((await s.t.run((ctx) => ctx.db.get(s.vehicleId)))?.sourceCost).toBe(9_500);
 
     await s.approver.as.mutation(api.financingEconomics.reopenApproval, { orgId: s.orgId, applicationId, reason: "Releasing the concession." });

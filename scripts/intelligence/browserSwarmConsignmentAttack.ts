@@ -395,7 +395,14 @@ function consignmentEconomicsSpec(options: MissionTiming, figures: Readonly<Cons
       const customer = await seedFinancedCustomer(env, command, { lastName: `Consigned-${nonce}`, ltvPercent: scenario.ltvPercent });
       if (customer === null) return;
       const { approver, customerId } = customer;
-      const supplierName = `Swarm Supplier ${nonce}`;
+      // SCRUM-868 P2: the consignment supplier is a master record named by id; the server writes the name.
+      const supplier = await command(() =>
+        client.mutation(api.suppliers.create, {
+          orgId: org,
+          idempotencyKey: `${nonce}-supplier`,
+          displayName: `Swarm Supplier ${nonce}`,
+        }),
+      );
       const vehicleId = await command(() =>
         client.mutation(api.vehicles.create, {
           orgId: org,
@@ -409,7 +416,7 @@ function consignmentEconomicsSpec(options: MissionTiming, figures: Readonly<Cons
           transmission: "Automatic",
           sellingPrice: figures.priceMajor,
           sourceType: "SOURCED",
-          sourcedFromName: supplierName,
+          sourcedSupplierId: supplier.supplierId,
           // The supplier's ENTITLEMENT, not a purchase price: the car was never the dealership's.
           sourceCost: figures.entitlementMajor,
           status: "AVAILABLE",

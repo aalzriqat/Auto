@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { SupplierSelect } from "@/components/suppliers/SupplierSelect";
 import { Button } from "@/components/ui/button";
 import { Upload, X, Search, Loader2, ArrowLeft, ArrowRight, Check } from "lucide-react";
 import {
@@ -145,12 +146,14 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       purchasePaymentMethod: undefined,
       bankAccountId: undefined,
       purchaseSupplierName: "",
+      purchaseSupplierId: undefined,
       minimumProfit: 0,
       sellingPrice: 0,
       status: "AVAILABLE",
       // SCRUM-717 (D-45): no default. The dealer chooses consignment or owned.
       sourceType: undefined,
       sourcedFromName: "",
+      sourcedSupplierId: undefined,
       sourceCost: 0,
       notes: "",
       imageIds: [],
@@ -178,11 +181,13 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         purchasePaymentMethod: undefined,
         bankAccountId: undefined,
         purchaseSupplierName: "",
+        purchaseSupplierId: undefined,
         minimumProfit: vehicle.minimumProfit,
         sellingPrice: vehicle.sellingPrice,
         status: vehicle.status,
         sourceType: (vehicle as any).sourceType ?? "STOCK",
         sourcedFromName: (vehicle as any).sourcedFromName ?? "",
+        sourcedSupplierId: vehicle.sourcedSupplierId ?? undefined,
         sourceCost: (vehicle as any).sourceCost ?? 0,
         notes: vehicle.notes || "",
         imageIds: vehicle.imageIds || [],
@@ -208,11 +213,13 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         purchasePaymentMethod: undefined,
         bankAccountId: undefined,
         purchaseSupplierName: "",
+        purchaseSupplierId: undefined,
         minimumProfit: 0,
         sellingPrice: 0,
         status: "AVAILABLE",
         sourceType: undefined,
         sourcedFromName: "",
+        sourcedSupplierId: undefined,
         sourceCost: 0,
         notes: "",
         imageIds: [],
@@ -388,9 +395,13 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         inspectionStatus,
         purchasePaymentMethod,
         bankAccountId: _bankAccountId,
-        purchaseSupplierName,
+        // SCRUM-868 P2: the display names are never submitted. Only the supplier ids go to the
+        // server, which resolves them against the supplier master and writes the snapshot.
+        purchaseSupplierName: _purchaseSupplierName,
+        purchaseSupplierId,
         purchasePrice,
-        sourcedFromName,
+        sourcedFromName: _sourcedFromName,
+        sourcedSupplierId,
         sourceCost,
         ...baseValues
       } = values;
@@ -405,7 +416,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         values.sourceType === "STOCK"
           ? { ...(costsUnlocked ? { purchasePrice } : {}) }
           : {
-              sourcedFromName,
+              ...(sourcedSupplierId ? { sourcedSupplierId: sourcedSupplierId as Id<"suppliers"> } : {}),
               ...(costsUnlocked ? { sourceCost } : {}),
               ...(vehicle && costsUnlocked ? { purchasePrice } : {}),
             };
@@ -416,8 +427,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
           ? {
               purchasePaymentMethod,
               ...(needsAcquisitionBank ? { bankAccountId: selectedAcquisitionBank?._id } : {}),
-              ...(purchasePaymentMethod === "ON_ACCOUNT"
-                ? { purchaseSupplierName: purchaseSupplierName?.trim() }
+              ...(purchasePaymentMethod === "ON_ACCOUNT" && purchaseSupplierId
+                ? { purchaseSupplierId: purchaseSupplierId as Id<"suppliers"> }
                 : {}),
             }
           : {};
@@ -633,7 +644,19 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                     <FormItem>
                       <FormLabel>{t("SourceDealerName" as any)} *</FormLabel>
                       <FormControl>
-                        <Input placeholder={t("SourceDealerPlaceholder" as any)} {...field} />
+                        <SupplierSelect
+                          orgId={activeOrgId}
+                          value={form.watch("sourcedSupplierId")}
+                          valueLabel={field.value}
+                          ariaLabel={t("SourceDealerName" as any)}
+                          invalid={!!form.formState.errors.sourcedFromName}
+                          dataTestId="vehicle-sourced-supplier"
+                          onChange={(supplier) => {
+                            form.setValue("sourcedSupplierId", supplier.id, { shouldDirty: true });
+                            field.onChange(supplier.displayName);
+                            form.clearErrors("sourcedFromName");
+                          }}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -927,7 +950,19 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                     <FormItem>
                       <FormLabel>{t("PurchaseSupplierName")} *</FormLabel>
                       <FormControl>
-                        <Input placeholder={t("SourceDealerPlaceholder" as any)} {...field} />
+                        <SupplierSelect
+                          orgId={activeOrgId}
+                          value={form.watch("purchaseSupplierId")}
+                          valueLabel={field.value}
+                          ariaLabel={t("PurchaseSupplierName")}
+                          invalid={!!form.formState.errors.purchaseSupplierName}
+                          dataTestId="vehicle-purchase-creditor"
+                          onChange={(supplier) => {
+                            form.setValue("purchaseSupplierId", supplier.id, { shouldDirty: true });
+                            field.onChange(supplier.displayName);
+                            form.clearErrors("purchaseSupplierName");
+                          }}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

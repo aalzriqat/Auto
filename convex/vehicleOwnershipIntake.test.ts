@@ -2,10 +2,10 @@
  * SCRUM-717 (D-45): intake ownership and source-shape authority.
  *
  * Invariant under test: a new vehicle carries an EXPLICIT ownership decision.
- *   - Consignment (SOURCED): supplier name + positive sourceCost, and NOTHING is
+ *   - Consignment (SOURCED): a supplier master id (SCRUM-868 P2) + positive sourceCost, and NOTHING is
  *     posted at intake (no journal, no cashbook row, no payable).
  *   - Owned (STOCK): purchasePrice + a deliberate settlement. ON_ACCOUNT names its
- *     creditor in `purchaseSupplierName` (never `sourcedFromName`), and a STOCK row
+ *     creditor by `purchaseSupplierId` (never `sourcedSupplierId`), and a STOCK row
  *     never gains sourcedFromName / sourceCost.
  *   - Every ownership change goes through an authorized, audited door.
  *
@@ -16,6 +16,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expectAppError } from "../test-utils/expectAppError";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -138,7 +139,14 @@ async function payablesOf(d: Dealer, vehicleId: Id<"vehicles">) {
   );
 }
 
-const sourcedFields = { sourceType: "SOURCED" as const, sourcedFromName: "Gulf Motors", sourceCost: 9000 };
+/** A consignment decision whose supplier is a master row, as every pilot caller must send it. */
+async function sourcedFields(d: Dealer) {
+  return {
+    sourceType: "SOURCED" as const,
+    sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Gulf Motors"),
+    sourceCost: 9000,
+  };
+}
 
 describe("vehicles.create — an explicit ownership decision", () => {
   test("a blank source type is refused and writes nothing", async () => {
@@ -170,24 +178,32 @@ describe("vehicles.create — an explicit ownership decision", () => {
     expect(await worldCounts(d)).toEqual(before);
   });
 
-  test("a consignment car needs a supplier name and a cost greater than zero", async () => {
+  test("a consignment car needs a supplier id and a cost greater than zero", async () => {
     const d = await seedDealer("c3");
     const before = await worldCounts(d);
+    const sourcedSupplierId = await supplierIdFor(d.t, d.orgId, "Gulf Motors");
     await expectAppError(
       d.asOwner.mutation(api.vehicles.create, {
         idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "SOURCED", sourceCost: 9000,
       }),
-      ...code("VEHICLE_SOURCED_SUPPLIER_REQUIRED")
+      "SUPPLIER_IDENTITY_REQUIRED", "A supplier is required."
+    );
+    // A name alone is not an identity (SCRUM-868 P2): this is also the shape a stale mobile build sends.
+    await expectAppError(
+      d.asOwner.mutation(api.vehicles.create, {
+        idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000,
+      }),
+      "SUPPLIER_IDENTITY_REQUIRED", "A supplier is required."
     );
     await expectAppError(
       d.asOwner.mutation(api.vehicles.create, {
-        idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "SOURCED", sourcedFromName: "Gulf Motors",
+        idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "SOURCED", sourcedSupplierId,
       }),
       ...code("VEHICLE_SOURCED_COST_INVALID")
     );
     await expectAppError(
       d.asOwner.mutation(api.vehicles.create, {
-        idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 0,
+        idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "SOURCED", sourcedSupplierId, sourceCost: 0,
       }),
       ...code("VEHICLE_SOURCED_COST_INVALID")
     );
@@ -198,7 +214,7 @@ describe("vehicles.create — an explicit ownership decision", () => {
     const d = await seedDealer("c4");
     const before = await worldCounts(d);
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     const after = await worldCounts(d);
     expect(after.vehicles).toBe(before.vehicles + 1);
@@ -207,11 +223,12 @@ describe("vehicles.create — an explicit ownership decision", () => {
     expect(await payablesOf(d, vehicleId)).toHaveLength(0);
   });
 
-  test("owned ON_ACCOUNT names the creditor in purchaseSupplierName: one AP journal, payable carries the name, the vehicle row has no consignment fields", async () => {
+  test("owned ON_ACCOUNT names the creditor by purchaseSupplierId: one AP journal, payable carries the master name, the vehicle row has no consignment fields", async () => {
     const d = await seedDealer("c5");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "STOCK",
-      purchasePrice: 10000, purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
+      purchasePrice: 10000, purchasePaymentMethod: "ON_ACCOUNT",
+      purchaseSupplierId: await supplierIdFor(d.t, d.orgId, "Credit Supplier Co"),
     });
     expect(await acquisitionEvents(d, vehicleId)).toHaveLength(1);
     const payables = await payablesOf(d, vehicleId);
@@ -224,7 +241,7 @@ describe("vehicles.create — an explicit ownership decision", () => {
     expect(row?.sourceCost).toBeUndefined();
   });
 
-  test("owned ON_ACCOUNT without purchaseSupplierName is refused and writes nothing", async () => {
+  test("owned ON_ACCOUNT without purchaseSupplierId is refused and writes nothing", async () => {
     const d = await seedDealer("c6");
     const before = await worldCounts(d);
     await expectAppError(
@@ -232,7 +249,15 @@ describe("vehicles.create — an explicit ownership decision", () => {
         idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "STOCK",
         purchasePrice: 10000, purchasePaymentMethod: "ON_ACCOUNT",
       }),
-      ...code("VEHICLE_PURCHASE_SUPPLIER_REQUIRED")
+      "SUPPLIER_IDENTITY_REQUIRED", "A supplier is required."
+    );
+    // A name alone is not an identity either.
+    await expectAppError(
+      d.asOwner.mutation(api.vehicles.create, {
+        idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "STOCK",
+        purchasePrice: 10000, purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
+      }),
+      "SUPPLIER_IDENTITY_REQUIRED", "A supplier is required."
     );
     expect(await worldCounts(d)).toEqual(before);
   });
@@ -296,7 +321,7 @@ describe("vehicles.create — an explicit ownership decision", () => {
 });
 
 describe("vehicles.createSourced", () => {
-  test("refuses a missing supplier or a non-positive cost with the shared coded errors, writing nothing", async () => {
+  test("refuses a missing supplier id or a non-positive cost with coded errors, writing nothing", async () => {
     const d = await seedDealer("s1");
     const before = await worldCounts(d);
     // createSourced has a narrower arg set than create (no status).
@@ -304,10 +329,12 @@ describe("vehicles.createSourced", () => {
     const row = { orgId: d.orgId, ...sourcedBase };
     await expectAppError(
       d.asOwner.mutation(api.vehicles.createSourced, { ...row, sourcedFromName: "  ", sourceCost: 9000 }),
-      ...code("VEHICLE_SOURCED_SUPPLIER_REQUIRED")
+      "SUPPLIER_IDENTITY_REQUIRED", "A supplier is required."
     );
     await expectAppError(
-      d.asOwner.mutation(api.vehicles.createSourced, { ...row, sourcedFromName: "Gulf Motors", sourceCost: 0 }),
+      d.asOwner.mutation(api.vehicles.createSourced, {
+        ...row, sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Gulf Motors"), sourceCost: 0,
+      }),
       ...code("VEHICLE_SOURCED_COST_INVALID")
     );
     expect(await worldCounts(d)).toEqual(before);
@@ -338,13 +365,14 @@ describe("vehicleEdits.requestCreate -> approve", () => {
     expect(await worldCounts(d)).toEqual(before);
   });
 
-  test("owned ON_ACCOUNT approval uses purchaseSupplierName and never stamps the vehicle with a supplier; approving twice posts once", async () => {
+  test("owned ON_ACCOUNT approval uses purchaseSupplierId and never stamps the vehicle with a supplier; approving twice posts once", async () => {
     const d = await seedDealer("r3");
     const requestId = await d.asOwner.mutation(api.vehicleEdits.requestCreate, {
       orgId: d.orgId,
       payload: {
         ...baseVehicle, sourceType: "STOCK", purchasePrice: 7000,
-        purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Approval Flow Supplier",
+        purchasePaymentMethod: "ON_ACCOUNT",
+        purchaseSupplierId: await supplierIdFor(d.t, d.orgId, "Approval Flow Supplier"),
       },
     });
     await d.asOwner.mutation(api.vehicleEdits.resolve, { orgId: d.orgId, requestId, status: "APPROVED" });
@@ -394,7 +422,7 @@ describe("vehicleEdits.requestCreate -> approve", () => {
     // The approver classifies it as consignment: no accounting at intake.
     await d.asOwner.mutation(api.vehicleEdits.resolve, {
       orgId: d.orgId, requestId, status: "APPROVED",
-      ownership: { sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000 },
+      ownership: { sourceType: "SOURCED", sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Gulf Motors"), sourceCost: 9000 },
     });
     const vehicle = await d.t.run((ctx) =>
       ctx.db.query("vehicles").withIndex("by_org_vin", (q) => q.eq("orgId", d.orgId).eq("vin", baseVehicle.vin)).unique()
@@ -429,7 +457,7 @@ describe("ownership flips", () => {
       idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "STOCK",
     });
     const sourcedId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, vin: "1HGCM82633A000002", ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, vin: "1HGCM82633A000002", ...(await sourcedFields(d)),
     });
     const before = await worldCounts(d);
     await expectAppError(
@@ -446,7 +474,7 @@ describe("ownership flips", () => {
   test("a forged UPDATE request that carries a sourceType change is refused at approval, with nothing applied", async () => {
     const d = await seedDealer("f1b");
     const sourcedId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     const requestId = await d.t.run((ctx) =>
       ctx.db.insert("vehicleEdits", {
@@ -473,7 +501,8 @@ describe("ownership flips", () => {
     const before = await worldCounts(d);
     await expectAppError(
       d.asOwner.mutation(api.vehicles.update, {
-        orgId: d.orgId, vehicleId, sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000,
+        orgId: d.orgId, vehicleId, sourceType: "SOURCED",
+        sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Gulf Motors"), sourceCost: 9000,
       }),
       ...code("VEHICLE_OWNERSHIP_FLIP_POSTED")
     );
@@ -496,7 +525,8 @@ describe("ownership flips", () => {
     const before = await worldCounts(d);
     await expectAppError(
       d.asOwner.mutation(api.vehicles.update, {
-        orgId: d.orgId, vehicleId, sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000,
+        orgId: d.orgId, vehicleId, sourceType: "SOURCED",
+        sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Gulf Motors"), sourceCost: 9000,
       }),
       ...code("VEHICLE_OWNERSHIP_FLIP_POSTED")
     );
@@ -506,7 +536,7 @@ describe("ownership flips", () => {
   test("direct SOURCED -> STOCK without MANAGE_FINANCE is refused and writes nothing", async () => {
     const d = await seedDealer("f4");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     const before = await worldCounts(d);
     await expect(
@@ -521,7 +551,7 @@ describe("ownership flips", () => {
   test("SOURCED -> STOCK without the explicit buy-out terms is refused (price > 0 AND a method)", async () => {
     const d = await seedDealer("f5");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     const before = await worldCounts(d);
     for (const terms of [
@@ -543,7 +573,7 @@ describe("ownership flips", () => {
     const d = await seedDealer("f6");
     const bankAccountId = await addOperatingBank(d);
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     // The agreed buy-out differs from the consignment cost on purpose.
     await d.asOwner.mutation(api.vehicles.update, {
@@ -567,14 +597,14 @@ describe("ownership flips", () => {
     expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.sourceType).toBe("STOCK");
   });
 
-  test("an authorized buy-out ON_ACCOUNT opens the payable under purchaseSupplierName", async () => {
+  test("an authorized buy-out ON_ACCOUNT opens the payable under purchaseSupplierId", async () => {
     const d = await seedDealer("f7");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     await d.asOwner.mutation(api.vehicles.update, {
       orgId: d.orgId, vehicleId, sourceType: "STOCK", purchasePrice: 8200,
-      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
+      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierId: await supplierIdFor(d.t, d.orgId, "Credit Supplier Co"),
     });
     const payables = await payablesOf(d, vehicleId);
     expect(payables).toHaveLength(1);
@@ -678,11 +708,14 @@ describe("vehicles.importBulk", () => {
     expect(await worldCounts(d)).toEqual(before);
   });
 
-  test("PURCHASE ON_ACCOUNT takes the creditor from purchaseSupplierName and the vehicle row never carries it", async () => {
+  test("PURCHASE ON_ACCOUNT takes the creditor from purchaseSupplierId and the vehicle row never carries it", async () => {
     const d = await seedDealer("i4");
     await d.asOwner.mutation(api.vehicles.importBulk, {
       orgId: d.orgId, acquisitionPosting: "PURCHASE", importId: "imp-717", purchasePaymentMethod: "ON_ACCOUNT",
-      vehicles: [{ rowId: 1, ...importRow, vin: "IMPORTONACC000001", sourceType: "STOCK", purchasePrice: 10000, purchaseSupplierName: "Gulf Motors" }],
+      vehicles: [{
+        rowId: 1, ...importRow, vin: "IMPORTONACC000001", sourceType: "STOCK", purchasePrice: 10000,
+        purchaseSupplierId: await supplierIdFor(d.t, d.orgId, "Gulf Motors"),
+      }],
     });
     const vehicle = await d.t.run((ctx) =>
       ctx.db.query("vehicles").withIndex("by_org_vin", (q) => q.eq("orgId", d.orgId).eq("vin", "IMPORTONACC000001")).unique()
@@ -714,7 +747,7 @@ describe("the data browser (adminData.adminUpdateRecord)", () => {
       await d.t.run((ctx) => ctx.db.insert("users", { clerkId: "dev_717", email: "admin@autoflow.dev" }));
       const asAdmin = d.t.withIdentity({ subject: "dev_717" });
       const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-        idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+        idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
       });
 
       const lockedPatches: Array<Record<string, unknown>> = [
@@ -762,7 +795,7 @@ describe("SCRUM-717 /simplify correctness items", () => {
   test("postVehicleAcquisitionIfOwned refuses to post when the STORED row is SOURCED, whatever isSourced says", async () => {
     const d = await seedDealer("s16");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     const before = await worldCounts(d);
     await expectAppError(

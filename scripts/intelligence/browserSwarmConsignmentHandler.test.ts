@@ -261,7 +261,13 @@ class World {
       case "finance:createCompany":
         if (a.defaultLtvPercent !== plan.ltv) throw new ConvexError("company LTV is not the scenario's");
         return this.id("company");
+      case "suppliers:create":
+        // SCRUM-868 P2: the consignment supplier master the SOURCED car is created against.
+        return { supplierId: this.id("sup") };
       case "vehicles:create":
+        if (typeof a.sourcedSupplierId !== "string" || "sourcedFromName" in a) {
+          throw new ConvexError("scenario named the supplier by text instead of by master id");
+        }
         if (this.vehicleRateLimits < (this.faults.rateLimitVehicleTimes ?? 0)) {
           this.vehicleRateLimits += 1;
           throw new ConvexError("Rate limit exceeded. Try again in 1s");

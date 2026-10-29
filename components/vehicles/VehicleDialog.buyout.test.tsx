@@ -62,7 +62,7 @@ vi.stubGlobal(
 
 const updateSpy = () => mutationSpies.get("vehicles:update")!;
 
-const storedVehicle = (sourceType: "SOURCED" | "STOCK") =>
+const storedVehicle = (sourceType: "SOURCED" | "STOCK", withSupplierId = true) =>
   ({
     _id: "veh_1",
     orgId: "org_1",
@@ -78,12 +78,18 @@ const storedVehicle = (sourceType: "SOURCED" | "STOCK") =>
     status: sourceType === "SOURCED" ? "SOURCING" : "AVAILABLE",
     sourceType,
     ...(sourceType === "SOURCED"
-      ? { sourcedFromName: "Gulf Motors", sourceCost: 9000, purchasePrice: 9000 }
+      ? {
+          sourcedFromName: "Gulf Motors",
+          // A vehicle that predates SCRUM-868 has the name only.
+          ...(withSupplierId ? { sourcedSupplierId: "sup_gulf" } : {}),
+          sourceCost: 9000,
+          purchasePrice: 9000,
+        }
       : { purchasePrice: 7000 }),
   }) as never;
 
-const renderEdit = (sourceType: "SOURCED" | "STOCK" = "SOURCED") =>
-  render(<VehicleDialog open onOpenChange={() => undefined} vehicle={storedVehicle(sourceType)} canEdit />);
+const renderEdit = (sourceType: "SOURCED" | "STOCK" = "SOURCED", withSupplierId = true) =>
+  render(<VehicleDialog open onOpenChange={() => undefined} vehicle={storedVehicle(sourceType, withSupplierId)} canEdit />);
 
 const owned = () => screen.getByRole("button", { name: "VehicleOwnershipOwned" });
 const consignment = () => screen.getByRole("button", { name: "VehicleOwnershipConsignment" });
@@ -136,8 +142,20 @@ describe("buying out a saved consignment car", () => {
     save();
     await waitFor(() => expect(updateSpy()).toHaveBeenCalledTimes(1));
     const sent = updateSpy().mock.calls[0][0];
-    expect(sent).toMatchObject({ sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000, purchasePrice: 9000 });
+    // The supplier travels as its master id only; the typed or stored name is never submitted.
+    expect(sent).toMatchObject({ sourceType: "SOURCED", sourcedSupplierId: "sup_gulf", sourceCost: 9000, purchasePrice: 9000 });
+    expect(sent).not.toHaveProperty("sourcedFromName");
     expect(sent).not.toHaveProperty("purchasePaymentMethod");
+  });
+
+  test("a legacy consignment car (name only, no supplier id) still saves an ordinary edit and sends no supplier at all", async () => {
+    renderEdit("SOURCED", false);
+    save();
+    await waitFor(() => expect(updateSpy()).toHaveBeenCalledTimes(1));
+    const sent = updateSpy().mock.calls[0][0];
+    expect(sent).toMatchObject({ sourceType: "SOURCED", sourceCost: 9000 });
+    expect(sent).not.toHaveProperty("sourcedFromName");
+    expect(sent).not.toHaveProperty("sourcedSupplierId");
   });
 
   test("an owned car's stored purchase price is untouched (not a buy-out)", async () => {
