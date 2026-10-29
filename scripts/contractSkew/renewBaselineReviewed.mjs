@@ -42,6 +42,8 @@
  * the recorded ancestor SHA. Whole-file changes can over-refuse unrelated edits.
  * The recorded SHA comes from `SCRUM-866 round N review against origin/main <sha>` or
  * `<KEY> review of PR #N head <sha>` (REVIEW_REFERENCE); the last one wins.
+ * In PR CI, --pr-base additionally requires that source SHA to already belong
+ * to the base history, so a squash cannot discard the recorded evidence.
  * Wrapper hooks, shared validators, handler helpers, custom registration factory
  * bodies, re-export wiring, resolution/config/dependency changes and runtime
  * loaders are outside this check. Mechanical contract comparison uses exported
@@ -288,13 +290,15 @@ function run(argv, io, root) {
       expires: { type: "string" },
       renewal: { type: "string" },
       "check-evidence": { type: "boolean" },
+      "pr-base": { type: "string" },
       write: { type: "boolean" },
     },
   });
   if (!args.reviewed) throw new Error("--reviewed <rev> is required");
   if (!args["check-evidence"] && !args.expires) throw new Error("--expires <YYYY-MM-DD> is required: the new expiry is a decision, never defaulted");
   if (!args["check-evidence"] && !args.renewal) throw new Error('--renewal "<reason>" is required: a renewal records why, it is never defaulted');
-  if (args["check-evidence"] && (args.write || args.expires || args.renewal)) throw new Error("--check-evidence is read-only and takes only --reviewed and --baseline");
+  if (args["check-evidence"] && (args.write || args.expires || args.renewal)) throw new Error("--check-evidence is read-only and takes only --reviewed, --baseline and --pr-base");
+  if (args["pr-base"] !== undefined && !args["check-evidence"]) throw new Error("--pr-base requires --check-evidence");
   const git = resolveGit();
   if (!git) throw new Error("git could not be located (set CONTRACT_SKEW_GIT to an absolute path)");
   const baseline = resolveInside(root, args.baseline ?? DEFAULT_BASELINE, "baseline");
@@ -320,6 +324,8 @@ function run(argv, io, root) {
   };
   // A reviewed revision that is not an ancestor of HEAD says nothing about HEAD's history.
   requireAncestor(reviewed, "reviewed revision");
+  const prBase = args["pr-base"] === undefined ? undefined : resolveHistoryCommit(args["pr-base"], "PR base revision");
+  if (prBase !== undefined) requireAncestor(prBase, "PR base revision");
   const dirty = new Set(runGitText(git, ["diff", "--name-only", "-z", "HEAD"], { cwd: root }).split("\0").filter(Boolean));
 
   const baselineText = fs.readFileSync(baseline, "utf8");
@@ -338,6 +344,9 @@ function run(argv, io, root) {
       if (!comparison) {
         const evidenceHead = resolveHistoryCommit(sha, "recorded evidence revision");
         requireAncestor(evidenceHead, "recorded evidence revision");
+        if (prBase !== undefined && !isAncestor(git, evidenceHead, prBase, root)) {
+          throw new Error(`PR_BASE_ANCESTRY_REFUSED: recorded evidence revision ${evidenceHead} is not a verified ancestor of PR base ${prBase}; cite a commit already on main and name the PR's own changed files in the renewal review`);
+        }
         comparison = gitCompare({ git, cwd: root, reviewed: evidenceHead, head: headSha });
         evidenceComparisons.set(sha, comparison);
       }
