@@ -90,11 +90,11 @@ const addSourcedVehicle = (s: Seed, tag: string) =>
   );
 
 /** A COMPLETED consigned sale settled DIRECT_TO_SUPPLIER: the real posting debits 1240 and opens the receivable. */
-async function directSale(s: Seed, tag: string) {
+async function directSale(s: Seed, tag: string, saleDate: number = Date.now()) {
   const vehicleId = await addSourcedVehicle(s, tag);
   const saleId = await s.asUser.mutation(api.sales.create, {
     idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
-    salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
+    salePrice: SALE_PRICE, saleDate, status: "COMPLETED" as const,
     supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
   });
   const receivable = (await s.t.run((ctx) =>
@@ -344,5 +344,59 @@ describe("SCRUM-869 S2 - the supplier receivables subledger reconciles to GL 124
     const source = Object.values(PERIOD_CLOSE_SOURCE)[0] as string;
     expect(source.length).toBeGreaterThan(1000);
     expect(source).not.toMatch(/SupplierReceivablesReconciliation/);
+  });
+});
+
+const DAY = 86_400_000;
+
+/**
+ * SCRUM-858 F1. The GL side is read as of `toDate`; the subledger side is the rows' CURRENT state,
+ * and a margin receipt carries no date of its own (`amountReceived` is a running total), so the
+ * subledger cannot be rebuilt at a past date. A comparison at a past `toDate` would mix two
+ * cutoffs, so it is refused: UNAVAILABLE, never "reconciled" and never a manufactured difference.
+ */
+describe("SCRUM-858 F1 - no mixed-cutoff comparison", () => {
+  test("a real 3,000 error is not reported reconciled at a past toDate", async () => {
+    const s = await seed("f1hide");
+    // Sale A is dated ten days ago, so its 3,000 is in the GL at the cutoff. Its receivable row is then lost
+    // (the real error). Sale B is made now: its row is created after the cutoff and its GL entry is later too.
+    const a = await directSale(s, "f1hideA", Date.now() - 10 * DAY);
+    await s.t.run((ctx) => ctx.db.delete(a.receivable._id));
+    await directSale(s, "f1hideB");
+    const r = await s.asUser.query(api.accountingReports.supplierReceivablesReconciliation, {
+      orgId: s.orgId, toDate: Date.now() - 5 * DAY,
+    });
+    expect(r.isReconciled).toBe(false);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("AS_OF_DATE_UNSUPPORTED");
+    expect(r.complete).toBe(false);
+    expect(r.byCurrency).toEqual({});
+  });
+
+  test("a row created after a past toDate does not manufacture a difference", async () => {
+    const s = await seed("f1art");
+    await directSale(s, "f1art");
+    const r = await s.asUser.query(api.accountingReports.supplierReceivablesReconciliation, {
+      orgId: s.orgId, toDate: Date.now() - DAY,
+    });
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("AS_OF_DATE_UNSUPPORTED");
+    expect(r.currencies).toEqual([]);
+    expect(r.byCurrency).toEqual({});
+    expect(r.isReconciled).toBe(false);
+  });
+
+  test("CONTROL: an omitted toDate and a future toDate are the current state and still reconcile", async () => {
+    const s = await seed("f1ok");
+    await directSale(s, "f1ok");
+    const omitted = await recon(s);
+    const future = await s.asUser.query(api.accountingReports.supplierReceivablesReconciliation, {
+      orgId: s.orgId, toDate: Date.now() + DAY,
+    });
+    for (const r of [omitted, future]) {
+      expect(r.status).toBe("AVAILABLE");
+      expect(r.byCurrency.JOD).toMatchObject({ glBalanceMinor: MARGIN * SCALE, subledgerBalanceMinor: MARGIN * SCALE, isReconciled: true });
+      expect(r.complete).toBe(true);
+    }
   });
 });
