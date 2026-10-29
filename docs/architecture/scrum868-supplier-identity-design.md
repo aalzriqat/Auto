@@ -52,7 +52,7 @@ Finding: **every money path identifies the party by a free-text name. No `suppli
 | `supplierCostRecoveries` (`supplierRecoveryCommon`) | `sourcedFromName` (required) | A/R: supplier-borne cost recovery, native and opening origin | `convex/schema.ts:46`, table at `:1775-1784` |
 | `supplierCostRecoveryReceipts` | none (reaches the party through `recoveryId`) | | `convex/schema.ts:65-88`, `:1796-1800` |
 | `vehicleOwnershipConversions` | `supplierName` (optional) | snapshot at SOURCED to STOCK conversion | `convex/schema.ts:1840` |
-| `applications.supplierGapBasis` | `supplierName` (inside object) | party the PR-C concession was agreed against | `convex/schema.ts:3458-3462` |
+| `financeApplications.supplierGapBasis` | `supplierName` (inside object) | party the PR-C concession was agreed against | `convex/schema.ts:3479` |
 | `expenses` | `vendor` (optional string) | service provider / payee, free text | `convex/schema.ts:2503` |
 | `expenses` | `costBearer` enum `SHOWROOM`/`SUPPLIER` | bearer type only; the bearer party is implied by `vehicle.sourcedFromName` | `convex/schema.ts:2535`, `convex/utils/costBearer.ts:62-90` |
 | `openingBalanceDrafts.allocations[]` | `counterpartyName` on `SUPPLIER_RECOVERABLE`, `SUPPLIER_PAYABLE`, `OTHER_PAYABLE` | opening party | `convex/utils/openingAllocationValidators.ts:43-45`, array at `convex/schema.ts:1313` |
@@ -158,7 +158,7 @@ A reuses the deployed, reviewed S1 master and its lock without a data move, keep
 
 ### 4.1 What this assumes, stated plainly
 
-The pilot deployments hold **no supplier-bearing documents that need converting**. Concretely, I assume that on the deployment(s) the Bloom Cars pilot runs on, the following contain no rows created before this change: `vehicleSupplierPayables`, `vehicleSupplierReceivables`, `supplierCostRecoveries`, `supplierCostRecoveryReceipts`, SOURCED `vehicles`, `vehicleOwnershipConversions` with a supplier, `applications` with `supplierGapBasis`, `expenses` with `vendor` or `costBearer: "SUPPLIER"`, `vehicleEdits` pending rows, and `openingBalanceDrafts` with supplier allocations. **I have not verified this and cannot from here.** It needs an operator read of the production deployment (counts only, no values) before slice P2 ships. See OQ-1.
+The pilot deployments hold **no supplier-bearing documents that need converting**. Concretely, I assume that on the deployment(s) the Bloom Cars pilot runs on, the following contain no rows created before this change: `vehicleSupplierPayables`, `vehicleSupplierReceivables`, `supplierCostRecoveries`, `supplierCostRecoveryReceipts`, SOURCED `vehicles`, `vehicleOwnershipConversions` with a supplier, `financeApplications` with `supplierGapBasis`, `expenses` with `vendor` or `costBearer: "SUPPLIER"`, `vehicleEdits` pending rows, and `openingBalanceDrafts` with supplier allocations. **I have not verified this and cannot from here.** It needs an operator read of the production deployment (counts only, no values) before slice P2 ships. See OQ-1.
 
 If the assumption is false for any deployment, nothing in this design converts those rows. They stay readable with their name snapshots, they are reported as unresolved identity (4.5), and every new money action on them is refused (N5).
 
@@ -180,7 +180,7 @@ All new fields are `v.optional(...)` in the stored-document validator, so a push
 | `vehicleSupplierReceivables` | `supplierId`, `supplierSnapshotVersion` | same | every insert (DIRECT_TO_SUPPLIER sale completion) | receipts and disputes refused |
 | `supplierCostRecoveries` (`supplierRecoveryCommon`, both origins) | `supplierId`, `supplierSnapshotVersion` | same | every insert (expense side effects, opening) | receipts and reversal-receipts refused |
 | `vehicleOwnershipConversions` | `supplierId` | `v.optional(v.id("suppliers"))` | conversion writer | none (history only) |
-| `applications.supplierGapBasis` | `supplierId` | `v.optional(v.id("suppliers"))` inside the object | concession agreement | concession completion compares ids; a basis without an id is refused |
+| `financeApplications.supplierGapBasis` | `supplierId` | `v.optional(v.id("suppliers"))` inside the object | concession agreement | concession completion compares ids; a basis without an id is refused |
 | `expenses` | `vendorSupplierId` (service provider / payee), `costBearerSupplierId` (cost bearer) | `v.optional(v.id("suppliers"))` each | `costBearerSupplierId`: every `costBearer: "SUPPLIER"` expense. `vendorSupplierId`: see OQ-3 | `vendor` stays as a non-authoritative note |
 | `openingBalanceDrafts.allocations[]` (`openingAllocationValidators.ts:43-45`) | `supplierId` on `SUPPLIER_RECOVERABLE`, `SUPPLIER_PAYABLE`; `OTHER_PAYABLE` per OQ-4 | `v.optional(v.id("suppliers"))` | save and post of a supplier allocation | an old draft cannot be posted; a posted one keeps verifying by snapshot name only for replay |
 | `journalLines` | `supplierId` | optional | **not in the early slices.** See OQ-5 | absent on every existing line |
@@ -263,21 +263,35 @@ Every slice follows the AGENTS.md money gates: failing-first tests, Seat 1 and S
 
 | Slice | Content | Risk | Independently shippable because |
 |---|---|---|---|
-| P1 | Widen-only schema: the optional fields and indexes of 4.3 for vehicles, vehicleEdits, the three subledgers, conversions, `supplierGapBasis`; `snapshotSupplier()` helper (wraps `requireActiveSupplier`, returns id, name, version); unresolved-identity code constants. Nothing reads or writes the fields. | LOW-MEDIUM (schema, one-way for the field names) | no behaviour changes; passes schema validation on a populated deployment |
+| P1 | Widen-only schema: the optional fields and indexes of 4.3 for vehicles, vehicleEdits, the three subledgers, conversions, `supplierGapBasis`; `snapshotSupplier()` helper (same org, active and existence checks as `requireActiveSupplier`, but with coded refusals; returns id, name, version); unresolved-identity code constants. Nothing reads or writes the fields. | LOW-MEDIUM (schema, one-way for the field names) | no behaviour changes; passes schema validation on a populated deployment |
 | P2 | Vehicle identity: `vehicles.create/update/createSourced`, `vehicleEdits.request*/resolve`, `importBulk` take and require ids; server writes snapshot names; on-account payable carries `supplierId`; vehicle supplier-link freeze (N11); web: `SupplierSelect`, VehicleDialog, ApprovalOwnershipChooser, VehiclePicker, import mapping step, EN+AR. Mobile refusal. | HIGH (money-adjacent writers) | sale and settlement paths still read the old name until P3, which is safe because P2 writes the snapshot name too |
-| P3 | Sale and settlement: sale completion writes receivable/payable `supplierId` from the vehicle and **removes the "Unknown supplier" default** (fail closed); payments, receipts, disputes and reversals require a resolved id; `outstandingSummary` and other readers group by id; concession basis compares ids; deal readers show record snapshots. | HIGH (money) | after P2 a SOURCED sale can resolve its supplier; before P3 the old name paths still work |
+| P3 | Sale and settlement: sale completion writes receivable/payable `supplierId` from the vehicle and **removes the "Unknown supplier" default** (fail closed); the pilot-enabled payments and receipts (supplier payable payment, consignment margin receipt, cost-recovery receipt) and disputes require a resolved id. Their reversal, unwind and correction doors stay refused server-side for the pilot (SCRUM-869 c23881) whether or not an id resolves: P3 adds the id requirement in front of the existing refusal and never replaces it; `outstandingSummary` and other readers group by id; concession basis compares ids; deal readers show record snapshots. | HIGH (money) | after P2 a SOURCED sale can resolve its supplier; before P3 the old name paths still work |
 | P4 | Expense split: `vendorSupplierId`, `costBearerSupplierId`, recovery `supplierId`, server-side bearer resolution, `ExpenseDialog`, EN+AR. | HIGH (SCRUM-389) | independent of P5 |
 | P5 | Openings: allocation validators and editor, materialisation, `openingSupplierBasis`/`openingSupplierPosting` compare ids with snapshot fallback for replay only. | HIGH (openings are one-way once approved) | independent of P4 |
-| P6 | Owner-gated (OQ-5): `journalLines.supplierId` dimension on the supplier control accounts plus payload field, per-supplier GL reconciliation, launch-evidence check. Posting payloads gain an optional field only (N4). | HIGH (ledger shape) | only if the owner wants per-supplier GL reconciliation for SCRUM-869 |
-| P7 | Certification: authenticated EN and AR RTL journeys on a disposable backend, SCRUM-342/761 scenario registration, SCRUM-486 money literals, SCRUM-810 capability truth, SCRUM-816 consumer coverage, exact-SHA evidence SCRUM-812. Most scenario rows land with P2 to P5; P7 is the gap-closer and the end-to-end journey. | MEDIUM | evidence only |
+| P6 | Deferred past the pilot (OQ-5, c23873): `journalLines.supplierId` dimension on the supplier control accounts plus payload field, per-supplier GL reconciliation. Posting payloads gain an optional field only (N4). | HIGH (ledger shape) | not part of the pilot; no posting changes before it |
+| P7 | Certification: the **mandatory launch-evidence check** (OQ-1, c23873), which counts pilot money rows with no `supplierId` (counts only, no values) and refuses the launch if any exist; authenticated EN and AR RTL journeys on a disposable backend, SCRUM-342/761 scenario registration, SCRUM-486 money literals, SCRUM-810 capability truth, SCRUM-816 consumer coverage, exact-SHA evidence SCRUM-812. Most scenario rows land with P2 to P5; P7 is the gap-closer and the end-to-end journey. | MEDIUM | evidence only |
 
 **SCRUM-869 can start**
 - Read-only design and UI shell: now, against S1 and the P1 field names.
 - Supplier statement, A/R and A/P panels, aging and the unresolved panel for vehicle-origin rows: after P3 (the subledgers then carry `supplierId` for native sales).
 - Expense recoveries in the statement: after P4. Opening allocations in the statement: after P5.
-- Per-supplier GL reconciliation: only after P6 or an owner decision to reconcile via subledger-to-event keys instead.
+- Per-supplier GL reconciliation: deferred with P6. For the pilot, SCRUM-869 reconciles the supplier subledgers to the control-account totals and shows unlinked differences, without a ledger shape change.
 
-## 9. Open questions that need an owner ruling (stated, not decided)
+## 9. Open questions and their decisions
+
+Decided on 2026-10-29 in SCRUM-868 comment 23873 (coordinator, within existing rulings; the "no migration" ruling is comment 23871):
+
+- OQ-1 and OQ-12: comment 23871 is the ruling cited. The assumption is checked, not trusted: the P7 launch-evidence check counts pilot money rows with no `supplierId` and refuses the launch if any exist.
+- OQ-2: `supplierId` is optional in storage and required at every pilot write path with a stable refusal code.
+- OQ-3: a payee id is required on supplier-borne expenses. Other expenses keep their current payee field.
+- OQ-4: an opening allocated to a supplier requires the id. A plain `OTHER_PAYABLE` opening with no supplier does not.
+- OQ-5: the journal-line supplier dimension (P6) is deferred past the pilot. No posting changes.
+- OQ-6: the pilot is web only, so mobile supplier money writes are refused server-side.
+- OQ-9: creating a supplier inline needs `MANAGE_FINANCE`, as in S1.
+
+Pilot scope (SCRUM-869 comment 23881, owner): supplier payable payment, consignment margin receipt and cost-recovery receipt are in the pilot and must be certified. Their reversal, unwind and correction doors are not indispensable for launch and stay refused server-side. Resolving a supplier id never enables one of them.
+
+The questions as originally stated, kept for the record:
 
 - **OQ-1.** Confirm that the Production deployment, and any other deployment the pilot uses, holds none of the rows listed in 4.1. I cannot read production. A counts-only operator check is needed before P2. If any exist, the 2026-10-29 "no migration" ruling does not cover them and a ruling is needed.
 - **OQ-2.** Schema strictness: keep every new `supplierId` optional in storage and required at the boundary (this design), or make some required in the schema. Required-in-schema makes any push fail on a deployment (dev, preview, CI seeds) that holds an old document, and Convex then offers only the widen-migrate-narrow path or deleting the data.
