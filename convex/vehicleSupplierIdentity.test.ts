@@ -548,6 +548,35 @@ describe("vehicles.importBulk", () => {
       await expect(purchase(d, importId, [{ ...first, purchaseSupplierId: d.foreign }])).rejects.toThrow(/IDEMPOTENCY_CONFLICT|SUPPLIER_NOT_FOUND/);
       expect(await worldCounts(d)).toEqual(before);
     });
+
+    /**
+     * The PURCHASE validator accepts any integer row number (Number.isInteger), so evidence exists for
+     * -1 and for 2^53 as well. A retry must be recognised for every row number the command ever accepted.
+     */
+    async function expectReplayRecognisedForRowId(suffix: string, rowId: number) {
+      const d = await seedDealer(suffix);
+      const importId = crypto.randomUUID();
+      const first = { ...owned, rowId, purchaseSupplierId: d.creditor };
+      expect(await purchase(d, importId, [first])).toMatchObject({ inserted: 1, alreadyRecorded: 0 });
+      await d.t.run((ctx) => ctx.db.patch(d.creditor, { status: "INACTIVE" }));
+      const before = await worldCounts(d);
+      expect(await purchase(d, importId, [first])).toMatchObject({ inserted: 0, alreadyRecorded: 1 });
+      expect(await worldCounts(d)).toEqual(before);
+      // The same evidence key with a different fact is still a conflict, never a trusted replay.
+      await expect(purchase(d, importId, [{ ...first, purchasePrice: 9500 }])).rejects.toThrow(/IDEMPOTENCY_CONFLICT/);
+      // A new use of the inactive creditor under the same row number is still refused.
+      await expectAppError(purchase(d, crypto.randomUUID(), [{ ...first, vin: "IMPORTRPL000004" }]), ...inactive);
+      expect(await worldCounts(d)).toEqual(before);
+    }
+
+    test("an accepted negative row number is recognised as a replay after its supplier was deactivated", async () => {
+      await expectReplayRecognisedForRowId("i5", -1);
+    });
+
+    test("an accepted row number beyond the safe integer range (2^53) is recognised as a replay after its supplier was deactivated", async () => {
+      await expectReplayRecognisedForRowId("i6", 9007199254740992);
+    });
+
   });
 });
 
@@ -649,6 +678,19 @@ describe("vehicleEdits: request and approval", () => {
       d.asClerk.mutation(api.vehicleEdits.requestUpdate, { orgId: d.orgId, vehicleId: id, payload: { sourcedFromName: "Someone Else" } }),
       ...identityRequired
     );
+  });
+
+  test("an UPDATE request that changes the supplier is refused at request time while a finance application holds a concession, and stores no request", async () => {
+    const d = await seedDealer("e8");
+    const id = await createSourcedVehicle(d);
+    const other = await seedSupplier(d.t, { orgId: d.orgId, userId: d.ownerId, displayName: "Other Motors" });
+    await insertHeldConcession(d, id);
+    const before = await worldCounts(d);
+    await expect(
+      d.asClerk.mutation(api.vehicleEdits.requestUpdate, { orgId: d.orgId, vehicleId: id, payload: { sourcedSupplierId: other } })
+    ).rejects.toMatchObject({ data: SUPPLIER_CONCESSION_REFUSALS.HELD_BY_DEAL });
+    expect(await worldCounts(d)).toEqual(before);
+    expect(await vehicleRow(d, id)).toMatchObject({ sourcedSupplierId: d.gulf, sourcedFromName: "Gulf Motors" });
   });
 
   test("an UPDATE request never stores a typed creditor name: only the server's snapshot, beside the id", async () => {
