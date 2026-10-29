@@ -606,48 +606,47 @@ describe("SCRUM-858 S5 the report refuses figures it cannot prove", () => {
     expect((await report(s)).status).toBe("OPENING_PROOF_UNAVAILABLE");
   });
 
-  // P2-b. An opening line that names a bank this organization cannot resolve is still part of the control. It is
-  // disclosed as unattributed, never dropped, and never balanced by an invented entry or a capital adjustment (c23884).
-  async function expectUnresolvedBankDisclosed(kind: "hard-deleted" | "foreign") {
-    {
-      const { s, bankB } = await openedBanks();
-      const before = await writeCounts(s);
-      await s.t.runUnwrapped(async (ctx) => {
-        if (kind === "hard-deleted") {
-          await ctx.db.delete(bankB);
-          return;
-        }
-        const otherOrgId = await ctx.db.insert("organizations", { name: "Other bank owner", createdAt: Date.now() });
-        const foreignBank = await ctx.db.insert("bankAccounts", {
-          orgId: otherOrgId, name: "Foreign bank", currency: "JOD", openingBalanceMinor: 3_000_000, openingBalanceDate: Date.now(),
-          isActive: true, isReconciliationTarget: false, createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
-        });
-        const lines = await ctx.db.query("journalLines").collect();
-        const line = lines.find((row) => row.bankAccountId === bankB);
-        if (!line) throw new Error("Missing Bank B opening line");
-        await ctx.db.patch(line._id, { bankAccountId: foreignBank });
+  // P2-b, tightened in round 3 (P2-1). An opening line that names a bank this organization cannot resolve (the record
+  // is gone, or it belongs to another organization) cannot be attributed to any bank. The report must not claim an
+  // opening it cannot explain: it fails closed as unavailable, discloses no partial figure, and posts or adjusts
+  // nothing, never a balancing entry and never partner capital (c23884).
+  async function expectUnresolvedBankUnavailable(kind: "hard-deleted" | "foreign") {
+    const { s, bankB } = await openedBanks();
+    const before = await writeCounts(s);
+    await s.t.runUnwrapped(async (ctx) => {
+      if (kind === "hard-deleted") {
+        await ctx.db.delete(bankB);
+        return;
+      }
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other bank owner", createdAt: Date.now() });
+      const foreignBank = await ctx.db.insert("bankAccounts", {
+        orgId: otherOrgId, name: "Foreign bank", currency: "JOD", openingBalanceMinor: 3_000_000, openingBalanceDate: Date.now(),
+        isActive: true, isReconciliationTarget: false, createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
       });
+      const lines = await ctx.db.query("journalLines").collect();
+      const line = lines.find((row) => row.bankAccountId === bankB);
+      if (!line) throw new Error("Missing Bank B opening line");
+      await ctx.db.patch(line._id, { bankAccountId: foreignBank });
+    });
 
-      const result = await report(s);
+    const result = await report(s);
 
-      expect(result.controlOpeningMinor).toBe(7_000_000);
-      expect(result.bankLinesTotalMinor).toBe(4_000_000);
-      expect(result.unattributedOpeningMinor).toBe(3_000_000);
-      expect((result.bankLinesTotalMinor ?? 0) + (result.unattributedOpeningMinor ?? 0)).toBe(result.controlOpeningMinor);
-      expect(result.banks.map((row) => row.name)).not.toContain("Foreign bank");
-      // Read-only: the disclosure posted nothing.
-      expect(await writeCounts(s)).toEqual(before);
-    }
+    expect(result.status).toBe("OPENING_PROOF_UNAVAILABLE");
+    expect(result.controlOpeningMinor).toBeNull();
+    expect(result.unattributedOpeningMinor).toBeNull();
+    expect(result.unexplainedOpeningDifference).toBeNull();
+    expect(result.banks.map((row) => row.name)).not.toContain("Foreign bank");
+    // Read-only: refusing to explain the line posted nothing.
+    expect(await writeCounts(s)).toEqual(before);
   }
 
-  test("an opening line naming a hard-deleted bank is disclosed as unattributed, so control equals bank lines plus unattributed", async () => {
-    await expectUnresolvedBankDisclosed("hard-deleted");
+  test("an opening line naming a hard-deleted bank makes the opening unavailable, never a partial or unattributed figure", async () => {
+    await expectUnresolvedBankUnavailable("hard-deleted");
   });
 
-  test("an opening line naming another organization's bank is disclosed as unattributed, so control equals bank lines plus unattributed", async () => {
-    await expectUnresolvedBankDisclosed("foreign");
+  test("an opening line naming another organization's bank makes the opening unavailable, never a partial or unattributed figure", async () => {
+    await expectUnresolvedBankUnavailable("foreign");
   });
-
   test("a deleted bank that holds no opening line is not listed", async () => {
     const { s, bankA, bankB } = await openedBanks();
     const bankC = await bank(s, "Bank C", 0);
@@ -656,5 +655,66 @@ describe("SCRUM-858 S5 the report refuses figures it cannot prove", () => {
     const result = await report(s);
 
     expect(result.banks.map((row) => row.bankAccountId).sort()).toEqual([bankA, bankB].sort());
+  });
+
+  // PR #715 review round 3, P2-1. Two unresolved bank identities whose amounts offset (+3.000 and -3.000 JOD) net to
+  // zero, so a report that only disclosed the NET unresolved amount said OK with banks [] and unattributed 0 while
+  // two opening lines named banks nobody could find. Any unresolved identity must fail closed, whatever its net.
+  async function openOpposingBanks() {
+    const s = await seed();
+    const bankA = await bank(s, "Bank A", 3_000_000, true);
+    const bankB = await bank(s, "Bank B", 0);
+    await s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: s.orgId,
+      expectedCurrency: "JOD",
+      asOfDate: Date.now(),
+      lines: [
+        { accountId: s.accountId("BANK_ACCOUNT"), debitMinor: 3_000_000, creditMinor: 0, bankAccountId: bankA },
+        { accountId: s.accountId("BANK_ACCOUNT"), debitMinor: 0, creditMinor: 3_000_000, bankAccountId: bankB },
+      ],
+    });
+    return { s, bankA, bankB };
+  }
+
+  test("control: opposing bank openings whose banks all resolve still report OK with both banks listed", async () => {
+    const { s, bankA, bankB } = await openOpposingBanks();
+
+    const result = await report(s);
+
+    expect(result.status).toBe("OK");
+    expect(result.banks.map((row) => row.bankAccountId).sort()).toEqual([bankA, bankB].sort());
+    expect(result.controlOpeningMinor).toBe(0);
+    expect(result.bankLinesTotalMinor).toBe(0);
+    expect(result.unattributedOpeningMinor).toBe(0);
+  });
+
+  test("two hard-deleted bank identities with opposing amounts that net to zero are unavailable, never OK with nothing disclosed", async () => {
+    const { s, bankA, bankB } = await openOpposingBanks();
+    const before = await writeCounts(s);
+    await s.t.runUnwrapped(async (ctx) => {
+      await ctx.db.delete(bankA);
+      await ctx.db.delete(bankB);
+    });
+
+    const result = await report(s);
+
+    expect(result.status).toBe("OPENING_PROOF_UNAVAILABLE");
+    expect(result.controlOpeningMinor).toBeNull();
+    expect(result.unattributedOpeningMinor).toBeNull();
+    expect(result.unexplainedOpeningDifference).toBeNull();
+    // Read-only: nothing was posted, adjusted or balanced, and no partner capital line appeared.
+    expect(await writeCounts(s)).toEqual(before);
+  });
+
+  test("one unresolved bank identity among resolved banks makes the whole opening unavailable", async () => {
+    const { s, bankA, bankB } = await openOpposingBanks();
+    await s.t.runUnwrapped((ctx) => ctx.db.delete(bankB));
+
+    const result = await report(s);
+
+    expect(result.status).toBe("OPENING_PROOF_UNAVAILABLE");
+    // The bank that still resolves is listed with no figures; nothing is claimed about the opening.
+    expect(result.banks.map((row) => row.bankAccountId)).toEqual([bankA]);
+    expect(result.banks.every((row) => row.openingLineMinor === null && row.differenceMinor === null)).toBe(true);
   });
 });

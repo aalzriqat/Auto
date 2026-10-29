@@ -9,7 +9,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { getFunctionName } from "convex/server";
 
 const language = vi.hoisted(() => ({ locale: "en" as "en" | "ar" }));
-const data = vi.hoisted(() => ({ opening: undefined as unknown }));
+const data = vi.hoisted(() => ({ opening: undefined as unknown, book: null as unknown }));
 
 vi.mock("convex/react", async () => {
   const { getFunctionName: nameOf } = await import("convex/server");
@@ -18,7 +18,7 @@ vi.mock("convex/react", async () => {
       if (args === "skip") return undefined;
       const name = nameOf(ref);
       if (name === "bankAccounts:list") return [];
-      if (name === "bankAccounts:getBookBalance") return null;
+      if (name === "bankAccounts:getBookBalance") return data.book;
       if (name === "bankAccounts:openingReconciliation") return data.opening;
       return undefined;
     },
@@ -48,6 +48,7 @@ afterEach(() => {
   cleanup();
   language.locale = "en";
   data.opening = undefined;
+  data.book = null;
 });
 
 /** A JOD opening. The JOD bank is 0.001 JOD (1 fils) off its stated balance. The USD bank states USD 123.45. */
@@ -83,6 +84,57 @@ function openingWithMixedCurrencies() {
     },
   };
 }
+
+function bookBalance(name: string, currency: string, balanceMinor: number) {
+  return { status: "OK", bankAccountId: "book1", name, currency, balanceMinor };
+}
+
+const bookText = () => (screen.getByText(/./, { selector: "p.text-2xl" }).textContent ?? "").replace(/ /g, " ");
+
+/**
+ * PR #715 review round 3, P2-2. The selected bank's book balance read through the organization currency formatter at
+ * zero decimals: USD 123.45 showed "JOD 123". It must use that bank's own currency and ISO 4217 precision.
+ */
+describe("BankAccountsTab book balance money", () => {
+  test("English: a USD bank of 123.45 shows dollars with cents, never the organization's JOD at zero decimals", () => {
+    data.book = bookBalance("Dollar Bank", "USD", 12_345);
+    render(<BankAccountsTab />);
+
+    expect(bookText()).toBe("$123.45");
+  });
+
+  test("English: a JOD bank holding one fils shows three decimals, not JOD 0", () => {
+    data.book = bookBalance("Arab Bank", "JOD", 1);
+    render(<BankAccountsTab />);
+
+    expect(bookText()).toBe("JOD 0.001");
+  });
+
+  test("Arabic: USD 123.45 and one JOD fils keep Western digits, each in its own currency and precision", () => {
+    language.locale = "ar";
+    data.book = bookBalance("Dollar Bank", "USD", 12_345);
+    const view = render(<BankAccountsTab />);
+    const usd = bookText();
+    expect(usd).toContain("123.45");
+    expect(usd).toContain("US$");
+    expect(usd).not.toContain("د.أ");
+    view.unmount();
+
+    data.book = bookBalance("Arab Bank", "JOD", 1);
+    render(<BankAccountsTab />);
+    const jod = bookText();
+    expect(jod).toContain("0.001");
+    expect(jod).toContain("د.أ");
+    expect(`${usd}${jod}`).not.toMatch(/[٠-٩۰-۹]/);
+  });
+
+  test("a book balance in a currency whose scale is unknown shows a dash, never a guessed scale", () => {
+    data.book = bookBalance("Odd Bank", "XXX", 12_345);
+    render(<BankAccountsTab />);
+
+    expect(bookText()).toBe("—");
+  });
+});
 
 describe("BankAccountsTab opening reconciliation money", () => {
   test("a bank currency whose scale is unknown shows a dash instead of crashing or guessing a scale", () => {
