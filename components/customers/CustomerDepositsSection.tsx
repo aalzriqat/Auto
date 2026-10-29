@@ -44,8 +44,8 @@ interface CustomerDepositsSectionProps {
  * A customer's current deposits on their record: classification (security / reservation), amount at the
  * currency's full scale, status, the linked vehicle when there is one, newest first.
  *
- * Layout is direction-neutral: logical alignment only (the table's `text-start`), and every figure is
- * isolated in a `<bdi dir="ltr">` so digits and the currency keep their order inside right-to-left text.
+ * Layout uses logical alignment (the table's `text-start`). Amounts are isolated in a `<bdi dir="ltr">`
+ * so digits and currency keep their order; localized dates retain the screen's direction.
  * Read-only: the pilot containment forbids refunding or forfeiting an opening deposit, so no row action
  * is offered here (WAI-ARIA: the table is a plain data table, the notices are `status` / `note` regions).
  */
@@ -105,9 +105,7 @@ export function CustomerDepositsSection({
                   </TableCell>
                   <TableCell>{t(depositStatusKey(row.status))}</TableCell>
                   <TableCell>{row.vehicleDesc ?? "—"}</TableCell>
-                  <TableCell>
-                    <bdi dir="ltr">{formatDepositDate(row.createdAt, locale)}</bdi>
-                  </TableCell>
+                  <TableCell>{formatDepositDate(row.createdAt, locale)}</TableCell>
                 </TableRow>
               );
             })}
