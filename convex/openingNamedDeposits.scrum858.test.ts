@@ -158,7 +158,7 @@ function securityRow(s: Seed, over: Record<string, unknown> = {}) {
 function reservationRow(s: Seed, over: Record<string, unknown> = {}) {
   return {
     kind: "CUSTOMER_DEPOSIT" as const,
-    rowKey: "dep-reservation-1",
+    rowKey: "opening-deposit-row-1",
     accountId: s.deposits,
     customerId: s.customerB,
     amountMinor: 50_000,
@@ -267,7 +267,7 @@ test("a named opening deposit materialises one HELD native row per customer only
   const draft = await s.t.run((ctx) => ctx.db.get(draftId as Id<"openingBalanceDrafts">));
   expect(draft?.allocationResults).toEqual([
     { kind: "CUSTOMER_DEPOSIT", rowKey: "dep-security-1", depositId: security?._id },
-    { kind: "CUSTOMER_DEPOSIT", rowKey: "dep-reservation-1", depositId: reservation?._id },
+    { kind: "CUSTOMER_DEPOSIT", rowKey: "opening-deposit-row-1", depositId: reservation?._id },
   ]);
 });
 
@@ -324,7 +324,7 @@ test("a named opening deposit that fails validation leaves no draft, row, journa
     ["security with a vehicle", [securityRow(s, { vehicleId: s.vehicleId })], 100_000, /Only a reservation deposit can name a vehicle/],
     [
       "duplicate customer and vehicle reservation",
-      [reservationRow(s), reservationRow(s, { rowKey: "dep-reservation-2" })],
+      [reservationRow(s), reservationRow(s, { rowKey: "opening-deposit-row-2" })],
       100_000,
       /only once per customer and vehicle/,
     ],
