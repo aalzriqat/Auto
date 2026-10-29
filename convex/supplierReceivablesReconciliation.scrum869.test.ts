@@ -26,7 +26,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { computeSupplierReceivablesReconciliation } from "./accountingReports";
+import { computeSupplierReceivablesReconciliation, getPostedLines } from "./accountingReports";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
@@ -829,5 +829,282 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
     expect(r.unavailableReason).toBe("OPENING_SOURCE_UNAVAILABLE");
     expect(r.isReconciled).toBe(false);
     expect(r.complete).toBe(false);
+  });
+});
+
+/**
+ * SCRUM-869 round 3 (reviewer findings H1, H2, M1, M2, L1 on PR #714).
+ */
+type RawPosting = {
+  accountId: Id<"chartOfAccounts">;
+  periodId: Id<"accountingPeriods">;
+  lineDate: number;
+  entryDate?: number;
+  entryPeriodId?: Id<"accountingPeriods">;
+  debitMinor?: number;
+  creditMinor?: number;
+  status?: "POSTED" | "REVERSED" | "DRAFT" | "VALIDATED";
+  category?: "SYSTEM" | "REVERSAL";
+  lines?: number;
+};
+/** One journal entry with `lines` identical lines on one account, written directly so that dates and status can be chosen. */
+const rawPosting = (s: Seed, o: RawPosting) =>
+  s.t.run(async (ctx) => {
+    const entryId = await ctx.db.insert("journalEntries", {
+      orgId: s.orgId, journalNumber: "RAW", accountingDate: o.entryDate ?? o.lineDate, periodId: o.entryPeriodId ?? o.periodId,
+      sourceType: "raw", sourceId: "raw", category: o.category ?? "SYSTEM", memo: "raw", status: o.status ?? "POSTED",
+      postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
+    });
+    for (let n = 1; n <= (o.lines ?? 1); n += 1) {
+      await ctx.db.insert("journalLines", {
+        orgId: s.orgId, journalEntryId: entryId, lineNumber: n, accountId: o.accountId, debitMinor: o.debitMinor ?? 0,
+        creditMinor: o.creditMinor ?? 0, currency: "JOD", scale: 3, accountingDate: o.lineDate,
+      });
+    }
+    return entryId;
+  });
+const reconAt = (s: Seed, toDate: number) =>
+  s.asUser.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId, toDate });
+const POST_DATED = 5 * DAY;
+const laterLines = (r: unknown) => (r as { accountsWithLaterLines?: Array<Id<"chartOfAccounts">> }).accountsWithLaterLines;
+
+describe("SCRUM-869 r3 H1 - activity dated after the cutoff", () => {
+  test("CONTROL: a lost receivable row on a current-dated sale is a difference", async () => {
+    const s = await seed("h1ctl");
+    const a = await directSale(s, "h1ctl");
+    await s.t.run((ctx) => ctx.db.delete(a.receivable._id));
+    const r = await recon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.byCurrency.JOD).toMatchObject({ glBalanceMinor: MARGIN * SCALE, subledgerBalanceMinor: 0, isReconciled: false });
+  });
+
+  test("a post-dated sale cannot hide a lost row behind it", async () => {
+    const s = await seed("h1hide");
+    const a = await directSale(s, "h1hideA");
+    await s.t.run((ctx) => ctx.db.delete(a.receivable._id)); // the real error: 3,000 in the GL, no row
+    await directSale(s, "h1hideB", Date.now() + POST_DATED); // its row exists now, its GL line is dated in the future
+    const ar = await accountOf(s, "RECEIVABLE_FROM_SUPPLIERS");
+    const future = await s.t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_org_account_date", (q) => q.eq("orgId", s.orgId).eq("accountId", ar._id).gt("accountingDate", Date.now())).collect()
+    );
+    expect(future).toHaveLength(1); // the setup really is post-dated
+    const r = await recon(s);
+    expect(r.isReconciled).toBe(false);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("ACTIVITY_AFTER_CUTOFF");
+    expect(r.complete).toBe(false);
+    expect(r.byCurrency).toEqual({});
+  });
+
+  test("a post-dated sale alone is UNAVAILABLE, not a manufactured difference", async () => {
+    const s = await seed("h1alone");
+    await directSale(s, "h1alone", Date.now() + POST_DATED);
+    const r = await recon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("ACTIVITY_AFTER_CUTOFF");
+    expect(r.currencies).toEqual([]);
+    expect(r.isReconciled).toBe(false);
+  });
+
+  test("a future toDate that still ends before the post-dated sale is UNAVAILABLE; one that covers it reconciles", async () => {
+    const s = await seed("h1future");
+    await directSale(s, "h1future", Date.now() + POST_DATED);
+    const short = await reconAt(s, Date.now() + DAY);
+    expect(short.status).toBe("UNAVAILABLE");
+    expect(short.unavailableReason).toBe("ACTIVITY_AFTER_CUTOFF");
+    const covering = await reconAt(s, Date.now() + POST_DATED + DAY);
+    expect(covering.status).toBe("AVAILABLE");
+    expect(covering.byCurrency.JOD).toMatchObject({ glBalanceMinor: MARGIN * SCALE, subledgerBalanceMinor: MARGIN * SCALE, isReconciled: true });
+  });
+
+  test("a post-dated line on an account that is not a control account does not block the comparison", async () => {
+    const s = await seed("h1other");
+    await directSale(s, "h1other");
+    const cash = await accountOf(s, "CASH_ON_HAND");
+    await rawPosting(s, { accountId: cash._id, periodId: (await periodOf(s))._id, lineDate: Date.now() + POST_DATED, debitMinor: 10 });
+    const r = await recon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.isReconciled).toBe(true);
+  });
+
+  test.each([true, false])("a line dated after the cutoff inside an entry dated before it is UNAVAILABLE (snapshot fast path %s)", async (fastPath) => {
+    const s = await seed(`h1line${fastPath}`);
+    const ar = await accountOf(s, "RECEIVABLE_FROM_SUPPLIERS");
+    const period = await periodOf(s);
+    await s.t.run((ctx) => ctx.db.patch(period._id, { snapshotFastPathEligible: fastPath }));
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, entryDate: Date.now() - 1000, lineDate: Date.now() + 3 * DAY, debitMinor: 500 });
+    // The real writers keep the period snapshot in step with every line they write.
+    await s.t.run((ctx) =>
+      ctx.db.insert("accountBalanceSnapshots", {
+        orgId: s.orgId, accountId: ar._id, currency: "JOD", periodId: period._id, shard: 0, runningDebitMinor: 500, runningCreditMinor: 0, updatedAt: Date.now(),
+      })
+    );
+    const r = await recon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("ACTIVITY_AFTER_CUTOFF");
+    expect(r.isReconciled).toBe(false);
+  });
+});
+
+describe("SCRUM-869 r3 H2 - a toDate that is not a finite number", () => {
+  test("NaN, Infinity and -Infinity are refused as UNAVAILABLE, never read as a cutoff", async () => {
+    const s = await seed("h2");
+    await directSale(s, "h2");
+    for (const toDate of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const viaCompute = await s.t.run((ctx) => computeSupplierReceivablesReconciliation(ctx, s.orgId, toDate));
+      const viaQuery = await reconAt(s, toDate);
+      for (const r of [viaCompute, viaQuery]) {
+        expect(r.status).toBe("UNAVAILABLE");
+        expect(r.unavailableReason).toBe("INVALID_AS_OF_DATE");
+        expect(r.isReconciled).toBe(false);
+        expect(r.complete).toBe(false);
+        expect(r.byCurrency).toEqual({});
+      }
+    }
+  });
+});
+
+describe("SCRUM-869 r3 L1 - the default budget is derived from the Convex per-function limits", () => {
+  test("more than the in-flight limit of queued outbox rows is UNAVAILABLE (OVER_LIMIT) at the default limit; exactly at it is not", async () => {
+    const s = await seed("l1inflight");
+    await directSale(s, "l1inflight");
+    await s.t.run(async (ctx) => {
+      for (let i = 0; i < 401; i += 1) {
+        await ctx.db.insert("pendingAccountingEvents", {
+          orgId: s.orgId, kind: "POST", status: "PENDING", idempotencyKey: `l1_${i}`, accountingDate: Date.now(), actorId: s.userId,
+          attempts: 0, createdAt: Date.now(), sourceType: "x", sourceId: "x", eventType: "COMMISSION_PAID",
+        } as never);
+      }
+    });
+    const over = await recon(s);
+    expect(over.status).toBe("UNAVAILABLE");
+    expect(over.unavailableReason).toBe("OVER_LIMIT");
+    const first = await s.t.run((ctx) => ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", s.orgId).eq("status", "PENDING")).first());
+    await s.t.run((ctx) => ctx.db.delete(first!._id));
+    expect((await recon(s)).status).toBe("AVAILABLE");
+  });
+
+  test("more OPENING recoveries than can be verified within the per-function limits is UNAVAILABLE (OVER_LIMIT)", async () => {
+    const s = await seed("l1opening");
+    await directSale(s, "l1opening");
+    // Each OPENING recovery costs a draft scan, a journal probe and a line read of its own, so there is a small fixed cap.
+    const insertOpening = (count: number) =>
+      s.t.run(async (ctx) => {
+        const draftId = await ctx.db.insert("openingBalanceDrafts", {
+          orgId: s.orgId, status: "POSTED", lines: [], asOfDate: Date.now() - 1000, createdBy: s.userId, createdAt: Date.now(),
+        } as never);
+        for (let i = 0; i < count; i += 1) {
+          await ctx.db.insert("supplierCostRecoveries", {
+            orgId: s.orgId, currency: "JOD", status: "OPEN", amountDueMinor: 1, amountRecoveredMinor: 0, receiptSeq: 0, sourcedFromName: "Amman Importer Co",
+            createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(), origin: "OPENING", openingBalanceDraftId: draftId,
+            openingRowKey: `row-${i}`, title: "t", purpose: "CLAIM",
+          } as never);
+        }
+      });
+    await insertOpening(26);
+    const over = await recon(s);
+    expect(over.status).toBe("UNAVAILABLE");
+    expect(over.unavailableReason).toBe("OVER_LIMIT");
+  });
+});
+describe("SCRUM-869 r3 M1/M2 - the journal-line path of the bounded GL read", () => {
+  async function journalOrg(tag: string) {
+    const s = await seed(tag);
+    const ar = await accountOf(s, "RECEIVABLE_FROM_SUPPLIERS");
+    const period = await periodOf(s);
+    await s.t.run((ctx) => ctx.db.patch(period._id, { snapshotFastPathEligible: false }));
+    return { s, ar, period };
+  }
+  const read = (s: Seed, accountId: Id<"chartOfAccounts">, readLimit: number, asOf: number = Date.now() + DAY) =>
+    s.t.run((ctx) => getControlAccountBalancesAsOf(ctx, s.orgId, [accountId], asOf, readLimit));
+  const totals = (r: Awaited<ReturnType<typeof read>>) => {
+    expect(r.status).toBe("OK");
+    return r.status === "OK" ? r.balances.map((b) => ({ debitMinor: b.debitMinor, creditMinor: b.creditMinor })) : [];
+  };
+
+  test("every line read is charged to the budget: exactly the cost is OK, one less is OVER_LIMIT", async () => {
+    const { s, ar, period } = await journalOrg("m1lines");
+    // one entry with 3 lines: 1 period + 3 lines + 1 entry read = 5 documents
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, lineDate: Date.now() - 1000, debitMinor: 10, lines: 3 });
+    expect(totals(await read(s, ar._id, 5))).toEqual([{ debitMinor: 30, creditMinor: 0 }]);
+    expect((await read(s, ar._id, 4)).status).toBe("OVER_LIMIT");
+  });
+
+  test("every parent entry read is charged to the budget, once per entry", async () => {
+    const { s, ar, period } = await journalOrg("m1entries");
+    // three entries, one line each: 1 period + 3 lines + 3 entry reads = 7 documents
+    for (let i = 0; i < 3; i += 1) await rawPosting(s, { accountId: ar._id, periodId: period._id, lineDate: Date.now() - 1000, debitMinor: 10 });
+    expect(totals(await read(s, ar._id, 7))).toEqual([{ debitMinor: 30, creditMinor: 0 }]);
+    expect((await read(s, ar._id, 6)).status).toBe("OVER_LIMIT");
+  });
+
+  test("only POSTED and REVERSED entries count: a DRAFT or VALIDATED entry's lines are not in the balance", async () => {
+    const { s, ar, period } = await journalOrg("m1status");
+    const at = Date.now() - 1000;
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, lineDate: at, debitMinor: 100 });
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, lineDate: at, debitMinor: 7, status: "DRAFT" });
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, lineDate: at, debitMinor: 9, status: "VALIDATED" });
+    expect(totals(await read(s, ar._id, 100))).toEqual([{ debitMinor: 100, creditMinor: 0 }]);
+  });
+
+  test("a REVERSED entry still counts, together with its reversal, so the pair nets out", async () => {
+    const { s, ar, period } = await journalOrg("m1reversed");
+    const at = Date.now() - 1000;
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, lineDate: at, debitMinor: 100 });
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, lineDate: at, debitMinor: 40, status: "REVERSED" });
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, lineDate: at, creditMinor: 40, category: "REVERSAL" });
+    const scoped = totals(await read(s, ar._id, 100));
+    expect(scoped).toEqual([{ debitMinor: 140, creditMinor: 40 }]);
+    const full = await s.t.run((ctx) => getCumulativeBalancesAsOf(ctx, s.orgId, Date.now() + DAY));
+    expect(full.filter((b) => b.accountId === ar._id).map((b) => ({ debitMinor: b.debitMinor, creditMinor: b.creditMinor }))).toEqual(scoped);
+  });
+
+  test("a line whose entry belongs to an elapsed period is counted once, from that period's snapshot", async () => {
+    const { s, ar, period } = await journalOrg("m1period");
+    const elapsed = await s.t.run(async (ctx) => {
+      const id = await ctx.db.insert("accountingPeriods", {
+        orgId: s.orgId, startDate: period.startDate - 365 * DAY, endDate: period.startDate - 1, fiscalYear: period.fiscalYear - 1,
+        periodNumber: 1, status: "CLOSED", createdAt: Date.now(),
+      });
+      await ctx.db.insert("accountBalanceSnapshots", {
+        orgId: s.orgId, accountId: ar._id, currency: "JOD", periodId: id, shard: 0, runningDebitMinor: 25, runningCreditMinor: 0, updatedAt: Date.now(),
+      });
+      return id;
+    });
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, lineDate: Date.now() - 1000, debitMinor: 100 });
+    // Its line is dated inside the open period's window, but its entry (and its snapshot, above) belong to the elapsed one.
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, entryPeriodId: elapsed, lineDate: period.startDate + DAY, debitMinor: 25 });
+    const scoped = totals(await read(s, ar._id, 100));
+    expect(scoped).toEqual([{ debitMinor: 125, creditMinor: 0 }]);
+    const full = await s.t.run((ctx) => getCumulativeBalancesAsOf(ctx, s.orgId, Date.now() + DAY));
+    expect(full.filter((b) => b.accountId === ar._id).map((b) => ({ debitMinor: b.debitMinor, creditMinor: b.creditMinor }))).toEqual(scoped);
+  });
+
+  test("M2: the line's own accountingDate governs, as in getPostedLines - a line before the cutoff in an entry dated after it is counted", async () => {
+    for (const fastPath of [false, true]) {
+      const { s, ar, period } = await journalOrg(`m2early${fastPath}`);
+      await s.t.run((ctx) => ctx.db.patch(period._id, { snapshotFastPathEligible: fastPath }));
+      const asOf = Date.now() + DAY;
+      await rawPosting(s, { accountId: ar._id, periodId: period._id, entryDate: Date.now() + 3 * DAY, lineDate: Date.now() - 1000, debitMinor: 60 });
+      const scoped = totals(await read(s, ar._id, 100, asOf));
+      const posted = await s.t.run((ctx) => getPostedLines(ctx, s.orgId, undefined, asOf));
+      const fromPostedLines = posted.filter((l) => l.accountId === ar._id).reduce((n, l) => n + l.debitMinor, 0);
+      expect(fromPostedLines).toBe(60);
+      expect(scoped).toEqual([{ debitMinor: 60, creditMinor: 0 }]);
+    }
+  });
+
+  test("M2: a line dated after the cutoff in an entry dated before it is flagged, and the journal path leaves it out as getPostedLines does", async () => {
+    const { s, ar, period } = await journalOrg("m2late");
+    const asOf = Date.now() + DAY;
+    await rawPosting(s, { accountId: ar._id, periodId: period._id, entryDate: Date.now() - 1000, lineDate: Date.now() + 3 * DAY, debitMinor: 60 });
+    const r = await read(s, ar._id, 100, asOf);
+    expect(laterLines(r)).toEqual([ar._id]);
+    expect(totals(r)).toEqual([]);
+    const posted = await s.t.run((ctx) => getPostedLines(ctx, s.orgId, undefined, asOf));
+    expect(posted.filter((l) => l.accountId === ar._id)).toHaveLength(0);
+    // An account with nothing after the cutoff is not flagged.
+    const clean = await read(s, ar._id, 100, Date.now() + 4 * DAY);
+    expect(laterLines(clean)).toEqual([]);
   });
 });
