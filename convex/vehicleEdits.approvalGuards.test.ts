@@ -69,7 +69,7 @@ async function setup() {
 // from `resolve` and the approval goes through: the vehicle takes the purchase
 // price and the request resolves, instead of this refusal.
 describe("vehicleEdits.resolve approval-time ownership guards", () => {
-  it("refuses to approve an UPDATE that buys on account without naming the supplier", async () => {
+  it("refuses to approve an UPDATE that buys on account without a supplier id", async () => {
     const { t, orgId, vehicleId, salespersonId, asManager } = await setup();
 
     const requestId = await t.run((ctx) =>
@@ -86,12 +86,38 @@ describe("vehicleEdits.resolve approval-time ownership guards", () => {
 
     await expect(
       asManager.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" })
-    ).rejects.toThrow("A supplier name is required for a vehicle purchased on account.");
+    ).rejects.toThrow("A supplier is required.");
 
     const vehicle = await t.run((ctx) => ctx.db.get(vehicleId));
     expect(vehicle?.purchasePrice).toBeUndefined();
     const request = await t.run((ctx) => ctx.db.get(requestId));
     expect(request?.status).toBe("PENDING");
+  });
+
+  // SCRUM-868 P2 (prediction 5: in-flight name-only state): a request queued before the rule existed names its
+  // creditor as text. Approving it must not post a payable to a name nobody resolved.
+  it("refuses to approve a queued UPDATE whose creditor is only a typed name, and writes nothing", async () => {
+    const { t, orgId, vehicleId, salespersonId, asManager } = await setup();
+    const requestId = await t.run((ctx) =>
+      ctx.db.insert("vehicleEdits", {
+        orgId,
+        vehicleId,
+        requestedBy: salespersonId,
+        type: "UPDATE",
+        payload: { purchasePrice: 9000, purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Typed Creditor Co" },
+        status: "PENDING",
+        createdAt: Date.now(),
+      })
+    );
+
+    await expect(
+      asManager.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" })
+    ).rejects.toThrow("A supplier is required.");
+
+    expect((await t.run((ctx) => ctx.db.get(vehicleId)))?.purchasePrice).toBeUndefined();
+    expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("PENDING");
+    expect(await t.run((ctx) => ctx.db.query("vehicleSupplierPayables").collect())).toHaveLength(0);
+    expect(await t.run((ctx) => ctx.db.query("suppliers").collect())).toHaveLength(0);
   });
 });
 

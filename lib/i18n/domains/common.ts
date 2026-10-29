@@ -508,6 +508,27 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "A supplier name is required for a vehicle purchased on account.",
     "اسم المورّد مطلوب للمركبة المشتراة على الحساب.",
   ],
+  // SCRUM-868 P2: canonical supplier identity. English equals the server message exactly.
+  ServerError_SUPPLIER_IDENTITY_REQUIRED: [
+    "A supplier is required.",
+    "المورّد مطلوب.",
+  ],
+  ServerError_SUPPLIER_NOT_FOUND: [
+    "Supplier not found.",
+    "لم يتم العثور على المورّد.",
+  ],
+  ServerError_SUPPLIER_INACTIVE: [
+    "This supplier is inactive and cannot be used for new records.",
+    "هذا المورّد غير نشط ولا يمكن استخدامه في سجلات جديدة.",
+  ],
+  ServerError_SUPPLIER_LINK_FROZEN: [
+    "This vehicle's supplier can no longer be changed because money has already been recorded against it. Ask your accountant for a reviewed correction.",
+    "لا يمكن تغيير مورّد هذه المركبة بعد الآن لأنه سُجّل عليها مبلغ مالي. اطلب من المحاسب تصحيحاً مراجعاً.",
+  ],
+  ServerError_SUPPLIER_ROLE_CONFLICT: [
+    "This supplier was sent in a role the vehicle does not have. A consignment supplier belongs to a consignment vehicle, and a purchase creditor belongs to an owned vehicle bought on account.",
+    "أُرسل هذا المورّد بصفة لا تنطبق على المركبة. مورّد البيع برسم البيع يخص مركبة برسم البيع، ودائن الشراء يخص مركبة مملوكة اشتُريت على الحساب.",
+  ],
   ServerError_VEHICLE_OWNERSHIP_FLIP_POSTED: [
     "This vehicle's purchase has already been posted to accounting, so it can't be changed to consignment. To fix a mistaken entry, use 'Correct purchase cost' or ask your accountant for a reversal.",
     "تم ترحيل شراء هذه المركبة إلى المحاسبة، لذلك لا يمكن تحويلها إلى برسم البيع. لتصحيح إدخال خاطئ استخدم «تصحيح تكلفة الشراء» أو اطلب من المحاسب عكس القيد.",

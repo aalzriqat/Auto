@@ -7,6 +7,7 @@
  * correction row, purchasePrice and payable untouched).
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import { describe, expect, test, vi } from "vitest";
 import { ConvexError } from "convex/values";
 import schema from "./schema";
@@ -130,7 +131,7 @@ async function createOnAccountVehicle(d: Dealer, price = 12500) {
   return d.asOwner.mutation(api.vehicles.create, {
     idempotencyKey: crypto.randomUUID(),
     orgId: d.orgId, ...baseVehicle, purchasePrice: price,
-    purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
+    purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierId: await supplierIdFor(d.t, d.orgId, "Credit Supplier Co"),
   });
 }
 
@@ -471,7 +472,7 @@ describe("SCRUM-650 correctAcquisitionCost — preconditions", () => {
     const soldId = await createCashVehicle(d);
     await d.t.run((ctx) => ctx.db.patch(soldId, { status: "SOLD" }));
     const sourcedId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, vin: "1HGCM82633A000002", sourceType: "SOURCED", sourcedFromName: "Supplier Dealer", sourceCost: 9000,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, vin: "1HGCM82633A000002", sourceType: "SOURCED", sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Supplier Dealer"), sourceCost: 9000,
     });
     const call = (vehicleId: Id<"vehicles">) =>
       refusalOf(

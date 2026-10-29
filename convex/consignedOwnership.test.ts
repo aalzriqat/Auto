@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import {
@@ -43,7 +44,9 @@ async function seed(
     });
     return { orgId, userId, vehicleId };
   });
-  return { t, ...ids, asUser: t.withIdentity({ subject: "own_1" }) };
+  // SCRUM-868 P2: a consignment supplier is a master row; the seeded vehicle keeps the legacy name-only shape.
+  const supplierId = await supplierIdFor(t, ids.orgId, "Amman Importer Co");
+  return { t, ...ids, supplierId, asUser: t.withIdentity({ subject: "own_1" }) };
 }
 
 describe("what a SOURCED vehicle is, by construction", () => {
@@ -185,7 +188,7 @@ describe("conversion to dealer-owned stock", () => {
         orgId: s.orgId,
         vehicleId: s.vehicleId,
         sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co",
+        sourcedSupplierId: s.supplierId,
         sourceCost: 9_500,
       })
     ).rejects.toThrow(/already been sold/i);
@@ -207,7 +210,7 @@ describe("conversion to dealer-owned stock", () => {
       s.asUser.mutation(api.vehicleEdits.requestUpdate, {
         orgId: s.orgId,
         vehicleId: s.vehicleId,
-        payload: { sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourceCost: 9_500 },
+        payload: { sourceType: "SOURCED", sourcedSupplierId: s.supplierId, sourceCost: 9_500 },
       })
     ).rejects.toThrow(/already been sold/i);
 
@@ -224,7 +227,7 @@ describe("conversion to dealer-owned stock", () => {
       orgId: s.orgId,
       vehicleId: s.vehicleId,
       sourceType: "SOURCED",
-      sourcedFromName: "Amman Importer Co",
+      sourcedSupplierId: s.supplierId,
       sourceCost: 9_500,
     });
 
