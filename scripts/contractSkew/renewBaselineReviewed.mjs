@@ -40,6 +40,8 @@
  * A missing current file refuses even if named. Renames need a fresh review;
  * a path absent only at the original base can pass when named and present at
  * the recorded ancestor SHA. Whole-file changes can over-refuse unrelated edits.
+ * The recorded SHA comes from `SCRUM-866 round N review against origin/main <sha>` or
+ * `<KEY> review of PR #N head <sha>` (REVIEW_REFERENCE); the last one wins.
  * Wrapper hooks, shared validators, handler helpers, custom registration factory
  * bodies, re-export wiring, resolution/config/dependency changes and runtime
  * loaders are outside this check. Mechanical contract comparison uses exported
@@ -204,6 +206,16 @@ export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
 }
 
 /**
+ * The two accepted review references; the last one in a renewal is the review head (group 1):
+ * `SCRUM-866 round <n> review against origin/main <sha>`, or, for a change reviewed on its own
+ * branch before it reaches main, `<JIRA-KEY> review of PR #<n> head <sha>`. Both are followed
+ * by an 8-40 digit lowercase hex SHA that must be a verified ancestor of HEAD. The SHA must end the
+ * token: only the end of the text, whitespace or `.,;:)]` may follow, so a longer or run-on token
+ * is malformed rather than silently truncated to its first 40 digits.
+ */
+const REVIEW_REFERENCE = /(?:SCRUM-866 round \d+ review against origin\/main|\b[A-Z][A-Z0-9]*-\d+ review of PR #\d+ head) ([0-9a-f]{8,40})(?=$|[\s.,;:)\]])/g;
+
+/**
  * A human renewal must name each changed client/defining backend file.
  * This checks evidence coverage, not whether the prose's interpretation is true.
  * @param {string} text
@@ -232,7 +244,7 @@ export function renewalEvidenceGaps(text, { reviewedText, compare, backendDefini
     if (typeof entry.file !== "string" || !entry.file.trim()) {
       return [{ index, entry: label(entry), missing: ["(invalid client or backend root)"], changedSinceEvidence: [], unresolved: [] }];
     }
-    const reviewHeads = [...entry.renewal.matchAll(/SCRUM-866 round \d+ review against origin\/main ([0-9a-f]{8,40})/g)];
+    const reviewHeads = [...entry.renewal.matchAll(REVIEW_REFERENCE)];
     const reviewHead = reviewHeads.at(-1)?.[1];
     if (!reviewHead) return [{ index, entry: label(entry), missing: ["(no reviewed source SHA in renewal)"], changedSinceEvidence: [], unresolved: [], renewalProblem: "malformed" }];
     const definition = backendDefinitionOf(entry.functionId);
