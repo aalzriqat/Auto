@@ -4,35 +4,35 @@
  * Owner ruling SCRUM-869#c23883 (the coordinator's Jira record of a chat ruling, not the owner's
  * own text): alert 3 days before the due date, on the due date, at 7 days overdue, then weekly.
  * Days are Amman calendar days (see supplierDueDates.ts); `daysOverdue` is negative before the due
- * date. An alert fires on the exact day, so a day the sweep did not run is a day without that alert.
+ * date. Coordinator ruling 2026-10-29 (missed-day gap): catch-up semantics - each run returns the latest step whose day has been reached; the caller sends it only if its idempotency record does not exist, so a missed day is made up once and never as a burst.
  */
 import { describe, expect, test } from "vitest";
 import { alertStepFor } from "./supplierDueAlertPlan";
 
-describe("SCRUM-869 S8 - alert schedule", () => {
-  test("3 days before the due date is the first step", () => {
-    expect(alertStepFor(-3)).toEqual({ step: "T_MINUS_3", occurrence: 0 });
+describe("SCRUM-869 S8 - alert schedule (catch-up)", () => {
+  test("before the first step nothing is due", () => {
+    for (const d of [-30, -4]) expect(alertStepFor(d), `day ${d}`).toBeNull();
   });
 
-  test("days between the steps never alert", () => {
-    for (const d of [-30, -4, -2, -1, 1, 2, 3, 4, 5, 6, 8, 9, 13, 15, 20, 22]) {
-      expect(alertStepFor(d), `day ${d}`).toBeNull();
-    }
+  test("from 3 days before the due date, the first step is the latest one reached", () => {
+    for (const d of [-3, -2, -1]) expect(alertStepFor(d), `day ${d}`).toEqual({ step: "T_MINUS_3", occurrence: 0 });
   });
 
-  test("the due date itself alerts", () => {
-    expect(alertStepFor(0)).toEqual({ step: "DUE_DAY", occurrence: 0 });
+  test("from the due date, the due step is the latest one reached until day 7", () => {
+    for (const d of [0, 1, 6]) expect(alertStepFor(d), `day ${d}`).toEqual({ step: "DUE_DAY", occurrence: 0 });
   });
 
-  test("7 days overdue alerts once as OVERDUE_7", () => {
-    expect(alertStepFor(7)).toEqual({ step: "OVERDUE_7", occurrence: 0 });
+  test("from 7 days overdue, OVERDUE_7 is the latest step until day 14", () => {
+    for (const d of [7, 8, 13]) expect(alertStepFor(d), `day ${d}`).toEqual({ step: "OVERDUE_7", occurrence: 0 });
   });
 
-  test("after that it repeats weekly with a counted occurrence", () => {
+  test("from day 14 the weekly occurrence counted is the latest one reached", () => {
     expect(alertStepFor(14)).toEqual({ step: "OVERDUE_WEEKLY", occurrence: 1 });
+    expect(alertStepFor(20)).toEqual({ step: "OVERDUE_WEEKLY", occurrence: 1 });
     expect(alertStepFor(21)).toEqual({ step: "OVERDUE_WEEKLY", occurrence: 2 });
     expect(alertStepFor(98)).toEqual({ step: "OVERDUE_WEEKLY", occurrence: 13 });
-    expect(alertStepFor(99)).toBeNull();
+    expect(alertStepFor(104)).toEqual({ step: "OVERDUE_WEEKLY", occurrence: 13 });
+    expect(alertStepFor(105)).toEqual({ step: "OVERDUE_WEEKLY", occurrence: 14 });
   });
 
   test("a missing or malformed day count never alerts", () => {

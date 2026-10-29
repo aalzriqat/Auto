@@ -160,25 +160,83 @@ describe("SCRUM-869 S8 - schedule and content", () => {
     expect(rows[0].link).toContain(String(s.orgId));
   });
 
-  test("only the exact schedule days alert: 4, 3, 2, 1 days before, the due day, 6/7/8 and 14/15 days after", async () => {
+  test("a run sends only the latest step reached, once, as the days pass", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "a2");
     const due = Date.parse("2026-06-01T09:00:00Z");
     await addPayable(t, s, { paymentDueDate: due });
     const fired: Record<number, number> = {};
     let before = 0;
-    for (const offset of [-4, -3, -2, -1, 0, 1, 6, 7, 8, 14, 15, 21]) {
+    for (const offset of [-4, -3, -2, 0, 1, 6, 7, 8, 14, 15, 21]) {
       await sweep(t, due + offset * DAY);
       const total = (await alerts(t)).length;
       fired[offset] = total - before;
       before = total;
     }
     const per = 3;
-    expect(fired).toEqual({ [-4]: 0, [-3]: per, [-2]: 0, [-1]: 0, 0: per, 1: 0, 6: 0, 7: per, 8: 0, 14: per, 15: 0, 21: per });
+    expect(fired).toEqual({ [-4]: 0, [-3]: per, [-2]: 0, 0: per, 1: 0, 6: 0, 7: per, 8: 0, 14: per, 15: 0, 21: per });
     const types = (await alerts(t)).map((r) => r.type);
     expect(new Set(types)).toEqual(new Set(["accounting.supplierObligationDue", "accounting.supplierObligationOverdue"]));
   });
 
+  test("a cron that skipped the due date sends the due alert on the next run", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "h1");
+    const due = Date.parse("2026-06-01T09:00:00Z");
+    await addPayable(t, s, { paymentDueDate: due });
+    await sweep(t, due - 3 * DAY);
+    expect(await alerts(t)).toHaveLength(3);
+    await sweep(t, due + DAY);
+    const rows = await alerts(t);
+    expect(rows).toHaveLength(6);
+    expect(rows.filter((r) => r.data?.dueDate === "2026-06-01" && r.type === "accounting.supplierObligationDue")).toHaveLength(6);
+    await sweep(t, due + DAY);
+    await sweep(t, due + 2 * DAY);
+    expect(await alerts(t)).toHaveLength(6);
+  });
+
+  test("a gap past day 7 sends the day-7 alert once and none of the earlier skipped steps", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "h2");
+    const due = Date.parse("2026-06-01T09:00:00Z");
+    await addPayable(t, s, { paymentDueDate: due });
+    await sweep(t, due - 3 * DAY);
+    await sweep(t, due + 6 * DAY);
+    expect(await alerts(t)).toHaveLength(6);
+    await sweep(t, due + 10 * DAY);
+    const rows = await alerts(t);
+    expect(rows).toHaveLength(9);
+    expect(rows.filter((r) => r.type === "accounting.supplierObligationOverdue")).toHaveLength(3);
+    await sweep(t, due + 10 * DAY);
+    expect(await alerts(t)).toHaveLength(9);
+  });
+
+  test("an obligation first seen late gets the single latest step, not the skipped ones", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "h3");
+    const due = Date.parse("2026-06-01T09:00:00Z");
+    await addPayable(t, s, { paymentDueDate: due });
+    await sweep(t, due + 10 * DAY);
+    const rows = await alerts(t);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.type === "accounting.supplierObligationOverdue")).toBe(true);
+  });
+
+  test("a weekly occurrence missed by two days is sent once, and the next one on time", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "h4");
+    const due = Date.parse("2026-06-01T09:00:00Z");
+    await addPayable(t, s, { paymentDueDate: due });
+    await sweep(t, due + 7 * DAY);
+    expect(await alerts(t)).toHaveLength(3);
+    await sweep(t, due + 16 * DAY);
+    expect(await alerts(t)).toHaveLength(6);
+    await sweep(t, due + 16 * DAY);
+    await sweep(t, due + 17 * DAY);
+    expect(await alerts(t)).toHaveLength(6);
+    await sweep(t, due + 21 * DAY);
+    expect(await alerts(t)).toHaveLength(9);
+  });
   test("a receivable with recorded delivery and a cost recovery with an agreed date alert on their schedule", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "a3");
