@@ -125,6 +125,20 @@ export function feeVoidSpec(options: MissionTiming, figures: Readonly<FeeVoidFig
 
       const customer = await seedFinancedCustomer(env, command, { lastName: `FeeVoid-${nonce}`, ltvPercent: 85 });
       if (customer === null) return;
+      // SCRUM-54 / SCRUM-878: a bank-funded purchase and every bank-transfer payment name the physical bank the money left. A fresh
+      // zero-balance bank in the organization's own denomination is created through the product's command (never a pre-existing
+      // one), on the disposable preview, BEFORE the car that names it.
+      const paidFromBankId = await refusalIsInconclusive(
+        () =>
+          client.mutation(api.bankAccounts.create, {
+            orgId: org,
+            name: `Swarm fee-void bank ${nonce}`,
+            currency,
+            openingBalanceMinor: 0,
+            openingBalanceDate: Date.now(),
+          }),
+        "the product refused to create the bank the vehicle purchase and the dealership-paid costs leave",
+      );
       const vehicleId = await command(() =>
         client.mutation(api.vehicles.create, {
           orgId: org,
@@ -141,25 +155,12 @@ export function feeVoidSpec(options: MissionTiming, figures: Readonly<FeeVoidFig
           purchasePrice: 15_000,
           // A priced owned car needs a declared payment method. Paid outright, so not ON_ACCOUNT (no supplier payable).
           purchasePaymentMethod: "BANK_TRANSFER",
+          bankAccountId: paidFromBankId,
           status: "AVAILABLE",
           idempotencyKey: `${nonce}-vehicle`,
         }),
       );
       const applicationId = await submitApprovedApplication(env, command, customer, { vehicleId, priceMajor: 20_000 });
-
-      // SCRUM-54: a bank-transfer payment names the physical bank it left. A fresh zero-balance bank in the organization's
-      // own denomination is created through the product's command (never a pre-existing one), on the disposable preview.
-      const paidFromBankId = await refusalIsInconclusive(
-        () =>
-          client.mutation(api.bankAccounts.create, {
-            orgId: org,
-            name: `Swarm fee-void bank ${nonce}`,
-            currency,
-            openingBalanceMinor: 0,
-            openingBalanceDate: Date.now(),
-          }),
-        "the product refused to create the bank the dealership-paid costs leave",
-      );
 
       // Two dealership-paid costs on the deal; only the first is reconciled. Each is paid directly, by bank transfer, at
       // the amount the approver saw.
