@@ -419,3 +419,171 @@ describe("SCRUM-869 S3a - schema widening (agreedDueDate is optional)", () => {
     expect(rows[3]!.agreedDueDate).toBe(NOW);
   });
 });
+
+/**
+ * SCRUM-869 S3b - owner ruling SCRUM-869#c23906 (given 2026-10-29), which replaces the coordinator's
+ * default for the two sourced triggers:
+ *  - "completed delivery" is handing the car to the customer, i.e. the recorded vehicle handover
+ *    (`financeApplications.vehicleHandoverAt`, written by `applications.registerVehicleHandover` for
+ *    EVERY operated deal, CASH included). A completed sale is not delivery.
+ *  - "cleared proceeds" is the receipt of the financing from the financier: the recorded
+ *    `financeApplications.disbursedAt` with `disbursedAmountMinor`, written by
+ *    `applications.confirmDisbursement` and cleared by `returnFinanceDisbursementCheque`.
+ *    CASH deals have no financier and stay outside the ruling.
+ */
+describe("SCRUM-869 S3b (c23906) - THROUGH_DEALERSHIP payable is due on the financier's funding", () => {
+  const FUNDED_AT = NOW - 20 * DAY;
+  const funded = { disbursedAt: FUNDED_AT, disbursedAmountMinor: 9_000_000, settlementStatus: "FULLY_SETTLED" };
+
+  async function financedPayable(s: Seed, application: Record<string, unknown>, payable: Record<string, unknown> = {}) {
+    const applicationId = await addApplication(s, { quoteModeAtSubmission: "CONFIGURED_FINANCE_COMPANY", ...application });
+    const saleId = await addSale(s, {
+      supplierSettlementRoute: "THROUGH_DEALERSHIP", financingType: "FINANCED", applicationId, saleDate: NOW - 400 * DAY,
+    });
+    await addPayable(s, { saleId, ...payable });
+    return { applicationId, saleId };
+  }
+
+  test("a financed deal whose financier funding is recorded: due on that instant and aged from it", async () => {
+    freezeNow();
+    const s = await seed("fund1");
+    await financedPayable(s, funded);
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({
+      kind: "PAYABLE", rule: "FINANCIER_FUNDING_RECORDED", dueAt: FUNDED_AT, daysOverdue: 20, bucket: "DAYS_1_30", outstandingMinor: 9_500_000,
+    });
+  });
+
+  test("a financed deal with no funding received (requested or pending) has no due date and is never overdue", async () => {
+    freezeNow();
+    const s = await seed("fund2");
+    await financedPayable(s, { settlementStatus: "EXPECTED", expectedDealerRemittanceMinor: 9_000_000 });
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({
+      dueAt: null, rule: "FINANCIER_FUNDING_NOT_RECORDED", daysOverdue: null, bucket: "NO_DUE_DATE",
+    });
+  });
+
+  test("a funding that was reversed (cheque returned after clearing) is not received", async () => {
+    freezeNow();
+    const s = await seed("fund3");
+    // The exact state `returnFinanceDisbursementCheque` leaves: the instant and amount cleared, the
+    // status back to EXPECTED, the disbursement version bumped.
+    await financedPayable(s, {
+      disbursedAt: undefined, disbursedAmountMinor: undefined, settlementStatus: "EXPECTED", disbursementVersion: 2,
+    });
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({
+      dueAt: null, rule: "FINANCIER_FUNDING_NOT_RECORDED", bucket: "NO_DUE_DATE",
+    });
+  });
+
+  test("an instant with no recorded amount is not a received funding", async () => {
+    freezeNow();
+    const s = await seed("fund4");
+    await financedPayable(s, { disbursedAt: FUNDED_AT });
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({ dueAt: null, rule: "FINANCIER_FUNDING_NOT_RECORDED" });
+  });
+
+  test("the financier's payment to the supplier (direct route fact) is not the dealership's funding", async () => {
+    freezeNow();
+    const s = await seed("fund5");
+    await financedPayable(s, { supplierDisbursementConfirmedAt: FUNDED_AT, supplierDisbursedAmountMinor: 9_000_000 });
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({ dueAt: null, rule: "FINANCIER_FUNDING_NOT_RECORDED" });
+  });
+
+  test("a recorded vehicle handover does not stand in for funding", async () => {
+    freezeNow();
+    const s = await seed("fund6");
+    await financedPayable(s, { handoverStatus: "HANDED_OVER", vehicleHandoverAt: FUNDED_AT });
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({ dueAt: null, rule: "FINANCIER_FUNDING_NOT_RECORDED" });
+  });
+
+  test("an agreed paymentDueDate still wins over the funding instant", async () => {
+    freezeNow();
+    const s = await seed("fund7");
+    await financedPayable(s, funded, { paymentDueDate: NOW - 3 * DAY, paymentDueTrigger: "FIXED_DATE" });
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({ rule: "AGREED_DATE", daysOverdue: 3, bucket: "DAYS_1_30" });
+  });
+
+  test("a funded application of another organisation is not evidence of this deal's funding", async () => {
+    freezeNow();
+    const a = await seed("fund8");
+    const foreignApplication = await a.t.run(async (ctx) => {
+      const org = await ctx.db.insert("organizations", { name: "Other", createdAt: NOW });
+      const customerId = await ctx.db.insert("customers", { orgId: org, firstName: "X", lastName: "Y" });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId: org, vin: "VINF8", make: "Kia", model: "Rio", year: 2024, mileage: 1, color: "Red",
+        fuelType: "Gas", transmission: "Auto", sellingPrice: 1, status: "AVAILABLE",
+      } as never);
+      const companyId = await ctx.db.insert("financeCompanies", { orgId: org, name: "B", isActive: true, profitRate: 5, maxTermMonths: 72, gracePeriodMonths: 3 });
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId: org, vehicleId, customerId, vehiclePrice: 1, downPayment: 0, totalFinancedAmount: 1,
+        termMonths: 12, status: "DRAFT", companyId, createdBy: a.userId, createdAt: NOW,
+      } as never);
+      return await ctx.db.insert("financeApplications", {
+        orgId: org, customerId, vehicleId, companyId, quoteId, salespersonId: a.userId, status: "CLOSED",
+        createdAt: NOW, updatedAt: NOW, ...funded,
+      } as never);
+    });
+    const saleId = await addSale(a, {
+      supplierSettlementRoute: "THROUGH_DEALERSHIP", financingType: "FINANCED", applicationId: foreignApplication,
+    });
+    await addPayable(a, { saleId });
+    expect((await list(a, "PAYABLE")).rows[0]).toMatchObject({ dueAt: null, rule: "FINANCIER_FUNDING_NOT_RECORDED" });
+  });
+
+  test("a CASH deal is outside the ruling: no due date, never overdue, even beside stray funding data", async () => {
+    freezeNow();
+    const s = await seed("cash1");
+    const applicationId = await addApplication(s, { quoteModeAtSubmission: "CASH", ...funded });
+    const saleId = await addSale(s, {
+      supplierSettlementRoute: "THROUGH_DEALERSHIP", financingType: "CASH", applicationId, saleDate: NOW - 400 * DAY,
+    });
+    await addPayable(s, { saleId });
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({
+      dueAt: null, rule: "CLEARED_PROCEEDS_NOT_RECORDED", daysOverdue: null, bucket: "NO_DUE_DATE",
+    });
+  });
+
+  test("a CASH sale recorded without a deal application has no due date either", async () => {
+    freezeNow();
+    const s = await seed("cash2");
+    const saleId = await addSale(s, { supplierSettlementRoute: "THROUGH_DEALERSHIP", financingType: "CASH", saleDate: NOW - 400 * DAY });
+    await addPayable(s, { saleId });
+    expect((await list(s, "PAYABLE")).rows[0]).toMatchObject({ dueAt: null, rule: "CLEARED_PROCEEDS_NOT_RECORDED", bucket: "NO_DUE_DATE" });
+  });
+});
+
+describe("SCRUM-869 S3b (c23906) - the margin receivable is due on the recorded vehicle handover only", () => {
+  const HANDED_OVER_AT = NOW - 70 * DAY;
+
+  test("a CASH deal records the same handover and is due on it", async () => {
+    freezeNow();
+    const s = await seed("rcash1");
+    const applicationId = await addApplication(s, {
+      quoteModeAtSubmission: "CASH", handoverStatus: "HANDED_OVER", vehicleHandoverAt: HANDED_OVER_AT,
+    });
+    const saleId = await addSale(s, { supplierSettlementRoute: "DIRECT_TO_SUPPLIER", financingType: "CASH", applicationId });
+    await addReceivable(s, saleId);
+    expect((await list(s, "RECEIVABLE")).rows[0]).toMatchObject({
+      rule: "DELIVERY_RECORDED", dueAt: HANDED_OVER_AT, daysOverdue: 70, bucket: "DAYS_61_90",
+    });
+  });
+
+  test("a CASH sale completed without a deal application has no handover record: not delivery", async () => {
+    freezeNow();
+    const s = await seed("rcash2");
+    const saleId = await addSale(s, {
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER", financingType: "CASH", status: "COMPLETED", saleDate: NOW - 200 * DAY,
+    });
+    await addReceivable(s, saleId);
+    expect((await list(s, "RECEIVABLE")).rows[0]).toMatchObject({ dueAt: null, rule: "DELIVERY_NOT_RECORDED", bucket: "NO_DUE_DATE" });
+  });
+
+  test("a funded financed deal with no recorded handover is still not delivered", async () => {
+    freezeNow();
+    const s = await seed("rfund");
+    const applicationId = await addApplication(s, { disbursedAt: NOW - 30 * DAY, disbursedAmountMinor: 9_000_000 });
+    const saleId = await addSale(s, { supplierSettlementRoute: "DIRECT_TO_SUPPLIER", financingType: "FINANCED", applicationId });
+    await addReceivable(s, saleId);
+    expect((await list(s, "RECEIVABLE")).rows[0]).toMatchObject({ dueAt: null, rule: "DELIVERY_NOT_RECORDED", bucket: "NO_DUE_DATE" });
+  });
+});

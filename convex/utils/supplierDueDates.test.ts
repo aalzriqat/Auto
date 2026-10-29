@@ -127,6 +127,61 @@ describe("due-date derivation (c23883 OQ-1)", () => {
     });
   });
 
+  // Owner ruling SCRUM-869#c23906 (2026-10-29): "cleared proceeds" is the receipt of the financing
+  // from the financier. A financed THROUGH_DEALERSHIP payable is due on the recorded instant the
+  // funding was received; a CASH deal has no financier and stays outside the ruling.
+  describe("SOURCED THROUGH_DEALERSHIP payable (c23906: due on the financier's funding)", () => {
+    const FUNDED = utc("2026-02-20T09:00:00Z");
+
+    test("financed and funded: due on the recorded instant the funding was received", () => {
+      expect(deriveDueDate("SOURCED_THROUGH_DEALERSHIP_PAYABLE", { financierFunding: { fundedAt: FUNDED } })).toMatchObject({
+        dueAt: FUNDED,
+        rule: "FINANCIER_FUNDING_RECORDED",
+      });
+    });
+
+    test("financed but no funding received yet: no due date, never overdue", () => {
+      const derived = deriveDueDate("SOURCED_THROUGH_DEALERSHIP_PAYABLE", { financierFunding: {} });
+      expect(derived).toMatchObject({ dueAt: null, rule: "FINANCIER_FUNDING_NOT_RECORDED" });
+      expect(agingFor(derived.dueAt, utc("2099-01-01T00:00:00Z")).bucket).toBe("NO_DUE_DATE");
+    });
+
+    test("a non-finite, zero or negative funding instant is a missing fact, never a date", () => {
+      for (const fundedAt of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+        expect(deriveDueDate("SOURCED_THROUGH_DEALERSHIP_PAYABLE", { financierFunding: { fundedAt } })).toMatchObject({
+          dueAt: null,
+          rule: "FINANCIER_FUNDING_NOT_RECORDED",
+        });
+      }
+    });
+
+    test("CASH (no financier fact at all) stays at no due date with the cleared-proceeds code, whatever else is recorded", () => {
+      expect(deriveDueDate("SOURCED_THROUGH_DEALERSHIP_PAYABLE", { deliveredAt: DELIVERED })).toMatchObject({
+        dueAt: null,
+        rule: "CLEARED_PROCEEDS_NOT_RECORDED",
+      });
+    });
+
+    test("an agreed date still wins over the funding instant", () => {
+      expect(
+        deriveDueDate("SOURCED_THROUGH_DEALERSHIP_PAYABLE", { agreedDueAt: AGREED, financierFunding: { fundedAt: FUNDED } })
+      ).toMatchObject({ dueAt: AGREED, rule: "AGREED_DATE" });
+    });
+
+    test("a delivery date does not stand in for funding", () => {
+      expect(
+        deriveDueDate("SOURCED_THROUGH_DEALERSHIP_PAYABLE", { deliveredAt: DELIVERED, financierFunding: {} })
+      ).toMatchObject({ dueAt: null, rule: "FINANCIER_FUNDING_NOT_RECORDED" });
+    });
+
+    test("the funding instant triggers only the THROUGH_DEALERSHIP payable, no other model", () => {
+      const facts = { financierFunding: { fundedAt: FUNDED } };
+      expect(deriveDueDate("SOURCED_DIRECT_RECEIVABLE", facts)).toMatchObject({ dueAt: null, rule: "DELIVERY_NOT_RECORDED" });
+      expect(deriveDueDate("OWNED_ON_ACCOUNT_PAYABLE", facts)).toMatchObject({ dueAt: null, rule: "TERMS_NOT_RECORDED" });
+      expect(deriveDueDate("COST_RECOVERY", facts)).toMatchObject({ dueAt: null, rule: "COLLECTIBILITY_NOT_RECORDED" });
+    });
+  });
+
   test("OWNED ON_ACCOUNT payable with no agreed terms has no due date", () => {
     expect(deriveDueDate("OWNED_ON_ACCOUNT_PAYABLE", {})).toMatchObject({
       dueAt: null,
