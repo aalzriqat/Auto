@@ -271,6 +271,55 @@ describe("SCRUM-869 S3a - margin receivables", () => {
   });
 });
 
+describe("SCRUM-869 S3a - receivable edges", () => {
+  test("a receivable whose saleId is another organisation's sale reads no delivery from it", async () => {
+    freezeNow();
+    const a = await seed("fsale");
+    // A handed-over application that is genuinely this organisation's; only the sale pointing at it is foreign.
+    const ownApplication = await addApplication(a, { handoverStatus: "HANDED_OVER", vehicleHandoverAt: NOW - 70 * DAY });
+    // The other organisation lives in the SAME harness: separate harnesses hand out identical ids.
+    const foreignSale = await a.t.run(async (ctx) => {
+      const org = await ctx.db.insert("organizations", { name: "Other", createdAt: NOW });
+      const customerId = await ctx.db.insert("customers", { orgId: org, firstName: "X", lastName: "Y" });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId: org, vin: "VINFOREIGN", make: "Kia", model: "Rio", year: 2024, mileage: 1, color: "Red",
+        fuelType: "Gas", transmission: "Auto", sellingPrice: 1, status: "AVAILABLE",
+      } as never);
+      const applicationId = ownApplication;
+      return await ctx.db.insert("sales", {
+        orgId: org, vehicleId, customerId, salespersonId: a.userId, salePrice: 1, saleDate: NOW - DAY, status: "COMPLETED",
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER", applicationId,
+      } as never);
+    });
+    await a.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierReceivables", {
+        orgId: a.orgId, vehicleId: a.vehicleId, saleId: foreignSale, sourcedFromName: "X", amountDue: 3_000, currency: "JOD",
+        status: "OPEN", createdBy: a.userId, createdAt: NOW, updatedAt: NOW,
+      } as never)
+    );
+    expect((await list(a, "RECEIVABLE")).rows[0]).toMatchObject({ dueAt: null, rule: "DELIVERY_NOT_RECORDED", bucket: "NO_DUE_DATE" });
+  });
+
+  test("a cancelled receivable and a fully received one are not outstanding", async () => {
+    freezeNow();
+    const s = await seed("rcan");
+    const saleId = await addSale(s, { supplierSettlementRoute: "DIRECT_TO_SUPPLIER" });
+    await addReceivable(s, saleId, { status: "CANCELLED", agreedDueDate: NOW - DAY });
+    await addReceivable(s, saleId, { status: "PAID", amountReceived: 3_000, agreedDueDate: NOW - DAY });
+    expect((await list(s, "RECEIVABLE")).rows).toHaveLength(0);
+  });
+
+  test("a status that says settled while the amounts say open does not hide the open money", async () => {
+    freezeNow();
+    const s = await seed("rinc");
+    const saleId = await addSale(s, { supplierSettlementRoute: "DIRECT_TO_SUPPLIER" });
+    await addReceivable(s, saleId, { status: "PAID", amountReceived: 1_000, agreedDueDate: NOW - DAY });
+    await addRecovery(s, { status: "RECOVERED", amountRecoveredMinor: 50_000, agreedDueDate: NOW - DAY });
+    expect((await list(s, "RECEIVABLE")).rows[0]).toMatchObject({ outstandingMinor: 2_000_000 });
+    expect((await list(s, "RECOVERY")).rows[0]).toMatchObject({ outstandingMinor: 150_000 });
+  });
+});
+
 describe("SCRUM-869 S3a - cost recoveries", () => {
   test("no agreed date: no due date, collectibility not recorded", async () => {
     freezeNow();
@@ -312,6 +361,22 @@ describe("SCRUM-869 S3a - bounded reads, tenancy, permission", () => {
     const third = await list(s, "PAYABLE", { limit: 2, cursor: second.continueCursor });
     expect(third.rows).toHaveLength(1);
     expect(third.complete).toBe(true);
+  });
+
+  test("a requested page size above the cap is cut to the cap", async () => {
+    freezeNow();
+    const s = await seed("cap");
+    await s.t.run(async (ctx) => {
+      for (let i = 0; i < 101; i++) {
+        await ctx.db.insert("vehicleSupplierPayables", {
+          orgId: s.orgId, vehicleId: s.vehicleId, sourcedFromName: "X", amountDue: 1, currency: "JOD", status: "DUE_ON_SALE",
+          paymentDueDate: NOW - DAY, createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
+        } as never);
+      }
+    });
+    const r = await list(s, "PAYABLE", { limit: 100_000 });
+    expect(r.rows).toHaveLength(100);
+    expect(r.complete).toBe(false);
   });
 
   test("another organisation's obligations are never returned", async () => {

@@ -54,11 +54,10 @@ describe("Asia/Amman calendar days", () => {
     const due = utc("2026-01-10T01:00:00.000Z"); // 04:00 Amman, 10 January
     expect(daysOverdue(due, utc("2026-01-10T20:59:59.999Z"))).toBe(0); // 23:59 Amman, same day
     expect(daysOverdue(due, utc("2026-01-10T21:00:00.000Z"))).toBe(1); // 00:00 Amman, 11 January
-    // Less than 24 hours after the due instant, but already the next calendar day in Amman.
-    expect(daysOverdue(due, utc("2026-01-10T21:00:00.000Z")) * 24 * 3600 * 1000).toBeGreaterThan(
-      utc("2026-01-10T21:00:00.000Z") - due
-    );
-    expect(daysOverdue(due, utc("2026-01-09T21:00:00.000Z"))).toBe(-1); // due tomorrow
+    // 20 hours after the due instant, but already the next calendar day in Amman.
+    expect(utc("2026-01-10T21:00:00.000Z") - due).toBeLessThan(24 * 3600 * 1000);
+    expect(daysOverdue(due, utc("2026-01-09T20:59:59.999Z"))).toBe(-1); // 23:59 Amman, 9 January: due tomorrow
+    expect(daysOverdue(due, utc("2026-01-09T21:00:00.000Z"))).toBe(0); // 00:00 Amman, 10 January: due today
   });
 });
 
