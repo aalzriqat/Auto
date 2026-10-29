@@ -261,7 +261,7 @@ function SupplierSelectBody({
       disabled={disabled || !orgId}
       invalid={invalid}
       ariaLabel={ariaLabel}
-      id={id}
+      triggerId={id}
       dataTestId={dataTestId}
       className={className}
     />

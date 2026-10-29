@@ -37,8 +37,12 @@ interface SearchableSelectProps {
   /** Names the field for assistive technology; also marks the trigger invalid when `invalid`. */
   ariaLabel?: string;
   invalid?: boolean;
-  /** DOM id of the trigger, so a `<label htmlFor>` reaches the control. */
-  id?: string;
+  /**
+   * DOM id of the trigger, so a `<label htmlFor>` reaches the control. Deliberately NOT named `id`: the
+   * shadcn `FormControl` Slot injects an `id` into its child, and honouring that would change the
+   * accessible name of every form-wrapped picker (a label would replace its content name). Opt in here.
+   */
+  triggerId?: string;
 }
 
 export function SearchableSelect({
@@ -61,7 +65,7 @@ export function SearchableSelect({
   renderFooter,
   ariaLabel,
   invalid,
-  id,
+  triggerId,
 }: SearchableSelectProps) {
   const value = valueProp ?? "";
   const [open, setOpen] = useState(false);
@@ -130,7 +134,7 @@ export function SearchableSelect({
       {/* Trigger — matches shadcn SelectTrigger exactly */}
       <button
         type="button"
-        id={id}
+        id={triggerId}
         data-testid={dataTestId}
         disabled={disabled}
         onClick={() => !disabled && setOpen((o) => !o)}
