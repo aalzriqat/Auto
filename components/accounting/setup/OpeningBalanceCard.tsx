@@ -96,6 +96,11 @@ function allocationConfirmationLine(row: OpeningAllocationDraft, currency: strin
     const purposeLabel = t(`OpeningAllocationPurpose_${row.purpose}`);
     return `  ${t("OpeningAllocationKind_UNALLOCATED_LIABILITY")} · ${purposeLabel} · ${row.title} · ${row.amount} ${currency}`;
   }
+  if (row.kind === "CUSTOMER_DEPOSIT") {
+    const typeLabel = t(row.depositKind === "RESERVATION" ? "OpeningDepositType_RESERVATION" : "OpeningDepositType_SECURITY");
+    const vehicle = row.depositVehicleId ? ` · ${row.depositVehicleLabel || row.depositVehicleId}` : "";
+    return `  ${row.partyLabel} (${row.partyId}) · ${typeLabel}${vehicle} · ${row.title} · ${row.amount} ${currency}`;
+  }
   if (row.kind === "SUPPLIER_RECOVERABLE" || row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE") {
     const kindLabel = t(`OpeningAllocationKind_${row.kind}`);
     return `  ${kindLabel} · ${row.counterpartyName} · ${row.title} · ${row.amount} ${currency}`;
@@ -560,6 +565,7 @@ export function OpeningBalanceCard() {
                     canSelectCustomers={status.canSelectCustomers}
                     canSelectEmployees={status.canSelectEmployees}
                     canSelectPartners={status.canSelectPartners}
+                    canSelectVehicles={status.canSelectVehicles}
                   />
                 )}
 

@@ -24,7 +24,8 @@ function newRow(group: OpeningAllocationGroup): OpeningAllocationDraft {
   return emptyParty({ rowKey: `oballoc-${allocationSeq}`, accountId: group.accountId,
     partyLabel: "", amount: "", title: "", dueDate: "", note: "",
     startYearMonth: "", termMonths: "", expenseSystemKey: "", attestedUnexpiredBenefit: false,
-    counterpartyName: "", purpose: undefined }, group.kind);
+    counterpartyName: "", purpose: undefined,
+    depositKind: undefined, depositVehicleId: undefined, depositVehicleLabel: undefined }, group.kind);
 }
 
 function maskPhone(phone: string | undefined): string {
@@ -32,7 +33,7 @@ function maskPhone(phone: string | undefined): string {
 }
 
 function partyFieldLabel(kind: OpeningAllocationDraft["kind"]): string {
-  if (kind === "CUSTOMER_RECEIVABLE") return "OpeningAllocationCustomer";
+  if (kind === "CUSTOMER_RECEIVABLE" || kind === "CUSTOMER_DEPOSIT") return "OpeningAllocationCustomer";
   if (kind === "EMPLOYEE_ADVANCE" || kind === "EMPLOYEE_COMMISSION") return "OpeningAllocationEmployee";
   if (kind === "VEHICLE_INVENTORY") return "OpeningAllocationVehicle";
   return "OpeningAllocationPartner";
@@ -47,23 +48,32 @@ type Props = {
   canSelectCustomers: boolean;
   canSelectEmployees: boolean;
   canSelectPartners: boolean;
+  /** Needed only to name a vehicle on a reservation deposit; absent means no vehicle picker. */
+  canSelectVehicles?: boolean;
 };
 
 /** Party families use existing party read grants; backend posting still
  * re-resolves each selected ID and owns every financial rule. */
 export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChange,
-  canSelectCustomers, canSelectEmployees, canSelectPartners }: Readonly<Props>) {
+  canSelectCustomers, canSelectEmployees, canSelectPartners, canSelectVehicles = false }: Readonly<Props>) {
   const { t } = useLanguage();
   const [activeCustomerRow, setActiveCustomerRow] = useState<string | null>(null);
   const [customerSearch, setCustomerSearch] = useState("");
+  const [activeVehicleRow, setActiveVehicleRow] = useState<string | null>(null);
+  const [vehicleSearch, setVehicleSearch] = useState("");
   const [selectionError, setSelectionError] = useState<string | null>(null);
-  const needsCustomers = groups.some((group) => (group.allowedKinds ?? [group.kind]).includes("CUSTOMER_RECEIVABLE"));
+  const needsCustomers = groups.some((group) => (group.allowedKinds ?? [group.kind]).some((kind) =>
+    kind === "CUSTOMER_RECEIVABLE" || kind === "CUSTOMER_DEPOSIT"));
+  const needsReservationVehicles = groups.some((group) => (group.allowedKinds ?? [group.kind]).includes("CUSTOMER_DEPOSIT"));
   const needsEmployees = groups.some((group) => (group.allowedKinds ?? [group.kind]).some((kind) =>
     kind === "EMPLOYEE_ADVANCE" || kind === "EMPLOYEE_COMMISSION"));
   const needsPartners = groups.some((group) => (group.allowedKinds ?? [group.kind]).includes("PARTNER_CAPITAL"));
   const needsVehicles = groups.some((group) => (group.allowedKinds ?? [group.kind]).includes("VEHICLE_INVENTORY"));
   const vehicles = useQuery(api.accountingCutover.listOpeningStockChoices,
     needsVehicles ? { orgId } : "skip");
+  const reservationVehicleOptions = useQuery(api.vehicles.selectorOptions,
+    needsReservationVehicles && canSelectVehicles && activeVehicleRow !== null
+      ? { orgId, search: vehicleSearch } : "skip");
   const customerOptions = useQuery(api.customers.selectorOptions,
     needsCustomers && canSelectCustomers && activeCustomerRow !== null
       ? { orgId, search: customerSearch } : "skip");
@@ -80,6 +90,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
   const employeesExhausted = memberStatus === "Exhausted" && members.length === 0;
   const noEligiblePartyByKind: Partial<Record<OpeningAllocationDraft["kind"], boolean>> = {
     CUSTOMER_RECEIVABLE: activeCustomerRow !== null && customerOptions !== undefined && customerOptions.length === 0,
+    CUSTOMER_DEPOSIT: activeCustomerRow !== null && customerOptions !== undefined && customerOptions.length === 0,
     EMPLOYEE_ADVANCE: employeesExhausted,
     EMPLOYEE_COMMISSION: employeesExhausted,
     VEHICLE_INVENTORY: vehicles !== undefined && vehicles.every((vehicle) => !vehicle.available),
@@ -111,7 +122,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
     if (!value) { replaceRow({ ...row, partyId: "", partyLabel: "" }); return; }
     const partyLabel = selectedPartyLabel(value);
     switch (row.kind) {
-      case "CUSTOMER_RECEIVABLE": {
+      case "CUSTOMER_RECEIVABLE": case "CUSTOMER_DEPOSIT": {
         const choice = customerOptions?.find(item => item._id === value);
         if (choice) { replaceRow({ ...row, partyId: choice._id, partyLabel }); return; }
         break;
@@ -136,8 +147,17 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
     setSelectionError(t("OpeningAllocationPartyUnavailable"));
   }
 
+  function selectDepositVehicle(row: OpeningAllocationDraft, value: string) {
+    if (row.kind !== "CUSTOMER_DEPOSIT") return;
+    if (!value) { replaceRow({ ...row, depositVehicleId: "", depositVehicleLabel: "" }); return; }
+    const choice = reservationVehicleOptions?.find((item) => item._id === value);
+    if (!choice) { setSelectionError(t("OpeningAllocationPartyUnavailable")); return; }
+    replaceRow({ ...row, depositVehicleId: choice._id,
+      depositVehicleLabel: `${choice.vin} · ${choice.year} ${choice.make} ${choice.model}` });
+  }
+
   function canEditKind(kind: OpeningAllocationDraft["kind"]): boolean {
-    if (kind === "CUSTOMER_RECEIVABLE") return canSelectCustomers;
+    if (kind === "CUSTOMER_RECEIVABLE" || kind === "CUSTOMER_DEPOSIT") return canSelectCustomers;
     if (kind === "EMPLOYEE_ADVANCE" || kind === "EMPLOYEE_COMMISSION") return canSelectEmployees;
     if (kind === "PARTNER_CAPITAL") return canSelectPartners;
     return true;
@@ -174,7 +194,8 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                     onChange={(event) => {
                       const kind = group.allowedKinds?.find(kind => kind === event.target.value && canEditKind(kind));
                       if (!kind) { setSelectionError(t("OpeningAllocationPartyUnavailable")); return; }
-                      replaceRow(emptyParty({ ...row, partyLabel: "", counterpartyName: "", title: "", purpose: undefined }, kind));
+                      replaceRow(emptyParty({ ...row, partyLabel: "", counterpartyName: "", title: "", purpose: undefined,
+                        depositKind: undefined, depositVehicleId: undefined, depositVehicleLabel: undefined }, kind));
                     }}
                     className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
                     {group.allowedKinds.map((kind) => <option key={kind} value={kind} disabled={!canEditKind(kind)}>
@@ -188,9 +209,9 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                   memberStatus === "Exhausted" && members.length === 0 &&
                   <p className="text-xs text-amber-700" role="status">{t("OpeningAllocationNoEligibleParty")}</p>}
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {["CUSTOMER_RECEIVABLE", "EMPLOYEE_ADVANCE", "EMPLOYEE_COMMISSION", "PARTNER_CAPITAL", "VEHICLE_INVENTORY"].includes(row.kind) && <div className="space-y-1">
+                  {["CUSTOMER_RECEIVABLE", "CUSTOMER_DEPOSIT", "EMPLOYEE_ADVANCE", "EMPLOYEE_COMMISSION", "PARTNER_CAPITAL", "VEHICLE_INVENTORY"].includes(row.kind) && <div className="space-y-1">
                     <Label htmlFor={`${row.rowKey}-party`}>{t(partyFieldLabel(row.kind))}</Label>
-                    {row.kind === "CUSTOMER_RECEIVABLE" && (
+                    {(row.kind === "CUSTOMER_RECEIVABLE" || row.kind === "CUSTOMER_DEPOSIT") && (
                       <Input
                         aria-label={t("OpeningAllocationSearchCustomer")}
                         placeholder={t("OpeningAllocationSearchCustomer")}
@@ -218,7 +239,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                         !vehicles?.some((item) => item.vehicleId === row.partyId) && (
                           <option value={row.partyId}>{row.partyLabel || row.partyId}</option>
                       )}
-                      {row.kind === "CUSTOMER_RECEIVABLE" && customerOptions?.map((customer) => (
+                      {(row.kind === "CUSTOMER_RECEIVABLE" || row.kind === "CUSTOMER_DEPOSIT") && customerOptions?.map((customer) => (
                         <option key={customer._id} value={customer._id}>
                           {customer.firstName} {customer.lastName} · {maskPhone(customer.phone) || customer.email || String(customer._id).slice(-6)}
                         </option>
@@ -249,7 +270,8 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                       onChange={(event) => updateRow(row.rowKey, { counterpartyName: event.target.value })} />
                   </div>}
                   {(row.kind === "SUPPLIER_RECOVERABLE" || row.kind === "SUPPLIER_PAYABLE" ||
-                    row.kind === "OTHER_PAYABLE" || row.kind === "UNALLOCATED_LIABILITY") && <div className="space-y-1">
+                    row.kind === "OTHER_PAYABLE" || row.kind === "UNALLOCATED_LIABILITY" ||
+                    row.kind === "CUSTOMER_DEPOSIT") && <div className="space-y-1">
                     <Label htmlFor={`${row.rowKey}-source-title`}>{t("OpeningAllocationSourceTitle")}</Label>
                     <Input id={`${row.rowKey}-source-title`} value={row.title}
                       onChange={(event) => updateRow(row.rowKey, { title: event.target.value })} />
@@ -269,6 +291,54 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                   {row.kind === "UNALLOCATED_LIABILITY" && <p className="text-xs text-amber-700 sm:col-span-2" role="note">
                     {t("OpeningAllocationUnallocatedNotice")}
                   </p>}
+                  {row.kind === "CUSTOMER_DEPOSIT" && <>
+                    <div className="space-y-1">
+                      <Label htmlFor={`${row.rowKey}-deposit-kind`}>{t("OpeningDepositType")}</Label>
+                      <select id={`${row.rowKey}-deposit-kind`} value={row.depositKind ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          const depositKind = value === "SECURITY" || value === "RESERVATION" ? value : undefined;
+                          // A security deposit never names a vehicle, so changing to it drops any vehicle.
+                          replaceRow({ ...row, depositKind,
+                            ...(depositKind === "RESERVATION" ? {} : { depositVehicleId: "" as const, depositVehicleLabel: "" }) });
+                        }}
+                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                        <option value="">{t("OpeningDepositChooseType")}</option>
+                        <option value="SECURITY">{t("OpeningDepositType_SECURITY")}</option>
+                        <option value="RESERVATION">{t("OpeningDepositType_RESERVATION")}</option>
+                      </select>
+                    </div>
+                    {row.depositKind === "RESERVATION" && canSelectVehicles && <div className="space-y-1">
+                      <Label htmlFor={`${row.rowKey}-deposit-vehicle`}>{t("OpeningDepositVehicle")}</Label>
+                      <Input
+                        aria-label={t("OpeningDepositSearchVehicle")}
+                        placeholder={t("OpeningDepositSearchVehicle")}
+                        dir="ltr"
+                        value={activeVehicleRow === row.rowKey ? vehicleSearch : row.depositVehicleLabel ?? ""}
+                        onFocus={() => { setActiveVehicleRow(row.rowKey); setVehicleSearch(""); }}
+                        onChange={(event) => {
+                          setActiveVehicleRow(row.rowKey);
+                          setVehicleSearch(event.target.value);
+                          if (row.depositVehicleId) replaceRow({ ...row, depositVehicleId: "", depositVehicleLabel: "" });
+                        }} />
+                      <select id={`${row.rowKey}-deposit-vehicle`}
+                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={row.depositVehicleId ?? ""}
+                        onChange={(event) => selectDepositVehicle(row, event.target.value)}>
+                        <option value="">{t("OpeningDepositNoVehicle")}</option>
+                        {row.depositVehicleId && !reservationVehicleOptions?.some((item) => item._id === row.depositVehicleId) && (
+                          <option value={row.depositVehicleId}>{row.depositVehicleLabel || row.depositVehicleId}</option>
+                        )}
+                        {reservationVehicleOptions?.filter((item) => item.status !== "SOLD").map((item) => (
+                          <option key={item._id} value={item._id}>{item.vin} · {item.year} {item.make} {item.model}</option>
+                        ))}
+                      </select>
+                      {row.depositVehicleId && <p className="text-xs text-muted-foreground" dir="ltr"><bdi>{row.depositVehicleLabel}</bdi></p>}
+                    </div>}
+                    <p className="text-xs text-amber-700 sm:col-span-2" role="note">
+                      {t(row.depositKind === "SECURITY" ? "OpeningDepositSecurityNotice" : "OpeningDepositReservationNotice")}
+                    </p>
+                  </>}
                   {row.kind === "CUSTOMER_RECEIVABLE" && <>
                     <div className="space-y-1"><Label htmlFor={`${row.rowKey}-title`}>{t("OpeningAllocationTitle")}</Label>
                       <Input id={`${row.rowKey}-title`} value={row.title}
