@@ -318,10 +318,13 @@ describe("SCRUM-869 S2 - the supplier receivables subledger reconciles to GL 124
     const asSales = s.t.withIdentity({ subject: "auth_sales", clerkId: "auth_sales" });
     await expect(asSales.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId })).rejects.toThrow();
 
-    const other = await seed("auth2");
-    await expect(other.asUser.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId })).rejects.toThrow();
-    const own = await recon(other);
-    expect(own.byCurrency).toEqual({});
+    // A finance user of a DIFFERENT organization in the same database (separate harnesses hand out identical ids).
+    const otherOrg = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "S2 other", createdAt: Date.now() }));
+    const otherUser = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "auth_other", email: "o@e.com", name: "Other" }));
+    const otherRole = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: otherOrg, name: "Owner", permissions: PERMS }));
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: otherOrg, userId: otherUser, roleId: otherRole }));
+    const asOther = s.t.withIdentity({ subject: "auth_other", clerkId: "auth_other" });
+    await expect(asOther.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId })).rejects.toThrow();
   });
 
   test("it only reports: nothing is written and period close does not read it", async () => {

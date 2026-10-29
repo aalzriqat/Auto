@@ -1,6 +1,6 @@
 import { createOpeningSettlementReader } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
-import { openingPayableBasis } from "./utils/openingSupplierBasis";
+import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
 /**
  * Phase 5 — Ledger-backed financial reports
@@ -23,7 +23,7 @@ import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
 import { settlementView } from "./utils/supplierSettlement";
-import { AP_AFFECTING_BY_EVENT_TYPE } from "./accounting/postingRules";
+import { AP_AFFECTING_BY_EVENT_TYPE, SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE } from "./accounting/postingRules";
 
 /**
  * GL Phase 14 note on aggregation: every aggregate below keys on
@@ -992,15 +992,16 @@ const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
     .map(([eventType]) => eventType)
 );
 
-async function hasPendingApAffectingPosting(
+async function hasPendingAffectingPosting(
   ctx: QueryCtx,
-  events: Array<Doc<"pendingAccountingEvents">>
+  events: Array<Doc<"pendingAccountingEvents">>,
+  affectingEventTypes: ReadonlySet<string>
 ): Promise<boolean> {
   // Postings need no reads, so settle them first.
   const reversals: Array<Doc<"pendingAccountingEvents">> = [];
   for (const event of events) {
     if (event.kind === "REVERSE") reversals.push(event);
-    else if (!event.eventType || AP_AFFECTING_EVENT_TYPES.has(event.eventType)) return true;
+    else if (!event.eventType || affectingEventTypes.has(event.eventType)) return true;
   }
   // A queued reversal inherits the AP effect of the event it reverses. One that cannot be
   // resolved is treated as AP-affecting: unknown must not read as safe.
@@ -1010,22 +1011,23 @@ async function hasPendingApAffectingPosting(
     originalIds.add(event.originalEventId);
   }
   const originals = await Promise.all([...originalIds].map((id) => ctx.db.get(id)));
-  return originals.some((original) => !original || AP_AFFECTING_EVENT_TYPES.has(original.eventType));
+  return originals.some((original) => !original || affectingEventTypes.has(original.eventType));
 }
 
 /**
  * A manual journal or opening-balance draft still awaiting approval that touches the AP account
  * will move the GL when approved, so the comparison is not final. "over" = could not read them all.
  */
-async function pendingApDraftState(
+async function pendingControlAccountDraftState(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  readLimit: number
+  readLimit: number,
+  controlAccountKey: SystemKey
 ): Promise<"NONE" | "PENDING" | "OVER_LIMIT"> {
   const [apAccount, manual, opening] = await Promise.all([
     ctx.db
       .query("chartOfAccounts")
-      .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS))
+      .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", controlAccountKey))
       .unique(),
     ctx.db
       .query("manualJournalDrafts")
@@ -1124,10 +1126,10 @@ export async function computeSupplierPayablesReconciliation(
   };
   const [outboxEvents, drafts] = await Promise.all([
     opts.outboxEvents ?? readOutbox(),
-    pendingApDraftState(ctx, orgId, readLimit),
+    pendingControlAccountDraftState(ctx, orgId, readLimit, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS),
   ]);
   if (!outboxEvents) return unavailable("OVER_LIMIT");
-  if (await hasPendingApAffectingPosting(ctx, outboxEvents)) return unavailable("PENDING_POSTINGS");
+  if (await hasPendingAffectingPosting(ctx, outboxEvents, AP_AFFECTING_EVENT_TYPES)) return unavailable("PENDING_POSTINGS");
   if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
   if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
 
@@ -1182,6 +1184,223 @@ export const supplierPayablesReconciliation = query({
   },
 });
 
+/**
+ * SCRUM-869 (S2, owner ruling SCRUM-869#c23881, design c23880). The supplier RECEIVABLES subledger
+ * reconciled to GL 1240 (Receivable from Suppliers), per currency.
+ *
+ * Subledger = the signed open balance of every non-CANCELLED margin receivable
+ * (`vehicleSupplierReceivables`) plus every non-REVERSED cost recovery (`supplierCostRecoveries`):
+ * both post to 1240 (recognition debits, receipt credits). The deposit retained against commission
+ * credits 1240 too; the receivable is seeded with it (`alreadyReceivedAmount`), so it is inside
+ * `amountReceived`.
+ *
+ * Established practice (stated from general accounting knowledge, not fetched in this session): a
+ * subledger is reconciled to its GL control account by total, per currency, and the reconciling
+ * difference is reported and investigated, never silently adjusted or posted. Rows that cannot be
+ * attributed to a supplier stay in the total and are shown separately (the Unlinked bucket) so a
+ * per-supplier view can never add up to less than the control account without saying why.
+ *
+ * Report-only (OQ-10): a difference is displayed, never posted, and period close does not read this.
+ * Nothing is stored: every figure is derived from the rows on each call.
+ */
+export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, "byCurrency"> & {
+  byCurrency: Record<
+    string,
+    GlVsSubledgerResult["byCurrency"][string] & {
+      /** Open margin receivables (minor units, signed). */
+      marginMinor: number;
+      /** Open supplier-borne cost recoveries (minor units, signed). */
+      recoveryMinor: number;
+      /** The part of the subledger attributable to a named supplier. */
+      linkedMinor: number;
+      /** The part with no supplier identity (blank or the "Unknown supplier" default). */
+      unlinkedMinor: number;
+    }
+  >;
+  status: "AVAILABLE" | "UNAVAILABLE";
+  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE";
+  /** True only when every source was read in full; UNAVAILABLE is never complete. */
+  complete: boolean;
+  rowsRead?: { receivables: number; recoveries: number };
+};
+
+/** Same bound and reasoning as SUPPLIER_PAYABLES_RECON_READ_LIMIT. */
+const SUPPLIER_RECEIVABLES_RECON_READ_LIMIT = 4000;
+
+/** Exhaustive over each status union, so a new status fails typecheck until it is classified. */
+const SUPPLIER_RECEIVABLE_STATUS_CARRIES_BALANCE = {
+  OPEN: true,
+  PARTIALLY_PAID: true,
+  PAID: true,
+  DISPUTED: true,
+  CANCELLED: false,
+} satisfies Record<Doc<"vehicleSupplierReceivables">["status"], boolean>;
+const SUPPLIER_COST_RECOVERY_STATUS_CARRIES_BALANCE = {
+  OPEN: true,
+  PARTIALLY_RECOVERED: true,
+  RECOVERED: true,
+  REVERSED: false,
+} satisfies Record<Doc<"supplierCostRecoveries">["status"], boolean>;
+const statusesCarryingBalance = <S extends string>(map: Record<S, boolean>): S[] =>
+  (Object.keys(map) as S[]).filter((status) => map[status]);
+
+const SUPPLIER_RECEIVABLE_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
+  Object.entries(SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE)
+    .filter(([, affects1240]) => affects1240)
+    .map(([eventType]) => eventType)
+);
+
+/** There is no supplier master data yet: a row is "linked" only when it carries a real supplier name. */
+export function isUnlinkedSupplierName(name: string | undefined): boolean {
+  const normalized = (name ?? "").trim().toLowerCase();
+  return normalized === "" || normalized === "unknown supplier";
+}
+
+export async function computeSupplierReceivablesReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  opts: { readLimit?: number } = {}
+): Promise<SupplierReceivablesReconciliationResult> {
+  const readLimit = opts.readLimit ?? SUPPLIER_RECEIVABLES_RECON_READ_LIMIT;
+  const unavailable = (
+    unavailableReason: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE"
+  ): SupplierReceivablesReconciliationResult => ({
+    currencies: [],
+    byCurrency: {},
+    isReconciled: false,
+    status: "UNAVAILABLE",
+    unavailableReason,
+    complete: false,
+  });
+
+  // 1. Postings still in flight: the GL side is about to move, so a comparison now is not the truth.
+  const [outbox, drafts] = await Promise.all([
+    Promise.all(
+      (["PENDING", "FAILED"] as const).map((status) =>
+        ctx.db
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+          .take(readLimit + 1)
+      )
+    ),
+    pendingControlAccountDraftState(ctx, orgId, readLimit, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS),
+  ]);
+  const [queued, failed] = outbox;
+  if (queued.length > readLimit || failed.length > readLimit) return unavailable("OVER_LIMIT");
+  if (await hasPendingAffectingPosting(ctx, [...queued, ...failed], SUPPLIER_RECEIVABLE_AFFECTING_EVENT_TYPES)) {
+    return unavailable("PENDING_POSTINGS");
+  }
+  if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+  if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
+
+  // 2. Both subledgers under one shared bound. Status is a label, not the balance.
+  const receivables: Array<Doc<"vehicleSupplierReceivables">> = [];
+  for (const status of statusesCarryingBalance(SUPPLIER_RECEIVABLE_STATUS_CARRIES_BALANCE)) {
+    const budget = readLimit - receivables.length;
+    const batch = await ctx.db
+      .query("vehicleSupplierReceivables")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .take(budget + 1);
+    if (batch.length > budget) return unavailable("OVER_LIMIT");
+    receivables.push(...batch);
+  }
+  const recoveries: Array<Doc<"supplierCostRecoveries">> = [];
+  for (const status of statusesCarryingBalance(SUPPLIER_COST_RECOVERY_STATUS_CARRIES_BALANCE)) {
+    const budget = readLimit - recoveries.length;
+    const batch = await ctx.db
+      .query("supplierCostRecoveries")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .take(budget + 1);
+    if (batch.length > budget) return unavailable("OVER_LIMIT");
+    recoveries.push(...batch);
+  }
+
+  // Signed open balance in minor units, NOT clamped: an over-received row is a real negative that
+  // the GL carries. The subledger side is the current state of the rows; only the GL side is
+  // taken as of `toDate` (same convention as the A/P reconciliation).
+  const margin = new Map<string, number>();
+  const recovery = new Map<string, number>();
+  const linked = new Map<string, number>();
+  const unlinked = new Map<string, number>();
+  const add = (map: Map<string, number>, currency: string, minor: number) =>
+    map.set(currency, (map.get(currency) ?? 0) + minor);
+  const controlAccounts = new Set<Id<"chartOfAccounts">>();
+  const canonical = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS))
+    .unique();
+  if (canonical) controlAccounts.add(canonical._id);
+  const cutoff = toDate ?? Date.now();
+
+  for (const row of receivables) {
+    const openMinor = toMinorUnits(row.amountDue, row.currency) - toMinorUnits(row.amountReceived ?? 0, row.currency);
+    add(margin, row.currency, openMinor);
+    add(isUnlinkedSupplierName(row.sourcedFromName) ? unlinked : linked, row.currency, openMinor);
+  }
+  for (const row of recoveries) {
+    if (row.origin === "OPENING") {
+      // Only opening recoveries need their basis verified (a bounded draft scan each); a native row
+      // is recognised by the same transaction as its expense posting.
+      let basis;
+      try {
+        basis = await openingRecoveryBasis(ctx, orgId, row);
+      } catch {
+        return unavailable("OPENING_SOURCE_UNAVAILABLE");
+      }
+      if (!basis) return unavailable("OPENING_SOURCE_UNAVAILABLE");
+      controlAccounts.add(basis.accountId);
+      if (basis.asOfDate > cutoff) continue;
+    }
+    const openMinor = row.amountDueMinor - row.amountRecoveredMinor;
+    add(recovery, row.currency, openMinor);
+    add(isUnlinkedSupplierName(row.sourcedFromName) ? unlinked : linked, row.currency, openMinor);
+  }
+
+  const subByCurrency = new Map<string, number>();
+  for (const map of [margin, recovery]) {
+    for (const [currency, minor] of map) subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + minor);
+  }
+  for (const [currency, minor] of subByCurrency) {
+    if (minor === 0) subByCurrency.delete(currency);
+  }
+
+  // 1240 is debit-normal: its balance is debits minus credits.
+  const glByCurrency = new Map<string, number>();
+  for (const balance of await getCumulativeBalancesAsOf(ctx, orgId, cutoff)) {
+    if (!controlAccounts.has(balance.accountId)) continue;
+    glByCurrency.set(balance.currency, (glByCurrency.get(balance.currency) ?? 0) + balance.debitMinor - balance.creditMinor);
+  }
+
+  const combined = combineGlAndSubledger(glByCurrency, subByCurrency);
+  return {
+    ...combined,
+    byCurrency: Object.fromEntries(
+      combined.currencies.map((currency) => [
+        currency,
+        {
+          ...combined.byCurrency[currency],
+          marginMinor: margin.get(currency) ?? 0,
+          recoveryMinor: recovery.get(currency) ?? 0,
+          linkedMinor: linked.get(currency) ?? 0,
+          unlinkedMinor: unlinked.get(currency) ?? 0,
+        },
+      ])
+    ),
+    status: "AVAILABLE",
+    complete: true,
+    rowsRead: { receivables: receivables.length, recoveries: recoveries.length },
+  };
+}
+
+export const supplierReceivablesReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    return computeSupplierReceivablesReconciliation(ctx, args.orgId, args.toDate);
+  },
+});
 /**
  * What the dealership still owes on a reservation deposit, row by row.
  *
