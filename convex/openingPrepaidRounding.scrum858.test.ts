@@ -54,11 +54,7 @@ async function fixture(totalMinor: number, termMonths: number) {
   return { t, ...ids, year, scheduleId: schedule._id, prepaidId: prepaid._id, expenseId: expense._id };
 }
 
-test.each([
-  { name: "70.003 JOD over 3 months at scale 3", totalMinor: 70_003, termMonths: 3, expected: [23_334, 23_334, 23_335] },
-  { name: "10.000 JOD over 3 months", totalMinor: 10_000, termMonths: 3, expected: [3_333, 3_333, 3_334] },
-  { name: "5 minor units over 4 months", totalMinor: 5, termMonths: 4, expected: [1, 1, 1, 2] },
-])("opening prepaid $name recognises exactly the allocated amount, remainder in the final month", ({ totalMinor, termMonths, expected }) => withFrozenScheduler(async () => {
+async function expectRemainderInFinalMonth(totalMinor: number, termMonths: number, expected: number[]) {
   const seed = await fixture(totalMinor, termMonths);
   const posted: number[] = [];
   for (let month = 0; month < termMonths; month++) {
@@ -82,4 +78,14 @@ test.each([
   // The asset is fully released and the expense carries every minor unit of it: nothing is stranded or invented.
   expect(net(seed.prepaidId)).toBe(0);
   expect(net(seed.expenseId)).toBe(totalMinor);
-}));
+}
+
+// One literally named check per case so each regression-library record can bind an exact title.
+test("opening prepaid 70.003 JOD over 3 months at scale 3 recognises exactly the allocated amount, remainder in the final month", () =>
+  withFrozenScheduler(() => expectRemainderInFinalMonth(70_003, 3, [23_334, 23_334, 23_335])));
+
+test("opening prepaid 10.000 JOD over 3 months recognises exactly the allocated amount, remainder in the final month", () =>
+  withFrozenScheduler(() => expectRemainderInFinalMonth(10_000, 3, [3_333, 3_333, 3_334])));
+
+test("opening prepaid 5 minor units over 4 months recognises exactly the allocated amount, remainder in the final month", () =>
+  withFrozenScheduler(() => expectRemainderInFinalMonth(5, 4, [1, 1, 1, 2])));

@@ -219,7 +219,7 @@ const tampers: ReadonlyArray<{
     }) },
 ];
 
-test.each(tampers)("$name is reported as an unexplained opening difference and nothing is posted", ({ family, expectedMinor, tamper }) => withFrozenScheduler(async () => {
+async function expectTamperReportedNotPosted({ family, expectedMinor, tamper }: (typeof tampers)[number]) {
   const seed = await fixture();
   await tamper(seed);
   const before = await ledger(seed);
@@ -233,7 +233,29 @@ test.each(tampers)("$name is reported as an unexplained opening difference and n
   });
   // Owner ruling 2026-10-28: reported, never resolved. No journal, line, snapshot, event or account moved.
   expect(await ledger(seed)).toEqual(before);
-}));
+}
+
+test.each(tampers)("$name is reported as an unexplained opening difference and nothing is posted", (entry) => withFrozenScheduler(() => expectTamperReportedNotPosted(entry)));
+
+// One literally named, non-parameterized check per family, so each regression-library record can bind
+// an exact title (a parameterized title cannot be bound). Same assertions as the table above.
+function tamperCase(name: string) {
+  const entry = tampers.find((row) => row.name === name);
+  if (!entry) throw new Error(`Missing tamper case ${name}`);
+  return entry;
+}
+
+test("a staff advance recovered without a ledger entry is reported as an unexplained opening difference and nothing is posted", () =>
+  withFrozenScheduler(() => expectTamperReportedNotPosted(tamperCase("staff advance recovered without a ledger entry"))));
+
+test("a supplier recoverable row deleted from a custom control is reported as an unexplained opening difference and nothing is posted", () =>
+  withFrozenScheduler(() => expectTamperReportedNotPosted(tamperCase("custom-control supplier recoverable row deleted"))));
+
+test("a partner opening balance raised without a ledger entry is reported as an unexplained opening difference and nothing is posted", () =>
+  withFrozenScheduler(() => expectTamperReportedNotPosted(tamperCase("partner opening balance raised without a ledger entry"))));
+
+test("a custom-control supplier payable cancelled without a ledger entry is reported as an unexplained opening difference and nothing is posted", () =>
+  withFrozenScheduler(() => expectTamperReportedNotPosted(tamperCase("custom-control payable cancelled without a ledger entry"))));
 
 test("a public partner contribution and draw stay reconciled, and a lost draw is reported", () => withFrozenScheduler(async () => {
   const seed = await fixture();

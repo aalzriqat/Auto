@@ -1,0 +1,79 @@
+{
+  "id": "opening-journal-close-reopen-leaves-it-untouched",
+  "fingerprint": "50bb8d6e51567116921a788f8b5a39ce502a443d03bdb91ef6ee02f98acb45e6",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-closure",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "families": 4
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.close",
+      "input": {
+        "acknowledgedWarnings": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.reopen",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "openingJournal.status",
+      "value": "POSTED"
+    },
+    {
+      "observable": "journalEntries.delta",
+      "value": 0
+    },
+    {
+      "observable": "journalLines.delta",
+      "value": 0
+    },
+    {
+      "observable": "accountingEvents.delta",
+      "value": 0
+    },
+    {
+      "observable": "pendingAccountingEvents.delta",
+      "value": 0
+    },
+    {
+      "observable": "correctionJournals.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingReversalDoors.scrum858.test.ts",
+    "testName": "closing and reopening the opening period leaves the opening journal untouched and posts no correction"
+  },
+  "matrixRow": "SCRUM-858-opening-journal-reversal-doors"
+}

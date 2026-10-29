@@ -1,0 +1,75 @@
+{
+  "id": "opening-journal-reversal-non-event-id-refuses",
+  "fingerprint": "a8ed8d0f466d96be92038fd7b9911e36ddb4e3caab51eb6c5b6a439fe1d86e15",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-closure",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "families": 4
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingLedger.reverse",
+      "input": {
+        "target": "openingJournalId"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reverse.outcome",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "openingJournal.status",
+      "value": "POSTED"
+    },
+    {
+      "observable": "journalEntries.delta",
+      "value": 0
+    },
+    {
+      "observable": "journalLines.delta",
+      "value": 0
+    },
+    {
+      "observable": "accountBalanceSnapshots.delta",
+      "value": 0
+    },
+    {
+      "observable": "accountingEvents.delta",
+      "value": 0
+    },
+    {
+      "observable": "pendingAccountingEvents.delta",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingReversalDoors.scrum858.test.ts",
+    "testName": "the generic reversal door refuses an id that is not an accounting event, writing nothing"
+  },
+  "matrixRow": "SCRUM-858-opening-journal-reversal-doors"
+}

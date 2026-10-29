@@ -1,0 +1,79 @@
+{
+  "id": "opening-journal-manual-journal-create-refuses",
+  "fingerprint": "02723759987016746b7308478a089a645381fd48a436ffdb95c8f21aca9a861b",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-closure",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "families": 4
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financialAudit.createManualJournal",
+      "input": {
+        "offsetsOpening": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "createManualJournal.outcome",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "manualJournalDrafts.delta",
+      "value": 0
+    },
+    {
+      "observable": "openingJournal.status",
+      "value": "POSTED"
+    },
+    {
+      "observable": "journalEntries.delta",
+      "value": 0
+    },
+    {
+      "observable": "journalLines.delta",
+      "value": 0
+    },
+    {
+      "observable": "accountBalanceSnapshots.delta",
+      "value": 0
+    },
+    {
+      "observable": "accountingEvents.delta",
+      "value": 0
+    },
+    {
+      "observable": "pendingAccountingEvents.delta",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingReversalDoors.scrum858.test.ts",
+    "testName": "the manual-journal door refuses a journal that offsets the opening, creating no draft or journal"
+  },
+  "matrixRow": "SCRUM-858-opening-journal-reversal-doors"
+}
