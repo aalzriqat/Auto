@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expectAppError } from "../test-utils/expectAppError";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -43,7 +44,18 @@ const baseVehicle = {
   sellingPrice: 20000,
   status: "AVAILABLE" as const,
 };
-const sourcedFields = { sourceType: "SOURCED" as const, sourcedFromName: "Gulf Motors", sourceCost: 9000 };
+/** A consignment decision whose supplier is a master row, as every pilot caller must send it (SCRUM-868 P2). */
+async function sourcedFields(d: Dealer) {
+  return {
+    sourceType: "SOURCED" as const,
+    sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Gulf Motors"),
+    sourceCost: 9000,
+  };
+}
+/** What a consignment row stores: the id plus the master's name snapshot. */
+async function sourcedState(d: Dealer) {
+  return { ...(await sourcedFields(d)), sourcedFromName: "Gulf Motors" };
+}
 
 // English texts of the refusals added by this batch. The codes are what the client
 // translates; the text equals the dictionary entry.
@@ -139,7 +151,7 @@ describe("vehicleEdits.resolve — approver ownership override", () => {
 
   test("a classified SOURCED request plus a STOCK override is refused; nothing is written", async () => {
     const d = await seedDealer("e1");
-    const requestId = await requestWith(d, sourcedFields);
+    const requestId = await requestWith(d, await sourcedFields(d));
     const before = await worldCounts(d);
     await expectAppError(
       d.asOwner.mutation(api.vehicleEdits.resolve, {
@@ -151,7 +163,7 @@ describe("vehicleEdits.resolve — approver ownership override", () => {
     expect(await worldCounts(d)).toEqual(before);
     const request = await d.t.run((ctx) => ctx.db.get(requestId));
     expect(request?.status).toBe("PENDING");
-    expect(request?.payload).toMatchObject(sourcedFields);
+    expect(request?.payload).toMatchObject(await sourcedState(d));
   });
 
   test("a classified STOCK/CASH request plus a SOURCED override is refused; nothing is written", async () => {
@@ -161,7 +173,7 @@ describe("vehicleEdits.resolve — approver ownership override", () => {
     await expectAppError(
       d.asOwner.mutation(api.vehicleEdits.resolve, {
         orgId: d.orgId, requestId, status: "APPROVED",
-        ownership: { sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000 },
+        ownership: { sourceType: "SOURCED", sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Gulf Motors"), sourceCost: 9000 },
       }),
       ...code("VEHICLE_OWNERSHIP_ALREADY_CLASSIFIED")
     );
@@ -180,33 +192,33 @@ describe("vehicleEdits.resolve — approver ownership override", () => {
     );
     await d.asOwner.mutation(api.vehicleEdits.resolve, {
       orgId: d.orgId, requestId, status: "APPROVED",
-      ownership: { sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000 },
+      ownership: { sourceType: "SOURCED", sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Gulf Motors"), sourceCost: 9000 },
     });
     const request = await d.t.run((ctx) => ctx.db.get(requestId));
     expect(request?.status).toBe("APPROVED");
-    expect(request?.payload).toMatchObject(sourcedFields);
+    expect(request?.payload).toMatchObject(await sourcedState(d));
     expect(request?.payload.purchasePrice).toBeUndefined();
     expect(request?.payload.vin).toBe(baseVehicle.vin);
     const vehicle = await d.t.run((ctx) =>
       ctx.db.query("vehicles").withIndex("by_org_vin", (q) => q.eq("orgId", d.orgId).eq("vin", baseVehicle.vin)).unique()
     );
-    expect(vehicle).toMatchObject(sourcedFields);
+    expect(vehicle).toMatchObject(await sourcedState(d));
   });
 
   test("control: a normal approval without an ownership override is unchanged", async () => {
     const d = await seedDealer("e4");
-    const requestId = await requestWith(d, sourcedFields);
+    const requestId = await requestWith(d, await sourcedFields(d));
     await d.asOwner.mutation(api.vehicleEdits.resolve, { orgId: d.orgId, requestId, status: "APPROVED" });
     const vehicle = await d.t.run((ctx) =>
       ctx.db.query("vehicles").withIndex("by_org_vin", (q) => q.eq("orgId", d.orgId).eq("vin", baseVehicle.vin)).unique()
     );
-    expect(vehicle).toMatchObject(sourcedFields);
-    expect((await d.t.run((ctx) => ctx.db.get(requestId)))?.payload).toMatchObject(sourcedFields);
+    expect(vehicle).toMatchObject(await sourcedState(d));
+    expect((await d.t.run((ctx) => ctx.db.get(requestId)))?.payload).toMatchObject(await sourcedState(d));
   });
 
   test("control: reject is unchanged and creates no vehicle", async () => {
     const d = await seedDealer("e5");
-    const requestId = await requestWith(d, sourcedFields);
+    const requestId = await requestWith(d, await sourcedFields(d));
     await d.asOwner.mutation(api.vehicleEdits.resolve, { orgId: d.orgId, requestId, status: "REJECTED" });
     expect((await d.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("REJECTED");
     expect((await worldCounts(d)).vehicles).toBe(0);
@@ -219,7 +231,7 @@ describe("SOURCED -> STOCK buy-out clears the consignment fields", () => {
   test("CASH buy-out: snapshot keeps the supplier/cost, the vehicle loses both, exactly one acquisition at the negotiated price", async () => {
     const d = await seedDealer("b1");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     await d.asOwner.mutation(api.vehicles.update, {
       orgId: d.orgId, vehicleId, sourceType: "STOCK", purchasePrice: 8200, purchasePaymentMethod: "CASH",
@@ -239,14 +251,14 @@ describe("SOURCED -> STOCK buy-out clears the consignment fields", () => {
     expect(lines.reduce((s, l) => s + l.debitMinor, 0)).toBe(8_200_000);
   });
 
-  test("ON_ACCOUNT buy-out: fields cleared, and the payable creditor is purchaseSupplierName", async () => {
+  test("ON_ACCOUNT buy-out: fields cleared, and the payable creditor is the purchaseSupplierId master name", async () => {
     const d = await seedDealer("b2");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     await d.asOwner.mutation(api.vehicles.update, {
       orgId: d.orgId, vehicleId, sourceType: "STOCK", purchasePrice: 8200,
-      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
+      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierId: await supplierIdFor(d.t, d.orgId, "Credit Supplier Co"),
     });
     const vehicle = await getVehicle(d, vehicleId);
     expect(vehicle && "sourcedFromName" in vehicle).toBe(false);
@@ -264,7 +276,7 @@ describe("SOURCED -> STOCK buy-out clears the consignment fields", () => {
   test("the export of a bought-out car has an empty Sourced From and the purchase price as cost", async () => {
     const d = await seedDealer("b3");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     await d.asOwner.mutation(api.vehicles.update, {
       orgId: d.orgId, vehicleId, sourceType: "STOCK", purchasePrice: 8200, purchasePaymentMethod: "CASH",
@@ -292,7 +304,7 @@ describe("SOURCED -> STOCK buy-out clears the consignment fields", () => {
   test("export of a SOURCED car still shows the supplier and sourceCost", async () => {
     const d = await seedDealer("b5");
     await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     const exported = await d.asOwner.query(api.vehicles.exportData, { orgId: d.orgId });
     expect(exported.vehicles[0]).toMatchObject({ sourceType: "SOURCED", sourcedFrom: "Gulf Motors", cost: 9000 });
@@ -401,11 +413,11 @@ describe("SCRUM-717: no door persists a blank consignment supplier name", () => 
       expect(neverBlank(vehicle?.sourcedFromName)).toBe(true);
     });
 
-    test("control: a SOURCED row's supplier rename is stored trimmed", async () => {
+    test("control: a SOURCED row's supplier change by id stores the master's name", async () => {
       const d = await seedDealer("r3");
-      const vehicleId = await seedStockVehicle(d, { ...sourcedFields });
+      const vehicleId = await seedStockVehicle(d, { ...(await sourcedState(d)) });
       const requestId = await d.asOwner.mutation(api.vehicleEdits.requestUpdate, {
-        orgId: d.orgId, vehicleId, payload: { sourcedFromName: "  Al Noor  " } as never,
+        orgId: d.orgId, vehicleId, payload: { sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Al Noor") },
       });
       await approve(d, requestId);
       expect((await getVehicle(d, vehicleId))?.sourcedFromName).toBe("Al Noor");
@@ -422,8 +434,11 @@ describe("landed-cost inventory exposure", () => {
       purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
   }
-  const flipToSourced = (d: Dealer, vehicleId: Id<"vehicles">) =>
-    d.asOwner.mutation(api.vehicles.update, { orgId: d.orgId, vehicleId, sourceType: "SOURCED", sourcedFromName: "Gulf Motors", sourceCost: 9000 });
+  const flipToSourced = async (d: Dealer, vehicleId: Id<"vehicles">) =>
+    d.asOwner.mutation(api.vehicles.update, {
+      orgId: d.orgId, vehicleId, sourceType: "SOURCED",
+      sourcedSupplierId: await supplierIdFor(d.t, d.orgId, "Gulf Motors"), sourceCost: 9000,
+    });
 
   test("(a) an owned car with a POSTED landed cost cannot flip to SOURCED; nothing is written", async () => {
     const d = await seedDealer("l1");
@@ -504,7 +519,7 @@ describe("landed-cost inventory exposure", () => {
   test("(b) a SOURCED car with landed-cost items cannot be bought out; nothing is written", async () => {
     const d = await seedDealer("l6");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     await d.asOwner.mutation(api.vehicles.upsertLandedCosts, {
       orgId: d.orgId, vehicleId, items: [{ label: "Shipping", amount: 300 }],
@@ -523,7 +538,7 @@ describe("landed-cost inventory exposure", () => {
   test("(b) offsetting landed-cost items (signed total zero) also refuse the buy-out", async () => {
     const d = await seedDealer("l7");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     await d.asOwner.mutation(api.vehicles.upsertLandedCosts, {
       orgId: d.orgId, vehicleId, items: [{ label: "Shipping", amount: 300 }, { label: "Rebate", amount: -300 }],
@@ -543,7 +558,7 @@ describe("landed-cost inventory exposure", () => {
   test("control: a clean buy-out followed by a new landed-cost edit capitalizes into Vehicle Inventory (1400)", async () => {
     const d = await seedDealer("l8");
     const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...(await sourcedFields(d)),
     });
     await d.asOwner.mutation(api.vehicles.update, {
       orgId: d.orgId, vehicleId, sourceType: "STOCK", purchasePrice: 8200, purchasePaymentMethod: "CASH",

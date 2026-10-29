@@ -18,6 +18,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { computeSupplierPayablesReconciliation } from "./accountingReports";
 import { seedOrgWithMember } from "../test-utils/seedOrg";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -205,7 +206,7 @@ describe("SCRUM-651 - reconciliation counts every non-CANCELLED payable by its o
       idempotencyKey: "ap651_onacct_1", orgId: s.orgId, vin: "1HGCM82633A651001", make: "Honda", model: "Accord", year: 2020,
       mileage: 10000, color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20_000,
       status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 10_000,
-      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
+      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierId: await supplierIdFor(s.t, s.orgId, "Credit Supplier Co"),
     });
     const payable = await s.t.run((ctx) =>
       ctx.db.query("vehicleSupplierPayables").withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId)).first()

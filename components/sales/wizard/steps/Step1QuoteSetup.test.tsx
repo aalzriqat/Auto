@@ -55,11 +55,34 @@ vi.mock("convex/react", async () => {
     useMutation: () => (...args: unknown[]) => stubs.mutation(...args),
   };
 });
-vi.mock("../components/VehiclePicker", () => ({
-  default: ({ initialSourceData }: { initialSourceData?: { make: string } }) => (
-    <div data-testid="single-picker" data-source-make={initialSourceData?.make ?? ""} />
-  ),
-}));
+vi.mock("../components/VehiclePicker", async () => {
+  const { useState } = await import("react");
+  return {
+    default: function MockVehiclePicker({ initialSourceData, onSourceVehicle }: {
+      initialSourceData?: { make: string };
+      onSourceVehicle?: (data: Record<string, unknown>) => Promise<string>;
+    }) {
+      const [sourceError, setSourceError] = useState("");
+      return (
+        <div data-testid="single-picker" data-source-make={initialSourceData?.make ?? ""}>
+          {/* Submits a sourced vehicle that never had a supplier picked, as the real form could not but a caller could. */}
+          <button
+            type="button"
+            data-testid="source-without-supplier"
+            onClick={async () => {
+              try {
+                await onSourceVehicle?.({ make: "Kia", model: "Rio", sourcedFromName: "Typed Name", sourceCost: 1, sellingPrice: 2 });
+              } catch (error) {
+                setSourceError((error as Error).message);
+              }
+            }}
+          />
+          <p data-testid="source-error">{sourceError}</p>
+        </div>
+      );
+    },
+  };
+});
 vi.mock("../components/VehicleLineItemsPicker", () => ({
   VehicleLineItemsPicker: ({ initialSourceData }: { initialSourceData?: { make: string } }) => (
     <div data-testid="line-items-picker" data-source-make={initialSourceData?.make ?? ""} />
@@ -108,6 +131,18 @@ test("accountant wizard reads active quote choices without settings authority", 
   stubs.verdict = { status: "NOT_REQUIRED", margin: 1, minimumProfit: 0 };
   expect(renderStep).not.toThrow();
   expect(screen.getByText("Synthetic eligibility")).toBeTruthy();
+});
+
+describe("SCRUM-868 P2: sourcing a vehicle with no supplier picked", () => {
+  test.each(["en", "ar"] as const)("%s: the refusal is the localized SupplierPickerRequired text and nothing is created", async (locale) => {
+    stubs.locale = locale;
+    const created = vi.fn(async () => "vehicle_new");
+    stubs.mutation = created;
+    renderStep();
+    await act(async () => { fireEvent.click(screen.getByTestId("source-without-supplier")); });
+    expect(screen.getByTestId("source-error").textContent).toBe(dictionaries[locale].SupplierPickerRequired);
+    expect(created).not.toHaveBeenCalled();
+  });
 });
 
 describe("SCRUM-641 R2-F1: the wizard explains a deleted-vehicle block", () => {
