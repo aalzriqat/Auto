@@ -159,13 +159,31 @@ describe("SupplierSelect: inline create is gated on MANAGE_FINANCE", () => {
     expect(screen.queryByText(en.SupplierPickerCreateNoPermission)).toBeNull();
   });
 
-  test("an exact match of the typed text offers no duplicate create", () => {
+  test("an exact name match still offers to add: the server's duplicate confirmation decides, nothing is created silently", async () => {
+    // SCRUM-868: two distinct suppliers may share a name once a finance user confirms they differ.
     world.permissions = [PERMISSIONS.MANAGE_FINANCE];
     world.searchRows = [gulf];
-    renderPicker();
+    world.createImpl = async (args) => {
+      if (!args.confirmDistinctFrom) {
+        throw new ConvexError({
+          code: "SUPPLIER_DUPLICATE_CANDIDATES",
+          candidates: [{ supplierId: "sup_gulf", displayName: "Gulf Motors", status: "ACTIVE" }],
+        });
+      }
+      return { supplierId: "sup_twin" };
+    };
+    const { onChange } = renderPicker();
     open();
     type("gulf motors");
-    expect(screen.queryByRole("button", { name: /Add supplier|Adding supplier/ })).toBeNull();
+    // The existing supplier stays pickable, and the add action is offered beside it.
+    expect(screen.getByTestId("searchable-option-sup_gulf")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Add supplier/ }));
+    expect(await screen.findByText(en.SupplierPickerSimilarTitle, { selector: "p" })).toBeTruthy();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(world.createCalls).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: en.SupplierPickerConfirmDistinct }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ id: "sup_twin", displayName: "gulf motors" }));
+    expect(world.createCalls[1].confirmDistinctFrom).toEqual(["sup_gulf"]);
   });
 
   test("similar suppliers are shown first; the user may use one, or confirm the new one is different", async () => {
