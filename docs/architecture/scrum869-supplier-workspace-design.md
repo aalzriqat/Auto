@@ -308,6 +308,26 @@ Each of these is a money or policy rule that agents must not decide. The default
 | OQ-9 | For a payment across several lines: must the user enter exact amounts per line, or may the system allocate oldest first and let the user confirm? | User confirms exact amounts, oldest-first suggested |
 | OQ-10 | Is one organization-wide A/R and A/P reconciliation (rather than per supplier) enough for period close, or must close be blocked on a difference? | Reconciliation is displayed only, not a close gate |
 
+### 8.1 Rulings, 2026-10-29
+
+These supersede the defaults above. Jira SCRUM-869 records them: c23881 for OQ-2, c23883 for OQ-1 and OQ-7, and c23880 for the coordinator decisions.
+
+- **OQ-1 (owner): due dates and aging.** An agreed due date always wins. The triggers by ownership model:
+  - SOURCED, THROUGH_DEALERSHIP: the payable is due once the deal is completed and the dealership holds cleared proceeds.
+  - SOURCED, DIRECT_TO_SUPPLIER: the commission receivable is due on completed delivery, and no supplier payable is created.
+  - OWNED, ON_ACCOUNT: the supplier's agreed terms apply.
+  - Cost recovery: due when the documented reimbursement becomes collectible.
+
+  With no reliable date or trigger, the line shows "No due date" and is never overdue. The aging buckets are Current, 1-30, 31-60, 61-90 and 90+ days overdue, measured in Asia/Amman time. Disputed amounts appear separately and stay in the gross balance.
+- **OQ-2 (owner): pilot doors.** Payable payment, consignment margin receipt and cost-recovery receipt are in the pilot and must be certified. Their reversal and correction doors are excluded and must refuse server-side. S5 is unblocked for these three doors.
+- **OQ-7 (owner): alerts.** In-app alerts only, to Owner, Finance Manager and authorised accounting staff. They fire 3 days before due, on the due date, at 7 days overdue, then weekly while overdue. Alerts are never duplicated and never cross tenants. A line with no due date gets no overdue alert, and a disputed line gets no payment reminder. S8 is unblocked.
+- **OQ-3 and OQ-4 (coordinator, within existing rulings):** no netting and no net figure.
+- **OQ-5 (coordinator):** each reused door keeps its existing permission, and the workspace grants nothing new.
+- **OQ-6 (coordinator):** each door's cashbook behaviour stays unchanged.
+- **OQ-8 (coordinator):** disputed amounts are shown separately, stay in the gross balance and in aging, and are excluded from "payable now".
+- **OQ-9 (coordinator):** the user types the exact amount for each line. Nothing is pre-filled or allocated oldest-first.
+- **OQ-10 (coordinator):** the reconciliation is displayed and never posted, and it is not a close gate.
+
 ## 9. Evidence limits (what was not checked)
 
 - Accounting practice (subledger to control account, aging, allocation to open items) is stated from general knowledge. No standard or textbook was fetched in this session.
