@@ -1,0 +1,71 @@
+{
+  "id": "foreign-and-missing-supplier-id-refuse-with-one-code-and-message",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "sourceType": "SOURCED",
+        "sourceCost": 9000,
+        "sourcedSupplierId": "OTHER_ORG_SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "sourceType": "SOURCED",
+        "sourceCost": 9000,
+        "sourcedSupplierId": "DELETED_SUPPLIER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_NOT_FOUND"
+    },
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_NOT_FOUND"
+    },
+    {
+      "observable": "refusal.messagesIdentical",
+      "value": true
+    },
+    {
+      "observable": "writes.rowCount",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-isolation",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "a foreign-organization id and a missing id get the SAME code and message (no existence oracle)"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "55a4267df708e5e77e6feeb4cf12c70a29fcff7336cc37c5c2dfaeab83fb12da"
+}

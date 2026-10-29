@@ -1,0 +1,69 @@
+{
+  "id": "stored-supplier-id-of-another-organization-is-dropped-by-readers",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicleId": "OWN_VEHICLE_ID",
+        "sourceType": "STOCK",
+        "purchasePrice": 8000,
+        "purchasePaymentMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicleId": "CORRUPT_VEHICLE_ID",
+        "sourceType": "STOCK",
+        "purchasePrice": 8000,
+        "purchasePaymentMethod": "CASH"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "conversion.own.supplierId",
+      "value": "SUPPLIER_ID"
+    },
+    {
+      "observable": "conversion.corrupt.supplierId",
+      "value": "ABSENT"
+    },
+    {
+      "observable": "conversion.corrupt.supplierName",
+      "value": "NAME_AT_CREATION"
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-isolation",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "the buy-out conversion record keeps the supplier id of the vehicle's own organization and drops a foreign one"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "55d1ab29699a3d9213ea6da6e721afb2587ae05ffc78ec2bfa2994a72d89386a"
+}
