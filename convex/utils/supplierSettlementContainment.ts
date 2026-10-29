@@ -31,6 +31,30 @@ export const SUPPLIER_SETTLEMENT_DOOR_REFUSALS = {
     "Reversing an expense the supplier owes the dealership for is not available during the pilot. Record any money received from the supplier as a receipt. Nothing has been changed.",
 } as const satisfies Record<SupplierSettlementDoorCode, string>;
 
+/**
+ * Methods the consignment margin receipt (`supplierReceivables.recordReceipt`) accepts in the pilot.
+ * A cheque posts Dr cheques-in-hand / Cr 1240 but this door creates no `postDatedCheques` custody row, so
+ * the instrument has no deposit, clearance or bounce lifecycle (ACC-3); a card receipt has no settlement
+ * flow here either. Same scope as `supplierCostRecoveries.recordReceipt`. Not a door switch: reopening
+ * cheque receipts needs the custody lifecycle built, certified and approved by the owner.
+ */
+export const SUPPLIER_RECEIPT_PILOT_METHODS = ["CASH", "BANK_TRANSFER"] as const;
+export type SupplierReceiptPilotMethod = (typeof SUPPLIER_RECEIPT_PILOT_METHODS)[number];
+
+export const SUPPLIER_RECEIPT_METHOD_REFUSAL =
+  "During the pilot a supplier margin receipt can be recorded in cash or by bank transfer only. Cheque and card receipts are not available. Nothing has been recorded.";
+
+export function isSupplierReceiptPilotMethod(method: string): method is SupplierReceiptPilotMethod {
+  return (SUPPLIER_RECEIPT_PILOT_METHODS as readonly string[]).includes(method);
+}
+
+/** Refuses a margin receipt method outside the pilot set, before the idempotency claim or any write. */
+export function assertSupplierReceiptMethodAllowed(method: string): void {
+  if (!isSupplierReceiptPilotMethod(method)) {
+    throwAppError(AppErrorCode.SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED, SUPPLIER_RECEIPT_METHOD_REFUSAL);
+  }
+}
+
 /** Read-only availability for screens; enforcement remains in the mutation. */
 export function isSupplierSettlementDoorDisabled(code: SupplierSettlementDoorCode): boolean {
   return SUPPLIER_SETTLEMENT_DOORS_PILOT_DISABLED[code];

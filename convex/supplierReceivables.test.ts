@@ -177,7 +177,7 @@ describe("the claim a direct-settled sale opens", () => {
     await s.t.run((ctx) => ctx.db.patch(s.bankAccountId, { isActive: false }));
     await expect(s.asUser.mutation(api.supplierReceivables.recordReceipt, {
       orgId: s.orgId, receivableId: s.receivable._id, amount: 100,
-      receiptMethod: "CARD", bankAccountId: s.bankAccountId, idempotencyKey: "inactive-bank",
+      receiptMethod: "BANK_TRANSFER", bankAccountId: s.bankAccountId, idempotencyKey: "inactive-bank",
     })).rejects.toThrow(/inactive/);
     const otherOrgId = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "Other supplier bank org", createdAt: Date.now() }));
     const foreignBankId = await s.t.run((ctx) => ctx.db.insert("bankAccounts", {
@@ -192,18 +192,20 @@ describe("the claim a direct-settled sale opens", () => {
     expect((await s.t.run((ctx) => ctx.db.get(s.receivable._id)))?.amountReceived).toBeUndefined();
   });
 
-  test("a supplier cheque is held without a bank, and cash rejects a bank selection", async () => {
+  test("cash rejects a bank selection, and a cheque is refused (no custody lifecycle in the pilot)", async () => {
     const s = await seed("cheque-direction");
     await expect(s.asUser.mutation(api.supplierReceivables.recordReceipt, {
       orgId: s.orgId, receivableId: s.receivable._id, amount: 100,
       receiptMethod: "CASH", bankAccountId: s.bankAccountId, idempotencyKey: "cash-with-bank",
     })).rejects.toThrow(/does not post to a bank/);
-    await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+    // SCRUM-869 F1: this used to post Dr cheques-in-hand with no postDatedCheques row. The coded refusal
+    // and its no-write proof live in supplierSettlementContainment.test.ts; here the ledger just stays empty.
+    await expect(s.asUser.mutation(api.supplierReceivables.recordReceipt, {
       orgId: s.orgId, receivableId: s.receivable._id, amount: 100,
       receiptMethod: "CHEQUE", idempotencyKey: "cheque-received",
-    });
+    })).rejects.toThrow(/cash or by bank transfer/i);
     const gl = await ledger(s.t, s.orgId);
-    expect(gl[SYSTEM_KEYS.CHEQUES_IN_HAND]).toBe(100 * SCALE);
+    expect(gl[SYSTEM_KEYS.CHEQUES_IN_HAND] ?? 0).toBe(0);
     expect(gl[SYSTEM_KEYS.BANK_ACCOUNT] ?? 0).toBe(0);
   });
   test("records which deal the margin is owed on, not just that it is owed", async () => {

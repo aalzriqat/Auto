@@ -141,6 +141,9 @@ export const AppErrorCode = {
   SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED: "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED",
   SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED: "SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED",
   SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED: "SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED",
+  // SCRUM-869 F1: a consignment margin receipt by CHEQUE or CARD has no custody lifecycle, so the pilot door takes
+  // CASH and BANK_TRANSFER only (utils/supplierSettlementContainment.ts). Translated under ServerError_<code>.
+  SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED: "SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",

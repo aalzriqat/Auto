@@ -116,7 +116,7 @@ describe("consignment margin receipt method", () => {
       }));
     const result = await refusalDataOf(call());
     expect(result?.code, result?.message ?? `${receiptMethod} receipt succeeded instead of refusing`).toBe(METHOD_CODE);
-    expect(result?.message).toMatch(/cash or bank transfer/i);
+    expect(result?.message).toMatch(/cash or by bank transfer/i);
     expect(result?.message).toContain("Nothing has been recorded.");
     const english: Record<string, string> = commonEn;
     const arabic: Record<string, string> = commonAr;

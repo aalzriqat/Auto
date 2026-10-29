@@ -13,6 +13,7 @@ import { hookSupplierReceivableCollected } from "./accounting/workflowHooks";
 import { auditLog } from "./financialAudit";
 import { postingStateForKey } from "./accounting/supplierCostRecoveryPosting";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { assertSupplierReceiptMethodAllowed } from "./utils/supplierSettlementContainment";
 
 /**
  * Collecting the dealership's agency margin from a supplier who was paid
@@ -291,6 +292,10 @@ export const recordReceipt = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const receiptMethod = normalizePaymentMethod(args.receiptMethod);
+    // SCRUM-869 F1: CASH and BANK_TRANSFER only. A cheque would post to cheques-in-hand with no
+    // `postDatedCheques` custody row, so it could never be deposited or reverse on a bounce.
+    // Refused before the idempotency claim or any read-for-write, so nothing is recorded.
+    assertSupplierReceiptMethodAllowed(receiptMethod);
 
     return await runWithIdempotency(
       ctx,
@@ -319,8 +324,8 @@ export const recordReceipt = mutation({
       async () => {
         const row = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierReceivables", args.receivableId, "Supplier receivable not found.");
 
-        const bankMethod = receiptMethod === "BANK_TRANSFER" || receiptMethod === "CARD";
-        if (bankMethod) {
+        // CARD and CHEQUE were refused above, so the bank-funded method is BANK_TRANSFER alone.
+        if (receiptMethod === "BANK_TRANSFER") {
           await requireActiveBankInCurrency(ctx, {
             orgId: args.orgId, bankAccountId: args.bankAccountId, currency: row.currency,
             missingMessage: "Choose the physical bank account that received this supplier payment. Nothing has been recorded.",
@@ -386,7 +391,7 @@ export const recordReceipt = mutation({
         // happened on. Same refusal as the payable side.
         if (projectedMinor > dueMinor) {
           throw new ConvexError(
-            `That would record ${fromMinorUnits(projectedMinor, row.currency)} against ${fromMinorUnits(dueMinor, row.currency)} owed. Reduce the amount, or correct the claim first.`
+            `That would record ${fromMinorUnits(projectedMinor, row.currency)} against ${fromMinorUnits(dueMinor, row.currency)} owed. Reduce the amount to the balance still owed.`
           );
         }
 

@@ -675,7 +675,7 @@ export const update = mutation({
     const bearerChanges = args.costBearer !== undefined && args.costBearer !== currentBearer;
     if (bearerChanges && currentStatus === "PAID") {
       throw new ConvexError(
-        "Who bears a paid expense cannot be changed. Reverse the expense and record it again instead."
+        "Who bears a paid expense cannot be changed once it is paid."
       );
     }
     const hasAccountingExposure = await hasExpenseAccountingExposure(ctx, args.orgId, args.expenseId);
