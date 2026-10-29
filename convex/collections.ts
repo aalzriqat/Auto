@@ -63,6 +63,7 @@ import {
   createCanonicalPayment,
   ensureReceivableDocument,
   getReceivableOutstandingMinor,
+  outstandingFromReceivableDoc,
   reverseAllocation,
 } from "./subledger";
 
@@ -319,6 +320,61 @@ async function hydrateReceivable(ctx: QueryCtx, receivable: Doc<"receivables">) 
     customerName: customerName(customer),
     vehicleLabel: vehicleLabel(vehicle),
   };
+}
+
+/**
+ * SCRUM-56 (SCRUM-760 c23812 ruling 8): a sale's customer debt is its canonical invoice
+ * (`receivableDocuments`, source `sales/<saleId>`), listed by `listOpenSaleReceivables`. A historical legacy row that
+ * also carries the saleId would show the same debt twice, so the legacy readers skip it. Only a row with a same-org
+ * canonical customer invoice at the sale source key is skipped: a legacy row with no canonical twin is the only record of
+ * its debt and stays visible. W1 containment means no new legacy row can carry a saleId.
+ */
+async function legacyRowRepeatsCanonicalSaleDebt(ctx: QueryCtx, orgId: Id<"organizations">, row: Doc<"receivables">) {
+  const saleId = row.saleId;
+  if (!saleId) return false;
+  const twin = await ctx.db.query("receivableDocuments")
+    .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", saleId))
+    .unique();
+  return twin !== null && twin.payerType === "CUSTOMER";
+}
+
+/** The queue and headline classify the same open sale debt at the server query time. */
+function isSaleDebtOverdue(dueDate: number, now: number): boolean {
+  return dueDate < now;
+}
+
+/** Open sale invoices read per status for the headline totals and aging, the same bound as the legacy reads (take(500)). */
+const OPEN_SALE_DEBT_READ_LIMIT = 500;
+
+/**
+ * SCRUM-56 (ruling 8: queue/aging): the open canonical sale debt as `{ amount (major units), dueDate }`, for the
+ * Collections totals and aging. Reads OPEN and PARTIALLY_PAID customer invoices of sales on `by_org_source_status`;
+ * the balance is the subledger's (original less ACTIVE allocations), never recomputed. `complete` is false when a
+ * status hit the read bound or an invoice is in another currency than the organization's (it is then left out
+ * rather than added at the wrong scale), so a total that is short says so.
+ */
+async function openSaleDebtForTotals(ctx: QueryCtx, orgId: Id<"organizations">, currency: string) {
+  const entries: { amount: number; dueDate: number }[] = [];
+  let complete = true;
+  for (const status of ["OPEN", "PARTIALLY_PAID"] as const) {
+    const docs = await ctx.db
+      .query("receivableDocuments")
+      .withIndex("by_org_source_status", (q) => q.eq("orgId", orgId).eq("sourceType", "sales").eq("status", status))
+      .take(OPEN_SALE_DEBT_READ_LIMIT + 1);
+    if (docs.length > OPEN_SALE_DEBT_READ_LIMIT) complete = false;
+    const priced = await Promise.all(
+      docs.slice(0, OPEN_SALE_DEBT_READ_LIMIT).map(async (doc) => ({ doc, outstandingMinor: doc.payerType === "CUSTOMER" ? await outstandingFromReceivableDoc(ctx, doc) : 0 }))
+    );
+    for (const { doc, outstandingMinor } of priced) {
+      if (outstandingMinor <= 0) continue;
+      if (doc.currency.toUpperCase() !== currency.toUpperCase()) {
+        complete = false;
+        continue;
+      }
+      entries.push({ amount: fromMinorUnits(outstandingMinor, doc.currency), dueDate: doc.dueDate });
+    }
+  }
+  return { entries, complete };
 }
 
 async function hydrateCheque(ctx: QueryCtx, cheque: Doc<"postDatedCheques">) {
@@ -739,10 +795,19 @@ export const summary = query({
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
         .take(500);
       for (const row of rows) {
+        if (await legacyRowRepeatsCanonicalSaleDebt(ctx, args.orgId, row)) continue;
         totalOutstanding += row.outstandingAmount;
         if (row.dueDate < now || row.status === "OVERDUE") overdueOutstanding += row.outstandingAmount;
         if (row.dueDate >= today.start && row.dueDate <= today.end) dueToday += row.outstandingAmount;
       }
+    }
+
+    // SCRUM-56 ruling 8: the canonical sale debt is part of the same totals (the legacy table holds none of it).
+    const saleDebt = await openSaleDebtForTotals(ctx, args.orgId, currency);
+    for (const { amount, dueDate } of saleDebt.entries) {
+      totalOutstanding += amount;
+      if (isSaleDebtOverdue(dueDate, now)) overdueOutstanding += amount;
+      if (dueDate >= today.start && dueDate <= today.end) dueToday += amount;
     }
 
     const todaysPayments = await ctx.db
@@ -768,6 +833,8 @@ export const summary = query({
       collectedToday: roundMoney(collectedToday, currency),
       upcomingChequeTotal: roundMoney(upcomingChequeTotal, currency),
       upcomingChequeCount: upcomingChequesThisWeek.length,
+      // Additive (SCRUM-56): false when the sale-debt part of the totals above is short (read bound or foreign currency).
+      saleDebtComplete: saleDebt.complete,
       // Additive (SCRUM-724): false while the pilot payout switch is on.
       retainedCreditPayoutAvailable: !isCustomerCreditPayoutDisabled(),
     };
@@ -796,10 +863,71 @@ export const listReceivables = query({
           .order("asc")
           .paginate(args.paginationOpts);
 
-    return {
-      ...result,
-      page: await Promise.all(result.page.map((row) => hydrateReceivable(ctx, row))),
-    };
+    // A page may come back shorter than requested when it held rows the canonical sale debt already shows.
+    const rows = await Promise.all(
+      result.page.map(async (row) => ((await legacyRowRepeatsCanonicalSaleDebt(ctx, args.orgId, row)) ? null : await hydrateReceivable(ctx, row)))
+    );
+    return { ...result, page: rows.filter((row) => row !== null) };
+  },
+});
+
+async function hydrateOpenSaleReceivable(ctx: QueryCtx, doc: Doc<"receivableDocuments">, orgId: Id<"organizations">, now: number) {
+  if (doc.payerType !== "CUSTOMER" || (doc.status !== "OPEN" && doc.status !== "PARTIALLY_PAID")) return null;
+  const outstandingMinor = await outstandingFromReceivableDoc(ctx, doc);
+  if (outstandingMinor <= 0) return null;
+  // The ids come off the document, not the request: re-check the organization on every related read.
+  const saleId = ctx.db.normalizeId("sales", doc.sourceId);
+  const [sale, customer] = await Promise.all([saleId ? ctx.db.get(saleId) : null, doc.customerId ? ctx.db.get(doc.customerId) : null]);
+  const ownSale = sale !== null && sale.orgId === orgId ? sale : null;
+  const vehicle = await getOptionalVehicle(ctx, ownSale?.vehicleId);
+  return {
+    receivableDocumentId: doc._id,
+    documentNumber: doc.documentNumber,
+    saleId: ownSale?._id ?? null,
+    saleDate: ownSale?.saleDate ?? null,
+    financingType: ownSale?.financingType ?? null,
+    customerId: doc.customerId ?? null,
+    customerName: customer !== null && customer.orgId === orgId ? customerName(customer) : null,
+    vehicleLabel: vehicle !== null && vehicle.orgId === orgId ? (vehicleLabel(vehicle) ?? null) : null,
+    originalAmountMinor: doc.originalAmountMinor,
+    outstandingMinor,
+    currency: doc.currency,
+    scale: doc.scale,
+    status: doc.status,
+    issueDate: doc.issueDate,
+    dueDate: doc.dueDate,
+    isOverdue: isSaleDebtOverdue(doc.dueDate, now),
+  };
+}
+
+/**
+ * SCRUM-56 (SCRUM-760 c23812 ruling 8): the customer debt of every sale that is still owed, read from the canonical
+ * sale invoice (`receivableDocuments` source `sales`), never from the legacy `receivables` table.
+ *
+ * - One row per invoice, `outstandingMinor` as the subledger derives it (original less ACTIVE allocations, 0 once
+ *   cancelled), integer minor units, never recomputed. Fully paid, cancelled, written-off and reversed invoices are
+ *   not listed.
+ * - Newest invoice first, paginated on `by_org_source_issueDate`: pages hold PAID invoices too (a CASH sale's invoice is
+ *   always PAID), so a page can come back shorter than requested or empty while `isDone` is false; the caller keeps
+ *   loading until `isDone`.
+ * - VIEW_FINANCE, like every other Collections read. The finance company's receivable (source `finance_application`)
+ *   is not customer debt and stays in the Claims queue.
+ */
+export const listOpenSaleReceivables = query({
+  args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const now = Date.now();
+    const result = await ctx.db
+      .query("receivableDocuments")
+      .withIndex("by_org_source_issueDate", (q) => q.eq("orgId", args.orgId).eq("sourceType", "sales"))
+      .order("desc")
+      .paginate(args.paginationOpts);
+
+    const rows = await Promise.all(
+      result.page.map((doc) => hydrateOpenSaleReceivable(ctx, doc, args.orgId, now))
+    );
+    return { ...result, page: rows.filter((row) => row !== null) };
   },
 });
 
@@ -807,8 +935,8 @@ export const listReceivables = query({
  * Phase 41 — Installment Collections Calendar. Unlike listReceivables (load-
  * more pagination for a list view), this pulls every open receivable due
  * within a bounded date range (a visible calendar month) so the UI can group
- * them by day. Excludes settled statuses so cleared installments don't
- * clutter the calendar.
+ * them by day. Canonical sale invoices replace their legacy twins at the invoice due date.
+ * A range that exceeds the read bound is refused rather than displayed as complete.
  */
 export const listReceivablesDueBetween = query({
   args: {
@@ -816,16 +944,49 @@ export const listReceivablesDueBetween = query({
     startDate: v.number(),
     endDate: v.number(),
   },
+  returns: v.array(v.object({
+    _id: v.union(v.id("receivables"), v.id("receivableDocuments")),
+    dueDate: v.number(), title: v.string(), customerName: v.union(v.string(), v.null()),
+    vehicleLabel: v.union(v.string(), v.null()), outstandingAmount: v.number(),
+    currency: v.string(), scale: v.number(), status: v.string(),
+  })),
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const rangeLimit = 500;
     const rows = await ctx.db
       .query("receivables")
       .withIndex("by_org_dueDate", (q) =>
         q.eq("orgId", args.orgId).gte("dueDate", args.startDate).lte("dueDate", args.endDate)
       )
-      .collect();
+      .take(rangeLimit + 1);
+    const saleDocs = await ctx.db.query("receivableDocuments")
+      .withIndex("by_org_source_dueDate", (q) =>
+        q.eq("orgId", args.orgId).eq("sourceType", "sales").gte("dueDate", args.startDate).lte("dueDate", args.endDate)
+      )
+      .take(rangeLimit + 1);
+    if (rows.length > rangeLimit || saleDocs.length > rangeLimit) {
+      throw new ConvexError("Too many receivables in this date range. Please select a shorter range.");
+    }
     const openRows = rows.filter((row) => !row.isDeleted && !["PAID", "CANCELLED", "REFUNDED"].includes(row.status));
-    return Promise.all(openRows.map((row) => hydrateReceivable(ctx, row)));
+    const hydrated = await Promise.all(
+      openRows.map(async (row) => ((await legacyRowRepeatsCanonicalSaleDebt(ctx, args.orgId, row)) ? null : await hydrateReceivable(ctx, row)))
+    );
+    const now = Date.now();
+    const canonical = await Promise.all(saleDocs.map((doc) => hydrateOpenSaleReceivable(ctx, doc, args.orgId, now)));
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    return [
+      ...hydrated.filter((row) => row !== null).map((row) => ({
+        _id: row._id, dueDate: row.dueDate, title: row.title, customerName: row.customerName ?? null,
+        vehicleLabel: row.vehicleLabel ?? null, outstandingAmount: row.outstandingAmount,
+        currency, scale: scaleForCurrency(currency), status: row.status,
+      })),
+      ...canonical.filter((row) => row !== null).map((row) => ({
+        _id: row.receivableDocumentId, dueDate: row.dueDate, title: row.documentNumber,
+        customerName: row.customerName, vehicleLabel: row.vehicleLabel,
+        outstandingAmount: row.outstandingMinor / 10 ** row.scale,
+        currency: row.currency, scale: row.scale, status: row.status,
+      })),
+    ].sort((a, b) => a.dueDate - b.dueDate);
   },
 });
 
@@ -3876,28 +4037,38 @@ export const agingReport = query({
       over90: { count: 0, amount: 0 },
     };
 
+    const addToBucket = (dueDate: number, amount: number) => {
+      const ageDays = Math.floor((now - dueDate) / DAY_MS);
+      const bucket = ageDays <= 0
+        ? buckets.current
+        : ageDays <= 30
+          ? buckets.days1To30
+          : ageDays <= 60
+            ? buckets.days31To60
+            : ageDays <= 90
+              ? buckets.days61To90
+              : buckets.over90;
+      bucket.count += 1;
+      bucket.amount = roundMoney(bucket.amount + amount, currency);
+    };
+
     for (const status of statuses) {
       const rows = await ctx.db
         .query("receivables")
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
         .take(500);
       for (const row of rows) {
-        const ageDays = Math.floor((now - row.dueDate) / DAY_MS);
-        const bucket = ageDays <= 0
-          ? buckets.current
-          : ageDays <= 30
-            ? buckets.days1To30
-            : ageDays <= 60
-              ? buckets.days31To60
-              : ageDays <= 90
-                ? buckets.days61To90
-                : buckets.over90;
-        bucket.count += 1;
-        bucket.amount = roundMoney(bucket.amount + row.outstandingAmount, currency);
+        if (await legacyRowRepeatsCanonicalSaleDebt(ctx, args.orgId, row)) continue;
+        addToBucket(row.dueDate, row.outstandingAmount);
       }
     }
 
-    return buckets;
+    // SCRUM-56 ruling 8: the canonical sale debt ages in the same buckets.
+    const saleDebt = await openSaleDebtForTotals(ctx, args.orgId, currency);
+    for (const { amount, dueDate } of saleDebt.entries) addToBucket(dueDate, amount);
+
+    // Additive: false when the sale-debt part is short (read bound or foreign currency).
+    return { ...buckets, saleDebtComplete: saleDebt.complete };
   },
 });
 

@@ -1006,6 +1006,9 @@ export default defineSchema({
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
     .index("by_org_source_issueDate", ["orgId", "sourceType", "issueDate"])
+    .index("by_org_source_dueDate", ["orgId", "sourceType", "dueDate"])
+    // SCRUM-56: the open customer debt of sales (source "sales", status OPEN / PARTIALLY_PAID) for the Collections totals and aging.
+    .index("by_org_source_status", ["orgId", "sourceType", "status"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_dueDate", ["orgId", "dueDate"])
     // SCRUM-555 lane-B: getReceivablesAsOf (not-cancelled-by-asOf) without a

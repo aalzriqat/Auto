@@ -28,7 +28,10 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org1" }) }));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/hooks/use-permissions", () => ({ usePermissions: () => ({ hasPermission: () => true }) }));
-vi.mock("@/hooks/useCurrencyFormatter", () => ({ useCurrencyFormatter: () => (n: number) => `${n} JOD` }));
+vi.mock("@/hooks/useCurrencyFormatter", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/hooks/useCurrencyFormatter")>(),
+  useCurrencyFormatter: () => (n: number) => `${n} JOD`,
+}));
 vi.mock("@/hooks/useCommandIdentity", () => ({ useCommandIdentity: () => ({ for: (i: string) => i, retire: () => {} }) }));
 vi.mock("@/components/accounting/collections/CashDrawerPanel", () => ({ CashDrawerPanel: () => null }));
 vi.mock("@/components/accounting/collections/PaymentLinksPanel", () => ({ PaymentLinksPanel: () => null }));

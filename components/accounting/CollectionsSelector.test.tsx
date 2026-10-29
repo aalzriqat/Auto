@@ -37,6 +37,7 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 
 vi.mock("@/hooks/useCurrencyFormatter", () => ({
   useCurrencyFormatter: () => (val: number) => String(val),
+  useCurrencyFormatterInCurrency: () => (val: number) => String(val),
 }));
 
 vi.mock("@/hooks/use-permissions", () => ({

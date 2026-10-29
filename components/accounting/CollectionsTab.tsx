@@ -55,6 +55,7 @@ import { ClearChequeBankDialog } from "./ClearChequeBankDialog";
 import { CashDrawerPanel } from "./collections/CashDrawerPanel";
 import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
+import { SaleReceivablesSection } from "./collections/SaleReceivablesSection";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
@@ -245,6 +246,9 @@ export function CollectionsTab() {
         <Metric icon={HandCoins} label={t("CollectionCollectedToday" as any)} value={formatCurrency(summary?.collectedToday ?? 0)} tone="success" />
         <Metric icon={FileCheck2} label={t("CollectionUpcomingCheques" as any)} value={formatCurrency(summary?.upcomingChequeTotal ?? 0)} />
       </div>
+      {(summary?.saleDebtComplete === false || aging?.saleDebtComplete === false) && (
+        <p role="status" className="text-sm text-amber-700 dark:text-amber-300">{t("CollectionSaleDebtIncomplete" as any)}</p>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -317,6 +321,9 @@ export function CollectionsTab() {
           {receivablesView === "calendar" ? (
             <InstallmentCalendar />
           ) : (
+          <>
+          {/* SCRUM-56: the canonical sale debt (ruling 8), above the legacy receivables it never appears in. */}
+          <SaleReceivablesSection orgId={activeOrgId} statusFilter={receivableStatus} />
           <div className="rounded-md border border-border overflow-x-auto">
             <Table>
               <TableHeader className="bg-muted/50">
@@ -369,6 +376,7 @@ export function CollectionsTab() {
               </TableBody>
             </Table>
           </div>
+          </>
           )}
           {receivablesView === "list" && receivableLoadStatus === "CanLoadMore" && (
             <Button variant="outline" onClick={() => loadMoreReceivables(75)}>{t("LoadMore" as any)}</Button>

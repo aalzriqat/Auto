@@ -6,7 +6,7 @@ import { format, startOfMonth, endOfMonth } from "date-fns";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
+import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 import { Calendar } from "@/components/ui/calendar";
 import { Badge } from "@/components/ui/badge";
 
@@ -17,7 +17,7 @@ function dayKey(value: number): string {
 export function InstallmentCalendar() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const formatCurrency = useCurrencyFormatter();
+  const formatCurrency = useCurrencyFormatterInCurrency();
   const [month, setMonth] = useState(() => new Date());
   const [selectedDay, setSelectedDay] = useState<Date | undefined>(new Date());
 
@@ -86,11 +86,11 @@ export function InstallmentCalendar() {
             {selectedRows.map((row) => (
               <div key={row._id} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-sm">
                 <div>
-                  <div className="font-medium">{row.customerName}</div>
+                  <div className="font-medium">{row.customerName || t("Unknown" as any)}</div>
                   <div className="text-xs text-muted-foreground">{row.vehicleLabel || row.title}</div>
                 </div>
                 <div className="text-right">
-                  <div className="font-semibold">{formatCurrency(row.outstandingAmount)}</div>
+                  <div className="font-semibold">{formatCurrency(row.outstandingAmount, row.currency, row.scale)}</div>
                   <Badge variant="outline" className="mt-1">{row.status}</Badge>
                 </div>
               </div>

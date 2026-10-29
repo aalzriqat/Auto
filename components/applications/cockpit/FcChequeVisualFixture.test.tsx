@@ -51,6 +51,10 @@ vi.mock("@/hooks/use-permissions", () => ({
 vi.mock("@/hooks/useCurrencyFormatter", () => ({
   useCurrencyFormatter: () => (n: number) =>
     `${n.toLocaleString("en-US")} ${language.locale === "ar" ? "دينار أردني" : "JOD"}`,
+  // The real hook's behaviour: the row's own currency. Collections' default
+  // Receivables tab (SaleReceivablesSection) calls it.
+  useCurrencyFormatterInCurrency: () => (n: number, currency: string) =>
+    `${n.toLocaleString("en-US")} ${currency === "JOD" && language.locale === "ar" ? "دينار أردني" : currency}`,
 }));
 vi.mock("@/hooks/useCommandIdentity", () => ({
   useCommandIdentity: () => ({ for: (k: string) => k, retire: () => {} }),

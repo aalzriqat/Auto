@@ -32,6 +32,7 @@ vi.mock("@/hooks/use-permissions", () => ({
 }));
 vi.mock("@/hooks/useCurrencyFormatter", () => ({
   useCurrencyFormatter: () => (n: number) => `${n} JOD`,
+  useCurrencyFormatterInCurrency: () => (n: number) => `${n} JOD`,
 }));
 vi.mock("@/hooks/useCommandIdentity", () => ({
   useCommandIdentity: () => ({ for: (k: string) => k, retire: () => {} }),
