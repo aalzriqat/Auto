@@ -1,0 +1,57 @@
+{
+  "id": "supplier-receivable-dispute-opposite-direction-same-key-refused",
+  "fingerprint": "f569233469f68d3cbb27a9381d3a95a114abaf10f2006eb76bea7d79fd9d96c0",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.setDisputed",
+      "input": {
+        "disputed": true,
+        "key": "r-x"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.setDisputed",
+      "input": {
+        "disputed": false,
+        "key": "r-x"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refused",
+      "value": "key-reused"
+    },
+    {
+      "observable": "receivable.status",
+      "value": "DISPUTED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementAudit.test.ts",
+    "testName": "receivable dispute: the same key with the opposite direction is refused, not replayed"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

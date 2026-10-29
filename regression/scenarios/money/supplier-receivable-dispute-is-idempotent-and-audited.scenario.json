@@ -1,0 +1,88 @@
+{
+  "id": "supplier-receivable-dispute-is-idempotent-and-audited",
+  "fingerprint": "e404aff9ef5db1677f65c8b59a74351b64bbbf10d7e39c175f12ababa53bd5b2",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.setDisputed",
+      "input": {
+        "disputed": true,
+        "key": "r-1"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.setDisputed",
+      "input": {
+        "disputed": false,
+        "key": "r-2"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.setDisputed",
+      "input": {
+        "disputed": true,
+        "key": "r-1"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.setDisputed",
+      "input": {
+        "disputed": true,
+        "reason": "changed",
+        "key": "r-1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.status",
+      "value": "OPEN"
+    },
+    {
+      "observable": "audit.count",
+      "value": 2
+    },
+    {
+      "observable": "audit.actionType",
+      "value": "SET_SUPPLIER_DISPUTE"
+    },
+    {
+      "observable": "step4.refused",
+      "value": "key-reused"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementAudit.test.ts",
+    "testName": "receivable dispute is audited, replays as a no-op, and a changed payload under the same key is refused"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

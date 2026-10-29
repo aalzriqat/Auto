@@ -1,0 +1,95 @@
+{
+  "id": "supplier-cost-recovery-receipt-80-then-120-recovers",
+  "fingerprint": "b54f80258ec016562c878f5885b495ccee5e0edde72523a8dd623ea7fe781c48",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 80000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 130000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 120000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.status",
+      "value": "PARTIALLY_RECOVERED"
+    },
+    {
+      "observable": "step1.recv1240.netMinor",
+      "value": 120000
+    },
+    {
+      "observable": "step2.refused",
+      "value": "over-application"
+    },
+    {
+      "observable": "step3.status",
+      "value": "RECOVERED"
+    },
+    {
+      "observable": "recv1240.netMinor",
+      "value": 0
+    },
+    {
+      "observable": "step4.refused",
+      "value": "over-application"
+    },
+    {
+      "observable": "journals.unbalanced",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "200 cost: 80 then 120 recovers it; 130 is refused; the receivable ends at zero and every entry balances"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

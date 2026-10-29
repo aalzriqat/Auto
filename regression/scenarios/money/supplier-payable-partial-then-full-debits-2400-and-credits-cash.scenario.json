@@ -1,0 +1,72 @@
+{
+  "id": "supplier-payable-partial-then-full-debits-2400-and-credits-cash",
+  "fingerprint": "c891a4dee982c43e363215e4ae3504629d6dd0ef1850a3641340b7e7517a462c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "amount": 3000,
+        "paymentMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "CASH"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.payable.status",
+      "value": "PARTIALLY_PAID"
+    },
+    {
+      "observable": "step1.ap2400.netMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "step2.payable.status",
+      "value": "PAID"
+    },
+    {
+      "observable": "ap2400.netMinor",
+      "value": 8000000
+    },
+    {
+      "observable": "cash.netMinor",
+      "value": -8000000
+    },
+    {
+      "observable": "journals.unbalanced",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "8,000 payable: 3,000 then the remaining 5,000 posts Dr 2400 / Cr cash, balanced, status PARTIALLY_PAID then PAID"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

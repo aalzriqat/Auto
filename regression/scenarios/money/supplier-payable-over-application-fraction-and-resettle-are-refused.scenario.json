@@ -1,0 +1,101 @@
+{
+  "id": "supplier-payable-over-application-fraction-and-resettle-are-refused",
+  "fingerprint": "d3b846d329f6ff5818ecd8e5481b01d8c544a6ce2ea9d2c948f6396891fa4cef",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "amount": 3000,
+        "paymentMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "amount": 5000.001,
+        "paymentMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "amount": 0.0005,
+        "paymentMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "amount": 5000,
+        "paymentMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "CASH"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refused",
+      "value": "over-application"
+    },
+    {
+      "observable": "step3.refused",
+      "value": "finer-than-currency"
+    },
+    {
+      "observable": "step5.refused",
+      "value": "already-paid"
+    },
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "payable.status",
+      "value": "PAID"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "over-application, fractions and a second settlement are refused with nothing written"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

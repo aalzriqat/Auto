@@ -1,0 +1,85 @@
+{
+  "id": "supplier-cost-recovery-receipt-replay-permission-tenancy",
+  "fingerprint": "6d9e9566683b52e27cab2c29c459e6bfd20da16a697a2ae4a928a312ff7682c2",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 80000,
+        "key": "k1"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 80000,
+        "key": "k1"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-viewer",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 80000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "B"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 80000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "recv1240.netMinor",
+      "value": 120000
+    },
+    {
+      "observable": "step3.refusal",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "step4.refused",
+      "value": "not-found"
+    },
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "recovery receipt: a replay posts once; MANAGE_FINANCE and tenancy are enforced"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

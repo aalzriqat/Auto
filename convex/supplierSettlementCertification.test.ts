@@ -155,7 +155,7 @@ describe("supplier payable payment (control account 2400)", () => {
     expect(await snapshot(s)).toEqual(before);
   });
 
-  test("a closed period: the subledger moves, the event is QUEUED, and the GL stays empty until the period reopens", async () => {
+  test("payable payment: a closed period: the subledger moves, the event is QUEUED, and the GL stays empty until the period reopens", async () => {
     // Characterization, not endorsement: the payment is recorded and the posting waits in
     // pendingAccountingEvents (status PENDING). The period-close check refuses to close while the
     // supplier-payables subledger disagrees with the GL, which is the control over this window.
@@ -204,7 +204,7 @@ describe("consignment margin receipt (control account 1240)", () => {
       /already settled in full/);
   });
 
-  test("a bank receipt needs an active JOD bank of this organization", async () => {
+  test("margin receipt: a bank receipt needs an active JOD bank of this organization", async () => {
     const s = await seedSupplierDoors("rec2");
     const receivableId = await insertReceivable(s, 500);
     const bank = (over: Record<string, unknown>) =>
@@ -221,7 +221,7 @@ describe("consignment margin receipt (control account 1240)", () => {
     expect(gl.unbalancedEntries).toBe(0);
   });
 
-  test("a replay under the same key posts once; MANAGE_FINANCE and tenancy are enforced", async () => {
+  test("margin receipt: a replay under the same key posts once; MANAGE_FINANCE and tenancy are enforced", async () => {
     const s = await seedSupplierDoors("rec3");
     const receivableId = await insertReceivable(s, 500);
     const args = receipt(s, receivableId, { idempotencyKey: "rec-replay" });
@@ -240,7 +240,7 @@ describe("consignment margin receipt (control account 1240)", () => {
     expect(await snapshot(s)).toEqual(before);
   });
 
-  test("a closed period: the claim moves, the event is QUEUED, and the GL stays empty until the period reopens", async () => {
+  test("margin receipt: a closed period: the claim moves, the event is QUEUED, and the GL stays empty until the period reopens", async () => {
     const s = await seedSupplierDoors("rec4");
     const receivableId = await insertReceivable(s, 500);
     await s.t.run((ctx) => ctx.db.patch(s.periodId, { status: "CLOSED" }));
@@ -285,7 +285,7 @@ describe("supplier cost-recovery receipt (control account 1240)", () => {
       /more than the supplier still owes/);
   });
 
-  test("a bank receipt needs an active JOD bank of this organization", async () => {
+  test("recovery receipt: a bank receipt needs an active JOD bank of this organization", async () => {
     const s = await seedSupplierDoors("cr2");
     const { recoveryId } = await openRecovery(s, 200);
     const bank = (over: Record<string, unknown>) =>
@@ -301,7 +301,7 @@ describe("supplier cost-recovery receipt (control account 1240)", () => {
     expect(gl.net[KEYS.RECEIVABLE_FROM_SUPPLIERS]).toBe(120 * SCALE);
   });
 
-  test("a replay posts once; MANAGE_FINANCE and tenancy are enforced", async () => {
+  test("recovery receipt: a replay posts once; MANAGE_FINANCE and tenancy are enforced", async () => {
     const s = await seedSupplierDoors("cr3");
     const { recoveryId } = await openRecovery(s, 200);
     const args = receipt(s, recoveryId, { idempotencyKey: "cr-replay" });

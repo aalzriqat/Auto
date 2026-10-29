@@ -1,0 +1,79 @@
+{
+  "id": "supplier-payable-payment-needs-manage-finance",
+  "fingerprint": "992983e7f89aed403ffa7cc839d05e14daff9b86fe748c0e71f4dc06fd43a3f2",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-viewer",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "amount": 1000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-viewer",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-viewer",
+        "org": "A"
+      },
+      "action": "sourcingPayables.setDisputed",
+      "input": {
+        "disputed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "B"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "amount": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1to3.refusal",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "step4.refused",
+      "value": "not-found"
+    },
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "MANAGE_FINANCE is required; another organization sees the payable as not found"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

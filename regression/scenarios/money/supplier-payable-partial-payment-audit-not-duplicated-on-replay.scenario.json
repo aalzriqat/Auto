@@ -1,0 +1,63 @@
+{
+  "id": "supplier-payable-partial-payment-audit-not-duplicated-on-replay",
+  "fingerprint": "b81f87b1e7233a498ec53fbeadbf9f7526e07057b8ca2d47de44ed9908668097",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "amount": 3000,
+        "paymentMethod": "CASH",
+        "key": "pay-part"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "amount": 3000,
+        "paymentMethod": "CASH",
+        "key": "pay-part"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.count",
+      "value": 1
+    },
+    {
+      "observable": "audit.after.amountPaid",
+      "value": 3000
+    },
+    {
+      "observable": "audit.after.status",
+      "value": "PARTIALLY_PAID"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementAudit.test.ts",
+    "testName": "recordPartialPayment writes one entry; a replay under the same key writes no second one"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

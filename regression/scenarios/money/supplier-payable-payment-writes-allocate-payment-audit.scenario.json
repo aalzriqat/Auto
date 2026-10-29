@@ -1,0 +1,58 @@
+{
+  "id": "supplier-payable-payment-writes-allocate-payment-audit",
+  "fingerprint": "e448ac426d5fbc0750a91822c68e1c4581a5afb9d1c1721044e16e9030bd44af",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "CASH",
+        "key": "pay-full"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.count",
+      "value": 1
+    },
+    {
+      "observable": "audit.actionType",
+      "value": "ALLOCATE_PAYMENT"
+    },
+    {
+      "observable": "audit.before.amountPaid",
+      "value": 0
+    },
+    {
+      "observable": "audit.after.amountPaid",
+      "value": 8000
+    },
+    {
+      "observable": "audit.after.status",
+      "value": "PAID"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementAudit.test.ts",
+    "testName": "markPaid writes one ALLOCATE_PAYMENT entry carrying the key, before and after"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

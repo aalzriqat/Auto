@@ -1,0 +1,61 @@
+{
+  "id": "supplier-cost-recovery-receipt-reversal-refuses-in-pilot",
+  "fingerprint": "c6baf3b24127e6b369a7aa0380b06eef80847a9ec0dd2f77049698621dec3ac9",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.reverseReceipt",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.reverseReceipt",
+      "input": {
+        "replay": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED"
+    },
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "step1.schedulerChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementContainment.test.ts",
+    "testName": "refuses with a coded, truthful EN/AR error and changes nothing"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

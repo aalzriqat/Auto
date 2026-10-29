@@ -52,7 +52,7 @@ describe("payable payment audit", () => {
 });
 
 describe("payable dispute", () => {
-  test("is audited, replays as a no-op, and a changed payload under the same key is refused", async () => {
+  test("payable dispute is audited, replays as a no-op, and a changed payload under the same key is refused", async () => {
     const s = await seedSupplierDoors("dis1");
     const payableId = await insertPayable(s, 8000);
     const base = { orgId: s.orgId, payableId };
@@ -69,7 +69,7 @@ describe("payable dispute", () => {
     ).rejects.toThrow(/Idempotency key reused with different request content/);
   });
 
-  test("the same key with the opposite direction is refused, not replayed", async () => {
+  test("payable dispute: the same key with the opposite direction is refused, not replayed", async () => {
     const s = await seedSupplierDoors("dis5");
     const payableId = await insertPayable(s, 8000);
     await s.as.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: true, reason: "Wrong price", idempotencyKey: "d-x" });
@@ -79,7 +79,7 @@ describe("payable dispute", () => {
     expect((await s.t.run((ctx) => ctx.db.get(payableId)))?.status).toBe("DISPUTED");
   });
 
-  test("a request with no idempotency key is rejected", async () => {
+  test("payable dispute: a request with no idempotency key is rejected", async () => {
     const s = await seedSupplierDoors("dis2");
     const payableId = await insertPayable(s, 8000);
     await expect(
@@ -90,7 +90,7 @@ describe("payable dispute", () => {
 });
 
 describe("receivable dispute", () => {
-  test("is audited, replays as a no-op, and a changed payload under the same key is refused", async () => {
+  test("receivable dispute is audited, replays as a no-op, and a changed payload under the same key is refused", async () => {
     const s = await seedSupplierDoors("dis3");
     const receivableId = await insertReceivable(s, 500);
     const base = { orgId: s.orgId, receivableId };
@@ -107,7 +107,7 @@ describe("receivable dispute", () => {
     ).rejects.toThrow(/Idempotency key reused with different request content/);
   });
 
-  test("the same key with the opposite direction is refused, not replayed", async () => {
+  test("receivable dispute: the same key with the opposite direction is refused, not replayed", async () => {
     const s = await seedSupplierDoors("dis6");
     const receivableId = await insertReceivable(s, 500);
     await s.as.mutation(api.supplierReceivables.setDisputed, { orgId: s.orgId, receivableId, disputed: true, reason: "Margin disagreed", idempotencyKey: "r-x" });
@@ -117,7 +117,7 @@ describe("receivable dispute", () => {
     expect((await s.t.run((ctx) => ctx.db.get(receivableId)))?.status).toBe("DISPUTED");
   });
 
-  test("a request with no idempotency key is rejected", async () => {
+  test("receivable dispute: a request with no idempotency key is rejected", async () => {
     const s = await seedSupplierDoors("dis4");
     const receivableId = await insertReceivable(s, 500);
     await expect(

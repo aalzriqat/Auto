@@ -1,0 +1,89 @@
+{
+  "id": "supplier-margin-receipt-replay-permission-tenancy",
+  "fingerprint": "52158cd756c5b0c1c8f3296f1d3eae1f361384755195afe9b4a7370b64ab6e50",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 200,
+        "key": "k1"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 200,
+        "key": "k1"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-viewer",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 200
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "B"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 200
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journals.count",
+      "value": 1
+    },
+    {
+      "observable": "recv1240.netMinor",
+      "value": -200000
+    },
+    {
+      "observable": "step3.refusal",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "step4.refused",
+      "value": "not-found"
+    },
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "margin receipt: a replay under the same key posts once; MANAGE_FINANCE and tenancy are enforced"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

@@ -1,0 +1,51 @@
+{
+  "id": "supplier-margin-receipt-closed-period-queues-posting",
+  "fingerprint": "06c830509d23a74deea52d49b5d11f10ef1c8f3c1cc889818f4f224e0c9a9f0f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 200,
+        "receiptMethod": "CASH",
+        "period": "CLOSED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.status",
+      "value": "PARTIALLY_PAID"
+    },
+    {
+      "observable": "pendingEvent.status",
+      "value": "PENDING"
+    },
+    {
+      "observable": "journals.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "margin receipt: a closed period: the claim moves, the event is QUEUED, and the GL stays empty until the period reopens"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

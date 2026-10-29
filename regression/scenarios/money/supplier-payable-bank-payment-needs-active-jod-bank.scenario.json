@@ -1,0 +1,101 @@
+{
+  "id": "supplier-payable-bank-payment-needs-active-jod-bank",
+  "fingerprint": "a2a0761c9936ec72ad449dd1609fcd36d79e2041ab1c4588545bdcf58917b2d0",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "BANK_TRANSFER"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "BANK_TRANSFER",
+        "bank": "USD"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "BANK_TRANSFER",
+        "bank": "foreign-org"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "CASH",
+        "bank": "USD"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "BANK_TRANSFER",
+        "bank": "JOD"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1to4.refused",
+      "value": true
+    },
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "bank.netMinor",
+      "value": -8000000
+    },
+    {
+      "observable": "ap2400.netMinor",
+      "value": 8000000
+    },
+    {
+      "observable": "cash.netMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "a bank-funded payment needs an active JOD bank of this organization"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

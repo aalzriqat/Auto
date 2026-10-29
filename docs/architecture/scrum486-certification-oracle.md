@@ -48,6 +48,28 @@ The RT11 refusal suite uses real switches. This is serial `convex-test` evidence
 not Convex platform, OCC, browser or production certification. Enabled controls
 still need independent pilot certification before launch.
 
+## SCRUM-869-SUPPLIER-SETTLE
+
+Owner ruling SCRUM-869#c23881, 2026-10-29: supplier payable payment, consignment margin receipt and supplier cost-recovery receipt are in the pilot. No reversal is indispensable, so every reversal door for the three refuses server-side. Amounts and postings are unchanged by this slice. The ruling digest in `regression/rulings.json` was computed from a paraphrase because the Jira text was not available to the implementing session; the operator refreshes it with the real text and every `supplier-*` record cites it.
+
+Hand-computed JOD figures (1 JOD = 1,000 minor units). Control 2400 is credit-normal, so a payment is a net debit; control 1240 is debit-normal, so a receipt is a net credit. Every row is a public-mutation call in `convex/supplierSettlementCertification.test.ts` unless a file is named.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| Payable 8,000, pay 3,000 then the remaining 5,000 | PARTIALLY_PAID then PAID; 2400 net +8,000,000; cash net -8,000,000; no unbalanced entry | `8,000 payable: 3,000 then the remaining 5,000 posts Dr 2400 / Cr cash, balanced, status PARTIALLY_PAID then PAID` |
+| Payable over-application, finer than 3 decimals, second settlement | 5,000.001 after 3,000 refused ("That would pay"); 0.0005 refused; 0.001 after PAID refused; markPaid after PAID refused; database unchanged | `over-application, fractions and a second settlement are refused with nothing written` |
+| Payable bank payment | missing, wrong-currency, foreign-org bank refused; JOD bank posts to the bank account, not cash | `a bank-funded payment needs an active JOD bank of this organization` |
+| Payable replay | one journal, one payment, 2400 net +3,000,000 | `a replay under the same key posts once and audits once` |
+| Payable permission and tenancy | view-only caller FORBIDDEN on all three doors; other organization refused; database unchanged | `MANAGE_FINANCE is required; another organization sees the payable as not found` |
+| Payable closed period | subledger moves, one PENDING queued event, zero journals | `payable payment: a closed period: the subledger moves, the event is QUEUED, and the GL stays empty until the period reopens` |
+| Margin 500: 200, 350, 300 | PARTIALLY_PAID remaining 300 (1240 net -200,000); 350 refused ("That would record 550 against 500 owed"); then PAID (1240 net -500,000, cash +500,000) | `500 commission: 200 then 300 posts Dr cash / Cr 1240, balanced, PARTIALLY_PAID then PAID; 350 is refused` |
+| Margin bank, replay, permission, tenancy, closed period | same guards as the payable cells | the three `margin receipt:` tests |
+| Recovery 200: 80, 130, 120 | 1240 net 120,000 after 80; 130 refused; RECOVERED at 0; one more minor unit refused | `200 cost: 80 then 120 recovers it; 130 is refused; the receivable ends at zero and every entry balances` |
+| Recovery bank, replay, permission, tenancy | same guards | the two `recovery receipt:` tests |
+| Receipt reversal (the only reversal door) | `SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED`, EN and AR, no table or scheduler change, a replay also refused, receipt stays LIVE, 1240 net 120,000 | `convex/supplierSettlementContainment.test.ts`, four tests |
+| Dispute and payment audit, idempotent dispute, completeness flags | `ALLOCATE_PAYMENT` and `SET_SUPPLIER_DISPUTE` entries; replay is a no-op; same key with a changed payload or direction is refused; list queries report `complete` | `convex/supplierSettlementAudit.test.ts`, eleven tests |
+
+Not covered here: concurrency or OCC (`convex-test` serializes), browser rendering, and the exact-SHA cloud rehearsal cases for these doors. Those remain SCRUM-762 obligations. Adjacent doors outside this ruling are not blocked by this slice: `vehicles.correctAcquisitionCost` can rewrite an unpaid payable's amount, and `expenses.reverseExpense` can close a recovery; the expense-reversal message still advises reversing receipts first, which the pilot now refuses.
 ## SCRUM-179-mobile-expense-categories
 
 One shared category tuple preserves the independently captured native twelve-value domain and order for registered create/update arguments and stored expense records. Forms without amortization inputs derive the eleven non-prepaid choices; mobile reads retain PREPAID. DETAILING, TRANSPORT and FEES are offered under their existing meanings; INSPECTION, REGISTRATION, CLEANING and INSURANCE are removed without remapping. Server payroll and prepaid business guards remain authoritative.

@@ -1,0 +1,92 @@
+{
+  "id": "supplier-margin-receipt-partial-then-full-credits-1240",
+  "fingerprint": "9506826411483703ceab06690fa766585ee4f2ae39a674423264ed58eee0ae07",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 200,
+        "receiptMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 350,
+        "receiptMethod": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 300,
+        "receiptMethod": "CASH"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.status",
+      "value": "PARTIALLY_PAID"
+    },
+    {
+      "observable": "step1.remaining",
+      "value": 300
+    },
+    {
+      "observable": "step1.recv1240.netMinor",
+      "value": -200000
+    },
+    {
+      "observable": "step2.refused",
+      "value": "over-application"
+    },
+    {
+      "observable": "step3.status",
+      "value": "PAID"
+    },
+    {
+      "observable": "recv1240.netMinor",
+      "value": -500000
+    },
+    {
+      "observable": "cash.netMinor",
+      "value": 500000
+    },
+    {
+      "observable": "journals.unbalanced",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "a5031bca168956e33737e7119e7c60ad8bafc217f1d544b07b9ef4980d68edec"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "500 commission: 200 then 300 posts Dr cash / Cr 1240, balanced, PARTIALLY_PAID then PAID; 350 is refused"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}
