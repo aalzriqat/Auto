@@ -5,7 +5,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { projectSaleRow } from "./utils/saleRowProjection";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
@@ -652,6 +652,9 @@ export const softDelete = mutation({
   },
 });
 
+/** How many of a customer's deposits one `getRelations` call returns; `depositsTruncated` says when more exist. */
+const CUSTOMER_DEPOSITS_PAGE = 100;
+
 export const getRelations = query({
   args: {
     orgId: v.id("organizations"),
@@ -737,11 +740,43 @@ export const getRelations = query({
       })
     );
 
+    // 5. Current deposits (SCRUM-858 c23884, native-screen visibility). `deposits.listByVehicle` is keyed
+    // by car, so an opening security deposit and a reservation that names no VIN never reach it; the
+    // customer's own record is where they are read. One indexed, bounded page (newest first), scoped to
+    // this organization and customer; deleted rows are not current. Gated on VIEW_SALES, the permission
+    // `deposits.quoteAllocation` and the deposit manager on this same screen already require, so a role
+    // that may see customers but not sales sees no deposit amounts.
+    const mayViewDeposits = isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_SALES);
+    const depositPage = mayViewDeposits
+      ? await ctx.db
+          .query("deposits")
+          .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
+          .order("desc")
+          .take(CUSTOMER_DEPOSITS_PAGE + 1)
+      : [];
+    const deposits = depositPage
+      .slice(0, CUSTOMER_DEPOSITS_PAGE)
+      .filter((deposit) => deposit.isDeleted !== true)
+      .map((deposit) => ({
+        _id: deposit._id,
+        status: deposit.status,
+        amountMinor: deposit.amountMinor,
+        amount: deposit.amount,
+        currency: deposit.currency,
+        vehicleId: deposit.vehicleId,
+        quoteId: deposit.quoteId,
+        origin: deposit.origin,
+        openingDepositKind: deposit.openingDepositKind,
+        createdAt: deposit.createdAt,
+      }));
+
     return {
       sales: enrichedSales.sort((a, b) => b.saleDate - a.saleDate),
       leads: enrichedLeads.sort((a, b) => b._creationTime - a._creationTime),
       tasks: enrichedTasks.sort((a, b) => a.dueDate - b.dueDate),
       quotes: enrichedQuotes.sort((a, b) => b.createdAt - a.createdAt),
+      deposits,
+      depositsTruncated: depositPage.length > CUSTOMER_DEPOSITS_PAGE,
     };
   },
 });
