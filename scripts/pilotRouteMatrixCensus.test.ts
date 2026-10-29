@@ -15,8 +15,8 @@ const ROOT = path.resolve(__dirname, "..");
 
 test("the pilot matrix classifies each public registration in its named module scope exactly once", () => {
   const expected: string[] = [];
-  for (const module of MODULES) {
-    const file = `convex/${module}.ts`;
+  for (const moduleName of MODULES) {
+    const file = `convex/${moduleName}.ts`;
     const source = ts.createSourceFile(file, readFileSync(path.join(ROOT, file), "utf8"), ts.ScriptTarget.Latest, true);
     const builders = new Set<string>();
     for (const statement of source.statements) {
@@ -37,7 +37,7 @@ test("the pilot matrix classifies each public registration in its named module s
         const call = declaration.initializer;
         if (!ts.isIdentifier(declaration.name) || !call || !ts.isCallExpression(call) ||
             !ts.isIdentifier(call.expression) || !builders.has(call.expression.text)) continue;
-        expected.push(`${module}.${declaration.name.text}`);
+        expected.push(`${moduleName}.${declaration.name.text}`);
       }
     }
   }
