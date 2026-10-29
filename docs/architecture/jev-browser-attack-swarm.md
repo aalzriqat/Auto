@@ -52,9 +52,61 @@ The control plane is bound to immutable and independently verified inputs:
 5. The trusted workflow independently recreates and resolves the deterministic preview through Convex's control plane and records the resulting deployment URL as trusted evidence.
 6. The trusted workflow fetches GitHub's `refs/pull/<pr>/head` and `refs/pull/<pr>/merge` refs itself.
 7. The merge ref is accepted only when it has exactly two parents: the expected trusted base SHA followed by the expected source-head SHA.
-8. Full authenticated E2E and adversarial browser execution both check out that validated merge commit as candidate application code, while their controller and test code comes from the immutable trusted workflow revision.
+8. The isolated frontend build checks out the validated merge commit. A separate secret-free job archives that merge as source data. Credential-bearing backend jobs download the archive and run the existing staging and input audit before deployment. The archive disables attribute transformations so candidate attributes cannot omit or rewrite backend files. The controller and test definitions come from the immutable trusted workflow revision.
 
 The candidate descriptor is untrusted data. It is size-bounded, archive-shape-checked, parsed by trusted code, and cannot supply backend authority.
+
+## Authenticated PR merge check (SCRUM-757)
+
+The proposed required check is `authenticated-pr-e2e`, produced by the GitHub Actions app (`github-actions`). It is a Checks API result on the PR source-head SHA. It has a different name from the `playwright` check used for main's release gate. This change does not configure branch protection. Read "Who can write this check" below before requiring it: selecting the Actions app as the source does not identify a workflow or a branch.
+
+The default-branch `Authenticated PR E2E admission` listener uses `pull_request_target` to record a result even when a conflicting PR cannot start the secret-free preflight, or a fork awaits approval. It checks out the immutable workflow revision and never checks out PR code. It has no reusable secret references. Its verdict starts as failure until trusted scope or authenticated execution is proven. GitHub API failure is unavailable evidence, never success.
+
+Trusted scope logic reads the complete PR file list, including previous names for renames. Root Markdown files and Markdown files under `docs/` are out of scope when they are the entire change. The check records an explicit documentation-only success, including for a fork. Other files, an empty impact set, and unknown paths require the full trusted Chromium suite. This conservative scope includes backend, configuration, and test-only changes. An incomplete or unreadable file list fails.
+
+For an in-scope same-repository PR, the existing `workflow_run` consumer authenticates on trusted main code, then drives the isolated candidate frontend and staged candidate backend at the recorded tested merge. The full assertions stay intact. Discovery and execution use the same trusted configuration and environment. Their JSON reports have separate paths from the accounting-period setup reports. The judge requires the executed test identities to equal discovery, a positive test count, no skipped or unexpected tests, no global errors, and passing final results. Existing retry passes are counted as flaky. It records the full counts, executed spec paths, head SHA, tested backend and frontend merge SHA, and controller SHA.
+
+The run summary separately lists main's available test definitions and definitions changed by the PR, including additions, removals, and both names in a rename. Conditional or ignored main definitions are not claimed as executed. Candidate test versions are never executed with credentials. A spec update that main's trusted tests need must cross the reviewed main boundary before it can be used by this judge. A candidate-only test cannot satisfy missing coverage.
+
+An in-scope fork, failed or cancelled preflight, failed setup, failed build, unsupported candidate dependencies, missing evidence, skipped suite, or stale head or merge produces failure. The listener leaves failure when no consumer can start. A run cancelled after it starts publication leaves a blocking failure. This G5 result does not replace the separate swarm and terminal-opening verdict.
+
+The two publishers and the admission listener share a per-head concurrency group and update one GitHub Actions check record rather than creating a second same-name result on a rerun. Admission does not run on `edited`: GitHub keeps only one pending job per group ([concurrency](https://docs.github.com/en/actions/using-jobs/using-concurrency)), so an edit could cancel a queued finish publication.
+
+A publisher treats a record as a destination, never as evidence. Its `external_id`, `output` and `details_url` are writable ([Checks API](https://docs.github.com/en/rest/checks/runs)), and its suite does not identify the last PATCH writer. API-created checks in this repository were observed in the dynamic CodeQL suite. Before publishing a current verdict, trusted code revokes an existing success to failure regardless of its marker, suite, or claimed publisher. Missing, malformed, future and older markers cannot suppress this write. More than one same-app record quarantines the entire head and refuses certification; a new commit is required to resolve that ambiguity.
+
+Success comes only from the current trusted invocation's fresh scope or counted execution evidence. Before certifying it, the CLI reads the current Actions run and checks workflow path, event, repository, running status and attempt. A swarm completion additionally verifies the upstream Playwright run's head, workflow, repository, completed success and attempt, then reads every page of the PR-head Playwright run inventory and refuses a newer source run. Empty, incomplete, unreadable or bounded-out evidence refuses. Older attempts and older preflights therefore write failure rather than preserve or replace a result based on its marker. These reads and the Checks PATCH are not atomic: a run can change after the reads, and duplicate event delivery ordering is unproven. Per-head publication concurrency and swarm cancellation remain necessary. No claim is made that arbitrary consumer run ids are totally ordered.
+
+Starting a consumer attempt revokes an earlier success to failure. GitHub re-runs a selected job and its dependents, never its ancestors ([re-run a job](https://docs.github.com/en/rest/actions/workflow-runs#re-run-a-job-from-a-workflow-run)), so `e2e-gate-begin` does not run again for a job-level re-run. The publisher job `e2e-gate-finish` therefore resets the check first. The jobs that run or feed candidate code (`prepare`, `candidate-source`, `candidate-build`, `trusted-e2e`) hold `checks: read` only. Their first work step refuses to start while a success stands on the head, so no work runs beside a stale green. The operator then re-runs all jobs, which re-runs `e2e-gate-begin`. A delayed admission listener also revokes previous content and evaluates current scope; an in-scope admission can only leave failure. The descriptor reader still refuses multiple same-name live descriptor artifacts; a preflight rerun with ambiguous artifacts therefore fails truthfully rather than reusing unbound evidence.
+
+The triggering PR is the `workflow_run.pull_requests` entry that targets `main` at the exact head the run reports. Otherwise the commit lookup must return exactly one such PR. The first entry is never used on trust, because a branch can have several PRs.
+
+### Who can write this check
+
+Branch protection and rulesets match a required check by name and, optionally, the expected GitHub app ([about protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches#require-status-checks-before-merging)). They do not identify a workflow, a branch or a job. Every workflow in this repository authenticates as the GitHub Actions app, and the `permissions` key can raise a token to `checks: write` ([workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions), [GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token)). So the following holds, and this PR does not change it:
+
+- A fork cannot post this check. Fork `pull_request` tokens are read-only and receive no secrets, and the secret-bearing jobs here refuse fork runs.
+- A workflow on a branch of this repository that requests `checks: write` can post or patch a check with this name, as the same app, before or after the trusted publishers run. Trusted code unconditionally revokes previous success on its next publication; it cannot detect every forged PATCH or prevent a later write. Follow [GitHub's least-privilege guidance](https://docs.github.com/en/actions/reference/security/secure-use); this shared-app risk remains the owner's accepted boundary.
+- Owner decision, 2026-10-29 (SCRUM-757 c23876): no dedicated GitHub App is built. The owner is the repository's only collaborator and accepts the insider risk. Requiring this check is therefore allowed by that acceptance, not by a technical boundary.
+- The decision is reopened by any of: a new collaborator, deploy key or GitHub App with write access; the repository transfer (SCRUM-753); a forged or unexplained result.
+- The way to a real barrier is a dedicated GitHub App whose private key lives in an environment restricted to the default branch. It is not implemented here.
+
+Selecting the GitHub Actions app as the required source excludes other apps only.
+
+### Verify the check before requiring it
+
+The trusted listener and consumer must first be on the default branch. A PR that changes the controller is evaluated by the previous default-branch controller, so its own CI cannot prove these new workflow paths. After merge, exercise an in-scope PR, docs-only PR, fork PR, changed-spec PR, failed preflight, and rerun. Inspect the uploaded counts and run summary. Confirm one GitHub Actions result at each exact source head. Check the actual current and upstream Actions run/attempt data and observe revocation followed by the current verdict; check-suite ownership is not publisher evidence. Select the GitHub Actions app as the expected source only to exclude other apps, not as a forgery boundary. Also exercise a job-level re-run of `trusted-e2e` after a success. Keep the normal up-to-date-branch policy so a head result is not treated as evidence for an untested later base.
+
+Run these read-only queries from a machine with GitHub access:
+
+```sh
+gh api repos/aalzriqat/Auto/pulls/PR --jq '{head: .head.sha, base: .base.sha, changed_files, mergeable}'
+gh api 'repos/aalzriqat/Auto/commits/HEAD_SHA/check-runs?check_name=authenticated-pr-e2e&filter=all&per_page=100' --jq '.check_runs[] | {id, name, head_sha, status, conclusion, external_id, app: {slug: .app.slug, id: .app.id}, details_url}'
+gh run view RUN_ID --repo aalzriqat/Auto --log
+gh api repos/aalzriqat/Auto/branches/main/protection/required_status_checks
+gh api repos/aalzriqat/Auto/rulesets
+```
+
+The design follows [GitHub's workflow event security boundary](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run), [GitHub Security Lab's guidance on untrusted PR artifacts](https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/), and [GitHub's required-check and expected-app guidance](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches#require-status-checks-before-merging). Check updates use the [Checks API](https://docs.github.com/en/rest/checks/runs#update-a-check-run). Counts use [Playwright's JSON reporter](https://playwright.dev/docs/test-reporters#json-reporter), with output-path precedence checked against the installed reporter. Source archiving follows [Git's archive attributes](https://git-scm.com/docs/git-archive#ATTRIBUTES) and [attribute precedence](https://git-scm.com/docs/gitattributes#_description).
 
 ## Repository-wide pull-request secret boundary
 
@@ -97,7 +149,7 @@ The candidate server retains its real Clerk middleware. Instead of deleting midd
 
 The trusted controller requires a development/test-instance Clerk publishable key before deriving public JWT verification material. Reusable Clerk secrets and E2E passwords exist only in trusted-main steps and are never passed to candidate containers or retyped into candidate DOM.
 
-This boundary is designed so same-repository pull-request code does not execute with reusable repository credentials. Candidate code can observe its own disposable preview state and public test configuration, but it does not receive project-wide Convex authority, Clerk secret keys, reusable E2E passwords, or GitHub write tokens.
+This boundary is designed so candidate application code runs only in containers, and no reusable credential is passed into a candidate process. It is not true that no credential-bearing job ever runs candidate code: `trusted-e2e`, the attack workers and the opening proof run candidate application artifacts in containers, beside trusted steps that hold credentials, and the build jobs check out the tested merge. The jobs that feed or run candidate code hold at most a read-only GitHub token. Candidate code can observe its own disposable preview state and public test configuration, but it does not receive project-wide Convex authority, Clerk secret keys, reusable E2E passwords, or GitHub write tokens.
 
 ## Phase A — deterministic preview attack harness
 
