@@ -1635,6 +1635,12 @@ export async function runRehearsalCases(ctx) {
     async () => {
       const stamp = Date.now().toString(36);
       const vin = `RHSSR1${stamp.replace(/[ioq]/g, "z").toUpperCase()}`.padEnd(17, "0").slice(0, 17);
+      // SCRUM-868 P2: a consignment supplier is a master record, named by id; the server writes the name.
+      const sr1Supplier = await ownerMust("mutation", "suppliers:create", {
+        orgId,
+        idempotencyKey: `rehearsal-sr1-supplier-${stamp}`,
+        displayName: `Rehearsal Supplier ${stamp}`,
+      });
       const vehicleId = await ownerMust("mutation", "vehicles:create", {
         orgId,
         vin,
@@ -1647,7 +1653,7 @@ export async function runRehearsalCases(ctx) {
         transmission: "Automatic",
         sellingPrice: 22000,
         sourceType: "SOURCED",
-        sourcedFromName: `Rehearsal Supplier ${stamp}`,
+        sourcedSupplierId: sr1Supplier.supplierId,
         status: "AVAILABLE",
         // The supplier's ENTITLEMENT — what he is owed for the car. It is
         // `sourceCost`, not `purchasePrice`, and the product refuses the wrong
