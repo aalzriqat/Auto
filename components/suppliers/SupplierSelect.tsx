@@ -9,6 +9,11 @@
  *
  * The server stays the authority for every rule shown here: the inline create re-checks
  * MANAGE_FINANCE, duplicates, and the org. This component only avoids the round trip.
+ *
+ * Inline add is offered even when the typed text exactly matches an existing supplier: two distinct
+ * suppliers may share a name, and the server's duplicate confirmation (confirmDistinctFrom) is the
+ * one place that decides, so a finance user is never blocked from recording a genuinely different
+ * supplier.
  */
 import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "convex/react";
@@ -166,8 +171,6 @@ function SupplierSelectBody({
     }
   }
 
-  const hasExactMatch = options.some((o) => o.label.trim().toLowerCase() === query.toLowerCase());
-
   const renderFooter = ({ close }: { search: string; close: () => void }) => {
     if (query === "") return null;
     return (
@@ -206,7 +209,7 @@ function SupplierSelectBody({
             </Button>
           </div>
         )}
-        {!candidates && !hasExactMatch && canCreate && (
+        {!candidates && canCreate && (
           <Button
             type="button"
             size="sm"
@@ -222,7 +225,7 @@ function SupplierSelectBody({
             </bdi>
           </Button>
         )}
-        {!candidates && !hasExactMatch && !canCreate && !permissionsLoading && options.length === 0 && (
+        {!candidates && !canCreate && !permissionsLoading && options.length === 0 && (
           <p className="text-xs text-muted-foreground">{translate("SupplierPickerCreateNoPermission")}</p>
         )}
         {createError && (
