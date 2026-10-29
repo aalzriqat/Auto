@@ -1,7 +1,8 @@
 import { isConvexError } from "@autoflow/shared";
 import { calculateUnifiedMurabaha } from "@autoflow/shared/financing";
 import { useRouter } from "expo-router";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { useQuery } from "convex/react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View, type StyleProp, type ViewStyle } from "react-native";
 import { EmptyState } from "../../../components/EmptyState";
 import { FormField as SharedFormField, type FormFieldProps as SharedFormFieldProps } from "../../../components/FormField";
@@ -218,35 +219,156 @@ export function compactNumber(value: number, locale: "en" | "ar"): string {
 
 // Decimal places to display per currency. JOD keeps this screen's existing
 // whole-currency display convention (0) rather than its ISO subdivision (the
-// ledger itself still stores JOD in 3-decimal minor units — see
-// convex/utils/money.ts's CURRENCY_SCALES — this is a display-only choice).
+// ledger itself still stores JOD in 3-decimal minor units - see
+// convex/utils/money.ts's CURRENCY_SCALES - this is a display-only choice).
 // KWD/BHD/OMR are genuinely 3-decimal currencies (1000 fils/baisa per unit),
 // so they need the extra precision or a value like "5.500" would render as
-// misleadingly-rounded "6". Everything else defaults to the standard 2.
+// misleadingly-rounded "6".
 const CURRENCY_DISPLAY_FRACTION_DIGITS: Record<string, number> = {
   JOD: 0,
   KWD: 3,
   BHD: 3,
   OMR: 3,
+  // The remaining ISO 4217 codes the backend supports (convex/utils/money.ts CURRENCY_SCALES),
+  // listed so their scale never depends on the device's Intl data.
+  USD: 2,
+  EUR: 2,
+  GBP: 2,
+  SAR: 2,
+  AED: 2,
+  QAR: 2,
+  EGP: 2,
+  JPY: 0,
 };
 
+/**
+ * The minor-unit scale to display. A currency outside the table above takes the
+ * platform's ISO 4217 data (Intl/CLDR); a code the platform does not know has NO
+ * scale and throws, instead of being shown with a guessed 2 decimals (SCRUM-85,
+ * owner ruling SCRUM-760 c23812 ruling 9: scale is never defaulted).
+ */
 function fractionDigitsForCurrency(currency: string): number {
-  return CURRENCY_DISPLAY_FRACTION_DIGITS[currency.toUpperCase()] ?? 2;
+  const known = CURRENCY_DISPLAY_FRACTION_DIGITS[currency.toUpperCase()];
+  if (known !== undefined) return known;
+  // Intl accepts ANY well-formed three-letter code and answers 2 for the ones it has
+  // no data for, so membership in its ISO 4217 list is required first. A runtime
+  // without that list cannot vouch for the code, which also throws.
+  const listed = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("currency") : [];
+  if (!listed.includes(currency.trim().toUpperCase())) {
+    throw new Error(`Unrecognised currency code "${currency}": its minor-unit scale is unknown.`);
+  }
+  const digits = new Intl.NumberFormat("en-US", { style: "currency", currency }).resolvedOptions().maximumFractionDigits;
+  if (digits === undefined) {
+    throw new Error(`Unrecognised currency code "${currency}": its minor-unit scale is unknown.`);
+  }
+  return digits;
 }
 
-export function money(value: number | undefined | null, locale: "en" | "ar", currency: string = "JOD"): string {
+/**
+ * The organization's stored currency (SCRUM-85: never a default). A workspace
+ * screen publishes it with `useSyncActiveOrgCurrency`; `money()` calls that omit a
+ * currency read it. `null` until the stored value is known, or when the
+ * organization has none.
+ *
+ * It is a small external store, not a value written during render: render must stay pure, and a
+ * write from render outlived the screen, so an organization switch could format the next
+ * tenant's figures in the previous tenant's currency. It is written from a layout effect and
+ * cleared on unmount, and components that must follow it subscribe (`useActiveOrgCurrency`).
+ */
+let activeOrgCurrency: string | null = null;
+const activeOrgCurrencyListeners = new Set<() => void>();
+
+export function setActiveOrgCurrency(code: string | null | undefined): void {
+  const trimmed = typeof code === "string" ? code.trim() : "";
+  const next = trimmed === "" ? null : trimmed;
+  if (next === activeOrgCurrency) return;
+  activeOrgCurrency = next;
+  for (const listener of [...activeOrgCurrencyListeners]) listener();
+}
+
+/**
+ * Each mounted screen that publishes is an owner; the published currency is the most recently
+ * published owner's, and an owner leaving falls back to the one beneath it. Screens stack
+ * (a detail screen over the module screen), so closing the top one must not unpublish the
+ * currency the screen below still formats in.
+ */
+const currencyPublishers = new Map<symbol, string | null>();
+
+function publishOrgCurrency(owner: symbol, code: string | null | undefined): void {
+  currencyPublishers.delete(owner);
+  currencyPublishers.set(owner, typeof code === "string" && code.trim() !== "" ? code : null);
+  settleOrgCurrency();
+}
+
+function unpublishOrgCurrency(owner: symbol): void {
+  currencyPublishers.delete(owner);
+  settleOrgCurrency();
+}
+
+function settleOrgCurrency(): void {
+  let latest: string | null = null;
+  for (const code of currencyPublishers.values()) latest = code;
+  setActiveOrgCurrency(latest);
+}
+
+function subscribeActiveOrgCurrency(listener: () => void): () => void {
+  activeOrgCurrencyListeners.add(listener);
+  return () => {
+    activeOrgCurrencyListeners.delete(listener);
+  };
+}
+
+const readActiveOrgCurrency = (): string | null => activeOrgCurrency;
+
+/**
+ * The published currency, subscribed: the calling component re-renders when it changes. For a
+ * component that formats money but may not re-render with its screen (a memoised list row).
+ */
+export function useActiveOrgCurrency(): string | null {
+  return useSyncExternalStore(subscribeActiveOrgCurrency, readActiveOrgCurrency, readActiveOrgCurrency);
+}
+
+/**
+ * Publish the organization's stored currency to `money()` for this screen's subtree. Published
+ * from a layout effect (before paint, so no frame shows the not-configured text) and cleared on
+ * unmount. The screen subscribes, so it and its children re-render once the value is published.
+ */
+export function useSyncActiveOrgCurrency(orgId: string | null | undefined, enabled = true): void {
+  const status = useQuery(api.orgSettings.getCurrencyStatus, enabled && orgId ? { orgId } : "skip");
+  const storedCurrency = status?.currency ?? null;
+  const [owner] = useState(() => Symbol("orgCurrencyPublisher"));
+  useActiveOrgCurrency();
+  useLayoutEffect(() => {
+    publishOrgCurrency(owner, storedCurrency);
+  }, [owner, storedCurrency]);
+  useLayoutEffect(() => () => unpublishOrgCurrency(owner), [owner]);
+}
+
+export function currencyNotConfiguredLabel(locale: "en" | "ar"): string {
+  return locale === "ar" ? "العملة غير مهيأة" : "Currency not configured";
+}
+
+/**
+ * An amount in `currency`, or in the organization's stored currency when the
+ * caller passes none. With neither known it returns the "currency not
+ * configured" text instead of a number - never a guessed currency.
+ */
+export function money(value: number | undefined | null, locale: "en" | "ar", currency?: string | null): string {
+  const code = currency ?? activeOrgCurrency;
+  if (!code) return currencyNotConfiguredLabel(locale);
   const safeValue = Number.isFinite(value ?? 0) ? Number(value ?? 0) : 0;
   try {
     return new Intl.NumberFormat(locale === "ar" ? "ar-JO" : "en-US", {
-      maximumFractionDigits: fractionDigitsForCurrency(currency),
+      maximumFractionDigits: fractionDigitsForCurrency(code),
       style: "currency",
-      currency,
+      currency: code,
     }).format(safeValue);
   } catch {
-    return `${Math.round(safeValue)} ${currency}`;
+    // The code is not a currency the platform knows, so its scale is unknown:
+    // show no figure rather than one rounded at a guessed scale.
+    return currencyNotConfiguredLabel(locale);
   }
 }
-
 /**
  * An undecided commission is not a zero one. `money(undefined)` renders "0.00",
  * which reads as "this sale earns nothing" — the opposite of the truth. Shared
@@ -1337,6 +1459,9 @@ const ModuleListRow = memo(function ModuleListRow<T>({
   render: (item: T) => React.ReactElement;
   rowStyle: StyleProp<ViewStyle>;
 }) {
+  // A row formats money through `money()`, which reads the published org currency. Subscribe so a
+  // memoised row re-renders when that currency is published after the row first rendered.
+  useActiveOrgCurrency();
   const content = render(item);
   return highlighted ? <View style={rowStyle}>{content}</View> : content;
 }) as <T>(props: {

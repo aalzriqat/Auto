@@ -24,6 +24,8 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 }));
 
 vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({ currency: "JOD" }) }));
+// SCRUM-85: the org's currency is the stored one, read through useOrgCurrencyState.
+vi.mock("@/hooks/useOrgCurrencyState", () => ({ useOrgCurrencyState: () => ({ status: "configured", code: "JOD", symbol: null }) }));
 
 // Keyed on the function's path — `api` is a proxy handing back a fresh
 // reference per property access, so an identity map misses every lookup.

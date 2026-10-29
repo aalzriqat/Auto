@@ -17,7 +17,8 @@ const COMPANY = "company_1" as Id<"financeCompanies">;
 
 const stubs = vi.hoisted(() => ({
   saveQuote: vi.fn(async () => "quote_1"),
-  orgSettings: null as null | { currency: string },
+  // SCRUM-85: an org without a stored currency shows "currency not configured", so the default fixture org stores JOD.
+  orgSettings: { currency: "JOD" } as null | { currency: string },
   rules: [] as unknown[] | undefined,
 }));
 
@@ -99,7 +100,7 @@ function renderReview(downPayment: number, selectedCompanyId: string = COMPANY) 
 afterEach(() => {
   cleanup();
   stubs.saveQuote.mockClear();
-  stubs.orgSettings = null;
+  stubs.orgSettings = { currency: "JOD" };
   stubs.rules = [];
 });
 

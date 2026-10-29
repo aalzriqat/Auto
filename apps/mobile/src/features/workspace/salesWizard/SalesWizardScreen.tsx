@@ -34,7 +34,7 @@ import {
   upliftRejectedText,
   upliftRequestActionText,
 } from "./minimumUpliftCopy";
-import { useCommandIdentity, money, parseOptionalNumber, useGenericError, SearchInput, SelectField } from "../modules/moduleShared";
+import { useCommandIdentity, money, parseOptionalNumber, useGenericError, useSyncActiveOrgCurrency, SearchInput, SelectField } from "../modules/moduleShared";
 import {
   calculateUnifiedMurabaha,
   minimumDownPaymentForFinancingLimit,
@@ -230,6 +230,7 @@ export function SalesWizardScreen({
   const updateQuoteStatus = useMutation(api.quotes.updateQuoteStatus);
   const createDeposit = useMutation(api.deposits.create);
   const requestDeposit = useMutation(api.depositRequests.request);
+  useSyncActiveOrgCurrency(orgId);
   const myMembership = useQuery(api.memberships.getMyMembership, { orgId });
   const canRecordDeposit =
     myMembership?.roleName?.toUpperCase() === "OWNER" ||

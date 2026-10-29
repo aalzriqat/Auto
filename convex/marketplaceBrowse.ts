@@ -7,6 +7,7 @@ import { getPublishedSnapshotData, getSettingsByOrg, activePrimaryDomain } from 
 import { projectedVehicleRows, websiteSectionMap } from "./websiteProjection";
 import { calculateUnifiedMurabaha } from "../lib/financing";
 import { isRequestedFinancingTermValid } from "./utils/financingEconomics";
+import { configuredCurrencyOf } from "./utils/money";
 
 const MAX_CANDIDATE_ORGS = 100;
 // Bounds the merged cross-org result set — founding-dealer scale, same
@@ -260,7 +261,10 @@ export const search = query({
       // the frontend never mislabels a non-JOD org's prices. Cross-currency
       // comparison for the price-sort modes is explicitly out of scope here;
       // this only fixes the display label.
-      const currency = orgSettings?.currency ?? "JOD";
+      // SCRUM-85: an org that has not chosen a currency lists no prices at all
+      // rather than priced in an assumed JOD.
+      const currency = configuredCurrencyOf(orgSettings);
+      if (currency === null) continue;
 
       // Project the org's inventory LIVE at query time (same projection the
       // website publish uses — respecting the dealer's public-display toggles —

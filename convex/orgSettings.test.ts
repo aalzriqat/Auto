@@ -38,7 +38,8 @@ describe("orgSettings", () => {
   });
 
   test("get returns null when no settings row exists", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    // The shared harness seeds a stored currency on every org; this test is about an org with no row.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { storedOrgCurrency: false });
     const { orgId, asOwner } = await seedOwner(t);
     const settings = await asOwner.query(api.orgSettings.get, { orgId });
     expect(settings).toBeNull();

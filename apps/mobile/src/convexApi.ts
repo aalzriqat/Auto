@@ -523,6 +523,14 @@ export interface MobileRole {
   isDeleted?: boolean;
 }
 
+/** SCRUM-85: orgSettings:getCurrencyStatus - any member; 
+ull while signed out / not a member. */
+export interface MobileOrgCurrencyStatus {
+  configured: boolean;
+  currency: string | null;
+  currencySymbol: string | null;
+}
+
 export interface MobileOrgSettings {
   _id: string;
   orgId: string;
@@ -2292,6 +2300,7 @@ export const api = {
   },
   orgSettings: {
     get: makeFunctionReference<"query", OrgScopedArgs, MobileOrgSettings | null>("orgSettings:get"),
+    getCurrencyStatus: makeFunctionReference<"query", OrgScopedArgs, MobileOrgCurrencyStatus | null>("orgSettings:getCurrencyStatus"),
     upsert: makeFunctionReference<"mutation", OrgSettingsUpsertArgs, string>("orgSettings:upsert"),
     setCommissionMode: makeFunctionReference<"mutation", OrgSettingsSetCommissionModeArgs, string>("orgSettings:setCommissionMode"),
   },
@@ -3092,6 +3101,7 @@ export const api = {
   };
   orgSettings: {
     get: FunctionReference<"query", "public", OrgScopedArgs, MobileOrgSettings | null>;
+    getCurrencyStatus: FunctionReference<"query", "public", OrgScopedArgs, MobileOrgCurrencyStatus | null>;
     upsert: FunctionReference<"mutation", "public", OrgSettingsUpsertArgs, string>;
     setCommissionMode: FunctionReference<"mutation", "public", OrgSettingsSetCommissionModeArgs, string>;
   };

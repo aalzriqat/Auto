@@ -16,6 +16,7 @@ import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
+import { getOrgCurrency } from "./utils/orgCurrency";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { liveAppliedMinorForDeposit } from "./utils/depositApplications";
 import { requireFeature } from "./subscriptions";
@@ -61,15 +62,6 @@ async function getLatestRate(
 /** Display-only translation — books never convert. Scale shift keeps the result in the target currency's minor units. */
 function translateMinor(amountMinor: number, rate: number, fromCurrency: string, toCurrency: string): number {
   return Math.round(amountMinor * rate * Math.pow(10, scaleForCurrency(toCurrency) - scaleForCurrency(fromCurrency)));
-}
-
-/** Resolve the organization's display currency (defaults to JOD). */
-async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations">): Promise<string> {
-  const settings = await ctx.db
-    .query("orgSettings")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .unique();
-  return settings?.currency ?? "JOD";
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -195,7 +187,7 @@ export const trialBalance = query({
       .collect();
     const accountMap = new Map(accounts.map((a) => [a._id as string, a]));
 
-    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
     const totals = new Map<string, { accountId: string; currency: string; debitMinor: number; creditMinor: number }>();
     if (args.fromDate === undefined) {
@@ -306,7 +298,7 @@ export async function computeIncomeStatement(ctx: QueryCtx, args: {
       .collect();
 
     const lines = await getPostedLines(ctx, args.orgId, args.fromDate, args.toDate);
-    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
     const accountMap = new Map(accounts.map((a) => [a._id as string, a]));
     const totals = new Map<string, { accountId: string; currency: string; netMinor: number }>();
@@ -419,7 +411,7 @@ export const balanceSheet = query({
     // a bounded scan of just the containing period's own entries, instead of
     // collecting every journal line the org has ever posted.
     const balances = await getCumulativeBalancesAsOf(ctx, args.orgId, args.asOfDate);
-    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
     const accountMap = new Map(accounts.map((a) => [a._id as string, a]));
     const totals = new Map<string, { accountId: string; currency: string; netMinor: number }>();
@@ -823,7 +815,7 @@ export async function computeVehicleInventoryReconciliation(
   orgId: Id<"organizations">,
   toDate: number | undefined
 ): Promise<GlVsSubledgerResult> {
-  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const orgCurrency = await getOrgCurrency(ctx, orgId);
   const vehicles = await ctx.db
     .query("vehicles")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -1262,7 +1254,7 @@ export async function computeCustomerDepositsReconciliation(
   orgId: Id<"organizations">,
   toDate: number | undefined
 ): Promise<GlVsSubledgerResult> {
-  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const orgCurrency = await getOrgCurrency(ctx, orgId);
   // Every row that could still owe something. A HELD row usually does; an
   // APPLIED, REFUNDED or FORFEITED one can too, when only part of it went.
   // VOIDED rows never received money in the first place.
@@ -1543,7 +1535,7 @@ export async function computeCommissionRecognitionDivergence(
   noPeriodCount: number;
   currency: string;
 }> {
-  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const orgCurrency = await getOrgCurrency(ctx, orgId);
   const sales =
     provided?.sales ??
     (await ctx.db

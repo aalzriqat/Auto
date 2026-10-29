@@ -19,6 +19,7 @@ import { MessengerOnboarding } from "@/components/messages/MessengerOnboarding";
 import { GlobalSearchOnboarding } from "@/components/search/GlobalSearchOnboarding";
 import { WebsiteOnboarding } from "@/components/website/WebsiteOnboarding";
 import { FeatureSpotlight } from "@/components/layout/FeatureSpotlight";
+import { CurrencyGate } from "@/components/layout/CurrencyGate";
 
 function DashboardWrapper({ children }: { children: React.ReactNode }) {
   // OrgProvider sets activeOrgId optimistically to the URL orgId while Convex
@@ -60,7 +61,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
           <ImpersonationBanner />
           <TopNav />
           <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8 relative pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-8">
-            {children}
+            <CurrencyGate>{children}</CurrencyGate>
           </main>
         </div>
         <Toaster />

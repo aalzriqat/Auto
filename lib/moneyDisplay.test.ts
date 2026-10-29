@@ -180,3 +180,21 @@ function walk(dir: string): string[] {
     return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
   });
 }
+
+
+describe("the scale of a currency is never guessed (SCRUM-85, owner ruling SCRUM-760 c23812 ruling 9)", () => {
+  test("a well-formed code that no ISO 4217 table lists has no scale and throws instead of answering 2", () => {
+    expect(() => moneyDisplayScale("XYZ")).toThrow(/Unrecognised currency code "XYZ"/);
+    expect(() => moneyDisplayScale("")).toThrow(/Unrecognised currency code/);
+    expect(() => moneyDisplayScale("NOTACODE")).toThrow(/Unrecognised currency code/);
+  });
+
+  test("a currency outside AutoFlow's own table takes the platform's ISO 4217 scale", () => {
+    expect(moneyDisplayScale("CLP")).toBe(0);
+    expect(moneyDisplayScale("chf")).toBe(2);
+  });
+
+  test("formatting an unrecognised code throws instead of printing a two-decimal figure", () => {
+    expect(() => formatMoneyDisplay(10, "XYZ", "en")).toThrow(/Unrecognised currency code/);
+  });
+});

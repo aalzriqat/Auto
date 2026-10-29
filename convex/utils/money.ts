@@ -1,6 +1,47 @@
 import { ConvexError } from "convex/values";
+import { AppErrorCode, throwAppError } from "./errors";
 
 export type CurrencyScale = 0 | 2 | 3;
+
+/**
+ * The refusal text when an organization has no stored currency. The English must
+ * equal `ServerError_CURRENCY_NOT_CONFIGURED` in lib/i18n/domains/common.ts.
+ */
+export const CURRENCY_NOT_CONFIGURED_MESSAGE =
+  "This organization has no currency configured, so no amount can be recorded or shown. The owner must choose the organization currency in Settings first. Nothing has been changed.";
+
+/**
+ * The currency an organization STORED, or null when it stored none.
+ *
+ * SCRUM-85 (SCRUM-760 c23812 ruling 9, owner 2026-10-28): "Currency code and scale
+ * must never be defaulted." There is deliberately no fallback here. A missing
+ * `orgSettings` row, a row created for some other setting that carries no
+ * currency, and a blank string all mean the same thing: the owner has not chosen
+ * one. The value is returned exactly as stored (no case folding) so a stored code
+ * that AutoFlow cannot vouch for still fails closed downstream in
+ * `scaleForCurrency` instead of being quietly corrected.
+ */
+export function configuredCurrencyOf(
+  settings: { currency?: string | null | undefined } | null | undefined
+): string | null {
+  const currency = settings?.currency;
+  if (typeof currency !== "string" || currency.trim() === "") return null;
+  return currency;
+}
+
+/**
+ * The stored currency, or a typed refusal. Use on every path that computes,
+ * posts or returns an amount from the organization's currency.
+ */
+export function requireConfiguredCurrency(
+  settings: { currency?: string | null | undefined } | null | undefined
+): string {
+  const currency = configuredCurrencyOf(settings);
+  if (currency === null) {
+    throwAppError(AppErrorCode.CURRENCY_NOT_CONFIGURED, CURRENCY_NOT_CONFIGURED_MESSAGE);
+  }
+  return currency;
+}
 
 const CURRENCY_SCALES: Record<string, CurrencyScale> = {
   JOD: 3,
@@ -20,16 +61,15 @@ const CURRENCY_SCALES: Record<string, CurrencyScale> = {
 /**
  * The scale AutoFlow can actually vouch for, or null when it cannot.
  *
- * `scaleForCurrency` below answers 2 for anything unrecognised, which is the
- * right behaviour for display and arithmetic that must not crash — but it is a
- * GUESS, and a guess is unacceptable where a wrong scale changes a figure by an
- * order of magnitude. `economicsCurrency` is a free string in the schema, so a
- * typo or a raw-edited value like "JD" reaches this code: JOD is scale 3, the
- * fallback would call it 2, and 11,500,000 fils would render as 115,000 on the
- * screen that seals a deal permanently.
+ * `scaleForCurrency` below THROWS for anything unrecognised (SCRUM-85: it no
+ * longer answers 2). The scale comes from the ISO 4217 minor-unit table
+ * (CURRENCY_SCALES): JOD/KWD/BHD/OMR are 3, JPY is 0, the rest 2. Never from a
+ * guess — `economicsCurrency` is a free string in the schema, so a typo or a
+ * raw-edited value like "JD" reaches this code, and a guessed 2 would render
+ * 11,500,000 fils as 115,000 on the screen that seals a deal permanently.
  *
- * Callers that seal or display money irreversibly use THIS one and fail closed
- * on null.
+ * Callers that need to REFUSE rather than throw a bare error (a screen, a
+ * handover) use THIS one and fail closed on null.
  */
 export function supportedCurrencyScale(
   currency: string | null | undefined
@@ -108,6 +148,30 @@ export function assertSupportedDenomination(
       `This deal's economics are recorded in "${currency}", which AutoFlow cannot use as a currency, so ${action} would scale the amount by a guess or fail later with the deal already sealed. Restate the deal in a supported currency first.`
     );
   }
+}
+
+/**
+ * The refusal text when a deal has no usable `economicsCurrency`. The English must equal
+ * `ServerError_DEAL_CURRENCY_UNSUPPORTED` in lib/i18n/domains/common.ts. It names no code and no amount.
+ */
+export const DEAL_CURRENCY_UNSUPPORTED_MESSAGE =
+  "This deal has no supported currency recorded, so the company's payment to the supplier cannot be recorded or amended. Nothing has been changed. Ask an administrator to restate the deal in a supported currency first.";
+
+/**
+ * The deal's own denomination, or a typed refusal. For money-write doors that store a minor-unit amount
+ * for a deal (SCRUM-85 c23823).
+ *
+ * Stricter than `assertSupportedDenomination`, which lets ABSENT through because the economics writers
+ * fill it in. A door that records an amount against an EXISTING deal has no writer left to fill it, and the
+ * organization's current currency is NOT a safe fallback: the org can change currency after the deal's
+ * figures were recorded. So absent, unrecognised ("JD") and non-canonical ("jod", "") are all refused.
+ */
+export function requireSupportedDealCurrency(currency: string | undefined): string {
+  const denomination = denominationOf(currency);
+  if (denomination === null) {
+    throwAppError(AppErrorCode.DEAL_CURRENCY_UNSUPPORTED, DEAL_CURRENCY_UNSUPPORTED_MESSAGE);
+  }
+  return denomination.code;
 }
 
 export function scaleForCurrency(currency: string): CurrencyScale {

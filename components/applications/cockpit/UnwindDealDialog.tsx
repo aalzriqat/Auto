@@ -391,10 +391,12 @@ function FinishStep({
   const [customerRefundReference, setCustomerRefundReference] = useState("");
   const [customerRefundDate, setCustomerRefundDate] = useState(economicTodayDateInput());
   const customerReceiptMinor = status.evidence?.customerReceiptMinor ?? 0;
-  const refundAmount = parseTypedAmount(
-    customerRefundAmount,
-    moneyDisplayScale(status.evidence?.customerReceiptCurrency || "JOD")
-  ).minor;
+  // SCRUM-85: the receipts' own currency; with none stated there is no scale to parse in.
+  const customerReceiptCurrency = status.evidence?.customerReceiptCurrency || null;
+  const refundAmount =
+    customerReceiptCurrency === null
+      ? null
+      : parseTypedAmount(customerRefundAmount, moneyDisplayScale(customerReceiptCurrency)).minor;
   // SCRUM-724 / SCRUM-795 c22479 + Sol Q7: the server decides whether a customer payout exists at all
   // (pilot switch + the viewer's MANAGE_FINANCE). Absent (an older backend) means unavailable.
   const customerPayoutAvailable = status.evidence?.customerPayoutAvailable === true;

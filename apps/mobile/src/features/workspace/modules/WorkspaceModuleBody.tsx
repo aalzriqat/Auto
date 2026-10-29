@@ -41,7 +41,7 @@ import { MarketplaceSettingsModule } from "./marketplaceSettings";
 import { FeedbackModule } from "./feedback";
 import { BillingModule } from "./billing";
 import { SettingsModule } from "./settings";
-import { firstAvailableOrg, ModuleHeader, ModuleSwitcherBar } from "./moduleShared";
+import { firstAvailableOrg, ModuleHeader, ModuleSwitcherBar, useSyncActiveOrgCurrency } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
 function ModuleBody({
@@ -141,6 +141,8 @@ export function WorkspaceModuleScreen({
   const myMembership = useQuery(api.memberships.getMyMembership, canQuery && orgId ? { orgId } : "skip");
   const moduleDefinition = useMemo(() => getNativeModule(moduleId), [moduleId]);
   const selectedOrg = firstAvailableOrg(orgs).find((org) => org._id === orgId) ?? null;
+  // SCRUM-85: every `money()` below formats in the organization's stored currency.
+  useSyncActiveOrgCurrency(orgId, canQuery);
 
   useEffect(() => {
     if (isLoaded && !isSignedIn) {

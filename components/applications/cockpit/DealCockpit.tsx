@@ -9,15 +9,23 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { requireStoredCurrencyCode } from "@/lib/storedCurrency";
+import { RequireOrgCurrency } from "@/components/layout/RequireOrgCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
+import { denominationOf } from "@/convex/utils/money";
 
-function safeScaleForCurrency(currency: string | null | undefined, fallback = 2): number {
-  if (!currency) return fallback;
-  try {
-    return scaleForCurrency(currency);
-  } catch {
-    return fallback;
-  }
+/**
+ * The scale of a currency AutoFlow can vouch for, or null.
+ *
+ * SCRUM-85 (SCRUM-760 c23812 ruling 9; SCRUM-85 c23823): "Currency code and scale must never be
+ * defaulted." This replaces `safeScaleForCurrency(currency, 2)`, which answered 2 for an absent or
+ * unrecognised code and so converted typed amounts to minor units by a guess. It applies the same
+ * canonical rule the server doors assert (`denominationOf`): "JD", "jod" and "" are all null. A caller
+ * that would turn a typed amount into minor units must refuse on null and send nothing.
+ */
+function strictScaleOf(currency: string | null | undefined): number | null {
+  const denomination = denominationOf(currency ?? undefined);
+  return denomination === null ? null : denomination.scale;
 }
 import {
   DISBURSEMENT_DENOMINATION_REASON,
@@ -817,7 +825,16 @@ export type { DealCockpitData } from "./DealStagePresentation";
  * and a component welded to `useQuery` can only be checked against whatever
  * happens to be in a deployment.
  */
-export function DealCockpit({
+/** The cockpit reads money in the org's stored currency; without one it shows the not-configured panel (SCRUM-85). */
+export function DealCockpit(props: Readonly<React.ComponentProps<typeof DealCockpitContent>>) {
+  return (
+    <RequireOrgCurrency>
+      <DealCockpitContent {...props} />
+    </RequireOrgCurrency>
+  );
+}
+
+function DealCockpitContent({
   orgId,
   applicationId,
   canonicalizeUrl = true,
@@ -1186,8 +1203,9 @@ export function DealCockpit({
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
   const orgCurrency = useCurrency();
+  const orgCode = requireStoredCurrencyCode(orgCurrency.code);
   const currencyMarker = (cur: string) => {
-    if (cur === orgCurrency.code) {
+    if (cur === orgCode) {
       if (locale === "ar") {
         return orgCurrency.symbol ?? (cur === "JOD" ? "د.أ" : orgCurrency.displayLabel);
       }
@@ -1435,11 +1453,24 @@ export function DealCockpit({
   // currency, not the org's current one; the customer's principal is read at
   // the org scale, as the dialog reads it. Absent means the row predates the
   // field, and the org's currency is then the only reading available.
-  const orgScale = safeScaleForCurrency(orgCurrency.code, 2);
+  const orgScale = scaleForCurrency(orgCode);
   const orgFactor = Math.pow(10, orgScale);
-  const economicsCurrencyCode = app?.economicsCurrency ?? orgCurrency.code;
-  const economicsScale = safeScaleForCurrency(economicsCurrencyCode, 2);
-  const economicsFactor = Math.pow(10, economicsScale);
+  const economicsCurrencyCode = app?.economicsCurrency ?? orgCode;
+  // MONEY INPUT (SCRUM-85 c23823): the factor a typed amount is converted to minor units by. It is the
+  // deal's OWN pinned currency, strictly: absent, unrecognised and non-canonical are all null, and every
+  // input that would use it refuses and sends nothing. The org's current currency is not a fallback —
+  // the org can change currency after the deal's figures were recorded.
+  const economicsInputScale = strictScaleOf(app?.economicsCurrency);
+  const economicsFactor = economicsInputScale === null ? null : Math.pow(10, economicsInputScale);
+  // DISPLAY ONLY: how recorded minor units are spelled on this screen. An absent pin keeps reading as the
+  // org currency, labelled with its code (legacy rows; the label says which currency the figure is in),
+  // and an unrecognised pin is withheld ("—") instead of being spelled at a guessed scale of 2. Nothing
+  // typed is ever converted by this factor.
+  const economicsDisplayScale = app?.economicsCurrency === undefined ? orgScale : strictScaleOf(app?.economicsCurrency);
+  const economicsDisplayFactor = economicsDisplayScale === null ? null : Math.pow(10, economicsDisplayScale);
+  // The deal currency the supplier-advice doors need (record and amend): refused server-side when absent
+  // or unsupported, so the screen withholds the action and says why instead of offering a dead button.
+  const supplierAdviceCurrencyBlocked = app != null && economicsInputScale === null;
   /**
    * What the finance company actually owes the dealership — the figure
    * `confirmDisbursement` compares against.
@@ -1463,9 +1494,16 @@ export function DealCockpit({
   const settlesDirectToSupplier =
     isConsignedDeal && app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER";
   const supplierName = app?.vehicle?.sourcedFromName ?? undefined;
+  /** The strict scale, or a localized refusal. Only reachable from a form the screen has already gated. */
+  const requireScaleOf = (currency: string): number => {
+    const scale = strictScaleOf(currency);
+    if (scale === null) throw new Error(t("ServerError_DEAL_CURRENCY_UNSUPPORTED"));
+    return scale;
+  };
   const formatEconomics = (minor: number) => {
-    return `${formatMinorAmount(minor, economicsFactor)} ${
-      economicsCurrencyCode === orgCurrency.code ? currencyMarker(economicsCurrencyCode) : economicsCurrencyCode
+    if (economicsDisplayFactor === null) return "—";
+    return `${formatMinorAmount(minor, economicsDisplayFactor)} ${
+      economicsCurrencyCode === orgCode ? currencyMarker(economicsCurrencyCode) : economicsCurrencyCode
     }`;
   };
   /**
@@ -1481,12 +1519,12 @@ export function DealCockpit({
           financierName: deal?.financeCompanyName || null,
           currency: economicsCurrencyCode,
           vehiclePrice:
-            app.targetSellingAmountMinor !== undefined
-              ? app.targetSellingAmountMinor / economicsFactor
+            app.targetSellingAmountMinor !== undefined && economicsDisplayFactor !== null
+              ? app.targetSellingAmountMinor / economicsDisplayFactor
               : app.quote.vehiclePrice,
           downPayment:
-            app.customerFirstPaymentMinor !== undefined
-              ? app.customerFirstPaymentMinor / economicsFactor
+            app.customerFirstPaymentMinor !== undefined && economicsDisplayFactor !== null
+              ? app.customerFirstPaymentMinor / economicsDisplayFactor
               : app.quote.downPayment,
           termMonths: app.quote.termMonths,
           monthlyInstallment: app.quote.monthlyInstallment,
@@ -1606,15 +1644,24 @@ export function DealCockpit({
           // for its own writers (pin, else the org's verified currency, which
           // the first cost fixes — SCRUM-319). Not derived client-side.
           denomination: { code: dealCosts?.currency ?? economicsCurrencyCode },
-          scaleOf: (cur: string) => safeScaleForCurrency(cur, 2),
-          money: (minor: number, currency: string) =>
-            `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${
-              currency === orgCurrency.code ? currencyMarker(currency) : currency
-            }`,
+          // Strict (SCRUM-85): `canManage` below is false while this deal's currency is unusable, so no
+          // form that converts a typed amount is mounted and this throw is not reachable from the UI.
+          scaleOf: requireScaleOf,
+          money: (minor: number, currency: string) => {
+            const scale = strictScaleOf(currency);
+            return scale === null
+              ? "—"
+              : `${formatMinorAmount(minor, Math.pow(10, scale))} ${
+                  currency === orgCode ? currencyMarker(currency) : currency
+                }`;
+          },
           // Frozen once the sale is recognized (`economicsFrozen`): the server
           // refuses every posting-bearing edit, so none is offered, and the
           // panel says why at its head.
-          canManage: canCreateApplication && !(dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED"),
+          canManage:
+            canCreateApplication &&
+            !(dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED") &&
+            strictScaleOf(dealCosts?.currency ?? economicsCurrencyCode) !== null,
           dealClosed: dealCosts?.economicsFrozen?.frozen ?? app.status === "CLOSED",
           // Where a new handover cost's cash comes from — always an employee's
           // custody (owner ruling 2026-09-28, SCRUM-439). A record counts
@@ -1886,9 +1933,10 @@ export function DealCockpit({
         }
       : undefined;
   const formatPlanMajor = (major: number, currency: string) => {
-    const scale = safeScaleForCurrency(currency, 2);
+    const scale = strictScaleOf(currency);
+    if (scale === null) return "—";
     return `${formatMoneyAmount(major, currency, scale)} ${
-      currency === orgCurrency.code ? currencyMarker(currency) : currency
+      currency === orgCode ? currencyMarker(currency) : currency
     }`;
   };
   /**
@@ -1914,7 +1962,7 @@ export function DealCockpit({
    * that receipt, and the one refusal left on it is an unrecognised pin.
    */
   const finalizeDenominationBlock = app
-    ? finalizeDenominationRefusal(app.economicsCurrency, orgCurrency.code)
+    ? finalizeDenominationRefusal(app.economicsCurrency, orgCode)
     : undefined;
   const disbursementDenominationBlock =
     app?.companyId && !settlesDirectToSupplier
@@ -1929,9 +1977,9 @@ export function DealCockpit({
     finalizeDenominationBlock && app
       ? {
           recordedLabel: t("RecordedEconomicsCurrency"),
-          recordedAmount: app.economicsCurrency ?? orgCurrency.code,
+          recordedAmount: app.economicsCurrency ?? orgCode,
           orgLabel: t("OrganisationCurrencyLabel"),
-          orgCurrency: orgCurrency.code,
+          orgCurrency: orgCode,
         }
       : undefined;
   const disbursementDenominationDetail = disbursementDenominationBlock
@@ -1939,7 +1987,7 @@ export function DealCockpit({
         recordedLabel: t("RecordedSettlementAmount"),
         recordedAmount: expectedDisbursementLabel,
         orgLabel: t("OrganisationCurrencyLabel"),
-        orgCurrency: orgCurrency.code,
+        orgCurrency: orgCode,
       }
     : undefined;
   // The route is a decision about a deal that has not posted yet; once it
@@ -1994,6 +2042,7 @@ export function DealCockpit({
     app.status === "CLOSED" &&
     settlesDirectToSupplier &&
     app.canSettleDirectToSupplier &&
+    !supplierAdviceCurrencyBlocked &&
     !app.supplierDisbursementStatus;
   // Mirror the backend permission tiers exactly.
   // SCRUM-413: a CLOSED deal is reversed with CANCEL_CLOSED_DEAL alone (no
@@ -2424,11 +2473,17 @@ export function DealCockpit({
           stageKey: "DISBURSEMENT",
           actionKey: "ConfirmSupplierDisbursement",
           onStart: () => setConfirmingSupplierDisbursement(true),
-          unavailableReasonKey: disbursementUnavailableReason(
-            canConfirmSupplierDisbursement,
-            canConfirmFinanceDisbursement,
-            "SupplierDisbursementUnavailable"
-          ),
+          // SCRUM-85 c23823: the advice is a minor-unit amount in the deal's own currency, and the
+          // server refuses it when that is absent or unsupported. Named before permission, because
+          // it is a fact about the deal that no caller can act on from here.
+          unavailableReasonKey:
+            supplierAdviceCurrencyBlocked && !app.supplierDisbursementStatus
+              ? "ServerError_DEAL_CURRENCY_UNSUPPORTED"
+              : disbursementUnavailableReason(
+                  canConfirmSupplierDisbursement,
+                  canConfirmFinanceDisbursement,
+                  "SupplierDisbursementUnavailable"
+                ),
         };
       }
       // A cheque state the server refuses is a fact about the deal, named
@@ -2926,10 +2981,14 @@ export function DealCockpit({
    * second payment, while a dialog opened again later for the same figures
    * is a new command rather than a silent replay of the first.
    */
-  const custodyMoney = (minor: number, currency: string) =>
-    `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${
-      currency === orgCurrency.code ? currencyMarker(currency) : currency
-    }`;
+  const custodyMoney = (minor: number, currency: string) => {
+    const scale = strictScaleOf(currency);
+    return scale === null
+      ? "—"
+      : `${formatMinorAmount(minor, Math.pow(10, scale))} ${
+          currency === orgCode ? currencyMarker(currency) : currency
+        }`;
+  };
   // One intent per dialog attempt. The deal, record and kind are named for
   // legibility only; the attempt's `intentId` is what makes it one command.
   const openCustodyIntent = (intentId: string) => `open-custody:${applicationId}:${intentId}`;
@@ -2968,7 +3027,9 @@ export function DealCockpit({
               actualAmountMinor: fee.actualAmountMinor as number,
               currency: fee.currency,
             })),
-          scaleOf: (cur: string) => safeScaleForCurrency(cur, 3),
+          // SCRUM-85: null for a currency whose scale is unknown; the custody panel then offers no
+          // money command and says why, rather than reading the amount under a guessed scale.
+          scaleOf: strictScaleOf,
           onPlan: (values) =>
             custodyPlain(() =>
               planCustodyHandler({
@@ -3744,11 +3805,17 @@ export function DealCockpit({
                     ? formatEconomics(app.approvedDealerPurchaseAmountMinor)
                     : t("NotRecorded"),
                 defaultAmountMajor:
-                  app.approvedDealerPurchaseAmountMinor !== undefined
+                  app.approvedDealerPurchaseAmountMinor !== undefined && economicsFactor !== null
                     ? app.approvedDealerPurchaseAmountMinor / economicsFactor
                     : undefined,
                 onOpenChange: setConfirmingSupplierDisbursement,
                 onConfirm: async (advice) => {
+                  // SCRUM-85 c23823: never convert the typed amount by a guessed scale. With no usable
+                  // deal currency the localized refusal is shown and NOTHING is sent (no key is minted).
+                  if (economicsFactor === null) {
+                    toast.error(t("ServerError_DEAL_CURRENCY_UNSUPPORTED"));
+                    return;
+                  }
                   setDisbursementSubmitting(true);
                   const generation = confirmGenerationRef.current;
                   const superseded = () => confirmGenerationRef.current !== generation;
@@ -3983,6 +4050,14 @@ export function DealCockpit({
       documentsActionable={!permissionsLoading && documentsStepReason === undefined}
       recordedFeedback={{ recorded: recordedFeedback, track: trackRecorded, onDismiss: clearRecorded }}
       onCorrectSettlementAdvice={async (correction) => {
+        // SCRUM-85 c23823: the scale comes from a currency the server pinned on this deal, and must be a
+        // canonical supported one (the same rule `amendSupplierDisbursementAdvice` asserts). With none
+        // there is no scale to convert the typed amount by, so the localized refusal is shown and nothing
+        // is sent — never JOD's scale, never a bare scale error.
+        const adviceCurrency =
+          deal?.settlementAdviceDiscrepancy?.currency ?? deal?.money?.currency;
+        const adviceScale = strictScaleOf(adviceCurrency);
+        if (adviceScale === null) throw new Error(t("ServerError_DEAL_CURRENCY_UNSUPPORTED"));
         correctionKeyRef.current ??= `amend-supplier-advice:${crypto.randomUUID()}`;
         await amendAdvice({
           orgId,
@@ -3992,13 +4067,7 @@ export function DealCockpit({
           // reason this deal is flagged is a disagreement about an amount, and
           // rescaling it on the way in would manufacture a second one.
           disbursedAmountMinor: Math.round(
-            correction.amountMajor *
-              Math.pow(
-                10,
-                scaleForCurrency(
-                  deal?.settlementAdviceDiscrepancy?.currency ?? deal?.money?.currency ?? "JOD"
-                )
-              )
+            correction.amountMajor * Math.pow(10, adviceScale)
           ),
           reference: correction.reference,
           // Distinct from omitting it. An emptied field used to arrive as
@@ -4085,13 +4154,13 @@ export function DealCockpit({
           }}
         />
       )}
-      {recordingLegalInvoice && (
+      {recordingLegalInvoice && strictScaleOf(dealCosts?.currency ?? orgCode) !== null && (
         <RecordLegalInvoiceDialog
           open={recordingLegalInvoice}
           submitting={legalInvoiceSubmitting}
           error={legalInvoiceError}
-          scale={scaleForCurrency(dealCosts?.currency ?? orgCurrency.code)}
-          currency={dealCosts?.currency ?? orgCurrency.code}
+          scale={requireScaleOf(dealCosts?.currency ?? orgCode)}
+          currency={dealCosts?.currency ?? orgCode}
           vehicleIsConsigned={isConsignedDeal}
           existing={
             dealCosts?.legalInvoiceAmountMinor !== undefined
@@ -5817,10 +5886,14 @@ export function DealCockpitView({
         true;
   const denominationUnusable = hasDenominationProjection && denomination === null && economicsRecorded;
   const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
-  const factor = useMemo(
-    () => Math.pow(10, denomination?.scale ?? safeScaleForCurrency(dealCurrency, 2)),
-    [denomination, dealCurrency]
-  );
+  // SCRUM-85: the deal's scale, or null when it cannot be vouched for. NEVER a guessed 2: the served
+  // denomination wins; without one, only a canonical supported code is read (a deal with nothing recorded
+  // yet reads the org's code); an unusable denomination on a recorded deal is null.
+  const factor = useMemo(() => {
+    if (denominationUnusable) return null;
+    const scale = denomination?.scale ?? strictScaleOf(dealCurrency);
+    return scale === null ? null : Math.pow(10, scale);
+  }, [denomination, dealCurrency, denominationUnusable]);
   // A SHORT currency marker, and a locale-appropriate one.
   //
   // `currency.format` renders "دينار اردني" in Arabic, which on a screen
@@ -5834,7 +5907,7 @@ export function DealCockpitView({
   // a different one it would label the amount as something it is not.
   const marker =
     locale === "ar" && dealCurrency === currency.code ? currency.symbol : dealCurrency;
-  const money = (minor: number) => `${formatMinorAmount(minor, factor)} ${marker}`;
+  const money = (minor: number) => (factor === null ? "—" : `${formatMinorAmount(minor, factor)} ${marker}`);
 
   // The discrepancy's own figures.
   //
@@ -5845,34 +5918,22 @@ export function DealCockpitView({
   // about the scale. A missing figure renders as unknown rather than as zero —
   // "the advice says nothing" and "the advice says nought" are different
   // claims, and only one of them is ever true here.
-  // DELIBERATELY still the guessing scaler. See SCRUM-88 before changing it.
-  //
-  // This strip does render a legacy "JD" row at the wrong scale, and an earlier
-  // revision of this PR tried to fix that here by switching to the strict
-  // `denominationOf`. That made things worse, not better: this same factor
-  // prefills the EDITABLE amount in `SettlementAdviceCorrectionDialog` below,
-  // while the submit path converts back with `scaleForCurrency`. Making only
-  // the display side strict left the two disagreeing, so an operator opening
-  // the dialog to correct a reference and submitting without touching the
-  // amount persisted 100x the recorded figure over the advice and its audit
-  // row. A display fault became a write corruption.
-  //
-  // The two sides have to move together — display, prefill, submit and a
-  // server-side denomination guard on the amend mutation, which currently takes
-  // no currency argument and so cannot check one. That is a change to a shipped
-  // financial correction flow, not a hunk in a release-verification pass, and
-  // it is tracked separately. Keeping main's behavior here is the smaller risk:
-  // wrong on screen, but internally consistent, and it round-trips exactly.
+  // SCRUM-85 c23823: STRICT, and all four sides now move together — display, prefill, submit
+  // (`onCorrectSettlementAdvice` converts with the same canonical rule) and the server-side guard on
+  // `amendSupplierDisbursementAdvice`. This used to be the guessing scaler (SCRUM-88), kept only because
+  // switching the display side alone would have prefilled a 100x amount that the submit path then
+  // persisted. Now an unusable currency withholds the figures ("—"), leaves the prefill blank, and the
+  // submit refuses with the localized reason; nothing is scaled by a guess anywhere on this path.
   const discrepancy = deal?.settlementAdviceDiscrepancy ?? null;
   const discrepancyCurrency = discrepancy?.currency ?? dealCurrency;
-  const discrepancyFactor = useMemo(
-    () => Math.pow(10, safeScaleForCurrency(discrepancyCurrency, 2)),
-    [discrepancyCurrency]
-  );
+  const discrepancyFactor = useMemo(() => {
+    const scale = strictScaleOf(discrepancyCurrency);
+    return scale === null ? null : Math.pow(10, scale);
+  }, [discrepancyCurrency]);
   const discrepancyMarker =
     locale === "ar" && discrepancyCurrency === currency.code ? currency.symbol : discrepancyCurrency;
   const discrepancyMoney = (minor: number) =>
-    `${formatMinorAmount(minor, discrepancyFactor)} ${discrepancyMarker}`;
+    discrepancyFactor === null ? "—" : `${formatMinorAmount(minor, discrepancyFactor)} ${discrepancyMarker}`;
 
   // The economics block is denominated in the APPLICATION's pinned currency,
   // which the money block need not even be present to establish — a MANAGER
@@ -5880,10 +5941,12 @@ export function DealCockpitView({
   // deal's and then the org's mirrors what the server does rather than
   // rescaling a JOD figure at a USD scale.
   const decisionCurrency = financeDecision?.currency ?? dealCurrency;
-  const decisionFactor = useMemo(
-    () => Math.pow(10, safeScaleForCurrency(decisionCurrency, 2)),
-    [decisionCurrency]
-  );
+  // SCRUM-85: STRICT. Null (an unusable currency) withholds the figures and unmounts the dialogs that
+  // convert a typed amount by it, rather than scaling by a guessed 2.
+  const decisionFactor = useMemo(() => {
+    const scale = strictScaleOf(decisionCurrency);
+    return scale === null ? null : Math.pow(10, scale);
+  }, [decisionCurrency]);
   const decisionMarker =
     locale === "ar" && decisionCurrency === currency.code ? currency.symbol : decisionCurrency;
   /**
@@ -5914,7 +5977,7 @@ export function DealCockpitView({
   // Withheld outright rather than approximated: a figure the operator cannot
   // tell is wrong is worse than a visible blank beside the restatement notice.
   const decisionMoney = (minor: number) =>
-    denominationUnusable
+    denominationUnusable || decisionFactor === null
       ? "—"
       : `${formatMinorAmount(minor, decisionFactor)} ${decisionMarker}`;
   const adviceRecordedLabel =
@@ -6495,7 +6558,7 @@ export function DealCockpitView({
             setReopeningApproval(true);
           }}
         />
-      {financeDecision.customerPayment && (
+      {financeDecision.customerPayment && decisionFactor !== null && (
         <CustomerFinanceCompanyPaymentCard
           {...financeDecision.customerPayment}
           factor={decisionFactor}
@@ -7511,7 +7574,7 @@ export function DealCockpitView({
       {/* Mounted only while the action is offered: losing authority or the
           settle-able state UNMOUNTS an open dialog rather than leaving a form
           whose submit the server will refuse. */}
-      {supplierRow && canSettleSupplier && (
+      {supplierRow && canSettleSupplier && factor !== null && (
         <SupplierSettlementDialog
           open={settlingSupplier}
           submitting={submitting}
@@ -7525,7 +7588,7 @@ export function DealCockpitView({
         />
       )}
 
-      {financeDecision && (
+      {financeDecision && decisionFactor !== null && !denominationUnusable && (
         <>
           <RecordSubmittedQuotationDialog
             open={recordingQuotation}
@@ -7598,7 +7661,7 @@ export function DealCockpitView({
           derives it, because a locally computed gap could disagree with the one
           the mutation reconciles against and reject the operator's arithmetic
           for being right. */}
-      {gapResolution && typeof deal?.money?.shortfall?.totalMinor === "number" && (
+      {gapResolution && factor !== null && typeof deal?.money?.shortfall?.totalMinor === "number" && (
         <ResolveGapDialog
           open={gapResolution.resolving}
           submitting={gapResolution.submitting}
@@ -7812,7 +7875,9 @@ export function DealCockpitView({
           submitting={correctionSubmitting}
           recordedMajor={
             discrepancy.recordedMinor != null
-              ? discrepancy.recordedMinor / discrepancyFactor
+              ? discrepancyFactor === null
+                ? null
+                : discrepancy.recordedMinor / discrepancyFactor
               : null
           }
           recordedReference={discrepancy.recordedReference ?? null}

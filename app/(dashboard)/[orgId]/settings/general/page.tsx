@@ -56,7 +56,9 @@ export default function GeneralSettingsPage() {
   const generateLogoUploadUrl = useMutation(api.orgSettings.generateLogoUploadUrl);
 
   // General tab state
-  const [currency, setCurrency] = useState("JOD");
+  // SCRUM-85: empty until the stored currency loads or the owner picks one. Saving
+  // other fields never chooses a currency for the organization.
+  const [currency, setCurrency] = useState("");
   const [country, setCountry] = useState("");
   const [vatRate, setVatRate] = useState("");
   const [timezone, setTimezone] = useState("");
@@ -84,7 +86,7 @@ export default function GeneralSettingsPage() {
   // Sync state from loaded settings
   useEffect(() => {
     if (settings) {
-      setCurrency(settings.currency ?? "JOD");
+      setCurrency(settings.currency ?? "");
       setCountry(settings.country ?? "");
       setVatRate(settings.vatRate !== undefined ? String(settings.vatRate) : "");
       setTimezone(settings.timezone ?? "");
@@ -116,8 +118,8 @@ export default function GeneralSettingsPage() {
       const selectedCurrency = CURRENCIES.find((c) => c.code === currency);
       await upsert({
         orgId: activeOrgId,
-        currency,
-        currencySymbol: selectedCurrency?.symbol ?? "د.أ",
+        currency: currency || undefined,
+        currencySymbol: currency ? selectedCurrency?.symbol : undefined,
         country: country || undefined,
         vatRate: vatRate ? parseFloat(vatRate) : undefined,
         timezone: timezone || undefined,

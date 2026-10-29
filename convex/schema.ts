@@ -6123,8 +6123,15 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
 
   orgSettings: defineTable({
     orgId: v.id("organizations"),
-    currency: v.string(),
-    currencySymbol: v.string(),
+    // SCRUM-85 (owner ruling SCRUM-760 c23812, ruling 9): optional so that "the
+    // owner has not chosen a currency" is representable. Before this, the field
+    // was required, so every door that created a row for another setting had to
+    // invent a currency, and it invented JOD. Loosening a validator needs no data
+    // migration: every existing row already holds a string. Read these through
+    // `configuredCurrencyOf` / `requireConfiguredCurrency` (utils/money.ts), never
+    // with `?? "JOD"`.
+    currency: v.optional(v.string()),
+    currencySymbol: v.optional(v.string()),
     vatRate: v.optional(v.number()),
     country: v.optional(v.string()),
     timezone: v.optional(v.string()),

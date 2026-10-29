@@ -1,0 +1,45 @@
+{
+  "id": "confirm-supplier-payment-refuses-unrecognised-deal-currency-nothing-written",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.confirmSupplierDisbursement",
+      "input": {
+        "Current": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "confirm.refusalCode",
+      "value": "DEAL_CURRENCY_UNSUPPORTED"
+    },
+    {
+      "observable": "database.changedRows",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-85#c23823",
+      "digest": "07949892785cfd7f0f0250bd05c5eb9b4051669a54658aececa6834924286683"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum85SupplierDisbursementCurrency.test.ts",
+    "testName": "confirming a deal whose economicsCurrency is the unrecognised code JD is refused and writes nothing"
+  },
+  "matrixRow": "SCRUM85-currency-no-default",
+  "fingerprint": "cc484617ee5e0c2244fbb354c6749dc0cce65c12554b77281ae565525c54cd7c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum85-supplier-disbursement-currency",
+    "firstSeen": "2026-10-28"
+  }
+}

@@ -217,7 +217,7 @@ test.each(["FOREIGN_ORG", "SOURCE_DELETED", "CURRENCY_CHANGED", "RESET", "LOST_P
     const planId = await seed.owner.mutation(draft, seed.args);
     if (damage === "SOURCE_DELETED") await seed.t.run((ctx) => ctx.db.delete(seed.parent._id));
     if (damage === "CURRENCY_CHANGED") await seed.t.run(async (ctx) => {
-      const settings = await ctx.db.query("orgSettings").unique();
+      const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", seed.orgId)).unique();
       if (settings) await ctx.db.patch(settings._id, { currency: "USD" });
     });
     if (damage === "RESET") await seed.t.run((ctx) => ctx.db.patch(seed.orgId, { financialResetGeneration: 1, financialResetCompletedGeneration: 1 }));

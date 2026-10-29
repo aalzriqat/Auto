@@ -19,9 +19,9 @@ import { describe, expect, test, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { summarize } from "./accountingPreviewRehearsal.mjs";
+import * as rehearsalCases from "./accountingRehearsalCases.mjs";
 import {
   CURRENCY_SCALES,
-  DEFAULT_ORG_CURRENCY,
   assertBothAttemptsExecuted,
   candidateCommandNamesBank,
   candidateNamesReceiptBank,
@@ -582,7 +582,12 @@ function makeBackend(defects: Defects = {}) {
   const financeReceivables = new Map<string, Record<string, any>>();
   /** Per-organization currency setting (FD2 creates disposable orgs). null = no settings row. */
   const orgCurrency = new Map<string, string | null>([["org_1", defects.noOrgSettingsRow ? null : ORG_CURRENCY]]);
-  const effectiveCurrency = (orgId: string) => orgCurrency.get(orgId) ?? "JOD";
+  /** SCRUM-85: the product's getOrgCurrency has NO default; an org that never stored a currency is refused. */
+  const effectiveCurrency = (orgId: string): string => {
+    const stored = orgCurrency.get(orgId);
+    if (stored === null || stored === undefined) throw new Error("CURRENCY_NOT_CONFIGURED");
+    return stored;
+  };
   /** Deal cost lines and their CREATE identities (FD2). */
   const financeDealFees = new Map<string, Record<string, any>>();
   const feeByKey = new Map<string, { id: string; fingerprint: string }>();
@@ -1031,8 +1036,8 @@ function makeBackend(defects: Defects = {}) {
   ) => {
     switch (fnPath) {
       case "orgSettings:get":
-        // The product resolves the denomination from orgSettings, defaulting to
-        // JOD when no row exists; the fake exposes the explicit form.
+        // The product resolves the denomination from the STORED orgSettings currency only
+        // (SCRUM-85: no default); the fake exposes the explicit form, or null for a fresh org.
         {
           const current = orgCurrency.get(String(args.orgId));
           return { ok: true as const, value: current === null || current === undefined ? null : { orgId: args.orgId, currency: current } };
@@ -1529,7 +1534,7 @@ function makeBackend(defects: Defects = {}) {
       }
       case "orgSettings:upsert": {
         const orgId = String(args.orgId);
-        if (args.currency !== undefined && args.currency !== effectiveCurrency(orgId)) {
+        if (args.currency !== undefined && args.currency !== (orgCurrency.get(orgId) ?? null)) {
           // The lock: once a deal or a money fact exists the currency is
           // load-bearing. The SCRUM-319 gap was exactly that deals and their
           // cost lines were not on the list.
@@ -3120,22 +3125,38 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     for (const m of block[1].matchAll(/([A-Z]{3}):\s*(\d+)/g)) product[m[1]] = Number(m[2]);
     expect(Object.keys(product).length).toBeGreaterThan(5);
     expect(CURRENCY_SCALES).toEqual(product);
-    // and the default the product applies when an org never chose a currency
+    // SCRUM-85 (owner ruling SCRUM-760 c23812 ruling 9): the product has NO currency default. Pin that
+    // contract so a reintroduced fallback in the product OR the runner turns this red.
+    const orgCurrencySrc = fs.readFileSync(path.join(__dirname, "..", "convex", "utils", "orgCurrency.ts"), "utf8");
+    expect(orgCurrencySrc).toMatch(/return requireConfiguredCurrency\(settings\)/);
+    expect(orgCurrencySrc).not.toMatch(/\?\?\s*["'`][A-Za-z]{3}["'`]/);
+    expect(orgCurrencySrc).not.toMatch(/\|\|\s*["'`][A-Za-z]{3}["'`]/);
     const hooks = fs.readFileSync(path.join(__dirname, "..", "convex", "accounting", "workflowHooks.ts"), "utf8");
-    const def = hooks.match(/settings\?\.currency \?\? "([A-Z]{3})"/);
-    if (!def) throw new Error("getOrgCurrency default not found in workflowHooks.ts");
-    expect(DEFAULT_ORG_CURRENCY).toBe(def[1]);
+    expect(hooks).not.toMatch(/settings\??\.currency\s*(\?\?|\|\|)/);
+    // The runner must not carry a default of its own either.
+    expect("DEFAULT_ORG_CURRENCY" in rehearsalCases).toBe(false);
+    const runnerSrc = fs.readFileSync(path.join(__dirname, "accountingRehearsalCases.mjs"), "utf8");
+    expect(runnerSrc).not.toMatch(/DEFAULT_ORG_CURRENCY/);
+    expect(runnerSrc).not.toMatch(/product default/);
   });
 
-  test("a FRESH org with no settings row resolves to the product default and every money case still passes", async () => {
-    // The shape the cloud actually presents: the first run of this closure
-    // failed all four money cases because the runner read a field the org
-    // record does not carry. The product default is the contract.
+  test("a FRESH org with NO stored currency is never PASS: the product refuses, so the money cases are UNPROVEN", async () => {
+    // The product no longer invents a currency (getOrgCurrency refuses with CURRENCY_NOT_CONFIGURED), so
+    // the runner cannot derive an expected denomination and must not invent one either. Not a FAIL: the
+    // product's refusal is correct; the seeded precondition (an explicit currency) is what is missing.
     const results = await runAgainst({ noOrgSettingsRow: true });
+    for (const id of ["B1", "RC1", "RV1", "RT2"]) {
+      expect(statusOf(results, id)).toBe("UNPROVEN");
+      expect(detail(results, id)).toMatch(/has no stored currency/);
+      expect(detail(results, id)).toMatch(/CURRENCY_NOT_CONFIGURED/);
+    }
+  });
+
+  test("an org with an EXPLICIT stored currency still passes every money case", async () => {
+    const results = await runAgainst({});
     for (const id of ["B1", "RC1", "RV1", "RT2"]) expect(statusOf(results, id)).toBe("PASS");
     expect((results.find((r) => r.id === "B1")?.detail as any)?.journal?.currency).toBe("JOD");
   });
-
   test("an org whose currency the product does not denominate makes the money cases UNPROVEN, not PASS", async () => {
     const results = await runAgainst({ orgCurrencyUnknown: true });
     for (const id of ["B1", "RC1", "RV1", "RT2"]) expect(statusOf(results, id)).toBe("UNPROVEN");

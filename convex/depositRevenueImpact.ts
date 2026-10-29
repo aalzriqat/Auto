@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalQuery } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
+import { supportedCurrencyScale } from "./utils/money";
 
 /**
  * What correcting the back-book would move, measured and never touched.
@@ -42,9 +43,10 @@ export const depositRevenueImpact = internalQuery({
       ? [await ctx.db.get(args.orgId)].filter((o): o is Doc<"organizations"> => o !== null)
       : await ctx.db.query("organizations").collect();
 
-    const currencyScale = (c: string) =>
-      ["JOD", "KWD", "BHD", "OMR"].includes(c) ? 1000 : 100;
-    const fromMinor = (minor: number, scale: number) => minor / scale;
+    // SCRUM-85: the divisor comes from the ISO 4217 table in utils/money.ts, never
+    // from a local JOD-or-100 guess. A deposit whose currency is missing or not in
+    // that table is classified as unattributable below instead of being scaled.
+    const fromMinor = (minor: number, scaleDigits: number) => minor / Math.pow(10, scaleDigits);
     const round2 = (n: number) => Math.round(n * 1000) / 1000;
 
     const monthOf = (ts: number) => {
@@ -106,7 +108,6 @@ export const depositRevenueImpact = internalQuery({
         const depositId = tx.depositId;
         const deposit = depositId ? await ctx.db.get(depositId) : null;
         const depositMonth = monthOf(tx.date);
-        const scale = currencyScale(deposit?.currency ?? "JOD");
 
         // No deposits row behind it at all. Production has nine of these,
         // sharing a single import timestamp, with no status and no resolution
@@ -121,7 +122,8 @@ export const depositRevenueImpact = internalQuery({
         // slice through its surviving applications AND then counted again as
         // an orphan for the whole receipt — the same money in two classes, in
         // the one report the back-book migration decision rests on.
-        if (!deposit) {
+        const scale = deposit ? supportedCurrencyScale(deposit.currency) : null;
+        if (!deposit || scale === null) {
           orphanReceipts += 1;
           orphanAmount += tx.amount;
           rows.push({
@@ -132,7 +134,9 @@ export const depositRevenueImpact = internalQuery({
             saleMonth: null,
             state: "REQUIRES_RECONCILIATION",
             crossPeriod: false,
-            note: "UNATTRIBUTABLE_LEGACY_RECEIPT — no deposits row; not inferred, not corrected.",
+            note: deposit
+              ? "UNATTRIBUTABLE_LEGACY_RECEIPT — the deposit has no recognised currency, so its amounts cannot be scaled; not inferred, not corrected."
+              : "UNATTRIBUTABLE_LEGACY_RECEIPT — no deposits row; not inferred, not corrected.",
           });
           continue;
         }

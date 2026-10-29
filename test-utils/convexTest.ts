@@ -100,6 +100,71 @@ const AGGREGATE_COMPONENTS = [
   "bankAttributionByDate",
 ] as const;
 
+/**
+ * SCRUM-85 (owner ruling SCRUM-760 c23812, ruling 9): an organization's currency
+ * is never defaulted, so a money path refuses an organization whose settings
+ * hold none. Production organizations get theirs from onboarding. A fixture
+ * that creates a bare `organizations` row is a dealership that has not finished
+ * onboarding, which is not the subject of most suites.
+ *
+ * So, as onboarding does, every `organizations` row a test inserts through
+ * `t.run` is given an explicit, stored `orgSettings` row (JOD, the pilot
+ * dealership's currency, with the symbol and payment types the old implicit
+ * default carried). It is a real row the code under test reads, not a bypass:
+ * nothing in `convex/` consults the harness. A test that inserts its own
+ * `orgSettings` row for that organization replaces the seeded one instead of
+ * adding a second, so `.unique()` reads stay valid and its values win.
+ * `storedOrgCurrency: false` switches the seed off.
+ */
+function seedStoredOrgCurrency<Ctx extends { db: object }>(ctx: Ctx, seeded: Set<string>): Ctx {
+  type Db = {
+    insert: (table: string, doc: Record<string, unknown>) => Promise<string>;
+    delete: (id: string) => Promise<void>;
+    query: (table: string) => {
+      withIndex: (
+        name: string,
+        range: (q: { eq: (field: string, value: unknown) => unknown }) => unknown,
+      ) => { unique: () => Promise<{ _id: string } | null> };
+    };
+  };
+  const target = ctx.db as Db;
+  const db = new Proxy(target, {
+    get(obj, prop, receiver) {
+      if (prop !== "insert") {
+        const value = Reflect.get(obj, prop, receiver);
+        return typeof value === "function" ? value.bind(obj) : value;
+      }
+      return async (table: string, doc: Record<string, unknown>) => {
+        if (table === "orgSettings" && typeof doc.orgId === "string" && seeded.has(doc.orgId)) {
+          const orgId = doc.orgId;
+          const harnessRow = await obj
+            .query("orgSettings")
+            .withIndex("by_org", (q) => q.eq("orgId", orgId))
+            .unique();
+          if (harnessRow) await obj.delete(harnessRow._id);
+          seeded.delete(orgId);
+        }
+        const id = await obj.insert(table, doc);
+        if (table === "organizations") {
+          await obj.insert("orgSettings", {
+            orgId: id,
+            currency: "JOD",
+            currencySymbol: "د.أ",
+            enabledPaymentTypes: ["CASH", "INSTALLMENT"],
+          });
+          seeded.add(id);
+        }
+        return id;
+      };
+    },
+  });
+  return new Proxy(ctx, {
+    get(obj, prop, receiver) {
+      return prop === "db" ? db : Reflect.get(obj, prop, receiver);
+    },
+  });
+}
+
 export function convexTestWithComponents<
   Schema extends SchemaDefinition<GenericSchema, boolean>,
 >(
@@ -108,7 +173,11 @@ export function convexTestWithComponents<
   // Opt-in: `transactionLimits: true` makes convex-test ENFORCE the platform's
   // per-transaction ceilings (4,096 index ranges/gets, 32,000 documents, 16 MiB).
   // Default is off, exactly as before, so no existing suite changes behaviour.
-  options: { transactionLimits?: boolean } = {},
+  //
+  // `storedOrgCurrency: false` opts out of the stored-currency seed described on
+  // `seedStoredOrgCurrency` - for the suites whose subject IS an organization
+  // that never chose a currency (SCRUM-85).
+  options: { transactionLimits?: boolean; storedOrgCurrency?: boolean } = {},
 ): TestConvex<Schema> & { runUnwrapped: TestConvex<Schema>["run"] } {
   // convexTest's own generic widens `Schema` here; re-pinning it keeps the
   // concrete table/index types that every caller's `t.run(ctx => ...)` needs.
@@ -135,9 +204,13 @@ export function convexTestWithComponents<
   // from a harness where every write maintains the tree.
   (t as unknown as { runUnwrapped: typeof t.run }).runUnwrapped = rawRun;
 
+  const seedCurrency = options.storedOrgCurrency !== false;
+  const seededOrgs = new Set<string>();
   t.run = ((fn: (ctx: never) => unknown) =>
-    rawRun(((ctx: never) =>
-      fn(aggregateTriggers.wrapDB(ctx as never) as never)) as never)) as typeof t.run;
+    rawRun(((ctx: never) => {
+      const wrapped = aggregateTriggers.wrapDB(ctx as never) as unknown as { db: object };
+      return fn((seedCurrency ? seedStoredOrgCurrency(wrapped, seededOrgs) : wrapped) as never);
+    }) as never)) as typeof t.run;
 
   return t as TestConvex<Schema> & { runUnwrapped: TestConvex<Schema>["run"] };
 }

@@ -16,6 +16,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
 import { useCurrency } from "@/hooks/useCurrency";
+import { requireStoredCurrencyCode } from "@/lib/storedCurrency";
+import { RequireOrgCurrency } from "@/components/layout/RequireOrgCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { getErrorMessage } from "@/lib/errors";
@@ -30,9 +32,17 @@ function statusClass(status: CashDrawerSession["status"]) {
 }
 
 export function CashDrawerPanel() {
+  return (
+    <RequireOrgCurrency>
+      <CashDrawerPanelContent />
+    </RequireOrgCurrency>
+  );
+}
+
+function CashDrawerPanelContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { code: currencyCode } = useCurrency();
+  const currencyCode = requireStoredCurrencyCode(useCurrency().code);
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission } = usePermissions();
   const canManage = hasPermission(PERMISSIONS.MANAGE_FINANCE);

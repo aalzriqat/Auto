@@ -60,13 +60,12 @@ import {
   describeOccurrence,
 } from "./receiptOccurrence";
 
-export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<string> {
-  const settings = await ctx.db
-    .query("orgSettings")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .unique();
-  return settings?.currency ?? "JOD";
-}
+/**
+ * The organization's STORED currency, or a typed `CURRENCY_NOT_CONFIGURED` refusal (SCRUM-85).
+ * Defined in the leaf module `../utils/orgCurrency` and re-exported here for the callers that
+ * already import it from the hooks.
+ */
+export { getOrgCurrency } from "../utils/orgCurrency";
 
 /**
  * Whether an event dated here would post now or queue to the outbox.

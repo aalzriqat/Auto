@@ -17,6 +17,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "@/components/ui/sonner";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { useCurrency } from "@/hooks/useCurrency";
+import { requireStoredCurrencyCode } from "@/lib/storedCurrency";
+import { RequireOrgCurrency } from "@/components/layout/RequireOrgCurrency";
 import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 import { busyCloseGuard } from "@/components/ui/busyCloseGuard";
 import { PAYMENT_LINKS_PILOT_DISABLED } from "@/lib/pilotCapabilities";
@@ -83,6 +85,14 @@ function useIntentAmount() {
 }
 
 export function PaymentLinksPanel() {
+  return (
+    <RequireOrgCurrency>
+      <PaymentLinksPanelContent />
+    </RequireOrgCurrency>
+  );
+}
+
+function PaymentLinksPanelContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const intentAmount = useIntentAmount();
@@ -349,7 +359,7 @@ function PaymentLinkEmptyRow({ label }: Readonly<{ label: string }>) {
 function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolean; onOpenChange: (open: boolean) => void }>) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { code: currencyCode } = useCurrency();
+  const currencyCode = requireStoredCurrencyCode(useCurrency().code);
   const scale = scaleForCurrency(currencyCode);
   const factor = Math.pow(10, scale);
   const createPaymentLink = useMutation(api.paymentIntents.create);

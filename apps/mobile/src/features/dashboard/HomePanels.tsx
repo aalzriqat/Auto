@@ -622,8 +622,8 @@ export function HomeOverviewCard({
   onToggleDetails,
   stats,
 }: Readonly<{
-  /** `undefined` until the workspace currency is known — see the skeleton below. */
-  currency: string | undefined;
+  /** `undefined` until the workspace currency is known - see the skeleton below; `null` when the organization has none (SCRUM-85). */
+  currency: string | null | undefined;
   detailsExpanded: boolean;
   onToggleDetails: () => void;
   stats: MobileDashboardStats | undefined;
@@ -649,7 +649,7 @@ export function HomeOverviewCard({
   // An unavailable figure (a source window exceeded its read cap) is stated as
   // such - never rendered as a zero or as the total of a prefix.
   const kpiAmount = (value: number | null) =>
-    value === null ? t("dashboardFigureUnavailable") : money(value, locale, currency);
+    value === null || currency === null ? t("dashboardFigureUnavailable") : money(value, locale, currency);
   const anyKpiUnavailable =
     kpis.sales === null || kpis.expenses === null || kpis.netProfit === null;
 

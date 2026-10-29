@@ -4,7 +4,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
-import { fromMinorUnits } from "./utils/money";
+import { configuredCurrencyOf, fromMinorUnits, requireConfiguredCurrency } from "./utils/money";
 import {
   DAY_MS,
   ExactSum,
@@ -1443,22 +1443,24 @@ const DEFAULT_ORG_TIMEZONE = "Asia/Amman";
 /**
  * The org's configured business timezone and currency, read from the same
  * `orgSettings` row other Convex modules already use for this (see
- * `getOrgCurrency` in `convex/accounting/workflowHooks.ts` and
- * `getOrgCurrencyForReports` in `convex/accountingReports.ts`), so "today"
+ * `getOrgCurrency` in `convex/utils/orgCurrency.ts`), so "today"
  * boundary math and amount labeling both reflect the org's actual settings
  * rather than the server process's own timezone or a hardcoded currency.
  */
 async function getOrgTimezoneAndCurrency(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-): Promise<{ timezone: string; currency: string }> {
+): Promise<{ timezone: string; currency: string | null }> {
   const settings = await ctx.db
     .query("orgSettings")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .unique();
   return {
     timezone: settings?.timezone ?? DEFAULT_ORG_TIMEZONE,
-    currency: settings?.currency ?? "JOD",
+    // SCRUM-85: null when the org stored no currency. NEVER "JOD". The
+    // dashboard figures that are tied to the org's denomination withhold
+    // themselves (stats) or refuse (todayForRole) instead of guessing.
+    currency: configuredCurrencyOf(settings),
   };
 }
 
@@ -1511,7 +1513,10 @@ export const todayForRole = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    const { timezone, currency } = await getOrgTimezoneAndCurrency(ctx, args.orgId);
+    const { timezone, currency: storedCurrency } = await getOrgTimezoneAndCurrency(ctx, args.orgId);
+    // SCRUM-85: these are money amounts labelled with the org currency, so an
+    // org with none is refused rather than shown amounts labelled "JOD".
+    const currency = requireConfiguredCurrency({ currency: storedCurrency });
     const now = Date.now();
     const todayStart = startOfTodayForOrg(timezone, now);
     const todayEnd = todayStart + 24 * 60 * 60 * 1000 - 1;

@@ -119,7 +119,8 @@ export type DealCustodyActions = Readonly<{
   bankOptions?: { banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean };
   /** Live employee-paid lines with an actual, not yet charged to any record. */
   eligibleFees: ReadonlyArray<CustodyEligibleFee>;
-  scaleOf: (currency: string) => number;
+  /** The currency's minor-unit scale, or null when it is unknown or unsupported (SCRUM-85: never guessed). */
+  scaleOf: (currency: string) => number | null;
   onPlan: (values: { userId: Id<"users">; amountMinor?: number; note?: string }) => Promise<void>;
   onClearPlan: () => Promise<void>;
   onOpen: (values: CustodyMovementValues & { userId: Id<"users"> }) => Promise<void>;
@@ -452,7 +453,12 @@ export function DealCustodyPanel({
   money: Formatter;
   t: T;
 }>) {
-  const { records, loading, actions } = wiring;
+  const { records, loading } = wiring;
+  const cur = wiring.currency;
+  // SCRUM-85 (c23823): a deal currency whose scale is unknown shuts every money door; the scale
+  // is never assumed. The panel then reads as view-only, with its own reason.
+  const currencyUnusable = wiring.actions !== undefined && wiring.actions.scaleOf(cur) === null;
+  const actions = currencyUnusable ? undefined : wiring.actions;
   const [dialog, setDialog] = useState<DialogState>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -472,7 +478,6 @@ export function DealCustodyPanel({
   const openRecord = records?.find((row) => row.status === "OPEN");
   const plan = wiring.plannedCustody ?? null;
   const recommended = wiring.recommended ?? null;
-  const cur = wiring.currency;
 
   const openDialog = (request: DialogRequest) => {
     setError(null);
@@ -515,7 +520,7 @@ export function DealCustodyPanel({
     }
   };
   const recordFor = (custodyId: Id<"financeDealCustody">) => records?.find((row) => row._id === custodyId);
-  const scale = (currency: string) => actions?.scaleOf(currency) ?? 3;
+  const dealScale = actions === undefined ? null : actions.scaleOf(cur);
   // Who an ISSUANCE may name: everyone served except the operator issuing
   // it — the server refuses self-issuance, so the picker never offers it.
   // The plan keeps the whole list; a plan moves no money and may name anyone.
@@ -689,19 +694,19 @@ export function DealCustodyPanel({
               </p>
             )}
             <p className="text-xs text-muted-foreground" data-testid="custody-posted-note">
-              {actions === undefined ? t("CustodyNoPermission") : t("CustodyPostedNote")}
+              {actions !== undefined ? t("CustodyPostedNote") : t(currencyUnusable ? "CustodyCurrencyUnusable" : "CustodyNoPermission")}
             </p>
           </>
         )}
       </CardContent>
 
-      {actions && (
+      {actions && dealScale !== null && (
         <>
           <CustodyPlanDialog
             open={dialog?.kind === "PLAN"}
             members={actions.members ?? []}
             currency={cur}
-            scale={scale(cur)}
+            scale={dealScale}
             current={plan}
             busy={busy}
             error={error}
@@ -715,7 +720,7 @@ export function DealCustodyPanel({
             intentId={dialog?.kind === "OPEN" ? dialog.intentId : ""}
             kind="ISSUED"
             currency={cur}
-            scale={scale(cur)}
+            scale={dealScale}
             busy={busy}
             error={error}
             members={recipients}
@@ -734,6 +739,8 @@ export function DealCustodyPanel({
           />
           {dialog?.kind === "MOVE" && (() => {
             const record = recordFor(dialog.custodyId);
+            const moveScale = actions.scaleOf(record?.currency ?? cur);
+            if (moveScale === null) return null;
             const s = record?.summary ?? null;
             const maxMinor =
               dialog.movement === "RETURNED" && record
@@ -747,7 +754,7 @@ export function DealCustodyPanel({
                 intentId={dialog.intentId}
                 kind={dialog.movement}
                 currency={record?.currency ?? cur}
-                scale={scale(record?.currency ?? cur)}
+                scale={moveScale}
                 busy={busy}
                 error={error}
                 suggestedMinor={dialog.movement === "REIMBURSED" ? maxMinor ?? null : dialog.movement === "RETURNED" ? (s?.employeeOwesDealerMinor ?? null) : null}

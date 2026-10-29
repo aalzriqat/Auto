@@ -10,6 +10,8 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { requireStoredCurrencyCode } from "@/lib/storedCurrency";
+import { RequireOrgCurrency } from "@/components/layout/RequireOrgCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
@@ -113,9 +115,17 @@ function AssetStatusBadge({ t, asset }: Readonly<{ t: (key: any) => string; asse
 }
 
 export function FixedAssetsTab() {
+  return (
+    <RequireOrgCurrency>
+      <FixedAssetsTabContent />
+    </RequireOrgCurrency>
+  );
+}
+
+function FixedAssetsTabContent() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { code: currencyCode } = useCurrency();
+  const currencyCode = requireStoredCurrencyCode(useCurrency().code);
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission } = usePermissions();
   const canManage = hasPermission(PERMISSIONS.MANAGE_FINANCE);

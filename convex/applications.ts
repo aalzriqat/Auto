@@ -102,6 +102,7 @@ import {
   outstandingMinorFromMajor,
   denominationOf,
   assertSupportedDenomination,
+  requireSupportedDealCurrency,
 } from "./utils/money";
 import {
   assertAppraisalGapSettledToAdvance,
@@ -6005,6 +6006,10 @@ export const confirmSupplierDisbursement = mutation({
       async () => {
         const app = await ctx.db.get(args.applicationId);
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
+        // SCRUM-85 c23823: the advice is a minor-unit amount, and a minor-unit amount means nothing
+        // without the deal's own denomination. Absent, unknown ("JD") and non-canonical ("jod") are all
+        // refused before any write; the organization's current currency is deliberately not a fallback.
+        requireSupportedDealCurrency(app.economicsCurrency);
         // Eligible once the deal is finalized, whether or not its sale survived.
         // `cancelApplication` moves a finalized deal to CANCELLED and keeps
         // `finalizedSaleId`; a sale cancelled through `sales.update` before
@@ -6356,6 +6361,9 @@ export const amendSupplierDisbursementAdvice = mutation({
       async () => {
         const app = await ctx.db.get(args.applicationId);
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
+        // SCRUM-85 c23823: same rule as recording the advice. A correction restates a minor-unit amount in
+        // the deal's denomination, so an absent or unsupported one is refused before any write.
+        requireSupportedDealCurrency(app.economicsCurrency);
         if (app.supplierDisbursementConfirmedAt === undefined) {
           throw new ConvexError(
             "There is no recorded settlement advice on this deal to amend. Record what the company paid the supplier first."

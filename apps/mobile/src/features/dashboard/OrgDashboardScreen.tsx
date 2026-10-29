@@ -410,13 +410,11 @@ function DashboardContent({
     api.dashboard.dataQualityStats,
     showsPerformance ? { orgId } : "skip",
   );
-  // The workspace currency. `orgSettings.get` returns null (rather than
-  // throwing) for a caller without `view:settings`, and `todayForRole` carries
-  // the same value for finance roles — so between them every role that can see
-  // the KPI row gets the real currency wherever the backend will disclose it.
-  // "JOD" is the last resort AND the backend's own default (see
-  // `getOrgTimezoneAndCurrency` in convex/dashboard.ts).
-  const orgSettings = useQuery(api.orgSettings.get, { orgId });
+  // The workspace currency, as the owner stored it (SCRUM-85: never a default).
+  // `orgSettings.getCurrencyStatus` is open to every member, unlike `get`,
+  // which returns null without `view:settings`. `undefined` while loading,
+  // `null` when the organization has chosen none.
+  const currencyStatus = useQuery(api.orgSettings.getCurrencyStatus, { orgId });
   const todayForRole: MobileDashboardTodayForRole | undefined = useQuery(
     api.dashboard.todayForRole,
     canViewFinanceToday ? { orgId } : "skip",
@@ -431,9 +429,9 @@ function DashboardContent({
     [todayForRole],
   );
   const currency =
-    orgSettings === undefined
+    currencyStatus === undefined || currencyStatus === null
       ? undefined
-      : (orgSettings?.currency ?? todayForRole?.currency ?? "JOD");
+      : currencyStatus.currency;
   // `undefined` while the query is in flight, a real 0 when it is skipped, so
   // the alerts panel can tell "loading" from "nothing waiting".
   const pendingApprovalsCount = canApprove ? pendingApprovals?.length : 0;

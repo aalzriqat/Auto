@@ -62,9 +62,15 @@ function exactMajorAmount(minor: number, scale: number): number | null {
  * message. No sign, no exponent, no more decimals than the currency carries;
  * Arabic-Indic digits are understood. The server still validates the figure.
  */
-function buildDepositSchema(t: Translate, scale: number) {
+function buildDepositSchema(t: Translate, scale: number | null) {
   return z.object({
     amount: z.string().superRefine((raw, ctx) => {
+      // SCRUM-85 (c23823): no scale, no amount. An unconfigured or unsupported currency is
+      // refused here rather than read under a guessed number of decimals.
+      if (scale === null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: t("CurrencyNotConfigured") });
+        return;
+      }
       const parsed = parseMajorToMinor(raw, scale);
       if (!parsed.ok) {
         ctx.addIssue({
@@ -114,7 +120,8 @@ export function RecordDepositDialog({
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const currency = useMoneyDisplay();
-  const scale = supportedCurrencyScale(currency.code) ?? 3;
+  // No default scale (SCRUM-85, c23823): null when the currency is not configured or not supported.
+  const scale = supportedCurrencyScale(currency.code);
   const depositSchema = useMemo(() => buildDepositSchema(t as Translate, scale), [t, scale]);
   const { hasPermission } = usePermissions();
   const canRecord = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
@@ -144,6 +151,7 @@ export function RecordDepositDialog({
       return;
     }
     if (canRecord && !bankReady) return;
+    if (scale === null) return;
     const parsed = parseMajorToMinor(values.amount, scale);
     if (!parsed.ok || parsed.minor <= 0) return;
     const amount = exactMajorAmount(parsed.minor, scale);
@@ -202,6 +210,11 @@ export function RecordDepositDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {scale === null ? (
+          <p className="text-sm font-medium text-destructive" role="alert">
+            {t("CurrencyNotConfigured" as any)}
+          </p>
+        ) : null}
         <Form {...form}>
           <form onSubmit={handleFormSubmit} className="space-y-4">
             <FormField
@@ -209,7 +222,7 @@ export function RecordDepositDialog({
               name="amount"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t("DepositAmount" as any) ?? "Deposit Amount (JOD)"}</FormLabel>
+                  <FormLabel>{t("DepositAmount" as any) ?? "Deposit Amount"}</FormLabel>
                   <FormControl>
                     <Input type="text" inputMode="decimal" dir="ltr" autoComplete="off" {...field} />
                   </FormControl>
@@ -262,7 +275,7 @@ export function RecordDepositDialog({
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any) || "Cancel"}
               </Button>
-              <Button type="submit" disabled={isSubmitting || (canRecord && !bankReady)}>
+              <Button type="submit" disabled={isSubmitting || scale === null || (canRecord && !bankReady)}>
                 {isSubmitting ? (t("Saving" as any) || "Saving...") : title}
               </Button>
             </div>

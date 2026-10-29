@@ -89,11 +89,16 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const bankOptions = useReceiptBankOptions(orgId, canManage && needsBank, paymentAttempt?.bankAccountId ?? bankAccountId);
   if (!canView) return null;
   const invoice = status?.invoice;
-  const currency = invoice?.currency ?? "JOD";
+  // SCRUM-85: the invoice's own currency, or null when there is no invoice - never a
+  // guessed "JOD". Every action below already requires an invoice.
+  const currency = invoice?.currency ?? null;
   const receiptCurrencyMatches = !!invoice && invoice.currency.toUpperCase() === status?.receiptCurrency.toUpperCase();
-  const factor = 10 ** moneyDisplayScale(currency);
-  const money = (minor: number, code = currency) =>
-    formatMoneyDisplay(minor / 10 ** moneyDisplayScale(code), code, locale);
+  const scaleDigits = currency === null ? null : moneyDisplayScale(currency);
+  const factor = scaleDigits === null ? Number.NaN : 10 ** scaleDigits;
+  const parseIn = (text: string, digits: number | null) =>
+    digits === null ? { minor: null, tooPrecise: false } : parseTypedAmount(text, digits);
+  const money = (minor: number, code: string | null = currency) =>
+    code === null ? "" : formatMoneyDisplay(minor / 10 ** moneyDisplayScale(code), code, locale);
   // SCRUM-724: the backend reports availability. Absent (a backend that does not
   // report it) means UNAVAILABLE, never "assume enabled". The gated actions stay
   // visible but disabled, tied to the reason, so the operator sees what exists
@@ -107,11 +112,12 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const pending = status?.page ?? [];
   const positions = credits.results ?? [];
   const selectedCredit = positions.find((position) => position.receiptMovementId === selectedMovement);
-  const parsedPayment = parseTypedAmount(amount, moneyDisplayScale(currency));
-  const parsedReserve = parseTypedAmount(reserveAmount, moneyDisplayScale(currency));
-  const parsedCheque = parseTypedAmount(chequeAmount, moneyDisplayScale(currency));
+  const parsedPayment = parseIn(amount, scaleDigits);
+  const parsedReserve = parseIn(reserveAmount, scaleDigits);
+  const parsedCheque = parseIn(chequeAmount, scaleDigits);
   const refundCredit = positions.find((position) => position.receiptMovementId === refundMovement);
-  const parsedRefund = parseTypedAmount(refundAmount, moneyDisplayScale(refundCredit?.currency ?? currency));
+  const refundCurrency = refundCredit?.currency ?? currency;
+  const parsedRefund = parseIn(refundAmount, refundCurrency === null ? null : moneyDisplayScale(refundCurrency));
   const paymentIntent = `sale-receipt:${saleId}`;
   const reserveIntent = `sale-reserve:${saleId}`;
 

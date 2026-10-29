@@ -9,6 +9,7 @@ import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
 import {
@@ -189,6 +190,7 @@ function useLeadDropdownOptions({
   const canViewVehicles = hasPermission("view:vehicles");
   const canViewUsers = hasPermission("view:users");
   const localeCode = locale === "ar" ? "ar-JO" : "en-US";
+  const { displayLabel: currencyLabel } = useCurrency();
   const [customerSearch, setCustomerSearch] = useState("");
   const customerSelectorOptions = useQuery(
     api.customers.selectorOptions,
@@ -223,7 +225,7 @@ function useLeadDropdownOptions({
           return {
             value: vehicle._id as string,
             label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
-            subLabel: `${vehicle.vin} · ${vehicle.sellingPrice.toLocaleString(localeCode)} ${t("JOD")}${reservationSuffix}`,
+            subLabel: `${vehicle.vin} · ${vehicle.sellingPrice.toLocaleString(localeCode)} ${currencyLabel}${reservationSuffix}`,
           };
         }) ?? [],
         lead?.vehicleId
@@ -236,7 +238,7 @@ function useLeadDropdownOptions({
             }
           : null
       ),
-    [vehicles, lead, localeCode, t]
+    [vehicles, lead, localeCode, t, currencyLabel]
   );
 
   const assigneeOptions = useMemo(

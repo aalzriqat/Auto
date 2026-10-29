@@ -20,6 +20,7 @@ import {
   requiredText,
   useFormErrors,
   useGenericError,
+  useSyncActiveOrgCurrency,
 } from "./modules/moduleShared";
 import { useStyles } from "./modules/moduleStyles";
 
@@ -50,6 +51,7 @@ export function CustomerDetailScreen({
 
   const myMembership = useQuery(api.memberships.getMyMembership, canQuery && orgId ? { orgId } : "skip");
   const scopedArgs = canQuery && orgId && customerId ? { orgId, customerId } : null;
+  useSyncActiveOrgCurrency(orgId, canQuery);
   const customer = useQuery(api.customers.get, scopedArgs ?? "skip");
   const relations = useQuery(api.customers.getRelations, scopedArgs ?? "skip");
 

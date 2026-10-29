@@ -324,6 +324,26 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
   });
 
+  it.each([
+    ["CURRENCY_NOT_CONFIGURED", "CURRENCY_NOT_CONFIGURED_MESSAGE"],
+    ["DEAL_CURRENCY_UNSUPPORTED", "DEAL_CURRENCY_UNSUPPORTED_MESSAGE"],
+  ] as const)("SCRUM-85 %s: the EN dictionary text equals the server message, and ar resolves to Arabic", async (code, constant) => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const money = await import("../convex/utils/money");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const serverText = money[constant];
+    expect(Object.values(AppErrorCode)).toContain(code);
+    expect((dictionaries.en as Record<string, string>)[`ServerError_${code}`]).toBe(serverText);
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code, message: serverText });
+    const arText = getLocalizedErrorMessage(error, ar);
+    expect(arText).toMatch(/[؀-ۿ]/);
+    expect(arText).not.toBe(serverText);
+    expect(arText).toBe((dictionaries.ar as Record<string, string>)[`ServerError_${code}`]);
+    expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
+  });
+
   it("SCRUM-650 purchase-cost correction refusals resolve to Arabic in ar and the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const { AppErrorCode } = await import("../convex/utils/errors");

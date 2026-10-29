@@ -15,6 +15,8 @@ vi.mock("convex/react", async () => {
       if (name === "organizations:listMine") return [{ _id: "org-a", name: "Synthetic Dealer" }];
       if (name === "memberships:getMyMembership") return { roleName: "Synthetic lead reader", permissions: state.permissions };
       if (["orgSettings:get", "orgSettings:getLogoUrl"].includes(name)) return null;
+      // The org's stored currency is read through the any-member status query (SCRUM-85).
+      if (name === "orgSettings:getCurrencyStatus") return { configured: true, currency: "JOD", currencySymbol: "JD" };
       const catalogPermissions: Partial<Record<string, string>> = { "customers:selectorOptions": "view:customers", "customers:get": "view:customers", "vehicles:listAll": "view:vehicles", "orgLeadSources:listForLeads": "view:leads" };
       const catalogPermission = catalogPermissions[name];
       if (catalogPermission && !state.permissions.includes(catalogPermission)) throw new Error("Forbidden lead catalog query: " + name);

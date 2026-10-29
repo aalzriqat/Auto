@@ -1,16 +1,25 @@
 "use client";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useOrgSettings } from "@/hooks/useOrgSettings";
+import { useOrgCurrencyState } from "@/hooks/useOrgCurrencyState";
 import { formatInCurrency } from "@/lib/currencyFormat";
 
-/** Formats amounts in the ORG's current currency — the default for most accounting UI. */
+/**
+ * Formats amounts in the ORG's current currency — the default for most accounting UI.
+ *
+ * SCRUM-85: the currency is the one the owner stored, never a guess. While it is
+ * unknown the formatter returns an empty string (a skeleton is showing); when the
+ * organization has none it returns "currency not configured" instead of a number.
+ */
 export function useCurrencyFormatter() {
-  const { isRtl } = useLanguage();
-  const orgSettings = useOrgSettings();
-  const currency = orgSettings?.currencySymbol ?? "USD";
+  const { isRtl, t } = useLanguage();
+  const state = useOrgCurrencyState();
   const locale = isRtl ? "ar" : "en-US";
 
-  return (amount: number, fractionDigits = 0) => formatInCurrency(locale, currency, amount, fractionDigits);
+  return (amount: number, fractionDigits = 0) => {
+    if (state.status === "unconfigured") return t("CurrencyNotConfigured");
+    if (state.status !== "configured") return "";
+    return formatInCurrency(locale, state.symbol ?? state.code, amount, fractionDigits);
+  };
 }
 
 /**

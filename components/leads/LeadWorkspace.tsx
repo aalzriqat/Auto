@@ -9,6 +9,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { usePermissions } from "@/hooks/use-permissions";
 import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
@@ -31,6 +32,7 @@ export function LeadWorkspace({ leadId }: Readonly<LeadWorkspaceProps>) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const localeCode = locale === "ar" ? "ar-JO" : "en-US";
+  const { displayLabel: currencyLabel } = useCurrency();
   const { hasPermission } = usePermissions();
   const [isEditOpen, setIsEditOpen] = useState(false);
   const canEdit = hasPermission(PERMISSIONS.EDIT_LEADS);
@@ -139,7 +141,7 @@ export function LeadWorkspace({ leadId }: Readonly<LeadWorkspaceProps>) {
                 <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
                   <div><dt className="text-xs text-muted-foreground">{t("Vehicle")}</dt><dd>{vehicle.year} {vehicle.make} {vehicle.model}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">{t("VIN")}</dt><dd className="font-mono text-xs">{vehicle.vin || t("VinPending")}</dd></div>
-                  <div><dt className="text-xs text-muted-foreground">{t("Price")}</dt><dd>{vehicle.sellingPrice.toLocaleString(localeCode)} {t("JOD")}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">{t("Price")}</dt><dd>{vehicle.sellingPrice.toLocaleString(localeCode)} {currencyLabel}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">{t("Status")}</dt><dd>{translateVehicleStatus(vehicle.status, t)}</dd></div>
                 </dl>
               ) : (
@@ -188,7 +190,7 @@ export function LeadWorkspace({ leadId }: Readonly<LeadWorkspaceProps>) {
                         <Badge variant="outline">{translateWorkflowStatus(quote.status, t)}</Badge>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {quote.totalFinancedAmount?.toLocaleString(localeCode) ?? quote.vehiclePrice?.toLocaleString(localeCode) ?? "—"} {t("JOD")} · {new Date(quote.createdAt).toLocaleDateString(localeCode)}
+                        {quote.totalFinancedAmount?.toLocaleString(localeCode) ?? quote.vehiclePrice?.toLocaleString(localeCode) ?? "—"} {currencyLabel} · {new Date(quote.createdAt).toLocaleDateString(localeCode)}
                       </p>
                     </div>
                   ))}

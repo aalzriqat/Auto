@@ -28,8 +28,10 @@ export function SettingsModule({
     dealershipAddress: "",
     dealershipPhone: "",
     dealershipPhones: "",
-    currency: "JOD",
-    currencySymbol: "د.أ",
+    // SCRUM-85: empty until the stored currency loads or the owner types one;
+    // saving other fields never chooses a currency for the organization.
+    currency: "",
+    currencySymbol: "",
     vatRate: "",
     country: "",
     timezone: "",
@@ -49,8 +51,8 @@ export function SettingsModule({
       dealershipAddress: next.dealershipAddress ?? "",
       dealershipPhone: next.dealershipPhone ?? "",
       dealershipPhones: joinList(next.dealershipPhones),
-      currency: next.currency ?? "JOD",
-      currencySymbol: next.currencySymbol ?? "د.أ",
+      currency: next.currency ?? "",
+      currencySymbol: next.currencySymbol ?? "",
       vatRate: next.vatRate != null ? String(next.vatRate) : "",
       country: next.country ?? "",
       timezone: next.timezone ?? "",

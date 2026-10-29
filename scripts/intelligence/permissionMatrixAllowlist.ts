@@ -136,6 +136,7 @@ export const MEMBER_ONLY_ALLOWLIST: AllowEntry[] = [
   { id: "convex/directMessages.ts:createGroup", reason: "creator-scoped group chat (read by the reviewer)" },
   { id: "convex/liveChat.ts:sendDealerMessage", reason: "thread must belong to the caller (dealerUserId check, read)" },
   { id: "convex/memberships.ts:leave", reason: "self-service leave: member-only by design (reviewer read memberships.ts:919)" },
+  { id: "convex/orgSettings.ts:getCurrencyStatus", reason: "SCRUM-85: active members need the stored currency to read money without VIEW_SETTINGS; handler read: returns only configured, currency and currencySymbol after tenant auth, or null for no access" },
   ...entries(ORG_READ, [
     "convex/directMessages.ts:getOrgMembers",
     "convex/orgCustomFields.ts:list",
