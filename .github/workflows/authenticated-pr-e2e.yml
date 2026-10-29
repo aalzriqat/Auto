@@ -1,0 +1,42 @@
+name: Authenticated PR E2E admission
+
+# This listener never checks out PR code and has no reusable secrets. It reports
+# even when a conflicting PR cannot run pull_request, or a fork awaits approval.
+on:
+  pull_request_target:
+    branches: [main]
+    # No "edited": a title or body edit changes nothing this gate judges, and a
+    # pending admission in the shared per-head concurrency group would cancel a
+    # queued finish publication (GitHub keeps one pending job per group).
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  admission:
+    name: authenticated-pr-e2e-admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: g5-publish-${{ github.event.pull_request.head.sha }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      checks: write
+    steps:
+      - name: Checkout immutable default-branch judge
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # pull_request_target checks out the BASE branch commit by default
+          # (GITHUB_SHA); never name a PR ref. The CLI refuses unless HEAD equals
+          # GITHUB_WORKFLOW_SHA.
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+      - name: Record trusted scope or execution refusal on the PR head
+        run: node scripts/intelligence/trustedPrE2eGateCli.mjs initialize
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
