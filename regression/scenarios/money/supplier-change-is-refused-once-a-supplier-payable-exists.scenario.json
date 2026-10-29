@@ -1,0 +1,65 @@
+{
+  "id": "supplier-change-is-refused-once-a-supplier-payable-exists",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.insertSupplierPayable",
+      "input": {
+        "vehicleId": "VEHICLE_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "sourceType": "SOURCED",
+        "sourcedSupplierId": "OTHER_SUPPLIER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_LINK_FROZEN"
+    },
+    {
+      "observable": "vehicle.sourcedSupplierId",
+      "value": "SUPPLIER_ID"
+    },
+    {
+      "observable": "world.rowCounts.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "is frozen once a supplier payable exists (N11): the id and the name stay as they were"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "846510126954939b122ae10c0eaf197350e3e1b11fb4f59d3eb3a41fc66d9255"
+}
