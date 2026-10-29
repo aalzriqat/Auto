@@ -21,6 +21,7 @@ import { requireOwnedRow, requireTenantAuth } from "../utils/tenancy";
 import { orgResetState } from "../utils/orgResetGeneration";
 import { isSystemOwnerRole, PERMISSIONS } from "../utils/permissions";
 import { insertOpeningDeposit } from "../utils/commitmentWriters";
+import { refuseOpeningDepositRow } from "../utils/openingDepositContainment";
 import { validateOpeningPartners } from "./openingPartnerAllocations";
 import { listOpeningStockEvidence } from "../utils/openingVehicleBasis";
 import {
@@ -306,35 +307,24 @@ async function validateOpeningDepositRow(
   args: OpeningAllocationArgs,
   row: Extract<Allocation, { kind: "CUSTOMER_DEPOSIT" }>,
 ): Promise<void> {
-  const customer = await requireOwnedRow(
-    ctx,
-    args.orgId,
-    "customers",
-    row.customerId,
-    "Opening customer not found in this organization.",
-  );
-  if (customer.isDeleted)
-    throw new ConvexError("Opening customer is unavailable.");
+  // Same tenancy rule as `requireOwnedRow` (a missing row and another organization's row are
+  // indistinguishable), but the refusal is coded so the screen can show it in the user's language.
+  const customer = await ctx.db.get(row.customerId);
+  if (!customer || customer.orgId !== args.orgId)
+    refuseOpeningDepositRow("OPENING_DEPOSIT_CUSTOMER_NOT_FOUND");
+  if (customer.isDeleted) refuseOpeningDepositRow("OPENING_DEPOSIT_CUSTOMER_UNAVAILABLE");
   if (row.vehicleId === undefined) return;
   if (row.depositKind !== "RESERVATION")
-    throw new ConvexError(
-      "Only a reservation deposit can name a vehicle; a security deposit is held against the customer.",
-    );
-  const vehicle = await requireOwnedRow(
-    ctx,
-    args.orgId,
-    "vehicles",
-    row.vehicleId,
-    "Opening deposit vehicle not found in this organization.",
-  );
+    refuseOpeningDepositRow("OPENING_DEPOSIT_SECURITY_NAMES_VEHICLE");
+  const vehicle = await ctx.db.get(row.vehicleId);
+  if (!vehicle || vehicle.orgId !== args.orgId)
+    refuseOpeningDepositRow("OPENING_DEPOSIT_VEHICLE_NOT_FOUND");
   if (
     vehicle.isDeleted ||
     vehicle.status === "SOLD" ||
     vehicle.sourceType === "SOURCED"
   )
-    throw new ConvexError(
-      "An opening reservation deposit must name a live vehicle that the dealership can hold.",
-    );
+    refuseOpeningDepositRow("OPENING_DEPOSIT_VEHICLE_NOT_HOLDABLE");
 }
 
 /** One reservation per customer and vehicle; row keys are checked per row. */
@@ -343,10 +333,7 @@ function validateOpeningDepositRows(rows: readonly Allocation[]): void {
   for (const row of rows) {
     if (row.kind !== "CUSTOMER_DEPOSIT" || row.vehicleId === undefined) continue;
     const key = `${row.customerId}:${row.vehicleId}`;
-    if (seen.has(key))
-      throw new ConvexError(
-        "An opening reservation deposit may be named only once per customer and vehicle.",
-      );
+    if (seen.has(key)) refuseOpeningDepositRow("OPENING_DEPOSIT_DUPLICATE_RESERVATION");
     seen.add(key);
   }
 }

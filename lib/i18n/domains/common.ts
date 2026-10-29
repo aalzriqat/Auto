@@ -382,6 +382,30 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Named customer deposits cannot be posted without a second approver. Save the opening balance for approval and ask an accountant to approve it. Nothing has been changed.",
     "لا يمكن ترحيل عربونات العملاء المسمّاة دون موافقة شخص ثانٍ. احفظ الرصيد الافتتاحي للموافقة واطلب من المحاسب الموافقة عليه. لم يتم تغيير أي شيء.",
   ],
+  ServerError_OPENING_DEPOSIT_CUSTOMER_NOT_FOUND: [
+    "Opening customer not found in this organization.",
+    "لم يتم العثور على عميل العربون الافتتاحي في هذه المنشأة.",
+  ],
+  ServerError_OPENING_DEPOSIT_CUSTOMER_UNAVAILABLE: [
+    "Opening customer is unavailable.",
+    "عميل العربون الافتتاحي غير متاح.",
+  ],
+  ServerError_OPENING_DEPOSIT_SECURITY_NAMES_VEHICLE: [
+    "Only a reservation deposit can name a vehicle; a security deposit is held against the customer.",
+    "لا يمكن ربط مركبة إلا بعربون الحجز؛ أما عربون التأمين فيُحتفظ به على العميل.",
+  ],
+  ServerError_OPENING_DEPOSIT_VEHICLE_NOT_FOUND: [
+    "Opening deposit vehicle not found in this organization.",
+    "لم يتم العثور على مركبة العربون الافتتاحي في هذه المنشأة.",
+  ],
+  ServerError_OPENING_DEPOSIT_VEHICLE_NOT_HOLDABLE: [
+    "An opening reservation deposit must name a live vehicle that the dealership can hold.",
+    "يجب أن يحدد عربون الحجز الافتتاحي مركبة قائمة يستطيع المعرض حجزها.",
+  ],
+  ServerError_OPENING_DEPOSIT_DUPLICATE_RESERVATION: [
+    "An opening reservation deposit may be named only once per customer and vehicle.",
+    "لا يجوز تسمية عربون حجز افتتاحي إلا مرة واحدة لكل عميل ومركبة.",
+  ],
   // SCRUM-795 (SCRUM-50): manual journals are off for the pilot.
   ServerError_MANUAL_JOURNALS_DISABLED: [
     "Manual journal entries are turned off during the pilot. Nothing has been changed.",

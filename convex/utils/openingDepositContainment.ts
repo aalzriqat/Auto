@@ -50,6 +50,29 @@ export function assertNotOpeningDepositPayout(deposit: { origin?: "OPENING" }): 
   if (isOpeningDeposit(deposit)) refuseOpeningDepositPayout();
 }
 
+/**
+ * Row-validation refusals for a named opening deposit (SCRUM-858 LOW, Seat 1). Each is a coded
+ * AppError so the screen shows it in the user's language. English text equals the matching
+ * `ServerError_<code>` entry in lib/i18n/domains/common.ts (lib/errors.test.ts pins that).
+ */
+export const OPENING_DEPOSIT_ROW_MESSAGES = {
+  OPENING_DEPOSIT_CUSTOMER_NOT_FOUND: "Opening customer not found in this organization.",
+  OPENING_DEPOSIT_CUSTOMER_UNAVAILABLE: "Opening customer is unavailable.",
+  OPENING_DEPOSIT_SECURITY_NAMES_VEHICLE:
+    "Only a reservation deposit can name a vehicle; a security deposit is held against the customer.",
+  OPENING_DEPOSIT_VEHICLE_NOT_FOUND: "Opening deposit vehicle not found in this organization.",
+  OPENING_DEPOSIT_VEHICLE_NOT_HOLDABLE:
+    "An opening reservation deposit must name a live vehicle that the dealership can hold.",
+  OPENING_DEPOSIT_DUPLICATE_RESERVATION:
+    "An opening reservation deposit may be named only once per customer and vehicle.",
+} as const;
+
+export type OpeningDepositRowRefusal = keyof typeof OPENING_DEPOSIT_ROW_MESSAGES;
+
+export function refuseOpeningDepositRow(code: OpeningDepositRowRefusal): never {
+  return throwAppError(AppErrorCode[code], OPENING_DEPOSIT_ROW_MESSAGES[code]);
+}
+
 // English text equals `ServerError_OPENING_DEPOSIT_DIRECT_POST_REFUSED` in lib/i18n/domains/common.ts.
 export const OPENING_DEPOSIT_DIRECT_POST_REFUSED_MESSAGE =
   "Named customer deposits cannot be posted without a second approver. Save the opening balance for approval and ask an accountant to approve it. Nothing has been changed.";

@@ -4340,7 +4340,6 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
-    .index("by_opening_draft", ["openingBalanceDraftId"])
     .index("by_quote", ["quoteId"])
     .index("by_quote_status", ["quoteId", "status"])
     .index("by_reservation", ["reservationId"])
