@@ -49,7 +49,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/ClosePeriodReviewDialog.tsx",
-      "callSiteId": "components/accounting/setup/ClosePeriodReviewDialog.tsx:103:13",
+      "callSiteId": "components/accounting/setup/ClosePeriodReviewDialog.tsx:113:13",
       "functionId": "accountingPeriods:close",
       "contractPath": "acknowledgedWarnings",
       "kind": "SHAPE_UNKNOWN",
