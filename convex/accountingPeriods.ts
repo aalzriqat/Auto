@@ -539,8 +539,12 @@ async function computeCloseChecklist(
   else if(heldOpeningLiabilities.status === "UNALLOCATED")warnings.push("Opening liabilities include unallocated held pools. Arithmetic reconciliation does not establish beneficial ownership; these pools are not available for customer refunds or credit application.");
   if (customerDepositsRecon.status === "UNAVAILABLE") {
     // Could not compare as of the period end: never reported as reconciled, and never as a difference
-    // in an empty list of currencies. An unavailable opening basis already has its own warning above.
-    if (customerDepositsRecon.unavailableReason !== "OPENING_SOURCE_UNAVAILABLE") {
+    // in an empty list of currencies. An unavailable opening liability basis already has its own warning
+    // above; an opening deposit row that cannot be dated (its draft is gone) does not, so it is warned here.
+    const coveredByOpeningBasisWarning =
+      customerDepositsRecon.unavailableReason === "OPENING_SOURCE_UNAVAILABLE" &&
+      heldOpeningLiabilities.status === "UNAVAILABLE";
+    if (!coveredByOpeningBasisWarning) {
       warnings.push(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING);
     }
   } else if (!customerDepositsRecon.isReconciled) {
