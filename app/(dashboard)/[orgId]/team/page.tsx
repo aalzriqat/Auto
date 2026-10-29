@@ -73,7 +73,7 @@ export default function TeamPage() {
   const { results: memberships, status: membershipsStatus, loadMore: loadMoreMemberships } = usePaginatedQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const roles = useQuery(api.roles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  // SCRUM-778: the mode the ledger runs (AUTO_MEMBER until chosen), readable without
+  // SCRUM-778: the mode the ledger runs (MANUAL until chosen), readable without
   // VIEW_SETTINGS. Loading or no access shows no mode as active.
   const commissionMode = useQuery(api.orgSettings.getCommissionMode, activeOrgId ? { orgId: activeOrgId } : "skip");
 

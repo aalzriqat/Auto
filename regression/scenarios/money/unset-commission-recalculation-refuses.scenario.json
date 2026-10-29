@@ -1,0 +1,45 @@
+{
+  "id": "unset-commission-recalculation-refuses",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum778-owner-default",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.recalculateCommission",
+      "input": {
+        "sale": "completed-with-unset-mode"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "recalculation.refusal",
+      "value": "automatic-modes-only"
+    },
+    {
+      "observable": "database.after",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-778#c23819",
+      "digest": "4fb52f2f9429a99df12e17b14481ef09ca407dca41449bb77650226317e378d6"
+    }
+  ],
+  "impl": {
+    "file": "convex/commissionDefaultMode.scrum778.test.ts",
+    "testName": "with no mode stored, recalculation refuses without creating a commission or journal"
+  },
+  "matrixRow": "pilot-commission-manual-default",
+  "fingerprint": "5840415c2c4b17a5679fd26e3a9ea3b6d40c7f00a80c6b640cecc044966b9c97"
+}

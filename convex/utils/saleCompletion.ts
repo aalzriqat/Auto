@@ -588,7 +588,7 @@ async function prepareSaleCompletion(
     .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
     .unique();
 
-  // SCRUM-778: never chosen keeps the long-standing default (AUTO_MEMBER); MANUAL is an explicit owner choice.
+  // SCRUM-778: an automatic commission requires an explicit stored AUTO opt-in.
   const commissionMode = effectiveCommissionMode(orgSettings);
 
   let commissionAmount: number | undefined;

@@ -357,9 +357,10 @@ describe("Sales Mutations", () => {
     });
   });
 
-  test("completed sale financial fields and commission amounts are locked", async () => {
+  test("explicit AUTO keeps completed sale financial fields and commission amounts locked", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "locked_1");
+    await t.run((ctx) => ctx.db.insert("orgSettings", { orgId, currency: "USD", currencySymbol: "$", enabledPaymentTypes: ["CASH"], commissionMode: "AUTO_MEMBER" }));
 
     const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -384,6 +385,49 @@ describe("Sales Mutations", () => {
       expect(sale?.salePrice).toBe(15000);
       expect(sale?.commissionAmount).toBeUndefined();
     });
+  });
+
+  test("unset MANUAL accepts a first completed-sale commission and posts one accrual", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "manual_first");
+    await t.run((ctx) => ctx.db.insert("subscriptions", {
+      orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    await t.run((ctx) => ctx.db.insert("orgSettings", {
+      orgId, currency: "USD", currencySymbol: "$", enabledPaymentTypes: ["CASH"],
+    }));
+    await t.run(async (ctx) => {
+      const membership = await ctx.db.query("memberships").withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId)).unique();
+      if (!membership) throw new Error("fixture membership missing");
+      await ctx.db.patch(membership.roleId, { isSystemOwnerRole: true });
+    });
+    await asAdmin.mutation(api.chartOfAccounts.initialize, { orgId });
+    const year = new Date().getUTCFullYear();
+    await asAdmin.mutation(api.accountingPeriods.create, {
+      orgId, startDate: Date.UTC(year, 0, 1), endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999), fiscalYear: year, periodNumber: 1,
+      openImmediately: true,
+    });
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId, salePrice: 15000, saleDate: Date.now(),
+      status: "COMPLETED", financingType: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await t.run((ctx) => ctx.db.get(saleId)))?.commissionAmount).toBeUndefined();
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 500 });
+    await asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 500 });
+    expect((await t.run((ctx) => ctx.db.get(saleId)))?.commissionAmount).toBe(500);
+    const ledger = await t.run(async (ctx) => {
+      const entries = await ctx.db.query("journalEntries").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "sales").eq("sourceId", `commission_${saleId}`)).collect();
+      expect(entries).toHaveLength(1);
+      expect(entries[0].status).toBe("POSTED");
+      const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entries[0]._id)).collect();
+      return Promise.all(lines.map(async (line) => ({
+        key: (await ctx.db.get(line.accountId))?.systemKey, debitMinor: line.debitMinor, creditMinor: line.creditMinor,
+      })));
+    });
+    expect(ledger).toEqual([
+      { key: "COMMISSION_EXPENSE", debitMinor: 50000, creditMinor: 0 },
+      { key: "COMMISSION_PAYABLE", debitMinor: 0, creditMinor: 50000 },
+    ]);
   });
 });
 

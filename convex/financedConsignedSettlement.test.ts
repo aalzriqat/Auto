@@ -102,7 +102,7 @@ type Route = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
  */
 async function seedDealership(
   tag: string,
-  opts: { sourceType?: "STOCK" | "SOURCED"; /** false: a Free/Starter org that never initialized a chart. */ chart?: boolean } = {}
+  opts: { commissionMode?: "AUTO_MEMBER"; sourceType?: "STOCK" | "SOURCED"; /** false: a Free/Starter org that never initialized a chart. */ chart?: boolean } = {}
 ) {
   const t = convexTestWithComponents(schema, MODULES);
   const orgId = await t.run((ctx) =>
@@ -127,6 +127,7 @@ async function seedDealership(
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+      ...(opts.commissionMode ? { commissionMode: opts.commissionMode } : {}),
     })
   );
 
@@ -3791,7 +3792,7 @@ describe("automatic commission is based on recognized earnings, not the commerci
   const RATE_PERCENT = 10;
 
   async function directDealCommissionedAt(tag: string, approvedAmount: number) {
-    const s = await seedDealership(tag);
+    const s = await seedDealership(tag, { commissionMode: "AUTO_MEMBER" });
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
       // The salesperson earns a straight percentage of the deal's margin.
@@ -3883,7 +3884,7 @@ describe("automatic commission is based on recognized earnings, not the commerci
     // collects the gross and the customer is contractually liable for the whole
     // sale price, so the spread over the entitlement genuinely IS recognized —
     // and this deal must be untouched by the change.
-    const s = await seedDealership("s30CommissionThrough");
+    const s = await seedDealership("s30CommissionThrough", { commissionMode: "AUTO_MEMBER" });
     await s.t.run(async (ctx) => {
       const membership = (await ctx.db.query("memberships").collect()).find(
         (m) => m.orgId === s.orgId && m.userId === s.userId
@@ -4031,9 +4032,9 @@ describe("financed direct evidence that has gone missing fails closed", () => {
      * in which `recalculateCommission` is legitimately reachable later, because
      * nothing was computed and nothing was accrued.
      */
-    opts: { manualCommission?: boolean } = {}
+    opts: { manualCommission?: boolean; autoCommission?: boolean } = {}
   ) {
-    const s = await seedDealership(tag);
+    const s = await seedDealership(tag, { commissionMode: opts.autoCommission ? "AUTO_MEMBER" : undefined });
     await s.t.run(async (ctx) => {
       await ctx.db.patch(s.companyId, { defaultLtvPercent: 100 });
       const membership = (await ctx.db.query("memberships").collect()).find(
@@ -4465,7 +4466,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     // Approved AT the entitlement, so the honest commission is 0 and no accrual
     // was posted — which is exactly the state `recalculateCommission` exists to
     // repair, and therefore the state in which it is reachable at all.
-    const { s, saleId } = await financedDirectSale("s30Erased", SUPPLIER_ENTITLEMENT);
+    const { s, saleId } = await financedDirectSale("s30Erased", SUPPLIER_ENTITLEMENT, { autoCommission: true });
 
     await s.t.run(async (ctx) => {
       // What `/admin`'s raw-JSON editor does to a completed sale, and what every
@@ -4540,7 +4541,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     // The rate is set AFTER completion, so the sale completes at a commission of
     // 0 and accrues nothing — which is the only state `recalculateCommission`
     // will act on, and the same state the financed case above is tested in.
-    const s = await seedDealership("s30CashDirect");
+    const s = await seedDealership("s30CashDirect", { commissionMode: "AUTO_MEMBER" });
 
     // Straight through sales.create rather than runDeal, which only builds
     // financed deals — and this is the one shape that must NOT be financed.

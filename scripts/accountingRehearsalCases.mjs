@@ -3389,7 +3389,9 @@ export async function runRehearsalCases(ctx) {
     const membership = members.page.find((row) => row.userId === me?._id);
     if (!me?._id || !membership?._id || !Number.isFinite(membership.commissionRate)) fail("S853 owner membership/rate is unavailable");
     const originalRate = membership.commissionRate;
-    expectEqual(await ownerMust("query", "orgSettings:getCommissionMode", { orgId }), "AUTO_MEMBER", "S853 initial effective policy");
+    expectEqual(await ownerMust("query", "orgSettings:getCommissionMode", { orgId }), "MANUAL", "S853 initial effective policy");
+    await ownerMust("mutation", "orgSettings:setCommissionMode", { orgId, commissionMode: "AUTO_MEMBER" });
+    expectEqual(await ownerMust("query", "orgSettings:getCommissionMode", { orgId }), "AUTO_MEMBER", "S853 explicit automatic policy");
     const denom = await orgDenomination({ orgId, ownerMust });
     expectEqual(denom.currency, "JOD", "S853 certified denomination");
     const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
@@ -3441,6 +3443,8 @@ export async function runRehearsalCases(ctx) {
         commandsExercised: ["memberships.updateCommissionRate", "sales.create", "orgSettings.setCommissionMode", "sales.setCommissionAmount"] };
     } finally {
       await ownerMust("mutation", "memberships:updateCommissionRate", { orgId, membershipId: membership._id, commissionRate: originalRate });
+      // Keep AUTO selected: the unpaid accrual above must refuse MANUAL. Later
+      // cases do not require a mode reset; restore only the owner's original rate.
     }
   });
 

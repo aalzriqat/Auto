@@ -541,7 +541,7 @@ function makeBackend(defects: Defects = {}) {
   const vehicles = new Map<string, Record<string, any>>();
   const sales = new Map<string, Record<string, any>>();
   let commissionRate = 0;
-  let commissionMode = "AUTO_MEMBER";
+  let commissionMode = "MANUAL";
   let commissionPayableReads = 0;
   let certifiedCashSalePosted = false;
   let m486c5ReportStarted = false;
@@ -1391,7 +1391,7 @@ function makeBackend(defects: Defects = {}) {
         const invoiceId = cashInvoice && !defects.cashSaleMissingInvoice ? id("rdoc") : undefined;
         sales.set(saleId, { _id: saleId, orgId: args.orgId, status: args.status,
           canonicalReceivableDocumentId: invoiceId });
-        if (commissionRate > 0) {
+        if (commissionMode !== "MANUAL" && commissionRate > 0) {
           // Literal S853 fixture: 12,500 sale less 10,000 acquisition, at 10%.
           sales.get(saleId)!.commissionAmount = 250;
           if (!defects.commissionNotAccrued) post("COMMISSION_ACCRUED", "commission", saleId, [

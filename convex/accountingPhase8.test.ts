@@ -25,7 +25,7 @@ vi.mock("./rateLimit", () => ({
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
-async function seedDealer(tag = "p8") {
+async function seedDealer(tag = "p8", commissionMode?: "AUTO_MEMBER") {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Phase8 Dealer ${tag}`, createdAt: Date.now() })
@@ -67,6 +67,7 @@ async function seedDealer(tag = "p8") {
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"],
+      ...(commissionMode ? { commissionMode } : {}),
     })
   );
 
@@ -161,7 +162,7 @@ describe("Phase 8 — sale cancellation reversal", () => {
   });
 
   test("cancelling a sale closes its receivable and reverses unpaid commission accrual", async () => {
-    const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_commission");
+    const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_commission", "AUTO_MEMBER");
     await t.run(async (ctx) => {
       const membership = await ctx.db
         .query("memberships")
@@ -248,7 +249,7 @@ describe("Phase 8 — sale cancellation reversal", () => {
   });
 
   test("cancelling a sale is blocked after commission has been paid", async () => {
-    const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_paid_commission");
+    const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_paid_commission", "AUTO_MEMBER");
     await t.run(async (ctx) => {
       const membership = await ctx.db
         .query("memberships")
