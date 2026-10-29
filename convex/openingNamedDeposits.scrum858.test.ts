@@ -867,6 +867,50 @@ test("period close reports an UNAVAILABLE deposits comparison as its own warning
   expect(checklist.warnings.filter((w: string) => /Customer deposits subledger does not reconcile/.test(w))).toEqual([]);
   expect(checklist.customerDepositsReconciliation).toMatchObject({ status: "UNAVAILABLE", isReconciled: false });
 });
+// ── Round 2 (Seat 2 P1): ONE effective cutoff, and the opening row's accounting date counts ─────
+//
+// (a) An opening approved today but DATED tomorrow: the row exists now, the GL credit is dated tomorrow,
+//     so a cutoff before tomorrow saw GL 0 against deposits 100 and invented a -100 difference.
+// (b) A reservation applied to a sale dated tomorrow, with `toDate` omitted: the activity scan was skipped
+//     while the GL was still read to Date.now(), so +100 was invented.
+const DAY = 86_400_000;
+const HOUR = 3_600_000;
+
+test("an opening deposit whose opening date is AFTER the cutoff is UNAVAILABLE, never GL 0 against deposits 100 (round-2 repro a)", async () => {
+  const s = await seed();
+  const openingDate = Date.now() + DAY;
+  await openReservationAt(s, openingDate);
+
+  const result = await reconAt(s, Date.now() + HOUR);
+  expect(result).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+  expect(result.byCurrency).toEqual({});
+
+  // Once the cutoff reaches the opening date both sides carry it and agree.
+  const onTime = await reconAt(s, openingDate + HOUR);
+  expect(onTime).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(onTime.byCurrency.JOD).toMatchObject({ glBalanceMinor: 100_000, subledgerBalanceMinor: 100_000, discrepancyMinor: 0 });
+});
+
+test("with toDate OMITTED the default 'now' cutoff gets the same activity guard: a sale dated tomorrow is UNAVAILABLE, never +100 (round-2 repro b)", async () => {
+  const s = await seed();
+  await openReservationAt(s, Date.now() - DAY);
+  await sellAt(s, Date.now() + DAY);
+  const apps = await s.t.run((ctx) => ctx.db.query("depositApplications").collect());
+  expect(apps).toHaveLength(1);
+  expect(apps[0].appliedAt).toBeGreaterThan(Date.now());
+
+  const omitted = await reconAt(s);
+  expect(omitted).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+  expect(omitted.byCurrency).toEqual({});
+
+  // The explicit cutoff, in the same instant, answers the same way: one rule for both spellings of "now".
+  const explicit = await reconAt(s, Date.now());
+  expect(explicit).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+  // Neither call wrote anything: a reconciliation never posts a correction.
+  const journals = await s.t.run((ctx) => ctx.db.query("journalEntries").collect());
+  expect(journals.map((j) => j.status)).not.toContain("DRAFT");
+});
+
 // ── Native-screen visibility (F3, round-1 review) ───────────────────────────────────────────────
 // `deposits.listByVehicle` is keyed by car, so a security deposit and a reservation that names no VIN
 // can never appear there. The customer's own record is where they are read.
