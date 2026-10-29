@@ -8,6 +8,7 @@ import {
 import { pathToFileURL } from "node:url";
 import { resolveGit } from "../contractSkew/gitExecutable.mjs";
 import {
+  PR_E2E_CHECK,
   executionEvidence,
   gateIsArmed,
   planPrE2e,
@@ -17,6 +18,84 @@ import {
 
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
 const sha = (value) => /^[a-f0-9]{40}$/.test(value ?? "");
+// Request-URL safety (SCRUM-757; Sonar jssecurity:S7044 API traversal and S8476
+// client-side request forgery; OWASP SSRF Prevention Cheat Sheet: allowlist the
+// destination, set scheme and path in code, do not carry user-controlled path
+// text, disable redirects). The token-bearing request may only reach this
+// origin. GitHub Enterprise Server is out of scope for this repository, so no
+// other host is accepted, not even through GITHUB_API_URL.
+const GITHUB_API_ORIGIN = "https://api.github.com";
+
+function githubApiOrigin(raw) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("Invalid GitHub API origin.");
+  }
+  // WHATWG URL drops an empty fragment or default port, so the raw text must
+  // also be exactly the origin, with or without one trailing slash.
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.origin !== GITHUB_API_ORIGIN ||
+    parsed.username !== "" || parsed.password !== "" ||
+    parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "" ||
+    (raw !== GITHUB_API_ORIGIN && raw !== `${GITHUB_API_ORIGIN}/`)
+  )
+    throw new Error("Invalid GitHub API origin.");
+  return GITHUB_API_ORIGIN;
+}
+
+// "owner/name" with neither part a dot segment, so the path cannot climb out
+// of /repos/.
+function repositoryParts(value) {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(value ?? ""))
+    throw new Error("Invalid repository identity.");
+  const [owner, name] = value.split("/");
+  if ([owner, name].some((part) => part === "." || part === ".."))
+    throw new Error("Invalid repository identity.");
+  return { owner, name };
+}
+
+// Run id and attempt arrive as environment text; Number() would accept "1e3",
+// "0x10" or " 12". Only plain positive decimal safe integers are identities.
+function positiveInteger(text) {
+  if (typeof text !== "string" || !/^[1-9]\d*$/.test(text))
+    throw new Error("Invalid GitHub run identity.");
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0)
+    throw new Error("Invalid GitHub run identity.");
+  return value;
+}
+
+// Every route the gate uses, in full. A segment that came from an event
+// payload or an API response (run id, PR number, check id, SHA) is accepted
+// only as digits or 40 lowercase hex characters, so none can carry "/", "..",
+// "?" or "#". Anything else is refused before a request is made.
+const ID = String.raw`[1-9]\d{0,14}`;
+const SHA = "[a-f0-9]{40}";
+const ROUTES = [
+  String.raw`/actions/runs/${ID}`,
+  String.raw`/actions/workflows/${ID}/runs\?event=pull_request&head_sha=${SHA}&per_page=100&page=${ID}`,
+  String.raw`/commits/${SHA}/pulls\?per_page=100`,
+  String.raw`/commits/${SHA}/check-runs\?check_name=${encodeURIComponent(PR_E2E_CHECK)}&filter=all&per_page=100&page=${ID}`,
+  "/check-runs",
+  String.raw`/check-runs/${ID}`,
+  String.raw`/pulls/${ID}`,
+  String.raw`/pulls/${ID}/files\?per_page=100&page=${ID}`,
+  String.raw`/git/ref/pull/${ID}/merge`,
+].map((pattern) => new RegExp(`^${pattern}$`));
+
+function requestUrl(origin, repository, route) {
+  if (typeof route !== "string" || !ROUTES.some((pattern) => pattern.test(route)))
+    throw new Error("Invalid GitHub API route.");
+  const base = `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`;
+  const url = new URL(`${base}${route}`, origin);
+  if (url.origin !== origin || !url.pathname.startsWith(`${base}/`))
+    throw new Error("Invalid GitHub API route.");
+  return url;
+}
+
 const safeJson = (value) =>
   JSON.stringify(value, null, 2)
     .replaceAll("`", "\\u0060")
@@ -142,11 +221,13 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
     );
     return;
   }
-  if (!/^[\w.-]+\/[\w.-]+$/.test(env.GITHUB_REPOSITORY ?? ""))
-    throw new Error("Invalid repository identity.");
+  const repository = repositoryParts(env.GITHUB_REPOSITORY);
+  const apiOrigin = githubApiOrigin(env.GITHUB_API_URL);
+  positiveInteger(env.GITHUB_RUN_ID);
+  positiveInteger(env.GITHUB_RUN_ATTEMPT);
   const api = async (method, route, body) => {
     const response = await fetchImpl(
-      `${env.GITHUB_API_URL}/repos/${env.GITHUB_REPOSITORY}${route}`,
+      requestUrl(apiOrigin, repository, route),
       {
         method,
         headers: {
