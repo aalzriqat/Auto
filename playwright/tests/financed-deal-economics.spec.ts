@@ -74,25 +74,12 @@ test.describe("recording a financed deal's economics through the interface", () 
    * Tracked with the redesign: SCRUM-63 (Unified Deal Workspace).
    */
 
-  /**
-   * Gated on the CREDENTIALS, not on the session file they produce.
-   *
-   * `test.skip()` at describe level runs during suite DISCOVERY — before the
-   * setup project has run, and therefore before `playwright/.auth/approver.json`
-   * exists. That directory is gitignored, so on any clean runner the file is
-   * absent at discovery and this suite would skip *permanently*: green CI, and
-   * the one path the issue exists to prove never executed. It passed locally
-   * only because earlier runs had left the file behind.
-   *
-   * The environment variables are present at discovery (playwright.config.ts
-   * loads `.env.local` at config time), and they are the same condition the
-   * approver's setup skips on — so the two can no longer disagree about whether
-   * this identity exists.
-   */
-  test.skip(
-    !process.env.E2E_APPROVER_USER || !process.env.E2E_APPROVER_PASSWORD,
-    "No approver identity is provisioned (E2E_APPROVER_USER / E2E_APPROVER_PASSWORD), and AutoFlow refuses to let one person both create and approve a deal — so this path cannot be driven. Provision the second identity rather than weakening what this proves.",
-  );
+  // Both identities are mandatory in the pilot hunt. Missing setup is a
+  // failed prerequisite, so the scenario cannot silently disappear.
+  test.beforeAll(() => {
+    expect(process.env.E2E_APPROVER_USER, "Second identity is required").toBeTruthy();
+    expect(process.env.E2E_APPROVER_PASSWORD, "Second identity is required").toBeTruthy();
+  });
 
   test("a salesperson quotes it, a manager approves it, and the deal finalizes", async ({
     page,

@@ -216,7 +216,10 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
     // SCRUM-616/617: the reviewed change opts into the cross-screen oracle.
-    "c9267fa9ae288f774457a1840721f319caef09b91f8846a61a264c35ffa3cbe2",
+    // SCRUM-760 G8: job timeout 120 -> 180 minutes for the larger deals/sales
+    // hunt library. Nothing else in the workflow changed: still main-only, same
+    // steps, secrets, permissions and checkouts.
+    "2f1d2e3816f6927ec6d7cde133d044223a9a13029e6bfa63a845f30ffe7f9db8",
   // SCRUM-616: main-only, serialized disposable previews; this whole-workflow
   // pin keeps its triggers, credentials, deploy and cleanup inside the review.
   "pilot-role-audit.yml":
