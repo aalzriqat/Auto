@@ -5,6 +5,26 @@ public snapshot of the owner rulings they cite: comment id, digest, date only.
 Never put ruling text or customer data here. Format, validators and rules live in
 `scripts/regression/scenarioRecord.ts`; run `pnpm test:regression-library`.
 
+## Supplier payment amount display (SCRUM-880)
+
+Four `supplier-payment-currency-scale-*` screen records bind the EN/AR JOD/USD
+checks in `components/sourcing/SupplierPaymentDialog.money.test.tsx`. They render
+the real dialog and language provider in jsdom with synthetic data, assert the
+exact amount text, preserve the VAT input, and check LTR amount isolation inside
+the Arabic RTL dialog. The library's `backend` level selects Vitest here; these
+are screen checks, with no backend calls or browser layout certification.
+`bugRef.failingFirst` identifies the commit where all four assertions failed.
+
+The dialog renders one formatted figure, `payable.amountDue`; its optional VAT
+field renders the supplied input string. The display reuses
+`lib/moneyDisplay.formatMoneyAmount`, keeps the ISO currency suffix, and follows
+that formatter's existing whole-number policy. Currency precision follows
+[ECMA-402 Intl.NumberFormat](https://tc39.es/ecma402/#sec-currencydigits) and
+[ISO 4217 List One](https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml):
+JOD has three minor-unit digits and USD has two. Both entries were checked on
+2026-10-29. The records cite SCRUM-760's standing consistency ruling; the exact
+scale and Latin-digit requirements are recorded in SCRUM-880.
+
 ## RT11-DOORS pilot containment
 
 The `rt11-*` records cite the whole-comment digest of owner ruling

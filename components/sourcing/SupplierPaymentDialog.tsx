@@ -9,6 +9,7 @@ import { PaymentMethodSelect, type PaymentMethod, type Translate } from "@/compo
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import type { Id } from "@/convex/_generated/dataModel";
+import { formatMoneyAmount } from "@/lib/moneyDisplay";
 
 type SupplierPaymentDetails = {
   vehicleDesc: string;
@@ -68,7 +69,7 @@ export function SupplierPaymentDialog({
               <p><strong>{t("SourceDealer" as any)}:</strong> {payable.sourcedFromName}</p>
               <p>
                 <strong>{t("Amount" as any)}:</strong>{" "}
-                <span className="font-semibold text-orange-600">{payable.amountDue.toLocaleString(locale === "ar" ? "ar-JO" : "en-JO")} {payable.currency}</span>
+                <span dir="ltr" className="font-semibold text-orange-600">{formatMoneyAmount(payable.amountDue, payable.currency)} {payable.currency}</span>
               </p>
             </div>
             <p className="text-sm text-muted-foreground">{t("MarkPaidWarning" as any)}</p>
