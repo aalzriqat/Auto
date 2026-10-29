@@ -140,6 +140,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "A consigned vehicle's supplier payable is settled at its gross amount. VAT cannot be reclassified on it.",
     "تُسوَّى ذمة المورّد عن سيارة الأمانة بمبلغها الإجمالي، ولا يمكن إعادة تصنيف ضريبة القيمة المضافة عليها.",
   ],
+  // SCRUM-858 S2 (owner, SCRUM-858 c23884): convex/utils/openingInventoryContainment.ts.
+  ServerError_OPENING_INVENTORY_SOURCED_REFUSED: [
+    "This vehicle is held on consignment, so it cannot be opened as owned inventory. Open only cars the dealership owns. Nothing has been changed.",
+    "هذه السيارة مودعة بالأمانة، لذلك لا يمكن افتتاحها كمخزون مملوك. افتح السيارات التي يملكها المعرض فقط. لم يتم تغيير أي شيء.",
+  ],
   PayableNoVatReclass: [
     "VAT cannot be reclassified on this payable.",
     "لا يمكن إعادة تصنيف ضريبة القيمة المضافة على هذه الذمة.",
