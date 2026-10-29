@@ -235,6 +235,74 @@ describe("narrow renewal evidence (SCRUM-866 round 9)", () => {
   });
 });
 
+describe("PR-head review reference in renewal evidence (SCRUM-866)", () => {
+  const PR_HEAD = "8f12a47f61e3";
+  const withText = (text: string) => entry({ expires: RENEWED_EXPIRES, renewal: text });
+  const options = {
+    reviewedText: serialize([entry()]), backendDefinitionOf: directDefinition,
+    compare: changedOnly("convex/vehicles.ts", "app/page.tsx"), evidenceChanged: allIdentical,
+  };
+  const gapsFor = (text: string, over: Record<string, unknown> = {}) =>
+    renewalEvidenceGaps(serialize([withText(text)]), { ...options, ...over });
+  const named = "reviewed convex/vehicles.ts and app/page.tsx.";
+
+  test("accepts `<KEY> review of PR #<n> head <sha>` when every changed file is named and unchanged since", () => {
+    expect(gapsFor(`SCRUM-778 review of PR #693 head ${PR_HEAD}: ${named}`)).toEqual([]);
+  });
+  test("still accepts the original `SCRUM-866 round N review against origin/main <sha>` form", () => {
+    expect(gapsFor(`SCRUM-866 round 9 review against origin/main fa4bdab2: ${named}`)).toEqual([]);
+  });
+  test("refuses the new form when a changed file is not named", () => {
+    const gaps = gapsFor(`SCRUM-778 review of PR #693 head ${PR_HEAD}: reviewed convex/vehicles.ts only.`);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].missing).toEqual(["app/page.tsx"]);
+  });
+  test("refuses the new form when a file changed after the PR-head SHA, even if named", () => {
+    const gaps = gapsFor(`SCRUM-778 review of PR #693 head ${PR_HEAD}: ${named}`, {
+      evidenceChanged: (_sha: string, file: string) => file === "app/page.tsx" ? "changed" : "identical",
+    });
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].changedSinceEvidence).toEqual(["app/page.tsx"]);
+  });
+  test("compares files against the SHA named in the new form", () => {
+    const seen: string[] = [];
+    gapsFor(`SCRUM-778 review of PR #693 head ${PR_HEAD}: ${named}`, {
+      evidenceChanged: (sha: string) => { seen.push(sha); return "identical"; },
+    });
+    expect(seen).toEqual([PR_HEAD, PR_HEAD]);
+  });
+  test("the last review reference wins across both forms", () => {
+    const seen: string[] = [];
+    gapsFor(`SCRUM-866 round 9 review against origin/main fa4bdab2 then SCRUM-778 review of PR #693 head ${PR_HEAD}: ${named}`, {
+      evidenceChanged: (sha: string) => { seen.push(sha); return "identical"; },
+    });
+    expect(seen).toEqual([PR_HEAD, PR_HEAD]);
+    seen.length = 0;
+    gapsFor(`SCRUM-778 review of PR #693 head ${PR_HEAD} then SCRUM-866 round 9 review against origin/main fa4bdab2: ${named}`, {
+      evidenceChanged: (sha: string) => { seen.push(sha); return "identical"; },
+    });
+    expect(seen).toEqual(["fa4bdab2", "fa4bdab2"]);
+  });
+  test.each([
+    ["no PR number", `SCRUM-778 review of PR head ${PR_HEAD}`],
+    ["no Jira key", `review of PR #693 head ${PR_HEAD}`],
+    ["a bare PR number as the key", `#12 review of PR #693 head ${PR_HEAD}`],
+    ["a non-hex SHA", "SCRUM-778 review of PR #693 head zzzzzzzzzzzz"],
+    ["a SHA shorter than 8 hex digits", "SCRUM-778 review of PR #693 head 8f12a47"],
+    ["a branch name instead of a SHA", "SCRUM-778 review of PR #693 head main"],
+    ["a non-numeric PR number", `SCRUM-778 review of PR #abc head ${PR_HEAD}`],
+    ["a 41-digit hex token", `SCRUM-778 review of PR #693 head ${"a".repeat(41)}`],
+    ["a SHA running into letters", `SCRUM-778 review of PR #693 head ${PR_HEAD}zz`],
+    ["a SHA running into a non-ASCII digit", `SCRUM-778 review of PR #693 head ${PR_HEAD}١`],
+    ["an old-form SHA running into letters", `SCRUM-866 round 2 review against origin/main ${PR_HEAD}zz`],
+  ])("refuses a lookalike with %s as having no review SHA", (_label, marker) => {
+    const gaps = gapsFor(`${marker}: ${named}`);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].missing).toEqual(["(no reviewed source SHA in renewal)"]);
+    expect(gaps[0].renewalProblem).toBe("malformed");
+  });
+});
+
 describe("backend definition attribution for narrow evidence", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cs-definition-"));
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
