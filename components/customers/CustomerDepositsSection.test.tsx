@@ -110,6 +110,18 @@ describe.each(["en", "ar"] as const)("customer deposits section in %s", (locale)
     expect(screen.queryByRole("note")).toBeNull();
   });
 
+  test("renders the exact localized date with Western digits and without forcing LTR", () => {
+    renderSection(locale, {
+      deposits: [row({ _id: "dated", createdAt: new Date(2026, 0, 13, 12).getTime() })],
+    });
+    const depositRow = within(screen.getByRole("table")).getAllByRole("row")[1];
+    const dateCell = within(depositRow).getAllByRole("cell")[4];
+    // ar-JO emits RTL marks around the separators; a forced LTR wrapper scrambles their display.
+    expect(dateCell.textContent).toBe(locale === "ar" ? "13\u200f/01\u200f/2026" : "Jan 13, 2026");
+    expect(dateCell.querySelector('[dir="ltr"]')).toBeNull();
+    expect(dateCell.closest("[dir]")?.getAttribute("dir")).toBe(locale === "ar" ? "rtl" : "ltr");
+  });
+
   test("a truncated page tells the reader the list is only the newest 100", () => {
     renderSection(locale, { deposits: SAMPLE, truncated: true });
     expect(screen.getByRole("note").textContent).toBe(text.truncated);
