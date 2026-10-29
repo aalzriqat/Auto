@@ -231,6 +231,32 @@ The Phase 2 implementation must put a bounded, independently reviewed certificat
 
 Selected real-backend rows M486C1–M486C4 now have exact-SHA disposable-preview proof described above. The SCRUM-760 unwind and cost-correction rows have **no** real-backend replay yet and are **UNAVAILABLE** as real-backend proof until they are added to the trusted case registry (blocked on the financed chain being green there, SCRUM-759/FD1). The remaining matrix rows are harness-only. Fully elapsed periods need consumer-facing snapshot assertions, and these release runs cannot prove retained production-data parity without separate reconciliation.
 
+## SCRUM-869-AR-1240-RECON
+
+Owner ruling SCRUM-869#c23881 (2026-10-29): the consignment margin receipt and the supplier cost-recovery receipt are in the pilot and must be certified. Design decisions SCRUM-869#c23880 (W2, W7, W13, OQ-10): the reconciliation is per currency, carries an Unlinked bucket, says UNAVAILABLE when it cannot be computed, stores no balance, and a difference is displayed and never posted. It is not a period-close gate. The ruling digest in `regression/rulings.json` is the same one the S1 slice records (computed from a paraphrase because the Jira text was not available to the implementing session; the operator refreshes it).
+
+Practice cited (general accounting knowledge; no external source was fetched in this session): a subledger is reconciled to its general-ledger control account by total and per currency, a reconciling difference is reported and investigated rather than adjusted or posted by the report, and items that cannot be attributed to a counterparty stay in the total and are shown as a separate unallocated line.
+
+Account facts, traced in `convex/accounting/postingRules.ts`: GL 1240 (`RECEIVABLE_FROM_SUPPLIERS`) is debit-normal. It is debited by the consigned DIRECT_TO_SUPPLIER sale (margin) and by a supplier-borne expense (cost recovery). It is credited by `SUPPLIER_RECEIVABLE_COLLECTED`, by `SUPPLIER_COST_RECOVERY_RECEIVED` and by a deposit retained against commission (seeded into `amountReceived` when the receivable opens). The subledger is the signed open balance of every non-CANCELLED receivable plus every non-REVERSED recovery. Every row is a call to `accountingReports.supplierReceivablesReconciliation` in `convex/supplierReceivablesReconciliation.scrum869.test.ts`; figures are JOD (1 JOD = 1,000 minor units) unless stated.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| Margin 3,000 from a direct-settled sale | GL 1240 3,000,000 = subledger 3,000,000; AVAILABLE; complete | `CONTROL: a fresh direct-settled sale reconciles - A/R subledger equals 1240` |
+| Margin 3,000, receipt 1,000 | both sides 2,000,000 | `a partial margin receipt lowers the subledger and 1240 by the same amount` |
+| Margin 3,000 plus supplier-borne cost 200, receipt 80 | both sides 3,200,000 then 3,120,000; recovery part 120,000 | `a supplier-borne cost recovery is part of the 1240 total, and its receipt lowers both sides` |
+| Direction 1: receipt in the GL, not in the subledger | GL 2,000,000, subledger 3,000,000, difference -1,000,000, not reconciled | `a receipt posted to the GL but not recorded in the subledger is a difference` |
+| Direction 2: receipt in the subledger, not in the GL | GL 3,000,000, subledger 2,000,000, difference +1,000,000, not reconciled | `a receipt recorded in the subledger but never posted to the GL is the reverse difference` |
+| USD receivable 400.00 with no USD GL balance | USD shown with GL 0, subledger 40,000, not reconciled; JOD still reconciled | `a currency with subledger rows and no GL balance is a difference, not zero` |
+| Receivable with no supplier identity | counted in the total and in the Unlinked bucket; named supplier moves it to the linked part | `rows with no supplier identity fall in the Unlinked bucket and still count toward the total` |
+| CANCELLED receivable, REVERSED recovery | contribute nothing to the subledger | `a CANCELLED receivable and a REVERSED recovery carry no balance` |
+| Queued posting that touches 1240 | UNAVAILABLE, PENDING_POSTINGS, no currencies, not reconciled, not complete | `a queued posting that touches 1240 reports pending, not a difference` |
+| Queued posting that cannot touch 1240 | AVAILABLE | `a queued posting that cannot touch 1240 does not block the comparison` |
+| Pending draft on the 1240 account | UNAVAILABLE, PENDING_POSTINGS (a draft on another account does not block) | `a pending draft that touches the 1240 account reports pending` |
+| More rows than the read limit | UNAVAILABLE, OVER_LIMIT, never a partial total | `more rows than the read limit is UNAVAILABLE (OVER_LIMIT), never a partial total` |
+| Permission and tenancy | caller without view:finance refused; a finance user of another organization refused | `is protected by finance read and scoped to the caller's tenant` |
+| Report only | no row written; `accountingPeriods.ts` does not read the reconciliation (OQ-10) | `it only reports: nothing is written and period close does not read it` |
+
+Known simplifications, stated rather than hidden: the subledger side is the current state of the rows and only the GL side is taken as of `toDate` (the A/P reconciliation does the same); a pending outbox expense is treated as 1240-affecting whatever its cost bearer, so a queued ordinary expense makes the report UNAVAILABLE until it drains; "Unlinked" means a blank or "Unknown supplier" name because no supplier id exists yet (SCRUM-869 P2/P3).
 ## Implementation ledger on this branch
 
 The owned configured-financier no-deposit cancellation row drives the public cancellation door before any financier receipt. It checks a CANCELLED finance-company invoice and sale, a REVERSED sale event, literal inverse 1210/4100/5100/1400 journal lines, and zero public open-period trial balance and income. A salesperson with ordinary sales and finance-application access but without `cancel:closed_deal` is refused before the reversal, with all schema tables unchanged. It does not cover cancellation after financier payment or a closed-period reversal.
