@@ -1,0 +1,68 @@
+{
+  "id": "deposit-deleted-after-the-cutoff-is-unavailable",
+  "fingerprint": "26a284c1364ff04a853ab12162e578cc345e32b24c612e4d39743a3d5eb87385",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r3-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "deposits.create",
+      "input": {
+        "createdAt": "before-cutoff",
+        "deletedAt": "after-cutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {
+        "toDate": "cutoff"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    },
+    {
+      "observable": "currencies",
+      "value": "EMPTY"
+    },
+    {
+      "observable": "journalWrites",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "a deposit DELETED after the cutoff makes the comparison UNAVAILABLE (deletedAt alone)"
+  },
+  "matrixRow": "OB-B15"
+}
