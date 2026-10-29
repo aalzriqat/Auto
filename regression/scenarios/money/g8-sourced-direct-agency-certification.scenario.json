@@ -1,0 +1,56 @@
+{
+  "id": "g8-sourced-direct-agency-certification",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "local-g8-plan-runtime-pending",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "vehicle": "SOURCED",
+        "price": 12500,
+        "supplierCost": 10000,
+        "route": "DIRECT_TO_SUPPLIER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "incomeStatement.totalRevenueMinor",
+      "value": 2500000
+    },
+    {
+      "observable": "supplierReceivable.amountDue",
+      "value": 2500
+    },
+    {
+      "observable": "financierReceivables",
+      "value": []
+    },
+    {
+      "observable": "supplierAdvice.journalMovement",
+      "value": "NONE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum486Certification.test.ts",
+    "testName": "SOURCED configured financier × direct supplier payment: only the supplier owes the agent margin"
+  },
+  "matrixRow": "SCRUM-760-G8-SOURCED",
+  "fingerprint": "a59bccc82a1df6bddea8867ff0f3d2e23aa88cd2af249744a5c52bee41894cfd"
+}
