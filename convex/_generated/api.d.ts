@@ -11,6 +11,7 @@
 import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
 import type * as accounting_bankAggregateTriggers from "../accounting/bankAggregateTriggers.js";
 import type * as accounting_bankLineAggregate from "../accounting/bankLineAggregate.js";
+import type * as accounting_bankOpeningReconciliation from "../accounting/bankOpeningReconciliation.js";
 import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
 import type * as accounting_invoiceReceiptDisposition from "../accounting/invoiceReceiptDisposition.js";
 import type * as accounting_invoiceReceiptReservation from "../accounting/invoiceReceiptReservation.js";
@@ -258,6 +259,7 @@ import type * as utils_openingAdvanceBasis from "../utils/openingAdvanceBasis.js
 import type * as utils_openingAllocationValidators from "../utils/openingAllocationValidators.js";
 import type * as utils_openingCommissionBasis from "../utils/openingCommissionBasis.js";
 import type * as utils_openingCommissionLiabilities from "../utils/openingCommissionLiabilities.js";
+import type * as utils_openingInventoryContainment from "../utils/openingInventoryContainment.js";
 import type * as utils_openingManagementBasis from "../utils/openingManagementBasis.js";
 import type * as utils_openingManagementSchedule from "../utils/openingManagementSchedule.js";
 import type * as utils_openingPartnerBasis from "../utils/openingPartnerBasis.js";
@@ -347,6 +349,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/accountSnapshots": typeof accounting_accountSnapshots;
   "accounting/bankAggregateTriggers": typeof accounting_bankAggregateTriggers;
   "accounting/bankLineAggregate": typeof accounting_bankLineAggregate;
+  "accounting/bankOpeningReconciliation": typeof accounting_bankOpeningReconciliation;
   "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
   "accounting/invoiceReceiptDisposition": typeof accounting_invoiceReceiptDisposition;
   "accounting/invoiceReceiptReservation": typeof accounting_invoiceReceiptReservation;
@@ -594,6 +597,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingAllocationValidators": typeof utils_openingAllocationValidators;
   "utils/openingCommissionBasis": typeof utils_openingCommissionBasis;
   "utils/openingCommissionLiabilities": typeof utils_openingCommissionLiabilities;
+  "utils/openingInventoryContainment": typeof utils_openingInventoryContainment;
   "utils/openingManagementBasis": typeof utils_openingManagementBasis;
   "utils/openingManagementSchedule": typeof utils_openingManagementSchedule;
   "utils/openingPartnerBasis": typeof utils_openingPartnerBasis;
