@@ -89,6 +89,8 @@ export function agingFor(
 export type DueRuleCode =
   | "AGREED_DATE"
   | "DELIVERY_RECORDED"
+  | "FINANCIER_FUNDING_RECORDED"
+  | "FINANCIER_FUNDING_NOT_RECORDED"
   | "CLEARED_PROCEEDS_NOT_RECORDED"
   | "DELIVERY_NOT_RECORDED"
   | "TERMS_NOT_RECORDED"
@@ -98,8 +100,17 @@ export type DueRuleCode =
 export interface DueFacts {
   /** A stored agreed due date (epoch ms). */
   agreedDueAt?: number;
-  /** The explicit delivery record (financed `handoverStatus === HANDED_OVER` and its timestamp). */
+  /**
+   * The recorded vehicle handover to the customer (`handoverStatus === HANDED_OVER` and its
+   * `vehicleHandoverAt` timestamp), on a CASH or a financed deal alike.
+   */
   deliveredAt?: number;
+  /**
+   * Present only when a financier funds this deal (never for CASH). `fundedAt` is the recorded
+   * instant the financier's funding reached the dealership; absent while it is pending, requested
+   * or has been reversed.
+   */
+  financierFunding?: { fundedAt?: number };
 }
 
 export interface DerivedDue {
@@ -120,25 +131,46 @@ type TriggerResolution = { dueAt: number; rule: DueRuleCode; explanation: string
  * The ownership-model trigger table. ONE entry per model, so an owner ruling on what "cleared
  * proceeds", "terms" or "collectibility" mean changes one entry and its test.
  *
- * Coordinator rulings 2026-10-29 within c23883:
- *  - THROUGH_DEALERSHIP payable: cleared proceeds are not a recorded fact, so no trigger.
- *  - DIRECT_TO_SUPPLIER commission receivable: only an explicit delivery record counts. A completed
- *    sale is NOT delivery.
+ * Owner ruling SCRUM-869 comment 23906 (2026-10-29) defines the two sourced triggers; the
+ * coordinator defaults within c23883 that it replaces are gone:
+ *  - THROUGH_DEALERSHIP payable ("cleared proceeds" = receipt of the financing from the financier):
+ *    due on the recorded instant the financier's funding was received. A CASH deal has no financier
+ *    and stays outside the ruling: no due date, `CLEARED_PROCEEDS_NOT_RECORDED`, never overdue.
+ *  - DIRECT_TO_SUPPLIER commission receivable ("completed delivery" = handing the car to the
+ *    customer): the recorded vehicle handover and nothing else. A completed sale is NOT delivery.
+ * Still coordinator rulings within c23883 (the owner has not ruled on them):
  *  - OWNED ON_ACCOUNT payable: supplier terms are not stored, so only an agreed date applies.
  *  - Cost recovery: no collectibility record exists, so only an agreed date applies.
+ * An agreed date wins over every trigger (see `deriveDueDate`).
  */
 export const DUE_TRIGGERS: Record<DueTriggerKey, (facts: DueFacts) => TriggerResolution> = {
-  SOURCED_THROUGH_DEALERSHIP_PAYABLE: () => ({
-    dueAt: null,
-    rule: "CLEARED_PROCEEDS_NOT_RECORDED",
-    explanation: "No due date: no agreed date, and cleared proceeds are not recorded.",
-  }),
+  SOURCED_THROUGH_DEALERSHIP_PAYABLE: (facts) => {
+    if (facts.financierFunding === undefined) {
+      return {
+        dueAt: null,
+        rule: "CLEARED_PROCEEDS_NOT_RECORDED",
+        explanation: "No due date: no agreed date, and no financier funds this deal, so there are no cleared proceeds to wait for.",
+      };
+    }
+    if (isRecordedInstant(facts.financierFunding.fundedAt)) {
+      return {
+        dueAt: facts.financierFunding.fundedAt,
+        rule: "FINANCIER_FUNDING_RECORDED",
+        explanation: "Due on the recorded date the financier's funding was received.",
+      };
+    }
+    return {
+      dueAt: null,
+      rule: "FINANCIER_FUNDING_NOT_RECORDED",
+      explanation: "No due date: no agreed date, and the financier's funding has not been received.",
+    };
+  },
   SOURCED_DIRECT_RECEIVABLE: (facts) => {
     if (isRecordedInstant(facts.deliveredAt)) {
       return {
         dueAt: facts.deliveredAt,
         rule: "DELIVERY_RECORDED",
-        explanation: "Due on the recorded delivery of the vehicle.",
+        explanation: "Due on the recorded handover of the vehicle to the customer.",
       };
     }
     return {

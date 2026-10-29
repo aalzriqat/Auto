@@ -1,0 +1,57 @@
+{
+  "id": "supplier-due-payable-financed-funding-recorded-due-on-funding",
+  "fingerprint": "1be770f2cdb8b26489590c0e4c8ef6efe4db93f8303877b66ce5c78d0b1a6e6b",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "route": "THROUGH_DEALERSHIP",
+        "financingType": "FINANCED",
+        "fundedAt": "-20d",
+        "fundedAmountMinor": 9000000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "FINANCIER_FUNDING_RECORDED"
+    },
+    {
+      "observable": "row.daysOverdue",
+      "value": 20
+    },
+    {
+      "observable": "row.bucket",
+      "value": "DAYS_1_30"
+    },
+    {
+      "observable": "row.outstandingMinor",
+      "value": 9500000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a financed deal whose financier funding is recorded: due on that instant and aged from it"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

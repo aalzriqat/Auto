@@ -118,9 +118,8 @@ describe("due-date derivation (c23883 OQ-1)", () => {
     });
   });
 
-  test("SOURCED THROUGH_DEALERSHIP payable: cleared proceeds are not recorded anywhere, so no due date", () => {
-    // Coordinator ruling 2026-10-29: no trigger until the owner names the record. A delivery date
-    // must not stand in for cleared proceeds.
+  test("SOURCED THROUGH_DEALERSHIP payable with no financier fact (CASH): a delivery date does not stand in for cleared proceeds", () => {
+    // The funding trigger itself is covered by the c23906 block below.
     expect(deriveDueDate("SOURCED_THROUGH_DEALERSHIP_PAYABLE", { deliveredAt: DELIVERED })).toMatchObject({
       dueAt: null,
       rule: "CLEARED_PROCEEDS_NOT_RECORDED",

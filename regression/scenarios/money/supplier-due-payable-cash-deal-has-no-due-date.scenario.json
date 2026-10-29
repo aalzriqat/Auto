@@ -1,0 +1,53 @@
+{
+  "id": "supplier-due-payable-cash-deal-has-no-due-date",
+  "fingerprint": "74c4a90b4ca44d2c149cde85397563efbe5d8d1458e94f3293a103b2ab7785e2",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "route": "THROUGH_DEALERSHIP",
+        "financingType": "CASH",
+        "fundedAt": "-20d",
+        "fundedAmountMinor": 9000000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "CLEARED_PROCEEDS_NOT_RECORDED"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "NO_DUE_DATE"
+    },
+    {
+      "observable": "row.dueDate",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a CASH deal is outside the ruling: no due date, never overdue, even beside stray funding data"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

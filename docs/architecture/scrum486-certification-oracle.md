@@ -237,8 +237,9 @@ Owner ruling SCRUM-869#c23883 (2026-10-29, OQ-1), recorded in Jira by the coordi
 
 Coordinator rulings of 2026-10-29 that fix the open points inside c23883 (the trigger table is `DUE_TRIGGERS` in `convex/utils/supplierDueDates.ts`, one entry per ownership model, so an owner answer changes one entry and its test):
 
-- A commission receivable is due on delivery only when the delivery is an explicit record: a financed application with `handoverStatus` HANDED_OVER and its `vehicleHandoverAt`. A COMPLETED sale is not delivery.
-- Cleared proceeds are not recorded anywhere, so a THROUGH_DEALERSHIP payable has no trigger and shows "No due date" unless `paymentDueDate` is set.
+- Owner ruling SCRUM-869#c23906 (2026-10-29, given in chat and recorded in Jira by the coordinator; the digest covers the whole comment) replaces the first two coordinator defaults. "Completed delivery" is handing the car to the customer: a commission receivable is due on the recorded vehicle handover and nothing else, `handoverStatus` HANDED_OVER with its `vehicleHandoverAt`. `applications.registerVehicleHandover` writes both for every deal, CASH included (`finalizeDeal` refuses without it), so a CASH deal is read the same way; a sale recorded without a deal application has no handover record. A COMPLETED sale is not delivery.
+- "Cleared proceeds" is the receipt of the financing from the financier: a THROUGH_DEALERSHIP payable on a FINANCED deal is due on the application's `disbursedAt`, counted only while `disbursedAmountMinor` is a positive amount (`confirmDisbursement` writes both; `returnFinanceDisbursementCheque` clears both; a requested or pending funding has neither). Rules `FINANCIER_FUNDING_RECORDED` and `FINANCIER_FUNDING_NOT_RECORDED`. The financier's payment to the supplier on the direct route (`supplierDisbursementConfirmedAt`) is a different payment and is never read. A CASH deal has no financier, so the ruling does not cover it: it keeps `CLEARED_PROCEEDS_NOT_RECORDED`, no due date, until the owner rules. An agreed date still wins over every trigger.
+- The coordinator defaults below stand because the owner has not ruled on them:
 - A cost recovery has an agreed date or none. An ON_ACCOUNT supplier's terms are not stored, so only `paymentDueDate` applies.
 - `agreedDueDate` (optional epoch ms) was added to margin receivables and cost recoveries. No door writes it in this slice.
 
@@ -247,7 +248,17 @@ Practice and evidence boundary: the aging layout (days past the due date in 30-d
 | Cell | Expected | Bound test |
 | --- | --- | --- |
 | Payable with an agreed `paymentDueDate` 10 days ago | rule AGREED_DATE, 10 days overdue, bucket 1-30, outstanding 9,500,000 minor | `an agreed paymentDueDate wins and ages by Amman calendar days` |
-| THROUGH_DEALERSHIP payable, completed sale, no agreed date | No due date (CLEARED_PROCEEDS_NOT_RECORDED), never overdue | `THROUGH_DEALERSHIP payable with a completed sale but no agreed date: no due date, cleared proceeds not recorded` |
+| THROUGH_DEALERSHIP payable, sale of unrecorded financing type and no application, no agreed date | No due date (CLEARED_PROCEEDS_NOT_RECORDED), never overdue | `THROUGH_DEALERSHIP payable with a completed sale but no agreed date: no due date, cleared proceeds not recorded` |
+| FINANCED THROUGH_DEALERSHIP payable, financier funding recorded 20 days ago | rule FINANCIER_FUNDING_RECORDED, due on that instant, 20 days, bucket 1-30, outstanding 9,500,000 minor | `a financed deal whose financier funding is recorded: due on that instant and aged from it` |
+| Financed payable, funding requested or pending (no `disbursedAt`) | No due date (FINANCIER_FUNDING_NOT_RECORDED), never overdue | `a financed deal with no funding received (requested or pending) has no due date and is never overdue` |
+| Financed payable, funding reversed (cheque returned after clearing) | the cleared instant and amount are absent: No due date | `a funding that was reversed (cheque returned after clearing) is not received` |
+| Financed payable, `disbursedAt` with no amount | not a received funding: No due date | `an instant with no recorded amount is not a received funding` |
+| Financed payable, only the supplier-direct disbursement recorded | not the dealership's funding: No due date | `the financier's payment to the supplier (direct route fact) is not the dealership's funding` |
+| Financed payable, vehicle handed over but no funding | the handover does not stand in for funding: No due date | `a recorded vehicle handover does not stand in for funding` |
+| Financed payable with funding and an agreed date | the agreed date wins | `an agreed paymentDueDate still wins over the funding instant` |
+| Funded application of another organisation | read as a missing fact: No due date | `a funded application of another organisation is not evidence of this deal's funding` |
+| CASH THROUGH_DEALERSHIP payable, even beside stray funding data | No due date (CLEARED_PROCEEDS_NOT_RECORDED), never overdue | `a CASH deal is outside the ruling: no due date, never overdue, even beside stray funding data` |
+| CASH sale recorded without a deal application | No due date (CLEARED_PROCEEDS_NOT_RECORDED) | `a CASH sale recorded without a deal application has no due date either` |
 | Payable with no sale and no agreed date | No due date (TERMS_NOT_RECORDED) | `an ON_ACCOUNT-style payable (no sale) with no agreed terms has no due date` |
 | Agreed date 5 days ahead | Current, -5 days | `an agreed date in the future is Current, with a negative day count` |
 | 20:59:59.999Z then 21:00:00.000Z on the due day | Current, 0 days; then 1 day overdue | `the Amman midnight edge: due that day is Current until 00:00 Amman, then 1 day overdue` |
@@ -256,6 +267,9 @@ Practice and evidence boundary: the aging layout (days past the due date in 30-d
 | Financed handover recorded 70 days ago | rule DELIVERY_RECORDED, 70 days, bucket 61-90 | `financed delivery recorded: due on handover and aged from it` |
 | COMPLETED sale, no application | No due date (DELIVERY_NOT_RECORDED) | `a COMPLETED sale is not delivery: no application means no due date` |
 | HANDED_OVER without `vehicleHandoverAt` | No due date, never overdue | `HANDED_OVER with no handover timestamp is a missing fact, never overdue` |
+| CASH deal, handover recorded 70 days ago | rule DELIVERY_RECORDED, 70 days, bucket 61-90 | `a CASH deal records the same handover and is due on it` |
+| CASH sale completed with no deal application | No due date (DELIVERY_NOT_RECORDED) | `a CASH sale completed without a deal application has no handover record: not delivery` |
+| Funded financed deal, no recorded handover | funding is not delivery: No due date (DELIVERY_NOT_RECORDED) | `a funded financed deal with no recorded handover is still not delivered` |
 | Receivable with `agreedDueDate` and a handover | the agreed date wins | `an agreedDueDate on the receivable beats the delivery trigger` |
 | Disputed receivable, 100 days past agreed date | gross kept, disputed shown, bucket 90+ | `a disputed receivable keeps its outstanding in gross and reports it as disputed` |
 | Application or sale of another organisation | read as a missing fact: No due date | `a sale from another organisation is not read as a fact of this one`; `a receivable whose saleId is another organisation's sale reads no delivery from it` |

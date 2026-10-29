@@ -7,6 +7,7 @@ import {
   ammanDateString,
   deriveDueDate,
   type AgingBucket,
+  type DueFacts,
   type DueRuleCode,
   type DueTriggerKey,
 } from "./supplierDueDates";
@@ -67,6 +68,7 @@ interface Outstanding {
   agreedDueAt: number | undefined;
   model: DueTriggerKey;
   deliveredAt?: number;
+  financierFunding?: DueFacts["financierFunding"];
 }
 
 type Reader = Pick<QueryCtx, "db">;
@@ -77,17 +79,50 @@ async function ownedSale(ctx: Reader, orgId: Id<"organizations">, saleId: Id<"sa
   return sale && sale.orgId === orgId ? sale : null;
 }
 
-/** The explicit delivery record: financed `handoverStatus === HANDED_OVER` with its timestamp. */
-async function recordedDeliveryAt(
+/** The deal's finance application, only when it is this organisation's: a foreign or missing one is a missing fact. */
+async function ownedApplication(
   ctx: Reader,
   orgId: Id<"organizations">,
   sale: Doc<"sales"> | null
-): Promise<number | undefined> {
-  if (!sale?.applicationId) return undefined;
+): Promise<Doc<"financeApplications"> | null> {
+  if (!sale?.applicationId) return null;
   const application = await ctx.db.get(sale.applicationId);
-  if (!application || application.orgId !== orgId) return undefined;
-  if (application.handoverStatus !== "HANDED_OVER") return undefined;
+  return application && application.orgId === orgId ? application : null;
+}
+
+/**
+ * The recorded vehicle handover to the customer (owner ruling SCRUM-869#c23906): `handoverStatus ===
+ * HANDED_OVER` with its `vehicleHandoverAt` timestamp. `applications.registerVehicleHandover` writes
+ * both, and `finalizeDeal` refuses to run without it, for a CASH deal exactly as for a financed one;
+ * a sale recorded without a deal application has no handover record at all. A completed sale is
+ * not delivery, so the sale's own status and date are never read.
+ */
+function recordedDeliveryAt(application: Doc<"financeApplications"> | null): number | undefined {
+  if (application?.handoverStatus !== "HANDED_OVER") return undefined;
   return application.vehicleHandoverAt;
+}
+
+/**
+ * The financier's funding of this deal (owner ruling SCRUM-869#c23906: "cleared proceeds" is the
+ * receipt of the financing from the financier).
+ *
+ * Undefined for a CASH deal, which no financier funds: the ruling does not reach it. Otherwise the
+ * fact is present, and `fundedAt` is the application's `disbursedAt` ONLY while the matching
+ * `disbursedAmountMinor` is a positive amount. `applications.confirmDisbursement` writes both when
+ * the money is received; `applications.returnFinanceDisbursementCheque` clears both when a cleared
+ * cheque comes back, and a requested or pending funding has neither. The supplier-direct
+ * disbursement fields are a different payment and are never read.
+ */
+function financierFundingFact(
+  sale: Doc<"sales"> | null,
+  application: Doc<"financeApplications"> | null
+): DueFacts["financierFunding"] {
+  if (!sale) return undefined;
+  if (sale.financingType === "CASH" || application?.quoteModeAtSubmission === "CASH") return undefined;
+  if (sale.financingType === undefined && application === null) return undefined;
+  const amount = application?.disbursedAmountMinor;
+  const received = typeof amount === "number" && Number.isFinite(amount) && amount > 0;
+  return { fundedAt: received ? application?.disbursedAt : undefined };
 }
 
 async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierPayables">): Promise<Outstanding | null> {
@@ -98,11 +133,14 @@ async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"v
   const outstandingMinor = toMinorUnits(view.remainingAmount, row.currency);
   if (outstandingMinor <= 0) return null;
   const sale = await ownedSale(ctx, orgId, "saleId" in row ? row.saleId : undefined);
+  const throughDealership = sale?.supplierSettlementRoute === "THROUGH_DEALERSHIP";
   return {
     outstandingMinor,
     disputed: view.status === "DISPUTED",
     agreedDueAt: row.paymentDueDate,
-    model: sale?.supplierSettlementRoute === "THROUGH_DEALERSHIP" ? "SOURCED_THROUGH_DEALERSHIP_PAYABLE" : "OWNED_ON_ACCOUNT_PAYABLE",
+    model: throughDealership ? "SOURCED_THROUGH_DEALERSHIP_PAYABLE" : "OWNED_ON_ACCOUNT_PAYABLE",
+    // Read only for the model that uses it: one extra bounded `get` per through-dealership row.
+    ...(throughDealership ? { financierFunding: financierFundingFact(sale, await ownedApplication(ctx, orgId, sale)) } : {}),
   };
 }
 
@@ -119,7 +157,7 @@ async function receivableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc
     disputed: row.status === "DISPUTED",
     agreedDueAt: row.agreedDueDate,
     model: "SOURCED_DIRECT_RECEIVABLE",
-    deliveredAt: await recordedDeliveryAt(ctx, orgId, sale),
+    deliveredAt: recordedDeliveryAt(await ownedApplication(ctx, orgId, sale)),
   };
 }
 
@@ -137,7 +175,11 @@ function toRow(
   facts: Outstanding,
   nowMs: number
 ): ObligationRow {
-  const derived = deriveDueDate(facts.model, { agreedDueAt: facts.agreedDueAt, deliveredAt: facts.deliveredAt });
+  const derived = deriveDueDate(facts.model, {
+    agreedDueAt: facts.agreedDueAt,
+    deliveredAt: facts.deliveredAt,
+    financierFunding: facts.financierFunding,
+  });
   const aging = agingFor(derived.dueAt, nowMs);
   return {
     kind,

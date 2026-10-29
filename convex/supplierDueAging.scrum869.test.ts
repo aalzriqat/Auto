@@ -7,10 +7,9 @@
  * facts only, else "No due date", which is never overdue. Buckets: Current, 1-30, 31-60, 61-90,
  * 90+ days overdue, in Asia/Amman. Disputed amounts are shown separately and stay in the gross.
  *
- * Coordinator rulings 2026-10-29 on the open points: "completed delivery" is only an explicit
- * record (financed `handoverStatus === HANDED_OVER` with `vehicleHandoverAt`); cleared proceeds are
- * not recorded, so a THROUGH_DEALERSHIP payable has no due date unless `paymentDueDate` is set;
- * a cost recovery has an agreed date or none.
+ * Coordinator rulings 2026-10-29 on the open points: a cost recovery has an agreed date or none.
+ * The "completed delivery" and "cleared proceeds" triggers were replaced by owner ruling
+ * SCRUM-869#c23906: see the S3b blocks at the end of this file.
  *
  * Rows are seeded directly: this slice reads, it writes nothing. Evidence boundary: convex-test
  * only (no runtime read limits, no OCC) and not production data.
