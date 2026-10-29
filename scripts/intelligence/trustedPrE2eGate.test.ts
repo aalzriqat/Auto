@@ -144,14 +144,7 @@ type Rec = {
   output?: { title?: string; text?: string };
 };
 const REPOSITORY = "aalzriqat/Auto";
-const ADMISSION_PATH = ".github/workflows/authenticated-pr-e2e.yml";
 const SWARM_PATH = ".github/workflows/browser-attack-swarm.yml";
-const admission = (id: number): Run => ({
-  id,
-  path: ADMISSION_PATH,
-  event: "pull_request_target",
-  head_branch: "feature",
-});
 const swarm = (id: number): Run => ({
   id,
   path: SWARM_PATH,
@@ -172,7 +165,7 @@ function github() {
   const records: Rec[] = [];
   const runsBySuite = new Map<number, Run>();
   const calls: string[] = [];
-  let writer: Run = swarm(100);
+  const publications: Array<Record<string, unknown>> = [];
   let nextId = 9;
   let runLookup: "ok" | "fail" = "ok";
   const api = async (
@@ -181,6 +174,7 @@ function github() {
     body?: Record<string, unknown>,
   ) => {
     calls.push(`${method} ${route.split("?")[0]}`);
+    if (method !== "GET" && body) publications.push(structuredClone(body));
     if (method === "GET" && route.startsWith("/commits/"))
       return { check_runs: records };
     if (method === "GET" && route.startsWith("/actions/runs?")) {
@@ -198,16 +192,16 @@ function github() {
     }
     if (method === "POST") {
       const id = nextId++;
-      runsBySuite.set(1000 + id, {
+      runsBySuite.set(110584846427, {
         id: 40796582338,
         path: "dynamic/github-code-scanning/codeql",
         event: "dynamic",
-        head_branch: writer.head_branch,
+        head_branch: "feature",
       });
       const record = {
         id,
         app: { slug: "github-actions" },
-        check_suite: { id: 1000 + id },
+        check_suite: { id: 110584846427 },
         ...body,
       } as Rec;
       records.push(record);
@@ -241,10 +235,8 @@ function github() {
     api,
     records,
     calls,
+    publications,
     insert,
-    asWriter: (run: Run) => {
-      writer = run;
-    },
     breakRunLookup: () => {
       runLookup = "fail";
     },
@@ -280,297 +272,110 @@ describe("SCRUM-757 check publication", () => {
       const record = hub.insert({ output: { text } }, swarm(100));
       expect(record.conclusion).toBe("success");
       const result = await gate.publishPrE2eCheck(hub.api, {
-        ...publishInput(200), mode, verdict: success,
+        ...publishInput(200), mode,
+        verdict: { conclusion: "failure", reason: "current execution failed" },
       });
-      expect(result.outcome, mode).toBe("quarantined");
+      expect(result.outcome, mode).toBe("written");
       expect(record.conclusion, mode).toBe("failure");
-      expect(hub.writes(), mode).toHaveLength(1);
+      expect(hub.writes().length, mode).toBeGreaterThan(0);
       expect(hub.records, mode).toHaveLength(1);
   });
 
   it.each([
-    undefined,
-    "",
-    "g5-publisher:swarm:200",
-    "g5-publisher:swarm:200:0",
+    undefined, "", "g5-publisher:swarm:200", "g5-publisher:swarm:200:0",
     "g5-publisher:swarm:9007199254740992:1",
     "g5-publisher:swarm:200:9007199254740992",
-    "g5-publisher:other:200:1",
-    "g5-publisher:admission:200:1",
-  ])(
-    "refuses without writing when a swarm-published admission record has invalid publisher marker %j",
-    async (text) => {
-      const hub = github();
-      const gate = await load();
-      hub.asWriter(admission(900));
-      await gate.publishPrE2eCheck(hub.api, { ...publishInput(900), mode: "initialize" });
-      hub.asWriter(swarm(200));
-      await gate.publishPrE2eCheck(hub.api, {
-        ...publishInput(200), mode: "finish",
-        verdict: { conclusion: "failure", reason: "newer execution failed" },
-      });
-      hub.records[0].output = { ...hub.records[0].output, text };
-      const before = JSON.stringify(hub.records);
-      hub.calls.length = 0;
-      await expect(gate.publishPrE2eCheck(hub.api, {
-        ...publishInput(300), mode: "finish", verdict: success,
-      })).rejects.toThrow("Recorded gate publisher is unavailable.");
-      expect(hub.writes()).toEqual([]);
-      expect(JSON.stringify(hub.records)).toBe(before);
-    },
-  );
-
-  it("preserves a newer attempt's failure against a late success from the same swarm run", async () => {
+    "g5-publisher:other:200:1", "g5-publisher:admission:200:1",
+    "g5-publisher:swarm:9007199254740991:1",
+  ])("revokes before independently publishing current evidence despite marker %j", async (text) => {
     const hub = github();
-    const gate = await load();
-    hub.asWriter(admission(900));
-    await gate.publishPrE2eCheck(hub.api, { ...publishInput(900), mode: "initialize" });
-    hub.asWriter(swarm(200));
-    await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(200, 2), mode: "finish",
-      verdict: { conclusion: "failure", reason: "retry failed" },
+    const record = hub.insert({ output: { text } }, swarm(100));
+    const result = await (await load()).publishPrE2eCheck(hub.api, {
+      ...publishInput(200), mode: "finish", verdict: success,
     });
-    hub.calls.length = 0;
-    const result = await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(200, 1), mode: "finish", verdict: success,
-    });
-    expect(result.outcome).toBe("obsolete");
-    expect(hub.writes()).toEqual([]);
-    expect(hub.records[0].conclusion).toBe("failure");
+    expect(result.outcome).toBe("written");
+    expect(hub.publications.map((body) => body.conclusion)).toEqual(["failure", "success"]);
+    expect(record.conclusion).toBe("success");
+    expect(hub.records).toHaveLength(1);
   });
 
-  it("preserves a newer swarm failure on an admission-created record when an older swarm publishes success", async () => {
+  it("updates the same check across actual GitHub suite placement and retries", async () => {
     const hub = github();
     const gate = await load();
-    hub.asWriter(admission(900));
     await gate.publishPrE2eCheck(hub.api, { ...publishInput(900), mode: "initialize" });
     const suite = hub.records[0].check_suite?.id;
-    hub.asWriter(swarm(200));
-    await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(200), mode: "finish",
-      verdict: { conclusion: "failure", reason: "newer execution failed" },
-    });
-    expect(hub.records[0].conclusion).toBe("failure");
-    expect(hub.records[0].check_suite?.id).toBe(suite);
-    const before = JSON.stringify(hub.records);
-    hub.calls.length = 0;
-    hub.asWriter(swarm(100));
-    const result = await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(100), mode: "finish", verdict: success,
-    });
-    expect(result.outcome).toBe("obsolete");
-    expect(hub.writes()).toEqual([]);
-    expect(JSON.stringify(hub.records)).toBe(before);
-    expect(hub.records[0].conclusion).toBe("failure");
-    // A delayed completion from the admission creator cannot replace swarm evidence.
-    const admissionResult = await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(900), mode: "finish", verdict: success,
-    });
-    expect(admissionResult.outcome).toBe("obsolete");
-    expect(hub.writes()).toEqual([]);
-    // A genuinely newer swarm may still publish its result.
-    hub.asWriter(swarm(300));
-    const newerResult = await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(300), mode: "finish", verdict: success,
-    });
-    expect(newerResult.outcome).toBe("written");
-    expect(hub.records[0].conclusion).toBe("success");
-  });
-
-  it("updates one proven check on reruns and never lets a late success outlive a restart", async () => {
-    const hub = github();
-    const gate = await load();
     await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
-    await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(100, 2),
-      mode: "begin",
-    });
-    await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(100, 2),
-      mode: "finish",
-      verdict: success,
-    });
+    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "finish", verdict: success });
     expect(hub.records[0].conclusion).toBe("success");
-    // A job-only rerun resets before its work starts, then publishes its result.
-    await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(100, 3),
-      mode: "reset",
-    });
+    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100, 2), mode: "reset" });
     expect(hub.records[0].conclusion).toBe("failure");
     await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(100, 3),
-      mode: "finish",
-      verdict: { conclusion: "failure", reason: "job-only rerun failed" },
+      ...publishInput(100, 2), mode: "finish",
+      verdict: { conclusion: "failure", reason: "retry failed" },
     });
     expect(hub.records).toHaveLength(1);
-    expect(hub.records[0]).toMatchObject({
-      head_sha: identity.headSha,
-      name: "authenticated-pr-e2e",
-      conclusion: "failure",
-    });
+    expect(hub.records[0].check_suite?.id).toBe(suite);
+    expect(hub.records[0].conclusion).toBe("failure");
   });
 
   it.each([
-    ["a higher run number claimed in external_id", { external_id: "g5:42:99999999:1" }, forgedRun],
-    ["a foreign external_id prefix", { external_id: "other:1" }, forgedRun],
-    ["a trusted-looking external_id from a branch workflow", { external_id: "g5:42:100:1" }, forgedRun],
-    ["no check suite", { check_suite: undefined }, undefined],
-    ["a suite that resolves to no workflow run", {}, undefined],
-    ["the trusted swarm path under a non-workflow_run event", {}, { ...swarm(100), event: "workflow_dispatch" }],
-    ["the trusted swarm path from a branch", {}, { ...swarm(100), head_branch: "feature" }],
-    ["the trusted admission path under pull_request", {}, { ...admission(100), event: "pull_request" }],
-    ["a trusted path suffixed with a branch ref", {}, { ...swarm(100), path: SWARM_PATH + "@refs/heads/feature" }],
-  ])(
-    "fails closed on a success record with %s, for every writer mode",
-    async (_label, overrides, run) => {
-      const gate = await load();
-      for (const mode of ["initialize", "begin", "reset", "finish"] as const) {
-        const hub = github();
-        const forged = hub.insert(
-          { external_id: "g5:42:100:1", ...overrides } as Partial<Rec>,
-          run as Run | undefined,
-        );
-        const result = await gate.publishPrE2eCheck(hub.api, {
-          ...publishInput(100),
-          mode,
-          verdict: success,
-        });
-        expect(result.outcome, mode).toBe("quarantined");
-        expect(forged.conclusion, mode).toBe("failure");
-        expect(forged.status, mode).toBe("completed");
-        expect(hub.records, mode).toHaveLength(1);
-      }
-    },
-  );
-
-  it("fails closed when the origin lookup itself is unavailable", async () => {
+    { external_id: "g5:42:99999999:1" },
+    { external_id: "other:1" },
+    { check_suite: undefined },
+    { check_suite: { id: 123 } },
+  ])("revokes standing success independently of suite or external id %j", async (overrides) => {
     const hub = github();
-    hub.insert({ external_id: "g5:42:100:1" }, swarm(100));
+    const record = hub.insert(overrides, forgedRun);
+    await (await load()).publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
+    expect(record.conclusion).toBe("failure");
+    expect(hub.publications.every((body) => body.conclusion === "failure")).toBe(true);
+  });
+
+  it("does not depend on suite origin lookup being available", async () => {
+    const hub = github();
+    hub.insert({}, swarm(100));
     hub.breakRunLookup();
-    const result = await (
-      await load()
-    ).publishPrE2eCheck(hub.api, {
-      ...publishInput(100),
-      mode: "finish",
-      verdict: success,
-    });
-    expect(result.outcome).toBe("quarantined");
+    await (await load()).publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
     expect(hub.records[0].conclusion).toBe("failure");
   });
 
-  it("revokes every duplicate same-app record and never certifies success while any exists", async () => {
+  it("revokes every duplicate and refuses later certification without adding checks", async () => {
     const hub = github();
+    hub.insert({}, swarm(100));
+    hub.insert({}, swarm(200));
     const gate = await load();
-    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
-    // A second record that even carries a trusted suite still counts as a duplicate.
-    hub.insert({ external_id: "g5:42:100:1" }, swarm(100));
-    const result = await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(100),
-      mode: "finish",
-      verdict: success,
-    });
-    expect(result.outcome).toBe("quarantined");
-    expect(hub.records.map((record) => record.conclusion)).toEqual([
-      "failure",
-      "failure",
-    ]);
-    // The state is sticky: nothing later turns this head green or adds a record.
-    await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(101),
-      mode: "finish",
-      verdict: success,
-    });
-    expect(hub.records.map((record) => record.conclusion)).toEqual([
-      "failure",
-      "failure",
-    ]);
-    expect(hub.records).toHaveLength(2);
-  });
-
-  it("refuses an older run without writing, so a newer proven verdict is not clobbered", async () => {
-    const hub = github();
-    const gate = await load();
-    hub.asWriter(swarm(200));
-    await gate.publishPrE2eCheck(hub.api, { ...publishInput(200), mode: "begin" });
-    await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(200),
-      mode: "finish",
-      verdict: success,
-    });
-    const before = JSON.stringify(hub.records);
-    hub.calls.length = 0;
-    for (const mode of ["begin", "reset", "finish"] as const) {
-      const result = await gate.publishPrE2eCheck(hub.api, {
-        ...publishInput(100),
-        mode,
-        verdict: { conclusion: "success", reason: "obsolete" },
-      });
-      expect(result.outcome, mode).toBe("obsolete");
+    for (const runId of [100, 200]) {
+      expect((await gate.publishPrE2eCheck(hub.api, {
+        ...publishInput(runId), mode: "finish", verdict: success,
+      })).outcome).toBe("quarantined");
+      expect(hub.records.map((record) => record.conclusion)).toEqual(["failure", "failure"]);
+      expect(hub.records).toHaveLength(2);
     }
-    expect(hub.writes()).toEqual([]);
-    expect(JSON.stringify(hub.records)).toBe(before);
   });
 
-  it("lets a later swarm run overwrite an admission record regardless of run-id order", async () => {
+  it("revokes before rejecting an invalid trusted attempt", async () => {
     const hub = github();
-    const gate = await load();
-    hub.asWriter(admission(900));
-    await gate.publishPrE2eCheck(hub.api, { ...publishInput(900), mode: "initialize" });
-    hub.asWriter(swarm(100));
-    const result = await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(100),
-      mode: "finish",
-      verdict: success,
-    });
-    expect(result.outcome).toBe("written");
-    expect(hub.records).toHaveLength(1);
-    expect(hub.records[0].conclusion).toBe("success");
+    hub.insert({}, swarm(100));
+    await expect((await load()).publishPrE2eCheck(hub.api, {
+      ...publishInput(100), runKey: "invalid", mode: "finish", verdict: success,
+    })).rejects.toThrow("Trusted run attempt is unavailable.");
+    expect(hub.records[0].conclusion).toBe("failure");
   });
 
-  it("keeps a proven existing result on admission and creates nothing", async () => {
-    const hub = github();
-    const gate = await load();
-    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
-    await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(100),
-      mode: "finish",
-      verdict: success,
-    });
-    hub.calls.length = 0;
-    hub.asWriter(admission(300));
-    const result = await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(300),
-      mode: "initialize",
-    });
-    expect(result.outcome).toBe("kept");
-    expect(hub.writes()).toEqual([]);
-    expect(hub.records[0].conclusion).toBe("success");
-  });
-
-  it("is armed only while no GitHub Actions success stands for the head", async () => {
+  it("is armed only while no same-app success stands, including forged success", async () => {
     const hub = github();
     const gate = await load();
     expect(await gate.gateIsArmed(hub.api, identity.headSha)).toBe(true);
-    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
-    expect(await gate.gateIsArmed(hub.api, identity.headSha)).toBe(true);
-    await gate.publishPrE2eCheck(hub.api, {
-      ...publishInput(100),
-      mode: "finish",
-      verdict: success,
-    });
+    hub.insert({}, forgedRun);
     expect(await gate.gateIsArmed(hub.api, identity.headSha)).toBe(false);
-    // A forged success disarms too: the rerun refuses to start beside it.
-    const forged = github();
-    forged.insert({}, undefined);
-    expect(await gate.gateIsArmed(forged.api, identity.headSha)).toBe(false);
-    expect(hub.writes().length).toBeGreaterThan(0);
+    await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });
+    expect(await gate.gateIsArmed(hub.api, identity.headSha)).toBe(true);
   });
-  it("never resets a head that has no record and ignores same-name checks from other apps", async () => {
+
+  it("refuses reset without a record and leaves other apps' checks alone", async () => {
     const hub = github();
     const gate = await load();
-    await expect(
-      gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "reset" }),
-    ).rejects.toThrow();
+    await expect(gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "reset" })).rejects.toThrow();
     expect(hub.writes()).toEqual([]);
     const foreign = hub.insert({ app: { slug: "other-app" } }, undefined);
     await gate.publishPrE2eCheck(hub.api, { ...publishInput(100), mode: "begin" });

@@ -24,13 +24,67 @@ const safeJson = (value) =>
 
 const REFUSALS = {
   quarantined: "The PR gate has unproven or duplicate records; it stays failed.",
-  obsolete: "A newer run owns the PR gate; this run published nothing.",
 };
 // A job that publishes nothing must not look green.
 const refusal = (outcome) => ({
   conclusion: "failure",
   reason: REFUSALS[outcome] ?? "The PR gate could not be updated.",
 });
+
+// Ordering is an Actions fact, never a field on a writable check. A rerun of
+// Playwright keeps its run id but increments run_attempt; a new run changes id.
+async function currentExecution(api, event, env, headSha) {
+  const runId = Number(env.GITHUB_RUN_ID);
+  const attempt = Number(env.GITHUB_RUN_ATTEMPT);
+  const current = await api("GET", `/actions/runs/${runId}`);
+  const admission = Boolean(event.pull_request);
+  if (
+    current.id !== runId || current.run_attempt !== attempt ||
+    current.status !== "in_progress" ||
+    current.repository?.full_name !== env.GITHUB_REPOSITORY ||
+    current.path !== (admission
+      ? ".github/workflows/authenticated-pr-e2e.yml"
+      : ".github/workflows/browser-attack-swarm.yml") ||
+    current.event !== (admission ? "pull_request_target" : "workflow_run") ||
+    (!admission && current.head_branch !== "main")
+  ) return false;
+  if (admission) return true;
+  const source = event.workflow_run;
+  if (!Number.isSafeInteger(source?.id) || source.id <= 0 ||
+      !Number.isSafeInteger(source.run_attempt) || source.run_attempt <= 0)
+    return false;
+  const live = await api("GET", `/actions/runs/${source.id}`);
+  if (live.id !== source.id || live.run_attempt !== source.run_attempt ||
+      live.event !== "pull_request" || live.head_sha !== headSha ||
+      live.path !== ".github/workflows/playwright.yml" ||
+      live.head_repository?.full_name !== env.GITHUB_REPOSITORY ||
+      live.status !== "completed" || live.conclusion !== "success" ||
+      !Number.isSafeInteger(live.workflow_id) || live.workflow_id <= 0)
+    return false;
+  let total;
+  const seen = new Set();
+  for (let page = 1; page <= 10; page++) {
+    const payload = await api("GET",
+      `/actions/workflows/${live.workflow_id}/runs?event=pull_request&head_sha=${headSha}&per_page=100&page=${page}`);
+    const runs = payload.workflow_runs;
+    // Filtered Actions searches cap at 1,000. At that boundary completeness
+    // cannot be established, so refuse rather than certify a partial search.
+    if (!Number.isSafeInteger(payload.total_count) || payload.total_count <= 0 ||
+        payload.total_count >= 1000 ||
+        (total !== undefined && total !== payload.total_count) ||
+        !Array.isArray(runs) || runs.some((run) =>
+      !Number.isSafeInteger(run.id) || run.id <= 0 || run.id > source.id))
+      return false;
+    total = payload.total_count;
+    const previousCount = seen.size;
+    for (const run of runs) seen.add(run.id);
+    if (seen.size !== previousCount + runs.length || seen.size > total)
+      return false;
+    if (runs.length < 100 || seen.size === total)
+      return seen.has(source.id) && seen.size === total;
+  }
+  return false;
+}
 
 // Identity comes from the triggering event only if its entry is the PR into main
 // at the exact head the run reports. A branch can have several PRs, so `[0]` is
@@ -155,9 +209,8 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       mode,
       summary: "Trusted scope evaluation pending.",
     });
-    // A delayed admission run must not revoke a consumer's newer execution.
     if (outcome !== "written")
-      return outcome === "kept" ? undefined : refusal(outcome);
+      return refusal(outcome);
   }
   let verdict = {
     conclusion: "failure",
@@ -228,6 +281,12 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
       testedSha,
       controllerSha,
     });
+    if (verdict.conclusion === "success" &&
+        !(await currentExecution(api, event, env, headSha)))
+      verdict = {
+        conclusion: "failure",
+        reason: "The trusted workflow or triggering execution has been superseded or cannot be verified.",
+      };
     // A green consumer requires its full-suite job AND successful preflight.
     if (plan.inScope && event.workflow_run?.conclusion !== "success")
       verdict = {
@@ -239,6 +298,10 @@ export async function runGate(mode, env = process.env, fetchImpl = fetch) {
     console.error(
       "Trusted PR scope or execution evidence could not be verified.",
     );
+    verdict = {
+      conclusion: "failure",
+      reason: "Trusted scope or execution identity could not be verified.",
+    };
   }  const summary = `Controller: ${controllerSha}\n\nHead: ${headSha}\n\nTested backend and frontend merge: ${testedSha ?? "unavailable"}\n\n${verdict.reason}\n\nMain test definitions available to the trusted configuration (conditional and ignored definitions may not register in this lane):\n\n\`\`\`json\n${safeJson(plan?.mainDefinitions ?? [])}\n\`\`\`\n\nDefinitions changed by the PR (candidate versions never executed with secrets):\n\n\`\`\`json\n${safeJson(plan?.changedDefinitions ?? [])}\n\`\`\`\n\nCounts and executed definitions (paths from the Playwright report):\n\n\`\`\`json\n${safeJson(evidence ?? null)}\n\`\`\`\n`;
   appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   const { outcome } = await publishPrE2eCheck(api, {

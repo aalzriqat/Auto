@@ -173,69 +173,14 @@ export function prE2eVerdict({
 }
 
 // ---------------------------------------------------------------------------
-// Publication. Origin of an existing record is PROVEN, never read from fields a
-// writer chooses. `external_id`, `output` and `details_url` are writable by any
-// workflow token in the repository, so they are informational only. The proof
-// follows scripts/releaseChecks.mjs: check suite -> workflow run -> workflow
-// path, event and branch. Only `workflow_run` and `pull_request_target` load the
-// workflow definition from the default branch; a run of the same path under any
-// other event ran the branch's own copy and is refused.
-//
-// This is detection and neutralisation by trusted code, NOT a barrier: any
-// workflow of this repository holding `checks: write` shares the GitHub Actions
-// app identity and can still write or patch the check after this code runs.
-// Docs: Checks API (create/update a check run), List workflow runs
-// (`check_suite_id` filter), workflow-syntax `permissions`.
-// ---------------------------------------------------------------------------
-export const TRUSTED_WRITERS = Object.freeze([
-  Object.freeze({
-    kind: "admission",
-    path: ".github/workflows/authenticated-pr-e2e.yml",
-    event: "pull_request_target",
-    branch: undefined,
-  }),
-  Object.freeze({
-    kind: "swarm",
-    path: ".github/workflows/browser-attack-swarm.yml",
-    event: "workflow_run",
-    branch: "main",
-  }),
-]);
+// Publication treats existing checks only as destinations, never as evidence.
+// GitHub groups API-created checks by app; suite ownership does not identify
+// their last PATCH writer. All writable metadata is diagnostic only.
+// The trusted CLI validates current upstream run/attempt before certification.
+// Any repository workflow with checks:write can still PATCH after we finish;
+// the owner's shared-app risk acceptance remains necessary.
+// Docs: https://docs.github.com/en/rest/checks/runs
 const MODES = new Set(["initialize", "begin", "reset", "finish"]);
-
-/** @returns {Promise<{ok: true, kind: string, runId: number} | {ok: false, reason: string}>} */
-async function establishOrigin(api, record, repository) {
-  const unproven = (reason) => ({ ok: false, reason });
-  const suiteId = record.check_suite?.id;
-  if (!Number.isSafeInteger(suiteId) || suiteId <= 0)
-    return unproven("the record has no check suite");
-  let payload;
-  try {
-    payload = await api(
-      "GET",
-      `/actions/runs?check_suite_id=${suiteId}&per_page=2`,
-    );
-  } catch {
-    return unproven("the owning workflow run could not be read");
-  }
-  const runs = payload?.workflow_runs;
-  if (!Array.isArray(runs) || runs.length !== 1)
-    return unproven("the check suite does not resolve to exactly one run");
-  const run = runs[0];
-  const writer = TRUSTED_WRITERS.find(
-    (entry) => entry.path === run.path && entry.event === run.event,
-  );
-  if (
-    !writer ||
-    run.check_suite_id !== suiteId ||
-    !Number.isSafeInteger(run.id) ||
-    run.id <= 0 ||
-    run.repository?.full_name !== repository ||
-    (writer.branch !== undefined && run.head_branch !== writer.branch)
-  )
-    return unproven("the owning run is not a default-branch gate workflow");
-  return { ok: true, kind: writer.kind, runId: run.id };
-}
 
 async function listGateRecords(api, headSha) {
   const matches = [];
@@ -280,7 +225,9 @@ async function quarantine(api, records, reasons, detailsUrl) {
     output: {
       title: "Authenticated PR gate records are unproven or duplicated",
       summary:
-        "This head has a same-name GitHub Actions check that trusted code cannot prove it wrote, or more than one such check. GitHub cannot delete check runs, so this head stays failed. Push a new commit. Reasons: " +
+        (records.length > 1
+          ? "Duplicate same-name GitHub Actions checks cannot certify this head. Push a new commit. Reasons: "
+          : "Previous check content is revoked. Only a fresh trusted evaluation may certify this head. Reasons: ") +
         reasons.join("; "),
     },
   };
@@ -295,16 +242,15 @@ async function quarantine(api, records, reasons, detailsUrl) {
 // The caller serializes initialize, begin and finish for a head with one Actions
 // concurrency group; reset only updates a record that already exists.
 /** @param {(method: string, route: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>} api
- * @param {{headSha: string, prNumber: number, repository: string, runId: number, runKey: string,
+ * @param {{headSha: string, prNumber: number, runId: number, runKey: string,
  * mode: "initialize" | "begin" | "reset" | "finish",
  * verdict?: {conclusion: string, reason: string} | null, summary?: string, detailsUrl?: string}} options
- * @returns {Promise<{outcome: "written" | "kept" | "obsolete" | "quarantined", record?: Record<string, unknown>}>} */
+ * @returns {Promise<{outcome: "written" | "quarantined", record?: Record<string, unknown>}>} */
 export async function publishPrE2eCheck(
   api,
   {
     headSha,
     prNumber,
-    repository,
     runId,
     runKey,
     mode,
@@ -313,53 +259,21 @@ export async function publishPrE2eCheck(
     detailsUrl = "",
   },
 ) {
+  const records = await listGateRecords(api, headSha);
+  if (records.length > 1)
+    return quarantine(api, records, ["more than one same-name record exists"], detailsUrl);
+  const previous = records[0];
+  // Revoke before parsing identity or doing anything that might throw. Even a
+  // missing, forged, future or perfectly plausible marker cannot prevent this.
+  if (previous)
+    await quarantine(api, records, ["previous content cannot be attributed to this invocation"], detailsUrl);
   if (!MODES.has(mode)) throw new Error("Unknown gate publication mode.");
   if (!Number.isSafeInteger(runId) || runId <= 0)
     throw new Error("Trusted run identity is unavailable.");
-  const records = await listGateRecords(api, headSha);
-  const origins = [];
-  for (const record of records)
-    origins.push(await establishOrigin(api, record, repository));
-  const reasons = origins.flatMap((origin) => (origin.ok ? [] : [origin.reason]));
-  if (records.length > 1) reasons.push("more than one same-name record exists");
-  // Any unexpected or unprovable record is failure at this head, never a throw
-  // that leaves an existing success standing.
-  if (reasons.length) return quarantine(api, records, reasons, detailsUrl);
-
-  const previous = records[0];
-  const origin = origins[0];
-  if (previous && mode === "initialize") return { outcome: "kept", record: previous };
-  const attemptMatch = new RegExp(`^${runId}:([1-9]\\d*)$`).exec(runKey);
+  const attemptMatch = new RegExp(String.raw`^${runId}:([1-9]\d*)$`).exec(runKey);
   const attempt = Number(attemptMatch?.[1]);
   if (!Number.isSafeInteger(attempt) || attempt <= 0)
     throw new Error("Trusted run attempt is unavailable.");
-  // PATCH preserves the creating suite. Track the latest publisher separately;
-  // an admission run may finish its own scope evaluation after initialization.
-  const kind =
-    mode === "initialize" ||
-    (origin?.kind === "admission" && origin.runId === runId)
-      ? "admission"
-      : "swarm";
-  const publisher = previous
-    ? /^g5-publisher:(admission|swarm):([1-9]\d*):([1-9]\d*)$/.exec(previous.output?.text ?? "")
-    : null;
-  if (
-    previous &&
-    (!publisher ||
-      !Number.isSafeInteger(Number(publisher[2])) ||
-      !Number.isSafeInteger(Number(publisher[3])) ||
-      (publisher[1] === "admission" &&
-        (origin?.kind !== "admission" || Number(publisher[2]) !== origin.runId)))
-  )
-    throw new Error("Recorded gate publisher is unavailable.");
-  // Admission ids do not order swarm publications. Swarm runs and attempts do.
-  if (
-    publisher?.[1] === "swarm" &&
-    (kind === "admission" ||
-      Number(publisher[2]) > runId ||
-      (Number(publisher[2]) === runId && Number(publisher[3]) > attempt))
-  )
-    return { outcome: "obsolete", record: previous };
   if (!previous && mode === "reset")
     throw new Error("There is no gate record to reset.");
 
@@ -377,7 +291,7 @@ export async function publishPrE2eCheck(
         ? "Authenticated PR execution pending"
         : (verdict?.reason ?? "Authenticated PR execution unavailable"),
       summary: summary || "No counted authenticated evidence is available.",
-      text: `g5-publisher:${kind}:${runId}:${attempt}`,
+      text: `g5-publisher:${runId}:${attempt}`,
     },
   };
   const record = previous

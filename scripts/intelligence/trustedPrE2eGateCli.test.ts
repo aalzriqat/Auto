@@ -24,6 +24,7 @@ async function scenario({
   pullRequests = undefined as ((pr: object) => unknown[]) | undefined,
   wrongLookup = false,
   forged = false,
+  freshness = "current",
 } = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), "autoflow-g5-"));
   const records: Array<Record<string, unknown>> = [];
@@ -42,6 +43,8 @@ async function scenario({
       ? { pull_request: pr }
       : {
           workflow_run: {
+            id: 1000,
+            run_attempt: 1,
             head_sha: headSha,
             conclusion: preflight,
             pull_requests: noPrArray ? [] : (pullRequests ? pullRequests(pr) : [pr]),
@@ -76,15 +79,8 @@ async function scenario({
     EVIDENCE_PATH: path.join(directory, "evidence.json"),
     E2E_RESULT: result,
   };
-  const runsBySuite = new Map<number, Record<string, unknown>>();
-  let writer: Record<string, unknown> = {};
+  const publications: Array<Record<string, unknown>> = [];
   if (forged) {
-    runsBySuite.set(555, {
-      id: 9,
-      path: ".github/workflows/forge.yml",
-      event: "push",
-      head_branch: "feature",
-    });
     records.push({
       id: 99,
       name: "authenticated-pr-e2e",
@@ -100,18 +96,44 @@ async function scenario({
     const url = new URL(String(input));
     const route = url.pathname;
     let payload: unknown;
-    if (route.endsWith("/actions/runs")) {
-      const run = runsBySuite.get(Number(url.searchParams.get("check_suite_id")));
+    if (init?.method !== "GET" && init?.body)
+      publications.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+    if (route.endsWith("/actions/runs/123")) {
+      if (freshness === "unreadable") throw new Error("unavailable");
       payload = {
-        workflow_runs: run
-          ? [
-              {
-                ...run,
-                check_suite_id: Number(url.searchParams.get("check_suite_id")),
-                repository: { full_name: "aalzriqat/Auto" },
-              },
-            ]
-          : [],
+        id: 123, run_attempt: freshness === "new-attempt" ? 2 : 1,
+        status: freshness === "cancelled" ? "completed" : "in_progress",
+        path: freshness === "wrong-workflow" ? ".github/workflows/forge.yml"
+          : mode === "initialize" ? ".github/workflows/authenticated-pr-e2e.yml"
+          : ".github/workflows/browser-attack-swarm.yml",
+        event: mode === "initialize" ? "pull_request_target" : "workflow_run",
+        head_branch: "main", repository: { full_name: "aalzriqat/Auto" },
+      };
+    } else if (route.endsWith("/actions/runs/1000")) {
+      payload = {
+        id: 1000, workflow_id: 77, run_attempt: freshness === "new-source-attempt" ? 2 : 1,
+        event: "pull_request", head_sha: headSha,
+        path: ".github/workflows/playwright.yml",
+        head_repository: { full_name: "aalzriqat/Auto" },
+        status: "completed", conclusion: "success",
+      };
+    } else if (route.endsWith("/actions/workflows/77/runs")) {
+      const page = Number(url.searchParams.get("page"));
+      const runs = freshness === "new-source-run" ? [{ id: 1001 }]
+        : freshness === "empty-inventory" ? []
+        : freshness === "missing-source" ? [{ id: 999 }]
+        : freshness === "malformed-inventory" ? undefined
+        : freshness === "later-page-new-source" && page === 1
+          ? Array.from({ length: 100 }, (_, index) => ({ id: 1000 - index }))
+        : freshness === "later-page-new-source" ? [{ id: 1001 }]
+        : [{ id: 1000 }];
+      payload = {
+        workflow_runs: freshness === "duplicate-inventory" ? [{ id: 1000 }, { id: 1000 }] : runs,
+        total_count: freshness === "oversized-inventory" ? 1001
+          : freshness === "missing-total" ? undefined
+          : freshness === "count-mismatch" || freshness === "duplicate-inventory" ? 2
+          : freshness === "later-page-new-source" ? 101
+          : runs?.length,
       };
     } else if (route.endsWith("/check-runs") && init?.method === "GET")
       payload = { check_runs: records };
@@ -119,10 +141,11 @@ async function scenario({
       const check = {
         id: 99 + records.length,
         app: { slug: "github-actions" },
-        check_suite: { id: 7000 + records.length },
+        check_suite: { id: 110584846427 },
         ...JSON.parse(String(init.body)),
       };
-      runsBySuite.set(check.check_suite.id, writer);
+      // API-created checks are attached to an app suite (observed CodeQL),
+      // not to the token-holding writer workflow's suite.
       records.push(check);
       payload = check;
     } else if (/\/check-runs\/\d+$/.test(route)) {
@@ -142,26 +165,14 @@ async function scenario({
       headers: { "Content-Type": "application/json" },
     });
   };
-  const swarmWriter = {
-    id: 123,
-    path: ".github/workflows/browser-attack-swarm.yml",
-    event: "workflow_run",
-    head_branch: "main",
-  };
-  const admissionWriter = {
-    id: 123,
-    path: ".github/workflows/authenticated-pr-e2e.yml",
-    event: "pull_request_target",
-    head_branch: "feature",
-  };
   try {
-    writer = mode === "initialize" ? admissionWriter : swarmWriter;
     if (mode === "finish" || mode === "reset")
       await runGate("begin", env, fakeFetch);
     const verdict: { conclusion: string; reason: string } | undefined =
       await runGate(mode, env, fakeFetch);
     return {
       records,
+      publications,
       verdict,
       summary: readFileSync(env.GITHUB_STEP_SUMMARY, "utf8"),
     };
@@ -263,7 +274,8 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
     "turns a forged success under the gate name into failure in %s mode instead of leaving it",
     async (mode) => {
       const { records, verdict } = await scenario({
-        files: ["docs/gate.md"],
+        files: ["app/page.tsx"],
+        result: "failure",
         mode,
         forged: true,
       });
@@ -271,7 +283,25 @@ describe("SCRUM-757 native judge with GitHub API boundary fixtures", () => {
         "success",
       );
       expect(records).toHaveLength(1);
+      if (mode === "initialize" || mode === "finish")
+        expect(verdict?.conclusion).toBe("failure");
+      else expect(verdict).toBeUndefined();
+    },
+  );
+
+  // Replaces marker-based ordering regressions with authoritative Actions data:
+  // late success from an older source run, source attempt or consumer attempt.
+  it.each(["new-source-run", "new-source-attempt", "new-attempt", "cancelled", "wrong-workflow", "unreadable",
+    "empty-inventory", "missing-source", "malformed-inventory", "later-page-new-source",
+    "oversized-inventory", "missing-total", "count-mismatch", "duplicate-inventory"])(
+    "revokes a standing success and refuses a stale consumer: %s", async (freshness) => {
+      const { records, verdict, publications } = await scenario({
+        mode: "finish", files: ["app/page.tsx"], forged: true, freshness,
+      });
       expect(verdict?.conclusion).toBe("failure");
+      expect(records).toHaveLength(1);
+      expect(records[0].conclusion).toBe("failure");
+      expect(publications.some((body) => body.conclusion === "success")).toBe(false);
     },
   );
 
