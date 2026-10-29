@@ -292,6 +292,124 @@ describe("SCRUM-858 S2 owned opening inventory", () => {
       }),
     ).rejects.toThrow(/tracked opening import/i);
   });
+
+  const unsoldStatuses = ["AVAILABLE", "RESERVED", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED", "SOURCING"] as const;
+  test.each(unsoldStatuses)("an owned costed car in status %s with no tracked import blocks the cutover", async (status) => {
+    const s = await seed();
+    await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", { orgId: s.orgId, ...BASE_VEHICLE, vin: vin("STATUS", 1), status, sourceType: "STOCK", purchasePrice: 9_000 }),
+    );
+    await expect(
+      s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId: s.orgId,
+        expectedCurrency: "JOD",
+        asOfDate: Date.now(),
+        lines: [
+          { accountId: s.accountId("VEHICLE_INVENTORY"), debitMinor: 1_000, creditMinor: 0 },
+          { accountId: s.accountId("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 1_000 },
+        ],
+      }),
+    ).rejects.toThrow(/tracked opening import/i);
+  });
+
+  test("a soft-deleted costed owned car is not an owned car and does not block the cutover", async () => {
+    const s = await seed();
+    await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId,
+        ...BASE_VEHICLE,
+        vin: vin("DELETED", 1),
+        status: "AVAILABLE",
+        sourceType: "STOCK",
+        purchasePrice: 9_000,
+        isDeleted: true,
+      }),
+    );
+    const message = await s.owner
+      .mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId: s.orgId,
+        expectedCurrency: "JOD",
+        asOfDate: Date.now(),
+        lines: [
+          { accountId: s.accountId("VEHICLE_INVENTORY"), debitMinor: 1_000, creditMinor: 0 },
+          { accountId: s.accountId("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 1_000 },
+        ],
+      })
+      .then(() => "")
+      .catch((error: unknown) => String((error as Error)?.message ?? error));
+    expect(message).not.toMatch(/tracked opening import|allocation limit/i);
+  });
+
+  test("an owned car with no recorded cost needs no tracked import and does not block the cutover", async () => {
+    const s = await seed();
+    await s.t.run(async (ctx) => {
+      await ctx.db.insert("vehicles", { orgId: s.orgId, ...BASE_VEHICLE, vin: vin("NOCOST", 1), status: "AVAILABLE", sourceType: "STOCK" });
+      await ctx.db.insert("vehicles", { orgId: s.orgId, ...BASE_VEHICLE, vin: vin("NOCOST", 2), status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 0 });
+    });
+    const message = await s.owner
+      .mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId: s.orgId,
+        expectedCurrency: "JOD",
+        asOfDate: Date.now(),
+        lines: [
+          { accountId: s.accountId("VEHICLE_INVENTORY"), debitMinor: 1_000, creditMinor: 0 },
+          { accountId: s.accountId("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 1_000 },
+        ],
+      })
+      .then(() => "")
+      .catch((error: unknown) => String((error as Error)?.message ?? error));
+    expect(message).not.toMatch(/tracked opening import|allocation limit/i);
+  });
+
+  test("owned cars spread over several unsold statuses count together against the limit", async () => {
+    const s = await seed();
+    for (const [status, prefix] of [["AVAILABLE", "SPLITA"], ["IN_REPAIR", "SPLITR"]] as const) {
+      for (let index = 0; index < 60; index++) {
+        await s.t.run((ctx) =>
+          ctx.db.insert("vehicles", { orgId: s.orgId, ...BASE_VEHICLE, vin: vin(prefix, index + 1), status, sourceType: "STOCK", purchasePrice: 8_000 }),
+        );
+      }
+    }
+    await expect(
+      s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId: s.orgId,
+        expectedCurrency: "JOD",
+        asOfDate: Date.now(),
+        lines: [
+          { accountId: s.accountId("VEHICLE_INVENTORY"), debitMinor: 1_000, creditMinor: 0 },
+          { accountId: s.accountId("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 1_000 },
+        ],
+      }),
+    ).rejects.toThrow(/reviewed opening allocation limit/i);
+  });
+
+  test("a bucket crowded past the limit by soft-deleted rows fails closed instead of hiding an owned car", async () => {
+    const s = await seed();
+    for (let index = 0; index < 101; index++) {
+      await s.t.run((ctx) =>
+        ctx.db.insert("vehicles", {
+          orgId: s.orgId,
+          ...BASE_VEHICLE,
+          vin: vin("CROWD", index + 1),
+          status: "AVAILABLE",
+          sourceType: "STOCK",
+          purchasePrice: 8_000,
+          isDeleted: true,
+        }),
+      );
+    }
+    await expect(
+      s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId: s.orgId,
+        expectedCurrency: "JOD",
+        asOfDate: Date.now(),
+        lines: [
+          { accountId: s.accountId("VEHICLE_INVENTORY"), debitMinor: 1_000, creditMinor: 0 },
+          { accountId: s.accountId("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 1_000 },
+        ],
+      }),
+    ).rejects.toThrow(/reviewed opening allocation limit/i);
+  });
 });
 
 describe("SCRUM-858 S2 a consigned vehicle is never owned opening inventory", () => {

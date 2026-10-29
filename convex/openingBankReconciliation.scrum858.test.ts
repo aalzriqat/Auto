@@ -359,4 +359,205 @@ describe("SCRUM-858 S5 per-bank opening reconciliation", () => {
 
     await expect(intruder.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId })).rejects.toThrow();
   });
+
+  test("a user of the same organization without view:finance cannot read it", async () => {
+    const s = await seed();
+    const clerkId = "ob_sales";
+    const salesId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId, email: "ob_sales@test.com", name: "Sales" }));
+    const salesRole = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "Sales", permissions: ["view:vehicles"] }));
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId: salesId, roleId: salesRole }));
+    const sales = s.t.withIdentity({ subject: clerkId, clerkId });
+
+    await expect(sales.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId })).rejects.toThrow();
+    // The owner of the same organization still reads it, so the refusal is the permission and not a broken setup.
+    expect((await s.owner.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId })).status).toBe("NO_OPENING");
+  });
+});
+
+describe("SCRUM-858 S5 the report refuses figures it cannot prove", () => {
+  async function manyBanks(s: Seed, count: number) {
+    for (let index = 0; index < count; index++) {
+      await s.t.run((ctx) =>
+        ctx.db.insert("bankAccounts", {
+          orgId: s.orgId, name: `Extra bank ${index}`, currency: "JOD", openingBalanceMinor: 0, openingBalanceDate: Date.now(),
+          isActive: true, isReconciliationTarget: false, createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+        }),
+      );
+    }
+  }
+
+  async function openingJournal(s: Seed) {
+    return s.t.runUnwrapped(async (ctx) => {
+      const rows = await ctx.db
+        .query("journalEntries")
+        .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId).eq("sourceType", "cutover").eq("sourceId", String(s.orgId)))
+        .take(5);
+      const journal = rows.find((row) => row.category === "OPENING_BALANCE");
+      if (!journal) throw new Error("Missing opening journal");
+      return journal;
+    });
+  }
+
+  async function padOpeningLines(s: Seed, extra: number) {
+    const journal = await openingJournal(s);
+    await s.t.runUnwrapped(async (ctx) => {
+      for (let index = 0; index < extra; index++) {
+        await ctx.db.insert("journalLines", {
+          orgId: s.orgId, journalEntryId: journal._id, currency: "JOD", scale: 3, accountingDate: journal.accountingDate,
+          lineNumber: 100 + index, accountId: s.accountId("CASH_ON_HAND"), debitMinor: 0, creditMinor: 0,
+        });
+      }
+    });
+  }
+
+  async function openedBanks() {
+    const s = await seed();
+    const bankA = await bank(s, "Bank A", 4_000_000, true);
+    const bankB = await bank(s, "Bank B", 3_000_000);
+    await openTwoBanks(s, bankA, bankB);
+    return { s, bankA, bankB };
+  }
+
+  const report = (s: Seed) => s.owner.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId });
+
+  test("more than two hundred banks report the opening as unavailable rather than a partial reconciliation", async () => {
+    const { s } = await openedBanks();
+    await manyBanks(s, 199); // 201 banks in all
+
+    const result = await report(s);
+
+    expect(result.status).toBe("OPENING_PROOF_UNAVAILABLE");
+    expect(result.unexplainedOpeningDifference).toBeNull();
+    expect(result.banks.length).toBeLessThanOrEqual(200);
+    expect(result.banks.every((row) => row.openingLineMinor === null && row.differenceMinor === null)).toBe(true);
+  });
+
+  test("exactly two hundred banks still reconcile", async () => {
+    const { s } = await openedBanks();
+    await manyBanks(s, 198);
+
+    const result = await report(s);
+
+    expect(result.status).toBe("OK");
+    expect(result.banks).toHaveLength(200);
+  });
+
+  test("an opening journal with more than five hundred lines reports the opening as unavailable", async () => {
+    const { s } = await openedBanks();
+    await padOpeningLines(s, 497); // 4 + 497 = 501 lines
+
+    expect((await report(s)).status).toBe("OPENING_PROOF_UNAVAILABLE");
+  });
+
+  test("exactly five hundred opening lines still reconcile", async () => {
+    const { s } = await openedBanks();
+    await padOpeningLines(s, 496); // 4 + 496 = 500 lines
+
+    expect((await report(s)).status).toBe("OK");
+  });
+
+  test("two live opening journals make the opening unavailable, never a guess", async () => {
+    const { s, bankA } = await openedBanks();
+    const journal = await openingJournal(s);
+    await s.t.runUnwrapped(async (ctx) => {
+      const { _id, _creationTime, ...rest } = journal;
+      void _id;
+      void _creationTime;
+      await ctx.db.insert("journalEntries", { ...rest, journalNumber: `${journal.journalNumber}-DUP` });
+    });
+
+    const result = await report(s);
+
+    expect(result.status).toBe("OPENING_PROOF_UNAVAILABLE");
+    expect(result.banks.find((row) => row.bankAccountId === bankA)?.openingLineMinor).toBeNull();
+  });
+
+  test("an opening journal that names no currency is unavailable", async () => {
+    const { s } = await openedBanks();
+    const journal = await openingJournal(s);
+    await s.t.runUnwrapped((ctx) => ctx.db.patch(journal._id, { currency: undefined }));
+
+    expect((await report(s)).status).toBe("OPENING_PROOF_UNAVAILABLE");
+
+    // With no bank line in the opening, the journal's own currency is the only thing that can refuse.
+    const cashOnly = await seed();
+    await bank(cashOnly, "Bank A", 4_000_000, true);
+    await cashOnly.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: cashOnly.orgId,
+      expectedCurrency: "JOD",
+      asOfDate: Date.now(),
+      lines: [
+        { accountId: cashOnly.accountId("CASH_ON_HAND"), debitMinor: 1_000_000, creditMinor: 0 },
+        { accountId: cashOnly.accountId("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 1_000_000 },
+      ],
+    });
+    expect((await report(cashOnly)).status).toBe("OK");
+    const cashJournal = await openingJournal(cashOnly);
+    // A legacy header that names no currency either, so the source identity itself still resolves.
+    await cashOnly.t.runUnwrapped(async (ctx) => {
+      await ctx.db.patch(cashJournal._id, { currency: undefined });
+      const headers = await ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", (q) => q.eq("orgId", cashOnly.orgId).eq("status", "POSTED")).take(5);
+      for (const header of headers) await ctx.db.patch(header._id, { currency: undefined });
+    });
+    expect((await report(cashOnly)).status).toBe("OPENING_PROOF_UNAVAILABLE");
+  });
+
+  test("an opening bank line in a different currency or organization than its journal makes the opening unavailable", async () => {
+    for (const field of ["currency", "org"] as const) {
+      const { s, bankB } = await openedBanks();
+      const otherOrgId = await s.t.run((ctx) => ctx.db.insert("organizations", { name: `Other ${field}`, createdAt: Date.now() }));
+      await s.t.runUnwrapped(async (ctx) => {
+        const lines = await ctx.db.query("journalLines").collect();
+        const line = lines.find((row) => row.bankAccountId === bankB);
+        if (!line) throw new Error("Missing Bank B opening line");
+        await ctx.db.patch(line._id, field === "currency" ? { currency: "USD" } : { orgId: otherOrgId });
+      });
+
+      expect((await report(s)).status, field).toBe("OPENING_PROOF_UNAVAILABLE");
+    }
+  });
+
+  test("a bank-control line on an account of another organization is not read as this organization's bank line", async () => {
+    const { s, bankB } = await openedBanks();
+    const otherOrgId = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "Other chart", createdAt: Date.now() }));
+    await s.t.runUnwrapped(async (ctx) => {
+      const control = await ctx.db.get(s.accountId("BANK_ACCOUNT"));
+      if (!control) throw new Error("Missing bank control");
+      const { _id, _creationTime, ...rest } = control;
+      void _id;
+      void _creationTime;
+      const foreignAccountId = await ctx.db.insert("chartOfAccounts", { ...rest, orgId: otherOrgId });
+      const lines = await ctx.db.query("journalLines").collect();
+      const line = lines.find((row) => row.bankAccountId === bankB);
+      if (!line) throw new Error("Missing Bank B opening line");
+      await ctx.db.patch(line._id, { accountId: foreignAccountId });
+    });
+
+    const result = await report(s);
+
+    expect(result.controlOpeningMinor).toBe(4_000_000);
+    expect(result.banks.find((row) => row.bankAccountId === bankB)).toMatchObject({ openingLineMinor: 0, differenceMinor: 3_000_000 });
+  });
+
+  test("bank amounts too large to add exactly make the opening unavailable", async () => {
+    const { s } = await openedBanks();
+    await s.t.runUnwrapped(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").collect();
+      for (const line of lines.filter((row) => row.bankAccountId !== undefined)) {
+        await ctx.db.patch(line._id, { debitMinor: Number.MAX_SAFE_INTEGER });
+      }
+    });
+
+    expect((await report(s)).status).toBe("OPENING_PROOF_UNAVAILABLE");
+  });
+
+  test("a deleted bank that holds no opening line is not listed", async () => {
+    const { s, bankA, bankB } = await openedBanks();
+    const bankC = await bank(s, "Bank C", 0);
+    await s.t.run((ctx) => ctx.db.patch(bankC, { isDeleted: true }));
+
+    const result = await report(s);
+
+    expect(result.banks.map((row) => row.bankAccountId).sort()).toEqual([bankA, bankB].sort());
+  });
 });

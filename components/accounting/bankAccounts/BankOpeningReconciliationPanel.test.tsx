@@ -124,8 +124,9 @@ describe("BankOpeningReconciliationPanel", () => {
       />
     );
     const row = screen.getByTestId("opening-bank-row-b9");
-    expect(row.textContent).toContain("—");
-    expect(row.textContent).toContain("JOD 500000");
+    const cells = row.querySelectorAll("td");
+    expect(cells[1].textContent).toBe("—");
+    expect(cells[2].textContent).toBe("JOD 500000");
   });
 
   test("an opening amount not tied to any bank is called out", () => {
