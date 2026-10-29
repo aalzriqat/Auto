@@ -1,0 +1,50 @@
+{
+  "id": "supplier-alert-unrenderable-stored-date-is-skipped-and-counted",
+  "fingerprint": "0aa7d6e2901d82dc5d9cc365c415dacd5baf7a8ef8beaa0140c0e7e2de606efd",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "storedDateField": "each-of-vehicleHandoverAt-disbursedAt-paymentDueDate-receiva",
+        "value": "1e20-1e20-NaN-Infinity-Infinity"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result.alerted",
+      "value": 0
+    },
+    {
+      "observable": "result.skipped",
+      "value": 1
+    },
+    {
+      "observable": "alerts",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "every unrenderable value in every stored date field is skipped and counted, never thrown"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

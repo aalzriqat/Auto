@@ -2,7 +2,8 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { CRON_HEARTBEAT_JOBS, supplierDueAlertJobName } from "./constants";
+import { CRON_HEARTBEAT_JOBS } from "./constants";
+import { supplierDueAlertJobName } from "./constants";
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -289,13 +290,13 @@ test("listSupplierDueAlertFailures names the organisations whose newest supplier
   await beat(orgs.recovered, now - DAY_MS, true, "recovered");
 
   const admin = await asSuperAdmin(t);
-  const result = await admin.query(api.adminSystem.listSupplierDueAlertFailures, { paginationOpts: { numItems: 50, cursor: null } });
+  const result = await admin.query(api.supplierDueAlerts.listSupplierDueAlertFailures, { paginationOpts: { numItems: 50, cursor: null } });
   expect(result.page.map((row) => String(row.orgId))).toEqual([String(orgs.failing)]);
   expect(result.page[0]).toMatchObject({ ranAt: now - DAY_MS, detail: "org failing kind=PAYABLE cursor=abc" });
   expect(result.isDone).toBe(true);
 
   // Super admins only: an unauthenticated caller is refused.
-  await expect(t.query(api.adminSystem.listSupplierDueAlertFailures, { paginationOpts: { numItems: 50, cursor: null } })).rejects.toThrow();
+  await expect(t.query(api.supplierDueAlerts.listSupplierDueAlertFailures, { paginationOpts: { numItems: 50, cursor: null } })).rejects.toThrow();
 });
 
 test("the removed adminSystem.pruneOperationalLogs sweep is not exported again (SCRUM-807)", async () => {

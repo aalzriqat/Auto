@@ -437,6 +437,15 @@ describe("SCRUM-869 S3a - a stored date that cannot be rendered fails loudly and
     });
   }
 
+  test("a stored due date of 1e20, -1e20, NaN or Infinity is refused by name, never shown as a date or as no date", async () => {
+    freezeNow();
+    for (const [label, stored] of [["1e20", 1e20], ["-1e20", -1e20], ["NaN", Number.NaN], ["Infinity", Number.POSITIVE_INFINITY]] as const) {
+      const s = await seed(`loud${label}`);
+      await addPayable(s, { paymentDueDate: stored });
+      await expect(list(s, "PAYABLE")).rejects.toThrow(/not a renderable instant/);
+    }
+  });
+
   test("the last instant a Date can hold is a date and is shown", async () => {
     freezeNow();
     const s = await seed("maxdate");

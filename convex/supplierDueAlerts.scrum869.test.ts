@@ -731,6 +731,24 @@ describe("SCRUM-869 S8 - a stored date that cannot be rendered is an unreadable 
     }
   }
 
+  test("every unrenderable value in every stored date field is skipped and counted, never thrown", async () => {
+    for (const field of DATE_FIELD_CASES) {
+      for (const [label, stored] of UNRENDERABLE_DATES) {
+        const t = newHarness();
+        const s = await seedOrg(t, "d1b");
+        await field.seed(t, s, stored);
+        const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+          const result = await t.mutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW, kind: field.kind });
+          expect({ field: field.name, label, result }).toEqual({ field: field.name, label, result: { alerted: 0, skipped: 1 } });
+        } finally {
+          spy.mockRestore();
+        }
+        expect(await alerts(t)).toHaveLength(0);
+      }
+    }
+  });
+
   test("the last instant a Date can hold is still a date, and one millisecond past it is not", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "d2");
@@ -893,14 +911,17 @@ describe("SCRUM-869 S8 - a worker failure leaves a durable, actionable signal", 
   test("a later successful run supersedes the failure, and a clean run writes no heartbeat at all", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "h2");
+    const clean = await seedOrg(t, "h2c");
     await addPayable(t, s, { paymentDueDate: NOW });
-    await sweep(t);
-    expect(await heartbeatsFor(t, s.orgId)).toHaveLength(0);
+    await addPayable(t, clean, { paymentDueDate: NOW });
+    await t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: clean.orgId, now: NOW });
+    await drain(t);
+    expect(await heartbeatsFor(t, clean.orgId)).toHaveLength(0);
 
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       await withNotificationFault(1, async () => {
-        await expect(t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW + DAY })).rejects.toThrow(/injected fault/);
+        await expect(t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW })).rejects.toThrow(/injected fault/);
       });
     } finally {
       spy.mockRestore();
@@ -909,13 +930,14 @@ describe("SCRUM-869 S8 - a worker failure leaves a durable, actionable signal", 
     const failed = await heartbeatsFor(t, s.orgId);
     expect(failed.map((r) => r.success)).toEqual([false]);
 
-    vi.setSystemTime(NOW + 2 * DAY);
-    await t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW + 2 * DAY });
+    // The next run for the organisation (the next day's sweep) commits, sends what was missed, and supersedes the failure.
+    vi.setSystemTime(NOW + DAY);
+    await t.action(internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW + DAY });
     await drain(t);
     const after = (await heartbeatsFor(t, s.orgId)).sort((a, b) => a.ranAt - b.ranAt);
     expect(after.map((r) => r.success)).toEqual([false, true]);
+    expect((await alerts(t)).filter((r) => r.orgId === s.orgId)).toHaveLength(3);
   });
-
   test("a repeated failure updates the one failure row instead of adding a row a day", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "h3");

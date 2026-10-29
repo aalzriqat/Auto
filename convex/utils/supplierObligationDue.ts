@@ -74,6 +74,25 @@ interface Outstanding {
 
 type Reader = Pick<QueryCtx, "db">;
 
+/** The largest instant a JavaScript Date can hold, in ms (ECMAScript TimeClip: https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-timeclip). */
+const MAX_DATE_MS = 8.64e15;
+
+/**
+ * A stored date the row's due date will be formatted from. Past the Date range `new Date(x)` is an
+ * Invalid Date and `Intl.DateTimeFormat` throws `RangeError: Invalid time value` from inside the
+ * formatter, which is neither a `ConvexError` nor something a reader can tell from an infrastructure
+ * fault. So every stored date is checked here, before it is used, and a bad one is a named data fault
+ * (an unreadable row). Not-a-number, an infinity and a magnitude past the range are all refused; an
+ * absent date is simply absent, and a small zero or negative is still a missing fact, as before.
+ */
+function renderableDate(field: string, value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > MAX_DATE_MS) {
+    throw new ConvexError(`Stored date "${field}" is not a renderable instant.`);
+  }
+  return value;
+}
+
 async function ownedSale(ctx: Reader, orgId: Id<"organizations">, saleId: Id<"sales"> | undefined) {
   if (!saleId) return null;
   const sale = await ctx.db.get(saleId);
@@ -100,7 +119,7 @@ async function ownedApplication(
  */
 function recordedDeliveryAt(application: Doc<"financeApplications"> | null): number | undefined {
   if (application?.handoverStatus !== "HANDED_OVER") return undefined;
-  return application.vehicleHandoverAt;
+  return renderableDate("vehicleHandoverAt", application.vehicleHandoverAt);
 }
 
 /**
@@ -123,7 +142,7 @@ function financierFundingFact(
   if (sale.financingType === undefined && application === null) return undefined;
   const amount = application?.disbursedAmountMinor;
   const received = typeof amount === "number" && Number.isFinite(amount) && amount > 0;
-  return { fundedAt: received ? application?.disbursedAt : undefined };
+  return { fundedAt: received ? renderableDate("disbursedAt", application?.disbursedAt) : undefined };
 }
 
 async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierPayables">): Promise<Outstanding | null> {
@@ -138,7 +157,7 @@ async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"v
   return {
     outstandingMinor,
     disputed: view.status === "DISPUTED",
-    agreedDueAt: row.paymentDueDate,
+    agreedDueAt: renderableDate("paymentDueDate", row.paymentDueDate),
     model: throughDealership ? "SOURCED_THROUGH_DEALERSHIP_PAYABLE" : "OWNED_ON_ACCOUNT_PAYABLE",
     // Read only for the model that uses it: one extra bounded `get` per through-dealership row.
     ...(throughDealership ? { financierFunding: financierFundingFact(sale, await ownedApplication(ctx, orgId, sale)) } : {}),
@@ -156,7 +175,7 @@ async function receivableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc
   return {
     outstandingMinor,
     disputed: row.status === "DISPUTED",
-    agreedDueAt: row.agreedDueDate,
+    agreedDueAt: renderableDate("agreedDueDate", row.agreedDueDate),
     model: "SOURCED_DIRECT_RECEIVABLE",
     deliveredAt: recordedDeliveryAt(await ownedApplication(ctx, orgId, sale)),
   };
@@ -166,7 +185,7 @@ function recoveryFacts(row: Doc<"supplierCostRecoveries">): Outstanding | null {
   if (row.status === "REVERSED") return null;
   const outstandingMinor = Math.max(0, row.amountDueMinor - row.amountRecoveredMinor);
   if (outstandingMinor <= 0) return null;
-  return { outstandingMinor, disputed: false, agreedDueAt: row.agreedDueDate, model: "COST_RECOVERY" };
+  return { outstandingMinor, disputed: false, agreedDueAt: renderableDate("agreedDueDate", row.agreedDueDate), model: "COST_RECOVERY" };
 }
 
 function toRow(

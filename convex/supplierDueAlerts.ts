@@ -1,8 +1,11 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
+import { internalAction, query, type MutationCtx } from "./_generated/server";
+import { requireSuperAdmin } from "./utils/tenancy";
 import { internalMutation } from "./functions";
+import { supplierDueAlertJobName } from "./constants";
 import { hasPlanFeature } from "./subscriptions";
 import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -49,6 +52,17 @@ import { OBLIGATION_PAGE_MAX, readObligationPage, type ObligationKind, type Obli
  * obligation page and the next membership cursor, and only then moves to the next obligation page.
  * The idempotency key names the recipient, so a continuation, a retry or a later sweep can never send
  * the same (obligation, step, occurrence) to the same person twice.
+ *
+ * Failure signal (PR #716 round 3). A worker that throws cannot record its own failure: that write rolls
+ * back with the rest. The chain is therefore run through `runOrgSupplierDueAlerts`, an action that calls
+ * the worker and, if it throws, records the failure from a separate transaction and rethrows (so the
+ * scheduled function still shows as failed in the Convex logs). The record goes into the existing
+ * `cronHeartbeats` table under a per-organisation job name (`supplierDueAlertJobName`): one failure row
+ * per organisation, updated in place while it keeps failing, and superseded by a success row the next
+ * time the worker commits for that organisation. It names the organisation, kind and cursors, so an
+ * operator can see where the chain stopped (`adminSystem.listSupplierDueAlertFailures`). Scheduled
+ * functions and actions are not retried by Convex for developer errors
+ * (https://docs.convex.dev/scheduling/scheduled-functions, https://docs.convex.dev/functions/actions).
  */
 
 const ORG_BATCH_SIZE = 20;
@@ -127,16 +141,31 @@ function planAlert(row: ObligationRow): PlannedAlert | null {
   };
 }
 
+/** The worker's arguments other than `orgId`, shared by the mutation and the action that wraps it. */
+const workerArgsBase = {
+  now: v.number(),
+  kind: v.optional(kindValidator),
+  /** Obligation page cursor, supplied by the worker's own continuation. */
+  cursor: v.optional(v.string()),
+  /** Membership page cursor within the obligation page, supplied by the worker's own continuation. */
+  recipientCursor: v.optional(v.string()),
+};
+
+/** One failure row's `detail` is at most this long, whatever the error text and cursors are. */
+const FAILURE_DETAIL_MAX = 1_000;
+const FAILURE_CURSOR_MAX = 300;
+
+async function newestOrgHeartbeat(ctx: MutationCtx, orgId: Id<"organizations">) {
+  return await ctx.db
+    .query("cronHeartbeats")
+    .withIndex("by_job_ranAt", (q) => q.eq("jobName", supplierDueAlertJobName(orgId)))
+    .order("desc")
+    .first();
+}
+
 export const processOrgSupplierDueAlerts = internalMutation({
-  args: {
-    orgId: v.id("organizations"),
-    now: v.number(),
-    kind: v.optional(kindValidator),
-    /** Obligation page cursor, supplied by this mutation's own continuation. */
-    cursor: v.optional(v.string()),
-    /** Membership page cursor within the obligation page, supplied by this mutation's own continuation. */
-    recipientCursor: v.optional(v.string()),
-  },
+  // `orgId` stays a native declaration so the tenantWriteGuard analyser still covers this worker.
+  args: { orgId: v.id("organizations"), ...workerArgsBase },
   returns: v.object({ alerted: v.number(), skipped: v.number() }),
   handler: async (ctx, args) => {
     const kind = args.kind ?? KINDS[0];
@@ -216,13 +245,116 @@ export const processOrgSupplierDueAlerts = internalMutation({
       continuation = { kind: nextKind };
     }
     if (continuation) {
-      await ctx.scheduler.runAfter(0, internal.supplierDueAlerts.processOrgSupplierDueAlerts, {
+      await ctx.scheduler.runAfter(0, internal.supplierDueAlerts.runOrgSupplierDueAlerts, {
         orgId: args.orgId,
         now: args.now,
         ...continuation,
       });
     }
+
+    // A transaction that committed supersedes an earlier failure of this organisation. One indexed read;
+    // a row is written only when the newest one is a failure, so a healthy organisation writes nothing.
+    const newest = await newestOrgHeartbeat(ctx, args.orgId);
+    if (newest && !newest.success) {
+      await ctx.db.insert("cronHeartbeats", {
+        jobName: supplierDueAlertJobName(args.orgId),
+        ranAt: Date.now(),
+        success: true,
+        detail: "supplier due alerts ran again for this organisation after a failure",
+      });
+    }
     return { alerted, skipped };
+  },
+});
+
+/**
+ * Runs one worker transaction and reports its failure. Convex rolls a throwing mutation back whole, so
+ * the failure is written here, from a separate transaction, and then rethrown: the scheduled function
+ * still fails visibly and is not retried (a developer error is not an internal error).
+ */
+export const runOrgSupplierDueAlerts = internalAction({
+  args: { orgId: v.id("organizations"), ...workerArgsBase },
+  returns: v.object({ alerted: v.number(), skipped: v.number() }),
+  // Annotated: the action and the mutation name each other through `internal`, which TypeScript
+  // cannot infer around (a TS7022 circular-inference error without it; Convex documents the same
+  // remedy, an explicit return type, for functions that call each other through `api`/`internal`).
+  handler: async (ctx, args): Promise<{ alerted: number; skipped: number }> => {
+    try {
+      return await ctx.runMutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, args);
+    } catch (error) {
+      console.error("supplier due alert worker failed", { orgId: args.orgId, kind: args.kind ?? KINDS[0] });
+      await ctx.runMutation(internal.supplierDueAlerts.recordSupplierDueAlertFailure, {
+        orgId: args.orgId,
+        kind: args.kind ?? KINDS[0],
+        ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+        ...(args.recipientCursor !== undefined ? { recipientCursor: args.recipientCursor } : {}),
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  },
+});
+
+/**
+ * The organisations whose supplier due-alert chain last failed and has not run again since (operator
+ * view of the failure signal above). One page of organisations per call (the caller pages with
+ * `continueCursor`) and one indexed heartbeat read per organisation, so the read set is bounded by the
+ * page size. A row is returned only while the newest heartbeat of that organisation's job is a failure:
+ * a later success supersedes it. Super admins only. Lives here, not in `adminSystem.ts`, so the whole
+ * signal is in one module.
+ */
+export const listSupplierDueAlertFailures = query({
+  args: { paginationOpts: paginationOptsValidator },
+  returns: v.object({
+    page: v.array(v.object({ orgId: v.id("organizations"), ranAt: v.number(), detail: v.string() })),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    await requireSuperAdmin(ctx);
+    const orgPage = await ctx.db.query("organizations").paginate(args.paginationOpts);
+    const newest = await Promise.all(
+      orgPage.page.map(async (org) => ({
+        orgId: org._id,
+        heartbeat: await ctx.db
+          .query("cronHeartbeats")
+          .withIndex("by_job_ranAt", (q) => q.eq("jobName", supplierDueAlertJobName(org._id)))
+          .order("desc")
+          .first(),
+      }))
+    );
+    const page = newest.flatMap(({ orgId, heartbeat }) =>
+      heartbeat && !heartbeat.success ? [{ orgId, ranAt: heartbeat.ranAt, detail: heartbeat.detail ?? "" }] : []
+    );
+    return { page, isDone: orgPage.isDone, continueCursor: orgPage.continueCursor };
+  },
+});
+
+/** Non-economic operational write: one bounded `cronHeartbeats` row per failing organisation, updated in place while it keeps failing. */
+export const recordSupplierDueAlertFailure = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    kind: kindValidator,
+    cursor: v.optional(v.string()),
+    recipientCursor: v.optional(v.string()),
+    message: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}...` : text);
+    const head =
+      `supplier due alerts failed: org=${args.orgId} kind=${args.kind} ` +
+      `cursor=${args.cursor === undefined ? "none" : clip(args.cursor, FAILURE_CURSOR_MAX)} ` +
+      `recipientCursor=${args.recipientCursor === undefined ? "none" : clip(args.recipientCursor, FAILURE_CURSOR_MAX)} error=`;
+    const detail = `${head}${clip(args.message, Math.max(0, FAILURE_DETAIL_MAX - head.length - 3))}`.slice(0, FAILURE_DETAIL_MAX);
+    const now = Date.now();
+    const newest = await newestOrgHeartbeat(ctx, args.orgId);
+    if (newest && !newest.success) {
+      await ctx.db.patch(newest._id, { ranAt: now, detail });
+    } else {
+      await ctx.db.insert("cronHeartbeats", { jobName: supplierDueAlertJobName(args.orgId), ranAt: now, success: false, detail });
+    }
+    return null;
   },
 });
 export const processSupplierDueAlerts = internalMutation({
@@ -234,7 +366,7 @@ export const processSupplierDueAlerts = internalMutation({
     const now = args.now ?? Date.now();
     const page = await ctx.db.query("organizations").paginate({ cursor: args.cursor ?? null, numItems: ORG_BATCH_SIZE });
     for (const org of page.page) {
-      await ctx.scheduler.runAfter(0, internal.supplierDueAlerts.processOrgSupplierDueAlerts, { orgId: org._id, now });
+      await ctx.scheduler.runAfter(0, internal.supplierDueAlerts.runOrgSupplierDueAlerts, { orgId: org._id, now });
     }
     if (!page.isDone) {
       await ctx.scheduler.runAfter(0, internal.supplierDueAlerts.processSupplierDueAlerts, { cursor: page.continueCursor, now });

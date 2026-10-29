@@ -1,0 +1,65 @@
+{
+  "id": "supplier-alert-failing-organisations-are-listed-for-super-admin",
+  "fingerprint": "4c871e85f41557539a3d7231ca35e98293b9c5d5d628be9dbb9269ea7c8be2dc",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SUPER_ADMIN",
+        "org": "platform"
+      },
+      "action": "supplierDueAlerts.listSupplierDueAlertFailures",
+      "input": {
+        "orgsFailing": 1,
+        "orgsRecovered": 1,
+        "orgsNeverFailed": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "anonymous",
+        "org": "none"
+      },
+      "action": "supplierDueAlerts.listSupplierDueAlertFailures",
+      "input": {
+        "caller": "unauthenticated"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "page.orgIds",
+      "value": "the-failing-organisation-only"
+    },
+    {
+      "observable": "page.detail",
+      "value": "the-newest-failure-row-s-detail"
+    },
+    {
+      "observable": "unauthenticatedCaller.refused",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/adminSystem.test.ts",
+    "testName": "listSupplierDueAlertFailures names the organisations whose newest supplier-due-alert heartbeat is a failure (SCRUM-869 round 3)"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "bfe3f3f75022245a57a406f1870cd747580cb156"
+  }
+}
