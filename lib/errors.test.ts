@@ -486,6 +486,13 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(arEntry).not.toBe(enEntry);
   });
 
+  it("SCRUM-858 OPENING_DEPOSIT_DIRECT_POST_REFUSED resolves in ar and en, and EN equals the backend message", async () => {
+    const { enEntry, arEntry } = await expectCodedEntry("OPENING_DEPOSIT_DIRECT_POST_REFUSED");
+    const { OPENING_DEPOSIT_DIRECT_POST_REFUSED_MESSAGE } = await import("../convex/utils/openingDepositContainment");
+    expect(enEntry).toBe(OPENING_DEPOSIT_DIRECT_POST_REFUSED_MESSAGE);
+    expect(arEntry).not.toBe(enEntry);
+  });
+
   it("SCRUM-413 OWNER_NAMED_ROLE_LOCKED resolves to its dictionary entry in ar and en, and EN equals the roles.ts message", async () => {
     const { enEntry } = await expectCodedEntry("OWNER_NAMED_ROLE_LOCKED");
     expect((await roleMessageConst("OWNER_NAMED_ROLE_LOCKED_MESSAGE")).message).toBe(enEntry);

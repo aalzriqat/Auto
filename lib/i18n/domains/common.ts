@@ -378,6 +378,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This sale applied a customer's opening deposit, and reversing that application is not available in the pilot. Nothing has been changed.",
     "تم تطبيق عربون افتتاحي للعميل على هذه الصفقة، وعكس هذا التطبيق غير متاح في المرحلة التجريبية. لم يتم تغيير أي شيء.",
   ],
+  ServerError_OPENING_DEPOSIT_DIRECT_POST_REFUSED: [
+    "Named customer deposits cannot be posted without a second approver. Save the opening balance for approval and ask an accountant to approve it. Nothing has been changed.",
+    "لا يمكن ترحيل عربونات العملاء المسمّاة دون موافقة شخص ثانٍ. احفظ الرصيد الافتتاحي للموافقة واطلب من المحاسب الموافقة عليه. لم يتم تغيير أي شيء.",
+  ],
   // SCRUM-795 (SCRUM-50): manual journals are off for the pilot.
   ServerError_MANUAL_JOURNALS_DISABLED: [
     "Manual journal entries are turned off during the pilot. Nothing has been changed.",

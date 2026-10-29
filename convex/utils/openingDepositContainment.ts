@@ -49,3 +49,27 @@ export function refuseOpeningDepositReversal(): never {
 export function assertNotOpeningDepositPayout(deposit: { origin?: "OPENING" }): void {
   if (isOpeningDeposit(deposit)) refuseOpeningDepositPayout();
 }
+
+// English text equals `ServerError_OPENING_DEPOSIT_DIRECT_POST_REFUSED` in lib/i18n/domains/common.ts.
+export const OPENING_DEPOSIT_DIRECT_POST_REFUSED_MESSAGE =
+  "Named customer deposits cannot be posted without a second approver. Save the opening balance for approval and ask an accountant to approve it. Nothing has been changed.";
+
+/** True when an opening allocation list names a customer's deposit. */
+export function hasNamedOpeningDeposit(
+  allocations: ReadonlyArray<{ kind: string }> | undefined
+): boolean {
+  return allocations?.some((row) => row.kind === "CUSTOMER_DEPOSIT") === true;
+}
+
+/**
+ * Owner ruling SCRUM-858 c23884: named deposits are real dealer balances and post only after an
+ * accountant approves them. The owner's direct route skips the second approver, so it refuses
+ * them. Call BEFORE any write: a caught exception in a Convex mutation still commits earlier
+ * writes, so this must run ahead of the draft insert.
+ */
+export function refuseOpeningDepositDirectPost(): never {
+  return throwAppError(
+    AppErrorCode.OPENING_DEPOSIT_DIRECT_POST_REFUSED,
+    OPENING_DEPOSIT_DIRECT_POST_REFUSED_MESSAGE
+  );
+}

@@ -312,7 +312,10 @@ export function OpeningBalanceCard() {
     if (asOfMs === null) return;
     const allocationPayload = buildOpeningAllocationPayload(allocations, currency);
     if (!allocationPayload || !openingAllocationTotalsMatch(allocations, allocationGroups, currency)) return;
-    if (status?.canPostDirectly && allocations.length > 0) {
+    // SCRUM-858 c23884: named customer deposits post only after an accountant approves them, so the
+    // owner route is never offered for a draft that carries one (the server refuses it as well).
+    const postsDirectly = Boolean(status?.canPostDirectly) && !allocations.some((row) => row.kind === "CUSTOMER_DEPOSIT");
+    if (postsDirectly && allocations.length > 0) {
       const summary = allocationGroups.map((group) => {
         const members = allocations.filter((row) => row.accountId === group.accountId)
           .map((row) => allocationConfirmationLine(row, currency, t));
@@ -344,7 +347,7 @@ export function OpeningBalanceCard() {
         expectedCurrency: currency,
       };
 
-      if (status?.canPostDirectly) {
+      if (postsDirectly) {
         await postDirect(payload);
         toast.success(t("OpeningBalancePostedToast"));
       } else {

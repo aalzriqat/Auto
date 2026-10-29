@@ -345,6 +345,7 @@ export const AppErrorCode = {
   // Translated under ServerError_<code>.
   OPENING_DEPOSIT_PAYOUT_REFUSED: "OPENING_DEPOSIT_PAYOUT_REFUSED",
   OPENING_DEPOSIT_REVERSAL_REFUSED: "OPENING_DEPOSIT_REVERSAL_REFUSED",
+  OPENING_DEPOSIT_DIRECT_POST_REFUSED: "OPENING_DEPOSIT_DIRECT_POST_REFUSED",
   OPENING_BALANCE_AFTER_LEDGER_ACTIVITY: "OPENING_BALANCE_AFTER_LEDGER_ACTIVITY",
   // SCRUM-781 (owner rulings SCRUM-773 c22401, SCRUM-760 c23812): `sourcingPayables.markPaid` refuses a
   // nonzero VAT on a consigned supplier payable. Message in convex/sourcingPayables.ts; translated

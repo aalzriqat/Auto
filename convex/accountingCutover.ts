@@ -46,6 +46,7 @@ import { openingAllocationValidator } from "./utils/openingAllocationValidators"
 import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { assertOpeningVehicleBasis, listOpeningStockEvidence } from "./utils/openingVehicleBasis";
 import { orgResetState } from "./utils/orgResetGeneration";
+import { hasNamedOpeningDeposit, refuseOpeningDepositDirectPost } from "./utils/openingDepositContainment";
 
 /**
  * SCRUM-54: an opening line on the BANK_ACCOUNT control account must name the
@@ -486,6 +487,11 @@ async function postOpeningBalanceDraft(
 ): Promise<Id<"journalEntries">> {
   const { orgId, draft, approverId, autoApproved } = args;
 
+  // SCRUM-858 c23884: named deposits post only through the accountant approval route. Checked here,
+  // ahead of every write, so no caller can reach a self-approved post of one (defence in depth for
+  // `postOpeningBalanceDirect`, which also refuses at its own boundary).
+  if (autoApproved && hasNamedOpeningDeposit(draft.allocations)) refuseOpeningDepositDirectPost();
+
   // The read-only preflight is repeated here in the posting transaction. The
   // wrapper is unwrapped before any write, preserving the original refusal and
   // Convex's uncaught-exception rollback behavior.
@@ -622,6 +628,10 @@ export const postOpeningBalanceDirect = mutation({
         "Only an owner can post an opening balance without a second approver. Save it for approval instead."
       );
     }
+
+    // SCRUM-858 c23884: a named customer deposit needs an accountant's approval before it posts, so
+    // this route (which self-approves) refuses it before the first read-for-write.
+    if (hasNamedOpeningDeposit(args.allocations)) refuseOpeningDepositDirectPost();
 
     // Before the draft insert AND before the post — this route does both in one
     // mutation, so it is the one where a late refusal would be worst.
