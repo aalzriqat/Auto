@@ -209,9 +209,11 @@ export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
  * The two accepted review references; the last one in a renewal is the review head (group 1):
  * `SCRUM-866 round <n> review against origin/main <sha>`, or, for a change reviewed on its own
  * branch before it reaches main, `<JIRA-KEY> review of PR #<n> head <sha>`. Both are followed
- * by a 8-40 digit lowercase hex SHA that must be a verified ancestor of HEAD.
+ * by an 8-40 digit lowercase hex SHA that must be a verified ancestor of HEAD. The SHA must end the
+ * token: only the end of the text, whitespace or `.,;:)]` may follow, so a longer or run-on token
+ * is malformed rather than silently truncated to its first 40 digits.
  */
-const REVIEW_REFERENCE = /(?:SCRUM-866 round \d+ review against origin\/main|\b[A-Z][A-Z0-9]*-\d+ review of PR #\d+ head) ([0-9a-f]{8,40})/g;
+const REVIEW_REFERENCE = /(?:SCRUM-866 round \d+ review against origin\/main|\b[A-Z][A-Z0-9]*-\d+ review of PR #\d+ head) ([0-9a-f]{8,40})(?=$|[\s.,;:)\]])/g;
 
 /**
  * A human renewal must name each changed client/defining backend file.
