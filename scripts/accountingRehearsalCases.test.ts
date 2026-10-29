@@ -19,7 +19,7 @@ import { describe, expect, test, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { summarize } from "./accountingPreviewRehearsal.mjs";
-import { registeredArgsProblems } from "../test-utils/registeredArgs";
+import { exportedArgsOf, registeredArgsProblems } from "../test-utils/registeredArgs";
 import {
   CURRENCY_SCALES,
   DEFAULT_ORG_CURRENCY,
@@ -515,21 +515,36 @@ type Defects = {
 
 /**
  * The registered Convex function behind `module:name`, loaded lazily so a case that never touches a module
- * never imports it. `null` when the path names no registered function (the fake then models it by hand).
+ * never imports it. A path that resolves to no registered function THROWS: the fake would otherwise model the
+ * call by hand against a backend that no longer has it, and a rename (or a failed import) would stay green.
+ * A thrown error fails the case that made the call, in a positive step and in a refusal step alike; a returned
+ * `{ ok: false }` would instead be read as a refusal by every case that expects one.
  */
 async function registeredFunction(fnPath: string): Promise<unknown> {
+  const unresolved = (why: string) =>
+    new Error(`${fnPath} is not a registered Convex function (${why}); the rehearsal refuses the call instead of modelling it`);
   const [module, name] = fnPath.split(":");
-  if (!module || !name || !/^[A-Za-z0-9_/]+$/.test(module)) return null;
+  if (!module || !name || !/^[A-Za-z0-9_/]+$/.test(module)) throw unresolved("not a module:name path");
+  let loaded: Record<string, unknown>;
   try {
-    const loaded = (await import(`../convex/${module}.ts`)) as Record<string, unknown>;
-    return loaded[name] ?? null;
-  } catch {
-    return null;
+    loaded = (await import(`../convex/${module}.ts`)) as Record<string, unknown>;
+  } catch (error) {
+    throw unresolved(`the module cannot be imported: ${String((error as Error)?.message ?? error).slice(0, 120)}`);
   }
+  let registered: unknown;
+  try {
+    registered = loaded[name];
+  } catch {
+    // A vitest module mock throws on an export it does not define; that is the same "not exported".
+    registered = undefined;
+  }
+  if (registered === undefined || registered === null) throw unresolved("the module does not export it");
+  if (exportedArgsOf(registered) === null) throw unresolved("the export is not a registered function");
+  return registered;
 }
 
-async function registeredArgsRefusal(fnPath: string, args: Record<string, unknown>): Promise<string | null> {
-  const problems = registeredArgsProblems(await registeredFunction(fnPath), args);
+async function registeredArgsRefusal(registered: unknown, fnPath: string, args: Record<string, unknown>): Promise<string | null> {
+  const problems = registeredArgsProblems(registered, args);
   if (!problems || problems.length === 0) return null;
   return `ArgumentValidationError in ${fnPath}: ${problems.join("; ")}`;
 }
@@ -1077,7 +1092,10 @@ function makeBackend(defects: Defects = {}) {
     // identity, a missing currency); with either on, the registered check would hide the defect the case
     // exists to catch, so it stands down for that run only.
     const validatorDropped = Boolean(defects.acceptUnidentified || defects.feeMissingCurrencyAccepted);
-    const invalid = validatorDropped ? null : await registeredArgsRefusal(fnPath, args);
+    // The registration itself is never skipped, even when the validator stands down: resolving it throws for a
+    // function the registry cannot find (see `registeredFunction`).
+    const registered = await registeredFunction(fnPath);
+    const invalid = validatorDropped ? null : await registeredArgsRefusal(registered, fnPath, args);
     if (invalid) return { ok: false as const, error: invalid };
     switch (fnPath) {
       case "orgSettings:get":

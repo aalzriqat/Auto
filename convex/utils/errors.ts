@@ -147,6 +147,10 @@ export const AppErrorCode = {
   // Same rule for paying a supplier payable (`sourcingPayables.markPaid` / `recordPartialPayment`): a cheque
   // credits the bank at once with no issued-cheque record to clear or bounce. Translated under ServerError_<code>.
   SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED: "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED",
+  // `sourcingPayables.recordPartialPayment` refuses a payment that would exceed the balance still owed. The
+  // payload carries `projected` and `due` (major units) for the `{placeholders}`; translated under ServerError_<code>.
+  // The only action it offers is the one available: reduce the amount (payable correction is pilot-disabled).
+  SUPPLIER_PAYMENT_EXCEEDS_BALANCE: "SUPPLIER_PAYMENT_EXCEEDS_BALANCE",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",

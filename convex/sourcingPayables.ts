@@ -26,6 +26,15 @@ export const CONSIGNED_PAYABLE_VAT_REFUSAL =
   "A consigned vehicle's supplier payable is settled at its gross amount. VAT cannot be reclassified on it.";
 
 /**
+ * SCRUM-869: the over-application refusal of `recordPartialPayment`. Must equal
+ * ServerError_SUPPLIER_PAYMENT_EXCEEDS_BALANCE (EN) in lib/i18n/domains/common.ts once `{projected}` and `{due}`
+ * are filled. It names only an action the user can take: payable correction is pilot-disabled.
+ */
+export function supplierPaymentExceedsBalanceMessage(projected: number, due: number): string {
+  return `That would pay ${projected} against ${due} owed. Reduce the amount to the balance still owed.`;
+}
+
+/**
  * Whether this payable may carry an input-VAT reclassification. THE one answer, read by the
  * `markPaid` refusal and by the `list`/`get` flag the screens use to hide the VAT field, so the
  * screen can never offer what the mutation refuses. An opening liability has no vehicle to prove
@@ -570,9 +579,16 @@ export const recordPartialPayment = mutation({
         // money behind it, and netting it into the next payable hides which
         // deal it happened on.
         if (projectedMinor > dueMinor) {
-          throw new ConvexError(
-            `That would pay ${fromMinorUnits(projectedMinor, payable.currency)} against ${fromMinorUnits(dueMinor, payable.currency)} owed. Reduce the amount, or correct the entitlement first.`
-          );
+          // Coded so the Arabic user reads Arabic. Payable correction is pilot-disabled
+          // (SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED), so the one action offered is reducing the amount.
+          const projectedMajor = fromMinorUnits(projectedMinor, payable.currency);
+          const dueMajor = fromMinorUnits(dueMinor, payable.currency);
+          throw new ConvexError({
+            code: AppErrorCode.SUPPLIER_PAYMENT_EXCEEDS_BALANCE,
+            message: supplierPaymentExceedsBalanceMessage(projectedMajor, dueMajor),
+            projected: projectedMajor,
+            due: dueMajor,
+          });
         }
 
         const opening = await openingPayableBasis(ctx,args.orgId,payable);

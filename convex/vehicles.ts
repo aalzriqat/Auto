@@ -2109,7 +2109,7 @@ export const correctAcquisitionCost = mutation({
     if (vehicle.sourceType === "SOURCED") {
       throwAppError(
         AppErrorCode.COST_CORRECTION_SOURCED,
-        "Sourced vehicles are not capitalized into inventory. Adjust the supplier payable instead."
+        "Sourced vehicles are not capitalized into inventory, so their cost cannot be corrected here. Nothing has been changed."
       );
     }
     if (vehicle.status === "SOLD") {

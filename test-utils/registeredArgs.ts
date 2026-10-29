@@ -90,15 +90,19 @@ function check(node: Node, value: unknown, at: string, problems: string[]): void
         return;
       }
       const given = value as Record<string, unknown>;
+      // Own properties only, as Convex does: `name in object` is true for `constructor`, `toString` and every other
+      // Object.prototype member, which would let an undeclared field through. https://docs.convex.dev/functions/validation
+      const declared = (name: string) => Object.hasOwn(node.value, name);
+      const present = (name: string) => (Object.hasOwn(given, name) ? given[name] : undefined);
       for (const [name, field] of Object.entries(node.value)) {
-        if (given[name] === undefined) {
+        if (present(name) === undefined) {
           if (!field.optional) problems.push(`${at}: missing the required field \`${name}\``);
           continue;
         }
-        check(field.fieldType, given[name], `${at === "args" ? "" : `${at}.`}${name}`, problems);
+        check(field.fieldType, present(name), `${at === "args" ? "" : `${at}.`}${name}`, problems);
       }
       for (const name of Object.keys(given)) {
-        if (given[name] !== undefined && !(name in node.value)) problems.push(`${at}: extra field \`${name}\` that is not in the validator`);
+        if (given[name] !== undefined && !declared(name)) problems.push(`${at}: extra field \`${name}\` that is not in the validator`);
       }
       return;
     }

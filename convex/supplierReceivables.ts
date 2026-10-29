@@ -561,7 +561,7 @@ export async function assertNoSupplierReceiptsForSale(
   const owned = rows.filter((row) => row.orgId === orgId);
   if (owned.some((row) => (row.receiptSeq ?? 0) > 0)) {
     throw new ConvexError(
-      "Cannot automatically cancel a sale after the supplier has paid against its commission claim. Use a manual accounting correction."
+      "Cannot automatically cancel a sale after the supplier has paid against its commission claim. Nothing has been changed. The sale and the supplier's receipts stay as recorded."
     );
   }
   return owned;
