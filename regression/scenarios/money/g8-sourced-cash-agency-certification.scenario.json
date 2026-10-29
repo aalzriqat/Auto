@@ -1,0 +1,52 @@
+{
+  "id": "g8-sourced-cash-agency-certification",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "local-g8-plan-runtime-pending",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "vehicle": "SOURCED",
+        "price": 12500,
+        "supplierCost": 10000,
+        "route": "THROUGH_DEALERSHIP"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "incomeStatement.totalRevenueMinor",
+      "value": 2500000
+    },
+    {
+      "observable": "incomeStatement.totalCogsMinor",
+      "value": 0
+    },
+    {
+      "observable": "supplierPayable.amountDue",
+      "value": 10000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum486Certification.test.ts",
+    "testName": "SOURCED CASH × full price held as deposit: agent margin only, deposit-settled customer AR and supplier liability"
+  },
+  "matrixRow": "SCRUM-760-G8-SOURCED",
+  "fingerprint": "d2ef37c7cfad8c1ffb4d4048d272479195d4fe2fcf3167780c19084c31999014"
+}
