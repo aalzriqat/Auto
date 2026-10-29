@@ -52,20 +52,28 @@
   ],
   "expected": [
     {
+      "observable": "report.status",
+      "value": "OPENING_PROOF_UNAVAILABLE"
+    },
+    {
       "observable": "controlOpeningMinor",
-      "value": 7000000
+      "value": "null"
     },
     {
       "observable": "bankLinesTotalMinor",
-      "value": 4000000
+      "value": "null"
     },
     {
       "observable": "unattributedOpeningMinor",
-      "value": 3000000
+      "value": "null"
     },
     {
       "observable": "bankB.differenceMinor",
-      "value": 3000000
+      "value": "null"
+    },
+    {
+      "observable": "unexplainedOpeningDifference",
+      "value": "null"
     }
   ],
   "rulings": [
@@ -76,8 +84,8 @@
   ],
   "impl": {
     "file": "convex/openingBankReconciliation.scrum858.test.ts",
-    "testName": "an opening bank line that names no bank is shown as unattributed and its bank reports the difference"
+    "testName": "an opening bank line that names no bank makes the opening unavailable even with a nonzero net"
   },
   "matrixRow": "OB-G2",
-  "fingerprint": "d9a41d6dba9ed85f69a0ffd7797cd4e36d60cf7c82517d6a6b134c1ea6b447df"
+  "fingerprint": "0ff306135770dd09f8fa13e19866f5da41b2efe75622ce1b6197ec97d83e1c3f"
 }

@@ -113,6 +113,7 @@ export async function computeBankOpeningReconciliation(
   // rounded (and 1e308 + 1e308 is Infinity), so a figure that cannot be proven exact is never reported as OK.
   let controlOpeningMinor = 0;
   let unattributedOpeningMinor = 0;
+  let hasUnnamedBankLines = false;
   const lineByBank = new Map<string, number>();
   let banks: BankOpeningRow[] = [];
   let bankLinesTotalMinor = 0;
@@ -128,9 +129,13 @@ export async function computeBankOpeningReconciliation(
       if (line.bankAccountId) {
         lineByBank.set(String(line.bankAccountId), exactMinor((lineByBank.get(String(line.bankAccountId)) ?? 0) + net));
       } else {
+        hasUnnamedBankLines = true;
         unattributedOpeningMinor = exactMinor(unattributedOpeningMinor + net);
       }
     }
+
+    // A zero net does not prove attribution: opposing unnamed legacy lines would otherwise disappear (c23884).
+    if (hasUnnamedBankLines) return withoutOpening("OPENING_PROOF_UNAVAILABLE", liveBanks);
 
     // A bank removed after the opening still owns its opening line, so it stays in the reconciliation.
     const shown = allBanks.filter((bank) => !bank.isDeleted || lineByBank.has(String(bank._id)));
