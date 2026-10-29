@@ -8,7 +8,6 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useCurrency } from "@/hooks/useCurrency";
-import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/components/ui/sonner";
 import { errorMessage, LoadingAccountingState, scaleForCurrency } from "./AccountingTabShared";
@@ -23,7 +22,6 @@ export function BankAccountsTab() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const { code: orgCurrency } = useCurrency();
-  const formatCurrency = useCurrencyFormatter();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<CreateBankAccountFormState>(defaultCreateBankAccountForm(orgCurrency));
@@ -125,7 +123,7 @@ export function BankAccountsTab() {
             </p>
           ) : (
             <p className="text-2xl font-semibold text-foreground">
-              {formatCurrency(bookBalance.balanceMinor / Math.pow(10, scaleForCurrency(bookBalance.currency)))}
+              {formatBankMinor(bookBalance.balanceMinor, bookBalance.currency)}
             </p>
           )}
         </div>
