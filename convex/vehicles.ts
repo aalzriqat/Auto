@@ -3639,8 +3639,11 @@ function isReplayProbeable(row: {
   rowId?: number; year: number; sellingPrice: number; mileage?: number; purchasePrice?: number;
   sourceCost?: number; valuations?: Array<{ valuationAmount: number }>;
 }): boolean {
-  if (row.rowId === undefined || !Number.isSafeInteger(row.rowId) || row.rowId < 0) return false;
-  const finite = (n: number | undefined) => n === undefined || Number.isFinite(n);
+  // The same test the PURCHASE validator applies to a row number. Evidence is keyed by whatever integer
+  // the command accepted (including negative and beyond-safe ones), so a narrower test here would leave
+  // already-recorded rows unrecognisable as replays once their supplier is deactivated.
+  if (row.rowId === undefined || !Number.isInteger(row.rowId)) return false;
+  const finite =(n: number | undefined) => n === undefined || Number.isFinite(n);
   return finite(row.year) && finite(row.sellingPrice) && finite(row.mileage) && finite(row.purchasePrice) &&
     finite(row.sourceCost) && (row.valuations ?? []).every((val) => Number.isFinite(val.valuationAmount));
 }
