@@ -27,6 +27,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { computeSupplierReceivablesReconciliation } from "./accountingReports";
+import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -349,6 +350,22 @@ describe("SCRUM-869 S2 - the supplier receivables subledger reconciles to GL 124
 
 const DAY = 86_400_000;
 
+const accountOf = (s: Seed, systemKey: string) =>
+  s.t.run(async (ctx) =>
+    (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", systemKey as never)).unique())!
+  );
+const periodOf = (s: Seed) =>
+  s.t.run(async (ctx) => (await ctx.db.query("accountingPeriods").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).first())!);
+/** Zero-valued snapshot shards: they add documents to the read without moving any balance. */
+const addZeroSnapshots = (s: Seed, accountId: Id<"chartOfAccounts">, periodId: Id<"accountingPeriods">, count: number) =>
+  s.t.run(async (ctx) => {
+    for (let shard = 100; shard < 100 + count; shard += 1) {
+      await ctx.db.insert("accountBalanceSnapshots", {
+        orgId: s.orgId, accountId, currency: "JOD", periodId, shard, runningDebitMinor: 0, runningCreditMinor: 0, updatedAt: Date.now(),
+      });
+    }
+  });
+
 /**
  * SCRUM-858 F1. The GL side is read as of `toDate`; the subledger side is the rows' CURRENT state,
  * and a margin receipt carries no date of its own (`amountReceived` is a running total), so the
@@ -398,5 +415,73 @@ describe("SCRUM-858 F1 - no mixed-cutoff comparison", () => {
       expect(r.byCurrency.JOD).toMatchObject({ glBalanceMinor: MARGIN * SCALE, subledgerBalanceMinor: MARGIN * SCALE, isReconciled: true });
       expect(r.complete).toBe(true);
     }
+  });
+});
+
+/**
+ * SCRUM-858 F2. The GL side used to read every period, every snapshot and possibly every journal
+ * line of the organization before keeping the control accounts, so `readLimit` bounded nothing there.
+ * The read is now scoped to the control accounts and counted against the limit.
+ */
+describe("SCRUM-858 F2 - the GL read is bounded", () => {
+  test("more control-account snapshot rows than the read limit is UNAVAILABLE (OVER_LIMIT), never a partial total", async () => {
+    const s = await seed("f2over");
+    await directSale(s, "f2over");
+    const ar = await accountOf(s, "RECEIVABLE_FROM_SUPPLIERS");
+    await addZeroSnapshots(s, ar._id, (await periodOf(s))._id, 6);
+    const tight = await s.t.run((ctx) => computeSupplierReceivablesReconciliation(ctx, s.orgId, undefined, { readLimit: 3 }));
+    expect(tight.status).toBe("UNAVAILABLE");
+    expect(tight.unavailableReason).toBe("OVER_LIMIT");
+    expect(tight.isReconciled).toBe(false);
+    expect(tight.complete).toBe(false);
+    const roomy = await s.t.run((ctx) => computeSupplierReceivablesReconciliation(ctx, s.orgId, undefined, { readLimit: 100 }));
+    expect(roomy.status).toBe("AVAILABLE");
+    expect(roomy.byCurrency.JOD).toMatchObject({ glBalanceMinor: MARGIN * SCALE, isReconciled: true });
+  });
+
+  test("snapshots of accounts that are not control accounts do not count against the limit", async () => {
+    const s = await seed("f2scope");
+    await directSale(s, "f2scope");
+    const cash = await accountOf(s, "CASH_ON_HAND");
+    await addZeroSnapshots(s, cash._id, (await periodOf(s))._id, 40);
+    const r = await s.t.run((ctx) => computeSupplierReceivablesReconciliation(ctx, s.orgId, undefined, { readLimit: 10 }));
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.byCurrency.JOD).toMatchObject({ glBalanceMinor: MARGIN * SCALE, isReconciled: true });
+  });
+
+  test("the scoped read returns what the full read returns for the control account", async () => {
+    const s = await seed("f2parity");
+    await directSale(s, "f2par1", Date.now() - 10 * DAY);
+    await directSale(s, "f2par2");
+    const ar = await accountOf(s, "RECEIVABLE_FROM_SUPPLIERS");
+    const period = await periodOf(s);
+    // A fully elapsed earlier period holding 500 more of debit on 1240, summed from its snapshot.
+    const earlier = await s.t.run(async (ctx) => {
+      const id = await ctx.db.insert("accountingPeriods", {
+        orgId: s.orgId, startDate: period.startDate - 365 * DAY, endDate: period.startDate - 1, fiscalYear: period.fiscalYear - 1,
+        periodNumber: 1, status: "CLOSED", createdAt: Date.now(),
+      });
+      await ctx.db.insert("accountBalanceSnapshots", {
+        orgId: s.orgId, accountId: ar._id, currency: "JOD", periodId: id, shard: 0, runningDebitMinor: 500, runningCreditMinor: 0, updatedAt: Date.now(),
+      });
+      return id;
+    });
+    expect(earlier).toBeTruthy();
+    const compare = async (asOf: number) =>
+      s.t.run(async (ctx) => {
+        const scoped = await getControlAccountBalancesAsOf(ctx, s.orgId, [ar._id], asOf, 4000);
+        const full = (await getCumulativeBalancesAsOf(ctx, s.orgId, asOf)).filter((b) => b.accountId === ar._id);
+        return { scoped, full };
+      });
+    for (const fastPath of [true, false]) {
+      await s.t.run((ctx) => ctx.db.patch(period._id, { snapshotFastPathEligible: fastPath }));
+      for (const asOf of [Date.now() + DAY, Date.now() - 5 * DAY, Date.now() - 20 * DAY]) {
+        const { scoped, full } = await compare(asOf);
+        expect(scoped.status).toBe("OK");
+        if (scoped.status === "OK") expect(scoped.balances).toEqual(full);
+      }
+    }
+    const now = await compare(Date.now() + DAY);
+    expect(now.full).toEqual([{ accountId: ar._id, currency: "JOD", debitMinor: 2 * MARGIN * SCALE + 500, creditMinor: 0 }]);
   });
 });
