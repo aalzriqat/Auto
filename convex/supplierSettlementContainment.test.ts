@@ -11,7 +11,7 @@ import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { refusalDataOf } from "../test-utils/financedDealFixture";
 import { commonAr, commonEn } from "../lib/i18n/domains/common";
 import { seedBank } from "../test-utils/bankFixture";
-import { insertReceivable, ledgerOf, KEYS, openRecovery, seedSupplierDoors, SCALE, type SupplierDoors } from "../test-utils/supplierDoorsFixture";
+import { insertPayable, insertReceivable, ledgerOf, KEYS, openRecovery, seedSupplierDoors, SCALE, type SupplierDoors } from "../test-utils/supplierDoorsFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -93,6 +93,78 @@ describe("cost-recovery receipt reversal", () => {
       receivedDate: Date.now() - 500, idempotencyKey: "receipt-2",
     });
     expect((await s.t.run((ctx) => ctx.db.get(recoveryId)))?.status).toBe("RECOVERED");
+  });
+});
+
+// SCRUM-869 (coordinator follow-up to F1): the supplier PAYABLE payment doors have the same defect. A CHEQUE
+// supplier payment credits the bank account the moment it is recorded (ruleSupplierPaymentSettled) and
+// stores only a method string: there is no issued-cheque record, so nothing tracks it to clearing or a
+// bounce (ACC-3). A CARD payment has no settlement flow either. The pilot pays suppliers in cash or by
+// bank transfer, as the receipt doors do, through ONE shared allowed-method check.
+describe("supplier payable payment method", () => {
+  const PAY_CODE = "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED";
+
+  async function expectPaymentMethodRefused(paymentMethod: "CHEQUE" | "CARD") {
+    const s = await seedSupplierDoors(`pm-${paymentMethod}`);
+    const payableId = await insertPayable(s, 8000);
+    const bankAccountId = await seedBank(s.t, s.orgId);
+    const before = await snapshot(s);
+    const doors = {
+      markPaid: () =>
+        s.as.mutation(api.sourcingPayables.markPaid, {
+          orgId: s.orgId, payableId, paymentMethod, bankAccountId, paymentReference: "CHQ-9", idempotencyKey: `pay-full-${paymentMethod}`,
+        }),
+      recordPartialPayment: () =>
+        s.as.mutation(api.sourcingPayables.recordPartialPayment, {
+          orgId: s.orgId, payableId, amount: 3000, paymentMethod, bankAccountId, paymentReference: "CHQ-9", idempotencyKey: `pay-part-${paymentMethod}`,
+        }),
+    };
+    for (const [door, call] of Object.entries(doors)) {
+      const result = await refusalDataOf(call());
+      expect(result?.code, result?.message ?? `${door} with ${paymentMethod} succeeded instead of refusing`).toBe(PAY_CODE);
+      expect(result?.message).toMatch(/cash or by bank transfer/i);
+      expect(result?.message).toContain("Nothing has been paid.");
+      const english: Record<string, string> = commonEn;
+      const arabic: Record<string, string> = commonAr;
+      expect(english[`ServerError_${PAY_CODE}`]).toBe(result?.message);
+      expect(arabic[`ServerError_${PAY_CODE}`]).toMatch(/[؀-ۿ]/);
+      // Nothing written: no payable change, no journal, no queued event, no audit row, no scheduled work.
+      expect(await snapshot(s), door).toEqual(before);
+      // A replay is refused the same way: the idempotency claim was never written.
+      expect((await refusalDataOf(call()))?.code, `${door} replay`).toBe(PAY_CODE);
+      expect(await snapshot(s), `${door} replay`).toEqual(before);
+    }
+    expect((await ledgerOf(s.t, s.orgId)).entryCount).toBe(0);
+    expect(await s.t.run((ctx) => ctx.db.get(payableId))).toMatchObject({ status: "PENDING" });
+  }
+
+  // Literal titles: the SCRUM-761 scenario records bind to a test by its exact title.
+  test("a CHEQUE supplier payment is refused on both payment doors with a coded, truthful EN/AR error and nothing is written", () => expectPaymentMethodRefused("CHEQUE"));
+  test("a CARD supplier payment is refused on both payment doors with a coded, truthful EN/AR error and nothing is written", () => expectPaymentMethodRefused("CARD"));
+
+  test("CASH, BANK_TRANSFER and an omitted method (CASH) still pay the supplier", async () => {
+    const s = await seedSupplierDoors("pm-ok");
+    const payableId = await insertPayable(s, 8000);
+    const bankAccountId = await seedBank(s.t, s.orgId);
+    await s.as.mutation(api.sourcingPayables.recordPartialPayment, { orgId: s.orgId, payableId, amount: 1000, paymentMethod: "CASH", idempotencyKey: crypto.randomUUID() });
+    await s.as.mutation(api.sourcingPayables.recordPartialPayment, { orgId: s.orgId, payableId, amount: 2000, paymentMethod: "BANK_TRANSFER", bankAccountId, idempotencyKey: crypto.randomUUID() });
+    await s.as.mutation(api.sourcingPayables.recordPartialPayment, { orgId: s.orgId, payableId, amount: 1000, idempotencyKey: crypto.randomUUID() });
+    await s.as.mutation(api.sourcingPayables.markPaid, { orgId: s.orgId, payableId, paymentMethod: "BANK_TRANSFER", bankAccountId, idempotencyKey: crypto.randomUUID() });
+    // Hand computed: 8,000 owed, 1,000 + 2,000 + 1,000 paid, the remaining 4,000 settles it: PAID. The fixture
+    // posts no opening credit, so 2400 is debited the whole 8,000.000; the two cash legs total 2,000.
+    expect(await s.t.run((ctx) => ctx.db.get(payableId))).toMatchObject({ status: "PAID", amountPaid: 8000 });
+    const gl = await ledgerOf(s.t, s.orgId);
+    expect(gl.net[KEYS.ACCOUNTS_PAYABLE_SUPPLIERS]).toBe(8000 * SCALE);
+    expect(gl.net[KEYS.CASH_ON_HAND]).toBe(-2000 * SCALE);
+  });
+
+  test("a caller without MANAGE_FINANCE is FORBIDDEN, not told about the method rule", async () => {
+    const s = await seedSupplierDoors("pm-perm");
+    const payableId = await insertPayable(s, 8000);
+    const result = await refusalDataOf(
+      s.viewer.mutation(api.sourcingPayables.markPaid, { orgId: s.orgId, payableId, paymentMethod: "CHEQUE", idempotencyKey: "pay-viewer" })
+    );
+    expect(result?.code).toBe("FORBIDDEN");
   });
 });
 
