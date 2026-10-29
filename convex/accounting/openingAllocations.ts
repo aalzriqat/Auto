@@ -290,6 +290,64 @@ async function validateRemainingOpeningRow(
     (!row.counterpartyName.trim() || row.counterpartyName.length > 200)
   )
     throw new ConvexError("The opening counterparty name is invalid.");
+  if (row.kind === "CUSTOMER_DEPOSIT")
+    await validateOpeningDepositRow(ctx, args, row);
+}
+
+/**
+ * SCRUM-858 S1. A named deposit is a real customer's money, so the customer must
+ * be this organization's own live customer; a reservation that names a car must
+ * name one the dealership can hold (never a sourced/consigned car, which is not
+ * the dealership's inventory), and a security deposit names no car at all.
+ */
+async function validateOpeningDepositRow(
+  ctx: QueryCtx | MutationCtx,
+  args: OpeningAllocationArgs,
+  row: Extract<Allocation, { kind: "CUSTOMER_DEPOSIT" }>,
+): Promise<void> {
+  const customer = await requireOwnedRow(
+    ctx,
+    args.orgId,
+    "customers",
+    row.customerId,
+    "Opening customer not found in this organization.",
+  );
+  if (customer.isDeleted)
+    throw new ConvexError("Opening customer is unavailable.");
+  if (row.vehicleId === undefined) return;
+  if (row.depositKind !== "RESERVATION")
+    throw new ConvexError(
+      "Only a reservation deposit can name a vehicle; a security deposit is held against the customer.",
+    );
+  const vehicle = await requireOwnedRow(
+    ctx,
+    args.orgId,
+    "vehicles",
+    row.vehicleId,
+    "Opening deposit vehicle not found in this organization.",
+  );
+  if (
+    vehicle.isDeleted ||
+    vehicle.status === "SOLD" ||
+    vehicle.sourceType === "SOURCED"
+  )
+    throw new ConvexError(
+      "An opening reservation deposit must name a live vehicle that the dealership can hold.",
+    );
+}
+
+/** One reservation per customer and vehicle; row keys are checked per row. */
+function validateOpeningDepositRows(rows: readonly Allocation[]): void {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (row.kind !== "CUSTOMER_DEPOSIT" || row.vehicleId === undefined) continue;
+    const key = `${row.customerId}:${row.vehicleId}`;
+    if (seen.has(key))
+      throw new ConvexError(
+        "An opening reservation deposit may be named only once per customer and vehicle.",
+      );
+    seen.add(key);
+  }
 }
 
 async function validateOpeningInventoryRow(
@@ -857,7 +915,11 @@ async function assertNoExistingOpeningSources(
 }
 
 function normalizeOpeningAllocation(row: Allocation): Allocation {
-  if (row.kind === "CUSTOMER_RECEIVABLE" || row.kind === "PREPAID_EXPENSE")
+  if (
+    row.kind === "CUSTOMER_RECEIVABLE" ||
+    row.kind === "PREPAID_EXPENSE" ||
+    row.kind === "CUSTOMER_DEPOSIT"
+  )
     return { ...row, title: row.title.trim() };
   if (row.kind === "EMPLOYEE_ADVANCE")
     return { ...row, note: row.note?.trim() };
@@ -903,6 +965,33 @@ async function materializeOpeningRow(
   }
   if (row.kind === "UNALLOCATED_LIABILITY") {
     return { kind: row.kind, rowKey: row.rowKey, purpose: row.purpose };
+  }
+  if (row.kind === "CUSTOMER_DEPOSIT") {
+    // SCRUM-858 S1. The cash was received before the opening date and is already
+    // inside the opening cash/bank lines, and the liability is the opening
+    // journal's credit to Customer Deposits. So this row is the NAME of that
+    // liability and nothing more: no transaction, payment, voucher, accounting
+    // event, vehicle hold or commitment claim is created (a second receipt would
+    // double the cash).
+    const depositId = await ctx.db.insert("deposits", {
+      orgId: plan.orgId,
+      customerId: row.customerId,
+      ...(row.vehicleId !== undefined ? { vehicleId: row.vehicleId } : {}),
+      amount: fromMinorUnits(row.amountMinor, plan.currency),
+      amountMinor: row.amountMinor,
+      currency: plan.currency,
+      status: "HELD",
+      holdActive: false,
+      usesVehicleHoldRows: false,
+      notes: row.title.trim(),
+      createdBy: actorId,
+      createdAt: now,
+      origin: "OPENING",
+      openingBalanceDraftId: draftId,
+      openingRowKey: row.rowKey,
+      openingDepositKind: row.depositKind,
+    });
+    return { kind: row.kind, rowKey: row.rowKey, depositId };
   }
   if (row.kind === "SUPPLIER_RECOVERABLE") {
     const recoveryId = await ctx.db.insert("supplierCostRecoveries", {
@@ -1053,6 +1142,7 @@ export async function prepareOpeningAllocations(
   const identities = new Set<string>();
   for (const row of rows)
     await validateOpeningRow(ctx, args, row, controls, identities, allocated);
+  validateOpeningDepositRows(rows);
   const totals: ControlTotals = {
     receivableMinor: 0,
     advanceMinor: 0,

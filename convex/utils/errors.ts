@@ -341,6 +341,10 @@ export const AppErrorCode = {
   // SCRUM-801 (owner, SCRUM-795 c22485): see convex/utils/depositOtherContainment.ts.
   // Translated under ServerError_<code>.
   DEPOSIT_OTHER_TREATMENT_DISABLED: "DEPOSIT_OTHER_TREATMENT_DISABLED",
+  // SCRUM-858 S1 (owner, SCRUM-858 c23884): see convex/utils/openingDepositContainment.ts.
+  // Translated under ServerError_<code>.
+  OPENING_DEPOSIT_PAYOUT_REFUSED: "OPENING_DEPOSIT_PAYOUT_REFUSED",
+  OPENING_DEPOSIT_REVERSAL_REFUSED: "OPENING_DEPOSIT_REVERSAL_REFUSED",
   OPENING_BALANCE_AFTER_LEDGER_ACTIVITY: "OPENING_BALANCE_AFTER_LEDGER_ACTIVITY",
   // SCRUM-781 (owner rulings SCRUM-773 c22401, SCRUM-760 c23812): `sourcingPayables.markPaid` refuses a
   // nonzero VAT on a consigned supplier payable. Message in convex/sourcingPayables.ts; translated

@@ -1,5 +1,7 @@
 import { createOpeningSettlementReader } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
+import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
 import { openingPayableBasis } from "./utils/openingSupplierBasis";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
 /**
@@ -1257,11 +1259,41 @@ async function outstandingDepositMinor(
   return outstanding;
 }
 
+/**
+ * SCRUM-858 S1 (owner ruling 2026-10-28, c23884): a deposit-liability difference in an organization
+ * that has an opening balance is REPORTED under the owner's label. Nothing here writes: no journal,
+ * plug, clearing line or equity entry is ever created to force the two sides to agree.
+ */
+export type CustomerDepositsReconciliationResult = GlVsSubledgerResult & {
+  unexplainedOpeningDifference: {
+    label: { en: string; ar: string };
+    /** Currencies whose GL and subledger sides disagree. */
+    currencies: string[];
+  } | null;
+};
+
+async function labelDepositsOpeningDifference(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  result: GlVsSubledgerResult
+): Promise<CustomerDepositsReconciliationResult> {
+  const currencies = result.currencies.filter((currency) => result.byCurrency[currency].discrepancyMinor !== 0);
+  if (currencies.length === 0) return { ...result, unexplainedOpeningDifference: null };
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  const hasOpeningHistory = source.headers.length > 0 || source.status !== "ABSENT";
+  return {
+    ...result,
+    unexplainedOpeningDifference: hasOpeningHistory
+      ? { label: { ...UNEXPLAINED_OPENING_DIFFERENCE_LABEL }, currencies }
+      : null,
+  };
+}
+
 export async function computeCustomerDepositsReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined
-): Promise<GlVsSubledgerResult> {
+): Promise<CustomerDepositsReconciliationResult> {
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
   // Every row that could still owe something. A HELD row usually does; an
   // APPLIED, REFUNDED or FORFEITED one can too, when only part of it went.
@@ -1282,7 +1314,7 @@ export async function computeCustomerDepositsReconciliation(
   }
 
   const held=await readOpeningUnallocatedLiabilities(ctx,orgId,toDate??Date.now());
-  if(held.status === "UNAVAILABLE")return {currencies:[],byCurrency:{},isReconciled:false,attributionStatus:"UNAVAILABLE"};
+  if(held.status === "UNAVAILABLE")return {currencies:[],byCurrency:{},isReconciled:false,attributionStatus:"UNAVAILABLE",unexplainedOpeningDifference:null};
   const controls=new Set<Id<"chartOfAccounts">>();
   const native=await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY)).unique();
   if(native)controls.add(native._id);
@@ -1297,7 +1329,11 @@ export async function computeCustomerDepositsReconciliation(
   for(const balance of await getCumulativeBalancesAsOf(ctx,orgId,toDate??Date.now())){
     if(controls.has(balance.accountId))glByCurrency.set(balance.currency,(glByCurrency.get(balance.currency)??0)+balance.creditMinor-balance.debitMinor);
   }
-  return {...combineGlAndSubledger(glByCurrency,subByCurrency),heldOpeningMinor,attributionStatus:Object.keys(heldOpeningMinor).length?"UNALLOCATED":"ATTRIBUTED"};
+  return labelDepositsOpeningDifference(ctx, orgId, {
+    ...combineGlAndSubledger(glByCurrency, subByCurrency),
+    heldOpeningMinor,
+    attributionStatus: Object.keys(heldOpeningMinor).length ? "UNALLOCATED" : "ATTRIBUTED",
+  });
 }
 
 export const customerDepositsReconciliation = query({
