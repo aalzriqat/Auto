@@ -15,12 +15,20 @@ import { AppErrorCode, throwAppError } from "./errors";
 export const SUPPLIER_SETTLEMENT_DOORS_PILOT_DISABLED = {
   /** supplierCostRecoveries.reverseReceipt: the only public reversal in the supplier settlement family. */
   SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED: true,
+  /** vehicles.correctAcquisitionCost: only the branch that rewrites an unpaid ON_ACCOUNT supplier payable. */
+  SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED: true,
+  /** expenses.reverseExpense: only when the expense has a live supplier cost recovery (the supplier owes it). */
+  SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED: true,
 } as const;
 export type SupplierSettlementDoorCode = keyof typeof SUPPLIER_SETTLEMENT_DOORS_PILOT_DISABLED;
 
 export const SUPPLIER_SETTLEMENT_DOOR_REFUSALS = {
   SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED:
     "Reversing a supplier cost-recovery receipt is not available during the pilot. Record any further money received as a new receipt. Nothing has been changed.",
+  SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED:
+    "Correcting the amount of an unpaid supplier payable is not available during the pilot. Pay the payable as recorded and ask your accountant about any difference. Nothing has been changed.",
+  SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED:
+    "Reversing an expense the supplier owes the dealership for is not available during the pilot. Record any money received from the supplier as a receipt. Nothing has been changed.",
 } as const satisfies Record<SupplierSettlementDoorCode, string>;
 
 /** Read-only availability for screens; enforcement remains in the mutation. */

@@ -121,7 +121,7 @@ export async function assertSupplierCostExpenseReversible(
     .first();
   if (!recovery || recovery.status === "REVERSED") return recovery;
   const refusal =
-    "The supplier has paid against this cost. Reverse every recovery receipt before reversing the expense.";
+    "The supplier has paid against this cost, so the expense cannot be reversed while those receipts stand.";
   if (recovery.amountRecoveredMinor !== 0) throw new ConvexError(refusal);
   const receipts = await ctx.db
     .query("supplierCostRecoveryReceipts")

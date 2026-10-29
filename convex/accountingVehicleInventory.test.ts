@@ -24,6 +24,13 @@ import { seedBank } from "../test-utils/bankFixture";
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
 // itself is pinned with the real switch by convex/scrum802CashSaleContainment.test.ts, and the certification
 // files run with it on. The census in convex/scrum802OptOutCensus.test.ts allows only the files listed there.
+// SCRUM-869#c23881: the supplier-payable rewrite is refused in the shipped pilot; these historical cases
+// keep exercising the deferred mechanics. The shipped-state refusal is convex/supplierObligationCorrections.test.ts.
+vi.mock("./utils/supplierSettlementContainment", async (importOriginal) =>
+  (await import("../test-utils/supplierSettlementSwitches")).openSupplierSettlementDoors(
+    await importOriginal<typeof import("./utils/supplierSettlementContainment")>()
+  )
+);
 vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
   CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,

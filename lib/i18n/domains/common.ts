@@ -360,6 +360,14 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Reversing a supplier cost-recovery receipt is not available during the pilot. Record any further money received as a new receipt. Nothing has been changed.",
     "عكس إيصال استرداد تكلفة من المورد غير متاح خلال المرحلة التجريبية. سجّل أي مبلغ إضافي مستلم كإيصال جديد. لم يتم تغيير أي شيء.",
   ],
+  ServerError_SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED: [
+    "Correcting the amount of an unpaid supplier payable is not available during the pilot. Pay the payable as recorded and ask your accountant about any difference. Nothing has been changed.",
+    "تصحيح مبلغ مستحق مورد غير مدفوع غير متاح خلال المرحلة التجريبية. سدّد المستحق كما هو مسجّل واسأل المحاسب عن أي فرق. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED: [
+    "Reversing an expense the supplier owes the dealership for is not available during the pilot. Record any money received from the supplier as a receipt. Nothing has been changed.",
+    "عكس مصروف يستحق التاجر استرداده من المورد غير متاح خلال المرحلة التجريبية. سجّل أي مبلغ مستلم من المورد كإيصال. لم يتم تغيير أي شيء.",
+  ],
   // SCRUM-760 ruling 11: convex/utils/legacyCollectionRefundContainment.ts.
   ServerError_LEGACY_COLLECTION_REFUND_PILOT_DISABLED: [
     "Recording a refund against a collection receivable is not available during the pilot. You can still reject a pending refund request. Nothing has been changed.",

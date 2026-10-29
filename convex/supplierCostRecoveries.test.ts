@@ -454,7 +454,7 @@ describe("reversing a supplier-borne expense", () => {
 
     await expect(
       s.as.mutation(api.expenses.reverseExpense, { orgId: s.orgId, expenseId, reason: "Wrong car" })
-    ).rejects.toThrow(/Reverse every recovery receipt before reversing the expense/);
+    ).rejects.toThrow(/The supplier has paid against this cost, so the expense cannot be reversed while those receipts stand/);
 
     await s.as.mutation(api.supplierCostRecoveries.reverseReceipt, {
       orgId: s.orgId, receiptId, reason: "Undo", idempotencyKey: crypto.randomUUID(),

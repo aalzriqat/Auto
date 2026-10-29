@@ -43,3 +43,26 @@ describe("no screen offers the contained reversal", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("the pilot switch file and the two correction guards are pinned", () => {
+  const read = (file: string) => readFileSync(join(process.cwd(), file), "utf8");
+  test("the switch file holds exactly the three reviewed doors, all closed", () => {
+    const source = read("convex/utils/supplierSettlementContainment.ts");
+    const block = source.match(/SUPPLIER_SETTLEMENT_DOORS_PILOT_DISABLED[^{]*\{([^}]*)\}/)?.[1] ?? "";
+    const keys = [...block.matchAll(/(\w+):\s*(true|false)/g)].map((m) => `${m[1]}=${m[2]}`).sort();
+    expect(keys).toEqual([
+      "SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED=true",
+      "SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED=true",
+      "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED=true",
+    ]);
+  });
+  test("correctAcquisitionCost asserts the payable-correction door", () => {
+    expect(read("convex/vehicles.ts")).toMatch(/assertSupplierSettlementDoorAllowed\(\s*"SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED"/);
+  });
+  test("reverseExpense asserts the cost-expense-reversal door", () => {
+    expect(read("convex/expenses.ts")).toMatch(/assertSupplierSettlementDoorAllowed\(\s*"SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED"/);
+  });
+  test("the expenses screen disables reversing a supplier-borne expense", () => {
+    expect(read("app/(dashboard)/[orgId]/expenses/page.tsx")).toMatch(/costBearer === "SUPPLIER"/);
+  });
+});

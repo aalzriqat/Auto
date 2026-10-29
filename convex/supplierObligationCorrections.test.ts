@@ -78,6 +78,18 @@ describe("vehicles.correctAcquisitionCost on an unpaid ON_ACCOUNT supplier payab
     expect((await ledgerOf(s.t, s.orgId)).net[KEYS.ACCOUNTS_PAYABLE_SUPPLIERS]).toBe(-12_500 * SCALE);
   });
 
+  test("the correction dialog is not offered the refused types for an unpaid ON_ACCOUNT car", async () => {
+    const s = await seedSupplierDoors("corr3");
+    const { vehicleId, payableId } = await onAccountVehicle(s, 12_500);
+    const unpaid = await s.as.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: s.orgId, vehicleId });
+    expect(unpaid).toMatchObject({ blockedReason: null, originalPaymentMethod: "ON_ACCOUNT", allowedTypes: [] });
+    await s.as.mutation(api.sourcingPayables.markPaid, {
+      orgId: s.orgId, payableId, paymentMethod: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    const paid = await s.as.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: s.orgId, vehicleId });
+    expect(paid.allowedTypes).toContain("CASH_REFUND");
+  });
+
   test("control: a CASH_REFUND on a PAID ON_ACCOUNT car still corrects the cost and leaves the payable alone", async () => {
     const s = await seedSupplierDoors("corr2");
     const { vehicleId, payableId } = await onAccountVehicle(s, 12_500);

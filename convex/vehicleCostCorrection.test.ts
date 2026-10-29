@@ -16,6 +16,13 @@ import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { costCorrectionCounterKey } from "./vehicles";
 import { seedBank } from "../test-utils/bankFixture";
 
+// SCRUM-869#c23881: the supplier-payable rewrite is refused in the shipped pilot; these historical cases
+// keep exercising the deferred mechanics. The shipped-state refusal is convex/supplierObligationCorrections.test.ts.
+vi.mock("./utils/supplierSettlementContainment", async (importOriginal) =>
+  (await import("../test-utils/supplierSettlementSwitches")).openSupplierSettlementDoors(
+    await importOriginal<typeof import("./utils/supplierSettlementContainment")>()
+  )
+);
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
