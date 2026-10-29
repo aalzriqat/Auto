@@ -30,6 +30,46 @@
     {
       "observable": "screen.journeyOutcome",
       "value": "closedDealRemainsVisibleAfterReload"
+    },
+    {
+      "observable": "journal.saleLinesMinor",
+      "value": [
+        {
+          "account": "1210",
+          "debit": 12500000,
+          "credit": 0,
+          "currency": "JOD"
+        },
+        {
+          "account": "2400",
+          "debit": 0,
+          "credit": 10000000,
+          "currency": "JOD"
+        },
+        {
+          "account": "4170",
+          "debit": 0,
+          "credit": 2500000,
+          "currency": "JOD"
+        }
+      ]
+    },
+    {
+      "observable": "journal.financierReceiptLinesMinor",
+      "value": [
+        {
+          "account": "1110",
+          "debit": 12500000,
+          "credit": 0,
+          "currency": "JOD"
+        },
+        {
+          "account": "1210",
+          "debit": 0,
+          "credit": 12500000,
+          "currency": "JOD"
+        }
+      ]
     }
   ],
   "rulings": [
@@ -42,5 +82,5 @@
     "file": "playwright/scenarios/pilot-sourced.spec.ts",
     "testName": "pilot SOURCED configured finance reaches delivery and full financier receipt with agency-only books"
   },
-  "fingerprint": "90c5fd7b3e21ad28bd32dfc647089c85760b63ebd286ed296687595562ab1e27"
+  "fingerprint": "ea9fc20a6db45fd0096b4bddf34e82bcd08be6727a26860ccc4bed590c631e8b"
 }

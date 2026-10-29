@@ -29,6 +29,63 @@
     {
       "observable": "screen.journeyOutcome",
       "value": "completedDealAndStatusHistoryVisible"
+    },
+    {
+      "observable": "journal.depositReceiptLinesMinor",
+      "value": [
+        {
+          "account": "1100",
+          "debit": 12500000,
+          "credit": 0,
+          "currency": "JOD"
+        },
+        {
+          "account": "2100",
+          "debit": 0,
+          "credit": 12500000,
+          "currency": "JOD"
+        }
+      ]
+    },
+    {
+      "observable": "journal.saleLinesMinor",
+      "value": [
+        {
+          "account": "1200",
+          "debit": 12500000,
+          "credit": 0,
+          "currency": "JOD"
+        },
+        {
+          "account": "2400",
+          "debit": 0,
+          "credit": 10000000,
+          "currency": "JOD"
+        },
+        {
+          "account": "4170",
+          "debit": 0,
+          "credit": 2500000,
+          "currency": "JOD"
+        }
+      ]
+    },
+    {
+      "observable": "journal.depositApplicationLinesMinor",
+      "value": [
+        {
+          "account": "2100",
+          "debit": 12500000,
+          "credit": 0,
+          "currency": "JOD"
+        },
+        {
+          "account": "1200",
+          "debit": 0,
+          "credit": 12500000,
+          "currency": "JOD"
+        }
+      ]
     }
   ],
   "rulings": [
@@ -41,5 +98,5 @@
     "file": "playwright/scenarios/pilot-sourced.spec.ts",
     "testName": "pilot SOURCED CASH pays by deposit and opens the completed deal with agency-only books"
   },
-  "fingerprint": "5e51b23a6991b421a06df4b7909058bee6a158fbff49cd786504b2b249a5dfdf"
+  "fingerprint": "a21ccaa11503391869dcded0719bdc6133f047763a55b1a3956699174862a1d6"
 }

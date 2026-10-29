@@ -417,14 +417,16 @@ The recovery checkpoint scenario additionally invokes an internal destructive re
 
 ## SCRUM-760-G8-SOURCED — hunter bindings, runtime pending
 
-G8 reuses three literal public-API certification tests in
-`convex/scrum486Certification.test.ts`. These tests already existed; this binding
-adds no financial capability and does not certify a real Convex deployment.
+G8 binds four literal public-API certification tests in
+`convex/scrum486Certification.test.ts`: three existing completion tests and a
+financier bank receipt regression. These bindings add no financial capability
+and do not certify a real Convex deployment.
 
 | Route | Public completion | Independent expected JOD amounts | Permanent record |
 | --- | --- | --- | --- |
 | SOURCED CASH, THROUGH_DEALERSHIP | Full 12,500 deposit, then completeFromQuote | Supplier payable 10,000; agency revenue 2,500; COGS 0; customer AR settled by deposit | g8-sourced-cash-agency-certification |
 | SOURCED configured finance, THROUGH_DEALERSHIP | finalizeDeal, approved 12,500, no deposit | Full financier AR 12,500; supplier payable 10,000; agency revenue 2,500; COGS 0 | g8-sourced-financed-agency-certification |
+| SOURCED configured finance, THROUGH_DEALERSHIP, full bank receipt (`SCRUM-760-G8-SOURCED-RECEIPT`) | finalizeDeal, then confirmDisbursement for 12,500 to a same-org JOD bank | Receipt Dr1110 / Cr1210 12,500 each (12,500,000 minor); financier AR PAID and zero; supplier payable remains 10,000; revenue remains 2,500; COGS 0; retry writes nothing | g8-sourced-financier-receipt-certification |
 | SOURCED configured finance, DIRECT_TO_SUPPLIER | finalizeDeal and external supplier advice | Supplier AR and agency income 2,500; no financier AR or supplier AP; advice posts no dealership journal | g8-sourced-direct-agency-certification |
 
 The exact backend titles are in those records. The paired browser witnesses in

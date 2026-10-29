@@ -148,7 +148,7 @@ separately provided by the trusted attack swarm, not inferred from a UI denial.
 | Owned CASH, full 15,000 cash deposit then Submit Sale, open sale cockpit | S: existing `sales.spec.ts`, now selected by `pilot-scripted`; assertions shared unchanged in `fixtures/cashSale.ts` | U in this hunt | g8-owned-cash-delivery-screen |
 | Owned configured finance: quotation, independent approval, handover, costs reconciliation, finalize | S: existing `financed-deal-economics.spec.ts`; full literal ledger/deposit/payment variations remain in `deal-scenarios.spec.ts` | U in this hunt | g8-owned-financed-delivery-screen |
 | SOURCED CASH: price 12,500, supplier cost 10,000, full deposit, through dealership, completion and cockpit | S: `pilot-sourced.spec.ts`; literal receipt, agency sale and deposit-application journals | U | g8-sourced-cash-delivery-screen + g8-sourced-cash-agency-certification |
-| SOURCED configured finance: approved 12,500, first payment 1,250, no deposit/contribution, through dealership; delivery, finalization, full bank receipt, reload | S: `pilot-sourced.spec.ts`; sale Dr1210 12,500 / Cr2400 10,000 / Cr4170 2,500; receipt Dr1110 / Cr1210 12,500 | U | g8-sourced-financed-delivery-screen + g8-sourced-financed-agency-certification |
+| SOURCED configured finance: approved 12,500, first payment 1,250, no deposit/contribution, through dealership; delivery, finalization, full bank receipt, reload | S: `pilot-sourced.spec.ts`; sale Dr1210 12,500 / Cr2400 10,000 / Cr4170 2,500; receipt Dr1110 / Cr1210 12,500 | U | g8-sourced-financed-delivery-screen + g8-sourced-financed-agency-certification + g8-sourced-financier-receipt-certification |
 | SOURCED configured finance, same figures, direct to supplier; delivery, finalize, external supplier advice | S: `pilot-sourced.spec.ts`; Dr1240 / Cr4170 2,500, then no dealership journal for the 12,500 external advice | U | g8-sourced-direct-financed-delivery-screen + g8-sourced-direct-agency-certification |
 | All Accounting readers and restricted entry states, each real role | A: new traversal, settled panel, localized authority, page reflow and capture | U | g8-accounting-workspace-traversal |
 | CASH/configured-finance entry panel, each real role | A: new entry traversal | U | g8-sales-mode-entry |
@@ -175,7 +175,14 @@ identity now fails the owned financed journey, instead of silently omitting it.
 
 ### Excluded doors and separate certification
 
-Keep receipt/refund payouts, manual journals, fixed-asset lifecycle and the
+Supplier payable payment, consignment margin receipt and cost-recovery receipt
+are **in pilot scope and must be certified**, tracked under SCRUM-869. See
+[SCRUM-869 c23881](https://autoflowdealer.atlassian.net/browse/SCRUM-869?focusedCommentId=23881)
+and [SCRUM-760 c23882](https://autoflowdealer.atlassian.net/browse/SCRUM-760?focusedCommentId=23882).
+Their reversal and correction doors remain excluded and need server-side block
+evidence. This G8 hunt does not replace SCRUM-869 certification.
+
+Keep customer receipt/refund payouts, manual journals, fixed-asset lifecycle and the
 RT11 closed doors blocked. New reader traversal never clicks a financial commit.
 The scripted accounting witness retains its manual-journal create refusal;
 legacy approve refusal remains in its existing seeded trusted-main lane.
@@ -189,6 +196,40 @@ all deposit/gap/tender combinations, and exhaustive backend permission dominance
 remain separate gates. This bounded G8 hunt does not certify those gates. The
 existing cancellation scenarios are retained even if a deferred payout makes
 them red; do not reinterpret a red or skipped scenario as coverage.
+
+## Seat 1 remediation evidence, 2026-10-29
+
+The missing through-dealership financier receipt now has a public-API backend
+test, money record and `SCRUM-760-G8-SOURCED-RECEIPT` oracle row. Expected
+amounts come from the worked G8 example and SCRUM-407 c21031: receipt
+Dr1110 / Cr1210 12,500 JOD each; supplier payable remains 10,000 and agency
+revenue remains 2,500. No production behavior changed.
+
+Each command below ran alone with `--maxWorkers=1`:
+
+| Run | Command after `pnpm exec vitest run` | Observed result |
+| --- | --- | --- |
+| Red before adding the backend test | `scripts/regression/scenarioRecord.test.ts --maxWorkers=1` | 1 failed, 61 passed. The new record's exact backend test name was absent. |
+| Initial backend control | `convex/scrum486Certification.test.ts --maxWorkers=1` | 60 passed, including the new receipt test. |
+| Temporary posting mutation | `convex/scrum486Certification.test.ts --maxWorkers=1 -t 'SOURCED through dealership × full financier bank receipt'` | 1 failed at the exact journal comparison: both receipt legs were 12,499,000 minor instead of 12,500,000. The other 59 tests were filtered out. |
+| Restored backend | `convex/scrum486Certification.test.ts --maxWorkers=1` | 60 passed; no skipped tests. |
+| Green records | `scripts/regression/scenarioRecord.test.ts --maxWorkers=1` | 62 passed. |
+| Green G8 coverage | `scripts/pilotG8Coverage.test.ts --maxWorkers=1` | 5 passed. |
+| Green role evidence validator | `scripts/pilotRoleAuditEvidence.test.ts --maxWorkers=1` | 40 passed. |
+
+The mutation subtracted 1,000 minor from both lines in `ruleFinanceCashReceived`,
+preserving balance so the new test had to detect the wrong amount. A `finally`
+restored `convex/accounting/postingRules.ts` byte for byte before the full green
+run. No mutation is committed. The browser records retain their screen outcomes
+and now state all journals asserted by their replays.
+
+The test uses public mutations and the existing schema-backed harness, following
+the [official Convex testing guidance](https://docs.convex.dev/testing/convex-test).
+`pnpm exec tsc -p convex/tsconfig.json --noEmit` also passed, checking the Convex
+project. The root application typecheck was not run.
+This is local harness evidence. Browser hunters, real-backend rehearsal and
+independent review of the new head remain required; these runs certify none of
+those gates.
 
 ## Coordinator workflow dispatches
 
