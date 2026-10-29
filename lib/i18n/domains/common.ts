@@ -372,6 +372,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "During the pilot a supplier margin receipt can be recorded in cash or by bank transfer only. Cheque and card receipts are not available. Nothing has been recorded.",
     "خلال المرحلة التجريبية يمكن تسجيل إيصال هامش المورد نقداً أو بحوالة بنكية فقط. إيصالات الشيك والبطاقة غير متاحة. لم يتم تسجيل أي شيء.",
   ],
+  ServerError_SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED: [
+    "During the pilot a supplier payable can be paid in cash or by bank transfer only. Cheque and card payments are not available. Nothing has been paid.",
+    "خلال المرحلة التجريبية يمكن سداد مستحقات المورد نقداً أو بحوالة بنكية فقط. الدفع بالشيك أو بالبطاقة غير متاح. لم يتم دفع أي مبلغ.",
+  ],
   // SCRUM-760 ruling 11: convex/utils/legacyCollectionRefundContainment.ts.
   ServerError_LEGACY_COLLECTION_REFUND_PILOT_DISABLED: [
     "Recording a refund against a collection receivable is not available during the pilot. You can still reject a pending refund request. Nothing has been changed.",

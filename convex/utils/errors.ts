@@ -144,6 +144,9 @@ export const AppErrorCode = {
   // SCRUM-869 F1: a consignment margin receipt by CHEQUE or CARD has no custody lifecycle, so the pilot door takes
   // CASH and BANK_TRANSFER only (utils/supplierSettlementContainment.ts). Translated under ServerError_<code>.
   SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED: "SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED",
+  // Same rule for paying a supplier payable (`sourcingPayables.markPaid` / `recordPartialPayment`): a cheque
+  // credits the bank at once with no issued-cheque record to clear or bounce. Translated under ServerError_<code>.
+  SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED: "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",

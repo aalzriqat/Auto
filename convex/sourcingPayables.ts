@@ -14,6 +14,7 @@ import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAcco
 import { supplierPayableVatReclassAllowed } from "./utils/vehicleOwnership";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { auditLog } from "./financialAudit";
+import { assertSupplierSettlementMethodAllowed } from "./utils/supplierSettlementContainment";
 
 const OPENING_PAYABLE_VAT_REFUSAL = "Opening liabilities cannot be reclassified as VAT.";
 
@@ -39,8 +40,8 @@ function payableAcceptsVatReclass(
   return supplierPayableVatReclassAllowed(payable, vehicle?.orgId === orgId ? vehicle : null);
 }
 
-const supplierMethodUsesBank = (method: string) =>
-  method === "BANK_TRANSFER" || method === "CARD" || method === "CHEQUE";
+// Cheque and card never reach here: both payment doors refuse them first (SCRUM-869).
+const supplierMethodUsesBank = (method: string) => method === "BANK_TRANSFER";
 
 async function assertSupplierPaymentBank(
   ctx: MutationCtx,
@@ -351,6 +352,8 @@ export const markPaid = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const paymentMethod = normalizePaymentMethod(args.paymentMethod);
+    // SCRUM-869: cash or bank transfer only, refused before the idempotency claim or any read-for-write.
+    assertSupplierSettlementMethodAllowed(paymentMethod, "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED");
 
     await openingPayableBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"vehicleSupplierPayables",args.payableId,"Supplier payable not found."));
     return await runWithIdempotency(
@@ -506,6 +509,8 @@ export const recordPartialPayment = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const paymentMethod = normalizePaymentMethod(args.paymentMethod);
+    // SCRUM-869: same shared check as markPaid, before the idempotency claim or any read-for-write.
+    assertSupplierSettlementMethodAllowed(paymentMethod, "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED");
 
     await openingPayableBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"vehicleSupplierPayables",args.payableId,"Supplier payable not found."));
     return await runWithIdempotency(

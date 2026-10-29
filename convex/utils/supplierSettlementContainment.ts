@@ -32,26 +32,39 @@ export const SUPPLIER_SETTLEMENT_DOOR_REFUSALS = {
 } as const satisfies Record<SupplierSettlementDoorCode, string>;
 
 /**
- * Methods the consignment margin receipt (`supplierReceivables.recordReceipt`) accepts in the pilot.
- * A cheque posts Dr cheques-in-hand / Cr 1240 but this door creates no `postDatedCheques` custody row, so
- * the instrument has no deposit, clearance or bounce lifecycle (ACC-3); a card receipt has no settlement
- * flow here either. Same scope as `supplierCostRecoveries.recordReceipt`. Not a door switch: reopening
- * cheque receipts needs the custody lifecycle built, certified and approved by the owner.
+ * The ONE set of money methods the supplier settlement doors accept in the pilot, in either direction:
+ * `supplierReceivables.recordReceipt` (margin receipt), `sourcingPayables.markPaid` and
+ * `sourcingPayables.recordPartialPayment` (supplier payable payment). `supplierCostRecoveries.recordReceipt`
+ * already restricts its own validator to the same two.
+ *
+ * A cheque has no tracked lifecycle on these doors. Received, it posts Dr cheques-in-hand / Cr 1240 with no
+ * `postDatedCheques` custody row; issued, it credits the bank the moment it is recorded and keeps only a
+ * method string, with no issued-cheque record to clear or bounce (ACC-3). A card has no settlement flow
+ * here either. Not a door switch: reopening a method needs its lifecycle built, certified and approved by
+ * the owner.
  */
-export const SUPPLIER_RECEIPT_PILOT_METHODS = ["CASH", "BANK_TRANSFER"] as const;
-export type SupplierReceiptPilotMethod = (typeof SUPPLIER_RECEIPT_PILOT_METHODS)[number];
+export const SUPPLIER_SETTLEMENT_PILOT_METHODS = ["CASH", "BANK_TRANSFER"] as const;
+export type SupplierSettlementPilotMethod = (typeof SUPPLIER_SETTLEMENT_PILOT_METHODS)[number];
 
-export const SUPPLIER_RECEIPT_METHOD_REFUSAL =
-  "During the pilot a supplier margin receipt can be recorded in cash or by bank transfer only. Cheque and card receipts are not available. Nothing has been recorded.";
-
-export function isSupplierReceiptPilotMethod(method: string): method is SupplierReceiptPilotMethod {
-  return (SUPPLIER_RECEIPT_PILOT_METHODS as readonly string[]).includes(method);
+export function isSupplierSettlementPilotMethod(method: string): method is SupplierSettlementPilotMethod {
+  return (SUPPLIER_SETTLEMENT_PILOT_METHODS as readonly string[]).includes(method);
 }
 
-/** Refuses a margin receipt method outside the pilot set, before the idempotency claim or any write. */
-export function assertSupplierReceiptMethodAllowed(method: string): void {
-  if (!isSupplierReceiptPilotMethod(method)) {
-    throwAppError(AppErrorCode.SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED, SUPPLIER_RECEIPT_METHOD_REFUSAL);
+export const SUPPLIER_METHOD_REFUSALS = {
+  SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED:
+    "During the pilot a supplier margin receipt can be recorded in cash or by bank transfer only. Cheque and card receipts are not available. Nothing has been recorded.",
+  SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED:
+    "During the pilot a supplier payable can be paid in cash or by bank transfer only. Cheque and card payments are not available. Nothing has been paid.",
+} as const;
+export type SupplierMethodRefusalCode = keyof typeof SUPPLIER_METHOD_REFUSALS;
+
+/**
+ * Refuses a method outside the pilot set with the door's own coded EN/AR refusal, before the idempotency
+ * claim or any write. The single check every supplier settlement door calls.
+ */
+export function assertSupplierSettlementMethodAllowed(method: string, code: SupplierMethodRefusalCode): void {
+  if (!isSupplierSettlementPilotMethod(method)) {
+    throwAppError(AppErrorCode[code], SUPPLIER_METHOD_REFUSALS[code]);
   }
 }
 

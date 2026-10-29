@@ -26,7 +26,12 @@ const CODE = "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED";
 async function snapshot(s: SupplierDoors) {
   return {
     tables: await dbSnapshot(s.t, Object.keys(schema.tables)),
-    scheduled: await s.t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect()),
+    // Identity, not state: seeding queues drain jobs that finish in the background between two snapshots, so
+    // `state` flips pending -> success with no write by the door under test. A job the door scheduled would
+    // still add a row here.
+    scheduled: (await s.t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect())).map(
+      ({ _id, name, args }) => ({ _id, name, args })
+    ),
   };
 }
 

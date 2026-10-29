@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import type { Id } from "@/convex/_generated/dataModel";
+import { SUPPLIER_SETTLEMENT_PILOT_METHODS, type SupplierSettlementPilotMethod } from "@/convex/utils/supplierSettlementContainment";
 import {
   Dialog,
   DialogContent,
@@ -36,11 +37,11 @@ import {
 /**
  * SCRUM-869 F1: the pilot accepts cash and bank transfer only. A cheque or card
  * receipt would post without the custody / bounce lifecycle, and the server
- * refuses both (`SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED`). Mirrors
- * `SUPPLIER_RECEIPT_PILOT_METHODS` in `convex/utils/supplierSettlementContainment.ts`.
+ * refuses both (`SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED`). The list is the
+ * server's own (`SUPPLIER_SETTLEMENT_PILOT_METHODS`), imported, not copied.
  */
-type SupplierReceiptMethod = Extract<PaymentMethod, "CASH" | "BANK_TRANSFER">;
-const SUPPLIER_RECEIPT_METHODS: readonly SupplierReceiptMethod[] = ["CASH", "BANK_TRANSFER"];
+type SupplierReceiptMethod = SupplierSettlementPilotMethod;
+const SUPPLIER_RECEIPT_METHODS: readonly SupplierReceiptMethod[] = SUPPLIER_SETTLEMENT_PILOT_METHODS;
 
 type SupplierSettlementDialogProps = {
   open: boolean;

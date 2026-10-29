@@ -13,7 +13,7 @@ import { hookSupplierReceivableCollected } from "./accounting/workflowHooks";
 import { auditLog } from "./financialAudit";
 import { postingStateForKey } from "./accounting/supplierCostRecoveryPosting";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
-import { assertSupplierReceiptMethodAllowed } from "./utils/supplierSettlementContainment";
+import { assertSupplierSettlementMethodAllowed } from "./utils/supplierSettlementContainment";
 
 /**
  * Collecting the dealership's agency margin from a supplier who was paid
@@ -295,7 +295,7 @@ export const recordReceipt = mutation({
     // SCRUM-869 F1: CASH and BANK_TRANSFER only. A cheque would post to cheques-in-hand with no
     // `postDatedCheques` custody row, so it could never be deposited or reverse on a bounce.
     // Refused before the idempotency claim or any read-for-write, so nothing is recorded.
-    assertSupplierReceiptMethodAllowed(receiptMethod);
+    assertSupplierSettlementMethodAllowed(receiptMethod, "SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED");
 
     return await runWithIdempotency(
       ctx,
