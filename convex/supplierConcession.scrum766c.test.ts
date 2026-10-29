@@ -150,7 +150,12 @@ async function refusalOf(promise: Promise<unknown>): Promise<{ message: string }
   return null;
 }
 
-async function setCommissionRate(s: Seeded, percent: number) {
+async function setAutomaticCommissionRate(s: Seeded, percent: number) {
+  // SCRUM-778 c23819: a member rate alone does not opt an unset org into AUTO.
+  await s.owner.as.mutation(api.orgSettings.setCommissionMode, {
+    orgId: s.orgId,
+    commissionMode: "AUTO_MEMBER",
+  });
   await s.t.run(async (ctx) => {
     const membership = (await ctx.db.query("memberships").collect()).find((m) => m.orgId === s.orgId && m.userId === s.owner.userId)!;
     await ctx.db.patch(membership._id, { commissionRate: percent });
@@ -587,7 +592,7 @@ describe("PR-C on a GROSS_MANUAL shortfall (a manual-letter finance company)", (
 
   test("THROUGH_DEALERSHIP completion: ledger balances, payable is E_eff 9,100, commission is 132.5", async () => {
     const s = await seed("g2");
-    await setCommissionRate(s, 10);
+    await setAutomaticCommissionRate(s, 10);
     const applicationId = await manualApprovedDeal(s, "THROUGH_DEALERSHIP");
     await resolve(s, applicationId, V3);
     await handOver(s, applicationId);
@@ -693,7 +698,7 @@ describe("PR-C completion: DIRECT_TO_SUPPLIER", () => {
 describe("PR-C commission: one frozen basis, the same whoever covers the gap (owner c22421)", () => {
   async function commissionOf(variant: "V0" | "V1" | "V2" | "V3"): Promise<number | undefined> {
     const s = await seed(`c${variant}`);
-    await setCommissionRate(s, 10);
+    await setAutomaticCommissionRate(s, 10);
     const split: Split =
       variant === "V0" ? { customer: 0, dealer: 850 }
       : variant === "V1" ? { customer: 400, dealer: 450, cash: 400 }
@@ -719,7 +724,7 @@ describe("PR-C commission: one frozen basis, the same whoever covers the gap (ow
 
   test("recalculation reads the same frozen basis and does not drift", async () => {
     const s = await seed("rc");
-    await setCommissionRate(s, 0);
+    await setAutomaticCommissionRate(s, 0);
     const applicationId = await readyConsignedDeal(s, "THROUGH_DEALERSHIP", V3);
     await finalizeAsOwner(s, applicationId);
     const sale = await saleOf(s, applicationId);
