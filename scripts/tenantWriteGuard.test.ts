@@ -770,12 +770,19 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-782: recoverPeriodHeldSupplierVat is an internal deployment-wide
   // migration with no orgId argument. Re-measured at 23fb6282 and round 3:
   // +1 total and skippedNoOrgId; analysed tenant handlers remain 380.
+  // SCRUM-869 S8 supplier due alerts (convex/supplierDueAlerts.ts): +2 total, +1 analysed, +1
+  // skippedNoOrgId. Re-measured FROM THE ANALYSER (563/380/15/168 -> 565/381/15/169).
+  // processOrgSupplierDueAlerts is an internal per-organisation worker with a v.id("organizations")
+  // orgId, so it is analysed; it takes no caller-supplied row id, only inserts notification and
+  // idempotency rows scoped to that orgId, and derives recipients from memberships by_org with a
+  // role.orgId check. processSupplierDueAlerts is the org-less internal dispatcher that paginates
+  // every organization and hands each org id to the worker, so it counts as skippedNoOrgId.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 563,
-      analysed: 380,
+      totalMutations: 565,
+      analysed: 381,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 168,
+      skippedNoOrgId: 169,
     });
   });
 });

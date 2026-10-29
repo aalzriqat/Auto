@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { internalMutation, type MutationCtx } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
+import { internalMutation } from "./functions";
 import { hasPlanFeature } from "./subscriptions";
 import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -64,45 +65,28 @@ function alertData(row: ObligationRow): Record<string, string | number> {
   };
 }
 
-async function alertRow(
-  ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  row: ObligationRow,
-  getRecipients: () => Promise<Id<"users">[]>
-): Promise<number> {
+interface PlannedAlert {
+  type: ReturnType<typeof alertTypeFor>;
+  data: Record<string, string | number>;
+  idempotencyKey: string;
+}
+
+/**
+ * Decides whether an obligation alerts now, and what it would say. Pure: it writes nothing. The
+ * idempotent write itself stays inside `processOrgSupplierDueAlerts`, because the SCRUM-57
+ * classification ratchet (`idempotencyEconomicCommands.test.ts`) attributes each
+ * `runWithIdempotency` call to the exported function it sits in.
+ */
+function planAlert(row: ObligationRow): PlannedAlert | null {
   // A missing due date can never alert, and a disputed obligation is held back.
-  if (row.dueAt === null || row.disputedMinor > 0) return 0;
+  if (row.dueAt === null || row.disputedMinor > 0) return null;
   const plan = alertStepFor(row.daysOverdue);
-  if (!plan) return 0;
-  const type = alertTypeFor(plan.step);
-  const def = NOTIFICATION_TYPES[type];
-  const data = alertData(row);
-  const recipients = await getRecipients();
-  const stored = await runWithIdempotency(
-    ctx,
-    {
-      orgId,
-      operation: ALERT_OPERATION,
-      economic: false,
-      idempotencyKey: `${row.kind}:${row.id}:${plan.step}:${plan.occurrence}`,
-    },
-    async () => {
-      for (const userId of recipients) {
-        await ctx.db.insert("notifications", {
-          orgId,
-          userId,
-          type,
-          category: def.category,
-          priority: def.priority,
-          data,
-          isRead: false,
-          link: `/${orgId}/accounting`,
-        });
-      }
-      return recipients.length;
-    }
-  );
-  return stored;
+  if (!plan) return null;
+  return {
+    type: alertTypeFor(plan.step),
+    data: alertData(row),
+    idempotencyKey: `${row.kind}:${row.id}:${plan.step}:${plan.occurrence}`,
+  };
 }
 
 export const processOrgSupplierDueAlerts = internalMutation({
@@ -127,7 +111,33 @@ export const processOrgSupplierDueAlerts = internalMutation({
       let recipients: Id<"users">[] | null = null;
       const getRecipients = async () => (recipients ??= await resolveRecipients(ctx, args.orgId));
       let alerted = 0;
-      for (const row of page.rows) alerted += await alertRow(ctx, args.orgId, row, getRecipients);
+      for (const row of page.rows) {
+        const planned = planAlert(row);
+        if (!planned) continue;
+        const { type, data, idempotencyKey } = planned;
+        const def = NOTIFICATION_TYPES[type];
+        const recipients = await getRecipients();
+        // Non-economic: this command writes in-app notification rows and moves no money.
+        alerted += await runWithIdempotency(
+          ctx,
+          { orgId: args.orgId, operation: ALERT_OPERATION, economic: false, idempotencyKey },
+          async () => {
+            for (const userId of recipients) {
+              await ctx.db.insert("notifications", {
+                orgId: args.orgId,
+                userId,
+                type,
+                category: def.category,
+                priority: def.priority,
+                data,
+                isRead: false,
+                link: `/${args.orgId}/accounting`,
+              });
+            }
+            return recipients.length;
+          }
+        );
+      }
       if (!page.complete) {
         await ctx.scheduler.runAfter(0, internal.supplierDueAlerts.processOrgSupplierDueAlerts, {
           orgId: args.orgId,
