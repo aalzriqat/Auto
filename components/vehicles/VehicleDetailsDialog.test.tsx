@@ -55,6 +55,7 @@ vi.mock("convex/react", async () => {
       if (name === "vehicles:listAcquisitionBankOptions") return state.bankOptions;
       if (name === "deposits:listRefundBankOptions") return state.bankOptions;
       if (name === "deposits:listReceiptBankOptions") return state.bankOptions;
+      if (name === "orgSettings:getCurrencyStatus") return { configured: true, currency: "JOD", currencySymbol: "JD" };
       return undefined;
     },
     useMutation: (reference: never) => async (args: Record<string, unknown>) => {
