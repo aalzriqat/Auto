@@ -233,7 +233,7 @@ Selected real-backend rows M486C1–M486C4 now have exact-SHA disposable-preview
 
 ## SCRUM-869-AR-1240-RECON
 
-Owner ruling SCRUM-869#c23881 (2026-10-29): the consignment margin receipt and the supplier cost-recovery receipt are in the pilot and must be certified. Design decisions SCRUM-869#c23880 (W2, W7, W13, OQ-10): the reconciliation is per currency, carries an Unlinked bucket, says UNAVAILABLE when it cannot be computed, stores no balance, and a difference is displayed and never posted. It is not a period-close gate. The ruling digest in `regression/rulings.json` is the same one the S1 slice records (computed from a paraphrase because the Jira text was not available to the implementing session; the operator refreshes it).
+Owner ruling SCRUM-869#c23881 (2026-10-29): the consignment margin receipt and the supplier cost-recovery receipt are in the pilot and must be certified. Design decisions SCRUM-869#c23880 (W2, W7, W13, OQ-10): the reconciliation is per currency, carries an Unlinked bucket, says UNAVAILABLE when it cannot be computed, stores no balance, and a difference is displayed and never posted. It is not a period-close gate. The ruling digest in `regression/rulings.json` is the same one the S1 slice records, computed from the owner's verbatim comment text.
 
 Practice cited (general accounting knowledge; no external source was fetched in this session): a subledger is reconciled to its general-ledger control account by total and per currency, a reconciling difference is reported and investigated rather than adjusted or posted by the report, and items that cannot be attributed to a counterparty stay in the total and are shown as a separate unallocated line.
 
