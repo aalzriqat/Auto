@@ -25,8 +25,9 @@ import { OBLIGATION_PAGE_MAX, readObligationPage, type ObligationKind, type Obli
  * which pages the organisations and schedules ONE worker mutation per organisation. A worker
  * handles one bounded page of one obligation kind and schedules its own continuation, so no
  * transaction reads more than a page and one organisation's failure cannot roll back another's.
- * The worker also catches and logs its own failure (TEN-3); the idempotency key makes the next
- * day's run safe, but a day on which an organisation failed is a day without its exact-day alerts.
+ * The worker also catches and logs its own failure (TEN-3). Catch-up: each run sends the latest step
+ * an obligation has reached unless that step's idempotency record exists, so a day the cron or an
+ * organisation worker missed is made up on the next run, once, never as a burst.
  */
 
 const ORG_BATCH_SIZE = 20;
