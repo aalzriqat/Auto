@@ -50,6 +50,7 @@ import {
 import type { LedgerSnapshot } from "./browserSwarmBoundaryOracle";
 import {
   asArray,
+  createSwarmBank,
   inconclusive,
   isRecord,
   readChartKeys,
@@ -125,20 +126,11 @@ export function feeVoidSpec(options: MissionTiming, figures: Readonly<FeeVoidFig
 
       const customer = await seedFinancedCustomer(env, command, { lastName: `FeeVoid-${nonce}`, ltvPercent: 85 });
       if (customer === null) return;
-      // SCRUM-54 / SCRUM-878: a bank-funded purchase and every bank-transfer payment name the physical bank the money left. A fresh
-      // zero-balance bank in the organization's own denomination is created through the product's command (never a pre-existing
-      // one), on the disposable preview, BEFORE the car that names it.
-      const paidFromBankId = await refusalIsInconclusive(
-        () =>
-          client.mutation(api.bankAccounts.create, {
-            orgId: org,
-            name: `Swarm fee-void bank ${nonce}`,
-            currency,
-            openingBalanceMinor: 0,
-            openingBalanceDate: Date.now(),
-          }),
-        "the product refused to create the bank the vehicle purchase and the dealership-paid costs leave",
-      );
+      // SCRUM-54 / SCRUM-878: the one swarm bank, created BEFORE the car that names it and reused for both cost payments.
+      const paidFromBankId = await createSwarmBank(env, refusalIsInconclusive, currency, {
+        label: "fee-void",
+        refused: "the product refused to create the bank the vehicle purchase and the dealership-paid costs leave",
+      });
       const vehicleId = await command(() =>
         client.mutation(api.vehicles.create, {
           orgId: org,

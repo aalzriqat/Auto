@@ -50,6 +50,7 @@ import { feeVoidSpec } from "./browserSwarmFeeVoidAttack";
 import {
   agreeEconomicsAndHandOver,
   asArray,
+  createSwarmBank,
   isRecord,
   readChartKeys,
   readOrgCurrency,
@@ -136,20 +137,12 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
       const customer = await seedFinancedCustomer(env, command, { lastName: `Boundary-${nonce}`, ltvPercent: scenario.ltvPercent });
       if (customer === null) return;
       const { approver, customerId } = customer;
-      // SCRUM-54 / SCRUM-878: a bank-funded purchase and every bank-transfer payment name the physical bank the money left. A fresh
-      // zero-balance bank in the organization's own denomination is created through the product's command (never a pre-existing
-      // one), on the disposable preview, BEFORE the car that names it. The approver may lack MANAGE_FINANCE, so the OWNER creates it.
-      const paidFromBankId = await refusalIsInconclusive(
-        () =>
-          client.mutation(api.bankAccounts.create, {
-            orgId: org,
-            name: `Swarm money-boundary bank ${nonce}`,
-            currency,
-            openingBalanceMinor: 0,
-            openingBalanceDate: Date.now(),
-          }),
-        "the product refused to create the bank the vehicle purchase, the dealership-paid admin fee and the forward leave",
-      );
+      // SCRUM-54 / SCRUM-878: the one swarm bank (the OWNER creates it; the approver may lack MANAGE_FINANCE), created BEFORE the
+      // car that names it and reused for the admin-fee payment and the forward.
+      const paidFromBankId = await createSwarmBank(env, refusalIsInconclusive, currency, {
+        label: "money-boundary",
+        refused: "the product refused to create the bank the vehicle purchase, the dealership-paid admin fee and the forward leave",
+      });
       const vehicleId = await command(() =>
         client.mutation(api.vehicles.create, {
           orgId: org,
