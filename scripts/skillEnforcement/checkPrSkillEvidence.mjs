@@ -235,7 +235,15 @@ async function carryCertificate(certified, { pr, commits, fileRows, read, repo, 
     "Required CI must still pass at the current head; this check does not evaluate other checks."];
 }
 
+// Every request path is built from GitHub API data (SHAs, PR numbers, repo name). Refuse anything that is not a
+// plain absolute path of unreserved characters, so a crafted value cannot reach another endpoint (OWASP SSRF and
+// path traversal; Sonar S7044/S8476).
+const SAFE_API_PATH = /^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*(?:\?[A-Za-z0-9._~=&-]*)?$/;
+
 export async function getJson(fetchImpl, token, path) {
+  const segments = path.split("?")[0].split("/");
+  if (!SAFE_API_PATH.test(path) || segments.some((s) => s === "." || s === ".."))
+    throw new Error("Unsafe GitHub API path refused.");
   const res = await fetchImpl(`${API}${path}`, {
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "skill-evidence" },
   });
@@ -300,13 +308,18 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
   };
 }
 
+/** One printed line: control characters (CR, LF, ESC and the rest) become spaces so PR data cannot forge log lines (Sonar S5145). */
+export function safeLogLine(line) {
+  return String(line).replace(/[\u0000-\u001f\u007f]/g, " ");
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const { exitCode, lines } = await check(process.env);
-    (exitCode ? console.error : console.log)(lines.join("\n"));
+    (exitCode ? console.error : console.log)(lines.map(safeLogLine).join("\n"));
     process.exitCode = exitCode;
   } catch (e) {
-    console.error(e.message);
+    console.error(safeLogLine(e.message));
     process.exitCode = 1;
   }
 }
