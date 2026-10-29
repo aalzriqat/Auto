@@ -1,0 +1,41 @@
+{
+  "id": "opening-bank-report-refuses-a-user-without-view-finance",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "salesperson",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {
+        "org": "A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "a user of the same organization without view:finance cannot read it"
+  },
+  "matrixRow": "OB-G6",
+  "fingerprint": "1be0f922c6953de45cda2b38041acbf25a66baab86db474c5085ccb43547366e"
+}

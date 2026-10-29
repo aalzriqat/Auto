@@ -1,0 +1,77 @@
+{
+  "id": "opening-bank-in-another-currency-is-listed-never-compared",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 4000000
+          },
+          {
+            "bank": "B",
+            "debitMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.create",
+      "input": {
+        "currency": "USD",
+        "statedMinor": 99999
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "usdBank.referenceOpeningMinor",
+      "value": 99999
+    },
+    {
+      "observable": "usdBank.differenceMinor",
+      "value": "null"
+    },
+    {
+      "observable": "unexplainedOpeningDifference",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "a bank in another currency than the opening is listed but never compared"
+  },
+  "matrixRow": "OB-G3",
+  "fingerprint": "af10e100730aaa5ebdfa416ea428d5d3e70090f833e5901b7819c25805c6e758"
+}

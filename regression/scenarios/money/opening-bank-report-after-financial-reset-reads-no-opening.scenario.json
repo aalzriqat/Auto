@@ -1,0 +1,70 @@
+{
+  "id": "opening-bank-report-after-financial-reset-reads-no-opening",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 4000000
+          },
+          {
+            "bank": "B",
+            "debitMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgReset.resetOrgToCompletion",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.status",
+      "value": "NO_OPENING"
+    },
+    {
+      "observable": "unexplainedOpeningDifference",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "after a financial reset the retained opening header is not read as a current opening"
+  },
+  "matrixRow": "OB-G7",
+  "fingerprint": "2a79b776282e01ce64f97ecd0da89b46006e20d289a9e41d95392f1cd8fe8e41"
+}

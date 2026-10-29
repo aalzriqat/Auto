@@ -1,0 +1,52 @@
+{
+  "id": "opening-owned-car-with-no-cost-does-not-block-the-cutover",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "ownedCars": 2,
+        "purchasePriceJod": "absent-or-zero"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.trackedOpeningImportOrLimit",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "an owned car with no recorded cost needs no tracked import and does not block the cutover"
+  },
+  "matrixRow": "OB-C3",
+  "fingerprint": "f1e4cf2ed2912be0469255eb4c9316c6457c5615b9df9788f9d61f96734838fb"
+}

@@ -1,0 +1,53 @@
+{
+  "id": "opening-bucket-crowded-by-deleted-rows-fails-closed",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "ownedCars": 101,
+        "status": "AVAILABLE",
+        "isDeleted": "true"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "REFUSED-reviewed-opening-allocation-limit"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "a bucket crowded past the limit by soft-deleted rows fails closed instead of hiding an owned car"
+  },
+  "matrixRow": "OB-C3",
+  "fingerprint": "175eb4aae2435e4dcf63ddc060ba5d464e3f39542624e08752448dd5c23f810e"
+}
