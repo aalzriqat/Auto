@@ -23,6 +23,7 @@ import { assertNoHeldSupplierConcession } from "./supplierConcession";
 import {
   SUPPLIER_ERROR,
   snapshotSupplier,
+  snapshotSupplierForProvenReplay,
   throwSupplierError,
   type SupplierSnapshot,
 } from "./supplierRegistry";
@@ -186,7 +187,9 @@ export async function resolveImportSuppliers<Row extends ImportSupplierRow>(
       const cached = snapshots.get(id);
       if (cached) return cached;
     }
-    const snapshot = await snapshotSupplier(ctx, orgId, id, replay ? { allowInactive: true } : undefined);
+    const snapshot = replay
+      ? await snapshotSupplierForProvenReplay(ctx, orgId, id)
+      : await snapshotSupplier(ctx, orgId, id);
     if (!replay) snapshots.set(snapshot.supplierId, snapshot);
     return snapshot;
   };

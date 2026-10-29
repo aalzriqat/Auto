@@ -279,16 +279,36 @@ export interface SupplierSnapshot {
  *    code and message for both (N6, no existence oracle).
  *  - an inactive supplier: `SUPPLIER_INACTIVE`. An inactive supplier takes no new records; existing
  *    records keep resolving through ordinary reads, and settlement never goes through this function (N10).
- *
- * `options.allowInactive` is for ONE caller: a proven replay of a command that already ran (the
- * recorded evidence, not this call, is what created the records). It skips only the inactive refusal;
- * the missing-id, foreign-organization and not-found refusals still apply. A NEW use never passes it.
  */
 export async function snapshotSupplier(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   supplierId: Id<"suppliers"> | null | undefined,
-  options?: { allowInactive?: boolean },
+): Promise<SupplierSnapshot> {
+  return await readSupplierSnapshot(ctx, orgId, supplierId, false);
+}
+
+/**
+ * The snapshot for ONE caller: a proven replay of a command that already ran (the recorded evidence,
+ * not this call, is what created the records, and a replay writes nothing). It skips only the inactive
+ * refusal; the missing-id, foreign-organization and not-found refusals still apply, and the snapshot
+ * name is still the one the server reads. A NEW use goes through `snapshotSupplier`, never through here.
+ * It is a separate function, not a flag on `snapshotSupplier`, so that function keeps its fixed
+ * (ctx, orgId, supplierId) shape and no caller can pass a value that loosens a new use.
+ */
+export async function snapshotSupplierForProvenReplay(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers"> | null | undefined,
+): Promise<SupplierSnapshot> {
+  return await readSupplierSnapshot(ctx, orgId, supplierId, true);
+}
+
+async function readSupplierSnapshot(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers"> | null | undefined,
+  allowInactive: boolean,
 ): Promise<SupplierSnapshot> {
   if (supplierId === undefined || supplierId === null) {
     throwSupplierError(SUPPLIER_ERROR.IDENTITY_REQUIRED, "A supplier is required.");
@@ -297,7 +317,7 @@ export async function snapshotSupplier(
   if (!supplier || supplier.orgId !== orgId) {
     throwSupplierError(SUPPLIER_ERROR.NOT_FOUND, SUPPLIER_NOT_FOUND_MESSAGE);
   }
-  if (options?.allowInactive !== true) refuseIfInactive(supplier);
+  if (!allowInactive) refuseIfInactive(supplier);
   return Object.freeze({ supplierId: supplier._id, name: supplier.displayName, version: supplier.version });
 }
 
