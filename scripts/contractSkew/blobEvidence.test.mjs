@@ -104,23 +104,59 @@ for (const variant of ["wrong", "missing", "malformed", "duplicate"]) {
   });
 }
 
-test("PR mode refuses changed commit evidence outside the PR base with blob guidance", (t) => {
+for (const existing of [false, true]) test(`PR mode refuses ${existing ? "changed" : "new"} commit evidence outside the PR base with blob guidance`, (t) => {
   const f = fixture(t);
+  let prBase = f.base;
+  if (existing) {
+    f.save(`SCRUM-866 review of PR #1 head ${f.base}`);
+    prBase = f.commit("test(SCRUM-866): prior renewal");
+  }
   f.write(client, "export const payload = 2;\n");
   const head = f.commit("test(SCRUM-866): PR change");
   f.save(`SCRUM-866 review of PR #1 head ${head}; reviewed ${client}`);
   f.commit("test(SCRUM-866): commit renewal");
   assert.equal(f.check().status, 0, "legacy HEAD ancestry still accepts PR commits outside PR mode");
-  const result = f.check(["--pr-base", f.base]);
+  const result = f.check(["--pr-base", prBase]);
   assert.notEqual(result.status, 0, result.output);
   assert.match(result.output, /use.*blob/i);
 });
 
 test("PR mode compares renewal text with the PR base, leaving unchanged legacy references alone", (t) => {
   const f = fixture(t);
-  f.save(`SCRUM-866 review of PR #1 head ${f.base}`);
+  f.run("switch", "-q", "-c", "side");
+  f.run("commit", "--allow-empty", "-q", "-m", "test(SCRUM-866): side review", "-m", trailer);
+  const side = f.run("rev-parse", "HEAD");
+  f.run("switch", "-q", "main");
+  f.save(`SCRUM-866 review of PR #1 head ${side}`);
   const prBase = f.commit("test(SCRUM-866): existing renewal");
+  f.run("merge", "--no-ff", "side", "-m", `test(SCRUM-866): include reviewed history\n\n${trailer}`);
   const result = f.check(["--pr-base", prBase]);
+  assert.equal(result.status, 0, result.output);
+});
+
+test("PR mode gives blob guidance when a new commit reference is unavailable", (t) => {
+  const f = fixture(t);
+  f.save(`SCRUM-866 review of PR #1 head ${"0".repeat(40)}`);
+  f.commit("test(SCRUM-866): unavailable reference");
+  const result = f.check(["--pr-base", f.base]);
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(result.output, /use.*blob/i);
+});
+
+test("malformed final blob syntax refuses even with an older valid reference", (t) => {
+  const f = fixture(t);
+  f.save(`SCRUM-866 review of PR #1 head ${f.base}; evidence-blobs not-json`);
+  f.commit("test(SCRUM-866): malformed final reference");
+  const result = f.check();
+  assert.equal(result.status, 10, result.output);
+  assert.match(result.output, /1 malformed/);
+});
+
+test("a final legacy reference after older blobs keeps the legacy freshness rule", (t) => {
+  const f = fixture(t);
+  f.save(`${f.reference([[client, "0".repeat(40)]])}; SCRUM-866 review of PR #1 head ${f.base}`);
+  f.commit("test(SCRUM-866): later legacy reference");
+  const result = f.check(["--pr-base", f.base]);
   assert.equal(result.status, 0, result.output);
 });
 
