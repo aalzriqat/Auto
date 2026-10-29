@@ -85,22 +85,32 @@ function openingWithMixedCurrencies() {
 }
 
 describe("BankAccountsTab opening reconciliation money", () => {
+  test("a bank currency whose scale is unknown shows a dash instead of crashing or guessing a scale", () => {
+    const opening = openingWithMixedCurrencies();
+    opening.banks[1] = { ...opening.banks[1], currency: "XXX" };
+    data.opening = opening;
+    render(<BankAccountsTab />);
+
+    const row = within(screen.getByTestId("opening-bank-panel")).getByTestId("opening-bank-row-usd1");
+    expect(row.textContent).toBe("Dollar Bank———");
+  });
+
   test("English: each bank amount uses the bank's own currency and precision", () => {
     data.opening = openingWithMixedCurrencies();
     render(<BankAccountsTab />);
     const panel = screen.getByTestId("opening-bank-panel");
 
-    const usd = within(panel).getByTestId("opening-bank-row-usd1").textContent ?? "";
+    const usd = within(panel).getByTestId("opening-bank-row-usd1").textContent?.replace(/\u00a0/g, " ") ?? "";
     expect(usd).toContain("$123.45");
     expect(usd).not.toContain("JOD");
 
-    const jod = within(panel).getByTestId("opening-bank-row-jod1").textContent ?? "";
+    const jod = within(panel).getByTestId("opening-bank-row-jod1").textContent?.replace(/\u00a0/g, " ") ?? "";
     expect(jod).toContain("JOD 4,000.000");
     expect(jod).toContain("JOD 4,000.001");
     // The one-fils difference is not rounded away to "JOD 0".
     expect(jod).toContain("JOD 0.001");
 
-    const difference = within(panel).getByTestId("opening-bank-difference").textContent ?? "";
+    const difference = within(panel).getByTestId("opening-bank-difference").textContent?.replace(/\u00a0/g, " ") ?? "";
     expect(difference).toContain("JOD 0.001");
   });
 
@@ -110,18 +120,18 @@ describe("BankAccountsTab opening reconciliation money", () => {
     render(<BankAccountsTab />);
     const panel = screen.getByTestId("opening-bank-panel");
 
-    const usd = within(panel).getByTestId("opening-bank-row-usd1").textContent ?? "";
+    const usd = within(panel).getByTestId("opening-bank-row-usd1").textContent?.replace(/\u00a0/g, " ") ?? "";
     expect(usd).toContain("123.45");
     expect(usd).toContain("US$");
     expect(usd).not.toContain("د.أ");
 
-    const jod = within(panel).getByTestId("opening-bank-row-jod1").textContent ?? "";
+    const jod = within(panel).getByTestId("opening-bank-row-jod1").textContent?.replace(/\u00a0/g, " ") ?? "";
     expect(jod).toContain("4,000.000");
     expect(jod).toContain("4,000.001");
     expect(jod).toContain("0.001");
     expect(jod).toContain("د.أ");
 
-    const difference = within(panel).getByTestId("opening-bank-difference").textContent ?? "";
+    const difference = within(panel).getByTestId("opening-bank-difference").textContent?.replace(/\u00a0/g, " ") ?? "";
     expect(difference).toContain("0.001");
     // ECMA-402 numbering system pinned to latn: no Arabic-Indic digits in any amount.
     expect(panel.textContent ?? "").not.toMatch(/[٠-٩۰-۹]/);

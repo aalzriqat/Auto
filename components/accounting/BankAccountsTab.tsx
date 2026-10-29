@@ -16,11 +16,12 @@ import { BankAccountsTable } from "./bankAccounts/BankAccountsTable";
 import { BankOpeningReconciliationPanel } from "./bankAccounts/BankOpeningReconciliationPanel";
 import { CreateBankAccountDialog } from "./bankAccounts/CreateBankAccountDialog";
 import { ReconciliationPanel } from "./bankAccounts/ReconciliationPanel";
+import { formatMinorAmount } from "./reports/FinancialReportShared";
 import { dateInputToMs, defaultCreateBankAccountForm, type CreateBankAccountFormState } from "./bankAccounts/types";
 
 export function BankAccountsTab() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { code: orgCurrency } = useCurrency();
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
@@ -36,7 +37,20 @@ export function BankAccountsTab() {
   const setReconciliationTarget = useMutation(api.bankAccounts.setReconciliationTarget);
   const deactivateAccount = useMutation(api.bankAccounts.deactivate);
 
-  const canManageFinance = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  // Each bank states its own currency, so an amount is formatted with that currency and its own minor-unit precision
+  // (ISO 4217: JOD 3, USD 2), through the repo's minor-unit formatter. The numbering system is pinned to latn
+  // (ECMA-402 `-u-nu-latn`) so Arabic keeps Western digits. A currency whose scale AutoFlow cannot vouch for shows a
+  // dash, never a guessed scale.
+  const moneyLocale = locale === "ar" ? "ar-u-nu-latn" : "en-US";
+  const formatBankMinor = (minor: number, currency: string) => {
+    try {
+      return formatMinorAmount(minor, currency, moneyLocale);
+    } catch {
+      return "—";
+    }
+  };
+
+  const canManageFinance =!permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   async function runAction(actionName: string, action: () => Promise<unknown>, successMessage: string) {
     setBusyAction(actionName);
@@ -120,7 +134,7 @@ export function BankAccountsTab() {
       {openingReconciliation && (
         <BankOpeningReconciliationPanel
           reconciliation={openingReconciliation}
-          formatMinor={(minor, currency) => formatCurrency(minor / Math.pow(10, scaleForCurrency(currency)))}
+          formatMinor={formatBankMinor}
         />
       )}
 
