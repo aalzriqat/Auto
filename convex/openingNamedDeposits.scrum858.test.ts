@@ -271,6 +271,34 @@ test("a named opening deposit materialises one HELD native row per customer only
   ]);
 });
 
+test("the owner's direct post refuses named deposits with a coded error before any write; the draft and approval route still posts them (F1, c23884)", async () => {
+  const s = await seed();
+  const baseline = await counts(s);
+  for (const rows of [[securityRow(s)], [reservationRow(s)], [securityRow(s), reservationRow(s)]]) {
+    const total = rows.reduce((sum, row) => sum + row.amountMinor, 0);
+    await expect(
+      s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId: s.orgId,
+        expectedCurrency: "JOD",
+        asOfDate: Date.now(),
+        lines: linesFor(s, total),
+        allocations: rows as never,
+      }),
+    ).rejects.toMatchObject({ data: { code: "OPENING_DEPOSIT_DIRECT_POST_REFUSED" } });
+    // No journal, no draft, no deposit row, no application, nothing.
+    expect(await counts(s)).toEqual(baseline);
+  }
+
+  // The refusal leaves the org able to open the same rows through the approval route.
+  await postNamedDeposits(s);
+  const after = await counts(s);
+  expect(after.deposits).toBe(2);
+  expect(after.journals).toBe(1);
+  const draft = await s.t.run(async (ctx) => (await ctx.db.query("openingBalanceDrafts").collect())[0]);
+  expect(draft?.status).toBe("POSTED");
+  expect(draft?.autoApproved).toBe(false);
+});
+
 test("a named opening deposit that fails validation leaves no draft, row, journal or payment behind", async () => {
   const s = await seed();
   const foreignOrg = await s.t.run((ctx) =>
