@@ -50,7 +50,7 @@ still need independent pilot certification before launch.
 
 ## SCRUM-869-SUPPLIER-SETTLE
 
-Owner ruling SCRUM-869#c23881, 2026-10-29: supplier payable payment, consignment margin receipt and supplier cost-recovery receipt are in the pilot. No reversal is indispensable, so every reversal door for the three refuses server-side. Amounts and postings are unchanged by this slice. The ruling digest in `regression/rulings.json` was computed from a paraphrase because the Jira text was not available to the implementing session; the operator refreshes it with the real text and every `supplier-*` record cites it.
+Owner ruling SCRUM-869#c23881, 2026-10-29: supplier payable payment, consignment margin receipt and supplier cost-recovery receipt are in the pilot. No reversal is indispensable, so every reversal door for the three refuses server-side. Amounts and postings are unchanged by this slice. The ruling digest in `regression/rulings.json` is computed from the owner's verbatim comment text (`refreshRulings.mjs`, commit 52067abd), and every `supplier-*` record cites it.
 
 Hand-computed JOD figures (1 JOD = 1,000 minor units). Control 2400 is credit-normal, so a payment is a net debit; control 1240 is debit-normal, so a receipt is a net credit. Every row is a public-mutation call in `convex/supplierSettlementCertification.test.ts` unless a file is named.
 
