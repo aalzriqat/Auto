@@ -104,7 +104,7 @@ describe("consignment margin receipt method", () => {
   const margin = (s: SupplierDoors, receivableId: unknown, over: Record<string, unknown> = {}) =>
     ({ orgId: s.orgId, receivableId, amount: 200, idempotencyKey: crypto.randomUUID(), ...over }) as never;
 
-  test.each(["CHEQUE", "CARD"] as const)("%s is refused with a coded, truthful EN/AR error and nothing is written", async (receiptMethod) => {
+  async function expectMethodRefused(receiptMethod: "CHEQUE" | "CARD") {
     const s = await seedSupplierDoors(`mm-${receiptMethod}`);
     const receivableId = await insertReceivable(s, 500);
     const bankAccountId = await seedBank(s.t, s.orgId);
@@ -129,7 +129,11 @@ describe("consignment margin receipt method", () => {
     // A replay of the same intent is refused the same way: the idempotency claim was never written.
     expect((await refusalDataOf(call()))?.code).toBe(METHOD_CODE);
     expect(await snapshot(s)).toEqual(before);
-  });
+  }
+
+  // Literal titles: the SCRUM-761 scenario records bind to a test by its exact title.
+  test("a CHEQUE receipt is refused with a coded, truthful EN/AR error and nothing is written", () => expectMethodRefused("CHEQUE"));
+  test("a CARD receipt is refused with a coded, truthful EN/AR error and nothing is written", () => expectMethodRefused("CARD"));
 
   test("CASH, BANK_TRANSFER and an omitted method (CASH) still record the receipt", async () => {
     const s = await seedSupplierDoors("mm-ok");
