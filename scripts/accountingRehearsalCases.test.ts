@@ -498,6 +498,18 @@ type Defects = {
   saleReferenceWrongRefusal?: boolean;
   saleReferenceWritesBeforeRefusing?: boolean;
   saleOwnReferenceRefused?: boolean;
+  /** SCRUM-869 supplier settlement negative controls. */
+  supplierPaymentPostsWrongAccount?: boolean;
+  supplierPaymentOverApplied?: boolean;
+  supplierReplayDoublePosts?: boolean;
+  marginReceiptPostsWrongAmount?: boolean;
+  marginOverReceiptAccepted?: boolean;
+  costRecoveryReceiptNotPosted?: boolean;
+  costRecoveryOverReceiptAccepted?: boolean;
+  receiptReversalAccepted?: boolean;
+  expenseReversalAccepted?: boolean;
+  payableCorrectionAccepted?: boolean;
+  refusedSupplierDoorWrites?: boolean;
 };
 
 function makeBackend(defects: Defects = {}) {
@@ -539,6 +551,12 @@ function makeBackend(defects: Defects = {}) {
   const MINOR_SCALE = 1000;
   const LINE_SCALE = defects.linesAtWrongScale ? 2 : 3;
   const vehicles = new Map<string, Record<string, any>>();
+  /** SCRUM-869 supplier settlement subledgers. */
+  const supPayables = new Map<string, Record<string, any>>();
+  const supClaims = new Map<string, Record<string, any>>();
+  const supRecoveries = new Map<string, Record<string, any>>();
+  const supReceipts = new Map<string, Record<string, any>>();
+  const supKeys = new Set<string>();
   const sales = new Map<string, Record<string, any>>();
   let commissionRate = 0;
   let commissionMode = "AUTO_MEMBER";
@@ -564,6 +582,7 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_comm_exp", code: "6100", type: "EXPENSE", name: "Commission Expense", systemKey: "COMMISSION_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_misc", code: "4400", type: "OTHER_INCOME", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
     { _id: "acct_forfeit", code: "4410", type: "OTHER_INCOME", name: "Deposit Forfeiture", systemKey: "DEPOSIT_FORFEITURE_INCOME", normalBalance: "CREDIT" },
+    { _id: "acct_recv_sup", code: "1240", type: "ASSET", name: "Receivable from Suppliers", systemKey: "RECEIVABLE_FROM_SUPPLIERS", normalBalance: "DEBIT" },
     { _id: "acct_ap", code: "2400", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
     { _id: "acct_rev", code: defects.cashSaleWrongAccountCode ? "4000" : "4100", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE", normalBalance: "CREDIT" },
     { _id: "acct_cogs", code: "5100", type: "COGS", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD", normalBalance: "DEBIT" },
@@ -1374,7 +1393,8 @@ function makeBackend(defects: Defects = {}) {
         // SCRUM-802 (owner ruling, Option A): a cash sale completes only when its full price is held as a deposit.
         // The real backend refuses otherwise, so the rehearsal fake must too: a case that completes an unpaid cash
         // sale is red here exactly as it would be against the real backend.
-        if (args.status === "COMPLETED" && args.financingType !== "FINANCED" && args.financingType !== "LEASE") {
+        if (args.status === "COMPLETED" && args.financingType !== "FINANCED" && args.financingType !== "LEASE" &&
+            args.supplierSettlementRoute !== "DIRECT_TO_SUPPLIER") {
           const requiredMinor = Math.round(Number(args.salePrice) * MINOR_SCALE);
           const heldMinor = [...deposits.values()]
             .filter((row) => row.vehicleId === String(args.vehicleId) && row.customerId === String(args.customerId) && row.status === "HELD")
@@ -1429,6 +1449,17 @@ function makeBackend(defects: Defects = {}) {
         const vehicle = vehicles.get(String(args.vehicleId));
         const priceMinor = Math.round(Number(args.salePrice) * MINOR_SCALE);
         const costMinor = Math.round((vehicle?.purchasePrice ?? 0) * MINOR_SCALE);
+        if (args.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" && vehicle?.sourceType === "SOURCED") {
+          // The buyer paid the supplier: nothing gross reaches these books, only the margin claim.
+          post("SALE_COMPLETED", "sales", saleId, [
+            { key: "RECEIVABLE_FROM_SUPPLIERS", debitMinor: priceMinor - costMinor },
+            { key: "CONSIGNMENT_COMMISSION_REVENUE", creditMinor: priceMinor - costMinor },
+          ], { payload: { saleAmountMinor: priceMinor } });
+          const claimId = id("srecv");
+          supClaims.set(claimId, { _id: claimId, vehicleId: String(args.vehicleId), saleId, amountDue: (priceMinor - costMinor) / MINOR_SCALE,
+            amountReceived: 0, remainingAmount: (priceMinor - costMinor) / MINOR_SCALE, status: "OPEN" });
+          return { ok: true as const, value: saleId };
+        }
         if (defects.silentConsignedSale) {
           events.push({ _id: id("evt"), eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: saleId, status: "POSTED", payload: { saleAmountMinor: priceMinor } });
           return { ok: true as const, value: saleId };
@@ -1563,6 +1594,15 @@ function makeBackend(defects: Defects = {}) {
             status: args.status,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
+          if (args.purchasePaymentMethod === "ON_ACCOUNT" && !(args.idempotencyKey && createdByKey.has(args.idempotencyKey) && supPayables.has(`pay_${madeVehicle.value}`))) {
+            const owed = Number(args.purchasePrice ?? 0);
+            const payableId = `pay_${madeVehicle.value}`;
+            supPayables.set(payableId, { _id: payableId, vehicleId: String(madeVehicle.value), amountDue: owed, amountPaid: 0, status: "DUE_ON_SALE" });
+            post("VEHICLE_ACQUIRED", "vehicles", String(madeVehicle.value), [
+              { key: "VEHICLE_INVENTORY", debitMinor: Math.round(owed * MINOR_SCALE), vehicleId: String(madeVehicle.value) },
+              { key: "ACCOUNTS_PAYABLE_SUPPLIERS", creditMinor: Math.round(owed * MINOR_SCALE) },
+            ]);
+          }
           if (/^rehearsal-m486c[1235]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
               !defects.cashSaleAcquisitionMissingPosting) {
             const costMinor = defects.cashSaleAcquisitionWrongAmount ? 9_000_000 : 10_000_000;
@@ -2372,6 +2412,125 @@ function makeBackend(defects: Defects = {}) {
         if (!defects.financeReceivableNotSettled) receivable.status = amount >= receivable.originalAmountMinor ? "PAID" : "PARTIALLY_PAID";
         return { ok: true as const, value: null };
       }
+      case "sourcingPayables:list":
+        return { ok: true as const, value: [...supPayables.values()].map((p) => ({ ...p })) };
+      case "sourcingPayables:recordPartialPayment":
+      case "sourcingPayables:markPaid": {
+        const payable = supPayables.get(String(args.payableId));
+        if (!payable) return { ok: false as const, error: "Supplier payable not found." };
+        const key = String(args.idempotencyKey);
+        const settle = (amountMinor: number) => post("SUPPLIER_PAYMENT_SETTLED", "vehicleSupplierPayables", `${payable._id}:${++seq}`, [
+          { key: defects.supplierPaymentPostsWrongAccount ? "GENERAL_EXPENSE" : "ACCOUNTS_PAYABLE_SUPPLIERS", debitMinor: amountMinor },
+          { key: "CASH_ON_HAND", creditMinor: amountMinor },
+        ]);
+        if (supKeys.has(key)) {
+          if (defects.supplierReplayDoublePosts) settle(Math.round(Number(args.amount ?? 0) * MINOR_SCALE));
+          return { ok: true as const, value: null };
+        }
+        if (payable.status === "PAID") return { ok: false as const, error: "This payable is already paid." };
+        const remainingMinor = Math.round((payable.amountDue - payable.amountPaid) * MINOR_SCALE);
+        const amountMinor = fnPath.endsWith("markPaid") ? remainingMinor : Math.round(Number(args.amount) * MINOR_SCALE);
+        if (!defects.supplierPaymentOverApplied && amountMinor > remainingMinor) {
+          return { ok: false as const, error: "That would pay more than is still owed." };
+        }
+        supKeys.add(key);
+        payable.amountPaid += amountMinor / MINOR_SCALE;
+        payable.status = payable.amountPaid >= payable.amountDue ? "PAID" : "PARTIALLY_PAID";
+        settle(amountMinor);
+        return { ok: true as const, value: null };
+      }
+      case "supplierReceivables:list":
+        return { ok: true as const, value: { complete: true, items: [...supClaims.values()].map((c) => ({ ...c })) } };
+      case "supplierReceivables:recordReceipt": {
+        const claim = supClaims.get(String(args.receivableId));
+        if (!claim) return { ok: false as const, error: "Supplier receivable not found." };
+        const key = String(args.idempotencyKey);
+        if (supKeys.has(key)) return { ok: true as const, value: null };
+        const amountMinor = Math.round(Number(args.amount) * MINOR_SCALE);
+        if (!defects.marginOverReceiptAccepted && amountMinor > Math.round(claim.remainingAmount * MINOR_SCALE)) {
+          return { ok: false as const, error: "That would record more than is owed." };
+        }
+        supKeys.add(key);
+        claim.amountReceived += amountMinor / MINOR_SCALE;
+        claim.remainingAmount = Math.max(0, claim.amountDue - claim.amountReceived);
+        claim.status = claim.remainingAmount === 0 ? "PAID" : "PARTIALLY_PAID";
+        post("SUPPLIER_RECEIVABLE_COLLECTED", "vehicleSupplierReceivables", `${claim._id}:${++seq}`, [
+          { key: "CASH_ON_HAND", debitMinor: amountMinor },
+          { key: "RECEIVABLE_FROM_SUPPLIERS", creditMinor: defects.marginReceiptPostsWrongAmount ? amountMinor + 1 : amountMinor },
+        ]);
+        return { ok: true as const, value: null };
+      }
+      case "expenses:create": {
+        const made = replayableCreate("exp", args, true);
+        if (made) return made;
+        const expenseId = id("exp");
+        createdByKey.set(String(args.idempotencyKey), expenseId);
+        const amountMinor = Math.round(Number(args.amount) * MINOR_SCALE);
+        post("EXPENSE_POSTED", "expenses", expenseId, [
+          { key: "GENERAL_EXPENSE", debitMinor: amountMinor }, { key: "CASH_ON_HAND", creditMinor: amountMinor },
+        ]);
+        if (args.costBearer === "SUPPLIER") {
+          const recoveryId = id("srec");
+          supRecoveries.set(recoveryId, { _id: recoveryId, expenseId, vehicleId: String(args.vehicleId), amountDueMinor: amountMinor,
+            amountRecoveredMinor: 0, remainingMinor: amountMinor, status: "OPEN" });
+          post("SUPPLIER_COST_RECOVERY_RECOGNIZED", "supplierCostRecoveries", recoveryId, [
+            { key: "RECEIVABLE_FROM_SUPPLIERS", debitMinor: amountMinor }, { key: "GENERAL_EXPENSE", creditMinor: amountMinor },
+          ]);
+        }
+        return { ok: true as const, value: expenseId };
+      }
+      case "supplierCostRecoveries:list":
+        return { ok: true as const, value: { complete: true, items: [...supRecoveries.values()].map((r) => ({ ...r })) } };
+      case "supplierCostRecoveries:listReceipts":
+        return { ok: true as const, value: [...supReceipts.values()].filter((r) => r.recoveryId === String(args.recoveryId)).map((r) => ({ ...r })) };
+      case "supplierCostRecoveries:recordReceipt": {
+        const recovery = supRecoveries.get(String(args.recoveryId));
+        if (!recovery) return { ok: false as const, error: "Supplier cost recovery not found." };
+        const key = String(args.idempotencyKey);
+        if (supKeys.has(key)) return { ok: true as const, value: null };
+        const amountMinor = Number(args.amountMinor);
+        if (!defects.costRecoveryOverReceiptAccepted && amountMinor > recovery.remainingMinor) {
+          return { ok: false as const, error: "That would recover more than is owed." };
+        }
+        supKeys.add(key);
+        recovery.amountRecoveredMinor += amountMinor;
+        recovery.remainingMinor = Math.max(0, recovery.amountDueMinor - recovery.amountRecoveredMinor);
+        recovery.status = recovery.remainingMinor === 0 ? "RECOVERED" : "PARTIALLY_RECOVERED";
+        const receiptId = id("srcpt");
+        supReceipts.set(receiptId, { _id: receiptId, recoveryId: recovery._id, amountMinor, status: "LIVE" });
+        if (!defects.costRecoveryReceiptNotPosted) post("SUPPLIER_COST_RECOVERY_RECEIVED", "supplierCostRecoveryReceipts", receiptId, [
+          { key: "CASH_ON_HAND", debitMinor: amountMinor }, { key: "RECEIVABLE_FROM_SUPPLIERS", creditMinor: amountMinor },
+        ]);
+        return { ok: true as const, value: null };
+      }
+      case "supplierCostRecoveries:reverseReceipt": {
+        const receipt = supReceipts.get(String(args.receiptId));
+        if (!receipt) return { ok: false as const, error: "Receipt not found." };
+        if (!defects.receiptReversalAccepted) {
+          if (defects.refusedSupplierDoorWrites) post("SUPPLIER_COST_RECOVERY_RECEIVED", "supplierCostRecoveryReceipts", receipt._id, []);
+          return { ok: false as const, errorCode: "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED", error: "Reversing a supplier receipt is not available in the pilot. Nothing has been changed." };
+        }
+        receipt.status = "REVERSED";
+        return { ok: true as const, value: null };
+      }
+      case "expenses:reverseExpense": {
+        const live = [...supRecoveries.values()].find((r) => r.expenseId === String(args.expenseId));
+        if (live && !defects.expenseReversalAccepted) {
+          return { ok: false as const, errorCode: "SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED", error: "An expense the supplier owes the dealership for cannot be reversed in the pilot. Nothing has been changed." };
+        }
+        if (live) live.status = "REVERSED";
+        return { ok: true as const, value: null };
+      }
+      case "vehicles:correctAcquisitionCost": {
+        const payable = [...supPayables.values()].find((p) => p.vehicleId === String(args.vehicleId));
+        if (payable && payable.amountPaid === 0 && !defects.payableCorrectionAccepted) {
+          return { ok: false as const, errorCode: "SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED", error: "An unpaid supplier payable cannot be corrected in the pilot. Nothing has been changed." };
+        }
+        if (payable) payable.amountDue = Number(args.newCost);
+        const vehicle = vehicles.get(String(args.vehicleId));
+        if (vehicle) vehicle.purchasePrice = Number(args.newCost);
+        return { ok: true as const, value: null };
+      }
       default:
         return { ok: false as const, error: `unmodelled function ${fnPath}` };
     }
@@ -2559,13 +2718,13 @@ describe("the rehearsal passes against a backend that behaves", () => {
     // quoted as a complete one. Against a healthy backend nothing may decline.
     const declined = results.filter((r) => r.status === "UNPROVEN");
     expect(declined.map((d) => d.id).sort()).toEqual(["CC-CASH","S858-CONTAINMENT","S858-OPENING"]);
-    expect(summarize(results)).toMatchObject({total:32,passed:29,failed:0,unproven:3,unprovenIds:["CC-CASH","S858-OPENING","S858-CONTAINMENT"],complete:false});
+    expect(summarize(results)).toMatchObject({total:36,passed:33,failed:0,unproven:3,unprovenIds:["CC-CASH","S858-OPENING","S858-CONTAINMENT"],complete:false});
     // And it actually ran the cases rather than finding nothing to do.
     // Cleanup callbacks, then U-RET, execute after this driver, in the trusted main entry point (runRehearsalSequence).
     const originalIds = REQUIRED_REHEARSAL_CASE_IDS.filter(id => id !== "S858-CLEANUP-HISTORY" && id !== "S858-CLEANUP-SPLIT" && id !== "U-RET");
-    expect(originalIds).toHaveLength(32);
+    expect(originalIds).toHaveLength(36);
     expect(results.map((r) => r.id).sort()).toEqual([...originalIds].sort());
-  for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2"]) {
+  for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2", "SUP-PAY", "SUP-MARGIN", "SUP-RECOVERY", "SUP-REFUSALS"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -2640,7 +2799,7 @@ describe("SCRUM-834 the rehearsal runs from main against either reconcile contra
     const results = await runAgainst(defects);
     expect(results.filter((r) => r.status === "FAIL")).toEqual([]);
     expect(results.filter((r) => r.status === "UNPROVEN").map(r=>r.id).sort()).toEqual(["CC-CASH","S858-CONTAINMENT","S858-OPENING"]);
-    expect(results.filter(r=>r.status === "PASS")).toHaveLength(29);
+    expect(results.filter(r=>r.status === "PASS")).toHaveLength(33);
     for (const id of ["M486C5", "FD1"]) expect(statusOf(results, id), `${id} reconciles a fee`).toBe("PASS");
   });
 });
@@ -2823,6 +2982,27 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     expect(String(results.find((r) => r.id === "SR1")?.detail)).toMatch(/NO journal entry/);
   });
 
+  test.each([
+    ["SUP-PAY", "supplierPaymentPostsWrongAccount", /net movement of ap/],
+    ["SUP-PAY", "supplierPaymentOverApplied", /5,000\.001 against 5,000 still owed was ACCEPTED/],
+    ["SUP-PAY", "supplierReplayDoublePosts", /net movement of ap/],
+    ["SUP-MARGIN", "marginReceiptPostsWrongAmount", /net movement of recv/],
+    ["SUP-MARGIN", "marginOverReceiptAccepted", /5,000\.001 against 5,000 still owed was ACCEPTED/],
+    ["SUP-RECOVERY", "costRecoveryReceiptNotPosted", /net movement of (recv|cash)/],
+    ["SUP-RECOVERY", "costRecoveryOverReceiptAccepted", /130 against 120 still outstanding was ACCEPTED/],
+    ["SUP-REFUSALS", "receiptReversalAccepted", /reverseReceipt was ACCEPTED/],
+    ["SUP-REFUSALS", "expenseReversalAccepted", /reverseExpense was ACCEPTED/],
+    ["SUP-REFUSALS", "payableCorrectionAccepted", /correctAcquisitionCost was ACCEPTED/],
+    ["SUP-REFUSALS", "refusedSupplierDoorWrites", /changed the receipts, the events/],
+  ] as const)("SCRUM-869 %s catches %s", async (caseId, defect, reason) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, caseId)).toBe("FAIL");
+    expect(String(results.find((r) => r.id === caseId)?.detail)).toMatch(reason);
+    // The other three supplier cases are not collateral damage of one defect.
+    for (const other of ["SUP-PAY", "SUP-MARGIN", "SUP-RECOVERY", "SUP-REFUSALS"].filter((id) => id !== caseId)) {
+      expect(statusOf(results, other), `${other} must stay green when only ${defect} is injected`).toBe("PASS");
+    }
+  });
   test("M486C1 rejects a balanced owned cash sale credited to the wrong revenue account", async () => {
     const results = await runAgainst({ cashSaleWrongRevenueAccount: true });
     expect(statusOf(results, "M486C1")).toBe("FAIL");
