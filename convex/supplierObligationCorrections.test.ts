@@ -14,6 +14,7 @@ import schema from "./schema";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { refusalDataOf } from "../test-utils/financedDealFixture";
 import { commonAr, commonEn } from "../lib/i18n/domains/common";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import {
   KEYS, ledgerOf, openRecovery, SCALE, seedSupplierDoors, type SupplierDoors,
 } from "../test-utils/supplierDoorsFixture";
@@ -52,6 +53,7 @@ async function onAccountVehicle(s: SupplierDoors, price: number) {
     year: 2020, mileage: 10_000, color: "White", fuelType: "Gasoline", transmission: "Automatic",
     sellingPrice: 20_000, status: "AVAILABLE", sourceType: "STOCK", purchasePrice: price,
     purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
+    purchaseSupplierId: await supplierIdFor(s.t, s.orgId, "Credit Supplier Co"),
   } as never)) as Id<"vehicles">;
   const payable = await s.t.run((ctx) =>
     ctx.db.query("vehicleSupplierPayables").withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId)).first()
