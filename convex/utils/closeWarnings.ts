@@ -14,6 +14,14 @@ export const SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING =
   "Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually.";
 
 /**
+ * SCRUM-858 (round-1 review F2): emitted when the customer-deposits comparison cannot be made as of
+ * the period end because deposit activity is dated after it. Server text is the acknowledgement key,
+ * like the two above; the close dialog translates it at display time only.
+ */
+export const CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING =
+  "Customer deposits reconciliation could not be completed as of the period end: deposit activity was recorded after that date, and the deposit side cannot be restated to it. Review customer deposits manually.";
+
+/**
  * SCRUM-858 — owner ruling 2026-10-28: a subledger-to-GL difference in an
  * organization that has an opening balance is REPORTED under this label. No
  * journal, plug, clearing line or equity entry is ever posted to force the two

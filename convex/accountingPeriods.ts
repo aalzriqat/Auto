@@ -10,6 +10,7 @@ import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
 import {
+  CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
 } from "./utils/closeWarnings";
@@ -22,6 +23,7 @@ import {
   computeCommissionPayableReconciliation,
   computeCommissionRecognitionDivergence,
   computePrepaidRecognitionShortfall,
+  CustomerDepositsReconciliationResult,
   GlVsSubledgerResult,
   SupplierPayablesReconciliationResult,
 } from "./accountingReports";
@@ -388,7 +390,7 @@ export type CloseChecklistResult = {
   arReconciliation: SubledgerReconciliationResult;
   vehicleInventoryReconciliation: GlVsSubledgerResult;
   supplierPayablesReconciliation: SupplierPayablesReconciliationResult;
-  customerDepositsReconciliation: GlVsSubledgerResult;
+  customerDepositsReconciliation: CustomerDepositsReconciliationResult;
   commissionPayableReconciliation: GlVsSubledgerResult;
 };
 
@@ -535,7 +537,13 @@ async function computeCloseChecklist(
   const heldOpeningLiabilities=await readOpeningUnallocatedLiabilities(ctx,orgId,period.endDate);
   if(heldOpeningLiabilities.status === "UNAVAILABLE")warnings.push("Opening unallocated liability basis is unavailable. Finance must reconcile the source proof.");
   else if(heldOpeningLiabilities.status === "UNALLOCATED")warnings.push("Opening liabilities include unallocated held pools. Arithmetic reconciliation does not establish beneficial ownership; these pools are not available for customer refunds or credit application.");
-  if (!customerDepositsRecon.isReconciled) {
+  if (customerDepositsRecon.status === "UNAVAILABLE") {
+    // Could not compare as of the period end: never reported as reconciled, and never as a difference
+    // in an empty list of currencies. An unavailable opening basis already has its own warning above.
+    if (customerDepositsRecon.unavailableReason !== "OPENING_SOURCE_UNAVAILABLE") {
+      warnings.push(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING);
+    }
+  } else if (!customerDepositsRecon.isReconciled) {
     const badCurrencies = customerDepositsRecon.currencies.filter((c) => !customerDepositsRecon.byCurrency[c].isReconciled);
     warnings.push(`Customer deposits subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }

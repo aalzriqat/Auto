@@ -766,6 +766,11 @@ export const subledgerReconciliation = query({
 // unspecified toDate, defaulting to now) both sides line up exactly. These
 // are informational reports for the accountant to check manually — not
 // period-close blockers.
+//
+// Customer Deposits is the exception since SCRUM-858 (round-1 review F2): it
+// refuses to compare when any deposit-side activity is dated after `toDate`
+// and reports UNAVAILABLE instead of a difference (see
+// hasDepositActivityAfter). The A/P case is tracked as SCRUM-876.
 
 export type GlVsSubledgerResult = {
   attributionStatus?: "ATTRIBUTED" | "UNALLOCATED" | "UNAVAILABLE";
@@ -1265,6 +1270,14 @@ async function outstandingDepositMinor(
  * plug, clearing line or equity entry is ever created to force the two sides to agree.
  */
 export type CustomerDepositsReconciliationResult = GlVsSubledgerResult & {
+  /**
+   * AVAILABLE: `byCurrency` / `isReconciled` are the real comparison.
+   * UNAVAILABLE: nothing is claimed. `isReconciled` is false, `currencies` / `byCurrency` are empty and
+   * no difference is invented, so a consumer reading only `isReconciled` can never take "could not
+   * check" for "reconciled". `unavailableReason` says why.
+   */
+  status: "AVAILABLE" | "UNAVAILABLE";
+  unavailableReason?: "POST_CUTOFF_ACTIVITY" | "INVALID_DATE" | "OPENING_SOURCE_UNAVAILABLE";
   unexplainedOpeningDifference: {
     label: { en: string; ar: string };
     /** Currencies whose GL and subledger sides disagree. */
@@ -1278,15 +1291,68 @@ async function labelDepositsOpeningDifference(
   result: GlVsSubledgerResult
 ): Promise<CustomerDepositsReconciliationResult> {
   const currencies = result.currencies.filter((currency) => result.byCurrency[currency].discrepancyMinor !== 0);
-  if (currencies.length === 0) return { ...result, unexplainedOpeningDifference: null };
+  if (currencies.length === 0) return { ...result, status: "AVAILABLE", unexplainedOpeningDifference: null };
   const source = await loadOpeningSourceIdentity(ctx, orgId);
   const hasOpeningHistory = source.headers.length > 0 || source.status !== "ABSENT";
   return {
     ...result,
+    status: "AVAILABLE",
     unexplainedOpeningDifference: hasOpeningHistory
       ? { label: { ...UNEXPLAINED_OPENING_DIFFERENCE_LABEL }, currencies }
       : null,
   };
+}
+
+function unavailableDepositsReconciliation(
+  unavailableReason: NonNullable<CustomerDepositsReconciliationResult["unavailableReason"]>
+): CustomerDepositsReconciliationResult {
+  return {
+    currencies: [],
+    byCurrency: {},
+    isReconciled: false,
+    attributionStatus: "UNAVAILABLE",
+    status: "UNAVAILABLE",
+    unavailableReason,
+    unexplainedOpeningDifference: null,
+  };
+}
+
+/**
+ * True when anything on the deposit side is dated AFTER `toDate`: a row created, resolved or deleted,
+ * an application made or reversed, or a hold allocated or resolved.
+ *
+ * Why this is a refusal and not a reconstruction. The GL side is read as of `toDate`; the subledger
+ * side is the CURRENT state of the deposit rows. The two agree only when nothing on the deposit side
+ * has moved since. The deposit side cannot be restated to an earlier date from what is recorded:
+ * `releasedAmountMinor` is one cumulative figure with no per-release date, `resolvedAt` is overwritten
+ * by whichever event came last, and an opening row is created when it is approved but dated at the
+ * opening date in the GL. Any restated figure would be a guess presented as a balance, so the
+ * comparison is declared UNAVAILABLE instead (the AP-Suppliers control does the same when it cannot
+ * see everything). Applications carry their own dates (`appliedAt` equals the journal's accounting
+ * date), so this scan is exact about what is "later".
+ */
+async function hasDepositActivityAfter(
+  ctx: QueryCtx,
+  deposits: ReadonlyArray<Doc<"deposits">>,
+  toDate: number
+): Promise<boolean> {
+  const later = (...stamps: Array<number | undefined>) => stamps.some((stamp) => stamp !== undefined && stamp > toDate);
+  for (const deposit of deposits) {
+    if (later(deposit.createdAt, deposit.resolvedAt, deposit.deletedAt)) return true;
+  }
+  for (const deposit of deposits) {
+    const applications = await ctx.db
+      .query("depositApplications")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+      .collect();
+    if (applications.some((a) => later(a.appliedAt, a.reversalStartedAt, a.reversedAt))) return true;
+    const holds = await ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+      .collect();
+    if (holds.some((h) => later(h.createdAt, h.allocatedAt, h.resolvedAt))) return true;
+  }
+  return false;
 }
 
 export async function computeCustomerDepositsReconciliation(
@@ -1294,16 +1360,22 @@ export async function computeCustomerDepositsReconciliation(
   orgId: Id<"organizations">,
   toDate: number | undefined
 ): Promise<CustomerDepositsReconciliationResult> {
+  // NaN and +/-Infinity pass `v.number()`, and every comparison against NaN is false, so an unchecked
+  // value would read as "nothing is later" and be handed to the ledger read as a cutoff.
+  if (toDate !== undefined && !Number.isFinite(toDate)) return unavailableDepositsReconciliation("INVALID_DATE");
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const allRows = await ctx.db
+    .query("deposits")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  // Absent `toDate` means "now": both sides are current and nothing can be later, so no scan is needed.
+  if (toDate !== undefined && (await hasDepositActivityAfter(ctx, allRows, toDate))) {
+    return unavailableDepositsReconciliation("POST_CUTOFF_ACTIVITY");
+  }
   // Every row that could still owe something. A HELD row usually does; an
   // APPLIED, REFUNDED or FORFEITED one can too, when only part of it went.
   // VOIDED rows never received money in the first place.
-  const candidates = (
-    await ctx.db
-      .query("deposits")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .collect()
-  ).filter((d) => d.isDeleted !== true && d.status !== "VOIDED");
+  const candidates = allRows.filter((d) => d.isDeleted !== true && d.status !== "VOIDED");
 
   const subByCurrency = new Map<string, number>();
   for (const d of candidates) {
@@ -1314,7 +1386,7 @@ export async function computeCustomerDepositsReconciliation(
   }
 
   const held=await readOpeningUnallocatedLiabilities(ctx,orgId,toDate??Date.now());
-  if(held.status === "UNAVAILABLE")return {currencies:[],byCurrency:{},isReconciled:false,attributionStatus:"UNAVAILABLE",unexplainedOpeningDifference:null};
+  if(held.status === "UNAVAILABLE")return unavailableDepositsReconciliation("OPENING_SOURCE_UNAVAILABLE");
   const controls=new Set<Id<"chartOfAccounts">>();
   const native=await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY)).unique();
   if(native)controls.add(native._id);
