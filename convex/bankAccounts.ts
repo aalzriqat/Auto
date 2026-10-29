@@ -16,6 +16,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { computeBankOpeningReconciliation } from "./accounting/bankOpeningReconciliation";
 import { BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRanges, readControlRanges } from "./accounting/bankLineAggregate";
 
 export const list = query({
@@ -197,6 +198,19 @@ export const getBookBalance = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     return await computeBookBalance(ctx, args.orgId, args.asOf ?? Date.now(), BOOK_BALANCE_READ_BUDGET);
+  },
+});
+
+/**
+ * SCRUM-858 S5 (owner ruling c23884): per-bank opening reconciliation. Each bank's posted opening line against the
+ * balance the dealer stated for it, the Σ of bank lines against the bank control's opening debit, and any
+ * difference under the owner's label. Read-only: it posts nothing and changes no balance.
+ */
+export const openingReconciliation = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    return await computeBankOpeningReconciliation(ctx, args.orgId);
   },
 });
 

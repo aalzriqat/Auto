@@ -193,7 +193,7 @@ describe("SCRUM-858 S5 per-bank opening reconciliation", () => {
     expect(byId.get(bankB)).toMatchObject({ differenceMinor: 0 });
     expect(reconciliation.unexplainedOpeningDifference).toEqual({
       label: OWNER_LABEL,
-      currencies: [{ currency: "JOD", differenceMinor: 100_000 }],
+      currencies: [{ currency: "JOD", differenceMinor: 100_000, absoluteDifferenceMinor: 100_000 }],
     });
     // The report is read-only: no journal, line, event or transaction appeared, and the balance is still the posted line.
     expect(await writeCounts(s)).toEqual(before);
@@ -213,7 +213,9 @@ describe("SCRUM-858 S5 per-bank opening reconciliation", () => {
 
     const byId = new Map(reconciliation.banks.map((row) => [row.bankAccountId, row]));
     expect(byId.get(bankC)).toMatchObject({ openingLineMinor: 0, referenceOpeningMinor: 250_000, differenceMinor: 250_000 });
-    expect(reconciliation.unexplainedOpeningDifference?.currencies).toEqual([{ currency: "JOD", differenceMinor: 250_000 }]);
+    expect(reconciliation.unexplainedOpeningDifference?.currencies).toEqual([
+      { currency: "JOD", differenceMinor: 250_000, absoluteDifferenceMinor: 250_000 },
+    ]);
   });
 
   test("a difference in the other direction is reported with its sign, and differences of one currency net per currency", async () => {
@@ -227,7 +229,77 @@ describe("SCRUM-858 S5 per-bank opening reconciliation", () => {
     const byId = new Map(reconciliation.banks.map((row) => [row.bankAccountId, row]));
     expect(byId.get(bankA)?.differenceMinor).toBe(-100_000);
     expect(byId.get(bankB)?.differenceMinor).toBe(30_000);
-    expect(reconciliation.unexplainedOpeningDifference?.currencies).toEqual([{ currency: "JOD", differenceMinor: -70_000 }]);
+    expect(reconciliation.unexplainedOpeningDifference?.currencies).toEqual([
+      { currency: "JOD", differenceMinor: -70_000, absoluteDifferenceMinor: 130_000 },
+    ]);
+  });
+
+  test("two offsetting bank differences still raise the report: the net is zero but the absolute difference is not", async () => {
+    const s = await seed();
+    const bankA = await bank(s, "Bank A", 4_100_000, true); // +100.000
+    const bankB = await bank(s, "Bank B", 2_900_000); // -100.000
+    await openTwoBanks(s, bankA, bankB);
+
+    const reconciliation = await s.owner.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId });
+
+    expect(reconciliation.unexplainedOpeningDifference?.currencies).toEqual([
+      { currency: "JOD", differenceMinor: 0, absoluteDifferenceMinor: 200_000 },
+    ]);
+  });
+
+  test("an opening bank line that names no bank is shown as unattributed and its bank reports the difference", async () => {
+    const s = await seed();
+    const bankA = await bank(s, "Bank A", 4_000_000, true);
+    const bankB = await bank(s, "Bank B", 3_000_000);
+    await openTwoBanks(s, bankA, bankB);
+    // Pre-identity history: drop the bank name from Bank B's opening line.
+    await s.t.runUnwrapped(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").collect();
+      const line = lines.find((row) => row.bankAccountId === bankB);
+      if (!line) throw new Error("Missing Bank B opening line");
+      await ctx.db.patch(line._id, { bankAccountId: undefined });
+    });
+
+    const reconciliation = await s.owner.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId });
+
+    expect(reconciliation).toMatchObject({
+      status: "OK",
+      controlOpeningMinor: 7_000_000,
+      bankLinesTotalMinor: 4_000_000,
+      unattributedOpeningMinor: 3_000_000,
+    });
+    const byId = new Map(reconciliation.banks.map((row) => [row.bankAccountId, row]));
+    expect(byId.get(bankB)).toMatchObject({ openingLineMinor: 0, referenceOpeningMinor: 3_000_000, differenceMinor: 3_000_000 });
+    expect(reconciliation.unexplainedOpeningDifference).not.toBeNull();
+  });
+
+  test("a bank deactivated after the opening keeps its opening line in the reconciliation", async () => {
+    const s = await seed();
+    const bankA = await bank(s, "Bank A", 4_000_000, true);
+    const bankB = await bank(s, "Bank B", 3_000_000);
+    await openTwoBanks(s, bankA, bankB);
+    await s.owner.mutation(api.bankAccounts.deactivate, { orgId: s.orgId, bankAccountId: bankB });
+
+    const reconciliation = await s.owner.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId });
+
+    expect(reconciliation.banks.map((row) => row.bankAccountId).sort()).toEqual([bankA, bankB].sort());
+    expect(reconciliation.bankLinesTotalMinor).toBe(7_000_000);
+  });
+
+  test("a bank in another currency than the opening is listed but never compared", async () => {
+    const s = await seed();
+    const bankA = await bank(s, "Bank A", 4_000_000, true);
+    const bankB = await bank(s, "Bank B", 3_000_000);
+    await openTwoBanks(s, bankA, bankB);
+    const usdBank = await s.owner.mutation(api.bankAccounts.create, {
+      orgId: s.orgId, name: "Dollar bank", currency: "USD", openingBalanceMinor: 99_999, openingBalanceDate: Date.now(),
+    });
+
+    const reconciliation = await s.owner.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId });
+
+    const byId = new Map(reconciliation.banks.map((row) => [row.bankAccountId, row]));
+    expect(byId.get(usdBank)).toMatchObject({ currency: "USD", referenceOpeningMinor: 99_999, differenceMinor: null });
+    expect(reconciliation.unexplainedOpeningDifference).toBeNull();
   });
 
   test("a later receipt on one bank moves only that bank's book balance and leaves the opening reconciliation unchanged", async () => {
