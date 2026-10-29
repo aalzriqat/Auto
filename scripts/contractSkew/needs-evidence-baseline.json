@@ -64,7 +64,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/OpeningBalanceCard.tsx",
-      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:343:15",
+      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:348:15",
       "functionId": "accountingCutover:postOpeningBalanceDirect",
       "contractPath": "lines",
       "kind": "SHAPE_UNKNOWN",
@@ -79,7 +79,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/OpeningBalanceCard.tsx",
-      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:346:15",
+      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:351:15",
       "functionId": "accountingCutover:draftOpeningBalance",
       "contractPath": "lines",
       "kind": "SHAPE_UNKNOWN",
@@ -94,7 +94,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/OpeningBalanceApprovalPanel.tsx",
-      "callSiteId": "components/accounting/setup/OpeningBalanceApprovalPanel.tsx:659:17",
+      "callSiteId": "components/accounting/setup/OpeningBalanceApprovalPanel.tsx:665:17",
       "functionId": "accountingCutover:approveOpeningBalance",
       "contractPath": "draftId",
       "kind": "TYPE_UNKNOWN",
@@ -109,7 +109,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/OpeningBalanceApprovalPanel.tsx",
-      "callSiteId": "components/accounting/setup/OpeningBalanceApprovalPanel.tsx:666:13",
+      "callSiteId": "components/accounting/setup/OpeningBalanceApprovalPanel.tsx:672:13",
       "functionId": "accountingCutover:rejectOpeningBalanceDraft",
       "contractPath": "draftId",
       "kind": "TYPE_UNKNOWN",
@@ -6919,7 +6919,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDetailsDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:263:13",
+      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:264:13",
       "functionId": "vehicles:createReservation",
       "contractPath": "idempotencyKey",
       "kind": "TYPE_UNKNOWN",
@@ -6934,7 +6934,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDetailsDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:263:13",
+      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:264:13",
       "functionId": "vehicles:createReservation",
       "contractPath": "customerId",
       "kind": "TYPE_UNKNOWN",
@@ -6949,7 +6949,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDetailsDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:299:13",
+      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:300:13",
       "functionId": "vehicles:releaseReservation",
       "contractPath": "reservationId",
       "kind": "TYPE_UNKNOWN",
@@ -6964,7 +6964,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDetailsDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:365:13",
+      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:366:13",
       "functionId": "deposits:release",
       "contractPath": "depositId",
       "kind": "TYPE_UNKNOWN",
@@ -6979,7 +6979,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDetailsDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:365:13",
+      "callSiteId": "components/vehicles/VehicleDetailsDialog.tsx:366:13",
       "functionId": "deposits:release",
       "contractPath": "idempotencyKey",
       "kind": "TYPE_UNKNOWN",
