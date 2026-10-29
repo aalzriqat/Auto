@@ -49,7 +49,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/ClosePeriodReviewDialog.tsx",
-      "callSiteId": "components/accounting/setup/ClosePeriodReviewDialog.tsx:103:13",
+      "callSiteId": "components/accounting/setup/ClosePeriodReviewDialog.tsx:105:13",
       "functionId": "accountingPeriods:close",
       "contractPath": "acknowledgedWarnings",
       "kind": "SHAPE_UNKNOWN",
@@ -64,7 +64,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/OpeningBalanceCard.tsx",
-      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:348:15",
+      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:351:15",
       "functionId": "accountingCutover:postOpeningBalanceDirect",
       "contractPath": "lines",
       "kind": "SHAPE_UNKNOWN",
@@ -79,7 +79,7 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/OpeningBalanceCard.tsx",
-      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:351:15",
+      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:354:15",
       "functionId": "accountingCutover:draftOpeningBalance",
       "contractPath": "lines",
       "kind": "SHAPE_UNKNOWN",
