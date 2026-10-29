@@ -1,0 +1,80 @@
+{
+  "id": "opening-bank-line-naming-another-orgs-bank-is-disclosed-unattributed",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-round2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 4000000
+          },
+          {
+            "bank": "B",
+            "debitMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.historicalLine",
+      "input": {
+        "pointLineAtBankOfOrg": "B"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "controlOpeningMinor",
+      "value": 7000000
+    },
+    {
+      "observable": "bankLinesTotalMinor",
+      "value": 4000000
+    },
+    {
+      "observable": "unattributedOpeningMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "writeCounts.changed",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "an opening line naming another organization's bank is disclosed as unattributed, so control equals bank lines plus unattributed"
+  },
+  "matrixRow": "OB-G9",
+  "fingerprint": "25d8d6491827eef1c40f3aead4e06d518d85669329652f2c5ce7321802a03e76"
+}

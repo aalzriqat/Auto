@@ -553,18 +553,12 @@ describe("SCRUM-858 S5 the report refuses figures it cannot prove", () => {
 
   // SCRUM-858 PR #715 review round 2, P2-a. Every operand and every accumulated result must be a safe integer in
   // minor units (ECMA-262 Number.isSafeInteger: |n| <= 2^53 - 1). 1e308 + 1e308 is Infinity and used to read "OK".
-  test.each([
-    ["two references of 1e308 add to Infinity", [1e308, 1e308]],
-    ["one reference of 1e308", [1e308, 3_000_000]],
-    ["two safe references whose differences cannot be added exactly", [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]],
-    ["a reference of 2^53, the first unsafe integer", [2 ** 53, 3_000_000]],
-    ["a reference that is NaN", [Number.NaN, 3_000_000]],
-    ["a reference that is not a whole minor unit", [4_000_000.5, 3_000_000]],
-  ] as const)("a stated bank balance that is not a safe integer makes the opening unavailable: %s", async (_name, references) => {
+  // One literal-titled test per case: the SCRUM-761 library binds a record to one exact title, never to test.each.
+  async function expectUnavailableForReferences(first: number, second: number) {
     const { s, bankA, bankB } = await openedBanks();
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(bankA, { openingBalanceMinor: references[0] });
-      await ctx.db.patch(bankB, { openingBalanceMinor: references[1] });
+      await ctx.db.patch(bankA, { openingBalanceMinor: first });
+      await ctx.db.patch(bankB, { openingBalanceMinor: second });
     });
 
     const result = await report(s);
@@ -574,6 +568,30 @@ describe("SCRUM-858 S5 the report refuses figures it cannot prove", () => {
     expect(result.controlOpeningMinor).toBeNull();
     expect(result.banks.every((row) => row.openingLineMinor === null && row.differenceMinor === null)).toBe(true);
     expect(JSON.stringify(result)).not.toContain("Infinity");
+  }
+
+  test("two stated bank balances of 1e308 that add to Infinity make the opening unavailable", async () => {
+    await expectUnavailableForReferences(1e308, 1e308);
+  });
+
+  test("one stated bank balance of 1e308 makes the opening unavailable", async () => {
+    await expectUnavailableForReferences(1e308, 3_000_000);
+  });
+
+  test("two safe stated bank balances whose differences cannot be added exactly make the opening unavailable", async () => {
+    await expectUnavailableForReferences(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+  });
+
+  test("a stated bank balance of 2^53, the first unsafe integer, makes the opening unavailable", async () => {
+    await expectUnavailableForReferences(2 ** 53, 3_000_000);
+  });
+
+  test("a stated bank balance that is NaN makes the opening unavailable", async () => {
+    await expectUnavailableForReferences(Number.NaN, 3_000_000);
+  });
+
+  test("a stated bank balance that is not a whole minor unit makes the opening unavailable", async () => {
+    await expectUnavailableForReferences(4_000_000.5, 3_000_000);
   });
 
   test("a posted line amount that is not a whole minor unit makes the opening unavailable", async () => {
@@ -590,9 +608,8 @@ describe("SCRUM-858 S5 the report refuses figures it cannot prove", () => {
 
   // P2-b. An opening line that names a bank this organization cannot resolve is still part of the control. It is
   // disclosed as unattributed, never dropped, and never balanced by an invented entry or a capital adjustment (c23884).
-  test.each(["hard-deleted", "another organization's"] as const)(
-    "an opening line naming a bank that is %s is disclosed as unattributed, so control equals bank lines plus unattributed",
-    async (kind) => {
+  async function expectUnresolvedBankDisclosed(kind: "hard-deleted" | "foreign") {
+    {
       const { s, bankB } = await openedBanks();
       const before = await writeCounts(s);
       await s.t.runUnwrapped(async (ctx) => {
@@ -620,8 +637,16 @@ describe("SCRUM-858 S5 the report refuses figures it cannot prove", () => {
       expect(result.banks.map((row) => row.name)).not.toContain("Foreign bank");
       // Read-only: the disclosure posted nothing.
       expect(await writeCounts(s)).toEqual(before);
-    },
-  );
+    }
+  }
+
+  test("an opening line naming a hard-deleted bank is disclosed as unattributed, so control equals bank lines plus unattributed", async () => {
+    await expectUnresolvedBankDisclosed("hard-deleted");
+  });
+
+  test("an opening line naming another organization's bank is disclosed as unattributed, so control equals bank lines plus unattributed", async () => {
+    await expectUnresolvedBankDisclosed("foreign");
+  });
 
   test("a deleted bank that holds no opening line is not listed", async () => {
     const { s, bankA, bankB } = await openedBanks();
