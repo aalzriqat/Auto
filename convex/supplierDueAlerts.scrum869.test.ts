@@ -72,7 +72,7 @@ async function seedOrg(t: T, tag: string, plan: string = "professional"): Promis
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S8 ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) => ctx.db.insert("subscriptions", { orgId, plan, status: "active", createdAt: Date.now(), updatedAt: Date.now() } as never));
   const ownerId = await addMember(t, orgId, tag, "owner", [], { isSystemOwnerRole: true });
-  const financeId = await addMember(t, orgId, tag, "finance", ["manage:finance", "view:finance"]);
+  const financeId = await addMember(t, orgId, tag, "finance", ["manage:finance"]);
   const accountantId = await addMember(t, orgId, tag, "accountant", ["view:finance"]);
   const salesId = await addMember(t, orgId, tag, "sales", ["view:sales"]);
   const vehicleId = await t.run((ctx) =>
@@ -125,7 +125,7 @@ const addRecovery = (t: T, s: OrgSeed, fields: Record<string, unknown> = {}) =>
 
 async function sweep(t: T, now: number = NOW) {
   vi.setSystemTime(now);
-  await t.mutation(internal.supplierDueAlerts.processSupplierDueAlerts as never, { now } as never);
+  await t.mutation(internal.supplierDueAlerts.processSupplierDueAlerts, { now });
   await drain(t);
 }
 
@@ -215,6 +215,17 @@ describe("SCRUM-869 S8 - idempotency", () => {
   });
 });
 
+  test("the sweep uses the day it is given, not the clock of whichever continuation runs it", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "b3");
+    await addPayable(t, s, { paymentDueDate: NOW });
+    vi.setSystemTime(NOW + 10 * DAY);
+    await t.mutation(internal.supplierDueAlerts.processSupplierDueAlerts, { now: NOW });
+    await drain(t);
+    const rows = await alerts(t);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.type === "accounting.supplierObligationDue")).toBe(true);
+  });
 describe("SCRUM-869 S8 - tenant isolation and recipients", () => {
   test("an organisation's alerts reach only its own members", async () => {
     const t = newHarness();
@@ -253,6 +264,17 @@ describe("SCRUM-869 S8 - tenant isolation and recipients", () => {
     expect(got).toHaveLength(3);
   });
 
+  test("a role that belongs to another organisation grants nothing", async () => {
+    const t = newHarness();
+    const a = await seedOrg(t, "c7");
+    const b = await seedOrg(t, "c8");
+    const stranger = await t.run((ctx) => ctx.db.insert("users", { clerkId: "c7_stranger", email: "c7.stranger@e.com", name: "Stranger" }));
+    const financeRoleOfB = await t.run(async (ctx) => (await ctx.db.get((await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", b.orgId)).first())!.roleId))!._id);
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId: a.orgId, userId: stranger, roleId: financeRoleOfB } as never));
+    await addPayable(t, a, { paymentDueDate: NOW });
+    await sweep(t);
+    expect(recipients(await alerts(t))).not.toContain(String(stranger));
+  });
   test("an organisation whose plan has no accounting is not alerted", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "c6", "free");
@@ -303,7 +325,7 @@ describe("SCRUM-869 S8 - channels, bounds and failure isolation", () => {
     const t = newHarness();
     const s = await seedOrg(t, "e1");
     await addPayable(t, s, { paymentDueDate: NOW });
-    await t.mutation(internal.supplierDueAlerts.processSupplierDueAlerts as never, { now: NOW } as never);
+    await t.mutation(internal.supplierDueAlerts.processSupplierDueAlerts, { now: NOW });
     const names = await t.run(async (ctx) =>
       (await ctx.db.system.query("_scheduled_functions").collect()).map((f) => String(f.name))
     );
@@ -337,6 +359,15 @@ describe("SCRUM-869 S8 - channels, bounds and failure isolation", () => {
     expect(new Set(rows.map((r) => String(r.orgId))).size).toBe(22);
   });
 
+  test("a failing organisation reports failed and logs, instead of throwing", async () => {
+    const t = newHarness();
+    const bad = await seedOrg(t, "g3");
+    await addPayable(t, bad, { paymentDueDate: NOW, currency: "XXX" });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const result = await t.mutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, { orgId: bad.orgId, now: NOW });
+    spy.mockRestore();
+    expect(result).toEqual({ alerted: 0, failed: true });
+  });
   test("one organisation failing does not stop the others", async () => {
     const t = newHarness();
     const bad = await seedOrg(t, "g1");
@@ -345,7 +376,7 @@ describe("SCRUM-869 S8 - channels, bounds and failure isolation", () => {
     await addPayable(t, good, { paymentDueDate: NOW });
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     await sweep(t);
-    expect(spy).toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith("supplier due alerts failed for one organisation", expect.anything());
     spy.mockRestore();
     const rows = await alerts(t);
     expect(rows.filter((r) => r.orgId === good.orgId)).toHaveLength(3);

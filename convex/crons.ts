@@ -44,6 +44,15 @@ crons.cron(
   {}
 );
 
+// SCRUM-869 S8: daily at 05:30 UTC (08:30 Jordan time, the same Amman calendar day) alert on supplier
+// obligations that are due in 3 days, due today, 7 days overdue, or weekly overdue. In-app only.
+crons.cron(
+  "supplier-due-alerts",
+  "30 5 * * *",
+  internal.supplierDueAlerts.processSupplierDueAlerts,
+  {}
+);
+
 // Expire stale marketplace buyer requests (Phase 57) past their expiresAt.
 crons.cron(
   "expire-marketplace-requests",
