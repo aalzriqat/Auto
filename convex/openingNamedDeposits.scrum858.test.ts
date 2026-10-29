@@ -911,6 +911,139 @@ test("with toDate OMITTED the default 'now' cutoff gets the same activity guard:
   expect(journals.map((j) => j.status)).not.toContain("DRAFT");
 });
 
+// ── Round 2 (Seat 1): every dated clause of the activity guard is pinned by a test that isolates it ──
+//
+// Each case below leaves ONE stamp after the cutoff and every other stamp on or before it, and first
+// proves that without that stamp the comparison is AVAILABLE, so the stamp is the sole cause. Removing
+// the matching clause from `scanDepositActivityAfter` (or one of its helpers) turns the case red.
+
+async function isolatedOpeningRow(s: Seed) {
+  await openReservationAt(s, OPENED_AT);
+  const row = await s.t.run(async (ctx) => (await ctx.db.query("deposits").collect())[0]);
+  await s.t.run((ctx) => ctx.db.patch(row._id, { createdAt: OPENED_AT }));
+  const control = await reconAt(s, CUTOFF);
+  expect(control, "control: nothing is later than the cutoff").toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  return row;
+}
+
+test("a deposit RECEIVED after the cutoff makes the comparison UNAVAILABLE (createdAt)", async () => {
+  const s = await seed();
+  const row = await isolatedOpeningRow(s);
+  await s.t.run((ctx) => ctx.db.patch(row._id, { createdAt: SOLD_AT }));
+  expect(await reconAt(s, CUTOFF)).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+});
+
+test.each([
+  ["refunded", "REFUNDED" as const],
+  ["voided", "VOIDED" as const],
+  ["forfeited", "FORFEITED" as const],
+])("a deposit %s after the cutoff makes the comparison UNAVAILABLE (resolvedAt)", async (_label, status) => {
+  const s = await seed();
+  const row = await isolatedOpeningRow(s);
+  await s.t.run((ctx) => ctx.db.patch(row._id, { status, resolvedAt: SOLD_AT }));
+  expect(await reconAt(s, CUTOFF)).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+});
+
+test("a deposit DELETED after the cutoff makes the comparison UNAVAILABLE (deletedAt alone)", async () => {
+  const s = await seed();
+  const row = await isolatedOpeningRow(s);
+  await s.t.run((ctx) => ctx.db.patch(row._id, { isDeleted: true, deletedAt: SOLD_AT }));
+  expect(await reconAt(s, CUTOFF)).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+});
+
+test.each(["createdAt", "allocatedAt", "resolvedAt"] as const)(
+  "a vehicle hold whose %s is after the cutoff makes the comparison UNAVAILABLE",
+  async (stamp) => {
+    const s = await seed();
+    const row = await isolatedOpeningRow(s);
+    const holdId = await s.t.run((ctx) =>
+      ctx.db.insert("depositVehicleHolds", {
+        orgId: s.orgId,
+        depositId: row._id,
+        vehicleId: s.vehicleId,
+        active: false,
+        createdAt: OPENED_AT,
+        allocatedAt: OPENED_AT,
+        resolvedAt: OPENED_AT,
+      }),
+    );
+    expect(await reconAt(s, CUTOFF), "control: a hold on or before the cutoff does not refuse").toMatchObject({
+      status: "AVAILABLE",
+    });
+    await s.t.run((ctx) => ctx.db.patch(holdId, { [stamp]: SOLD_AT }));
+    expect(await reconAt(s, CUTOFF)).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+  },
+);
+
+test.each(["appliedAt", "reversalStartedAt", "reversedAt"] as const)(
+  "a deposit application whose %s is after the cutoff makes the comparison UNAVAILABLE",
+  async (stamp) => {
+    const s = await seed();
+    await isolatedOpeningRow(s);
+    await sellAt(s, SOLD_AT);
+    const row = await s.t.run(async (ctx) => (await ctx.db.query("deposits").collect())[0]);
+    const application = await s.t.run(async (ctx) => (await ctx.db.query("depositApplications").collect())[0]);
+    await s.t.run((ctx) => ctx.db.patch(row._id, { createdAt: OPENED_AT, resolvedAt: OPENED_AT }));
+    await s.t.run((ctx) =>
+      ctx.db.patch(application._id, { appliedAt: OPENED_AT, reversalStartedAt: undefined, reversedAt: undefined }),
+    );
+    expect(await reconAt(s, CUTOFF), "control: an application on or before the cutoff does not refuse").toMatchObject({
+      status: "AVAILABLE",
+    });
+    await s.t.run((ctx) => ctx.db.patch(application._id, { [stamp]: SOLD_AT }));
+    expect(await reconAt(s, CUTOFF)).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+  },
+);
+
+test("cutoff equality: a stamp ON the cutoff is included, one millisecond later is refused", async () => {
+  const s = await seed();
+  const row = await isolatedOpeningRow(s);
+  await s.t.run((ctx) => ctx.db.patch(row._id, { createdAt: CUTOFF }));
+  expect(await reconAt(s, CUTOFF)).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  await s.t.run((ctx) => ctx.db.patch(row._id, { createdAt: CUTOFF + 1 }));
+  expect(await reconAt(s, CUTOFF)).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+});
+
+test("cutoff equality for the opening date: an opening dated ON the cutoff agrees, one millisecond later is refused", async () => {
+  const on = await seed();
+  await openReservationAt(on, CUTOFF);
+  const onRow = await on.t.run(async (ctx) => (await ctx.db.query("deposits").collect())[0]);
+  await on.t.run((ctx) => ctx.db.patch(onRow._id, { createdAt: OPENED_AT }));
+  const agreed = await reconAt(on, CUTOFF);
+  expect(agreed).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(agreed.byCurrency.JOD).toMatchObject({ glBalanceMinor: 100_000, subledgerBalanceMinor: 100_000 });
+
+  const after = await seed();
+  await openReservationAt(after, CUTOFF + 1);
+  const afterRow = await after.t.run(async (ctx) => (await ctx.db.query("deposits").collect())[0]);
+  await after.t.run((ctx) => ctx.db.patch(afterRow._id, { createdAt: OPENED_AT }));
+  expect(await reconAt(after, CUTOFF)).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "POST_CUTOFF_ACTIVITY" });
+});
+
+test("an opening deposit whose draft is gone cannot be dated: UNAVAILABLE as OPENING_SOURCE_UNAVAILABLE, and period close still warns", async () => {
+  const s = await seed();
+  await openReservationAt(s, OPENED_AT);
+  const draft = await s.t.run(async (ctx) => (await ctx.db.query("openingBalanceDrafts").collect())[0]);
+  await s.t.run((ctx) => ctx.db.delete(draft._id));
+  const result = await reconAt(s);
+  expect(result).toMatchObject({ ...UNAVAILABLE_NO_CLAIM, unavailableReason: "OPENING_SOURCE_UNAVAILABLE" });
+
+  const [period] = await s.owner.query(api.accountingPeriods.list, { orgId: s.orgId });
+  const checklist = await s.owner.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId: period._id });
+  expect(checklist.warnings).toContain(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING);
+});
+
+test("period close: an opening dated after the period end is an UNAVAILABLE warning, never an invented difference", async () => {
+  const s = await seed();
+  await openReservationAt(s, SOLD_AT);
+  const [period] = await s.owner.query(api.accountingPeriods.list, { orgId: s.orgId });
+  await s.t.run((ctx) => ctx.db.patch(period._id, { endDate: CUTOFF }));
+  const checklist = await s.owner.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId: period._id });
+  expect(checklist.warnings).toContain(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING);
+  expect(checklist.warnings.filter((w: string) => /Customer deposits subledger does not reconcile/.test(w))).toEqual([]);
+  expect(checklist.customerDepositsReconciliation).toMatchObject({ status: "UNAVAILABLE", isReconciled: false });
+});
+
 // ── Native-screen visibility (F3, round-1 review) ───────────────────────────────────────────────
 // `deposits.listByVehicle` is keyed by car, so a security deposit and a reservation that names no VIN
 // can never appear there. The customer's own record is where they are read.
