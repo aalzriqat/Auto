@@ -569,9 +569,9 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   "./payroll": ["recordAdvance", "recoverAdvance"],
   "./prepaidExpenses": ["correctSchedule"],
   "./sales": ["create", "completeFromQuote", "completeDraft", "markCommissionPaid"],
-  "./sourcingPayables": ["markPaid", "recordPartialPayment"],
+  "./sourcingPayables": ["markPaid", "recordPartialPayment", "setDisputed"],
   "./supplierCostRecoveries": ["recordReceipt", "reverseReceipt"],
-  "./supplierReceivables": ["recordReceipt"],
+  "./supplierReceivables": ["recordReceipt", "setDisputed"],
   // ⚠️ `./transactions: ["add"]` was REMOVED during RC integration (SCRUM-313),
   // and the removal is NOT a relaxation — it is a retirement, guarded below.
   //
@@ -650,7 +650,8 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
     // 54 -> 56: SCRUM-724's retainedCreditRefunds respond + execute.
     // 56 -> 57: SCRUM-766 PR-B's `customerFinanceCompanyPayments.confirmPayment`.
-    expect(checked).toBe(57);
+    // 57 -> 59: SCRUM-869 S1 gives both `setDisputed` doors a command identity (sourcingPayables, supplierReceivables).
+    expect(checked).toBe(59);
   });
 
   /**
@@ -719,7 +720,8 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
     // 56 -> 57: SCRUM-766 PR-B's `customerFinanceCompanyPayments.confirmPayment`.
     // 58 -> 59 call sites by SCRUM-868 S1: `suppliers.create`, classified NON-economic (see below).
-    expect(economicInSource.size).toBe(57);
+    // 57 -> 59: SCRUM-869 S1 (`sourcingPayables.setDisputed`, `supplierReceivables.setDisputed`).
+    expect(economicInSource.size).toBe(59);
     // The non-economic side is pinned by name. `sales.createDraft` is the original entry.
     //
     // `suppliers.create` (SCRUM-868 S1, supplier master) is the second, classified on the code
@@ -733,7 +735,8 @@ describe("SCRUM-57 — classification ratchet", () => {
     // duplicate master row, which the candidate check already refuses, not a double posting.
     // Any later supplier command that touches money must be economic: true and listed above.
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft", "suppliers.create"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(59);
+    // 59 -> 61 call sites: SCRUM-869 S1's two economic `setDisputed` doors.
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(61);
   });
 
   /**

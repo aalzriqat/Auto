@@ -69,6 +69,16 @@ describe("payable dispute", () => {
     ).rejects.toThrow(/Idempotency key reused with different request content/);
   });
 
+  test("the same key with the opposite direction is refused, not replayed", async () => {
+    const s = await seedSupplierDoors("dis5");
+    const payableId = await insertPayable(s, 8000);
+    await s.as.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: true, reason: "Wrong price", idempotencyKey: "d-x" });
+    await expect(
+      s.as.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: false, reason: "Wrong price", idempotencyKey: "d-x" })
+    ).rejects.toThrow(/Idempotency key reused with different request content/);
+    expect((await s.t.run((ctx) => ctx.db.get(payableId)))?.status).toBe("DISPUTED");
+  });
+
   test("a request with no idempotency key is rejected", async () => {
     const s = await seedSupplierDoors("dis2");
     const payableId = await insertPayable(s, 8000);
@@ -97,6 +107,16 @@ describe("receivable dispute", () => {
     ).rejects.toThrow(/Idempotency key reused with different request content/);
   });
 
+  test("the same key with the opposite direction is refused, not replayed", async () => {
+    const s = await seedSupplierDoors("dis6");
+    const receivableId = await insertReceivable(s, 500);
+    await s.as.mutation(api.supplierReceivables.setDisputed, { orgId: s.orgId, receivableId, disputed: true, reason: "Margin disagreed", idempotencyKey: "r-x" });
+    await expect(
+      s.as.mutation(api.supplierReceivables.setDisputed, { orgId: s.orgId, receivableId, disputed: false, reason: "Margin disagreed", idempotencyKey: "r-x" })
+    ).rejects.toThrow(/Idempotency key reused with different request content/);
+    expect((await s.t.run((ctx) => ctx.db.get(receivableId)))?.status).toBe("DISPUTED");
+  });
+
   test("a request with no idempotency key is rejected", async () => {
     const s = await seedSupplierDoors("dis4");
     const receivableId = await insertReceivable(s, 500);
@@ -114,9 +134,9 @@ describe("completeness flags", () => {
     const small = await s.as.query(api.supplierReceivables.list, { orgId: s.orgId });
     expect(small).toMatchObject({ complete: true });
     expect(small.items).toHaveLength(3);
-    for (let i = 0; i < 498; i++) await insertReceivable(s, 1);
+    for (let i = 0; i < 497; i++) await insertReceivable(s, 1);
     const exact = await s.as.query(api.supplierReceivables.list, { orgId: s.orgId });
-    expect(exact.items).toHaveLength(501 - 1); // 500 rows exist: all returned, complete
+    expect(exact.items).toHaveLength(500); // exactly 500 rows exist: all returned, complete
     expect(exact.complete).toBe(true);
     await insertReceivable(s, 1);
     const over = await s.as.query(api.supplierReceivables.list, { orgId: s.orgId });

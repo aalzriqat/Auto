@@ -659,8 +659,8 @@ describe("SCRUM-650 batch 2 A2: payable eligibility is derived from the money", 
     const d = await seedDealer("b2");
     const vehicleId = await createOnAccountVehicle(d, 12500);
     const payable = await payableOf(d.t, vehicleId);
-    await d.asOwner.mutation(api.sourcingPayables.setDisputed, { orgId: d.orgId, payableId: payable!._id, disputed: true, reason: "Invoice total in question" });
-    await d.asOwner.mutation(api.sourcingPayables.setDisputed, { orgId: d.orgId, payableId: payable!._id, disputed: false });
+    await d.asOwner.mutation(api.sourcingPayables.setDisputed, { orgId: d.orgId, payableId: payable!._id, disputed: true, reason: "Invoice total in question", idempotencyKey: crypto.randomUUID() });
+    await d.asOwner.mutation(api.sourcingPayables.setDisputed, { orgId: d.orgId, payableId: payable!._id, disputed: false, idempotencyKey: crypto.randomUUID() });
     const inventoryBefore = await balanceMinor(d.t, d.orgId, "VEHICLE_INVENTORY");
 
     await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
@@ -680,7 +680,7 @@ describe("SCRUM-650 batch 2 A2: payable eligibility is derived from the money", 
     const d = await seedDealer("b2c");
     const vehicleId = await createOnAccountVehicle(d, 12500);
     const payable = await payableOf(d.t, vehicleId);
-    await d.asOwner.mutation(api.sourcingPayables.setDisputed, { orgId: d.orgId, payableId: payable!._id, disputed: true, reason: "Invoice total in question" });
+    await d.asOwner.mutation(api.sourcingPayables.setDisputed, { orgId: d.orgId, payableId: payable!._id, disputed: true, reason: "Invoice total in question", idempotencyKey: crypto.randomUUID() });
     const before = await snapshot(d.t, d.orgId, vehicleId);
     const data = await refusalOf(
       d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {

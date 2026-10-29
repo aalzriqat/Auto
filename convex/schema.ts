@@ -1103,6 +1103,8 @@ export default defineSchema({
       v.literal("UPDATE_ACCOUNT"),
       v.literal("MIGRATE_TRANSACTION"),
       v.literal("ALLOCATE_PAYMENT"),
+      // SCRUM-869 S1: opening or lifting a dispute on a supplier payable or commission claim.
+      v.literal("SET_SUPPLIER_DISPUTE"),
       v.literal("REVERSE_ALLOCATION"),
       v.literal("IGNORE_BANK_STATEMENT_LINE"),
       v.literal("CORRECT_PREPAID_SCHEDULE"),

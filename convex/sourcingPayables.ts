@@ -1,6 +1,6 @@
 import { openingPayableBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
-import { query, type MutationCtx } from "./_generated/server";
+import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -13,6 +13,7 @@ import { getActiveDepositHolds } from "./utils/depositHelpers";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { supplierPayableVatReclassAllowed } from "./utils/vehicleOwnership";
 import { AppErrorCode, throwAppError } from "./utils/errors";
+import { auditLog } from "./financialAudit";
 
 const OPENING_PAYABLE_VAT_REFUSAL = "Opening liabilities cannot be reclassified as VAT.";
 
@@ -120,36 +121,84 @@ export const list = query({
         .collect();
     }
 
-    return await Promise.all(
-      payables.map(async (p) => {
-        // Guard: only surface joined records that belong to this org.
-        const vehicle = p.origin === "OPENING" ? null : await ctx.db.get(p.vehicleId);
-        const safeVehicle = vehicle?.orgId === args.orgId ? vehicle : null;
-
-        const sale = p.origin !== "OPENING" && p.saleId ? await ctx.db.get(p.saleId) : null;
-        const safeSale = sale?.orgId === args.orgId ? sale : null;
-
-        const customer = safeSale ? await ctx.db.get(safeSale.customerId) : null;
-        const safeCustomer = customer?.orgId === args.orgId ? customer : null;
-
-        const paidByUser = p.paidBy ? await ctx.db.get(p.paidBy) : null;
-
-        return {
-          ...p,
-          vehicleDesc: supplierPayableVehicleDescription(safeVehicle, p),
-          vehicleVin: safeVehicle?.vin,
-          // SCRUM-781: the screens hide the VAT field unless this is true (absent also hides it).
-          vatReclassAllowed: payableAcceptsVatReclass(p, safeVehicle, args.orgId),
-          customerName: safeCustomer
-            ? `${safeCustomer.firstName} ${safeCustomer.lastName}`
-            : null,
-          paidByName: paidByUser && "name" in paidByUser ? paidByUser.name : null,
-          daysOutstanding: Math.floor((Date.now() - p.createdAt) / (24 * 60 * 60 * 1000)),
-        };
-      })
-    );
+    return await payableListRows(ctx, args.orgId, payables);
   },
 });
+
+/** Rows `listBounded` returns before it reports `complete: false`. */
+export const SOURCING_PAYABLES_LIST_LIMIT = 500;
+
+/**
+ * SCRUM-869 S1: the same rows as `list`, but bounded and honest about truncation (`{ complete, items }`).
+ * `list` keeps its array shape because released mobile binaries and the web screen read it as one; a new
+ * query is the additive way to give new callers the completeness flag.
+ */
+export const listBounded = query({
+  args: {
+    orgId: v.id("organizations"),
+    status: v.optional(
+      v.union(
+        v.literal("PENDING"),
+        v.literal("NOT_YET_DUE"),
+        v.literal("DUE_ON_SALE"),
+        v.literal("PARTIALLY_PAID"),
+        v.literal("PAID"),
+        v.literal("DISPUTED"),
+        v.literal("CANCELLED")
+      )
+    ),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const fetched = args.status
+      ? await ctx.db
+          .query("vehicleSupplierPayables")
+          .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", args.status!))
+          .order("desc")
+          .take(SOURCING_PAYABLES_LIST_LIMIT + 1)
+      : await ctx.db
+          .query("vehicleSupplierPayables")
+          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+          .order("desc")
+          .take(SOURCING_PAYABLES_LIST_LIMIT + 1);
+    const complete = fetched.length <= SOURCING_PAYABLES_LIST_LIMIT;
+    return {
+      complete,
+      items: await payableListRows(ctx, args.orgId, fetched.slice(0, SOURCING_PAYABLES_LIST_LIMIT)),
+    };
+  },
+});
+
+async function payableListRows(ctx: QueryCtx, orgId: Id<"organizations">, payables: Doc<"vehicleSupplierPayables">[]) {
+  return await Promise.all(
+    payables.map(async (p) => {
+      // Guard: only surface joined records that belong to this org.
+      const vehicle = p.origin === "OPENING" ? null : await ctx.db.get(p.vehicleId);
+      const safeVehicle = vehicle?.orgId === orgId ? vehicle : null;
+
+      const sale = p.origin !== "OPENING" && p.saleId ? await ctx.db.get(p.saleId) : null;
+      const safeSale = sale?.orgId === orgId ? sale : null;
+
+      const customer = safeSale ? await ctx.db.get(safeSale.customerId) : null;
+      const safeCustomer = customer?.orgId === orgId ? customer : null;
+
+      const paidByUser = p.paidBy ? await ctx.db.get(p.paidBy) : null;
+
+      return {
+        ...p,
+        vehicleDesc: supplierPayableVehicleDescription(safeVehicle, p),
+        vehicleVin: safeVehicle?.vin,
+        // SCRUM-781: the screens hide the VAT field unless this is true (absent also hides it).
+        vatReclassAllowed: payableAcceptsVatReclass(p, safeVehicle, orgId),
+        customerName: safeCustomer
+          ? `${safeCustomer.firstName} ${safeCustomer.lastName}`
+          : null,
+        paidByName: paidByUser && "name" in paidByUser ? paidByUser.name : null,
+        daysOutstanding: Math.floor((Date.now() - p.createdAt) / (24 * 60 * 60 * 1000)),
+      };
+    })
+  );
+}
 
 /**
  * The live special-order pipeline: cars being sourced from another dealer on a
@@ -407,6 +456,19 @@ export const markPaid = mutation({
           actorId: user._id,
           occurredAt: now,
         });
+
+        // SCRUM-869 S1: who settled which supplier entitlement, in what state it was.
+        await auditLog(ctx, {
+          orgId: args.orgId,
+          actorId: user._id,
+          actionType: "ALLOCATE_PAYMENT",
+          resourceType: "vehicleSupplierPayables",
+          resourceId: args.payableId,
+          description: `Paid ${remainingToSettle} ${currency} to ${payable.sourcedFromName} to settle the supplier payable of ${payable.amountDue} in full (${paymentMethod}).`,
+          before: { amountPaid: alreadyPaidBeforeSettle, status: payable.status },
+          after: { amountPaid: payable.amountDue, status: "PAID" },
+          idempotencyKey: args.idempotencyKey,
+        });
       }
     );
   },
@@ -552,6 +614,19 @@ export const recordPartialPayment = mutation({
           occurredAt: now,
         });
 
+        // SCRUM-869 S1: who paid how much of which supplier entitlement, in what state it was.
+        await auditLog(ctx, {
+          orgId: args.orgId,
+          actorId: user._id,
+          actionType: "ALLOCATE_PAYMENT",
+          resourceType: "vehicleSupplierPayables",
+          resourceId: args.payableId,
+          description: `Paid ${args.amount} ${payable.currency} to ${payable.sourcedFromName} against a supplier payable of ${payable.amountDue} (${paymentMethod}).`,
+          before: { amountPaid: alreadyPaid, status: payable.status },
+          after: { amountPaid: projected, status: settlesInFull ? "PAID" : "PARTIALLY_PAID" },
+          idempotencyKey: args.idempotencyKey,
+        });
+
         // The remainder is derived from the integers, not from a major-unit
         // subtraction. That difference returns a residue like 4.4e-16 on a row
         // this same call just marked PAID — and a caller that passes the
@@ -580,48 +655,85 @@ export const setDisputed = mutation({
     payableId: v.id("vehicleSupplierPayables"),
     disputed: v.boolean(),
     reason: v.optional(v.string()),
+    /** SCRUM-869 S1: minted once per intent; a retry reuses it and replays as a no-op. */
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const payable = await ctx.db.get(args.payableId);
-    if (!payable || payable.orgId !== args.orgId) {
-      throw new ConvexError("Supplier payable not found.");
-    }
-    if (payable.status === "CANCELLED") {
-      throw new ConvexError("This payable was cancelled with its sale.");
-    }
-    if (payable.status === "PAID") {
-      throw new ConvexError("This payable is already settled. Reverse the payment first.");
-    }
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "sourcingPayables.setDisputed",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          payableId: args.payableId,
+          disputed: args.disputed,
+          reason: args.reason?.trim() ?? null,
+        }),
+      },
+      async () => {
+        const payable = await ctx.db.get(args.payableId);
+        if (!payable || payable.orgId !== args.orgId) {
+          throw new ConvexError("Supplier payable not found.");
+        }
+        if (payable.status === "CANCELLED") {
+          throw new ConvexError("This payable was cancelled with its sale.");
+        }
+        if (payable.status === "PAID") {
+          // SCRUM-869#c23881: no payment reversal exists during the pilot, so do not promise one.
+          throw new ConvexError("This payable is already settled in full.");
+        }
 
-    const now = Date.now();
-    if (args.disputed) {
-      const reason = args.reason?.trim();
-      // A dispute blocks payment, so the reason is the only record of why the
-      // supplier is not being paid. Left optional it would be blank exactly
-      // when somebody needs it.
-      if (!reason) {
-        throw new ConvexError("Say what is disputed — it is the reason the supplier is not being paid.");
+        const now = Date.now();
+        let nextStatus: Doc<"vehicleSupplierPayables">["status"];
+        if (args.disputed) {
+          const reason = args.reason?.trim();
+          // A dispute blocks payment, so the reason is the only record of why the
+          // supplier is not being paid. Left optional it would be blank exactly
+          // when somebody needs it.
+          if (!reason) {
+            throw new ConvexError("Say what is disputed — it is the reason the supplier is not being paid.");
+          }
+          nextStatus = "DISPUTED";
+          await ctx.db.patch(args.payableId, {
+            status: nextStatus,
+            disputedAt: now,
+            disputedBy: user._id,
+            disputeReason: reason,
+            updatedAt: now,
+          });
+        } else {
+          // Back to whatever the money says, not to a remembered previous status:
+          // payments may have been recorded while the dispute stood.
+          const alreadyPaid = payable.amountPaid ?? 0;
+          nextStatus = alreadyPaid > 0 ? "PARTIALLY_PAID" : "DUE_ON_SALE";
+          await ctx.db.patch(args.payableId, {
+            status: nextStatus,
+            disputedAt: undefined,
+            disputedBy: undefined,
+            disputeReason: undefined,
+            updatedAt: now,
+          });
+        }
+
+        await auditLog(ctx, {
+          orgId: args.orgId,
+          actorId: user._id,
+          actionType: "SET_SUPPLIER_DISPUTE",
+          resourceType: "vehicleSupplierPayables",
+          resourceId: args.payableId,
+          description: args.disputed
+            ? `Disputed the supplier payable to ${payable.sourcedFromName}: ${args.reason?.trim()}`
+            : `Lifted the dispute on the supplier payable to ${payable.sourcedFromName}.`,
+          before: { status: payable.status },
+          after: { status: nextStatus },
+          idempotencyKey: args.idempotencyKey,
+        });
+        return args.payableId;
       }
-      await ctx.db.patch(args.payableId, {
-        status: "DISPUTED",
-        disputedAt: now,
-        disputedBy: user._id,
-        disputeReason: reason,
-        updatedAt: now,
-      });
-    } else {
-      // Back to whatever the money says, not to a remembered previous status:
-      // payments may have been recorded while the dispute stood.
-      const alreadyPaid = payable.amountPaid ?? 0;
-      await ctx.db.patch(args.payableId, {
-        status: alreadyPaid > 0 ? "PARTIALLY_PAID" : "DUE_ON_SALE",
-        disputedAt: undefined,
-        disputedBy: undefined,
-        disputeReason: undefined,
-        updatedAt: now,
-      });
-    }
-    return args.payableId;
+    );
   },
 });

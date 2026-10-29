@@ -105,6 +105,9 @@ function receiptSeqFor(row: Doc<"vehicleSupplierReceivables">): number {
   return row.receiptSeq ?? 0;
 }
 
+/** Rows `list` returns before it reports `complete: false`. */
+export const SUPPLIER_RECEIVABLES_LIST_LIMIT = 500;
+
 export const list = query({
   args: {
     orgId: v.id("organizations"),
@@ -121,17 +124,20 @@ export const list = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    const rows = args.status
+    // SCRUM-869 S1: read one past the limit so a truncated list says so instead of looking complete.
+    const fetched = args.status
       ? await ctx.db
           .query("vehicleSupplierReceivables")
           .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", args.status!))
-          .take(500)
+          .take(SUPPLIER_RECEIVABLES_LIST_LIMIT + 1)
       : await ctx.db
           .query("vehicleSupplierReceivables")
           .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-          .take(500);
+          .take(SUPPLIER_RECEIVABLES_LIST_LIMIT + 1);
+    const complete = fetched.length <= SUPPLIER_RECEIVABLES_LIST_LIMIT;
+    const rows = fetched.slice(0, SUPPLIER_RECEIVABLES_LIST_LIMIT);
 
-    return await Promise.all(
+    const items = await Promise.all(
       rows.map(async (row) => {
         const vehicle = await ctx.db.get(row.vehicleId);
         return {
@@ -144,6 +150,7 @@ export const list = query({
         };
       })
     );
+    return { complete, items };
   },
 });
 
@@ -449,43 +456,79 @@ export const setDisputed = mutation({
     receivableId: v.id("vehicleSupplierReceivables"),
     disputed: v.boolean(),
     reason: v.optional(v.string()),
+    /** SCRUM-869 S1: minted once per intent; a retry reuses it and replays as a no-op. */
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const row = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierReceivables", args.receivableId, "Supplier receivable not found.");
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "supplierReceivables.setDisputed",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          receivableId: args.receivableId,
+          disputed: args.disputed,
+          reason: args.reason?.trim() ?? null,
+        }),
+      },
+      async () => {
+        const row = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierReceivables", args.receivableId, "Supplier receivable not found.");
 
-    if (row.status === "CANCELLED") {
-      throw new ConvexError("This claim was cancelled with its sale.");
-    }
-    if (row.status === "PAID") {
-      throw new ConvexError("This claim is already settled in full.");
-    }
-    if (args.disputed && !args.reason?.trim()) {
-      throw new ConvexError("Say what is disputed — a dispute with no reason cannot be resolved.");
-    }
+        if (row.status === "CANCELLED") {
+          throw new ConvexError("This claim was cancelled with its sale.");
+        }
+        if (row.status === "PAID") {
+          throw new ConvexError("This claim is already settled in full.");
+        }
+        if (args.disputed && !args.reason?.trim()) {
+          throw new ConvexError("Say what is disputed — a dispute with no reason cannot be resolved.");
+        }
 
-    const now = Date.now();
-    if (args.disputed) {
-      await ctx.db.patch(args.receivableId, {
-        status: "DISPUTED",
-        disputeReason: args.reason,
-        disputedAt: now,
-        disputedBy: user._id,
-        updatedAt: now,
-      });
-    } else {
-      // Back to whatever the money says, not to a remembered status: a
-      // stored one could disagree with the receipts recorded meanwhile.
-      const received = row.amountReceived ?? 0;
-      await ctx.db.patch(args.receivableId, {
-        status: received > 0 ? "PARTIALLY_PAID" : "OPEN",
-        disputeReason: undefined,
-        disputedAt: undefined,
-        disputedBy: undefined,
-        updatedAt: now,
-      });
-    }
-    return { status: args.disputed ? "DISPUTED" : row.amountReceived ? "PARTIALLY_PAID" : "OPEN" };
+        const now = Date.now();
+        let nextStatus: "DISPUTED" | "PARTIALLY_PAID" | "OPEN";
+        if (args.disputed) {
+          nextStatus = "DISPUTED";
+          await ctx.db.patch(args.receivableId, {
+            status: nextStatus,
+            disputeReason: args.reason,
+            disputedAt: now,
+            disputedBy: user._id,
+            updatedAt: now,
+          });
+        } else {
+          // Back to whatever the money says, not to a remembered status: a
+          // stored one could disagree with the receipts recorded meanwhile.
+          const received = row.amountReceived ?? 0;
+          nextStatus = received > 0 ? "PARTIALLY_PAID" : "OPEN";
+          await ctx.db.patch(args.receivableId, {
+            status: nextStatus,
+            disputeReason: undefined,
+            disputedAt: undefined,
+            disputedBy: undefined,
+            updatedAt: now,
+          });
+        }
+
+        await auditLog(ctx, {
+          orgId: args.orgId,
+          actorId: user._id,
+          actionType: "SET_SUPPLIER_DISPUTE",
+          resourceType: "vehicleSupplierReceivables",
+          resourceId: args.receivableId,
+          description: args.disputed
+            ? `Disputed the consigned-sale commission claim on ${row.sourcedFromName}: ${args.reason?.trim()}`
+            : `Lifted the dispute on the consigned-sale commission claim on ${row.sourcedFromName}.`,
+          before: { status: row.status },
+          after: { status: nextStatus },
+          idempotencyKey: args.idempotencyKey,
+        });
+        return { status: nextStatus };
+      }
+    );
   },
 });
 

@@ -354,7 +354,7 @@ describe("collecting it", () => {
 describe("disputes", () => {
   test("a disputed claim refuses money until the dispute is lifted", async () => {
     const s = await seed("dispute");
-    await s.asUser.mutation(api.supplierReceivables.setDisputed, {
+    await s.asUser.mutation(api.supplierReceivables.setDisputed, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, receivableId: s.receivable._id, disputed: true,
       reason: "Supplier says the agreed margin was 2,500",
     });
@@ -367,7 +367,7 @@ describe("disputes", () => {
 
     // Lifting it returns the claim to what the money says, not to a remembered
     // status that could have drifted.
-    await s.asUser.mutation(api.supplierReceivables.setDisputed, {
+    await s.asUser.mutation(api.supplierReceivables.setDisputed, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, receivableId: s.receivable._id, disputed: false,
     });
     const row = await s.t.run((ctx) => ctx.db.get(s.receivable._id));
@@ -378,7 +378,7 @@ describe("disputes", () => {
   test("a dispute must say what is disputed", async () => {
     const s = await seed("disputeNoReason");
     await expect(
-      s.asUser.mutation(api.supplierReceivables.setDisputed, {
+      s.asUser.mutation(api.supplierReceivables.setDisputed, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, receivableId: s.receivable._id, disputed: true,
       })
     ).rejects.toThrow(/say what is disputed/i);
@@ -493,7 +493,7 @@ describe("tenancy", () => {
       })
     ).rejects.toThrow(/not found/i);
     await expect(
-      asOther.mutation(api.supplierReceivables.setDisputed, {
+      asOther.mutation(api.supplierReceivables.setDisputed, { idempotencyKey: crypto.randomUUID(),
         orgId: otherOrgId, receivableId: a.receivable._id, disputed: true, reason: "not mine",
       })
     ).rejects.toThrow(/not found/i);
@@ -503,7 +503,7 @@ describe("tenancy", () => {
     expect(row?.status).toBe("OPEN");
     expect(row?.amountReceived).toBeUndefined();
     const list = await asOther.query(api.supplierReceivables.list, { orgId: otherOrgId });
-    expect(list).toHaveLength(0);
+    expect(list).toEqual({ complete: true, items: [] });
   });
 });
 
