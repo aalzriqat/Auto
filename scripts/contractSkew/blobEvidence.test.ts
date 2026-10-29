@@ -4,9 +4,13 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test, type TestContext } from "vitest";
+import { test, vi, type TestContext } from "vitest";
 import { main } from "./renewBaselineReviewed.mjs";
 import { resolveGit } from "./gitExecutable.mjs";
+
+// Each test builds a real git fixture and runs the checker, which takes over 5s under CI coverage.
+// The same budget as the in-process CLI suites in authorToolsCli.test.ts.
+vi.setConfig({ testTimeout: 60_000 });
 
 const baseline = "scripts/contractSkew/needs-evidence-baseline.json";
 const client = "app/page.tsx";
