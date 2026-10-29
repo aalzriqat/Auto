@@ -1126,6 +1126,51 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(income.cogsRows).toEqual([]);
   });
 
+  test("SOURCED through dealership × full financier bank receipt: settles financier AR without changing supplier liability or agency margin", async () => {
+    const { s, applicationId } = await sourcedFinancedOpening("s486sourcedreceipt", "THROUGH_DEALERSHIP");
+    const bankAccountId = await seedBank(s.t, s.orgId);
+    const beforeReceipt = await journalRows(s);
+    // SCRUM-407 c21031 and the G8 worked example: the financier transfers the
+    // full approved 12,500 JOD. Supplier entitlement 10,000 and margin 2,500
+    // were recognized at finalization; receiving cash earns no further revenue.
+    expectLiteralRows(beforeReceipt, [
+      { account: "1210", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
+    ]);
+    const receiptArgs = {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000,
+      bankAccountId, idempotencyKey: "s486-sourced-through-full-receipt",
+    };
+    await s.owner.as.mutation(api.applications.confirmDisbursement, receiptArgs);
+    const afterReceipt = await journalRows(s);
+    expectAdditionalRows(beforeReceipt, afterReceipt, [
+      { account: "1110", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1210", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(afterReceipt);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1110|JOD": 12_500_000, "2400|JOD": 10_000_000, "4170|JOD": 2_500_000,
+    });
+    const application = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(application).toMatchObject({ status: "CLOSED", disbursedAmountMinor: 12_500_000 });
+    const saleId = application?.finalizedSaleId;
+    expect(saleId).toBeDefined();
+    expect(await s.t.run((ctx) => ctx.db.query("vehicleSupplierPayables")
+      .withIndex("by_sale", (q) => q.eq("saleId", saleId!)).unique()))
+      .toMatchObject({ amountDue: 10_000, currency: "JOD", status: "PENDING" });
+    expect(await s.t.run((ctx) => ctx.db.query("receivableDocuments")
+      .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
+        .eq("sourceType", "finance_application").eq("sourceId", applicationId)).unique()))
+      .toMatchObject({ payerType: "FINANCE_COMPANY", originalAmountMinor: 12_500_000, status: "PAID" });
+    expect(await publicIncomeStatement(s)).toMatchObject({
+      totalRevenue: 2_500_000, totalCogs: 0, grossProfit: 2_500_000, netIncome: 2_500_000,
+    });
+    const afterReceiptSnapshot = await dbSnapshot(s.t, Object.keys(schema.tables));
+    await s.owner.as.mutation(api.applications.confirmDisbursement, receiptArgs);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterReceiptSnapshot);
+  });
+
   test("SOURCED configured financier × through dealership × cancellation before receipt reverses both debts", async () => {
     const { s, applicationId } = await sourcedFinancedOpening("s486sourcedthroughcancel", "THROUGH_DEALERSHIP");
     const application = await s.t.run((ctx) => ctx.db.get(applicationId));
