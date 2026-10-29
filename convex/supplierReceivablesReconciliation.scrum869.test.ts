@@ -485,3 +485,50 @@ describe("SCRUM-858 F2 - the GL read is bounded", () => {
     expect(now.full).toEqual([{ accountId: ar._id, currency: "JOD", debitMinor: 2 * MARGIN * SCALE + 500, creditMinor: 0 }]);
   });
 });
+
+/**
+ * SCRUM-858 F4. A/P runs the opening-parent integrity check on every payable, native ones too: a native
+ * row that a POSTED opening draft claims as its own result is a contradiction, not a native row. A/R
+ * ran it only for OPENING recoveries.
+ */
+describe("SCRUM-858 F4 - a native recovery is checked against the opening drafts too", () => {
+  const postedDraft = (s: Seed, allocationResults: unknown[]) =>
+    s.t.run((ctx) =>
+      ctx.db.insert("openingBalanceDrafts", {
+        orgId: s.orgId, status: "POSTED", lines: [], asOfDate: Date.now(), createdBy: s.userId, createdAt: Date.now(), allocationResults,
+      } as never)
+    );
+
+  test("a native recovery that a POSTED opening draft claims as its result is UNAVAILABLE", async () => {
+    const s = await seed("f4claim");
+    const { recovery } = await supplierBornePayment(s, "f4claim");
+    expect(recovery.origin ?? "EXPENSE").toBe("EXPENSE");
+    await postedDraft(s, [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "r1", recoveryId: recovery._id }]);
+    const r = await recon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("OPENING_SOURCE_UNAVAILABLE");
+    expect(r.isReconciled).toBe(false);
+    expect(r.complete).toBe(false);
+  });
+
+  test("CONTROL: a POSTED opening draft that claims a different recovery does not block a native one", async () => {
+    const s = await seed("f4other");
+    const { recovery } = await supplierBornePayment(s, "f4other1");
+    const { recovery: elsewhere } = await supplierBornePayment(s, "f4other2");
+    await s.t.run((ctx) => ctx.db.delete(elsewhere._id));
+    await postedDraft(s, [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "r1", recoveryId: elsewhere._id }]);
+    const r = await recon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.byCurrency.JOD.recoveryMinor).toBe(SUPPLIER_COST * SCALE);
+    expect(recovery._id).not.toBe(elsewhere._id);
+  });
+
+  test("more POSTED opening drafts than can be checked is UNAVAILABLE, as it is for A/P", async () => {
+    const s = await seed("f4many");
+    await supplierBornePayment(s, "f4many");
+    for (let i = 0; i < 101; i += 1) await postedDraft(s, []);
+    const r = await recon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("OPENING_SOURCE_UNAVAILABLE");
+  });
+});
