@@ -175,3 +175,110 @@ export async function getCumulativeBalancesAsOf(
 
   return Array.from(totals.values());
 }
+
+export type BoundedControlBalances =
+  | { status: "OK"; balances: CumulativeBalance[] }
+  | { status: "OVER_LIMIT" };
+
+/**
+ * The same answer as getCumulativeBalancesAsOf, kept to the given accounts and counted against a
+ * budget. getCumulativeBalancesAsOf reads every snapshot of every account (and, for a period without
+ * a snapshot certificate, every journal line in it) before a caller can discard the accounts it does
+ * not want. This reads only through the indexes that start with the account: the account's snapshots
+ * (`by_org_account_currency_period_shard`) and, for the journal-line path, its lines
+ * (`by_org_account_date`). Every document it reads - periods, snapshots, the future-entry probe, lines
+ * and their entries - is charged to `readLimit`; if the next read would exceed it, nothing partial is
+ * returned (OVER_LIMIT). Read-only. A bounded read here is still one Convex query, so the caller
+ * stays inside the documents-per-function ceiling by choosing `readLimit` well under it.
+ */
+export async function getControlAccountBalancesAsOf(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  accountIds: ReadonlyArray<Id<"chartOfAccounts">>,
+  asOfDate: number,
+  readLimit: number
+): Promise<BoundedControlBalances> {
+  let remaining = readLimit;
+  const over: BoundedControlBalances = { status: "OVER_LIMIT" };
+  // A read of `rows` documents is allowed only while the budget covers it; callers `take(remaining + 1)`
+  // so a result longer than the budget is detected without reading further.
+  const charge = (rows: number): boolean => {
+    remaining -= rows;
+    return remaining >= 0;
+  };
+
+  const periods = await ctx.db
+    .query("accountingPeriods")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(remaining + 1);
+  if (!charge(periods.length)) return over;
+
+  const fullyElapsedPeriods = periods.filter((p) => p.endDate <= asOfDate);
+  const containingPeriod = periods.find((p) => p.startDate <= asOfDate && asOfDate < p.endDate);
+
+  const snapshotPeriods = new Set<Id<"accountingPeriods">>(fullyElapsedPeriods.map((p) => p._id));
+  let journalPeriod: (typeof periods)[number] | undefined;
+  if (containingPeriod) {
+    // Same rule as getCumulativeBalancesAsOf: a certified period with no entry dated after asOfDate is
+    // summed from its snapshots; any other containing period is rebuilt from journal lines.
+    let useSnapshots = false;
+    if (containingPeriod.snapshotFastPathEligible) {
+      const futureEntry = await ctx.db
+        .query("journalEntries")
+        .withIndex("by_org_period_date", (q) =>
+          q.eq("orgId", orgId).eq("periodId", containingPeriod._id).gt("accountingDate", asOfDate)
+        )
+        .first();
+      if (!charge(futureEntry ? 1 : 0)) return over;
+      useSnapshots = !futureEntry;
+    }
+    if (useSnapshots) snapshotPeriods.add(containingPeriod._id);
+    else journalPeriod = containingPeriod;
+  }
+
+  const totals = new Map<string, CumulativeBalance>();
+  const addTo = (accountId: Id<"chartOfAccounts">, currency: string, debitMinor: number, creditMinor: number) => {
+    const key = `${accountId}__${currency}`;
+    const existing = totals.get(key) ?? { accountId, currency, debitMinor: 0, creditMinor: 0 };
+    existing.debitMinor += debitMinor;
+    existing.creditMinor += creditMinor;
+    totals.set(key, existing);
+  };
+
+  const entryStatusCache = new Map<Id<"journalEntries">, boolean>();
+  for (const accountId of new Set(accountIds)) {
+    const snapshots = await ctx.db
+      .query("accountBalanceSnapshots")
+      .withIndex("by_org_account_currency_period_shard", (q) => q.eq("orgId", orgId).eq("accountId", accountId))
+      .take(remaining + 1);
+    if (!charge(snapshots.length)) return over;
+    for (const s of snapshots) {
+      if (snapshotPeriods.has(s.periodId)) addTo(s.accountId, s.currency, s.runningDebitMinor, s.runningCreditMinor);
+    }
+
+    if (journalPeriod) {
+      const period = journalPeriod;
+      // Include REVERSED entries too: their original lines remain postings, offset by a separately
+      // posted reversal (as getCumulativeBalancesAsOf does).
+      const lines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_org_account_date", (q) =>
+          q.eq("orgId", orgId).eq("accountId", accountId).gte("accountingDate", period.startDate).lte("accountingDate", asOfDate)
+        )
+        .take(remaining + 1);
+      if (!charge(lines.length)) return over;
+      for (const line of lines) {
+        let counts = entryStatusCache.get(line.journalEntryId);
+        if (counts === undefined) {
+          if (!charge(1)) return over;
+          const entry = await ctx.db.get(line.journalEntryId);
+          counts = !!entry && entry.periodId === period._id && (entry.status === "POSTED" || entry.status === "REVERSED");
+          entryStatusCache.set(line.journalEntryId, counts);
+        }
+        if (counts) addTo(line.accountId, line.currency, line.debitMinor, line.creditMinor);
+      }
+    }
+  }
+
+  return { status: "OK", balances: Array.from(totals.values()) };
+}

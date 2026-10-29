@@ -19,7 +19,7 @@ import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { liveAppliedMinorForDeposit } from "./utils/depositApplications";
 import { requireFeature } from "./subscriptions";
-import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
+import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
 import { settlementView } from "./utils/supplierSettlement";
@@ -1231,7 +1231,11 @@ export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, 
   rowsRead?: { receivables: number; recoveries: number };
 };
 
-/** Same bound and reasoning as SUPPLIER_PAYABLES_RECON_READ_LIMIT. */
+/**
+ * Same figure and reasoning as SUPPLIER_PAYABLES_RECON_READ_LIMIT, applied to each source on its own:
+ * the margin receivables, the cost recoveries, the PENDING and FAILED outbox rows, the pending drafts,
+ * and (unlike the A/P figure) the GL read, which counts every document it reads.
+ */
 const SUPPLIER_RECEIVABLES_RECON_READ_LIMIT = 4000;
 
 /** Exhaustive over each status union, so a new status fails typecheck until it is classified. */
@@ -1380,8 +1384,11 @@ export async function computeSupplierReceivablesReconciliation(
 
   // 1240 is debit-normal: its balance is debits minus credits.
   const glByCurrency = new Map<string, number>();
-  for (const balance of await getCumulativeBalancesAsOf(ctx, orgId, cutoff)) {
-    if (!controlAccounts.has(balance.accountId)) continue;
+  // Only the control accounts are read, through account-first indexes, and every document read is
+  // counted against `readLimit`; past it the comparison is refused rather than summed from a partial read.
+  const gl = await getControlAccountBalancesAsOf(ctx, orgId, [...controlAccounts], cutoff, readLimit);
+  if (gl.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+  for (const balance of gl.balances) {
     glByCurrency.set(balance.currency, (glByCurrency.get(balance.currency) ?? 0) + balance.debitMinor - balance.creditMinor);
   }
 
