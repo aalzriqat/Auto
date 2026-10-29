@@ -3,7 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { createCostedVehicle } from "../playwright/fixtures/dealScenarios";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -30,6 +30,9 @@ describe("SCRUM-857 scenario acquisition fixture through public backend handlers
         return orgId;
       });
       const owner = t.withIdentity({ subject: "scenario-owner" });
+      // SCRUM-868 P2: the fixture creates its creditor through the public supplier mutation, which needs
+      // the registry the rollout initialises for every organization.
+      await t.mutation(internal.suppliers.initialiseRegistry, { orgId });
       await owner.mutation(api.orgSettings.upsert, { orgId, currency: "JOD", currencySymbol: "JD" });
 
       // Replace only the HTTP boundary. The fixture, validators, permissions,

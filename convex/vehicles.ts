@@ -15,6 +15,22 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { assertNoHeldSupplierConcession } from "./utils/supplierConcession";
+import {
+  SUPPLIER_ERROR,
+  ownedStoredSupplierId,
+  snapshotSupplier,
+  throwSupplierError,
+  type SupplierSnapshot,
+} from "./utils/supplierRegistry";
+import {
+  assertSupplierLinkChangeAllowed,
+  refuseUnusedCreditorId,
+  resolveCreditorForPosting,
+  resolveImportSuppliers,
+  resolveIntakeSuppliers,
+  resolveUpdateSourcedSupplier,
+  withServerSupplierNames,
+} from "./utils/vehicleSupplierIdentity";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
@@ -162,8 +178,11 @@ export async function postVehicleAcquisitionIfOwned(
     purchasePrice: number | undefined;
     purchasePaymentMethod?: AcquisitionPaymentMethod;
     bankAccountId?: Id<"bankAccounts">;
-    /** Required when purchasePaymentMethod is "ON_ACCOUNT" — who the payable is owed to. */
-    supplierName?: string;
+    /**
+     * Required when purchasePaymentMethod is "ON_ACCOUNT": who the payable is owed to, as the
+     * SERVER-resolved supplier master snapshot (SCRUM-868 P2). A name alone is not accepted.
+     */
+    creditor?: SupplierSnapshot;
     vehicleLabel: string;
     vin: string;
     actorId: Id<"users">;
@@ -180,8 +199,10 @@ export async function postVehicleAcquisitionIfOwned(
   }
 
   const isOnAccount = args.purchasePaymentMethod === "ON_ACCOUNT";
-  if (isOnAccount && !args.supplierName?.trim()) {
-    throw new ConvexError("A supplier name is required for a vehicle purchased on account.");
+  // No bypass writer (design prediction 1): the money point itself refuses an on-account purchase
+  // that carries no resolved creditor, whatever the caller validated before.
+  if (isOnAccount && !args.creditor) {
+    throwSupplierError(SUPPLIER_ERROR.IDENTITY_REQUIRED, "A supplier is required.");
   }
 
   const now = Date.now();
@@ -217,7 +238,9 @@ export async function postVehicleAcquisitionIfOwned(
     await ctx.db.insert("vehicleSupplierPayables", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
-      sourcedFromName: args.supplierName!.trim(),
+      sourcedFromName: args.creditor!.name,
+      supplierId: args.creditor!.supplierId,
+      supplierSnapshotVersion: args.creditor!.version,
       amountDue: args.purchasePrice,
       currency,
       status: "PENDING",
@@ -929,6 +952,14 @@ export const create = mutation({
     bankAccountId: v.optional(v.id("bankAccounts")),
     /** SCRUM-717: the creditor of an OWNED car bought ON_ACCOUNT. Never `sourcedFromName`, which is consignment only. */
     purchaseSupplierName: v.optional(v.string()),
+    /**
+     * SCRUM-868 P2: the supplier master ids. A SOURCED car needs `sourcedSupplierId`; an owned car bought
+     * ON_ACCOUNT needs `purchaseSupplierId`. The names above stay optional only so a client that still
+     * sends a name type-checks: a name without its id is refused (SUPPLIER_IDENTITY_REQUIRED), and the
+     * stored name is always the one the server reads from the master.
+     */
+    sourcedSupplierId: v.optional(v.id("suppliers")),
+    purchaseSupplierId: v.optional(v.id("suppliers")),
     ...trustPassportFieldValidators,
     // SCRUM-313 census. This path calls `postVehicleAcquisitionIfOwned`, which
     // has NO posted-check, with the vehicle id minted by the insert below. A
@@ -941,36 +972,44 @@ export const create = mutation({
     // uniqueness check on an absent value protects nothing.
     idempotencyKey: v.string(),
   },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+  handler: async (ctx, submitted) => {
+    const { user } = await requireTenantAuth(ctx, submitted.orgId, [PERMISSIONS.CREATE_VEHICLES]);
     return await runWithIdempotency(
       ctx,
       {
-        orgId: args.orgId,
+        orgId: submitted.orgId,
         operation: "vehicles.create",
         economic: true,
-        idempotencyKey: args.idempotencyKey,
+        idempotencyKey: submitted.idempotencyKey,
         actorId: user._id,
         // Identity of the physical car plus everything that decides the
         // acquisition economics. A same-key call differing in any of these is a
-        // different intent and is refused, not deduped.
+        // different intent and is refused, not deduped. The suppliers are keyed by
+        // their master ids, never by typed text (SCRUM-868 N12): the text is not the
+        // authority, so a retry after a rename must not look like a different intent.
         fingerprint: JSON.stringify({
-          vin: args.vin?.trim() || null,
-          make: args.make.trim(),
-          model: args.model.trim(),
-          year: args.year,
-          sourceType: args.sourceType,
-          purchasePrice: args.purchasePrice ?? null,
-          sourceCost: args.sourceCost ?? null,
-          sellingPrice: args.sellingPrice,
-          purchasePaymentMethod: args.purchasePaymentMethod ?? null,
-          bankAccountId: args.bankAccountId ?? null,
-          purchaseSupplierName: args.purchaseSupplierName?.trim() || null,
+          vin: submitted.vin?.trim() || null,
+          make: submitted.make.trim(),
+          model: submitted.model.trim(),
+          year: submitted.year,
+          sourceType: submitted.sourceType,
+          purchasePrice: submitted.purchasePrice ?? null,
+          sourceCost: submitted.sourceCost ?? null,
+          sellingPrice: submitted.sellingPrice,
+          purchasePaymentMethod: submitted.purchasePaymentMethod ?? null,
+          bankAccountId: submitted.bankAccountId ?? null,
+          sourcedSupplierId: submitted.sourcedSupplierId ?? null,
+          purchaseSupplierId: submitted.purchaseSupplierId ?? null,
         }),
       },
       async () => {
     // NOTE: the body below is unchanged and deliberately NOT re-indented, so
     // the diff shows the identity boundary rather than 130 reformatted lines.
+    // SCRUM-868 P2 resolve-then-normalise: the supplier ids are resolved in the caller's proven org
+    // FIRST, and the name fields of `args` become the names the server read from the master. From
+    // here on `args` is exactly the shape the guards and the posting code always saw.
+    const resolvedSuppliers = await resolveIntakeSuppliers(ctx, submitted.orgId, submitted);
+    const args = withServerSupplierNames(submitted, resolvedSuppliers);
 
     const vehicleGate = await ctx.runQuery(internal.subscriptions.canAddVehicle, { orgId: args.orgId });
     if (!vehicleGate.allowed) {
@@ -1045,6 +1084,7 @@ export const create = mutation({
       status: args.status ?? (isSourced ? "SOURCING" : "AVAILABLE"),
       sourceType: args.sourceType,
       sourcedFromName: isSourced ? args.sourcedFromName : undefined,
+      sourcedSupplierId: isSourced ? resolvedSuppliers.sourced?.supplierId : undefined,
       sourceCost: isSourced ? args.sourceCost : undefined,
       notes: args.notes,
       imageIds: args.imageIds,
@@ -1065,7 +1105,7 @@ export const create = mutation({
       purchasePrice: effectivePurchasePrice,
       purchasePaymentMethod: args.purchasePaymentMethod,
       bankAccountId: args.bankAccountId,
-      supplierName: args.purchaseSupplierName,
+      creditor: resolvedSuppliers.creditor,
       vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()}`,
       vin: normalizedVin,
       actorId: user._id,
@@ -1332,6 +1372,9 @@ export const update = mutation({
     bankAccountId: v.optional(v.id("bankAccounts")),
     /** SCRUM-717: the creditor when the acquisition above is ON_ACCOUNT. Never `sourcedFromName`. */
     purchaseSupplierName: v.optional(v.string()),
+    /** SCRUM-868 P2: the supplier master ids (see `create`). Names without ids are refused. */
+    sourcedSupplierId: v.optional(v.id("suppliers")),
+    purchaseSupplierId: v.optional(v.id("suppliers")),
     ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
@@ -1347,6 +1390,9 @@ export const update = mutation({
     if (requestedVehicleSourceTypeChange(vehicle, args)) {
       assertRt11DoorAllowed("VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED");
     }
+    // SCRUM-868 P2: the consignment supplier this patch sets, resolved from the master in the caller's
+    // org (undefined when it sets none). A name without an id is refused here, before any write.
+    const sourcedSnapshot = await resolveUpdateSourcedSupplier(ctx, args.orgId, vehicle, args);
     const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
@@ -1364,7 +1410,10 @@ export const update = mutation({
     // when this patch CHANGES the type, the supplier or the cost — an existing
     // inconsistent row stays editable for unrelated fields, and a refusal here
     // happens before any write.
-    assertVehicleSourceShapeOnUpdate(vehicle, args);
+    assertVehicleSourceShapeOnUpdate(
+      vehicle,
+      sourcedSnapshot ? { ...args, sourcedFromName: sourcedSnapshot.name } : args,
+    );
 
     // Changing what a vehicle IS, after it has been sold, rewrites history in
     // whichever direction it runs. Both are refused.
@@ -1461,7 +1510,14 @@ export const update = mutation({
     // purchasePaymentMethod and purchaseSupplierName are transient inputs for the
     // acquisition posting below, not persisted vehicle fields — exclude them from
     // the patch.
-    const { orgId: _, vehicleId: __, purchasePaymentMethod: ___, purchaseSupplierName: ____, bankAccountId: _____, ...updates } = args;
+    //
+    // SCRUM-868 P2: the supplier ids and the typed consignment name are excluded as well. A typed name
+    // is never persisted: the consignment link (id + the master's name) is written below from the
+    // server-resolved snapshot only, and the creditor id is as transient as the creditor name.
+    const {
+      orgId: _, vehicleId: __, purchasePaymentMethod: ___, purchaseSupplierName: ____, bankAccountId: _____,
+      purchaseSupplierId: ______, sourcedSupplierId: _______, sourcedFromName: ________, ...updates
+    } = args;
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
@@ -1486,6 +1542,19 @@ export const update = mutation({
             patch[key] = newValue;
           }
         }
+      }
+    }
+
+    // SCRUM-868 P2: the consignment supplier link (N3: the name is the server's snapshot; N11: it cannot
+    // be swapped once money exists against the vehicle). Refused before any write.
+    if (sourcedSnapshot) {
+      await assertSupplierLinkChangeAllowed(ctx, args.orgId, vehicle, sourcedSnapshot);
+      // Written only when the link actually moves. Re-sending the supplier the vehicle already has changes
+      // nothing: the stored name stays the snapshot taken when the link was made (N3), and the "supplier
+      // terms changed" guard below does not fire on an echo.
+      if (vehicle.sourcedSupplierId !== sourcedSnapshot.supplierId) {
+        patch.sourcedSupplierId = sourcedSnapshot.supplierId;
+        patch.sourcedFromName = sourcedSnapshot.name;
       }
     }
 
@@ -1529,8 +1598,14 @@ export const update = mutation({
     if (needsAcquisitionPosting && !args.purchasePaymentMethod) {
       throw new ConvexError("Payment method is required to post this vehicle's acquisition cost to accounting.");
     }
+    // SCRUM-868 P2: the creditor of an on-account acquisition is the master row's snapshot. A creditor id
+    // sent on a write that posts no acquisition would be silently dropped, so it is refused instead.
+    let creditor: SupplierSnapshot | undefined;
     if (needsAcquisitionPosting) {
-      assertOnAccountHasCreditor(args.purchasePaymentMethod, args.purchaseSupplierName);
+      creditor = await resolveCreditorForPosting(ctx, args.orgId, args);
+      assertOnAccountHasCreditor(args.purchasePaymentMethod, creditor?.name);
+    } else {
+      refuseUnusedCreditorId(args);
     }
 
     if (Object.keys(patch).length > 0) {
@@ -1552,6 +1627,7 @@ export const update = mutation({
           fromSourceType: previousSourceType,
           toSourceType: nextSourceType,
           supplierName: vehicle.sourcedFromName,
+          supplierId: await ownedStoredSupplierId(ctx, args.orgId, vehicle.sourcedSupplierId),
           supplierEntitlementAtConversion: vehicle.sourceCost,
           purchaseAmount:
             "purchasePrice" in patch ? (patch.purchasePrice as number) : vehicle.purchasePrice,
@@ -1581,6 +1657,7 @@ export const update = mutation({
       // the fields, so an owned car never keeps consignment residue.
       if (previousSourceType === "SOURCED" && nextSourceType === "STOCK") {
         patch.sourcedFromName = undefined;
+        patch.sourcedSupplierId = undefined;
         patch.sourceCost = undefined;
       }
       await ctx.db.patch(args.vehicleId, patch);
@@ -1599,7 +1676,7 @@ export const update = mutation({
           purchasePrice: acquisitionPurchasePrice,
           purchasePaymentMethod: args.purchasePaymentMethod,
           bankAccountId: args.bankAccountId,
-          supplierName: args.purchaseSupplierName,
+          creditor,
           vehicleLabel: `${(patch.year as number | undefined) ?? vehicle.year} ${(patch.make as string | undefined) ?? vehicle.make} ${(patch.model as string | undefined) ?? vehicle.model}`,
           vin: ((patch.vin as string | undefined) ?? vehicle.vin) || "",
           actorId: user._id,
@@ -2932,20 +3009,23 @@ export const createSourced = mutation({
     mileage: v.number(),
     fuelType: v.string(),
     transmission: v.string(),
-    sourcedFromName: v.string(),
+    /** SCRUM-868 P2: optional and never trusted. The stored name is the one read from the master row. */
+    sourcedFromName: v.optional(v.string()),
+    /** SCRUM-868 P2: the consignment supplier's master id, required (a name alone is refused). */
+    sourcedSupplierId: v.optional(v.id("suppliers")),
     sourceCost: v.number(),
     sellingPrice: v.number(),
     vin: v.optional(v.string()),
     notes: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, submitted) => {
     // Sourcing a vehicle mid-sale needs to write immediately (the salesperson
     // is actively closing a deal), so this accepts CREATE_VEHICLES_REQUEST —
     // the same permission sales already holds for creating/editing normal
     // stock with approval — not just the manager-only direct CREATE_VEHICLES.
     // Every sourced vehicle still gets an APPROVED-status vehicleEdits audit
     // row and a manager notification below, so oversight isn't lost.
-    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const { user, role } = await requireTenantAuth(ctx, submitted.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     if (
       !isSystemOwnerRole(role) &&
       !role.permissions.includes(PERMISSIONS.CREATE_VEHICLES) &&
@@ -2955,6 +3035,11 @@ export const createSourced = mutation({
         `Forbidden: Missing required permissions: ${PERMISSIONS.CREATE_VEHICLES_REQUEST}`
       );
     }
+
+    // SCRUM-868 P2: the supplier is the master row's id, resolved in the caller's proven org. Its
+    // name here is the server's snapshot, so a client-typed name can never reach the vehicle.
+    const supplier = await snapshotSupplier(ctx, submitted.orgId, submitted.sourcedSupplierId);
+    const args = { ...submitted, sourcedFromName: supplier.name };
 
     const vehicleGate = await ctx.runQuery(internal.subscriptions.canAddVehicle, { orgId: args.orgId });
     if (!vehicleGate.allowed) {
@@ -3013,7 +3098,8 @@ export const createSourced = mutation({
       transmission: args.transmission,
       purchasePrice: args.sourceCost,
       sourceCost: args.sourceCost,
-      sourcedFromName: args.sourcedFromName.trim(),
+      sourcedFromName: supplier.name,
+      sourcedSupplierId: supplier.supplierId,
       sourceType: "SOURCED",
       sellingPrice: args.sellingPrice,
       status: "SOURCING",
@@ -3041,7 +3127,8 @@ export const createSourced = mutation({
         fuelType: args.fuelType,
         transmission: args.transmission,
         sourceCost: args.sourceCost,
-        sourcedFromName: args.sourcedFromName,
+        sourcedFromName: supplier.name,
+        sourcedSupplierId: supplier.supplierId,
         sourceType: "SOURCED" as const,
         sellingPrice: args.sellingPrice,
         status: "SOURCING" as const,
@@ -3458,6 +3545,7 @@ async function importRowFingerprint(
     sellingPrice: number; status?: string; notes?: string;
     purchasePrice?: number; sourceType?: string; sourcedFromName?: string; sourceCost?: number;
     purchaseSupplierName?: string;
+    sourcedSupplierId?: string; purchaseSupplierId?: string;
     valuations?: Array<{ companyId?: string; companyName?: string; valuationAmount: number }>;
   },
   paymentMethod: AcquisitionPaymentMethod,
@@ -3528,9 +3616,14 @@ async function importRowFingerprint(
     notes: text(row.notes),
     purchasePrice: row.purchasePrice ?? null,
     sourceType: ownershipOf(row),
-    sourcedFromName: text(row.sourcedFromName),
+    // SCRUM-868 N12: a supplier is keyed by its master id once the row carries one, never by the
+    // name the server read from the master (which a rename would change under a retry). A row with
+    // no supplier id hashes exactly as it did before.
+    sourcedFromName: row.sourcedSupplierId ? "" : text(row.sourcedFromName),
+    ...(row.sourcedSupplierId ? { sourcedSupplierId: row.sourcedSupplierId } : {}),
     sourceCost: row.sourceCost ?? null,
-    purchaseSupplierName: text(row.purchaseSupplierName),
+    purchaseSupplierName: row.purchaseSupplierId ? "" : text(row.purchaseSupplierName),
+    ...(row.purchaseSupplierId ? { purchaseSupplierId: row.purchaseSupplierId } : {}),
     paymentMethod,
     bankAccountId: bankAccountId ?? null,
     valuations,
@@ -3583,8 +3676,8 @@ const ownershipOf = (row: { sourceType?: string }) => storedVehicleSourceType(ro
  * Returns a human-readable reason, or null when nothing contradicts.
  */
 function ownershipTermsMismatch(
-  existing: { sourceType?: string; sourcedFromName?: string; sourceCost?: number },
-  row: { sourceType?: string; sourcedFromName?: string; sourceCost?: number; purchasePrice?: number }
+  existing: { sourceType?: string; sourcedFromName?: string; sourcedSupplierId?: string; sourceCost?: number },
+  row: { sourceType?: string; sourcedFromName?: string; sourcedSupplierId?: string; sourceCost?: number; purchasePrice?: number }
 ): string | null {
   const was = ownershipOf(existing);
   const now = ownershipOf(row);
@@ -3595,8 +3688,13 @@ function ownershipTermsMismatch(
   }
   if (now === "STOCK") return null;
 
-  // Both sourced: the supplier and the agreed cost ARE the terms.
-  if (!sameText(existing.sourcedFromName, row.sourcedFromName)) {
+  // Both sourced: the supplier and the agreed cost ARE the terms. SCRUM-868: when both sides carry a
+  // supplier master id the ids decide (a rename of the master is not a different supplier); otherwise
+  // the snapshot names are compared as they always were.
+  const sameSupplier = existing.sourcedSupplierId && row.sourcedSupplierId
+    ? existing.sourcedSupplierId === row.sourcedSupplierId
+    : sameText(existing.sourcedFromName, row.sourcedFromName);
+  if (!sameSupplier) {
     return `recorded as sourced from ${existing.sourcedFromName ?? "no one"}, this file says ${row.sourcedFromName?.trim() || "no one"}`;
   }
   const incomingCost = row.sourceCost ?? row.purchasePrice;
@@ -3701,6 +3799,13 @@ export const importBulk = mutation({
       sourceCost: v.optional(v.number()),
       /** SCRUM-717: the creditor of an OWNED row bought ON_ACCOUNT (never `sourcedFromName`). */
       purchaseSupplierName: v.optional(v.string()),
+      /**
+       * SCRUM-868 P2: the supplier master ids. A SOURCED row that names a supplier carries
+       * `sourcedSupplierId`; an owned row bought ON_ACCOUNT carries `purchaseSupplierId`. A name without
+       * its id refuses the whole file; the stored name is always the master's.
+       */
+      sourcedSupplierId: v.optional(v.id("suppliers")),
+      purchaseSupplierId: v.optional(v.id("suppliers")),
       // Per-company financing valuations carried over from the spreadsheet's
       // valuation columns. `companyId` targets an existing finance company;
       // `companyName` (no companyId) means the column's header didn't match
@@ -3712,7 +3817,10 @@ export const importBulk = mutation({
       }))),
     })),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, submitted) => {
+    // `args` starts as the submission and becomes the supplier-resolved file right after the tenant
+    // check below (SCRUM-868 P2). Nothing reads a row's supplier fields before that point.
+    let args = submitted;
     const postsAcquisitions = args.acquisitionPosting === "PURCHASE";
     const importId = args.importId?.trim();
     const tracksOpeningStock = args.acquisitionPosting === "OPENING_STOCK" && !!importId;
@@ -3734,6 +3842,12 @@ export const importBulk = mutation({
     }
 
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    // SCRUM-868 P2 resolve-then-normalise: every supplier id of the file is resolved in the caller's org
+    // before anything else; the rows' name fields become the master's names. A wrong row refuses the file.
+    const resolvedImport = await resolveImportSuppliers(ctx, args.orgId, args.vehicles, {
+      onAccountPurchase: postsAcquisitions && args.purchasePaymentMethod === "ON_ACCOUNT",
+    });
+    args = { ...args, vehicles: resolvedImport.rows };
     const openingCurrency = tracksOpeningStock ? await getOrgCurrency(ctx, args.orgId) : undefined;
 
     // Bulk import runs no Zod schema, and its two range filters (`sourceCost <= 0`
@@ -4165,7 +4279,11 @@ export const importBulk = mutation({
               .withIndex("by_vehicle", (q) => q.eq("vehicleId", existing._id))
               .collect();
             const supplier = row.purchaseSupplierName ?? "";
-            if (!payables.some((payable) => sameText(payable.sourcedFromName, supplier))) {
+            const sameCreditor = (payable: { sourcedFromName: string; supplierId?: string }) =>
+              payable.supplierId && row.purchaseSupplierId
+                ? payable.supplierId === row.purchaseSupplierId
+                : sameText(payable.sourcedFromName, supplier);
+            if (!payables.some(sameCreditor)) {
               contradictions.push(
                 payables.length === 0
                   ? `${normalized}: recorded on account, but no supplier payable exists to compare against`
@@ -4395,7 +4513,12 @@ export const importBulk = mutation({
           // For a sourced vehicle purchasePrice mirrors the supplier cost, matching createSourced.
           purchasePrice: isSourced ? sourceCost : row.purchasePrice,
           ...(isSourced
-            ? { sourceType: "SOURCED" as const, sourcedFromName: row.sourcedFromName!.trim(), sourceCost }
+            ? {
+                sourceType: "SOURCED" as const,
+                sourcedFromName: row.sourcedFromName!.trim(),
+                sourcedSupplierId: row.sourcedSupplierId,
+                sourceCost,
+              }
             : { sourceType: "STOCK" as const }),
           status: status as VehicleLifecycleStatus,
           notes: row.notes,
@@ -4428,7 +4551,7 @@ export const importBulk = mutation({
             purchasePrice: isSourced ? sourceCost : row.purchasePrice,
             purchasePaymentMethod: args.purchasePaymentMethod,
             bankAccountId: args.bankAccountId,
-            supplierName: row.purchaseSupplierName?.trim(),
+            creditor: row.purchaseSupplierId ? resolvedImport.snapshots.get(row.purchaseSupplierId) : undefined,
             vehicleLabel: `${row.year} ${row.make.trim()} ${row.model.trim()}`,
             vin: insertedVin,
             actorId: user._id,

@@ -56,6 +56,10 @@ export const SUPPLIER_ERROR = {
   IDENTITY_REQUIRED: "SUPPLIER_IDENTITY_REQUIRED",
   /** SCRUM-868 P1: an action on an existing record that carries no supplier id (old or name-only row). */
   IDENTITY_UNRESOLVED: "SUPPLIER_IDENTITY_UNRESOLVED",
+  /** SCRUM-868 P2 (N11): a vehicle's supplier link cannot change once money exists against it. */
+  LINK_FROZEN: "SUPPLIER_LINK_FROZEN",
+  /** SCRUM-868 P2 (N9): a supplier id was sent in a role the vehicle's shape does not have. */
+  ROLE_CONFLICT: "SUPPLIER_ROLE_CONFLICT",
 } as const;
 export type SupplierErrorCode = (typeof SUPPLIER_ERROR)[keyof typeof SUPPLIER_ERROR];
 
@@ -290,6 +294,23 @@ export async function snapshotSupplier(
   }
   refuseIfInactive(supplier);
   return Object.freeze({ supplierId: supplier._id, name: supplier.displayName, version: supplier.version });
+}
+
+/**
+ * Any reader that carries a record's STORED supplier id into another record goes through this: the id is
+ * returned only when that supplier row exists in `orgId` (N6). A stored id that is missing or belongs to
+ * another organization (corruption, never a state a write here produces) is dropped, so it can never be
+ * copied into a new record; the name snapshot already on the source record still carries the history.
+ * Read-only. It lives here because only the supplier modules read the supplier tables.
+ */
+export async function ownedStoredSupplierId(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  storedId: Id<"suppliers"> | undefined,
+): Promise<Id<"suppliers"> | undefined> {
+  if (storedId === undefined) return undefined;
+  const row = await ctx.db.get("suppliers", storedId);
+  return row !== null && row.orgId === orgId ? storedId : undefined;
 }
 
 // ─── Duplicate detection (read-only; callers run it inside the lock) ──────────────────────────

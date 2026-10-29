@@ -16,6 +16,7 @@ import { seedBank } from "../test-utils/bankFixture";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
@@ -3177,10 +3178,12 @@ describe("SCRUM-760 deal unwind and vehicle cost correction cells (harness only)
   type CostDealership = Awaited<ReturnType<typeof costDealership>>;
 
   /** A car bought for 12,500 through the public door: Dr 1400 / Cr counter 12,500,000. */
-  const buyCar = (s: CostDealership, tag: string, how: { method: "CASH" } | { method: "ON_ACCOUNT" }) =>
+  const buyCar = async (s: CostDealership, tag: string, how: { method: "CASH" } | { method: "ON_ACCOUNT" }) =>
     s.owner.as.mutation(api.vehicles.create, {
       orgId: s.orgId, ...carArgs(), purchasePrice: 12_500, purchasePaymentMethod: how.method,
-      ...(how.method === "ON_ACCOUNT" ? { purchaseSupplierName: "Credit Supplier Co" } : {}),
+      ...(how.method === "ON_ACCOUNT"
+        ? { purchaseSupplierId: await supplierIdFor(s.t, s.orgId, "Credit Supplier Co") }
+        : {}),
       idempotencyKey: `${tag}-buy`,
     }) as Promise<Id<"vehicles">>;
 
