@@ -42,8 +42,17 @@ const organizationDeletionRequestStatus = v.union(
 
 const supplierRecoveryCommon = {
 orgId: v.id("organizations"),
-/** Snapshot of the supplier at payment — there is no supplier master data. */
+/** Snapshot of the supplier name at payment. Kept as the immutable snapshot (SCRUM-868 N3). */
     sourcedFromName: v.string(),
+/**
+     * SCRUM-868 P1 (widen-only): the supplier master row this party is, and the master's `version`
+     * when the name above was captured. OPTIONAL IN STORAGE FOREVER so a deployment holding rows
+     * written before this field exists still validates on schema push
+     * (https://docs.convex.dev/database/schemas); REQUIRED AT THE WRITE BOUNDARY by later slices.
+     * Nothing reads or writes these in P1. Design: docs/architecture/scrum868-supplier-identity-design.md.
+     */
+    supplierId: v.optional(v.id("suppliers")),
+supplierSnapshotVersion: v.optional(v.number()),
 amountDueMinor: v.number(),
 amountRecoveredMinor: v.number(),
 currency: v.string(),
@@ -89,19 +98,14 @@ createdAt: v.number(),
 
 const supplierPayableCommon = {
 orgId: v.id("organizations"),
-// Supplier identity is SNAPSHOT-BASED for this workflow, deliberately.
-    // No canonical supplier entity exists in AutoFlow — suppliers are a name on
-    // a vehicle — so there is nothing for a `supplierId` to point at. Do not
-    // fabricate or persist one until supplier master data is introduced: a
-    // foreign key to a table that does not exist is worse than an honest name,
-    // because it looks like referential integrity and provides none.
-    //
-    // Introduce a supplier master separately if AutoFlow needs statements
-    // across multiple vehicles, supplier-level aging, contact or tax identity,
-    // consolidated balances, or supplier analytics. That is a subsystem with
-    // its own lifecycle, permissions, deduplication and migration — not a field
-    // to be smuggled into an accounting correction.
+// `sourcedFromName` is the immutable NAME SNAPSHOT of the party at creation.
+    // The supplier master now exists (SCRUM-868 S1), so P1 adds `supplierId` and
+    // `supplierSnapshotVersion` beside it, widen-only: optional in storage (old rows
+    // stay valid), required at the write boundary by later slices, unread and unwritten
+    // in P1. The snapshot name is never rewritten when the master is renamed (N3).
     sourcedFromName: v.string(),
+supplierId: v.optional(v.id("suppliers")),
+supplierSnapshotVersion: v.optional(v.number()),
 amountDue: v.number(),
 currency: v.string(),
 // PENDING is retained permanently as a legacy value. Every row written
@@ -1494,6 +1498,8 @@ export default defineSchema({
     // Sourced / drop-ship vehicles: dealer locates from another dealer on demand
     sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
     sourcedFromName: v.optional(v.string()),
+    /** SCRUM-868 P1 (widen-only, unread): the consignment supplier's master row. Name above stays the snapshot. */
+    sourcedSupplierId: v.optional(v.id("suppliers")),
     sourceCost: v.optional(v.number()),
     // When a sourced car physically reached the dealership. Arrival cannot be
     // expressed through `status`: a special-order car that arrives while a
@@ -1528,6 +1534,8 @@ export default defineSchema({
     // lot — and discard almost all of them.
     .index("by_org_sourceType_status", ["orgId", "sourceType", "status"])
     .index("by_org_vin", ["orgId", "vin"])
+    // SCRUM-868 P1: a supplier's consignment cars. Unread until the identity slices land.
+    .index("by_org_and_sourcedSupplierId", ["orgId", "sourcedSupplierId"])
     .searchIndex("search_make", { searchField: "make", filterFields: ["orgId", "isDeleted"] })
     .searchIndex("search_model", { searchField: "model", filterFields: ["orgId", "isDeleted"] })
     .searchIndex("search_vin", { searchField: "vin", filterFields: ["orgId", "isDeleted"] }),
@@ -1695,16 +1703,18 @@ export default defineSchema({
    * means, and against which reference — the things an aging report and a
    * supplier conversation are actually made of.
    *
-   * Supplier identity is snapshot-based for exactly the reason spelled out on
-   * `vehicleSupplierPayables.sourcedFromName`: there is no supplier master to
-   * point at, and a foreign key to a table that does not exist looks like
-   * referential integrity while providing none.
+   * `sourcedFromName` is the immutable name snapshot (SCRUM-868 N3). The supplier
+   * master now exists, so `supplierId` sits beside it, optional in storage and
+   * required at the write boundary by later slices.
    */
   vehicleSupplierReceivables: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
     saleId: v.id("sales"),
     sourcedFromName: v.string(),
+    /** SCRUM-868 P1 (widen-only, unread): the supplier master row and its `version` when the name was captured. */
+    supplierId: v.optional(v.id("suppliers")),
+    supplierSnapshotVersion: v.optional(v.number()),
     /** The dealership's agency margin on the deal — what the supplier owes back. */
     amountDue: v.number(),
     currency: v.string(),
@@ -1754,7 +1764,9 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_sale", ["orgId", "saleId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
-    .index("by_sale", ["saleId"]),
+    .index("by_sale", ["saleId"])
+    // SCRUM-868 P1: one supplier's receivables by status. Unread until the identity slices land.
+    .index("by_org_and_supplierId_and_status", ["orgId", "supplierId", "status"]),
 
   /**
    * SCRUM-389 — a paid SUPPLIER-borne vehicle cost, owed back by the supplier.
@@ -1784,7 +1796,9 @@ origin:v.optional(v.literal("EXPENSE"))}),v.object({...supplierRecoveryCommon,or
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
-    .index("by_org_expense", ["orgId", "expenseId"]),
+    .index("by_org_expense", ["orgId", "expenseId"])
+    // SCRUM-868 P1: one supplier's recoveries by status. Unread until the identity slices land.
+    .index("by_org_and_supplierId_and_status", ["orgId", "supplierId", "status"]),
 
   /**
    * SCRUM-389 — money actually received from a supplier against one recovery.
@@ -1809,7 +1823,9 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     .index("by_org", ["orgId"])
     .index("by_vehicle", ["vehicleId"])
     .index("by_sale", ["saleId"])
-    .index("by_org_status", ["orgId", "status"]),
+    .index("by_org_status", ["orgId", "status"])
+    // SCRUM-868 P1: one supplier's payables by status. Unread until the identity slices land.
+    .index("by_org_and_supplierId_and_status", ["orgId", "supplierId", "status"]),
 
   vehiclePriceHistory: defineTable({
     vehicleId: v.id("vehicles"),
@@ -1841,6 +1857,8 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     toSourceType: v.union(v.literal("STOCK"), v.literal("SOURCED")),
     /** Snapshotted, not joined: the supplier's name on the vehicle can change afterwards. */
     supplierName: v.optional(v.string()),
+    /** SCRUM-868 P1 (widen-only, unread): the supplier master row. `supplierName` stays the snapshot. */
+    supplierId: v.optional(v.id("suppliers")),
     /** What the supplier was owed while it was consigned, as it stood at conversion. */
     supplierEntitlementAtConversion: v.optional(v.number()),
     /** What the dealership agreed to buy it for. */
@@ -1955,11 +1973,14 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
       bankAccountId: v.optional(v.id("bankAccounts")),
       purchaseSupplierName: v.optional(v.string()),
+      // SCRUM-868 P1 (widen-only, unread): master ids for the two names in this approval payload.
+      purchaseSupplierId: v.optional(v.id("suppliers")),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
       sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
       sourcedFromName: v.optional(v.string()),
+      sourcedSupplierId: v.optional(v.id("suppliers")),
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
@@ -3462,6 +3483,8 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
       contractEntitlementMinor: v.number(),
       currency: v.string(),
       supplierName: v.string(),
+      /** SCRUM-868 P1 (widen-only, unread): the supplier master row the concession was agreed against. */
+      supplierId: v.optional(v.id("suppliers")),
     })),
     customerGapCashToDealerMinor: v.optional(v.number()),
     customerGapInstallmentToDealerMinor: v.optional(v.number()),
