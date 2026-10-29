@@ -279,6 +279,12 @@ export function OpeningBalanceCard() {
     !currencyChanged &&
     !submitting;
 
+  // SCRUM-858 c23884: named customer deposits post only after an accountant approves them, so the owner
+  // route is never offered for a draft that carries one (the server refuses it as well). One decision
+  // drives the note, the button label and the click, so the screen cannot say "post" while saving a draft.
+  const namesCustomerDeposit = allocations.some((row) => row.kind === "CUSTOMER_DEPOSIT");
+  const postsDirectly = Boolean(status?.canPostDirectly) && !namesCustomerDeposit;
+
   function updateLine(index: number, patch: Partial<DraftLine>) {
     setLines((current) => current.map((line, i) => (i === index ? { ...line, ...patch } : line)));
   }
@@ -312,9 +318,6 @@ export function OpeningBalanceCard() {
     if (asOfMs === null) return;
     const allocationPayload = buildOpeningAllocationPayload(allocations, currency);
     if (!allocationPayload || !openingAllocationTotalsMatch(allocations, allocationGroups, currency)) return;
-    // SCRUM-858 c23884: named customer deposits post only after an accountant approves them, so the
-    // owner route is never offered for a draft that carries one (the server refuses it as well).
-    const postsDirectly = Boolean(status?.canPostDirectly) && !allocations.some((row) => row.kind === "CUSTOMER_DEPOSIT");
     if (postsDirectly && allocations.length > 0) {
       const summary = allocationGroups.map((group) => {
         const members = allocations.filter((row) => row.accountId === group.accountId)
@@ -414,9 +417,9 @@ export function OpeningBalanceCard() {
               <DialogHeader>
                 <DialogTitle>{t("OpeningBalance")}</DialogTitle>
                 <DialogDescription>
-                  {status.canPostDirectly
-                    ? t("OpeningBalanceOwnerNote")
-                    : t("OpeningBalanceApprovalNote")}
+                  {postsDirectly && t("OpeningBalanceOwnerNote")}
+                  {!postsDirectly && !namesCustomerDeposit && t("OpeningBalanceApprovalNote")}
+                  {!postsDirectly && namesCustomerDeposit && t("OpeningBalanceNamedDepositNote")}
                 </DialogDescription>
               </DialogHeader>
 
@@ -593,7 +596,7 @@ export function OpeningBalanceCard() {
 
               <DialogFooter>
                 <Button onClick={() => void submit()} disabled={!canSubmit}>
-                  {status.canPostDirectly
+                  {postsDirectly
                     ? t("OpeningBalancePost")
                     : t("OpeningBalanceSubmitForApproval")}
                 </Button>
