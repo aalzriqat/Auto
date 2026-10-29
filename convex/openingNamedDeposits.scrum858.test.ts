@@ -342,21 +342,21 @@ test("a named opening deposit that fails validation leaves no draft, row, journa
     ctx.db.insert("customers", { orgId: s.orgId, firstName: "Gone", lastName: "Customer", isDeleted: true }),
   );
   const baseline = await counts(s);
-  const cases: Array<[string, unknown[], number, RegExp]> = [
-    ["foreign customer", [securityRow(s, { customerId: foreignCustomer })], 100_000, /Opening customer not found/],
-    ["foreign vehicle", [reservationRow(s, { vehicleId: foreignVehicle })], 50_000, /Opening deposit vehicle not found/],
-    ["sourced vehicle", [reservationRow(s, { vehicleId: sourced })], 50_000, /live vehicle that the dealership can hold/],
-    ["deleted customer", [securityRow(s, { customerId: deletedCustomer })], 100_000, /Opening customer is unavailable/],
+  const cases: Array<[string, unknown[], number, RegExp | string]> = [
+    ["foreign customer", [securityRow(s, { customerId: foreignCustomer })], 100_000, "OPENING_DEPOSIT_CUSTOMER_NOT_FOUND"],
+    ["foreign vehicle", [reservationRow(s, { vehicleId: foreignVehicle })], 50_000, "OPENING_DEPOSIT_VEHICLE_NOT_FOUND"],
+    ["sourced vehicle", [reservationRow(s, { vehicleId: sourced })], 50_000, "OPENING_DEPOSIT_VEHICLE_NOT_HOLDABLE"],
+    ["deleted customer", [securityRow(s, { customerId: deletedCustomer })], 100_000, "OPENING_DEPOSIT_CUSTOMER_UNAVAILABLE"],
     ["duplicate row key", [securityRow(s), reservationRow(s, { rowKey: "dep-security-1" })], 150_000, /row keys must be unique/],
     ["sum mismatch", [securityRow(s), reservationRow(s)], 160_000, /exactly match their declared control balance/],
     ["zero amount", [securityRow(s, { amountMinor: 0 })], 100_000, /positive whole minor-unit/],
     ["fractional amount", [securityRow(s, { amountMinor: 100_000.5 })], 100_000, /positive whole minor-unit/],
-    ["security with a vehicle", [securityRow(s, { vehicleId: s.vehicleId })], 100_000, /Only a reservation deposit can name a vehicle/],
+    ["security with a vehicle", [securityRow(s, { vehicleId: s.vehicleId })], 100_000, "OPENING_DEPOSIT_SECURITY_NAMES_VEHICLE"],
     [
       "duplicate customer and vehicle reservation",
       [reservationRow(s), reservationRow(s, { rowKey: "opening-deposit-row-2" })],
       100_000,
-      /only once per customer and vehicle/,
+      "OPENING_DEPOSIT_DUPLICATE_RESERVATION",
     ],
     [
       "unnamed pool mixed on the same control",
@@ -377,9 +377,38 @@ test("a named opening deposit that fails validation leaves no draft, row, journa
   ];
   for (const [label, allocations, total, refusal] of cases) {
     // A business refusal, not the argument validator rejecting an unknown shape.
-    await expect(draftCall(s, allocations, total), label).rejects.toThrow(refusal);
+    // A string is a coded refusal (EN/AR through ServerError_<code>); a RegExp is a plain validation text.
+    if (typeof refusal === "string")
+      await expect(draftCall(s, allocations, total), label).rejects.toMatchObject({ data: { code: refusal } });
+    else await expect(draftCall(s, allocations, total), label).rejects.toThrow(refusal);
     expect(await counts(s), label).toEqual(baseline);
   }
+});
+
+test("a named opening deposit keeps an exact fils amount at JOD scale 3 end to end (123.457 JOD)", async () => {
+  // Characterisation test (it passes before and after the coded-error change): it closes the Seat 1 gap
+  // that every earlier amount was a whole number of dinars.
+  const s = await seed();
+  const FILS = 123_457;
+  const draftId = await draftAndApprove(s, [securityRow(s, { amountMinor: FILS })], FILS);
+  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, {
+    orgId: s.orgId,
+    draftId: draftId as Id<"openingBalanceDrafts">,
+  });
+  const [row] = await s.t.run((ctx) => ctx.db.query("deposits").collect());
+  expect(row).toMatchObject({ amountMinor: FILS, amount: 123.457, currency: "JOD", status: "HELD" });
+  const lines = await s.t.run((ctx) => ctx.db.query("journalLines").collect());
+  expect(lines.map((line) => [line.debitMinor ?? 0, line.creditMinor ?? 0]).sort()).toEqual([
+    [0, FILS],
+    [FILS, 0],
+  ]);
+  const recon = await s.owner.query(api.accountingReports.customerDepositsReconciliation, { orgId: s.orgId });
+  expect(recon.byCurrency.JOD).toMatchObject({
+    glBalanceMinor: FILS,
+    subledgerBalanceMinor: FILS,
+    discrepancyMinor: 0,
+  });
+  expect(recon.isReconciled).toBe(true);
 });
 
 test("a named opening deposit cannot sit on a custom liability account", async () => {
