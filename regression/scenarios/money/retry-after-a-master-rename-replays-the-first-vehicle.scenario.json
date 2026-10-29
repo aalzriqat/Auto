@@ -1,0 +1,76 @@
+{
+  "id": "retry-after-a-master-rename-replays-the-first-vehicle",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "sourceType": "SOURCED",
+        "sourceCost": 9000,
+        "idempotencyKey": "KEY_1",
+        "sourcedSupplierId": "SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "suppliers.update",
+      "input": {
+        "supplierId": "SUPPLIER_ID",
+        "displayName": "RENAMED_DISPLAY_NAME"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "sourceType": "SOURCED",
+        "sourceCost": 9000,
+        "idempotencyKey": "KEY_1",
+        "sourcedSupplierId": "SUPPLIER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step3.vehicleId",
+      "value": "SAME_AS_STEP1"
+    },
+    {
+      "observable": "vehicle.sourcedFromName",
+      "value": "NAME_AT_CREATION"
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "a retry after the master was renamed replays the first execution and writes no second car (N12)"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "039d3df0177c4dcd5a55c290576183ee12188e05e9e3a300fe6b535ef5575157"
+}

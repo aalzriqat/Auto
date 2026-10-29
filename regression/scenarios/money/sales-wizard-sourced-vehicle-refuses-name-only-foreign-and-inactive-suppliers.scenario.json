@@ -1,0 +1,80 @@
+{
+  "id": "sales-wizard-sourced-vehicle-refuses-name-only-foreign-and-inactive-suppliers",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.createSourced",
+      "input": {
+        "sourceCost": 9000,
+        "sourcedFromName": "TYPED_NAME"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.createSourced",
+      "input": {
+        "sourceCost": 9000,
+        "sourcedSupplierId": "OTHER_ORG_SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.createSourced",
+      "input": {
+        "sourceCost": 9000,
+        "sourcedSupplierId": "INACTIVE_SUPPLIER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_IDENTITY_REQUIRED"
+    },
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_NOT_FOUND"
+    },
+    {
+      "observable": "step3.refusal",
+      "value": "SUPPLIER_INACTIVE"
+    },
+    {
+      "observable": "writes.rowCount",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "a name-only call is refused; foreign and inactive ids are refused; nothing is written"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "505a73d8f69a9084369220b9a9ae8dc72921f4e5d0cd7d191532f502bdfc95d6"
+}

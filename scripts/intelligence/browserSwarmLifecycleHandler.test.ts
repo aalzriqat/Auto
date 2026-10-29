@@ -180,7 +180,13 @@ class World {
         return this.faults.settings === "missing" ? null : { currency: "JOD" };
       case "customers:create":
         return this.id("cust");
+      case "suppliers:create":
+        // SCRUM-868 P2: the consignment supplier master the SOURCED car is created against.
+        return { supplierId: this.id("sup") };
       case "vehicles:create": {
+        if (typeof a.sourcedSupplierId !== "string" || "sourcedFromName" in a) {
+          throw new ConvexError("scenario named the supplier by text instead of by master id");
+        }
         // The product's own validation: a VIN with I, O or Q never reaches the table.
         const parsed = CreateVehicleSchema.safeParse(a);
         if (!parsed.success) throw new ConvexError(parsed.error.issues.map((issue) => issue.message).join("; "));

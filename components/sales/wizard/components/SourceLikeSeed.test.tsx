@@ -15,6 +15,10 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => en[key] ?? key, language: "en", dir: "ltr", isRtl: false }),
 }));
 vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({ currency: "JOD" }) }));
+// SCRUM-868 P2: the source form carries a supplier picker, which reads the active org and the supplier
+// master. This test is about the seed, so the picker is a stub (its own behaviour: SupplierSelect.test.tsx).
+vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org1" }) }));
+vi.mock("@/components/suppliers/SupplierSelect", () => ({ SupplierSelect: () => null }));
 
 afterEach(cleanup);
 

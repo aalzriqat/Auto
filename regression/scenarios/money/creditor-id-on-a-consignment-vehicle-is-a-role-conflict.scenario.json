@@ -1,0 +1,52 @@
+{
+  "id": "creditor-id-on-a-consignment-vehicle-is-a-role-conflict",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "sourceType": "SOURCED",
+        "sourceCost": 9000,
+        "sourcedSupplierId": "SUPPLIER_ID",
+        "purchaseSupplierId": "CREDITOR_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_ROLE_CONFLICT"
+    },
+    {
+      "observable": "writes.rowCount",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "the creditor id on a consignment car is a role conflict (N9)"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "36c7205a27b124e5fc7ea564e26aff55ec706678f779a1470a00ff08011f9321"
+}

@@ -156,6 +156,12 @@ export interface OwnedPurchaseTermsInput {
   purchasePrice?: number | null;
   purchasePaymentMethod?: string | null;
   purchaseSupplierName?: string | null;
+  /**
+   * SCRUM-868 P2: the creditor's supplier master id. Its presence satisfies only the "names a creditor"
+   * test of `ownedPurchaseTermsComplete`; the caller resolves it (org, active) afterwards, and a name
+   * sent without an id is refused there with SUPPLIER_IDENTITY_REQUIRED.
+   */
+  purchaseSupplierId?: string | null;
 }
 
 /** An on-account purchase must name its creditor; any other method needs none. */
@@ -178,7 +184,7 @@ export function ownedPurchaseTermsComplete(input: OwnedPurchaseTermsInput): bool
     Number.isFinite(input.purchasePrice) &&
     input.purchasePrice > 0 &&
     !!input.purchasePaymentMethod &&
-    (input.purchasePaymentMethod !== "ON_ACCOUNT" || hasText(input.purchaseSupplierName))
+    (input.purchasePaymentMethod !== "ON_ACCOUNT" || hasText(input.purchaseSupplierName) || !!input.purchaseSupplierId)
   );
 }
 
@@ -219,4 +225,7 @@ export const VEHICLE_OWNERSHIP_FIELD_KEYS = [
   "purchasePaymentMethod",
   "bankAccountId",
   "purchaseSupplierName",
+  // SCRUM-868 P2: the master ids travel with the names they resolve.
+  "sourcedSupplierId",
+  "purchaseSupplierId",
 ] as const;
