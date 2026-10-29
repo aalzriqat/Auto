@@ -279,14 +279,18 @@ Design facts the cells rely on:
 - The alert row is inserted directly. `utils/notifications.dispatch` is not used because it also fans out to email, WhatsApp and push; this ruling is in-app only.
 - Idempotency is one `commandIdempotency` record per obligation, step and occurrence (`supplier-due-alert`, key `<kind>:<id>:<step>:<occurrence>`), written in the same transaction as the alert rows.
 - The cron `supplier-due-alerts` (05:30 UTC, 08:30 Amman) pages organisations, 20 per page, and schedules one worker mutation per organisation. A worker reads one page (50 rows) of one obligation kind and schedules its own continuation. A worker failure is caught and logged per organisation.
-- The match is exact-day. A day on which the sweep did not run is a day without that alert; nothing replays it.
+- Catch-up (coordinator ruling 2026-10-29, closing the missed-day gap): each run finds the latest schedule step whose Amman day has been reached (-3, 0, 7, then 14, 21, ... counted as occurrences) and sends it only when that step's idempotency record does not exist. A day the cron or an organisation worker missed is made up on the next run, once; earlier skipped steps are never sent as a burst, and a row that gains a due date late gets the one step it has reached.
 
 Evidence boundary: `convex-test` only. It has no runtime read limits, no OCC and no real scheduler clock, so bounded reads and the live cron are not proven here. The page-size constant (50) is not observable in these tests, because a larger page would still alert every row.
 
 | Cell | Expected | Bound test |
 | --- | --- | --- |
 | Payable due in 3 days | one in-app alert per recipient (Owner, manage:finance, view:finance), type due, amount `9500.000` JOD | `an obligation due in 3 days alerts each authorised recipient once, in-app` |
-| Sweep on days -4..21 around one due date | alerts only on days -3, 0, 7, 14 and 21 | `only the exact schedule days alert: 4, 3, 2, 1 days before, the due day, 6/7/8 and 14/15 days after` |
+| Sweep on days -4..21 around one due date | one alert per step as it is reached: days -3, 0, 7, 14 and 21; none in between | `a run sends only the latest step reached, once, as the days pass` |
+| Cron skipped the due date | the due alert is sent on the next run, once | `a cron that skipped the due date sends the due alert on the next run` |
+| Gap past day 7 | the day-7 alert is sent once; the skipped earlier steps are not | `a gap past day 7 sends the day-7 alert once and none of the earlier skipped steps` |
+| Row first seen late | the single latest step | `an obligation first seen late gets the single latest step, not the skipped ones` |
+| Weekly occurrence missed by 2 days | sent once; the next is on time | `a weekly occurrence missed by two days is sent once, and the next one on time` |
 | Receivable with an agreed date, cost recovery with an agreed date | both alert on their schedule | `a receivable with recorded delivery and a cost recovery with an agreed date alert on their schedule` |
 | Same-day re-run, three sweeps | no duplicate | `running the sweep twice on the same day does not duplicate any alert` |
 | Two obligations, then a later step | separate alerts, and the later step alerts again | `two obligations alert separately, and a later step of the same obligation alerts again` |

@@ -1,6 +1,6 @@
 {
-  "id": "supplier-alert-exact-schedule-days-only",
-  "fingerprint": "c7e805abbac391ada742b6d39a83d1f5b2d093db69dc96292b4ded346d793cfc",
+  "id": "supplier-alert-skipped-due-date-sent-next-run",
+  "fingerprint": "61a6c71c2489ce7fb5e9c677e8cd3b7c36980e002ed7a7108960e901a2172b34",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -18,34 +18,22 @@
       "action": "supplierDueAlerts.processSupplierDueAlerts",
       "input": {
         "kind": "PAYABLE",
-        "sweepDays": "-4_-3_-2_-1_0_1_6_7_8_14_15_21"
+        "sweepDays": "-3_skip0_1_1_2"
       }
     }
   ],
   "expected": [
     {
-      "observable": "alertsOnDay-3",
+      "observable": "alertsAfterDay-3",
       "value": 3
     },
     {
-      "observable": "alertsOnDay0",
-      "value": 3
+      "observable": "alertsAfterDay1",
+      "value": 6
     },
     {
-      "observable": "alertsOnDay7",
-      "value": 3
-    },
-    {
-      "observable": "alertsOnDay14",
-      "value": 3
-    },
-    {
-      "observable": "alertsOnDay21",
-      "value": 3
-    },
-    {
-      "observable": "alertsOnOtherDays",
-      "value": 0
+      "observable": "alertsAfterRerunAndDay2",
+      "value": 6
     }
   ],
   "rulings": [
@@ -56,7 +44,7 @@
   ],
   "impl": {
     "file": "convex/supplierDueAlerts.scrum869.test.ts",
-    "testName": "only the exact schedule days alert: 4, 3, 2, 1 days before, the due day, 6/7/8 and 14/15 days after"
+    "testName": "a cron that skipped the due date sends the due alert on the next run"
   },
   "matrixRow": "SCRUM-869-DUE-ALERTS"
 }
