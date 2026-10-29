@@ -295,7 +295,7 @@ async function quarantine(api, records, reasons, detailsUrl) {
 // The caller serializes initialize, begin and finish for a head with one Actions
 // concurrency group; reset only updates a record that already exists.
 /** @param {(method: string, route: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>} api
- * @param {{headSha: string, prNumber: number, repository: string, runId: number, runKey?: string,
+ * @param {{headSha: string, prNumber: number, repository: string, runId: number, runKey: string,
  * mode: "initialize" | "begin" | "reset" | "finish",
  * verdict?: {conclusion: string, reason: string} | null, summary?: string, detailsUrl?: string}} options
  * @returns {Promise<{outcome: "written" | "kept" | "obsolete" | "quarantined", record?: Record<string, unknown>}>} */
@@ -306,7 +306,7 @@ export async function publishPrE2eCheck(
     prNumber,
     repository,
     runId,
-    runKey = "",
+    runKey,
     mode,
     verdict = null,
     summary = "",
@@ -329,14 +329,35 @@ export async function publishPrE2eCheck(
   const previous = records[0];
   const origin = origins[0];
   if (previous && mode === "initialize") return { outcome: "kept", record: previous };
-  // Run ids only order two swarm runs. Admission and swarm ids are not
-  // comparable evidence of recency, and attempts of one run are serial.
+  const attemptMatch = new RegExp(`^${runId}:([1-9]\\d*)$`).exec(runKey);
+  const attempt = Number(attemptMatch?.[1]);
+  if (!Number.isSafeInteger(attempt) || attempt <= 0)
+    throw new Error("Trusted run attempt is unavailable.");
+  // PATCH preserves the creating suite. Track the latest publisher separately;
+  // an admission run may finish its own scope evaluation after initialization.
+  const kind =
+    mode === "initialize" ||
+    (origin?.kind === "admission" && origin.runId === runId)
+      ? "admission"
+      : "swarm";
+  const publisher = previous
+    ? /^g5-publisher:(admission|swarm):([1-9]\d*):([1-9]\d*)$/.exec(previous.output?.text ?? "")
+    : null;
   if (
     previous &&
-    mode !== "initialize" &&
-    origin?.ok &&
-    origin.kind === "swarm" &&
-    origin.runId > runId
+    (!publisher ||
+      !Number.isSafeInteger(Number(publisher[2])) ||
+      !Number.isSafeInteger(Number(publisher[3])) ||
+      (publisher[1] === "admission" &&
+        (origin?.kind !== "admission" || Number(publisher[2]) !== origin.runId)))
+  )
+    throw new Error("Recorded gate publisher is unavailable.");
+  // Admission ids do not order swarm publications. Swarm runs and attempts do.
+  if (
+    publisher?.[1] === "swarm" &&
+    (kind === "admission" ||
+      Number(publisher[2]) > runId ||
+      (Number(publisher[2]) === runId && Number(publisher[3]) > attempt))
   )
     return { outcome: "obsolete", record: previous };
   if (!previous && mode === "reset")
@@ -356,6 +377,7 @@ export async function publishPrE2eCheck(
         ? "Authenticated PR execution pending"
         : (verdict?.reason ?? "Authenticated PR execution unavailable"),
       summary: summary || "No counted authenticated evidence is available.",
+      text: `g5-publisher:${kind}:${runId}:${attempt}`,
     },
   };
   const record = previous
