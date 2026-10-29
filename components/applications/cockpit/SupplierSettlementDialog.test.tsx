@@ -203,4 +203,14 @@ describe("the receipt methods the dialog offers (SCRUM-869 F1)", () => {
     const offered = screen.getAllByRole("option").map((option) => option.textContent);
     expect(offered).toEqual(["PaymentMethod_CASH", "PaymentMethod_BANK_TRANSFER"]);
   });
+
+  test("the reference label no longer invites a cheque number in either language", async () => {
+    const { dictionaries } = await import("@/lib/i18n/dictionaries");
+    const en = (dictionaries.en as Record<string, string>).SupplierReceiptReference;
+    const ar = (dictionaries.ar as Record<string, string>).SupplierReceiptReference;
+    expect(en).toBeTruthy();
+    expect(en).not.toMatch(/cheque|check/i);
+    expect(ar).toBeTruthy();
+    expect(ar).not.toMatch(/شيك/);
+  });
 });
