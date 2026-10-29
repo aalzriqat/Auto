@@ -14,9 +14,11 @@ test.describe("leads", () => {
       dialog.getByRole("heading", { name: "Add Lead" }),
     ).toBeVisible();
 
-    await dialog.getByRole("button", { name: "Select customer" }).click();
+    // Accept both roles until the combobox change (#722) is on main; #722 removes the button branch.
+    await dialog.getByRole("combobox", { name: "Select customer" }).or(dialog.getByRole("button", { name: "Select customer" })).click();
     await dialog.locator('input[placeholder^="Search"]').fill(lastName);
-    const customerOption = dialog.getByRole("button", { name: customerName });
+    // Accept both roles until the combobox change (#722) is on main; #722 removes the button branch.
+    const customerOption = dialog.getByRole("option", { name: customerName }).or(dialog.getByRole("button", { name: customerName }));
     await expect(customerOption).toBeVisible({ timeout: 30_000 });
     await customerOption.click();
 
