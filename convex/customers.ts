@@ -754,21 +754,35 @@ export const getRelations = query({
           .order("desc")
           .take(CUSTOMER_DEPOSITS_PAGE + 1)
       : [];
-    const deposits = depositPage
-      .slice(0, CUSTOMER_DEPOSITS_PAGE)
-      .filter((deposit) => deposit.isDeleted !== true)
-      .map((deposit) => ({
-        _id: deposit._id,
-        status: deposit.status,
-        amountMinor: deposit.amountMinor,
-        amount: deposit.amount,
-        currency: deposit.currency,
-        vehicleId: deposit.vehicleId,
-        quoteId: deposit.quoteId,
-        origin: deposit.origin,
-        openingDepositKind: deposit.openingDepositKind,
-        createdAt: deposit.createdAt,
-      }));
+    // `depositsTruncated` is "a 101st row exists", read before deleted rows are dropped, so it can
+    // over-report by one page edge when that extra row is a deleted deposit. It never under-reports.
+    // Excluding deleted rows in the index scan would be unbounded (the index has no isDeleted component),
+    // so the cheap, bounded, honest choice is to keep the flag a "might be more" notice.
+    const deposits = await Promise.all(
+      depositPage
+        .slice(0, CUSTOMER_DEPOSITS_PAGE)
+        .filter((deposit) => deposit.isDeleted !== true)
+        .map(async (deposit) => {
+          // Names the linked car for the customer screen. The row's own org is checked on the read, so a
+          // vehicle id that points into another organization names nothing.
+          const vehicle = deposit.vehicleId ? await ctx.db.get(deposit.vehicleId) : null;
+          const vehicleDesc =
+            vehicle && vehicle.orgId === args.orgId ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : undefined;
+          return {
+            _id: deposit._id,
+            status: deposit.status,
+            amountMinor: deposit.amountMinor,
+            amount: deposit.amount,
+            currency: deposit.currency,
+            vehicleId: deposit.vehicleId,
+            vehicleDesc,
+            quoteId: deposit.quoteId,
+            origin: deposit.origin,
+            openingDepositKind: deposit.openingDepositKind,
+            createdAt: deposit.createdAt,
+          };
+        })
+    );
 
     return {
       sales: enrichedSales.sort((a, b) => b.saleDate - a.saleDate),
