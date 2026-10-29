@@ -1,0 +1,65 @@
+{
+  "id": "supplier-change-is-refused-once-a-supplier-borne-expense-exists",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.insertSupplierBorneExpense",
+      "input": {
+        "vehicleId": "VEHICLE_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "sourceType": "SOURCED",
+        "sourcedSupplierId": "OTHER_SUPPLIER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_LINK_FROZEN"
+    },
+    {
+      "observable": "vehicle.sourcedSupplierId",
+      "value": "SUPPLIER_ID"
+    },
+    {
+      "observable": "world.rowCounts.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "is frozen once a supplier-borne expense exists (N11)"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "e86ced53cd37c4a0a5d4c8ee8a992165252d133d42b38bcee0b6606fba7a88d5"
+}

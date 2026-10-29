@@ -171,8 +171,11 @@ function assertPatchDoesNotForgeVehicleLifecycle(
  * workflow are the doors. Only a change is refused, so the editor's whole-record
  * round trip (which re-sends current values) still saves.
  */
-// `purchaseSupplierName` is a transient posting input, never a stored vehicle field.
-const VEHICLE_OWNERSHIP_FIELDS = VEHICLE_OWNERSHIP_FIELD_KEYS.filter((key) => key !== "purchaseSupplierName");
+// `purchaseSupplierName` and `purchaseSupplierId` are transient posting inputs (the creditor lives on the
+// payable), never stored vehicle fields. `sourcedSupplierId` IS stored and stays locked with the name.
+const VEHICLE_OWNERSHIP_FIELDS = VEHICLE_OWNERSHIP_FIELD_KEYS.filter(
+  (key) => key !== "purchaseSupplierName" && key !== "purchaseSupplierId",
+);
 
 function assertPatchDoesNotChangeVehicleOwnership(
   table: string,

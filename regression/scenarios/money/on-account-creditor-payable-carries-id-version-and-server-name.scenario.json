@@ -1,0 +1,69 @@
+{
+  "id": "on-account-creditor-payable-carries-id-version-and-server-name",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "sourceType": "STOCK",
+        "purchasePrice": 10000,
+        "purchasePaymentMethod": "ON_ACCOUNT",
+        "purchaseSupplierId": "CREDITOR_ID",
+        "purchaseSupplierName": "CLIENT_TYPED_TEXT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payable.supplierId",
+      "value": "CREDITOR_ID"
+    },
+    {
+      "observable": "payable.supplierSnapshotVersion",
+      "value": 1
+    },
+    {
+      "observable": "payable.sourcedFromName",
+      "value": "MASTER_DISPLAY_NAME"
+    },
+    {
+      "observable": "payable.amountDue",
+      "value": 10000
+    },
+    {
+      "observable": "vehicle.sourcedSupplierId",
+      "value": "ABSENT"
+    },
+    {
+      "observable": "events.vehicleAcquiredCount",
+      "value": 1
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "the payable carries the id, the version and the SERVER name; the journal is the unchanged one (N4)"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "4dc07ba448c7786865ee07df06c1c0167b15977b62229ce760139393e6d4af17"
+}

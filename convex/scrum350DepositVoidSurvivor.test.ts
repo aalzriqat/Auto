@@ -1,4 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -79,7 +80,7 @@ describe("SCRUM-350 LIFE-1 real-mutation regression: voiding one of two deposits
       transmission: "Automatic",
       sellingPrice: figures.priceMajor,
       sourceType: "SOURCED",
-      sourcedFromName: `Swarm Supplier ${nonce}`,
+      sourcedSupplierId: await supplierIdFor(t, orgId, `Swarm Supplier ${nonce}`),
       sourceCost: figures.sourceCostMajor,
       status: "AVAILABLE",
       idempotencyKey: `${nonce}-vehicle`,

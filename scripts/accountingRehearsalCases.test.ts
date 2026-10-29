@@ -1547,6 +1547,9 @@ function makeBackend(defects: Defects = {}) {
       }
       case "customers:create":
         return { ok: true as const, value: id("cust") };
+      case "suppliers:create":
+        // SCRUM-868 P2: the consignment supplier master the SOURCED vehicle is created against.
+        return { ok: true as const, value: { supplierId: id("sup") } };
       case "vehicles:create":
         // Non-probe mode never returns null; the assertion keeps that visible
         // to the type checker instead of widening every caller's result.

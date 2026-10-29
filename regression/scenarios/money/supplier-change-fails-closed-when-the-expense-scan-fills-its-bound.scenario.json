@@ -1,0 +1,93 @@
+{
+  "id": "supplier-change-fails-closed-when-the-expense-scan-fills-its-bound",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.insertDealershipExpenses",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "count": 199
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "sourceType": "SOURCED",
+        "sourcedSupplierId": "OTHER_SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.insertDealershipExpenses",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "count": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "sourceType": "SOURCED",
+        "sourcedSupplierId": "SUPPLIER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.vehicle.sourcedSupplierId",
+      "value": "OTHER_SUPPLIER_ID"
+    },
+    {
+      "observable": "step4.refusal",
+      "value": "SUPPLIER_LINK_FROZEN"
+    },
+    {
+      "observable": "vehicle.sourcedSupplierId",
+      "value": "OTHER_SUPPLIER_ID"
+    },
+    {
+      "observable": "world.rowCounts.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "fails closed when the supplier-borne expense scan fills its bound (200) without a hit, and not one row earlier"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "f4ff0a96861af069ef42edf556617e84dc496e27cb9c6e25bb2b6bd49bbdf260"
+}

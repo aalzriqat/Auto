@@ -1,0 +1,97 @@
+{
+  "id": "supplier-change-is-frozen-once-money-exists-at-request-and-approval",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "CLERK",
+        "org": "A"
+      },
+      "action": "vehicleEdits.requestUpdate",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "payload": {
+          "sourcedSupplierId": "OTHER_SUPPLIER_ID"
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicleEdits.resolve",
+      "input": {
+        "requestId": "REQUEST_ID",
+        "status": "APPROVED"
+      }
+    },
+    {
+      "actor": {
+        "role": "CLERK",
+        "org": "A"
+      },
+      "action": "vehicleEdits.requestUpdate",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "payload": {
+          "sourcedSupplierId": "OTHER_SUPPLIER_ID"
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "CLERK",
+        "org": "A"
+      },
+      "action": "vehicleEdits.requestUpdate",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "payload": {
+          "sourcedFromName": "OTHER_TYPED_NAME"
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_LINK_FROZEN"
+    },
+    {
+      "observable": "step3.refusal",
+      "value": "SUPPLIER_LINK_FROZEN"
+    },
+    {
+      "observable": "step4.refusal",
+      "value": "SUPPLIER_IDENTITY_REQUIRED"
+    },
+    {
+      "observable": "vehicle.sourcedSupplierId",
+      "value": "SUPPLIER_ID"
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "an UPDATE request that changes the supplier is refused at request time AND at approval once money exists (N11)"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "e90ea3d3cfd41993d2c6f66d6d75b7e2ce4487861b9b243f75709c42e7adf494"
+}

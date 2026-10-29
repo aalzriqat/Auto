@@ -81,6 +81,26 @@ export async function ensureCompany(
   await expect(page.getByText(company.name, { exact: true }).first()).toBeVisible();
 }
 
+/**
+ * The supplier master row named `displayName`, created through the public mutation on first use.
+ * SCRUM-868 P2: a creditor is sent to the backend as an id, never as typed text.
+ */
+export async function ensureSupplier(
+  client: ConvexHttpClient,
+  orgId: Id<"organizations">,
+  displayName: string,
+): Promise<Id<"suppliers">> {
+  const found = await client.query(api.suppliers.search, { orgId, query: displayName });
+  const exact = found.find((row) => row.displayName === displayName && row.status === "ACTIVE");
+  if (exact) return exact._id;
+  const created = await client.mutation(api.suppliers.create, {
+    orgId,
+    displayName,
+    idempotencyKey: `qa-supplier:${displayName}`,
+  });
+  return created.supplierId;
+}
+
 /** A vehicle carrying a real cost, through the mutation the Add Vehicle wizard calls. */
 export async function createCostedVehicle(
   client: ConvexHttpClient,
@@ -104,9 +124,11 @@ export async function createCostedVehicle(
     purchasePaymentMethod: opts.costPaidBy,
     ...(bankAccountId ? { bankAccountId } : {}),
     // Bought on account, the payable needs someone to owe.
-    // SCRUM-717: the creditor of an owned purchase is `purchaseSupplierName`;
-    // `sourcedFromName` is consignment-only and is refused on an owned car.
-    ...(opts.costPaidBy === "ON_ACCOUNT" ? { purchaseSupplierName: "QA TEST Supplier" } : {}),
+    // SCRUM-717: the creditor of an owned purchase is its own field, never the consignment supplier.
+    // SCRUM-868 P2: it is a supplier master id; the server writes the name from the master.
+    ...(opts.costPaidBy === "ON_ACCOUNT"
+      ? { purchaseSupplierId: await ensureSupplier(client, orgId, "QA TEST Supplier") }
+      : {}),
     sourceType: "STOCK",
     status: "AVAILABLE",
     notes: "QA TEST — SCRUM-595 scenario matrix",
