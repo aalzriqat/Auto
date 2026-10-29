@@ -132,6 +132,12 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Nothing has been changed. The sale and the supplier payment stay as recorded.",
     "لا يمكن إلغاء البيع تلقائياً بعد سداد ذمة المورّد كلياً أو جزئياً. لم يتم تغيير أي شيء، ويبقى البيع ودفعة المورّد كما هما مسجّلتان.",
   ],
+  // SCRUM-869 (owner ruling c23881). The English text must equal SUPPLIER_RECEIVABLE_PAID_CANCEL_MESSAGE in
+  // convex/supplierReceivables.ts. Names no action that is unavailable in the pilot.
+  ServerError_SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED: [
+    "Cannot automatically cancel a sale after the supplier has paid against its commission claim. Nothing has been changed. The sale and the supplier's receipts stay as recorded.",
+    "لا يمكن إلغاء البيع تلقائياً بعد أن يسدّد المورّد جزءاً من مطالبة العمولة أو كلها. لم يتم تغيير أي شيء، ويبقى البيع وإيصالات المورّد كما هي مسجّلة.",
+  ],
   // SCRUM-781 (owner rulings SCRUM-773 c22401, SCRUM-760 c23812). The English text must equal
   // CONSIGNED_PAYABLE_VAT_REFUSAL in convex/sourcingPayables.ts. PayableNoVatReclass is the neutral
   // note the pay screen shows in place of the VAT field: the backend predicate is also false for an opening liability

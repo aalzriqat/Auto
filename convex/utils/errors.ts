@@ -167,6 +167,10 @@ export const AppErrorCode = {
   // SCRUM-651. Sale / deal teardown refuses while any supplier payable on the sale carries a
   // recorded payment (whole or part). Translated under ServerError_<code>.
   SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED: "SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED",
+  // SCRUM-869 (owner ruling c23881). The same refusal on the receivable side: sale / deal teardown refuses while a
+  // consignment margin claim carries a recorded supplier receipt. Message in convex/supplierReceivables.ts;
+  // translated under ServerError_<code>.
+  SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED: "SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED",
   // SCRUM-563. Post-reset safety. A command identity recorded before an org financial reset
   // cannot replay after it; the org cannot be reactivated mid-reset. Translated under
   // ServerError_<code>.

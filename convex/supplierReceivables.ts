@@ -14,6 +14,7 @@ import { auditLog } from "./financialAudit";
 import { postingStateForKey } from "./accounting/supplierCostRecoveryPosting";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { assertSupplierSettlementMethodAllowed } from "./utils/supplierSettlementContainment";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 
 /**
  * Collecting the dealership's agency margin from a supplier who was paid
@@ -538,6 +539,13 @@ export const setDisputed = mutation({
 });
 
 /**
+ * SCRUM-869 (owner ruling c23881). Must equal ServerError_SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED (EN) in
+ * lib/i18n/domains/common.ts. Thrown through `throwAppError` so the client can localize it by code.
+ */
+export const SUPPLIER_RECEIVABLE_PAID_CANCEL_MESSAGE =
+  "Cannot automatically cancel a sale after the supplier has paid against its commission claim. Nothing has been changed. The sale and the supplier's receipts stay as recorded.";
+
+/**
  * The read-only refusal half of `cancelSupplierReceivablesForSale`, shared with the unwind status
  * preview (SCRUM-693 PR-B F2) so both ask one question. Returns the sale's claims for the caller.
  *
@@ -560,9 +568,7 @@ export async function assertNoSupplierReceiptsForSale(
     .collect();
   const owned = rows.filter((row) => row.orgId === orgId);
   if (owned.some((row) => (row.receiptSeq ?? 0) > 0)) {
-    throw new ConvexError(
-      "Cannot automatically cancel a sale after the supplier has paid against its commission claim. Nothing has been changed. The sale and the supplier's receipts stay as recorded."
-    );
+    throwAppError(AppErrorCode.SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED, SUPPLIER_RECEIVABLE_PAID_CANCEL_MESSAGE);
   }
   return owned;
 }
