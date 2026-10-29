@@ -155,8 +155,11 @@ separately provided by the trusted attack swarm, not inferred from a UI denial.
 | Four owned/SOURCED cash/finance draft/detail links, each real role | A: new list-to-cockpit traversal | U | g8-deals-list-to-detail |
 | Separate exploratory walks on Deals, Sales and Accounting | E: twelve named pilot tests, one per route, locale and width (`pilot explorer <route> <en\|ar> <desktop\|phone>`), existing action filters and backend attestation retained | U | twelve records `g8-explorer-<route>[-<locale>-<width>]`; the EN desktop walk of each route keeps the plain id `g8-explorer-deals`, `-sales` or `-accounting` |
 
-The three new money records bind existing public-API tests in
-`convex/scrum486Certification.test.ts` and oracle row `SCRUM-760-G8-SOURCED`.
+The 24 G8 records comprise 4 money records and 20 screen records, counted from
+`regression/scenarios/**/g8-*.scenario.json`. The four money records bind
+public-API tests in `convex/scrum486Certification.test.ts`: three agency cases
+use oracle row `SCRUM-760-G8-SOURCED`, and the financier receipt case uses
+`SCRUM-760-G8-SOURCED-RECEIPT`.
 They use independently written figures; a `convex-test` success is harness
 execution, not platform or concurrency proof. Browser records bind exact active
 test names. Fingerprints and ruling digests use the existing validator.
@@ -220,8 +223,10 @@ Each command below ran alone with `--maxWorkers=1`:
 The mutation subtracted 1,000 minor from both lines in `ruleFinanceCashReceived`,
 preserving balance so the new test had to detect the wrong amount. A `finally`
 restored `convex/accounting/postingRules.ts` byte for byte before the full green
-run. No mutation is committed. The browser records retain their screen outcomes
-and now state all journals asserted by their replays.
+run. No mutation is committed. The three SOURCED browser records retain their
+screen outcomes and state all journals asserted by their replays. The direct
+finance record includes sale Dr1240 / Cr4170 2,500 JOD and an empty journal for
+the external supplier advice.
 
 The test uses public mutations and the existing schema-backed harness, following
 the [official Convex testing guidance](https://docs.convex.dev/testing/convex-test).

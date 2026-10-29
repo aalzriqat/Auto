@@ -30,6 +30,27 @@
     {
       "observable": "screen.journeyOutcome",
       "value": "closedDealAndExternalSupplierAdvice"
+    },
+    {
+      "observable": "journal.saleLinesMinor",
+      "value": [
+        {
+          "account": "1240",
+          "debit": 2500000,
+          "credit": 0,
+          "currency": "JOD"
+        },
+        {
+          "account": "4170",
+          "debit": 0,
+          "credit": 2500000,
+          "currency": "JOD"
+        }
+      ]
+    },
+    {
+      "observable": "journal.externalSupplierAdviceLinesMinor",
+      "value": []
     }
   ],
   "rulings": [
@@ -42,5 +63,5 @@
     "file": "playwright/scenarios/pilot-sourced.spec.ts",
     "testName": "pilot SOURCED direct finance reaches delivery and records external supplier advice without a bank receipt"
   },
-  "fingerprint": "1786ba4feaedcc857c6076b34deac0c9f4e3838561a8ec2fef5227725e635d07"
+  "fingerprint": "e93cca52e5e1cd55777e1faf96b8321156311782b50b51e578a6642fe1c06905"
 }
