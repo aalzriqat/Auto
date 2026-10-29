@@ -177,7 +177,16 @@ export async function getCumulativeBalancesAsOf(
 }
 
 export type BoundedControlBalances =
-  | { status: "OK"; balances: CumulativeBalance[] }
+  | {
+      status: "OK";
+      balances: CumulativeBalance[];
+      /**
+       * Accounts that have at least one journal line dated AFTER `asOfDate`. For these the balance is
+       * only "as of" the date by the line dates; a caller that pairs it with a current-state subledger
+       * (whose rows already include whatever those later lines belong to) must not call it a comparison.
+       */
+      accountsWithLaterLines: Array<Id<"chartOfAccounts">>;
+    }
   | { status: "OVER_LIMIT" };
 
 /**
@@ -190,6 +199,13 @@ export type BoundedControlBalances =
  * and their entries - is charged to `readLimit`; if the next read would exceed it, nothing partial is
  * returned (OVER_LIMIT). Read-only. A bounded read here is still one Convex query, so the caller
  * stays inside the documents-per-function ceiling by choosing `readLimit` well under it.
+ *
+ * Which date governs (SCRUM-869 r3 M2): a line is in the balance by its OWN `accountingDate`, the way
+ * getPostedLines includes it. The snapshot path is keyed by the entry's period, not by line dates, and
+ * a certified period is read from snapshots only when no ENTRY is dated after `asOfDate`; so a line
+ * dated after `asOfDate` inside an earlier-dated entry would be in a snapshot sum but not in the
+ * line-date answer. Rather than guess, every account is probed for lines dated after `asOfDate` and
+ * reported in `accountsWithLaterLines` (one indexed read each, charged only when it finds one).
  */
 export async function getControlAccountBalancesAsOf(
   ctx: QueryCtx,
@@ -246,7 +262,16 @@ export async function getControlAccountBalancesAsOf(
   };
 
   const entryStatusCache = new Map<Id<"journalEntries">, boolean>();
+  const accountsWithLaterLines: Array<Id<"chartOfAccounts">> = [];
   for (const accountId of new Set(accountIds)) {
+    const later = await ctx.db
+      .query("journalLines")
+      .withIndex("by_org_account_date", (q) => q.eq("orgId", orgId).eq("accountId", accountId).gt("accountingDate", asOfDate))
+      .first();
+    if (later) {
+      if (!charge(1)) return over;
+      accountsWithLaterLines.push(accountId);
+    }
     const snapshots = await ctx.db
       .query("accountBalanceSnapshots")
       .withIndex("by_org_account_currency_period_shard", (q) => q.eq("orgId", orgId).eq("accountId", accountId))
@@ -280,5 +305,5 @@ export async function getControlAccountBalancesAsOf(
     }
   }
 
-  return { status: "OK", balances: Array.from(totals.values()) };
+  return { status: "OK", balances: Array.from(totals.values()), accountsWithLaterLines };
 }

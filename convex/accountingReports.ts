@@ -959,8 +959,10 @@ export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
 /**
  * How many supplier-payable rows (all open-balance statuses together) and, separately, how many
  * outbox events / drafts one reconciliation reads before it declares itself UNAVAILABLE. The whole
- * figure is needed to be true, so a truncated read is refused rather than summed. 4,000 sits well
- * under the Convex 16,384-documents-per-function ceiling. The limit bounds only this function's own
+ * figure is needed to be true, so a truncated read is refused rather than summed. Convex allows 32,000
+ * documents scanned and 4,096 index ranges per function (https://docs.convex.dev/production/state/limits);
+ * this figure has not been re-derived against both (the A/R reader's budget has: see
+ * SUPPLIER_RECEIVABLES_RECON_LIMITS). The limit bounds only this function's own
  * payable, outbox and draft reads; it does not budget the GL read (computeGlBalanceByCurrency reads
  * every posted line via getPostedLines) or the rest of the period-close checklist. Fully paid rows
  * still count toward it.
@@ -1208,7 +1210,16 @@ export type SupplierReceivablesUnavailableReason =
   | "PENDING_POSTINGS"
   | "OPENING_SOURCE_UNAVAILABLE"
   /** `toDate` is earlier than now: the subledger cannot be read as of a past date (see below). */
-  | "AS_OF_DATE_UNSUPPORTED";
+  | "AS_OF_DATE_UNSUPPORTED"
+  /** `toDate` is NaN or infinite (`v.number()` accepts both): it is not a date, so it is not read as a cutoff. */
+  | "INVALID_AS_OF_DATE"
+  /**
+   * A control account has a posting dated after the cutoff (a sale or expense may be dated up to ten days
+   * ahead). The subledger is the rows' current state, which already includes what that posting belongs to,
+   * so the GL as of the cutoff and the subledger are not the same moment: neither "reconciled" nor a
+   * difference would be true.
+   */
+  | "ACTIVITY_AFTER_CUTOFF";
 
 export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, "byCurrency"> & {
   byCurrency: Record<
@@ -1232,11 +1243,50 @@ export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, 
 };
 
 /**
- * Same figure and reasoning as SUPPLIER_PAYABLES_RECON_READ_LIMIT, applied to each source on its own:
- * the margin receivables, the cost recoveries, the PENDING and FAILED outbox rows, the pending drafts,
- * and (unlike the A/P figure) the GL read, which counts every document it reads.
+ * How much one supplier-receivables reconciliation may read before it says UNAVAILABLE (OVER_LIMIT).
+ * Convex allows one query or mutation function (https://docs.convex.dev/production/state/limits):
+ *   - 32,000 documents scanned (documents dropped by a filter still count), and
+ *   - 4,096 index ranges, counting every `db.get` and every `db.query`.
+ * (The A/P figure's comment cites a 16,384-document ceiling; that is not Convex's limit.)
+ *
+ * Each source has its own cap, so a truncated read is refused rather than summed:
+ *   rows              margin receivables and cost recoveries, each on its own, all statuses together.
+ *                     Plain indexed queries: they spend documents, not ranges.
+ *   inFlight          each of the PENDING outbox rows, the FAILED outbox rows and the two pending-draft
+ *                     lists. A queued reversal needs one `db.get` of the event it reverses, so this also
+ *                     bounds those reads (at most two lists of originals).
+ *   gl                every document the GL read touches: periods, snapshots, and on the journal-line path
+ *                     the lines and one `db.get` per parent entry.
+ *   openingRecoveries OPENING cost recoveries, each of which re-verifies its opening draft (a scan of up
+ *                     to 100 drafts, a journal probe, up to 200 lines and a few `db.get`s).
+ * `supplierReceivablesReconWorstCase` adds the caps up the way the code reads, and the test pins the
+ * result under both Convex limits. Its per-opening-row costs are read from the code of
+ * openingRecoveryBasis / requireOpeningSettlementBasis, not measured, so they carry headroom.
  */
-const SUPPLIER_RECEIVABLES_RECON_READ_LIMIT = 4000;
+export const SUPPLIER_RECEIVABLES_RECON_LIMITS = { rows: 4000, inFlight: 400, gl: 2400, openingRecoveries: 25 } as const;
+const OPENING_ROW_DOCUMENT_ALLOWANCE = 450;
+const OPENING_ROW_RANGE_ALLOWANCE = 12;
+export const CONVEX_DOCUMENTS_SCANNED_LIMIT = 32_000;
+export const CONVEX_INDEX_RANGES_LIMIT = 4_096;
+
+export function supplierReceivablesReconWorstCase(limits: {
+  rows: number; inFlight: number; gl: number; openingRecoveries: number;
+}): { documents: number; ranges: number } {
+  const outbox = 2 * (limits.inFlight + 1);
+  const originals = 2 * limits.inFlight; // one db.get per reversed event
+  const drafts = 2 * (limits.inFlight + 1) + 1; // manual + opening drafts, and the control account
+  const rows = 2 * (limits.rows + 1);
+  const referenceDrafts = 101;
+  const opening = limits.openingRecoveries * OPENING_ROW_DOCUMENT_ALLOWANCE;
+  const openingAccounts = 1 + limits.openingRecoveries;
+  const glDocuments = limits.gl + 1 + openingAccounts;
+  const documents = outbox + originals + drafts + rows + 1 + referenceDrafts + opening + glDocuments;
+  const ranges =
+    2 /* outbox */ + originals + 3 /* drafts */ + 4 + 3 /* statuses of both subledgers */ + 1 /* control account */ +
+    1 /* opening references */ + limits.openingRecoveries * OPENING_ROW_RANGE_ALLOWANCE +
+    2 /* periods, future-entry probe */ + 3 * openingAccounts /* snapshots, later-line probe, lines */ + limits.gl /* parent entries */;
+  return { documents, ranges };
+}
 
 /** Exhaustive over each status union, so a new status fails typecheck until it is classified. */
 const SUPPLIER_RECEIVABLE_STATUS_CARRIES_BALANCE = {
@@ -1273,7 +1323,10 @@ export async function computeSupplierReceivablesReconciliation(
   toDate: number | undefined,
   opts: { readLimit?: number } = {}
 ): Promise<SupplierReceivablesReconciliationResult> {
-  const readLimit = opts.readLimit ?? SUPPLIER_RECEIVABLES_RECON_READ_LIMIT;
+  // `opts.readLimit` (tests) applies one figure to every source; the default is the derived budget.
+  const limits = opts.readLimit === undefined
+    ? SUPPLIER_RECEIVABLES_RECON_LIMITS
+    : { ...SUPPLIER_RECEIVABLES_RECON_LIMITS, rows: opts.readLimit, inFlight: opts.readLimit, gl: opts.readLimit };
   const unavailable = (unavailableReason: SupplierReceivablesUnavailableReason): SupplierReceivablesReconciliationResult => ({
     currencies: [],
     byCurrency: {},
@@ -1288,6 +1341,9 @@ export async function computeSupplierReceivablesReconciliation(
   // the dates of the other facts are not the GL's accounting dates. Rebuilding it at a past date would
   // be a guess, and comparing a past GL with today's rows can hide a real error behind a row created
   // after the cutoff, or invent a difference from one. So a past `toDate` is refused, not approximated.
+  // `v.number()` accepts NaN and the infinities, and `NaN < now` is false: without this check NaN would
+  // pass the guard below and be used as a cutoff. A non-finite value is not a date, so it is refused.
+  if (toDate !== undefined && !Number.isFinite(toDate)) return unavailable("INVALID_AS_OF_DATE");
   const now = Date.now();
   if (toDate !== undefined && toDate < now) return unavailable("AS_OF_DATE_UNSUPPORTED");
 
@@ -1298,13 +1354,13 @@ export async function computeSupplierReceivablesReconciliation(
         ctx.db
           .query("pendingAccountingEvents")
           .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
-          .take(readLimit + 1)
+          .take(limits.inFlight + 1)
       )
     ),
-    pendingControlAccountDraftState(ctx, orgId, readLimit, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS),
+    pendingControlAccountDraftState(ctx, orgId, limits.inFlight, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS),
   ]);
   const [queued, failed] = outbox;
-  if (queued.length > readLimit || failed.length > readLimit) return unavailable("OVER_LIMIT");
+  if (queued.length > limits.inFlight || failed.length > limits.inFlight) return unavailable("OVER_LIMIT");
   if (await hasPendingAffectingPosting(ctx, [...queued, ...failed], SUPPLIER_RECEIVABLE_AFFECTING_EVENT_TYPES)) {
     return unavailable("PENDING_POSTINGS");
   }
@@ -1314,7 +1370,7 @@ export async function computeSupplierReceivablesReconciliation(
   // 2. Both subledgers under one shared bound. Status is a label, not the balance.
   const receivables: Array<Doc<"vehicleSupplierReceivables">> = [];
   for (const status of statusesCarryingBalance(SUPPLIER_RECEIVABLE_STATUS_CARRIES_BALANCE)) {
-    const budget = readLimit - receivables.length;
+    const budget = limits.rows - receivables.length;
     const batch = await ctx.db
       .query("vehicleSupplierReceivables")
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
@@ -1324,7 +1380,7 @@ export async function computeSupplierReceivablesReconciliation(
   }
   const recoveries: Array<Doc<"supplierCostRecoveries">> = [];
   for (const status of statusesCarryingBalance(SUPPLIER_COST_RECOVERY_STATUS_CARRIES_BALANCE)) {
-    const budget = readLimit - recoveries.length;
+    const budget = limits.rows - recoveries.length;
     const batch = await ctx.db
       .query("supplierCostRecoveries")
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
@@ -1332,6 +1388,9 @@ export async function computeSupplierReceivablesReconciliation(
     if (batch.length > budget) return unavailable("OVER_LIMIT");
     recoveries.push(...batch);
   }
+  // Each OPENING recovery re-verifies its opening draft with reads of its own (see the limits above), so
+  // their number is capped before the first one is verified, not discovered by running into Convex's limit.
+  if (recoveries.filter((row) => row.origin === "OPENING").length > limits.openingRecoveries) return unavailable("OVER_LIMIT");
 
   // Signed open balance in minor units, NOT clamped: an over-received row is a real negative that
   // the GL carries. The subledger side is the current state of the rows and `toDate` is not in the
@@ -1343,11 +1402,18 @@ export async function computeSupplierReceivablesReconciliation(
   const add = (map: Map<string, number>, currency: string, minor: number) =>
     map.set(currency, (map.get(currency) ?? 0) + minor);
   const controlAccounts = new Set<Id<"chartOfAccounts">>();
+  // The accounts whose later-dated postings would make the comparison mixed: 1240 and the declared account
+  // of every opening recovery that is IN the subledger. An opening recovery dated after the cutoff is on
+  // neither side, so its own account may hold lines dated after the cutoff without any mismatch.
+  const subledgerAccounts = new Set<Id<"chartOfAccounts">>();
   const canonical = await ctx.db
     .query("chartOfAccounts")
     .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS))
     .unique();
-  if (canonical) controlAccounts.add(canonical._id);
+  if (canonical) {
+    controlAccounts.add(canonical._id);
+    subledgerAccounts.add(canonical._id);
+  }
   const cutoff = toDate ?? now;
 
   for (const row of receivables) {
@@ -1379,6 +1445,7 @@ export async function computeSupplierReceivablesReconciliation(
       if (!basis) return unavailable("OPENING_SOURCE_UNAVAILABLE");
       controlAccounts.add(basis.accountId);
       if (basis.asOfDate > cutoff) continue;
+      subledgerAccounts.add(basis.accountId);
     }
     const openMinor = row.amountDueMinor - row.amountRecoveredMinor;
     add(recovery, row.currency, openMinor);
@@ -1396,9 +1463,17 @@ export async function computeSupplierReceivablesReconciliation(
   // 1240 is debit-normal: its balance is debits minus credits.
   const glByCurrency = new Map<string, number>();
   // Only the control accounts are read, through account-first indexes, and every document read is
-  // counted against `readLimit`; past it the comparison is refused rather than summed from a partial read.
-  const gl = await getControlAccountBalancesAsOf(ctx, orgId, [...controlAccounts], cutoff, readLimit);
+  // counted against `limits.gl`; past it the comparison is refused rather than summed from a partial read.
+  const gl = await getControlAccountBalancesAsOf(ctx, orgId, [...controlAccounts], cutoff, limits.gl);
   if (gl.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+  // SCRUM-869 r3 H1. The subledger is the rows' current state; a sale or expense may be dated up to ten days
+  // ahead, so its row can exist now while its GL line lies after the cutoff (or the reverse). Summing the
+  // GL only to the cutoff would then compare two different moments and could print "reconciled" over a real
+  // error, or a difference that is only timing. The subledger cannot be rebuilt at the cutoff (a receipt
+  // carries no date), so this is refused rather than approximated.
+  if (gl.accountsWithLaterLines.some((accountId) => subledgerAccounts.has(accountId))) {
+    return unavailable("ACTIVITY_AFTER_CUTOFF");
+  }
   for (const balance of gl.balances) {
     glByCurrency.set(balance.currency, (glByCurrency.get(balance.currency) ?? 0) + balance.debitMinor - balance.creditMinor);
   }

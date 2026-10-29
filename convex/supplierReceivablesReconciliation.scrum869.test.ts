@@ -26,7 +26,10 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { computeSupplierReceivablesReconciliation, getPostedLines } from "./accountingReports";
+import {
+  computeSupplierReceivablesReconciliation, CONVEX_DOCUMENTS_SCANNED_LIMIT, CONVEX_INDEX_RANGES_LIMIT, getPostedLines,
+  SUPPLIER_RECEIVABLES_RECON_LIMITS, supplierReceivablesReconWorstCase,
+} from "./accountingReports";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
@@ -965,6 +968,19 @@ describe("SCRUM-869 r3 H2 - a toDate that is not a finite number", () => {
 });
 
 describe("SCRUM-869 r3 L1 - the default budget is derived from the Convex per-function limits", () => {
+  test("the worst case of the default caps stays under 32,000 documents scanned and 4,096 index ranges", () => {
+    // Convex limits per query or mutation function: https://docs.convex.dev/production/state/limits
+    expect(CONVEX_DOCUMENTS_SCANNED_LIMIT).toBe(32_000);
+    expect(CONVEX_INDEX_RANGES_LIMIT).toBe(4_096);
+    const worst = supplierReceivablesReconWorstCase(SUPPLIER_RECEIVABLES_RECON_LIMITS);
+    expect(worst.documents).toBeLessThan(CONVEX_DOCUMENTS_SCANNED_LIMIT);
+    expect(worst.ranges).toBeLessThan(CONVEX_INDEX_RANGES_LIMIT);
+    // The old single figure (4,000 for every source) does not fit: this is why the budget changed.
+    const old = supplierReceivablesReconWorstCase({ rows: 4000, inFlight: 4000, gl: 4000, openingRecoveries: 4000 });
+    expect(old.documents).toBeGreaterThan(CONVEX_DOCUMENTS_SCANNED_LIMIT);
+    expect(old.ranges).toBeGreaterThan(CONVEX_INDEX_RANGES_LIMIT);
+  });
+
   test("more than the in-flight limit of queued outbox rows is UNAVAILABLE (OVER_LIMIT) at the default limit; exactly at it is not", async () => {
     const s = await seed("l1inflight");
     await directSale(s, "l1inflight");
@@ -1101,6 +1117,9 @@ describe("SCRUM-869 r3 M1/M2 - the journal-line path of the bounded GL read", ()
     const r = await read(s, ar._id, 100, asOf);
     expect(laterLines(r)).toEqual([ar._id]);
     expect(totals(r)).toEqual([]);
+    // The probe is charged when it finds a line: 1 period + 1 later line = 2 documents.
+    expect((await read(s, ar._id, 2, asOf)).status).toBe("OK");
+    expect((await read(s, ar._id, 1, asOf)).status).toBe("OVER_LIMIT");
     const posted = await s.t.run((ctx) => getPostedLines(ctx, s.orgId, undefined, asOf));
     expect(posted.filter((l) => l.accountId === ar._id)).toHaveLength(0);
     // An account with nothing after the cutoff is not flagged.
