@@ -3,7 +3,7 @@
   "fingerprint": "2a3b2b11b177f4499a9533543101635215b56f8b2c594320c4c51aeb54b9651c",
   "domain": "money",
   "level": "backend",
-  "status": "active",
+  "status": "retired",
   "source": {
     "hunter": "scripted",
     "runId": "scrum869-s8",
@@ -42,5 +42,7 @@
     "file": "convex/supplierDueAlerts.scrum869.test.ts",
     "testName": "a failing organisation reports failed and logs, instead of throwing"
   },
-  "matrixRow": "SCRUM-869-DUE-ALERTS"
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "retiredReason": "PR 716 round 2: the worker no longer catches its own failure (a caught error committed partial writes and starved the organisation). An unreadable row is now skipped and reported; replaced by supplier-alert-unreadable-row-is-skipped-and-reported.",
+  "retiredByRuling": "SCRUM-869#c23883"
 }

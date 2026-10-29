@@ -112,7 +112,7 @@ const addRecovery = (s: Seed, fields: Record<string, unknown> = {}) =>
   });
 
 const list = (s: Seed, kind: "PAYABLE" | "RECEIVABLE" | "RECOVERY", extra: Record<string, unknown> = {}) =>
-  s.asUser.query(api.supplierDueAging.list, { orgId: s.orgId, kind, ...extra } as never);
+  s.asUser.query(api.supplierDueAging.list, { orgId: s.orgId, kind, nowMs: Date.now(), ...extra } as never);
 
 describe("SCRUM-869 S3a - payables", () => {
   test("an agreed paymentDueDate wins and ages by Amman calendar days", async () => {
@@ -391,7 +391,7 @@ describe("SCRUM-869 S3a - bounded reads, tenancy, permission", () => {
     await addPayable(a, { paymentDueDate: NOW - DAY });
     const r = await list(a, "PAYABLE");
     expect(r.rows).toHaveLength(1);
-    await expect(a.asUser.query(api.supplierDueAging.list, { orgId: otherOrg, kind: "PAYABLE" } as never)).rejects.toThrow();
+    await expect(a.asUser.query(api.supplierDueAging.list, { orgId: otherOrg, kind: "PAYABLE", nowMs: Date.now() } as never)).rejects.toThrow();
   });
 
   test("a member without view:finance is refused", async () => {

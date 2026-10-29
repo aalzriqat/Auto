@@ -253,6 +253,7 @@ Practice and evidence boundary: the aging layout (days past the due date in 30-d
 | Financed payable, funding requested or pending (no `disbursedAt`) | No due date (FINANCIER_FUNDING_NOT_RECORDED), never overdue | `a financed deal with no funding received (requested or pending) has no due date and is never overdue` |
 | Financed payable, funding reversed (cheque returned after clearing) | the cleared instant and amount are absent: No due date | `a funding that was reversed (cheque returned after clearing) is not received` |
 | Financed payable, `disbursedAt` with no amount | not a received funding: No due date | `an instant with no recorded amount is not a received funding` |
+| Financed payable, `disbursedAt` with a recorded amount of zero (legacy row) | not a received funding: No due date | `an instant with a recorded amount of zero is not a received funding (kills the > 0 to >= 0 mutant)` |
 | Financed payable, only the supplier-direct disbursement recorded | not the dealership's funding: No due date | `the financier's payment to the supplier (direct route fact) is not the dealership's funding` |
 | Financed payable, vehicle handed over but no funding | the handover does not stand in for funding: No due date | `a recorded vehicle handover does not stand in for funding` |
 | Financed payable with funding and an agreed date | the agreed date wins | `an agreed paymentDueDate still wins over the funding instant` |
@@ -282,6 +283,7 @@ Practice and evidence boundary: the aging layout (days past the due date in 30-d
 | Page size 100,000 over 101 rows | 100 rows, not complete | `a requested page size above the cap is cut to the cap` |
 | Another organisation | its rows never returned; calling with its id is refused | `another organisation's obligations are never returned` |
 | Caller without view:finance | refused | `a member without view:finance is refused` |
+| Caller-supplied day | `nowMs` decides the aging (a day later reads one day older); a value more than a day from the server clock, or not a whole number, is refused; a call without it is refused | `aging follows the supplied nowMs, and a clock far from the server's is refused`, `a call without nowMs is refused rather than silently reading the clock` |
 
 Known simplifications, stated rather than hidden: `complete` is per family and per page walk (a caller must walk to the last page; totals are for the page only); a payable's ownership model is read from its sale's `supplierSettlementRoute` (no sale means OWNED ON_ACCOUNT); alerts (S8) are a separate section.
 ## SCRUM-869-DUE-ALERTS
@@ -291,8 +293,8 @@ Owner ruling SCRUM-869#c23883 (2026-10-29, OQ-1), the coordinator's Jira record 
 Design facts the cells rely on:
 
 - The alert row is inserted directly. `utils/notifications.dispatch` is not used because it also fans out to email, WhatsApp and push; this ruling is in-app only.
-- Idempotency is one `commandIdempotency` record per obligation, step and occurrence (`supplier-due-alert`, key `<kind>:<id>:<step>:<occurrence>`), written in the same transaction as the alert rows.
-- The cron `supplier-due-alerts` (05:30 UTC, 08:30 Amman) pages organisations, 20 per page, and schedules one worker mutation per organisation. A worker reads one page (50 rows) of one obligation kind and schedules its own continuation. A worker failure is caught and logged per organisation.
+- Idempotency is one `commandIdempotency` record per obligation, step, occurrence and recipient (`supplier-due-alert`, key `<kind>:<id>:<step>:<occurrence>:<userId>`), written in the same transaction as that recipient's alert row. Per recipient, because the fan-out for one obligation can span several transactions (PR #716 round 2).
+- The cron `supplier-due-alerts` (05:30 UTC, 08:30 Amman) pages organisations, 20 per page, and schedules one worker mutation per organisation. A worker transaction reads one page (50 rows) of one obligation kind and at most `floor(400 / alerts)` memberships, sends at most 400 alerts (at most three documents written each: the notification, and the idempotency record's insert and patch, so 1,200 at the budget against Convex's 16,000 limit), and schedules its own continuation: the same obligation page with the next membership cursor, then the next obligation page, then the next kind. The budget of 400 is chosen from the documented limits, not measured: `convex-test` has no write meter. The worker does not catch its own failure: a fault that can be seen from a read (an unsupported currency, unconvertible amounts) is skipped with a log line and counted in `skipped` before any write, and any other fault throws, so the mutation rolls back whole and its continuation is dropped with it (a caught error would commit the writes before it and drop the rest of the organisation). Recipients are the active, non-disabled, non-impersonation members of the organisation's memberships, read one bounded membership page at a time rather than the first 1,000.
 - Catch-up (coordinator ruling 2026-10-29, closing the missed-day gap): each run finds the latest schedule step whose Amman day has been reached (-3, 0, 7, then 14, 21, ... counted as occurrences) and sends it only when that step's idempotency record does not exist. A day the cron or an organisation worker missed is made up on the next run, once; earlier skipped steps are never sent as a burst, and a row that gains a due date late gets the one step it has reached.
 
 Evidence boundary: `convex-test` only. It has no runtime read limits, no OCC and no real scheduler clock, so bounded reads and the live cron are not proven here. The page-size constant (50) is not observable in these tests, because a larger page would still alert every row.
@@ -315,7 +317,14 @@ Evidence boundary: `convex-test` only. It has no runtime read limits, no OCC and
 | No due date (any kind), disputed, paid or cancelled | no alert | `no due date is never alerted, however old the sale`, `a disputed obligation is not alerted`, `settled and cancelled obligations are not alerted` |
 | Channels | nothing scheduled to email, WhatsApp or push | `the sweep schedules no email, WhatsApp or push delivery` |
 | 53 obligations; 22 organisations | all alerted; all swept | `more obligations than one page are all alerted`, `more organisations than one batch are all swept` |
-| An organisation that fails | reports failed and logs; the others still alert | `a failing organisation reports failed and logs, instead of throwing`, `one organisation failing does not stop the others` |
+| An unreadable row (unsupported currency) | skipped and reported (`skipped`), nothing thrown | `an unreadable row is skipped and reported, not thrown` |
+| One unreadable payable and one unreadable recovery among 54 good rows over two pages and three kinds | the 54 good rows are all alerted (162 alerts), the two unreadable ones are logged once each and never alerted | `one unreadable row does not starve the rest of its page, its later pages or its later kinds` |
+| An organisation with an unreadable row beside a good one | the good organisation still alerts | `one organisation with an unreadable row does not stop the others` |
+| Fault injected on the 2nd notification insert | the worker throws; no notification and no idempotency record remain; the retry sends all 6 alerts once | `a fault after earlier writes rolls the whole worker back, and the retry sends everything once` |
+| Same worker call replayed | `alerted` is 3 then 0: only new sends are counted | `alerted counts only new sends: a replay reports zero` |
+| 603 recipients, 3 obligations | no transaction writes more than 1,500 documents; each recipient gets exactly one alert per obligation (1,809); a replay sends none | `600 extra recipients and 3 obligations: no transaction writes past the ceiling, and each recipient is told once per obligation` |
+| 1,005 memberships, the last the only late finance member | that member is alerted | `a finance member who is the 1,005th membership is still alerted` |
+| Disabled user; super-admin impersonation membership | neither is alerted | `a disabled user and a super-admin impersonation membership are not alerted` |
 
 ## Implementation ledger on this branch
 

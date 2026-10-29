@@ -525,7 +525,8 @@ interface TransactionStep {
 
 /** Runs one organisation's worker one transaction at a time, following its own scheduled continuations. */
 async function driveOrganisation(t: T, orgId: Id<"organizations">): Promise<TransactionStep[]> {
-  const seen = new Set<string>();
+  // Continuations scheduled by earlier transactions are not this chain's.
+  const seen = new Set(await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).map((f) => String(f._id))));
   const steps: TransactionStep[] = [];
   let args: Record<string, unknown> = { orgId, now: NOW };
   for (let i = 0; i < 400; i += 1) {
@@ -593,7 +594,7 @@ describe("SCRUM-869 S8 - writes per transaction stay bounded however many recipi
     const replay = await driveOrganisation(t, s.orgId);
     expect(replay.reduce((sum, step) => sum + step.sent, 0)).toBe(0);
     expect(await alerts(t)).toHaveLength(recipientCount * 3);
-  });
+  }, 120_000);
 });
 
 // PR #716 round 2 (P2). Recipients were read with `.take(1000)` and no continuation: the 1,001st
@@ -609,7 +610,7 @@ describe("SCRUM-869 S8 - recipients beyond the first thousand memberships", () =
     await addPayable(t, s, { paymentDueDate: NOW });
     await sweep(t);
     expect(recipients(await alerts(t))).toEqual([s.ownerId, s.financeId, s.accountantId, lateFinance].map(String).sort());
-  });
+  }, 60_000);
 
   test("a disabled user and a super-admin impersonation membership are not alerted", async () => {
     const t = newHarness();

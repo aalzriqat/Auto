@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { hasPlanFeature } from "./subscriptions";
@@ -24,33 +24,71 @@ import { OBLIGATION_PAGE_MAX, readObligationPage, type ObligationKind, type Obli
  *
  * Shape (modelled on collections.processDailyCollectionReminders): the cron runs the dispatcher,
  * which pages the organisations and schedules ONE worker mutation per organisation. A worker
- * handles one bounded page of one obligation kind and schedules its own continuation, so no
- * transaction reads more than a page and one organisation's failure cannot roll back another's.
- * The worker also catches and logs its own failure (TEN-3). Catch-up: each run sends the latest step
- * an obligation has reached unless that step's idempotency record exists, so a day the cron or an
- * organisation worker missed is made up on the next run, once, never as a burst.
+ * runs one bounded transaction of one obligation kind and schedules its own continuation, so one
+ * organisation's failure cannot roll back another's. Catch-up: each run sends the latest step an
+ * obligation has reached unless that (obligation, step, occurrence, recipient) idempotency record
+ * exists, so a day the cron or an organisation worker missed is made up on the next run, once,
+ * never as a burst.
+ *
+ * Failure model (PR #716 round 2). The worker does NOT catch its own failure. A Convex mutation that
+ * throws is rolled back whole and its scheduled continuation is dropped with it; one that catches and
+ * returns commits everything written before the throw (a notification and a STARTED idempotency
+ * record, with the retry then refused) and silently drops the rest of the organisation. So every
+ * data fault that can be seen from a READ is handled before the first write - an unreadable row is
+ * skipped with a log line - and anything else throws and rolls back cleanly. Scheduled mutations are
+ * retried by Convex only for internal errors (docs.convex.dev/scheduling/scheduled-functions); a
+ * thrown developer error stops that organisation's chain for the day and is visible in the logs, and
+ * the next day's sweep starts it again from the first page.
+ *
+ * Write bound (PR #716 round 2). One transaction sends at most `SEND_BUDGET` alerts. Each send is one
+ * notification insert plus one idempotency record (an insert and a patch), so a transaction writes at
+ * most three documents per send: 1,200 at the budget, a tenth of Convex's 16,000 documents-written
+ * limit, and about two index-range reads per send against the 4,096 limit
+ * (docs.convex.dev/production/state/limits). A transaction takes one page of obligations and as many
+ * memberships as keep (alerts x memberships) within the budget, then continues with the same
+ * obligation page and the next membership cursor, and only then moves to the next obligation page.
+ * The idempotency key names the recipient, so a continuation, a retry or a later sweep can never send
+ * the same (obligation, step, occurrence) to the same person twice.
  */
 
 const ORG_BATCH_SIZE = 20;
 const ROW_PAGE_SIZE = Math.min(50, OBLIGATION_PAGE_MAX);
+/** Alert sends per worker transaction. Chosen from the limits above, not measured: convex-test has no write meter. */
+const SEND_BUDGET = 400;
 const KINDS: readonly ObligationKind[] = ["PAYABLE", "RECEIVABLE", "RECOVERY"];
 const kindValidator = v.union(v.literal("PAYABLE"), v.literal("RECEIVABLE"), v.literal("RECOVERY"));
 const ALERT_OPERATION = "supplier-due-alert";
 
-/** Owner, Finance Manager (manage:finance) and authorised accounting staff (view:finance). */
-async function resolveRecipients(ctx: MutationCtx, orgId: Id<"organizations">): Promise<Id<"users">[]> {
-  const memberships = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(1000);
+/**
+ * The members of one membership page who are alerted: Owner, Finance Manager (manage:finance) and
+ * authorised accounting staff (view:finance), and only active ones. An offboarding member, a super
+ * admin's temporary impersonation membership (it copies the target's role) and a disabled user are
+ * not recipients, the same predicates `requireTenantAuth` and `countOwners` apply.
+ */
+async function eligibleRecipients(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  memberships: Doc<"memberships">[]
+): Promise<Id<"users">[]> {
+  const rolesHoldingFinance = new Map<Id<"roles">, boolean>();
   const recipients = new Set<Id<"users">>();
   for (const membership of memberships) {
-    // The same predicate `requireTenantAuth` refuses on: an offboarding member is not active.
-    if (membership.offboardingStatus) continue;
-    const role = await ctx.db.get(membership.roleId);
-    if (!role || role.orgId !== orgId) continue;
-    const holdsFinance =
-      isSystemOwnerRole(role) ||
-      role.permissions.includes(PERMISSIONS.MANAGE_FINANCE) ||
-      role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
-    if (holdsFinance) recipients.add(membership.userId);
+    if (membership.offboardingStatus || membership.impersonationGrantId) continue;
+    let holdsFinance = rolesHoldingFinance.get(membership.roleId);
+    if (holdsFinance === undefined) {
+      const role = await ctx.db.get(membership.roleId);
+      holdsFinance =
+        !!role &&
+        role.orgId === orgId &&
+        (isSystemOwnerRole(role) ||
+          role.permissions.includes(PERMISSIONS.MANAGE_FINANCE) ||
+          role.permissions.includes(PERMISSIONS.VIEW_FINANCE));
+      rolesHoldingFinance.set(membership.roleId, holdsFinance);
+    }
+    if (!holdsFinance) continue;
+    const user = await ctx.db.get(membership.userId);
+    if (!user || user.disabled) continue;
+    recipients.add(membership.userId);
   }
   return [...recipients];
 }
@@ -94,35 +132,58 @@ export const processOrgSupplierDueAlerts = internalMutation({
     orgId: v.id("organizations"),
     now: v.number(),
     kind: v.optional(kindValidator),
+    /** Obligation page cursor, supplied by this mutation's own continuation. */
     cursor: v.optional(v.string()),
+    /** Membership page cursor within the obligation page, supplied by this mutation's own continuation. */
+    recipientCursor: v.optional(v.string()),
   },
-  returns: v.object({ alerted: v.number(), failed: v.boolean() }),
+  returns: v.object({ alerted: v.number(), skipped: v.number() }),
   handler: async (ctx, args) => {
     const kind = args.kind ?? KINDS[0];
-    try {
-      if (!(await hasPlanFeature(ctx, args.orgId, "accounting"))) return { alerted: 0, failed: false };
-      const page = await readObligationPage(ctx, {
-        orgId: args.orgId,
-        kind,
-        cursor: args.cursor ?? null,
-        limit: ROW_PAGE_SIZE,
-        nowMs: args.now,
-      });
-      let recipients: Id<"users">[] | null = null;
-      const getRecipients = async () => (recipients ??= await resolveRecipients(ctx, args.orgId));
-      let alerted = 0;
-      for (const row of page.rows) {
-        const planned = planAlert(row);
-        if (!planned) continue;
-        const { type, data, idempotencyKey } = planned;
+    if (!(await hasPlanFeature(ctx, args.orgId, "accounting"))) return { alerted: 0, skipped: 0 };
+
+    // Everything that can be learned from a read is learned before the first write below, so a data
+    // fault is skipped here and can never leave a half-written transaction behind.
+    const firstRecipientPage = args.recipientCursor === undefined;
+    let skipped = 0;
+    const page = await readObligationPage(ctx, {
+      orgId: args.orgId,
+      kind,
+      cursor: args.cursor ?? null,
+      limit: ROW_PAGE_SIZE,
+      nowMs: args.now,
+      onUnreadableRow: (row) => {
+        // The same unreadable row is met again by each membership continuation: count and log it once.
+        if (!firstRecipientPage) return;
+        skipped += 1;
+        console.error("supplier due alert skipped an unreadable row", { orgId: args.orgId, kind: row.kind, id: row.id, reason: row.reason });
+      },
+    });
+    const planned: PlannedAlert[] = [];
+    for (const row of page.rows) {
+      const alert = planAlert(row);
+      if (alert) planned.push(alert);
+    }
+
+    let alerted = 0;
+    let moreRecipients = false;
+    let recipientCursor: string | undefined;
+    if (planned.length > 0) {
+      // (alerts) x (memberships) stays within the send budget, whatever the alert count of the page.
+      const membershipPage = await ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .paginate({ cursor: args.recipientCursor ?? null, numItems: Math.max(1, Math.floor(SEND_BUDGET / planned.length)) });
+      const recipients = await eligibleRecipients(ctx, args.orgId, membershipPage.page);
+      for (const { type, data, idempotencyKey } of planned) {
         const def = NOTIFICATION_TYPES[type];
-        const recipients = await getRecipients();
-        // Non-economic: this command writes in-app notification rows and moves no money.
-        alerted += await runWithIdempotency(
-          ctx,
-          { orgId: args.orgId, operation: ALERT_OPERATION, economic: false, idempotencyKey },
-          async () => {
-            for (const userId of recipients) {
+        for (const userId of recipients) {
+          let sent = false;
+          // Non-economic: this command writes one in-app notification row and moves no money.
+          await runWithIdempotency(
+            ctx,
+            { orgId: args.orgId, operation: ALERT_OPERATION, economic: false, idempotencyKey: `${idempotencyKey}:${userId}` },
+            async () => {
               await ctx.db.insert("notifications", {
                 orgId: args.orgId,
                 userId,
@@ -133,36 +194,37 @@ export const processOrgSupplierDueAlerts = internalMutation({
                 isRead: false,
                 link: `/${args.orgId}/accounting`,
               });
+              sent = true;
+              return 1;
             }
-            return recipients.length;
-          }
-        );
-      }
-      if (!page.complete) {
-        await ctx.scheduler.runAfter(0, internal.supplierDueAlerts.processOrgSupplierDueAlerts, {
-          orgId: args.orgId,
-          now: args.now,
-          kind,
-          cursor: page.continueCursor,
-        });
-      } else {
-        const next = KINDS[KINDS.indexOf(kind) + 1];
-        if (next) {
-          await ctx.scheduler.runAfter(0, internal.supplierDueAlerts.processOrgSupplierDueAlerts, {
-            orgId: args.orgId,
-            now: args.now,
-            kind: next,
-          });
+          );
+          if (sent) alerted += 1;
         }
       }
-      return { alerted, failed: false };
-    } catch (error) {
-      console.error("supplier due alerts failed for one organisation", error);
-      return { alerted: 0, failed: true };
+      moreRecipients = !membershipPage.isDone;
+      recipientCursor = membershipPage.continueCursor;
     }
+
+    // No `undefined` field is ever passed on: a Convex argument is either present or absent.
+    const nextKind = KINDS[KINDS.indexOf(kind) + 1];
+    let continuation: { kind: ObligationKind; cursor?: string; recipientCursor?: string } | null = null;
+    if (moreRecipients && recipientCursor !== undefined) {
+      continuation = { kind, ...(args.cursor !== undefined ? { cursor: args.cursor } : {}), recipientCursor };
+    } else if (!page.complete) {
+      continuation = { kind, cursor: page.continueCursor };
+    } else if (nextKind) {
+      continuation = { kind: nextKind };
+    }
+    if (continuation) {
+      await ctx.scheduler.runAfter(0, internal.supplierDueAlerts.processOrgSupplierDueAlerts, {
+        orgId: args.orgId,
+        now: args.now,
+        ...continuation,
+      });
+    }
+    return { alerted, skipped };
   },
 });
-
 export const processSupplierDueAlerts = internalMutation({
   // `cursor` and `now` are supplied by this mutation's own continuation; the cron passes nothing.
   // `now` pins every continuation of one sweep to the same Amman day.

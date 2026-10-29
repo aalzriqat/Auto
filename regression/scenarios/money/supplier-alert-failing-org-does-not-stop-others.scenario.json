@@ -41,7 +41,7 @@
   ],
   "impl": {
     "file": "convex/supplierDueAlerts.scrum869.test.ts",
-    "testName": "one organisation failing does not stop the others"
+    "testName": "one organisation with an unreadable row does not stop the others"
   },
   "matrixRow": "SCRUM-869-DUE-ALERTS"
 }

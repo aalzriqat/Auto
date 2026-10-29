@@ -1,6 +1,7 @@
+import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
-import { toMinorUnits } from "./money";
+import { supportedCurrencyScale, toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
 import {
   agingFor,
@@ -208,6 +209,41 @@ export function totalsOf(rows: ObligationRow[]): ObligationTotal[] {
   return [...byKey.values()];
 }
 
+/** A row this module could not read: the data itself is unusable, not the infrastructure. */
+export interface UnreadableRow {
+  kind: ObligationKind;
+  id: string;
+  reason: string;
+}
+
+/**
+ * One row, or null when it is not outstanding. A row whose currency AutoFlow cannot vouch for, or
+ * whose amounts cannot be converted, is a deterministic data fault: with `onUnreadableRow` it is
+ * reported and left out, without it the fault throws as before (the aging screen must fail loudly
+ * rather than show a page that silently omits money). Only `ConvexError` data faults are caught; an
+ * infrastructure error always propagates.
+ */
+async function readRow(
+  kind: ObligationKind,
+  id: string,
+  currency: string,
+  nowMs: number,
+  facts: () => Promise<Outstanding | null> | Outstanding | null,
+  onUnreadableRow: ((row: UnreadableRow) => void) | undefined
+): Promise<ObligationRow | null> {
+  try {
+    if (onUnreadableRow && supportedCurrencyScale(currency) === null) {
+      throw new ConvexError(`Unsupported or unrecognised currency code "${currency}".`);
+    }
+    const resolved = await facts();
+    return resolved ? toRow(kind, id, currency, resolved, nowMs) : null;
+  } catch (error) {
+    if (!onUnreadableRow || !(error instanceof ConvexError)) throw error;
+    onUnreadableRow({ kind, id, reason: typeof error.data === "string" ? error.data : "unreadable" });
+    return null;
+  }
+}
+
 export async function readObligationPage(
   ctx: Reader,
   args: {
@@ -216,9 +252,11 @@ export async function readObligationPage(
     cursor: string | null;
     limit: number;
     nowMs: number;
+    /** Supplied by a writer that must decide before it writes anything (the due-alert worker). */
+    onUnreadableRow?: (row: UnreadableRow) => void;
   }
 ): Promise<ObligationPage> {
-  const { orgId, kind, cursor, nowMs } = args;
+  const { orgId, kind, cursor, nowMs, onUnreadableRow } = args;
   const numItems = Math.min(Math.max(Math.trunc(args.limit), 1), OBLIGATION_PAGE_MAX);
   const rows: ObligationRow[] = [];
   let isDone: boolean;
@@ -227,22 +265,22 @@ export async function readObligationPage(
   if (kind === "PAYABLE") {
     const page = await ctx.db.query("vehicleSupplierPayables").withIndex("by_org", (q) => q.eq("orgId", orgId)).paginate({ cursor, numItems });
     for (const row of page.page) {
-      const facts = await payableFacts(ctx, orgId, row);
-      if (facts) rows.push(toRow(kind, row._id, row.currency, facts, nowMs));
+      const read = await readRow(kind, row._id, row.currency, nowMs, () => payableFacts(ctx, orgId, row), onUnreadableRow);
+      if (read) rows.push(read);
     }
     ({ isDone, continueCursor } = page);
   } else if (kind === "RECEIVABLE") {
     const page = await ctx.db.query("vehicleSupplierReceivables").withIndex("by_org", (q) => q.eq("orgId", orgId)).paginate({ cursor, numItems });
     for (const row of page.page) {
-      const facts = await receivableFacts(ctx, orgId, row);
-      if (facts) rows.push(toRow(kind, row._id, row.currency, facts, nowMs));
+      const read = await readRow(kind, row._id, row.currency, nowMs, () => receivableFacts(ctx, orgId, row), onUnreadableRow);
+      if (read) rows.push(read);
     }
     ({ isDone, continueCursor } = page);
   } else {
     const page = await ctx.db.query("supplierCostRecoveries").withIndex("by_org", (q) => q.eq("orgId", orgId)).paginate({ cursor, numItems });
     for (const row of page.page) {
-      const facts = recoveryFacts(row);
-      if (facts) rows.push(toRow(kind, row._id, row.currency, facts, nowMs));
+      const read = await readRow(kind, row._id, row.currency, nowMs, () => recoveryFacts(row), onUnreadableRow);
+      if (read) rows.push(read);
     }
     ({ isDone, continueCursor } = page);
   }
