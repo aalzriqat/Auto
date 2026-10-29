@@ -10,6 +10,8 @@ import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
 import {
+  OPENING_DIFFERENCE_WARNING_BY_FAMILY,
+  OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
 } from "./utils/closeWarnings";
@@ -22,7 +24,12 @@ import {
   computeCommissionPayableReconciliation,
   computeCommissionRecognitionDivergence,
   computePrepaidRecognitionShortfall,
+  computeEmployeeAdvancesReconciliation,
+  computeSupplierRecoverablesReconciliation,
+  computePartnerCapitalReconciliation,
+  orgHasOpeningHistory,
   GlVsSubledgerResult,
+  OpeningFamilyReconciliationResult,
   SupplierPayablesReconciliationResult,
 } from "./accountingReports";
 
@@ -390,6 +397,10 @@ export type CloseChecklistResult = {
   supplierPayablesReconciliation: SupplierPayablesReconciliationResult;
   customerDepositsReconciliation: GlVsSubledgerResult;
   commissionPayableReconciliation: GlVsSubledgerResult;
+  // SCRUM-858: opening-balance families. Differences are reported, never posted away.
+  employeeAdvancesReconciliation: OpeningFamilyReconciliationResult;
+  supplierRecoverablesReconciliation: OpeningFamilyReconciliationResult;
+  partnerCapitalReconciliation: OpeningFamilyReconciliationResult;
 };
 
 /**
@@ -463,7 +474,7 @@ async function computeCloseChecklist(
   // on them produced false close-blockers, so they are surfaced as warnings the
   // accountant reviews, not blockers. Independent read-only computations, so
   // run them concurrently rather than five sequential round-trips.
-  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence] =
+  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence, employeeAdvancesRecon, supplierRecoverablesRecon, partnerCapitalRecon] =
     await Promise.all([
       computeSubledgerReconciliation(ctx, orgId, period.endDate),
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
@@ -477,6 +488,9 @@ async function computeCloseChecklist(
         pendingEvents: [...allPendingOutbox, ...allFailedOutbox],
         sales: allSales,
       }),
+      computeEmployeeAdvancesReconciliation(ctx, orgId, period.endDate),
+      computeSupplierRecoverablesReconciliation(ctx, orgId, period.endDate),
+      computePartnerCapitalReconciliation(ctx, orgId, period.endDate),
     ]);
 
   const blockers: string[] = [];
@@ -532,9 +546,29 @@ async function computeCloseChecklist(
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
     warnings.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
+  // SCRUM-858 (owner ruling 2026-10-28): a labelled opening-balance difference is reported here and
+  // never corrected by a posting. The label text is a fixed constant because close matches it verbatim.
+  if (supplierPayablesRecon.unexplainedOpeningDifference) {
+    warnings.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES);
+  }
   const heldOpeningLiabilities=await readOpeningUnallocatedLiabilities(ctx,orgId,period.endDate);
   if(heldOpeningLiabilities.status === "UNAVAILABLE")warnings.push("Opening unallocated liability basis is unavailable. Finance must reconcile the source proof.");
   else if(heldOpeningLiabilities.status === "UNALLOCATED")warnings.push("Opening liabilities include unallocated held pools. Arithmetic reconciliation does not establish beneficial ownership; these pools are not available for customer refunds or credit application.");
+  const openingFamilies = [
+    ["EMPLOYEE_ADVANCES", employeeAdvancesRecon],
+    ["SUPPLIER_RECOVERABLES", supplierRecoverablesRecon],
+    ["PARTNER_CAPITAL", partnerCapitalRecon],
+  ] as const;
+  // An "unavailable" reading is only worth a warning where an opening balance exists to reconcile;
+  // elsewhere these families are ordinary current-state subledgers with no new close obligation.
+  const hasOpeningHistory = openingFamilies.some(([, recon]) => recon.status === "UNAVAILABLE")
+    ? await orgHasOpeningHistory(ctx, orgId)
+    : false;
+  for (const [family, recon] of openingFamilies) {
+    if (recon.status === "UNAVAILABLE") {
+      if (hasOpeningHistory) warnings.push(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
+    } else if (recon.unexplainedOpeningDifference) warnings.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY[family]);
+  }
   if (!customerDepositsRecon.isReconciled) {
     const badCurrencies = customerDepositsRecon.currencies.filter((c) => !customerDepositsRecon.byCurrency[c].isReconciled);
     warnings.push(`Customer deposits subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
@@ -605,6 +639,9 @@ async function computeCloseChecklist(
     supplierPayablesReconciliation: supplierPayablesRecon,
     customerDepositsReconciliation: customerDepositsRecon,
     commissionPayableReconciliation: commissionPayableRecon,
+    employeeAdvancesReconciliation: employeeAdvancesRecon,
+    supplierRecoverablesReconciliation: supplierRecoverablesRecon,
+    partnerCapitalReconciliation: partnerCapitalRecon,
   };
 }
 

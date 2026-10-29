@@ -1,3 +1,5 @@
+import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
 import { createOpeningSettlementReader } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { openingPayableBasis } from "./utils/openingSupplierBasis";
@@ -954,6 +956,8 @@ export async function computePrepaidRecognitionShortfall(
 export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
   status: "AVAILABLE" | "UNAVAILABLE";
   unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE";
+  /** Present on AVAILABLE results (SCRUM-858); see OpeningDifferenceReport. */
+  unexplainedOpeningDifference?: OpeningDifferenceReport;
 };
 
 /**
@@ -1165,12 +1169,19 @@ export async function computeSupplierPayablesReconciliation(
     if (minor === 0) subByCurrency.delete(currency);
   }
 
+  // SCRUM-858: a declared payable control account is known from the immutable opening, not only from
+  // the surviving rows. Otherwise a cancelled or deleted opening payable would take its own control
+  // account out of the comparison and the missing liability would read as "reconciled".
+  const openingControls = await openingAllocationAccounts(ctx, orgId, new Set(["SUPPLIER_PAYABLE", "OTHER_PAYABLE"]));
+  if (!openingControls) return unavailable("OPENING_SOURCE_UNAVAILABLE");
+  for (const accountId of openingControls) controlAccounts.add(accountId);
+
   const glByCurrency=new Map<string,number>();
   for(const balance of await getCumulativeBalancesAsOf(ctx,orgId,cutoff)){
     if(!controlAccounts.has(balance.accountId))continue;
     glByCurrency.set(balance.currency,(glByCurrency.get(balance.currency)??0)+balance.creditMinor-balance.debitMinor);
   }
-  return { ...combineGlAndSubledger(glByCurrency, subByCurrency), status: "AVAILABLE" };
+  return { ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))), status: "AVAILABLE" };
 }
 
 export const supplierPayablesReconciliation = query({
@@ -1179,6 +1190,262 @@ export const supplierPayablesReconciliation = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeSupplierPayablesReconciliation(ctx, args.orgId, args.toDate);
+  },
+});
+
+/**
+ * SCRUM-858 — subledger-to-GL readers for the opening-balance families that had none: staff
+ * advances, supplier recoverables and partner capital. They follow the supplier-payables pattern
+ * (current-state subledger, GL as of `toDate`) and add the owner-ruled difference label.
+ *
+ * Owner ruling 2026-10-28: a difference is REPORTED, never resolved. Nothing here writes; no
+ * journal, plug, clearing line or equity entry is ever created to force the two sides to agree.
+ */
+export type OpeningDifferenceReport = {
+  label: { en: string; ar: string };
+  /** Currencies whose GL and subledger sides disagree. */
+  currencies: string[];
+} | null;
+
+export type OpeningFamilyReconciliationResult = GlVsSubledgerResult & {
+  status: "AVAILABLE" | "UNAVAILABLE";
+  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE";
+  unexplainedOpeningDifference: OpeningDifferenceReport;
+};
+
+/** True when the organization has any opening-balance draft or journal (even an unreadable one). */
+export async function orgHasOpeningHistory(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  return source.headers.length > 0 || source.status !== "ABSENT";
+}
+
+/**
+ * Labels a non-zero difference only when the organization has opening history; without one the
+ * difference is still reported in `byCurrency`, but it is not an opening-balance difference.
+ */
+async function withOpeningDifferenceReport<T extends GlVsSubledgerResult>(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  result: T
+): Promise<T & { unexplainedOpeningDifference: OpeningDifferenceReport }> {
+  const currencies = result.currencies.filter((currency) => result.byCurrency[currency].discrepancyMinor !== 0);
+  if (currencies.length === 0) return { ...result, unexplainedOpeningDifference: null };
+  const hasOpeningHistory = await orgHasOpeningHistory(ctx, orgId);
+  return {
+    ...result,
+    unexplainedOpeningDifference: hasOpeningHistory
+      ? { label: { ...UNEXPLAINED_OPENING_DIFFERENCE_LABEL }, currencies }
+      : null,
+  };
+}
+
+function unavailableFamilyResult(
+  unavailableReason: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE"
+): OpeningFamilyReconciliationResult {
+  return {
+    currencies: [],
+    byCurrency: {},
+    isReconciled: false,
+    status: "UNAVAILABLE",
+    unavailableReason,
+    unexplainedOpeningDifference: null,
+  };
+}
+
+/** Any queued or failed posting means the GL side is about to move; a comparison now is not the truth. */
+async function hasQueuedPosting(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
+  for (const status of ["PENDING", "FAILED"] as const) {
+    const row = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .first();
+    if (row) return true;
+  }
+  return false;
+}
+
+/**
+ * Accounts the POSTED opening named for the given allocation kinds. Deriving the GL control set
+ * from the immutable opening — not from the subledger rows — keeps a deleted or cancelled row from
+ * removing its own control account from the comparison. Null = the retained history is too large
+ * to enumerate, which must not read as "no accounts".
+ */
+async function openingAllocationAccounts(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  kinds: ReadonlySet<string>
+): Promise<Set<Id<"chartOfAccounts">> | null> {
+  const drafts = await ctx.db
+    .query("openingBalanceDrafts")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "POSTED"))
+    .take(101);
+  if (drafts.length > 100) return null;
+  const accounts = new Set<Id<"chartOfAccounts">>();
+  for (const draft of drafts) {
+    for (const allocation of draft.allocations ?? []) {
+      if (kinds.has(allocation.kind) && "accountId" in allocation) accounts.add(allocation.accountId);
+    }
+  }
+  return accounts;
+}
+
+async function addSystemAccount(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  accounts: Set<Id<"chartOfAccounts">>,
+  systemKey: SystemKey
+): Promise<void> {
+  const account = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
+    .unique();
+  if (account) accounts.add(account._id);
+}
+
+async function glNetByAccounts(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  cutoff: number,
+  accounts: ReadonlySet<Id<"chartOfAccounts">>,
+  normalSide: "DEBIT" | "CREDIT"
+): Promise<Map<string, number>> {
+  const byCurrency = new Map<string, number>();
+  for (const balance of await getCumulativeBalancesAsOf(ctx, orgId, cutoff)) {
+    if (!accounts.has(balance.accountId)) continue;
+    const net = normalSide === "DEBIT" ? balance.debitMinor - balance.creditMinor : balance.creditMinor - balance.debitMinor;
+    byCurrency.set(balance.currency, (byCurrency.get(balance.currency) ?? 0) + net);
+  }
+  return byCurrency;
+}
+
+/** Employee Advances asset (GL, debit-normal) vs the unrecovered remainder of every live advance. */
+export async function computeEmployeeAdvancesReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<OpeningFamilyReconciliationResult> {
+  if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
+  const rows = await ctx.db
+    .query("employeeAdvances")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(SUPPLIER_PAYABLES_RECON_READ_LIMIT + 1);
+  if (rows.length > SUPPLIER_PAYABLES_RECON_READ_LIMIT) return unavailableFamilyResult("OVER_LIMIT");
+  const subByCurrency = new Map<string, number>();
+  for (const row of rows) {
+    // A deleted row is no longer a receivable; a written-off one has left the asset. Neither is
+    // clamped away if the GL still carries it — that stays visible as a difference.
+    if (row.isDeleted || row.status === "WRITTEN_OFF") continue;
+    subByCurrency.set(row.currency, (subByCurrency.get(row.currency) ?? 0) + row.amountMinor - row.recoveredMinor);
+  }
+  // The opening writer only allows an advance on the system Employee Advances account (a declared
+  // custom asset account is classified as a supplier recoverable), so that account is the whole control set.
+  const controls = new Set<Id<"chartOfAccounts">>();
+  await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.EMPLOYEE_ADVANCES);
+  const glByCurrency = await glNetByAccounts(ctx, orgId, toDate ?? Date.now(), controls, "DEBIT");
+  return {
+    ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
+    status: "AVAILABLE",
+  };
+}
+
+export const employeeAdvancesReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    return computeEmployeeAdvancesReconciliation(ctx, args.orgId, args.toDate);
+  },
+});
+
+/** Receivable from Suppliers (system and declared opening controls) vs the unrecovered supplier claims. */
+export async function computeSupplierRecoverablesReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<OpeningFamilyReconciliationResult> {
+  if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
+  const rows: Array<Doc<"supplierCostRecoveries">> = [];
+  // REVERSED is the one status whose source posting was reversed out of the GL, so it is excluded.
+  for (const status of ["OPEN", "PARTIALLY_RECOVERED", "RECOVERED"] as const) {
+    const budget = SUPPLIER_PAYABLES_RECON_READ_LIMIT - rows.length;
+    const batch = await ctx.db
+      .query("supplierCostRecoveries")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .take(budget + 1);
+    if (batch.length > budget) return unavailableFamilyResult("OVER_LIMIT");
+    rows.push(...batch);
+  }
+  const subByCurrency = new Map<string, number>();
+  for (const row of rows) {
+    subByCurrency.set(row.currency, (subByCurrency.get(row.currency) ?? 0) + row.amountDueMinor - row.amountRecoveredMinor);
+  }
+  const controls = await openingAllocationAccounts(ctx, orgId, new Set(["SUPPLIER_RECOVERABLE"]));
+  if (!controls) return unavailableFamilyResult("OPENING_SOURCE_UNAVAILABLE");
+  await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS);
+  const glByCurrency = await glNetByAccounts(ctx, orgId, toDate ?? Date.now(), controls, "DEBIT");
+  return {
+    ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
+    status: "AVAILABLE",
+  };
+}
+
+export const supplierRecoverablesReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    return computeSupplierRecoverablesReconciliation(ctx, args.orgId, args.toDate);
+  },
+});
+
+/**
+ * Partner equity (GL: capital and declared capital controls, net of drawings) vs the sum of the live
+ * partners' balances. The subledger side is read raw — opening base plus signed movements — and is
+ * deliberately NOT routed through the partner-basis validation: a tampered base must surface as a
+ * difference here, not turn the whole comparison into "unavailable".
+ */
+export async function computePartnerCapitalReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<OpeningFamilyReconciliationResult> {
+  if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
+  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const partners = await ctx.db
+    .query("partnerEquity")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(SUPPLIER_PAYABLES_RECON_READ_LIMIT + 1);
+  if (partners.length > SUPPLIER_PAYABLES_RECON_READ_LIMIT) return unavailableFamilyResult("OVER_LIMIT");
+  const subByCurrency = new Map<string, number>();
+  const add = (currency: string, minor: number) => subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + minor);
+  for (const partner of partners) {
+    if (partner.isDeleted) continue;
+    add(orgCurrency, partner.openingBalanceMinor ?? toMinorUnits(partner.currentBalance ?? 0, orgCurrency));
+    const movements = await ctx.db
+      .query("partnerEquityTransactions")
+      .withIndex("by_org_partner_time", (q) => q.eq("orgId", orgId).eq("partnerId", partner._id))
+      .take(SUPPLIER_PAYABLES_RECON_READ_LIMIT + 1);
+    if (movements.length > SUPPLIER_PAYABLES_RECON_READ_LIMIT) return unavailableFamilyResult("OVER_LIMIT");
+    for (const movement of movements) add(movement.currency, movement.type === "DRAW" ? -movement.amountMinor : movement.amountMinor);
+  }
+  const controls = await openingAllocationAccounts(ctx, orgId, new Set(["PARTNER_CAPITAL"]));
+  if (!controls) return unavailableFamilyResult("OPENING_SOURCE_UNAVAILABLE");
+  await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.PARTNER_CAPITAL);
+  // Draws debit Partner Drawings, a separate account that lowers each partner's balance.
+  await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.PARTNER_DRAWINGS);
+  const glByCurrency = await glNetByAccounts(ctx, orgId, toDate ?? Date.now(), controls, "CREDIT");
+  return {
+    ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
+    status: "AVAILABLE",
+  };
+}
+
+export const partnerCapitalReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    return computePartnerCapitalReconciliation(ctx, args.orgId, args.toDate);
   },
 });
 

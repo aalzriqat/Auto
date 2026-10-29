@@ -19,6 +19,8 @@ import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { DialogFooterActions, errorMessage } from "../AccountingTabShared";
 import {
+  OPENING_DIFFERENCE_WARNING_BY_FAMILY,
+  OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
 } from "@/convex/utils/closeWarnings";
@@ -34,6 +36,14 @@ import { periodLabel } from "./types";
 const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
   [SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING]: "ClosePeriodWarnSupplierPayablesReconPending",
   [SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING]: "ClosePeriodWarnSupplierPayablesReconTooMany",
+  // SCRUM-858: opening-balance reconciliation. A difference is reported, never posted away.
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES]: "ClosePeriodWarnOpeningDiffSupplierPayables",
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES]: "ClosePeriodWarnOpeningDiffEmployeeAdvances",
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES]: "ClosePeriodWarnOpeningDiffSupplierRecoverables",
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.PARTNER_CAPITAL]: "ClosePeriodWarnOpeningDiffPartnerCapital",
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES]: "ClosePeriodWarnOpeningReconUnavailableEmployeeAdvances",
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES]: "ClosePeriodWarnOpeningReconUnavailableSupplierRecoverables",
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.PARTNER_CAPITAL]: "ClosePeriodWarnOpeningReconUnavailablePartnerCapital",
 };
 
 function displayWarning(warning: string, t: Translate): string {
