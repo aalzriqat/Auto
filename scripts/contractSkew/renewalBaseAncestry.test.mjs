@@ -77,13 +77,11 @@ test("renewal evidence must survive a squash merge onto the PR base", async (t) 
     assert.equal(result.status, 0, result.output);
     assert.match(result.output, /1 renewed entries checked, 0 unrenewed, 0 stale/);
   });
-  /** @type {Array<[string, string, RegExp]>} */
-  const invalidBases = [
+  for (const [name, revision, diagnostic] of [
     ["unrelated", unrelated, /HISTORY_ANCESTRY_REFUSED/],
     ["unavailable", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", /PR base revision .* unavailable/],
     ["empty", "", /PR base revision/],
-  ];
-  for (const [name, revision, diagnostic] of invalidBases) {
+  ]) {
     await t.test(`${name} PR base cannot certify evidence`, () => {
       renew(base);
       const result = check("--pr-base", revision);
