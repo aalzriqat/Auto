@@ -50,6 +50,12 @@ export const SUPPLIER_ERROR = {
   ALIAS_EXISTS: "SUPPLIER_ALIAS_EXISTS",
   ALIAS_LIMIT: "SUPPLIER_ALIAS_LIMIT",
   ALIAS_ALREADY_RETIRED: "SUPPLIER_ALIAS_ALREADY_RETIRED",
+  /** A foreign-organisation id and a missing id both land here, with one message (no existence oracle). */
+  NOT_FOUND: "SUPPLIER_NOT_FOUND",
+  /** SCRUM-868 P1: a pilot write path that needs a supplier was called without one. No name fallback. */
+  IDENTITY_REQUIRED: "SUPPLIER_IDENTITY_REQUIRED",
+  /** SCRUM-868 P1: an action on an existing record that carries no supplier id (old or name-only row). */
+  IDENTITY_UNRESOLVED: "SUPPLIER_IDENTITY_UNRESOLVED",
 } as const;
 export type SupplierErrorCode = (typeof SUPPLIER_ERROR)[keyof typeof SUPPLIER_ERROR];
 
@@ -232,10 +238,58 @@ export async function requireActiveSupplier(
   supplierId: Id<"suppliers">,
 ): Promise<Doc<"suppliers">> {
   const supplier = await requireOwnedRow(ctx, orgId, "suppliers", supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+  refuseIfInactive(supplier);
+  return supplier;
+}
+
+function refuseIfInactive(supplier: Doc<"suppliers">): void {
   if (supplier.status !== "ACTIVE") {
     throwSupplierError(SUPPLIER_ERROR.INACTIVE, "This supplier is inactive and cannot be used for new records.");
   }
-  return supplier;
+}
+
+/**
+ * The party captured on a NEW money record (SCRUM-868 P1; design section 4.3). `name` and `version` are
+ * what the master held when the record was created. The record stores them beside `supplierId`
+ * (`sourcedFromName` and `supplierSnapshotVersion`) and they are never rewritten, so a later rename,
+ * alias or deactivation cannot change what the record says (invariant N3).
+ */
+export interface SupplierSnapshot {
+  readonly supplierId: Id<"suppliers">;
+  readonly name: string;
+  readonly version: number;
+}
+
+/**
+ * Resolves the supplier a new record will point at and returns its snapshot. Read-only: it writes
+ * nothing and takes no registry lock, so it cannot change any figure or any row (N4).
+ *
+ * `orgId` must be the organization the caller already proved (`requireTenantAuth`); this function
+ * never accepts an organization from the client, and it has no parameter for a name, so the snapshot
+ * name is always the one the server reads here.
+ *
+ * Refusals, all `ConvexError` with a stable `code`:
+ *  - no id (`undefined` or `null`): `SUPPLIER_IDENTITY_REQUIRED`. There is no "Unknown supplier"
+ *    default and no fallback to a typed name (N5).
+ *  - an id of another organization, and an id that does not exist: `SUPPLIER_NOT_FOUND`, the same
+ *    code and message for both (N6, no existence oracle).
+ *  - an inactive supplier: `SUPPLIER_INACTIVE`. An inactive supplier takes no new records; existing
+ *    records keep resolving through ordinary reads, and settlement never goes through this function (N10).
+ */
+export async function snapshotSupplier(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers"> | null | undefined,
+): Promise<SupplierSnapshot> {
+  if (supplierId === undefined || supplierId === null) {
+    throwSupplierError(SUPPLIER_ERROR.IDENTITY_REQUIRED, "A supplier is required.");
+  }
+  const supplier = await ctx.db.get("suppliers", supplierId);
+  if (!supplier || supplier.orgId !== orgId) {
+    throwSupplierError(SUPPLIER_ERROR.NOT_FOUND, SUPPLIER_NOT_FOUND_MESSAGE);
+  }
+  refuseIfInactive(supplier);
+  return Object.freeze({ supplierId: supplier._id, name: supplier.displayName, version: supplier.version });
 }
 
 // ─── Duplicate detection (read-only; callers run it inside the lock) ──────────────────────────
