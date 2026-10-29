@@ -42,6 +42,8 @@ export interface SupplierSelectProps {
   disabled?: boolean;
   invalid?: boolean;
   ariaLabel?: string;
+  /** DOM id of the picker's trigger, so a `<label htmlFor>` reaches it. */
+  id?: string;
   dataTestId?: string;
   className?: string;
 }
@@ -98,6 +100,7 @@ function SupplierSelectBody({
   disabled,
   invalid,
   ariaLabel,
+  id,
   dataTestId,
   className,
 }: Readonly<SupplierSelectProps>) {
@@ -258,6 +261,7 @@ function SupplierSelectBody({
       disabled={disabled || !orgId}
       invalid={invalid}
       ariaLabel={ariaLabel}
+      id={id}
       dataTestId={dataTestId}
       className={className}
     />

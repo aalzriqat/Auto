@@ -3630,6 +3630,21 @@ async function importRowFingerprint(
   });
 }
 
+/**
+ * A row can be looked up as a replay before the file's numeric validation runs only when its identity
+ * and every number the fingerprint hashes are well-formed; anything else is left to the ordinary
+ * validation and the evidence loop, which see it after normalisation.
+ */
+function isReplayProbeable(row: {
+  rowId?: number; year: number; sellingPrice: number; mileage?: number; purchasePrice?: number;
+  sourceCost?: number; valuations?: Array<{ valuationAmount: number }>;
+}): boolean {
+  if (row.rowId === undefined || !Number.isSafeInteger(row.rowId) || row.rowId < 0) return false;
+  const finite = (n: number | undefined) => n === undefined || Number.isFinite(n);
+  return finite(row.year) && finite(row.sellingPrice) && finite(row.mileage) && finite(row.purchasePrice) &&
+    finite(row.sourceCost) && (row.valuations ?? []).every((val) => Number.isFinite(val.valuationAmount));
+}
+
 const sameText = (a: string | undefined, b: string | undefined) =>
   (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
 
@@ -3842,10 +3857,31 @@ export const importBulk = mutation({
     }
 
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    // SCRUM-868 P2: a row whose (import, row) evidence already exists and whose fingerprint matches is a
+    // PROVEN REPLAY. It writes nothing now, so it must not be refused because its supplier was
+    // deactivated after the original run. Only the inactive refusal is relaxed for these rows (below);
+    // tenant, missing-id and foreign-id checks still apply, and a row that is not a proven replay is a
+    // NEW use and still needs an active supplier. A conflicting fingerprint throws from findCommandUnit
+    // exactly as it does in the evidence loop further down.
+    const provenReplayRowIds = new Set<number>();
+    if (postsAcquisitions && importId && args.purchasePaymentMethod !== undefined) {
+      for (const row of args.vehicles) {
+        if (!isReplayProbeable(row)) continue;
+        const evidence = await findCommandUnit(ctx, {
+          orgId: args.orgId,
+          operation: IMPORT_ROW_OPERATION,
+          idempotencyKey: `${importId}:${row.rowId}`,
+          fingerprint: await importRowFingerprint(row, args.purchasePaymentMethod, args.bankAccountId),
+          label: `Row ${row.rowId} (${row.vin.trim().toUpperCase()})`,
+        });
+        if (evidence) provenReplayRowIds.add(row.rowId!);
+      }
+    }
     // SCRUM-868 P2 resolve-then-normalise: every supplier id of the file is resolved in the caller's org
     // before anything else; the rows' name fields become the master's names. A wrong row refuses the file.
     const resolvedImport = await resolveImportSuppliers(ctx, args.orgId, args.vehicles, {
       onAccountPurchase: postsAcquisitions && args.purchasePaymentMethod === "ON_ACCOUNT",
+      provenReplayRowIds,
     });
     args = { ...args, vehicles: resolvedImport.rows };
     const openingCurrency = tracksOpeningStock ? await getOrgCurrency(ctx, args.orgId) : undefined;

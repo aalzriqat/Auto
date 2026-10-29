@@ -279,11 +279,16 @@ export interface SupplierSnapshot {
  *    code and message for both (N6, no existence oracle).
  *  - an inactive supplier: `SUPPLIER_INACTIVE`. An inactive supplier takes no new records; existing
  *    records keep resolving through ordinary reads, and settlement never goes through this function (N10).
+ *
+ * `options.allowInactive` is for ONE caller: a proven replay of a command that already ran (the
+ * recorded evidence, not this call, is what created the records). It skips only the inactive refusal;
+ * the missing-id, foreign-organization and not-found refusals still apply. A NEW use never passes it.
  */
 export async function snapshotSupplier(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   supplierId: Id<"suppliers"> | null | undefined,
+  options?: { allowInactive?: boolean },
 ): Promise<SupplierSnapshot> {
   if (supplierId === undefined || supplierId === null) {
     throwSupplierError(SUPPLIER_ERROR.IDENTITY_REQUIRED, "A supplier is required.");
@@ -292,7 +297,7 @@ export async function snapshotSupplier(
   if (!supplier || supplier.orgId !== orgId) {
     throwSupplierError(SUPPLIER_ERROR.NOT_FOUND, SUPPLIER_NOT_FOUND_MESSAGE);
   }
-  refuseIfInactive(supplier);
+  if (options?.allowInactive !== true) refuseIfInactive(supplier);
   return Object.freeze({ supplierId: supplier._id, name: supplier.displayName, version: supplier.version });
 }
 

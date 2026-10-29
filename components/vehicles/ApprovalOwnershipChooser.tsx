@@ -130,6 +130,7 @@ export function ApprovalOwnershipChooser({ orgId, bankOptions, idPrefix, draft, 
               value={draft.sourcedSupplierId}
               valueLabel={draft.sourcedFromName}
               ariaLabel={t("SourceDealerName")}
+              id={`${idPrefix}-supplier`}
               dataTestId={`${idPrefix}-supplier`}
               onChange={(supplier) => set({ sourcedSupplierId: supplier.id, sourcedFromName: supplier.displayName })}
             />
@@ -165,6 +166,7 @@ export function ApprovalOwnershipChooser({ orgId, bankOptions, idPrefix, draft, 
                 value={draft.purchaseSupplierId}
                 valueLabel={draft.purchaseSupplierName}
                 ariaLabel={t("PurchaseSupplierName")}
+                id={`${idPrefix}-creditor`}
                 dataTestId={`${idPrefix}-creditor`}
                 onChange={(supplier) => set({ purchaseSupplierId: supplier.id, purchaseSupplierName: supplier.displayName })}
               />

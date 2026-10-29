@@ -37,6 +37,8 @@ interface SearchableSelectProps {
   /** Names the field for assistive technology; also marks the trigger invalid when `invalid`. */
   ariaLabel?: string;
   invalid?: boolean;
+  /** DOM id of the trigger, so a `<label htmlFor>` reaches the control. */
+  id?: string;
 }
 
 export function SearchableSelect({
@@ -59,6 +61,7 @@ export function SearchableSelect({
   renderFooter,
   ariaLabel,
   invalid,
+  id,
 }: SearchableSelectProps) {
   const value = valueProp ?? "";
   const [open, setOpen] = useState(false);
@@ -127,6 +130,7 @@ export function SearchableSelect({
       {/* Trigger — matches shadcn SelectTrigger exactly */}
       <button
         type="button"
+        id={id}
         data-testid={dataTestId}
         disabled={disabled}
         onClick={() => !disabled && setOpen((o) => !o)}

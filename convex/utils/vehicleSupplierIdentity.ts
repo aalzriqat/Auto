@@ -148,6 +148,7 @@ export function refuseUnusedCreditorId(input: { purchaseSupplierId?: Id<"supplie
 
 /** The fields of one import row that decide which supplier roles it carries. */
 export interface ImportSupplierRow {
+  rowId?: number;
   sourceType?: string;
   purchasePrice?: number;
   sourcedFromName?: string;
@@ -165,30 +166,38 @@ export interface ImportSupplierRow {
  *    a SOURCED row with neither keeps the file's existing handling (skipped, or refused as uncreatable);
  *  - an owned row that will open a payable (an ON_ACCOUNT purchase import, positive price) must carry the
  *    creditor's id; an id on any row that would not use it is a role conflict, never silently dropped.
+ *
+ * `posting.provenReplayRowIds` names the rows whose (import, row) evidence was already read and matched
+ * by fingerprint: those rows ran before and write nothing now, so a supplier deactivated since does not
+ * refuse them. Their ids are still looked up inside the caller's organization (a missing or foreign id
+ * still refuses). Every other row is a NEW use and needs an active supplier.
  */
 export async function resolveImportSuppliers<Row extends ImportSupplierRow>(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   rows: readonly Row[],
-  posting: { onAccountPurchase: boolean },
+  posting: { onAccountPurchase: boolean; provenReplayRowIds?: ReadonlySet<number> },
 ): Promise<{ rows: Row[]; snapshots: Map<Id<"suppliers">, SupplierSnapshot> }> {
   const snapshots = new Map<Id<"suppliers">, SupplierSnapshot>();
-  const resolve = async (id: Id<"suppliers"> | null | undefined): Promise<SupplierSnapshot> => {
-    if (id !== undefined && id !== null) {
+  // A replay row resolves leniently and its snapshot is never cached for a new-use row: an inactive
+  // supplier must still refuse a different row that would use it for the first time.
+  const resolve = async (id: Id<"suppliers"> | null | undefined, replay: boolean): Promise<SupplierSnapshot> => {
+    if (id !== undefined && id !== null && !replay) {
       const cached = snapshots.get(id);
       if (cached) return cached;
     }
-    const snapshot = await snapshotSupplier(ctx, orgId, id);
-    snapshots.set(snapshot.supplierId, snapshot);
+    const snapshot = await snapshotSupplier(ctx, orgId, id, replay ? { allowInactive: true } : undefined);
+    if (!replay) snapshots.set(snapshot.supplierId, snapshot);
     return snapshot;
   };
   const resolved: Row[] = [];
   for (const row of rows) {
+    const replay = row.rowId !== undefined && posting.provenReplayRowIds?.has(row.rowId) === true;
     const type = parseVehicleSourceType(row.sourceType);
     if (type === "SOURCED") {
       if (present(row.purchaseSupplierId)) throwRoleConflict();
       if (present(row.sourcedSupplierId) || (row.sourcedFromName ?? "").trim() !== "") {
-        const snapshot = await resolve(row.sourcedSupplierId);
+        const snapshot = await resolve(row.sourcedSupplierId, replay);
         resolved.push({ ...row, sourcedFromName: snapshot.name });
       } else {
         resolved.push(row);
@@ -199,7 +208,7 @@ export async function resolveImportSuppliers<Row extends ImportSupplierRow>(
       if (present(row.sourcedSupplierId)) throwRoleConflict();
       const opensPayable = posting.onAccountPurchase && (row.purchasePrice ?? 0) > 0;
       if (opensPayable) {
-        const snapshot = await resolve(row.purchaseSupplierId);
+        const snapshot = await resolve(row.purchaseSupplierId, replay);
         resolved.push({ ...row, purchaseSupplierName: snapshot.name });
         continue;
       }

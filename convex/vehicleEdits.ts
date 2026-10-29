@@ -357,8 +357,9 @@ export const requestUpdate = mutation({
 
     const filteredPayload: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(payload)) {
-      // A typed consignment name or id is never copied: the link is written below from the snapshot only.
-      if (key === "sourcedFromName" || key === "sourcedSupplierId") continue;
+      // A typed supplier name or id is never copied: the link is written below from the snapshot only.
+      // A typed creditor name would otherwise be stored with no id beside it (SCRUM-868 P2).
+      if (key === "sourcedFromName" || key === "sourcedSupplierId" || key === "purchaseSupplierName") continue;
       if (key === "imageIds") {
         const oldImages = JSON.stringify(vehicle.imageIds || []);
         const newImages = JSON.stringify(value || []);

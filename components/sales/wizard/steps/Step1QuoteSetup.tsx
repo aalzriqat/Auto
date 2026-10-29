@@ -45,9 +45,13 @@ export type Step1Values = z.infer<typeof step1Schema>;
  * SCRUM-868 P2: a sourced vehicle names its supplier by master id only. The display name the
  * picker keeps for the screen is dropped here, and the server writes the stored snapshot.
  */
-function toCreateSourcedArgs(orgId: Id<"organizations">, data: SourceVehicleData) {
+function toCreateSourcedArgs(
+  orgId: Id<"organizations">,
+  data: SourceVehicleData,
+  translate: (key: string) => string,
+) {
   const { sourcedFromName: _displayName, sourcedSupplierId, ...vehicle } = data;
-  if (!sourcedSupplierId) throw new Error("Choose a supplier from the list.");
+  if (!sourcedSupplierId) throw new Error(translate("SupplierPickerRequired"));
   return { orgId, ...vehicle, sourcedSupplierId };
 }
 
@@ -468,7 +472,7 @@ export default function Step1QuoteSetup({
                     onChange={handleVehicleItemsChange}
                     onSourceVehicle={async (data) => {
                       if (!activeOrgId) throw new Error("No org selected");
-                      return await createSourced(toCreateSourcedArgs(activeOrgId, data));
+                      return await createSourced(toCreateSourcedArgs(activeOrgId, data, t as (key: string) => string));
                     }}
                     initialSourceData={initialSourceData}
                   />
@@ -485,7 +489,7 @@ export default function Step1QuoteSetup({
                     }}
                     onSourceVehicle={async (data) => {
                       if (!activeOrgId) throw new Error("No org selected");
-                      const newId = await createSourced(toCreateSourcedArgs(activeOrgId, data));
+                      const newId = await createSourced(toCreateSourcedArgs(activeOrgId, data, t as (key: string) => string));
                       return newId;
                     }}
                     initialSourceData={initialSourceData}
