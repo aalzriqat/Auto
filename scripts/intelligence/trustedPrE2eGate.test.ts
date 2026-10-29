@@ -165,9 +165,9 @@ const forgedRun: Run = {
   head_branch: "feature",
 };
 
-/** A GitHub fake that reproduces what the publisher can observe: records, and the
- * workflow run that owns each record's check suite. A forged writer's suite
- * resolves to the forger's own workflow, never to a trusted one. */
+/** API-created checks share an app suite; in this repository GitHub places them
+ * in the dynamic CodeQL suite, independently of the workflow holding the token.
+ * PATCH retains that suite. Explicit insert() fixtures also exercise legacy data. */
 function github() {
   const records: Rec[] = [];
   const runsBySuite = new Map<number, Run>();
@@ -198,7 +198,12 @@ function github() {
     }
     if (method === "POST") {
       const id = nextId++;
-      runsBySuite.set(1000 + id, writer);
+      runsBySuite.set(1000 + id, {
+        id: 40796582338,
+        path: "dynamic/github-code-scanning/codeql",
+        event: "dynamic",
+        head_branch: writer.head_branch,
+      });
       const record = {
         id,
         app: { slug: "github-actions" },
@@ -258,6 +263,31 @@ const publishInput = (runId: number, attempt = 1) => ({
 const success = { conclusion: "success", reason: "counted suite passed" };
 
 describe("SCRUM-757 check publication", () => {
+  // SCRUM-760 / PR #704 round 2: no writer-controlled marker can prevent
+  // trusted code from revoking a standing SUCCESS, including initialize.
+  it.each([
+    ["huge run id", "g5-publisher:swarm:9007199254740991:1"],
+    ["missing", undefined],
+    ["malformed", "not a publisher"],
+    ["legitimately older", "g5-publisher:swarm:100:1"],
+  ].flatMap(([label, text]) =>
+    (["initialize", "begin", "reset", "finish"] as const).map((mode) => ({ label, text, mode })),
+  ))("revokes standing success with $label marker during $mode", async ({ text, mode }) => {
+    const gate = await load();
+      const hub = github();
+      // Even the formerly accepted trusted-suite shape cannot prove the last
+      // PATCH writer or attempt. The record starts green before the invocation.
+      const record = hub.insert({ output: { text } }, swarm(100));
+      expect(record.conclusion).toBe("success");
+      const result = await gate.publishPrE2eCheck(hub.api, {
+        ...publishInput(200), mode, verdict: success,
+      });
+      expect(result.outcome, mode).toBe("quarantined");
+      expect(record.conclusion, mode).toBe("failure");
+      expect(hub.writes(), mode).toHaveLength(1);
+      expect(hub.records, mode).toHaveLength(1);
+  });
+
   it.each([
     undefined,
     "",
