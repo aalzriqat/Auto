@@ -82,11 +82,13 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
     expect(blocked.map((check) => check.key)).toEqual(["FINANCING_RECONCILED"]);
     expect(served.state).toBe("BLOCKED");
     // Ordered after every check that existed when it was added. SCRUM-766's check follows it (NOT_APPLICABLE here),
-    // then SCRUM-411's RECOGNITION_PERIOD_OPEN (READY here: the fixture's handover period is open).
-    expect(served.checks.slice(-3)).toMatchObject([
+    // then SCRUM-411's RECOGNITION_PERIOD_OPEN (READY here: the fixture's handover period is open), then SCRUM-571's
+    // CUSTOMER_GAP_COLLECTABLE (READY here: the fixture's customer owes the dealership no gap).
+    expect(served.checks.slice(-4)).toMatchObject([
       { key: "FINANCING_RECONCILED", status: "BLOCKED", reasonCode: "FINANCING_RECONCILIATION_FLAGGED" },
       { key: "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", status: "NOT_APPLICABLE" },
       { key: "RECOGNITION_PERIOD_OPEN", status: "READY" },
+      { key: "CUSTOMER_GAP_COLLECTABLE", status: "READY" },
     ]);
   });
 
@@ -155,8 +157,13 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
     const s = await seedDeal({ flag: true, reconcileFee: false });
     const served = await readiness(s.asOwner, s);
     const keys = served.checks.map((check) => check.key);
-    // SCRUM-766 appended the customer-payment check after it and SCRUM-411 appended RECOGNITION_PERIOD_OPEN after that.
-    expect(keys.slice(-3)).toEqual(["FINANCING_RECONCILED", "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "RECOGNITION_PERIOD_OPEN"]);
+    // SCRUM-766 appended the customer-payment check after it, SCRUM-411 appended RECOGNITION_PERIOD_OPEN after that, and SCRUM-571 appended CUSTOMER_GAP_COLLECTABLE last.
+    expect(keys.slice(-4)).toEqual([
+      "FINANCING_RECONCILED",
+      "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
+      "RECOGNITION_PERIOD_OPEN",
+      "CUSTOMER_GAP_COLLECTABLE",
+    ]);
     expect(served.checks.find((c) => c.key === "COSTS_CLOSABLE")).toMatchObject({
       status: "BLOCKED", reasonCode: "COSTS_AWAITING_RECONCILIATION",
     });

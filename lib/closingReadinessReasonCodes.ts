@@ -31,6 +31,8 @@ export const CLOSING_READINESS_CHECK_KEYS = [
   "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
   // SCRUM-411 (plan v3): the handover date the sale is recognised on falls in an open accounting period. Appended after the SCRUM-766 check.
   "RECOGNITION_PERIOD_OPEN",
+  // SCRUM-571 ruling 10: the customer owes the dealership no gap that no certified route can collect. Appended after the SCRUM-411 check.
+  "CUSTOMER_GAP_COLLECTABLE",
 ] as const;
 
 export type ClosingReadinessCheckKey = (typeof CLOSING_READINESS_CHECK_KEYS)[number];
@@ -111,6 +113,11 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   CUSTOMER_FINANCE_COMPANY_PAYMENT_UNCONFIRMED: [],
   // ... and a confirmed payment that belongs to an agreement since withdrawn is on file with nothing accounting for it.
   CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED: [],
+  // CUSTOMER_GAP_COLLECTABLE (SCRUM-571 ruling 10): the customer owes the dealership part of the finance shortfall and no certified door collects it.
+  CUSTOMER_GAP_UNCOLLECTABLE: [],
+  // ... the same after the vehicle is handed over, when the agreement can no longer be changed, and when the gap is not a readable amount.
+  CUSTOMER_GAP_UNCOLLECTABLE_AFTER_HANDOVER: [],
+  CUSTOMER_GAP_UNREADABLE: [],
   // A check refused for a reason the evaluator does not classify.
   CHECK_REFUSED: [],
   // No verdict could be formed (`getClosingReadiness.unavailableReason`).

@@ -15,10 +15,12 @@ import {
  *
  * Every figure is written out by hand (JOD, scale 1,000): a 20,000 car bought for
  * 15,000, approved at 18,000 by an 85% financier, a 200 deposit, a customer gap of
- * 1,000, a 300 admin fee. Hand-worked: contribution D = 18,000 − 15,300 − 200 = 2,500;
- * consideration K = 18,000 + 1,000 = 19,000; forward = 200 + 2,500 = 2,700. The correct
- * entry therefore debits 18,000 + 1,000 + 200 + 2,500 + 15,000 = 36,700 and credits
- * 2,700 + 19,000 + 15,000 = 36,700. None of these literals comes from the builder.
+ * 0 (SCRUM-760 c23812 #10 refuses a customer gap owed to the dealership on a financed
+ * deal, so the dealership absorbs the whole 1,700 shortfall), a 300 admin fee.
+ * Hand-worked: contribution D = 18,000 − 15,300 − 200 = 2,500;
+ * consideration K = 18,000 + 0 = 18,000; forward = 200 + 2,500 = 2,700. The correct
+ * entry therefore debits 18,000 + 200 + 2,500 + 15,000 = 35,700 and credits
+ * 2,700 + 18,000 + 15,000 = 35,700. None of these literals comes from the builder.
  */
 const EXPECTATION: MoneyBoundaryExpectation = {
   currency: "JOD",
@@ -27,7 +29,7 @@ const EXPECTATION: MoneyBoundaryExpectation = {
   approvedMinor: 18_000_000,
   contributionMinor: 2_500_000,
   depositMinor: 200_000,
-  customerGapMinor: 1_000_000,
+  customerGapMinor: 0,
   adminFeeMinor: 300_000,
 };
 
@@ -43,12 +45,11 @@ const line = (key: string, debitMinor: number, creditMinor: number, entryId = "j
 
 const correct = (): ConsignmentLine[] => [
   line("ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", 18_000_000, 0),
-  line("ACCOUNTS_RECEIVABLE_CUSTOMERS", 1_000_000, 0),
   line("CUSTOMER_DEPOSITS_LIABILITY", 200_000, 0),
   line("SALES_CONSIDERATION_REDUCTIONS", 2_500_000, 0),
   line("COST_OF_VEHICLES_SOLD", 15_000_000, 0),
   line("ACCOUNTS_PAYABLE_FINANCE_COMPANIES", 0, 2_700_000),
-  line("SALES_REVENUE", 0, 19_000_000),
+  line("SALES_REVENUE", 0, 18_000_000),
   line("VEHICLE_INVENTORY", 0, 15_000_000),
 ];
 
@@ -69,14 +70,14 @@ describe("SCRUM-350 ACC-1 money boundary oracle: the hand-worked scenario", () =
       ltvPercent: 85,
       firstPaymentMinor: 200_000,
       shortfallMinor: 1_700_000,
-      customerShareMinor: 1_000_000,
-      dealerShareMinor: 700_000,
+      customerShareMinor: 0,
+      dealerShareMinor: 1_700_000,
       forwardDueMinor: 2_700_000,
     });
   });
 
-  it("tells the correct net revenue (16,500) from the price basis (17,500)", () => {
-    expect(expectedNetRevenueMinor(EXPECTATION)).toBe(16_500_000);
+  it("tells the correct net revenue (15,500) from the price basis (17,500)", () => {
+    expect(expectedNetRevenueMinor(EXPECTATION)).toBe(15_500_000);
     expect(priceBasisNetRevenueMinor(EXPECTATION)).toBe(17_500_000);
     expect(undiscriminatedBases(EXPECTATION)).toEqual([]);
   });
@@ -102,16 +103,16 @@ describe("SCRUM-350 ACC-1 money boundary oracle: the hand-worked scenario", () =
 });
 
 describe("SCRUM-350 ACC-1 money boundary oracle: judging the posting", () => {
-  it("passes the correct entry, which balances at 36,700", () => {
+  it("passes the correct entry, which balances at 35,700", () => {
     const lines = correct();
-    expect(lines.reduce((sum, entry) => sum + entry.debitMinor, 0)).toBe(36_700_000);
-    expect(lines.reduce((sum, entry) => sum + entry.creditMinor, 0)).toBe(36_700_000);
+    expect(lines.reduce((sum, entry) => sum + entry.debitMinor, 0)).toBe(35_700_000);
+    expect(lines.reduce((sum, entry) => sum + entry.creditMinor, 0)).toBe(35_700_000);
     expect(evaluateMoneyBoundary(EXPECTATION, lines)).toEqual({ violations: [], unjudged: [] });
   });
 
   it("fails revenue measured on the sale price even though the entry balances", () => {
-    // Revenue 20,000 and the customer's receivable raised by the same 1,000: balanced and wrong.
-    const lines = without(["SALES_REVENUE", "ACCOUNTS_RECEIVABLE_CUSTOMERS"], [
+    // Revenue 20,000 and a customer receivable raised by the same 2,000: balanced and wrong.
+    const lines = without(["SALES_REVENUE"], [
       line("SALES_REVENUE", 0, 20_000_000),
       line("ACCOUNTS_RECEIVABLE_CUSTOMERS", 2_000_000, 0),
     ]);
@@ -119,9 +120,9 @@ describe("SCRUM-350 ACC-1 money boundary oracle: judging the posting", () => {
     const verdict = evaluateMoneyBoundary(EXPECTATION, lines);
     expect(verdict.unjudged).toEqual([]);
     expect(verdict.violations).toEqual([
-      "ACCOUNTS_RECEIVABLE_CUSTOMERS debits 2000000 minor units, expected 1000000",
-      "SALES_REVENUE credits 20000000 minor units, expected 19000000",
-      "revenue was measured on the sale price 20000000 instead of the approved amount plus the customer's gap 19000000",
+      "ACCOUNTS_RECEIVABLE_CUSTOMERS debits 2000000 minor units, expected 0",
+      "SALES_REVENUE credits 20000000 minor units, expected 18000000",
+      "revenue was measured on the sale price 20000000 instead of the approved amount plus the customer's gap 18000000",
     ]);
   });
 
@@ -141,17 +142,17 @@ describe("SCRUM-350 ACC-1 money boundary oracle: judging the posting", () => {
   });
 
   it("fails agent basis on an owned car: the same bottom line on a commission and a supplier payable", () => {
-    // Commission 4,000 = 19,000 − 15,000, the supplier owed 15,000, no revenue, COGS or inventory. Balanced, same profit.
+    // Commission 3,000 = 18,000 − 15,000, the supplier owed 15,000, no revenue, COGS or inventory. Balanced, same profit.
     const lines = without(["SALES_REVENUE", "COST_OF_VEHICLES_SOLD", "VEHICLE_INVENTORY"], [
-      line("CONSIGNMENT_COMMISSION_REVENUE", 0, 4_000_000),
+      line("CONSIGNMENT_COMMISSION_REVENUE", 0, 3_000_000),
       line("ACCOUNTS_PAYABLE_SUPPLIERS", 0, 15_000_000),
     ]);
     const verdict = evaluateMoneyBoundary(EXPECTATION, lines);
     expect(verdict.violations).toContain(
-      "a commission was posted (debit 0, credit 4000000) on a car the dealership owns; it was recognized on agent basis",
+      "a commission was posted (debit 0, credit 3000000) on a car the dealership owns; it was recognized on agent basis",
     );
     expect(verdict.violations).toContain("ACCOUNTS_PAYABLE_SUPPLIERS (debit 0, credit 15000000) is not an account a financed sale of dealership stock may post to");
-    expect(verdict.violations).toContain("SALES_REVENUE credits 0 minor units, expected 19000000");
+    expect(verdict.violations).toContain("SALES_REVENUE credits 0 minor units, expected 18000000");
     expect(verdict.violations).toContain("COST_OF_VEHICLES_SOLD debits 0 minor units, expected 15000000");
     expect(verdict.violations).toContain("VEHICLE_INVENTORY credits 0 minor units, expected 15000000");
   });
@@ -177,26 +178,28 @@ describe("SCRUM-350 ACC-1 money boundary oracle: judging the posting", () => {
   });
 
   it("is not fooled by an offsetting pair on one account whose net equals the expected amount", () => {
-    // Revenue credited 19,000 net, but through a 100 debit and a 19,100 credit.
+    // Revenue credited 18,000 net, but through a 100 debit and an 18,100 credit.
     const lines = [...correct(), line("SALES_REVENUE", 100, 0), line("SALES_REVENUE", 0, 100)];
     const verdict = evaluateMoneyBoundary(EXPECTATION, lines);
     expect(verdict.violations).toContain("SALES_REVENUE debits 100 minor units, expected 0");
-    expect(verdict.violations).toContain("SALES_REVENUE credits 19000100 minor units, expected 19000000");
+    expect(verdict.violations).toContain("SALES_REVENUE credits 18000100 minor units, expected 18000000");
   });
 
   it("fails an entry that does not balance, naming the journal", () => {
-    const lines = correct().map((entry) => (entry.key === "SALES_REVENUE" ? { ...entry, creditMinor: 18_999_999 } : entry));
+    const lines = correct().map((entry) => (entry.key === "SALES_REVENUE" ? { ...entry, creditMinor: 17_999_999 } : entry));
     const verdict = evaluateMoneyBoundary(EXPECTATION, lines);
-    expect(verdict.violations).toContain("journal je-1 does not balance: debits 36700000, credits 36699999");
+    expect(verdict.violations).toContain("journal je-1 does not balance: debits 35700000, credits 35699999");
   });
 
   it("fails a line in another currency or scale, a negative amount and a two-sided line", () => {
-    const lines = correct().map((entry) => {
-      if (entry.key === "SALES_REVENUE") return { ...entry, currency: "USD", scale: 2 };
-      if (entry.key === "VEHICLE_INVENTORY") return { ...entry, debitMinor: 7 };
-      if (entry.key === "ACCOUNTS_RECEIVABLE_CUSTOMERS") return { ...entry, debitMinor: -1 };
-      return entry;
-    });
+    const lines = [
+      ...correct().map((entry) => {
+        if (entry.key === "SALES_REVENUE") return { ...entry, currency: "USD", scale: 2 };
+        if (entry.key === "VEHICLE_INVENTORY") return { ...entry, debitMinor: 7 };
+        return entry;
+      }),
+      line("ACCOUNTS_RECEIVABLE_CUSTOMERS", -1, 0),
+    ];
     const verdict = evaluateMoneyBoundary(EXPECTATION, lines);
     expect(verdict.violations).toContain("a SALES_REVENUE line is denominated USD at scale 2, not JOD at scale 3");
     expect(verdict.violations).toContain("a VEHICLE_INVENTORY line carries both a debit and a credit (7 / 15000000)");

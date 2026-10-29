@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import type { ExecutionFeeHeadline } from "./executionFeePosition";
+import { assertApplicationGapCollectable } from "./financedGapPilotRule";
 import { toMinorSameCurrencyOrUndefined, assertFiniteNumber, assertMajorAmountRepresentable } from "./money";
 import {
   isRequestedFinancingTermValid,
@@ -1309,6 +1310,10 @@ export function assertAppraisalGapSettledToAdvance(
     netShortfallMethod?: ShortfallMethod;
     netShortfallMinor?: number;
     gapResolution?: GapResolution;
+    companyId?: Doc<"financeApplications">["companyId"];
+    quoteModeAtSubmission?: Doc<"financeApplications">["quoteModeAtSubmission"];
+    customerGapCashToDealerMinor?: number;
+    customerGapInstallmentToDealerMinor?: number;
   },
   action: string
 ): void {
@@ -1321,6 +1326,10 @@ export function assertAppraisalGapSettledToAdvance(
       `The shortfall on this deal could not be worked out from its recorded quotation, so who covers any difference cannot be agreed. Re-record the quotation and the approval before ${action}.`
     );
   }
+  // SCRUM-571 ruling 10: a gap the customer still owes the dealership can never be collected at pilot, so the deal
+  // cannot close. Refused here, once, for handover and finalization (the callers of this guard), before any write.
+  // Asked before the shortfall test, so a stored gap on a deal that no longer has a shortfall is refused too.
+  assertApplicationGapCollectable(app, composeCustomerGapToDealer(app));
   if (!shortfall.requiresResolution) return;
   if (appraisalGapIsSettled(app.gapResolution)) return;
   // No figure in the message. The gap is a FINANCE-class field under the

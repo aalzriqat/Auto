@@ -186,15 +186,20 @@ export interface ConsignmentFigures {
   /** The financier's loan-to-value percentage (a whole number). */
   ltvPercent: number;
   depositMajor: number;
-  /** The part of the shortfall the customer agrees to pay the dealership in cash. */
+  /**
+   * The part of the shortfall the customer owes the dealership. The pilot refuses any such amount on a financed deal
+   * (SCRUM-760 c23812 #10: nothing could collect it), so the seeded scenario states 0 and the seed step refuses to
+   * submit more; the oracle still judges a gap, because it is a pure function of the figures it is handed.
+   */
   customerGapMajor: number;
 }
 
 /**
  * A 20,000 car the supplier is owed 15,000 for, quoted to an 85% financier at 20,000
- * and approved at 18,000. The net shortfall is 1,700 (not the gross 2,000); the customer
- * pays 1,000 of it to the dealership and the dealership absorbs 700, so approved + gap
- * (19,000) is 1,000 short of the price.
+ * and approved at 18,000. The net shortfall is 1,700 (not the gross 2,000) and the
+ * dealership absorbs all of it (SCRUM-760 c23812 #10: a customer gap owed to the
+ * dealership is refused, so none is seeded), so approved (18,000) is 2,000 short of the
+ * price and a margin measured on the price is told apart from the right one.
  */
 export const CONSIGNMENT_FIGURES: Readonly<ConsignmentFigures> = {
   priceMajor: 20_000,
@@ -203,7 +208,7 @@ export const CONSIGNMENT_FIGURES: Readonly<ConsignmentFigures> = {
   approvedMajor: 18_000,
   ltvPercent: 85,
   depositMajor: 200,
-  customerGapMajor: 1_000,
+  customerGapMajor: 0,
 };
 
 /**

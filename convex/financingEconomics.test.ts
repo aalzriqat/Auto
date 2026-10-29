@@ -19,6 +19,14 @@ type AuthenticatedTestConvex = ReturnType<TestConvex["withIdentity"]>;
 
 const MODULES = import.meta.glob("./**/*.*s");
 
+// SCRUM-571 financed-gap-collection opt-out: fixture only, policy and allowed list in scripts/scrum571FinancedGapOptOutCensus.test.ts.
+// This suite records the customer-pays-the-dealership gap routes as inputs to the economics it tests; the refusal of those
+// routes is proven, with the real switch, in scrum571bGapRefusedEarly.test.ts.
+vi.mock("./utils/financedGapPilotSwitch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/financedGapPilotSwitch")>()),
+  FINANCED_CUSTOMER_GAP_COLLECTION_PILOT_REQUIRED: false,
+}));
+
 afterEach(() => {
   vi.useRealTimers();
 });

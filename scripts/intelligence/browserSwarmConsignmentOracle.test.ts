@@ -388,7 +388,8 @@ describe("CONS-1 oracle: B3 — the approved basis is told from the price basis 
 
 // The v3 discriminating scenario, written out by hand (JOD minor units): a 20,000 car the supplier is
 // owed 15,000 for, quoted at 20,000 to an 85% financier that approves 18,000, a 200 deposit (the first
-// payment), a net shortfall of 1,700 of which the customer pays 1,000 in cash and the dealership absorbs 700.
+// payment), a net shortfall of 1,700 that the dealership absorbs whole (SCRUM-760 c23812 #10 refuses a customer gap
+// owed to the dealership on a financed deal, so none is seeded).
 const V3: ConsignmentExpectation = {
   currency: "JOD",
   priceMinor: 20_000_000,
@@ -397,31 +398,29 @@ const V3: ConsignmentExpectation = {
   contributionMinor: 2_500_000,
   route: "THROUGH_DEALERSHIP",
   depositForwardMinor: 200_000,
-  customerGapMinor: 1_000_000,
+  customerGapMinor: 0,
 };
 
 const correctV3 = (): ConsignmentLine[] => [
   line("ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", 18_000_000, 0),
-  line("ACCOUNTS_RECEIVABLE_CUSTOMERS", 1_000_000, 0),
   line("CUSTOMER_DEPOSITS_LIABILITY", 200_000, 0),
   line("SALES_CONSIDERATION_REDUCTIONS", 2_500_000, 0),
   line("ACCOUNTS_PAYABLE_FINANCE_COMPANIES", 0, 2_700_000),
   line("ACCOUNTS_PAYABLE_SUPPLIERS", 0, 15_000_000),
-  line("CONSIGNMENT_COMMISSION_REVENUE", 0, 4_000_000),
+  line("CONSIGNMENT_COMMISSION_REVENUE", 0, 3_000_000),
 ];
 
 /** The same sale posted with its margin measured on the 20,000 price: balanced, and wrong by price − (approved + gap). */
-const priceBasisV3 = (): ConsignmentLine[] => {
-  const lines = correctV3();
-  lines[1] = line("ACCOUNTS_RECEIVABLE_CUSTOMERS", 2_000_000, 0);
-  lines[6] = line("CONSIGNMENT_COMMISSION_REVENUE", 0, 5_000_000);
-  return lines;
-};
+const priceBasisV3 = (): ConsignmentLine[] => [
+  ...correctV3().slice(0, 5),
+  line("ACCOUNTS_RECEIVABLE_CUSTOMERS", 2_000_000, 0),
+  line("CONSIGNMENT_COMMISSION_REVENUE", 0, 5_000_000),
+];
 
 describe("CONS-1 v3: approved + the customer's gap differs from the price, so the price basis is caught", () => {
-  it("derives expected revenue 1,500 and price-basis revenue 2,500 by hand, differing by price − (approved + gap)", () => {
-    // 18,000 + 1,000 − 15,000 − 2,500 = 1,500 against 20,000 − 15,000 − 2,500 = 2,500.
-    expect(expectedConsignedRevenueMinor(V3)).toBe(1_500_000);
+  it("derives expected revenue 500 and price-basis revenue 2,500 by hand, differing by price − (approved + gap)", () => {
+    // 18,000 + 0 − 15,000 − 2,500 = 500 against 20,000 − 15,000 − 2,500 = 2,500.
+    expect(expectedConsignedRevenueMinor(V3)).toBe(500_000);
     expect(priceBasisRevenueMinor(V3)).toBe(2_500_000);
     expect(priceBasisRevenueMinor(V3) - expectedConsignedRevenueMinor(V3)).toBe(
       V3.priceMinor - (V3.approvedMinor + (V3.customerGapMinor ?? 0)),
@@ -429,11 +428,11 @@ describe("CONS-1 v3: approved + the customer's gap differs from the price, so th
     expect(discriminatesApprovedFromPrice(V3)).toBe(true);
   });
 
-  it("passes the correct posting: debits and credits both 21,700, no invoice needed", () => {
+  it("passes the correct posting: debits and credits both 20,700, no invoice needed", () => {
     expect(evaluateConsignmentEconomics(V3, correctV3())).toEqual({ violations: [], unjudged: [] });
     const lines = correctV3();
-    expect(lines.reduce((sum, l) => sum + l.debitMinor, 0)).toBe(21_700_000);
-    expect(lines.reduce((sum, l) => sum + l.creditMinor, 0)).toBe(21_700_000);
+    expect(lines.reduce((sum, l) => sum + l.debitMinor, 0)).toBe(20_700_000);
+    expect(lines.reduce((sum, l) => sum + l.creditMinor, 0)).toBe(20_700_000);
   });
 
   it("is a violation, naming the price basis, when a balanced posting measures the margin on the sale price", () => {
@@ -442,22 +441,28 @@ describe("CONS-1 v3: approved + the customer's gap differs from the price, so th
     const verdict = evaluateConsignmentEconomics(V3, lines);
     expect(verdict.unjudged).toEqual([]);
     const out = verdict.violations.join("\n");
-    expect(out).toMatch(/recognized revenue is 2500000 minor units, expected 1500000/);
+    expect(out).toMatch(/recognized revenue is 2500000 minor units, expected 500000/);
     expect(out).toMatch(/the margin was measured on the sale price 20000000 instead of the approved amount plus the customer's gap/);
-    expect(out).toMatch(/commission revenue is 5000000 minor units, expected the margin 4000000/);
-    expect(out).toMatch(/receivable from the customer is 2000000 minor units, expected the gap 1000000/);
+    expect(out).toMatch(/commission revenue is 5000000 minor units, expected the margin 3000000/);
+    expect(out).toMatch(/receivable from the customer is 2000000 minor units, expected the gap 0/);
   });
 
   it("would not tell the two bases apart if the customer's gap filled the difference", () => {
-    const filled: ConsignmentExpectation = { ...V3, approvedMinor: 19_000_000, contributionMinor: 0, depositForwardMinor: 0 };
+    const filled: ConsignmentExpectation = {
+      ...V3,
+      approvedMinor: 19_000_000,
+      customerGapMinor: 1_000_000,
+      contributionMinor: 0,
+      depositForwardMinor: 0,
+    };
     expect(expectedConsignedRevenueMinor(filled)).toBe(priceBasisRevenueMinor(filled));
     expect(discriminatesApprovedFromPrice(filled)).toBe(false);
   });
 
   it("is a violation when the deposit is released but the forward owed onward omits it", () => {
     const lines = correctV3();
-    lines[4] = line("ACCOUNTS_PAYABLE_FINANCE_COMPANIES", 0, 2_500_000);
-    lines[6] = line("CONSIGNMENT_COMMISSION_REVENUE", 0, 4_200_000);
+    lines[3] = line("ACCOUNTS_PAYABLE_FINANCE_COMPANIES", 0, 2_500_000);
+    lines[5] = line("CONSIGNMENT_COMMISSION_REVENUE", 0, 3_200_000);
     expect(violationsOf(lines, V3)).toMatch(/payable to the financing company is 2500000 minor units, expected 2700000/);
   });
 });
@@ -474,8 +479,8 @@ describe("CONS-1 v3: the scenario builder", () => {
       firstPaymentMinor: 200_000,
       depositMinor: 200_000,
       shortfallMinor: 1_700_000,
-      customerShareMinor: 1_000_000,
-      dealerShareMinor: 700_000,
+      customerShareMinor: 0,
+      dealerShareMinor: 1_700_000,
       forwardDueMinor: 2_700_000,
     });
     expect(discriminatesApprovedFromPrice(built.scenario.expectation)).toBe(true);

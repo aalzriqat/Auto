@@ -14,9 +14,12 @@ import type { MissionBrowser, MissionBrowserRuntime, MissionSeat } from "./brows
  * The real handler runs end to end against a scripted two-seat backend. The
  * scenario is a 20,000 consigned car (supplier owed 15,000) quoted at 20,000 to an
  * 85% financier that approves only 18,000, with a 200 deposit and a net shortfall
- * of 1,700 of which the customer pays 1,000. A correct product therefore posts
- * revenue of 19,000 − 15,000 − 2,500 = 1,500, where a margin measured on the
- * price would post 2,500: the two differ, so this scenario can certify.
+ * of 1,700 that the dealership absorbs whole (SCRUM-760 c23812 #10 refuses a
+ * customer gap owed to the dealership). A correct product therefore posts
+ * revenue of 18,000 − 15,000 − 2,500 = 500, where a margin measured on the
+ * price would post 2,500: the two differ, so this scenario can certify. The
+ * mission first ATTACKS the refusal itself: an agreement leaving the customer
+ * owing the dealership the 1,700 must be refused before any write.
  *
  * Every literal below is written out by hand (a `Plan`), never taken from the
  * production scenario builder, so a wrong figure in the builder cannot make both
@@ -37,6 +40,8 @@ interface Plan {
   forward: number;
   contra: number;
   commission: number;
+  /** The car's selling price in major units. */
+  priceMajor: number;
 }
 
 const V3: Plan = {
@@ -45,25 +50,18 @@ const V3: Plan = {
   quotation: 20_000_000,
   approved: 18_000_000,
   firstPayment: 200_000,
-  customerShare: 1_000_000,
-  dealerShare: 700_000,
+  customerShare: 0,
+  dealerShare: 1_700_000,
   forward: 2_700_000,
   contra: 2_500_000,
-  commission: 4_000_000,
+  commission: 3_000_000,
+  priceMajor: 20_000,
 };
 
-/** A 100% financier approving 19,000 with a 1,000 gap: approved + gap equals the price, so nothing is discriminated. */
-const FILLED_GAP: Plan = {
-  ...V3,
-  ltv: 100,
-  approved: 19_000_000,
-  dealerShare: 0,
-  forward: 200_000,
-  contra: 0,
-  commission: 5_000_000,
-};
-/** The handler options that run FILLED_GAP: the scripted product's plan and the scenario figures that match it. */
-const FILLED_GAP_RUN = { plan: FILLED_GAP, figures: { ltvPercent: 100, approvedMajor: 19_000 } };
+/** A car priced at the approval: the approval and the price give the same margin, so nothing is discriminated. */
+const PRICE_AT_APPROVAL: Plan = { ...V3, priceMajor: 18_000 };
+/** The handler options that run PRICE_AT_APPROVAL: the scripted product's plan and the scenario figures that match it. */
+const PRICE_AT_APPROVAL_RUN = { plan: PRICE_AT_APPROVAL, figures: { priceMajor: 18_000 } };
 
 interface Faults {
   /** Posts the sale as dealership stock: gross revenue, COGS and inventory. */
@@ -96,6 +94,12 @@ interface Faults {
   forwardRefused?: boolean;
   /** The product serves no economics stamp for the gap agreement. */
   noGapStamp?: boolean;
+  /** The product ACCEPTS an agreement that leaves the customer owing the dealership (the pilot refusal is gone). */
+  acceptsUncollectableGap?: boolean;
+  /** The product refuses that agreement, but only after it wrote (the economics stamp moved). */
+  refusesAfterWriting?: boolean;
+  /** The product refuses that agreement for an unrelated reason (the attack proves nothing about the refusal). */
+  refusesForAnotherReason?: boolean;
   /** The posted journal carries an extra line on an account the chart does not list. */
   unmappedAccount?: boolean;
   /** finalizeDeal answers with another, unrelated sale (other vehicle, customer, application). */
@@ -177,6 +181,7 @@ class World {
   private vehicleRateLimits = 0;
   private saleId: string | null = null;
   private gapResolved = false;
+  private economicsStamp = "stamp-1";
   private handedOver = false;
   private forwarded = false;
   private depositHeld = false;
@@ -229,8 +234,8 @@ class World {
       line("ACCOUNTS_PAYABLE_FINANCE_COMPANIES", 0, plan.forward),
     ];
     if (this.faults.priceBasis) {
-      // Balanced and wrong: the customer's receivable and the commission both rise by the same
-      // 1,000 (price − approved − gap), as if the margin were taken on the 20,000 price.
+      // Balanced and wrong: a customer receivable that nobody owes and the commission both rise by the same
+      // 2,000 (price − approved), as if the margin were taken on the 20,000 price.
       correct[2] = line("CONSIGNMENT_COMMISSION_REVENUE", 0, 5_000 * SCALE);
       correct[3] = line("ACCOUNTS_RECEIVABLE_CUSTOMERS", 2_000 * SCALE, 0);
     }
@@ -267,7 +272,7 @@ class World {
           throw new ConvexError("Rate limit exceeded. Try again in 1s");
         }
         this.vins.push(String(a.vin));
-        if (a.sourceType !== "SOURCED" || a.sourceCost !== 15_000 || a.sellingPrice !== 20_000) {
+        if (a.sourceType !== "SOURCED" || a.sourceCost !== 15_000 || a.sellingPrice !== plan.priceMajor) {
           throw new ConvexError("scenario sent a car other than the consigned one");
         }
         this.seeded.vehicle = this.id("veh");
@@ -277,7 +282,7 @@ class World {
           ? { sourceType: "STOCK", purchasePrice: 15_000 }
           : { sourceType: "SOURCED", sourceCost: 15_000 };
       case "quotes:saveQuote":
-        if (a.vehiclePrice !== 20_000 || a.downPayment !== 0) throw new ConvexError("quote is not the 20,000 car with no down payment");
+        if (a.vehiclePrice !== plan.priceMajor || a.downPayment !== 0) throw new ConvexError("quote is not the scenario's car with no down payment");
         return this.id("quote");
       case "deposits:create":
         if (actor !== "owner") throw new ConvexError("deposit is taken by the primary seat");
@@ -303,11 +308,24 @@ class World {
         return null;
       case "applications:get":
         if (actor !== "manager") throw new ConvexError("the gap is read by the approver seat");
-        return this.faults.noGapStamp ? { _id: this.seeded.application } : { _id: this.seeded.application, economicsStamp: "stamp-1" };
+        return this.faults.noGapStamp ? { _id: this.seeded.application } : { _id: this.seeded.application, economicsStamp: this.economicsStamp };
       case "financingEconomics:resolveAppraisalGap":
         if (actor !== "manager") throw new ConvexError("the gap is resolved by the approver seat");
-        if (a.economicsStamp !== "stamp-1") throw new ConvexError("stale economics stamp");
+        if (a.economicsStamp !== this.economicsStamp) throw new ConvexError("stale economics stamp");
         if (this.faults.gapRefused) throw new ConvexError("The gap shares must add up to the net shortfall.");
+        // SCRUM-760 c23812 #10: a customer gap owed to the dealership is refused before any write.
+        if (typeof a.customerGapCashToDealerMinor === "number" && a.customerGapCashToDealerMinor > 0) {
+          if (this.faults.acceptsUncollectableGap) {
+            this.economicsStamp = "stamp-2";
+            return null;
+          }
+          if (this.faults.refusesAfterWriting) this.economicsStamp = "stamp-2";
+          throw new ConvexError(
+            this.faults.refusesForAnotherReason
+              ? "The gap shares must add up to the net shortfall."
+              : "This financed deal cannot go ahead this way because the customer would still owe the dealership part of the gap, and no payment can be recorded against the sale invoice yet.",
+          );
+        }
         if (
           a.customerGapShareMinor !== plan.customerShare ||
           a.dealerGapShareMinor !== plan.dealerShare ||
@@ -354,7 +372,7 @@ class World {
           vehicleId: this.faults.unrelatedSale ? "veh-other" : this.seeded.vehicle,
           customerId: this.faults.unrelatedSale ? "cust-other" : this.seeded.customer,
           applicationId: this.faults.unrelatedSale ? "app-other" : this.seeded.application,
-          salePrice: 20_000,
+          salePrice: plan.priceMajor,
         };
       case "chartOfAccounts:list":
         return ACCOUNTS.map((key) => ({ _id: `acct-${key}`, systemKey: key, code: "0000" }));
@@ -526,7 +544,7 @@ const inconclusive = async (faults: Faults, pattern: RegExp) => {
 };
 
 describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler v3: the discriminating scenario", () => {
-  it("PASSES a correct product, whose revenue (1,500) differs from the price-basis revenue (2,500)", async () => {
+  it("PASSES a correct product, whose revenue (500) differs from the price-basis revenue (2,500)", async () => {
     const h = harness();
     const result = await h.run();
     expect(result.oracle.passed).toBe(true);
@@ -550,7 +568,7 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler v3: the discriminating scenari
         entitlementMinor: 15_000_000,
         contributionMinor: 2_500_000,
         depositForwardMinor: 200_000,
-        customerGapMinor: 1_000_000,
+        customerGapMinor: 0,
         route: "THROUGH_DEALERSHIP",
       },
       scenario: {
@@ -558,10 +576,10 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler v3: the discriminating scenari
         ltvPercent: 85,
         firstPaymentMinor: 200_000,
         netShortfallMinor: 1_700_000,
-        customerShareMinor: 1_000_000,
-        dealerShareMinor: 700_000,
+        customerShareMinor: 0,
+        dealerShareMinor: 1_700_000,
         forwardDueMinor: 2_700_000,
-        expectedRevenueMinor: 1_500_000,
+        expectedRevenueMinor: 500_000,
         priceBasisRevenueMinor: 2_500_000,
       },
       ledger: { complete: true },
@@ -583,10 +601,10 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler v3: the discriminating scenari
     const h = harness({ priceBasis: true });
     const result = await h.run();
     expect(result.oracle.passed).toBe(false);
-    expect(result.oracle.summary).toMatch(/recognized revenue is 2500000 minor units, expected 1500000/);
+    expect(result.oracle.summary).toMatch(/recognized revenue is 2500000 minor units, expected 500000/);
     expect(result.oracle.summary).toMatch(/the margin was measured on the sale price 20000000 instead of the approved amount plus the customer's gap/);
-    expect(result.oracle.summary).toMatch(/commission revenue is 5000000 minor units, expected the margin 4000000/);
-    expect(result.oracle.summary).toMatch(/the receivable from the customer is 2000000 minor units, expected the gap 1000000/);
+    expect(result.oracle.summary).toMatch(/commission revenue is 5000000 minor units, expected the margin 3000000/);
+    expect(result.oracle.summary).toMatch(/the receivable from the customer is 2000000 minor units, expected the gap 0/);
     expect(h.evidence[0]).toMatchObject({ violations: expect.arrayContaining([expect.stringMatching(/measured on the sale price/)]) });
   });
 
@@ -598,8 +616,8 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler v3: the discriminating scenari
     expect(JSON.stringify(h.world.argsOf)).not.toMatch(/SWARM-|legalInvoice/);
   });
 
-  it("is INCONCLUSIVE (UNAVAILABLE), never a pass, when approved plus the gap equals the price", async () => {
-    const h = harness({}, FILLED_GAP_RUN);
+  it("is INCONCLUSIVE (UNAVAILABLE), never a pass, when the approval equals the price", async () => {
+    const h = harness({}, PRICE_AT_APPROVAL_RUN);
     const outcome = await settle(h);
     expect(outcome).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
     expect((outcome as Error).message).toMatch(/UNAVAILABLE.*APPROVED_VS_PRICE_BASIS/);
@@ -609,24 +627,33 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler v3: the discriminating scenari
       outcome: "INCONCLUSIVE",
       notDiscriminated: ["APPROVED_VS_PRICE_BASIS"],
       unjudged: [expect.stringMatching(/APPROVED_VS_PRICE_BASIS/)],
-      scenario: { expectedRevenueMinor: 5_000_000, priceBasisRevenueMinor: 5_000_000 },
+      scenario: { expectedRevenueMinor: 500_000, priceBasisRevenueMinor: 500_000 },
     });
   });
 
-  it("still reports a proven breach when the scenario cannot discriminate, with the gap stated alongside it", async () => {
-    const h = harness({ grossRecognition: true }, FILLED_GAP_RUN);
+  it("still reports a proven breach when the scenario cannot discriminate, with the unavailable basis stated alongside it", async () => {
+    const h = harness({ grossRecognition: true }, PRICE_AT_APPROVAL_RUN);
     const result = await h.run();
     expect(result.oracle.passed).toBe(false);
     expect(h.evidence[0]).toMatchObject({ phase: "PARTIAL", unjudged: [expect.stringMatching(/APPROVED_VS_PRICE_BASIS/)] });
   });
 
   it("is INCONCLUSIVE, and seeds nothing, when the scenario's figures cannot form a shortfall", async () => {
-    // Approved at the quotation leaves no shortfall to share, so the customer's 1,000 has nothing to cover.
+    // Approved at the quotation leaves no shortfall for the dealership to absorb.
     const h = harness({}, { figures: { approvedMajor: 20_000 } });
     const outcome = await settle(h);
     expect(outcome).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
     expect((outcome as Error).message).toMatch(/net shortfall/);
     expect(h.world.calls.filter((call) => /create|finalize/.test(call))).toEqual([]);
+  });
+
+  it("is INCONCLUSIVE, and seeds nothing, when the scenario states a customer gap owed to the dealership (SCRUM-760 c23812 #10)", async () => {
+    // The pilot refuses such an agreement, so a scenario that needs one could never close and judges nothing.
+    const h = harness({}, { figures: { customerGapMajor: 1_000 } });
+    const outcome = await settle(h);
+    expect(outcome).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect((outcome as Error).message).toMatch(/customer gap of 1000000 owed to the dealership.*SCRUM-760 c23812.*nothing was seeded/);
+    expect(h.world.calls.filter((call) => /create|finalize|resolveAppraisalGap/.test(call))).toEqual([]);
   });
 
   it("is INCONCLUSIVE, and seeds nothing, when the scenario's figures leave the oracle no margin to judge", async () => {
@@ -639,7 +666,7 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler v3: the discriminating scenari
   });
 
   it("is INCONCLUSIVE when the product refuses the gap agreement for the independently derived shortfall", async () => {
-    const h = await inconclusive({ gapRefused: true }, /refused the gap agreement for the independently derived net shortfall of 1700000 \(customer 1000000, dealership 700000\)/);
+    const h = await inconclusive({ gapRefused: true }, /refused the gap agreement for the independently derived net shortfall of 1700000 \(the dealership absorbs all of it\)/);
     expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
   });
 
@@ -664,6 +691,63 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler v3: the discriminating scenari
     ].map((call) => h.world.calls.indexOf(call));
     expect(order.every((index) => index >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+});
+
+describe("SCRUM-760 c23812 #10 CONSIGNMENT_ECONOMICS handler: the mission attacks the gap refusal itself", () => {
+  const gapCalls = (h: ReturnType<typeof harness>) =>
+    h.world.argsOf.filter((entry) => entry.name === "financingEconomics:resolveAppraisalGap").map((entry) => entry.args);
+
+  it("first submits an agreement leaving the customer owing the dealership the whole shortfall, then the one the pilot accepts", async () => {
+    const h = harness();
+    const result = await h.run();
+    expect(result.oracle.passed).toBe(true);
+    const calls = gapCalls(h);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      customerGapShareMinor: 1_700_000,
+      dealerGapShareMinor: 0,
+      customerGapCashToDealerMinor: 1_700_000,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 0,
+    });
+    // The deal goes on with the dealership absorbing the shortfall: nothing is ever submitted as owed to the dealership.
+    expect(calls[1]).toMatchObject({
+      customerGapShareMinor: 0,
+      dealerGapShareMinor: 1_700_000,
+      customerGapCashToDealerMinor: 0,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 0,
+    });
+    // Both were read against the stamp the application served before the attack.
+    expect(calls[0]?.economicsStamp).toBe("stamp-1");
+    expect(calls[1]?.economicsStamp).toBe("stamp-1");
+  });
+
+  it("proves a BREACH, and never a pass, when the product ACCEPTS the agreement the pilot refuses", async () => {
+    const h = harness({ acceptsUncollectableGap: true });
+    const result = await h.run();
+    expect(result.oracle.passed).toBe(false);
+    expect(result.oracle.summary).toMatch(/a gap agreement leaving the customer owing the dealership 1700000 \(SCRUM-760 c23812 #10\) was accepted/);
+    // The deal is no longer the scenario judged, so it goes no further.
+    expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
+    expect(h.evidence[0]).toMatchObject({ violations: [expect.stringMatching(/was accepted/)] });
+  });
+
+  it("proves a BREACH when the refusal comes AFTER a write (the application's economics stamp moved)", async () => {
+    const h = harness({ refusesAfterWriting: true });
+    const result = await h.run();
+    expect(result.oracle.passed).toBe(false);
+    expect(result.oracle.summary).toMatch(/the refused gap agreement changed the application's economics \(stamp stamp-1 became stamp-2\)/);
+    expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
+  });
+
+  it("is INCONCLUSIVE, never a pass, when the agreement is refused for a reason other than the pilot rule", async () => {
+    const h = harness({ refusesForAnotherReason: true });
+    const outcome = await settle(h);
+    expect(outcome).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect((outcome as Error).message).toMatch(/failed for a reason other than the pilot's customer-gap refusal \(The gap shares must add up/);
+    expect(h.evidence[0]).toMatchObject({ outcome: "INCONCLUSIVE" });
   });
 });
 
@@ -767,8 +851,8 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: breaches", () => {
   it("reports a breach for commission one minor unit above the independent margin", async () => {
     const result = await harness({ overstatedCommission: true }).run();
     expect(result.oracle.passed).toBe(false);
-    expect(result.oracle.summary).toMatch(/recognized revenue is 1500001 minor units, expected 1500000/);
-    expect(result.oracle.summary).toMatch(/commission revenue is 4000001 minor units, expected the margin 4000000/);
+    expect(result.oracle.summary).toMatch(/recognized revenue is 500001 minor units, expected 500000/);
+    expect(result.oracle.summary).toMatch(/commission revenue is 3000001 minor units, expected the margin 3000000/);
   });
 
   it("reports a breach when the supplier is not owed his entitlement", async () => {
@@ -849,7 +933,7 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: the canonical supplier payabl
     const h = harness({ overstatedCommission: true, payablesRefused: true });
     const result = await h.run();
     expect(result.oracle.passed).toBe(false);
-    expect(result.oracle.summary).toMatch(/commission revenue is 4000001/);
+    expect(result.oracle.summary).toMatch(/commission revenue is 3000001/);
     expect(h.evidence[0]).toMatchObject({
       phase: "PARTIAL",
       unjudged: [expect.stringMatching(/canonical supplier payable could not be read/)],

@@ -390,6 +390,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This customer has a sale invoice that is not fully paid. A payment cannot be recorded without linking it to a sale yet. Record the payment as a deposit instead. Nothing has been changed.",
     "لدى هذا العميل فاتورة بيع غير مسددة بالكامل، ولا يمكن تسجيل دفعة غير مرتبطة ببيع حاليًا. سجّل الدفعة كعربون بدلًا من ذلك. لم يتم تغيير أي شيء.",
   ],
+  ServerError_FINANCED_CUSTOMER_GAP_UNCOLLECTABLE_REFUSED: [
+    "This financed deal cannot go ahead this way because the customer would still owe the dealership part of the gap, and no payment can be recorded against the sale invoice yet. Before the vehicle is handed over, agree that the dealership absorbs the gap or, where the finance company is a configured one, that the customer pays it to the finance company; reopen the approved purchase amount first if an agreement is already recorded. After handover the agreement can no longer be changed. Nothing has been changed.",
+    "لا يمكن متابعة صفقة التمويل هذه بهذه الطريقة لأن العميل سيبقى مدينًا للمعرض بجزء من الفرق، ولا يمكن حاليًا تسجيل دفعة على فاتورة البيع. قبل تسليم السيارة، يُتَّفق على أن يتحمّل المعرض الفرق، أو على أن يدفعه العميل لشركة التمويل إذا كانت شركة مُعدّة في النظام؛ وأعد فتح مبلغ الشراء المعتمد أولًا إذا كان هناك اتفاق مسجَّل. بعد التسليم لا يمكن تغيير الاتفاق. لم يتم تغيير أي شيء.",
+  ],
   ServerError_ORG_FINANCIAL_RESET_IN_PROGRESS: [
     "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
     "لم تكتمل إعادة ضبط البيانات المالية لهذه المنشأة. لا يمكن إعادتها إلى الخدمة قبل اكتمال إعادة الضبط.",

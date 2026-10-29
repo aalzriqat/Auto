@@ -17,6 +17,8 @@
  * At a 10% commission rate: V0 = 77.5, V1 = V2 = V3 = 117.5 (owner c22421: the
  * commission margin is the same whoever covers the gap). Every expected number below is
  * the literal above, never recomputed from the code under test.
+ * SCRUM-760 c23812 ruling 10 supersedes V1's completion expectation for the pilot:
+ * its uncollectable customer invoice must be refused. The pure margin example remains valid.
  *
  * Open owner questions are marked "pending owner ruling Qn" in the source; the tests that
  * pin the fail-closed default for one say so in their name.
@@ -691,12 +693,11 @@ describe("PR-C completion: DIRECT_TO_SUPPLIER", () => {
 });
 
 describe("PR-C commission: one frozen basis, the same whoever covers the gap (owner c22421)", () => {
-  async function commissionOf(variant: "V0" | "V1" | "V2" | "V3"): Promise<number | undefined> {
+  async function commissionOf(variant: "V0" | "V2" | "V3"): Promise<number | undefined> {
     const s = await seed(`c${variant}`);
     await setCommissionRate(s, 10);
     const split: Split =
       variant === "V0" ? { customer: 0, dealer: 850 }
-      : variant === "V1" ? { customer: 400, dealer: 450, cash: 400 }
       : variant === "V2" ? { customer: 400, dealer: 450, financeCompany: 400 }
       : V3;
     const applicationId = await readyConsignedDeal(s, "THROUGH_DEALERSHIP", split);
@@ -710,11 +711,22 @@ describe("PR-C commission: one frozen basis, the same whoever covers the gap (ow
     return (await saleOf(s, applicationId)).commissionAmount;
   }
 
-  test("10% of 775 = 77.5 for V0, and 10% of 1,175 = 117.5 for V1, V2 and V3", async () => {
+  test("10% of 775 = 77.5 for V0, and 10% of 1,175 = 117.5 for the collectible V2 and V3 routes", async () => {
     expect(await commissionOf("V0")).toBe(77.5);
-    expect(await commissionOf("V1")).toBe(117.5);
     expect(await commissionOf("V2")).toBe(117.5);
     expect(await commissionOf("V3")).toBe(117.5);
+  });
+
+  test("V1: ruling 10 refuses the uncollectable customer cash gap before creating a sale or commission", async () => {
+    const s = await seed("cV1");
+    await setCommissionRate(s, 10);
+    const applicationId = await approvedDeal(s, "THROUGH_DEALERSHIP");
+    const before = await stateOf(s);
+
+    await expect(resolve(s, applicationId, { customer: 400, dealer: 450, cash: 400 })).rejects.toMatchObject({
+      data: { code: "FINANCED_CUSTOMER_GAP_UNCOLLECTABLE_REFUSED" },
+    });
+    expect(await stateOf(s)).toEqual(before);
   });
 
   test("recalculation reads the same frozen basis and does not drift", async () => {

@@ -30,6 +30,7 @@ import {
 } from "./cashSalePilotGate";
 import { requireOrgMember } from "./tenancy";
 import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
+import { assertFinancedInvoiceFullyPaid } from "./financedGapPilotGate";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
 import { assertNoPendingDepositRequest } from "./depositRequestGuards";
 import { assertOperatedDealMode, FINANCED_SALE_REQUIRES_DEAL_MESSAGE } from "./dealModes";
@@ -2149,6 +2150,11 @@ async function applySaleCompletionSideEffects(
     saleReceivableId,
     tradeInAppliedMinor,
   });
+
+  // SCRUM-571 ruling 10: the financed counterpart, on the invoice that actually exists. The pre-write refusal in
+  // `applications.finalizeDeal` judges the plan; this judges the money, so a plan and an invoice that disagree cannot
+  // leave an uncollectable customer invoice open.
+  await assertFinancedInvoiceFullyPaid(ctx, { financedSalePlan: args.financedSalePlan, saleReceivableId });
 
   // For sourced vehicles the dealership owes the supplier his entitlement out
   // of the gross it collected — but only on the route where it actually

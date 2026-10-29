@@ -6,9 +6,11 @@
  * preview, with run-unique synthetic data: customer, an 85% finance company, a
  * 20,000 car the supplier is owed 15,000 for, a 200 reservation deposit (also the
  * customer's first payment), a 20,000 quotation the financier approves at only
- * 18,000, and a REAL resolved shortfall (net 1,700: the customer owes the
- * dealership 1,000, agreed as cash and never collected here; the dealership
- * absorbs 700). The deal is routed
+ * 18,000, and a REAL resolved shortfall (net 1,700, which the dealership absorbs
+ * whole: SCRUM-760 c23812 #10 refuses any customer gap owed to the dealership on a
+ * financed deal, so none is seeded). Before it agrees that, the mission ATTACKS the
+ * refusal: an agreement leaving the customer owing the dealership the 1,700 must be
+ * refused before any write (economics stamp unchanged), never accepted. The deal is routed
  * THROUGH_DEALERSHIP, approved by the MANAGER seat, handed over, its H + D
  * (deposit + contribution) paid to the financier, and finalized by the OWNER
  * seat. No legal invoice is recorded: under plan v3 the server derives the
@@ -25,11 +27,11 @@
  * and car owing the independently computed 15,000. A row that cannot be read is
  * INCONCLUSIVE, never a pass.
  *
- * Why this scenario can certify: approved + gap (19,000) differs from the sale
- * price (20,000), so a margin measured on the price would post 1,000 too much and
- * fail. Approved < price alone would not suffice (a gap that fills the difference
- * gives identical figures), so the mission checks that the two revenues differ and
- * ends INCONCLUSIVE with `APPROVED_VS_PRICE_BASIS` otherwise.
+ * Why this scenario can certify: approved (18,000) differs from the sale price
+ * (20,000), so a margin measured on the price would post 2,000 too much and fail.
+ * The mission still checks that the two revenues differ and ends INCONCLUSIVE with
+ * `APPROVED_VS_PRICE_BASIS` otherwise (a price equal to the approval gives identical
+ * figures).
  *
  * The mission lifecycle (egress-contained browser, evidence, cleanup and the
  * fail-closed rule) is the shared runBoundaryMission: a posting that never
@@ -65,6 +67,7 @@ import { untilAborted, type MissionBrowserRuntime } from "./browserSwarmEconomic
 import {
   agreeEconomicsAndHandOver,
   asArray,
+  customerGapOwedProblem,
   inconclusive,
   isRecord,
   readChartKeys,
@@ -337,7 +340,7 @@ function consignmentEconomicsSpec(options: MissionTiming, figures: Readonly<Cons
     seat: "primary" as const,
     oracles: ["ECONOMIC_AUTHORITY" as const],
     passSummary:
-      "A financed sale of a consigned car, approved below its price with a resolved customer gap and a forwarded deposit, posted a sale journal (the entries whose source is the sale) that recognized revenue on the approved amount plus the customer's gap (less the supplier's entitlement and the dealership's contribution), recorded the supplier's entitlement, the financier's receivable and the amount owed onward to the financier (forwarded deposit and contribution) in the sale journal, and never posted the car's price, cost or inventory as the dealership's own; the supplier's canonical payable row agreed with the entitlement. Judged against independently computed figures. Not read: the deposit-receipt and forward-payment postings, and the finance-company and customer receivable subledger rows.",
+      "A financed sale of a consigned car, approved below its price (the dealership absorbing the shortfall, after an agreement leaving the customer owing the dealership was attacked and refused before any write) with a forwarded deposit, posted a sale journal (the entries whose source is the sale) that recognized revenue on the approved amount plus the customer's gap (less the supplier's entitlement and the dealership's contribution), recorded the supplier's entitlement, the financier's receivable and the amount owed onward to the financier (forwarded deposit and contribution) in the sale journal, and never posted the car's price, cost or inventory as the dealership's own; the supplier's canonical payable row agreed with the entitlement. Judged against independently computed figures. Not read: the deposit-receipt and forward-payment postings, and the finance-company and customer receivable subledger rows.",
     breachSummary: "A financed consigned sale was not recognized on the agent basis",
     async run(env: BoundaryMissionEnv): Promise<void> {
       const { client, orgId, nonce, signal, detail, page } = env;
@@ -354,6 +357,11 @@ function consignmentEconomicsSpec(options: MissionTiming, figures: Readonly<Cons
       }
       const { scenario } = built;
       const { expectation } = scenario;
+      const statedGap = customerGapOwedProblem(scenario.customerShareMinor);
+      if (statedGap !== null) {
+        env.unjudged(`${statedGap}; nothing was seeded`);
+        return;
+      }
 
       // Computed from the scenario's own figures before anything is seeded, so every non-pass states what was expected.
       detail.expected = expectation;

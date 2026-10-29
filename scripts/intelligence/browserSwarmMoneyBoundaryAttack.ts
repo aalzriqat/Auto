@@ -6,15 +6,17 @@
  * isolated, marker-gated disposable preview, with run-unique synthetic data: customer, an
  * 85% finance company, a 20,000 car the dealership bought for 15,000, a 200 deposit (also
  * the customer's first payment), a 20,000 quotation the financier approves at only 18,000,
- * a REAL resolved shortfall (net 1,700: the customer owes the dealership 1,000, agreed as
- * cash and never collected here; the dealership absorbs 700) and a 300 admin fee the
+ * a REAL resolved shortfall (net 1,700, absorbed whole by the dealership: SCRUM-760 c23812 #10
+ * refuses a customer gap owed to the dealership on a financed deal, and the mission first attacks
+ * that refusal with an agreement leaving the customer owing the 1,700, which must be refused
+ * before any write) and a 300 admin fee the
  * dealership pays itself. The deal is approved by the MANAGER seat, handed over, its
  * deposit + contribution paid to the financier, and finalized by the OWNER seat.
  *
  * The sale's posted journal (the entries whose source is the sale) is read back through
  * the same permission-checked queries an accountant uses and judged, account by account
  * and side by side, against figures computed in browserSwarmMoneyBoundaryOracle.ts, never
- * from the product: revenue is the approval plus the customer's gap (19,000, not the
+ * from the product: revenue is the approval (18,000, not the
  * 20,000 price), the financier owes the full 18,000 (the admin fee is not netted off it),
  * the deposit liability is released, and the car's 15,000 cost leaves inventory. A
  * balanced entry on the wrong accounts or amounts is a breach.
@@ -50,6 +52,7 @@ import { feeVoidSpec } from "./browserSwarmFeeVoidAttack";
 import {
   agreeEconomicsAndHandOver,
   asArray,
+  customerGapOwedProblem,
   isRecord,
   readChartKeys,
   readOrgCurrency,
@@ -78,7 +81,7 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
     seat: "primary" as const,
     oracles: ["ECONOMIC_AUTHORITY" as const],
     passSummary:
-      "A financed sale of a dealership-owned car, approved below its price with a resolved customer gap, a forwarded deposit and a dealer-paid admin fee, posted a sale journal (the entries whose source is the sale) that recognized revenue on the approved amount plus the customer's gap (less the dealership's contribution), owed the full approval by the financier, released the deposit liability, owed the financier the deposit and contribution onward, relieved the car's cost from inventory, and posted nothing on any other account. Judged account by account against independently computed figures. Not read: the vehicle acquisition, admin fee, deposit-receipt and forward-payment postings, and the finance-company and customer receivable subledger rows.",
+      "A financed sale of a dealership-owned car, approved below its price (the dealership absorbing the shortfall, after an agreement leaving the customer owing the dealership was attacked and refused before any write), a forwarded deposit and a dealer-paid admin fee, posted a sale journal (the entries whose source is the sale) that recognized revenue on the approved amount plus the customer's gap (less the dealership's contribution), owed the full approval by the financier, released the deposit liability, owed the financier the deposit and contribution onward, relieved the car's cost from inventory, and posted nothing on any other account. Judged account by account against independently computed figures. Not read: the vehicle acquisition, admin fee, deposit-receipt and forward-payment postings, and the finance-company and customer receivable subledger rows.",
     breachSummary: "A financed sale of dealership stock was not posted on the owned-stock basis",
     async run(env: BoundaryMissionEnv): Promise<void> {
       const { client, orgId, nonce, signal, detail, page } = env;
@@ -95,6 +98,11 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
       }
       const { scenario } = built;
       const { expectation } = scenario;
+      const statedGap = customerGapOwedProblem(scenario.customerShareMinor);
+      if (statedGap !== null) {
+        env.unjudged(`${statedGap}; nothing was seeded`);
+        return;
+      }
 
       // Computed from the scenario's own figures before anything is seeded, so every non-pass states what was expected.
       detail.expected = expectation;
