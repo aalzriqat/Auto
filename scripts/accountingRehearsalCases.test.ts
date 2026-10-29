@@ -19,6 +19,7 @@ import { describe, expect, test, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { summarize } from "./accountingPreviewRehearsal.mjs";
+import { registeredArgsProblems } from "../test-utils/registeredArgs";
 import {
   CURRENCY_SCALES,
   DEFAULT_ORG_CURRENCY,
@@ -511,6 +512,27 @@ type Defects = {
   payableCorrectionAccepted?: boolean;
   refusedSupplierDoorWrites?: boolean;
 };
+
+/**
+ * The registered Convex function behind `module:name`, loaded lazily so a case that never touches a module
+ * never imports it. `null` when the path names no registered function (the fake then models it by hand).
+ */
+async function registeredFunction(fnPath: string): Promise<unknown> {
+  const [module, name] = fnPath.split(":");
+  if (!module || !name || !/^[A-Za-z0-9_/]+$/.test(module)) return null;
+  try {
+    const loaded = (await import(`../convex/${module}.ts`)) as Record<string, unknown>;
+    return loaded[name] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function registeredArgsRefusal(fnPath: string, args: Record<string, unknown>): Promise<string | null> {
+  const problems = registeredArgsProblems(await registeredFunction(fnPath), args);
+  if (!problems || problems.length === 0) return null;
+  return `ArgumentValidationError in ${fnPath}: ${problems.join("; ")}`;
+}
 
 function makeBackend(defects: Defects = {}) {
   const deposits = new Map<string, Deposit>();
@@ -1048,6 +1070,15 @@ function makeBackend(defects: Defects = {}) {
     fnPath: string,
     args: Record<string, any>
   ) => {
+    // SCRUM-869 F2: refuse what the REGISTERED function's own validator would refuse (missing required
+    // field, unknown field, wrong type), before any modelled handler runs. The handlers below were
+    // hand-written and never looked at the signature, which let a case omit `receivedDate` and pass.
+    // Two injected defects model a backend whose validator no longer demands a field (a missing command
+    // identity, a missing currency); with either on, the registered check would hide the defect the case
+    // exists to catch, so it stands down for that run only.
+    const validatorDropped = Boolean(defects.acceptUnidentified || defects.feeMissingCurrencyAccepted);
+    const invalid = validatorDropped ? null : await registeredArgsRefusal(fnPath, args);
+    if (invalid) return { ok: false as const, error: invalid };
     switch (fnPath) {
       case "orgSettings:get":
         // The product resolves the denomination from orgSettings, defaulting to
@@ -2054,7 +2085,9 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: fee._id };
       }
       case "applications:handoverStamp":
-        return { ok: true as const, value: { stamp: "economics" } };
+        // The real query returns the bare stamp string (convex/applications.ts handoverStamp); the registered
+        // argument check on registerVehicleHandover caught this fake handing back an object.
+        return { ok: true as const, value: "economics" };
       case "financeDealCosts:recordDealFee": {
         const app = financeApps.get(String(args.applicationId));
         if (!app) return { ok: false as const, error: "Application not found." };

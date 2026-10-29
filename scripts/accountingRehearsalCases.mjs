@@ -3777,6 +3777,10 @@ export async function runRehearsalCases(ctx) {
     expectEqual(mine.length, 1, "supplier cost recoveries for this expense");
     return mine[0];
   };
+  // `supplierCostRecoveries.recordReceipt` requires `receivedDate`: a past instant that is not before the cost
+  // posting (the expense below is dated 60 s ago). Taken ONCE per case, after the cost exists, and reused for every
+  // call of that case, because a replay under the same idempotency key must carry the same inputs (SCRUM-869 F2).
+  const supReceivedDate = () => Date.now() - 5_000;
   const supPayCost = async (tag, stamp, vehicleId, amount) => ownerMust("mutation", "expenses:create", {
     orgId, vehicleId, title: `Rehearsal supplier cost ${tag}-${stamp}`, amount, date: Date.now() - 60_000,
     category: "TRANSPORT", status: "PAID", paymentMethod: "CASH", costBearer: "SUPPLIER",
@@ -3874,7 +3878,7 @@ export async function runRehearsalCases(ctx) {
     expectEqual(recovery.amountDueMinor, 200 * scale, "recovery amount for a 200 supplier-borne cost");
     const start = await supNets();
     expectNetMoved(before, start, { recv: 200 * scale, cash: -200 * scale }, "SUP-RECOVERY the supplier-borne cost and its claim");
-    const recvArgs = { orgId, recoveryId: recovery._id, method: "CASH" };
+    const recvArgs = { orgId, recoveryId: recovery._id, method: "CASH", receivedDate: supReceivedDate() };
 
     await ownerMust("mutation", "supplierCostRecoveries:recordReceipt", { ...recvArgs, amountMinor: 80 * scale, idempotencyKey: `rehearsal-sc-part-${stamp}` });
     const afterPart = await supNets();
@@ -3907,7 +3911,7 @@ export async function runRehearsalCases(ctx) {
     const recovery = await supRecoveryOf(expenseId);
     const { minorPerMajor: scale } = await orgDenomination({ orgId, ownerMust });
     await ownerMust("mutation", "supplierCostRecoveries:recordReceipt", {
-      orgId, recoveryId: recovery._id, method: "CASH", amountMinor: 80 * scale, idempotencyKey: `rehearsal-sr-receipt-${stamp}`,
+      orgId, recoveryId: recovery._id, method: "CASH", amountMinor: 80 * scale, receivedDate: supReceivedDate(), idempotencyKey: `rehearsal-sr-receipt-${stamp}`,
     });
     const onAccountId = await supOnAccountCar("SX", stamp, 12_500);
     const payable = await supPayableOf(onAccountId);
