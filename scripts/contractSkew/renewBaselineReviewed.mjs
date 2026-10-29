@@ -41,7 +41,7 @@
  * a path absent only at the original base can pass when named and present at
  * the recorded ancestor SHA. Whole-file changes can over-refuse unrelated edits.
  * The recorded SHA comes from `SCRUM-866 round N review against origin/main <sha>` or
- * `<KEY> review of PR #N head <sha>` (REVIEW_REFERENCE); the last one wins.
+ * `<KEY> review of PR #N head <sha>` (REVIEW_REFERENCES); the last one wins.
  * Alternatively the final reference can be `evidence-blobs [["path","blob"],...]`:
  * a JSON array of unique path/40-hex git blob pairs, ending the renewal text.
  * Both required files must have records matching HEAD. This form needs no
@@ -224,7 +224,17 @@ export function renewBaseline(text, { compare, closureOf, expires, renewal, blob
  * token: only the end of the text, whitespace or `.,;:)]` may follow, so a longer or run-on token
  * is malformed rather than silently truncated to its first 40 digits.
  */
-const REVIEW_REFERENCE = /(?:SCRUM-866 round \d+ review against origin\/main|\b[A-Z][A-Z0-9]*-\d+ review of PR #\d+ head) ([0-9a-f]{8,40})(?=$|[\s.,;:)\]])|\bevidence-blobs(?=\s|$)/g;
+const REVIEW_REFERENCES = [
+  /SCRUM-866 round \d+ review against origin\/main ([0-9a-f]{8,40})(?=$|[\s.,;:)\]])/g,
+  /\b[A-Z][A-Z0-9]*-\d+ review of PR #\d+ head ([0-9a-f]{8,40})(?=$|[\s.,;:)\]])/g,
+  /\bevidence-blobs(?=\s|$)/g,
+];
+
+/** @param {string} text */
+function lastReviewReference(text) {
+  return REVIEW_REFERENCES.flatMap((pattern) => [...text.matchAll(pattern)])
+    .sort((a, b) => a.index - b.index).at(-1);
+}
 
 /**
  * A marker is recognized even when its records are malformed, so it cannot
@@ -247,6 +257,46 @@ function parseBlobEvidence(text) {
   }
 }
 
+/** @param {string | undefined} text @returns {Map<string, unknown> | undefined} */
+function prBaseRenewals(text) {
+  if (text === undefined) return undefined;
+  const entries = parseCanonicalBaseline(text)?.entries;
+  if (!Array.isArray(entries)) throw new Error("the PR base baseline has no entries array");
+  const renewals = new Map(entries.map((entry) => [identityOf(entry), entry.renewal]));
+  if (renewals.size !== entries.length) throw new Error("the PR base baseline has duplicate identities");
+  return renewals;
+}
+
+/**
+ * @param {string | undefined} reviewHead
+ * @param {Map<string, unknown> | undefined} prRenewals
+ * @param {Record<string, unknown>} entry
+ * @param {((sha: string) => void) | undefined} requireCommitOnPrBase
+ */
+function requirePrBaseReview(reviewHead, prRenewals, entry, requireCommitOnPrBase) {
+  if (!reviewHead || !prRenewals || prRenewals.get(identityOf(entry)) === entry.renewal) return;
+  if (!requireCommitOnPrBase) throw new Error("requireCommitOnPrBase is required in PR mode");
+  requireCommitOnPrBase(reviewHead);
+}
+
+/**
+ * @param {{ file: string, functionId: string, renewal: string }} entry
+ * @param {Pick<Parameters<typeof renewalEvidenceGaps>[1], "compare" | "backendDefinitionOf" | "evidenceChanged" | "blobOf"> & { reviewHead?: string, blobs?: Map<string, string> }} options
+ */
+function sourceEvidenceGaps(entry, { compare, backendDefinitionOf, evidenceChanged, blobOf, reviewHead, blobs }) {
+  const definition = backendDefinitionOf(entry.functionId);
+  const unresolved = definition.file ? definition.unresolved : [...definition.unresolved, "backend definition is unavailable"];
+  const files = [...new Set([entry.file, ...(definition.file ? [definition.file] : [])])];
+  const changed = files.filter((file) => compare(file) !== "identical");
+  if (blobs && !blobOf) throw new Error("blobOf is required to compare evidence-blobs with HEAD");
+  const changedSinceEvidence = files.filter((file) => blobs
+    ? !blobs.has(file) || blobOf?.(file) !== blobs.get(file)
+    : evidenceChanged(/** @type {string} */ (reviewHead), file) !== "identical");
+  const named = blobs ? new Set(blobs.keys()) : new Set(rationalePaths(entry.renewal));
+  const missing = (blobs ? files : changed).filter((file) => !named.has(file));
+  return { missing, changedSinceEvidence, unresolved };
+}
+
 /**
  * A human renewal must name each changed client/defining backend file.
  * This checks evidence coverage, not whether the prose's interpretation is true.
@@ -262,10 +312,7 @@ export function renewalEvidenceGaps(text, { reviewedText, compare, backendDefini
   if (!reviewed || !Array.isArray(reviewed.entries) || !reviewed.entries.length) throw new Error("the reviewed baseline has no entries");
   const reviewedEntries = new Map(reviewed.entries.map((entry) => [identityOf(entry), entry]));
   if (reviewedEntries.size !== reviewed.entries.length) throw new Error("the reviewed baseline has duplicate identities");
-  const prEntries = prBaseText === undefined ? undefined : parseCanonicalBaseline(prBaseText)?.entries;
-  if (prBaseText !== undefined && !Array.isArray(prEntries)) throw new Error("the PR base baseline has no entries array");
-  const prRenewals = prEntries === undefined ? undefined : new Map(prEntries.map((entry) => [identityOf(entry), entry.renewal]));
-  if (prRenewals && prRenewals.size !== prEntries.length) throw new Error("the PR base baseline has duplicate identities");
+  const prRenewals = prBaseRenewals(prBaseText);
   return document.entries.flatMap((entry, index) => {
     const previous = reviewedEntries.get(identityOf(entry));
     // A relocated/new identity cannot establish an unchanged expiry. Evidence is
@@ -280,24 +327,13 @@ export function renewalEvidenceGaps(text, { reviewedText, compare, backendDefini
     if (typeof entry.file !== "string" || !entry.file.trim()) {
       return [{ index, entry: label(entry), missing: ["(invalid client or backend root)"], changedSinceEvidence: [], unresolved: [] }];
     }
-    const reference = [...entry.renewal.matchAll(REVIEW_REFERENCE)].at(-1);
+    const reference = lastReviewReference(entry.renewal);
     const reviewHead = reference?.[1];
     const blobs = reference && !reviewHead ? parseBlobEvidence(entry.renewal.slice(reference.index + reference[0].length)) : undefined;
     if (!reviewHead && !blobs) return [{ index, entry: label(entry), missing: [reference ? "(malformed evidence-blobs in renewal)" : "(no reviewed source SHA in renewal)"], changedSinceEvidence: [], unresolved: [], renewalProblem: "malformed" }];
-    if (reviewHead && prRenewals && prRenewals.get(identityOf(entry)) !== entry.renewal) {
-      if (!requireCommitOnPrBase) throw new Error("requireCommitOnPrBase is required in PR mode");
-      requireCommitOnPrBase(reviewHead);
-    }
-    const definition = backendDefinitionOf(entry.functionId);
-    const unresolved = definition.file ? definition.unresolved : [...definition.unresolved, "backend definition is unavailable"];
-    const files = [...new Set([entry.file, ...(definition.file ? [definition.file] : [])])];
-    const changed = files.filter((file) => compare(file) !== "identical");
-    if (blobs && !blobOf) throw new Error("blobOf is required to compare evidence-blobs with HEAD");
-    const changedSinceEvidence = files.filter((file) => blobs
-      ? !blobs.has(file) || blobOf?.(file) !== blobs.get(file)
-      : evidenceChanged(/** @type {string} */ (reviewHead), file) !== "identical");
-    const named = blobs ? new Set(blobs.keys()) : new Set(rationalePaths(entry.renewal));
-    const missing = (blobs ? files : changed).filter((file) => !named.has(file));
+    requirePrBaseReview(reviewHead, prRenewals, entry, requireCommitOnPrBase);
+    const { missing, changedSinceEvidence, unresolved } = sourceEvidenceGaps(entry,
+      { compare, backendDefinitionOf, evidenceChanged, blobOf, reviewHead, blobs });
     return missing.length || changedSinceEvidence.length || unresolved.length
       ? [{ index, entry: label(entry), missing, changedSinceEvidence, unresolved }] : [];
   });

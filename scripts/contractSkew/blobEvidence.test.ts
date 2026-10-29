@@ -1,9 +1,10 @@
+// @vitest-environment node
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test, type TestContext } from "vitest";
 import { main } from "./renewBaselineReviewed.mjs";
 import { resolveGit } from "./gitExecutable.mjs";
 
@@ -12,22 +13,22 @@ const client = "app/page.tsx";
 const backend = "convex/definition.ts";
 const trailer = "Co-Authored-By: Codex gpt-6.1-sol <noreply@openai.com>";
 
-function fixture(t) {
+function fixture(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cs-blob-evidence-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }));
   const git = resolveGit();
   assert.ok(git, "real git is required");
-  const run = (...args) => execFileSync(git, args, { cwd: root, encoding: "utf8", stdio: "pipe", timeout: 10000 }).trim();
-  const write = (file, value) => {
+  const run = (...args: string[]) => execFileSync(git, args, { cwd: root, encoding: "utf8", stdio: "pipe", timeout: 10000 }).trim();
+  const write = (file: string, value: string) => {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), value);
   };
   const entry = { surface: "web", file: client, callSiteId: `${client}:1:1`, functionId: "vehicles:update",
     contractPath: "orgId", kind: "TYPE_UNKNOWN", cause: "cause", fingerprint: "fingerprint", multiplicity: 1,
     rationale: "Reviewed fixture", issue: "SCRUM-866", expires: "2026-11-01" };
-  const save = (renewal, overrides = {}) => write(baseline, JSON.stringify({ version: 1, entries: [{ ...entry, ...overrides,
+  const save = (renewal?: string, overrides: Record<string, unknown> = {}) => write(baseline, JSON.stringify({ version: 1, entries: [{ ...entry, ...overrides,
     ...(renewal === undefined ? {} : { renewal }) }] }, null, 2) + "\n");
-  const commit = (message) => {
+  const commit = (message: string) => {
     run("add", "--", client, "convex", "tsconfig.json", "package.json", "pnpm-lock.yaml", baseline);
     run("commit", "-q", "-m", message, "-m", trailer);
     return run("rev-parse", "HEAD");
@@ -48,10 +49,10 @@ function fixture(t) {
   write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
   save();
   const base = commit("test(SCRUM-866): base fixture");
-  const blob = (file) => run("rev-parse", `HEAD:${file}`);
+  const blob = (file: string) => run("rev-parse", `HEAD:${file}`);
   const reference = (records = [[client, blob(client)], [backend, blob(backend)]]) => `reviewed fixture; evidence-blobs ${JSON.stringify(records)}`;
-  const check = (extra = []) => {
-    const lines = [];
+  const check = (extra: string[] = []) => {
+    const lines: string[] = [];
     const status = main(["--reviewed", base, "--check-evidence", ...extra], { log: (s) => lines.push(s), error: (s) => lines.push(s) }, root);
     return { status, output: lines.join("\n") };
   };
@@ -175,7 +176,7 @@ test("legacy commit evidence still refuses non-ancestor revisions", (t) => {
 
 test("writer mechanically emits blobs for client and resolved declaration after verifying files", (t) => {
   const f = fixture(t);
-  const lines = [];
+  const lines: string[] = [];
   const status = main(["--reviewed", f.base, "--expires", "2026-12-01", "--renewal", "Reviewed fixture", "--blob-evidence", "--write"],
     { log: (s) => lines.push(s), error: (s) => lines.push(s) }, f.root);
   assert.equal(status, 0, lines.join("\n"));
