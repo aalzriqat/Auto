@@ -88,16 +88,28 @@ a({ label: "new" }); b({}); }`);
     const fn = (identifier, fields) => ({ identifier, functionType: "Mutation", visibility: { kind: "public" }, args: { type: "object", value: fields } });
     fs.writeFileSync(path.join(root, "deployed.json"), JSON.stringify({ functions: [fn("a.js:update", {}), fn("b.js:update", {})] }));
     fs.writeFileSync(path.join(root, "partial.json"), JSON.stringify({ functions: [fn("a.js:update", { label: { fieldType: { type: "string" }, optional: false } })] }));
+    fs.writeFileSync(path.join(root, "complete.json"), JSON.stringify({ functions: [
+      fn("a.js:update", { label: { fieldType: { type: "string" }, optional: false } }), fn("b.js:update", {}),
+    ] }));
     fs.writeFileSync(path.join(root, "baseline.json"), JSON.stringify({ version: 1, entries: [] }));
-    for (const extra of [[], ["--current", "partial.json"]]) {
+    for (const extra of [[], ["--current", "partial.json"], ["--current", "complete.json"]]) {
       const run = spawnSync(process.execPath, [cli, "--mode", "production", "--spec", "deployed.json", "--baseline", "baseline.json", "--json", "report.json", ...extra],
         { cwd: root, encoding: "utf8", timeout: 30_000 });
       assert.ifError(run.error);
       assert.equal(run.status, 7, run.stderr);
       assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, "report.json"), "utf8")).classification.callOutcomes,
-        { fixed: 0, stillFails: 0, unproven: 1 });
-      if (extra.length) assert.match(run.stderr, /Current spec unavailable/);
+        extra.includes("complete.json") ? { fixed: 1, stillFails: 0, unproven: 0 } : { fixed: 0, stillFails: 0, unproven: 1 });
+      if (extra.includes("partial.json")) assert.match(run.stderr, /Current spec unavailable/);
     }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an unreviewed Convex SDK version refuses before module evaluation", async () => {
+  const root = fixture();
+  try {
+    fs.mkdirSync(path.join(root, "node_modules/convex"), { recursive: true });
+    fs.writeFileSync(path.join(root, "node_modules/convex/package.json"), JSON.stringify({ name: "convex", version: "99.0.0" }));
+    await assert.rejects(renderCurrentSpec(root), /require review for this Convex version/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

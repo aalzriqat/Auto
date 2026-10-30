@@ -30,7 +30,7 @@ export async function renderCurrentSpec(root) {
       `\nexport default [${files.map((file, i) => `{ file: ${JSON.stringify(path.relative(dir, file).replace(/\\/g, "/"))}, exports: m${i} }`).join(",")}];`;
     await build({ stdin: { contents: source, resolveDir: root, loader: "ts" },
       outfile, bundle: true, platform: "node", format: "cjs", packages: "external",
-      treeShaking: false, ignoreAnnotations: true, logLevel: "silent", tsconfig: path.join(root, "tsconfig.json"),
+      treeShaking: false, ignoreAnnotations: true, logLevel: "silent",
       // Workspace packages expose TypeScript source and must be bundled too.
       plugins: [{ name: "workspace-source", setup(builder) {
         builder.onResolve({ filter: /^@autoflow\// }, (args) => ({ path: require.resolve(args.path) }));

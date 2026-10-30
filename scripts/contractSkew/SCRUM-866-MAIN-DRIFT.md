@@ -331,7 +331,7 @@ the deployed spec. This is therefore a fresh identity-checked production metadat
 read using workstation account auth, plus an assertion that all 11 finding
 identities match the saved report, not a replay of an archived deployed spec.
 The identity comparison includes function, call site, path, dimension, severity
-and detail. No production handler or mutation was invoked.
+and detail. No application handler or production mutation was invoked.
 
 The node regression suite includes a partial-render control: removing the
 called-function guard makes its CLI test fail with `fixed: 1, unproven: 0`;
@@ -343,7 +343,7 @@ Follow-up validation:
 
 ```text
 node --test --test-concurrency=1 scripts/contractSkew/*.test.mjs
-17 passed, 0 failed, 0 skipped
+18 passed, 0 failed, 0 skipped
 pnpm exec vitest run scripts/contractSkew/<each test file> --maxWorkers=1
 26 files passed; 1,279 tests passed, 1 existing skip, 0 failures
 pnpm exec vitest run scripts/intelligence/convexCredentialBoundary.test.ts --maxWorkers=1
@@ -362,3 +362,19 @@ Node 22.21.1 and Node 26.4.0 outputs have identical SHA-256 hashes. ESLint passe
 on the new renderer sources; an initial reserved `module` variable error was
 fixed by renaming the local variable to `namespace`. No backend deploy,
 production mutation, screen audit or explorer swarm was run.
+
+The read-only Claude review's configuration concern was resolved by removing
+the root `tsconfig` override, letting esbuild select each source file's config.
+All 1,032 rendered entries remain byte-identical. The final node run also adds
+a complete-current CLI control and an unsupported-SDK-version refusal check.
+The 26-file Vitest result above predates this renderer-only follow-up; the final
+18-test node suite, detector typecheck and new-source lint were rerun afterward.
+
+Its proposed credential-ordering violation was rejected after checking the
+actual rule: `convexCredentialBoundary.test.ts` orders credentials before
+**candidate-controlled** execution. This workflow has no PR trigger and evaluates
+trusted main, as this task requires. A live GitHub read confirmed the
+`contract-skew-prod-read` environment's custom branch policy admits only the
+`main` branch. Separate steps share a runner and are not a sandbox; the design
+does not claim isolation from compromised trusted-main code or dependencies.
+No formal review-seat certificate is claimed.
