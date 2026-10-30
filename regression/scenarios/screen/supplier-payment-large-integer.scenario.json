@@ -24,8 +24,19 @@
   ],
   "expected": [
     {
-      "observable": "amountText",
-      "value": "9007199254740.989"
+      "observable": "amount.groupedNumberParts",
+      "value": [
+        "9",
+        "007",
+        "199",
+        "254",
+        "740",
+        "989"
+      ]
+    },
+    {
+      "observable": "amount.currencySuffix",
+      "value": "JOD"
     }
   ],
   "rulings": [
@@ -42,5 +53,5 @@
     "components/sourcing/SupplierPaymentDialog.tsx",
     "lib/moneyDisplay.ts"
   ],
-  "fingerprint": "ab71716685b52137a863b1220c4ac0f2912c619ae6b8121e700f05538cac6fe2"
+  "fingerprint": "60aef192757e5bede5f1b700b9498d2654c5defe8754a0e511f2f0b8bc676419"
 }
