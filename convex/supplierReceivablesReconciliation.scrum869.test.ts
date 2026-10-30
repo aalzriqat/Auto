@@ -183,6 +183,19 @@ const insertReceivable = (s: Seed, vehicleId: Id<"vehicles">, saleId: Id<"sales"
 };
 
 describe("SCRUM-869 S2 - the supplier receivables subledger reconciles to GL 1240", () => {
+  test("a stored NaN produces a generic public error and logs conversion details only on the server", async () => {
+    const s = await seed("nanpublic");
+    const { receivable } = await directSale(s, "nanpublic");
+    await s.t.run((ctx) => ctx.db.patch(receivable._id, { amountDue: NaN }));
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(recon(s)).rejects.toThrow("An unexpected error occurred. Please try again later.");
+      expect(log).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ message: expect.stringContaining("Amount NaN JOD") }));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test("CONTROL: a fresh direct-settled sale reconciles - A/R subledger equals 1240", async () => {
     const s = await seed("ctl");
     await directSale(s, "ctl");
@@ -355,7 +368,7 @@ describe("SCRUM-869 S2 - the supplier receivables subledger reconciles to GL 124
     const salesUser = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "auth_sales", email: "s@e.com", name: "Sales" }));
     await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId: salesUser, roleId: noFinanceRole }));
     const asSales = s.t.withIdentity({ subject: "auth_sales", clerkId: "auth_sales" });
-    await expect(asSales.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId })).rejects.toThrow();
+    await expect(asSales.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId })).rejects.toThrow("Forbidden: Missing required permissions: view:finance");
 
     // A finance user of a DIFFERENT organization in the same database (separate harnesses hand out identical ids).
     const otherOrg = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "S2 other", createdAt: Date.now() }));
@@ -363,7 +376,7 @@ describe("SCRUM-869 S2 - the supplier receivables subledger reconciles to GL 124
     const otherRole = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: otherOrg, name: "Owner", permissions: PERMS }));
     await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: otherOrg, userId: otherUser, roleId: otherRole }));
     const asOther = s.t.withIdentity({ subject: "auth_other", clerkId: "auth_other" });
-    await expect(asOther.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId })).rejects.toThrow();
+    await expect(asOther.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId })).rejects.toThrow("Unauthorized: You are not a member of this organization.");
   });
 
   test("it only reports: nothing is written and period close does not read it", async () => {
@@ -840,6 +853,44 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
     expect(r.status).toBe("AVAILABLE");
     expect(r.byCurrency.JOD).toMatchObject({
       glBalanceMinor: OPENING_MINOR, subledgerBalanceMinor: OPENING_MINOR, discrepancyMinor: 0, isReconciled: true, recoveryMinor: OPENING_MINOR,
+    });
+    expect(r.glBalanceLabel.en).toBe("GL 1240 and declared opening supplier recovery control accounts");
+    expect(r.glBalanceLabel.ar).toBe("حساب الأستاذ العام 1240 وحسابات الرقابة المعلنة لمبالغ الموردين القابلة للاسترداد الافتتاحية");
+  });
+
+  test("a lost opening recovery leaves a difference on its independently discovered GL account", async () => {
+    const s = await seed("lostopening");
+    const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run((ctx) => ctx.db.delete(row._id));
+    const gl = await s.t.run((ctx) => getControlAccountBalancesAsOf(ctx, s.orgId, [accountId], Date.now(), 4000));
+    expect(gl).toMatchObject({ status: "OK", balances: [{ debitMinor: 100_000, creditMinor: 0 }] });
+    const r = await recon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.byCurrency.JOD).toMatchObject({ glBalanceMinor: 100_000, subledgerBalanceMinor: 0, discrepancyMinor: 100_000 });
+    expect(r.isReconciled).toBe(false);
+  });
+
+  async function withPendingOpeningControlDraft(table: "manualJournalDrafts" | "openingBalanceDrafts") {
+      const s = await seed(`customdraft${table}`);
+      const { accountId } = await openingRecovery(s, Date.now() - 1_000);
+      await s.t.run((ctx) => ctx.db.insert(table, {
+        orgId: s.orgId, status: "PENDING_APPROVAL", createdBy: s.userId, createdAt: Date.now(),
+        lines: [{ accountId, debitMinor: 1, creditMinor: 0 }],
+        ...(table === "openingBalanceDrafts" ? { asOfDate: Date.now() } : { accountingDate: Date.now(), memo: "Pending custom control", idempotencyKey: crypto.randomUUID() }),
+      }));
+      return recon(s);
+  }
+
+  // Explicit registrations let the permanent scenario library bind each draft family separately.
+  test("a pending manualJournalDrafts on a declared opening control account refuses the comparison", async () => {
+    expect(await withPendingOpeningControlDraft("manualJournalDrafts")).toMatchObject({
+      status: "UNAVAILABLE", unavailableReason: "PENDING_POSTINGS", complete: false, isReconciled: false, currencies: [],
+    });
+  });
+
+  test("a pending openingBalanceDrafts on a declared opening control account refuses the comparison", async () => {
+    expect(await withPendingOpeningControlDraft("openingBalanceDrafts")).toMatchObject({
+      status: "UNAVAILABLE", unavailableReason: "PENDING_POSTINGS", complete: false, isReconciled: false, currencies: [],
     });
   });
 

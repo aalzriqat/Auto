@@ -1,6 +1,6 @@
-import { createOpeningSettlementReader } from "./utils/openingSettlementBasis";
+import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
-import { openingPayableBasis, openingRecoveryBasis, openingRecoveryReferenceCounts } from "./utils/openingSupplierBasis";
+import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
 /**
  * Phase 5 — Ledger-backed financial reports
@@ -1024,7 +1024,8 @@ async function pendingControlAccountDraftState(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   readLimit: number,
-  controlAccountKey: SystemKey
+  controlAccountKey: SystemKey,
+  additionalAccounts: ReadonlySet<Id<"chartOfAccounts">> = new Set(),
 ): Promise<"NONE" | "PENDING" | "OVER_LIMIT"> {
   const [apAccount, manual, opening] = await Promise.all([
     ctx.db
@@ -1040,10 +1041,10 @@ async function pendingControlAccountDraftState(
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
       .take(readLimit + 1),
   ]);
-  if (!apAccount) return "NONE";
+  if (!apAccount && additionalAccounts.size === 0) return "NONE";
   if (manual.length > readLimit || opening.length > readLimit) return "OVER_LIMIT";
 
-  const touchesAp = [...manual, ...opening].some((d) => d.lines.some((line) => line.accountId === apAccount._id));
+  const touchesAp = [...manual, ...opening].some((d) => d.lines.some((line) => line.accountId === apAccount?._id || additionalAccounts.has(line.accountId)));
   return touchesAp ? "PENDING" : "NONE";
 }
 
@@ -1196,8 +1197,9 @@ export const supplierPayablesReconciliation = query({
  * credits 1240 too; the receivable is seeded with it (`alreadyReceivedAmount`), so it is inside
  * `amountReceived`.
  *
- * Established practice (stated from general accounting knowledge, not fetched in this session): a
- * subledger is reconciled to its GL control account by total, per currency, and the reconciling
+ * Established practice (ACCA FA1 examiner's report, September 2019-August 2020, example 1):
+ * https://www.accaglobal.com/content/dam/acca/global/PDF-students/fia/examreports/FA1/FA1%20examiners%20report%20spet-19-aug20.pdf
+ * The subledger and GL control account are independent sides. This report compares per currency, and the reconciling
  * difference is reported and investigated, never silently adjusted or posted. Rows that cannot be
  * attributed to a supplier stay in the total and are shown separately (the Unlinked bucket) so a
  * per-supplier view can never add up to less than the control account without saying why.
@@ -1221,7 +1223,13 @@ export type SupplierReceivablesUnavailableReason =
    */
   | "ACTIVITY_AFTER_CUTOFF";
 
+const SUPPLIER_RECEIVABLES_GL_LABEL = {
+  en: "GL 1240 and declared opening supplier recovery control accounts",
+  ar: "حساب الأستاذ العام 1240 وحسابات الرقابة المعلنة لمبالغ الموردين القابلة للاسترداد الافتتاحية",
+};
+
 export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, "byCurrency"> & {
+  glBalanceLabel: { en: string; ar: string };
   byCurrency: Record<
     string,
     GlVsSubledgerResult["byCurrency"][string] & {
@@ -1264,8 +1272,10 @@ export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, 
  * openingRecoveryBasis / requireOpeningSettlementBasis, not measured, so they carry headroom.
  */
 export const SUPPLIER_RECEIVABLES_RECON_LIMITS = { rows: 4000, inFlight: 400, gl: 2400, openingRecoveries: 25 } as const;
-const OPENING_ROW_DOCUMENT_ALLOWANCE = 450;
-const OPENING_ROW_RANGE_ALLOWANCE = 12;
+// Includes independent declared-account verification and row verification. The request-local
+// reader shares parent drafts and journal lines; the additional journal-provenance scan is bounded.
+const OPENING_ROW_DOCUMENT_ALLOWANCE = 700;
+const OPENING_ROW_RANGE_ALLOWANCE = 24;
 export const CONVEX_DOCUMENTS_SCANNED_LIMIT = 32_000;
 export const CONVEX_INDEX_RANGES_LIMIT = 4_096;
 
@@ -1328,6 +1338,7 @@ export async function computeSupplierReceivablesReconciliation(
     ? SUPPLIER_RECEIVABLES_RECON_LIMITS
     : { ...SUPPLIER_RECEIVABLES_RECON_LIMITS, rows: opts.readLimit, inFlight: opts.readLimit, gl: opts.readLimit };
   const unavailable = (unavailableReason: SupplierReceivablesUnavailableReason): SupplierReceivablesReconciliationResult => ({
+    glBalanceLabel: SUPPLIER_RECEIVABLES_GL_LABEL,
     currencies: [],
     byCurrency: {},
     isReconciled: false,
@@ -1348,24 +1359,19 @@ export async function computeSupplierReceivablesReconciliation(
   if (toDate !== undefined && toDate < now) return unavailable("AS_OF_DATE_UNSUPPORTED");
 
   // 1. Postings still in flight: the GL side is about to move, so a comparison now is not the truth.
-  const [outbox, drafts] = await Promise.all([
-    Promise.all(
+  const outbox = await Promise.all(
       (["PENDING", "FAILED"] as const).map((status) =>
         ctx.db
           .query("pendingAccountingEvents")
           .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
           .take(limits.inFlight + 1)
       )
-    ),
-    pendingControlAccountDraftState(ctx, orgId, limits.inFlight, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS),
-  ]);
+  );
   const [queued, failed] = outbox;
   if (queued.length > limits.inFlight || failed.length > limits.inFlight) return unavailable("OVER_LIMIT");
   if (await hasPendingAffectingPosting(ctx, [...queued, ...failed], SUPPLIER_RECEIVABLE_AFFECTING_EVENT_TYPES)) {
     return unavailable("PENDING_POSTINGS");
   }
-  if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
-  if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
 
   // 2. Both subledgers under one shared bound. Status is a label, not the balance.
   const receivables: Array<Doc<"vehicleSupplierReceivables">> = [];
@@ -1402,8 +1408,8 @@ export async function computeSupplierReceivablesReconciliation(
   const add = (map: Map<string, number>, currency: string, minor: number) =>
     map.set(currency, (map.get(currency) ?? 0) + minor);
   const controlAccounts = new Set<Id<"chartOfAccounts">>();
-  // The accounts whose later-dated postings would make the comparison mixed: 1240 and the declared account
-  // of every opening recovery that is IN the subledger. An opening recovery dated after the cutoff is on
+  // The accounts whose later-dated postings would make the comparison mixed: 1240 and declared opening
+  // accounts in force by the cutoff, including those whose recovery row was lost. An opening dated after the cutoff is on
   // neither side, so its own account may hold lines dated after the cutoff without any mismatch.
   const subledgerAccounts = new Set<Id<"chartOfAccounts">>();
   const canonical = await ctx.db
@@ -1416,29 +1422,51 @@ export async function computeSupplierReceivablesReconciliation(
   }
   const cutoff = toDate ?? now;
 
+  // Discover the GL account set from POSTED opening batches independently of surviving recovery
+  // rows. Verify each declaration against its journal even when its subledger result was lost.
+  const openingDrafts = await ctx.db.query("openingBalanceDrafts")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "POSTED"))
+    .take(101);
+  if (openingDrafts.length > 100) return unavailable("OPENING_SOURCE_UNAVAILABLE");
+  const declarations = openingDrafts.flatMap((draft) =>
+    (draft.allocations ?? []).filter((allocation) => allocation.kind === "SUPPLIER_RECOVERABLE")
+      .map((allocation) => ({ draftId: draft._id, rowKey: allocation.rowKey })),
+  );
+  if (declarations.length > limits.openingRecoveries) return unavailable("OVER_LIMIT");
+  const openingReader = createOpeningSettlementReader(ctx, orgId);
+  const openingReferences = new Set(openingDrafts.flatMap((draft) =>
+    (draft.allocationResults ?? []).flatMap((result) => "recoveryId" in result ? [result.recoveryId] : []),
+  ));
+  for (const ref of declarations) {
+    try {
+      const basis = await requireOpeningSettlementBasis(ctx, orgId, ref, "SUPPLIER_RECOVERABLE", openingReader);
+      controlAccounts.add(basis.accountId);
+      if (basis.asOfDate <= cutoff) subledgerAccounts.add(basis.accountId);
+    } catch {
+      return unavailable("OPENING_SOURCE_UNAVAILABLE");
+    }
+  }
+  const drafts = await pendingControlAccountDraftState(ctx, orgId, limits.inFlight, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, controlAccounts);
+  if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+  if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
+
   for (const row of receivables) {
     const openMinor = toMinorUnits(row.amountDue, row.currency) - toMinorUnits(row.amountReceived ?? 0, row.currency);
     add(margin, row.currency, openMinor);
     add(isUnlinkedSupplierName(row.sourcedFromName) ? unlinked : linked, row.currency, openMinor);
   }
-  let openingReferences: Map<string, number> | undefined;
   for (const row of recoveries) {
     if (row.origin !== "OPENING") {
       // A native row is recognised by the same transaction as its expense posting, so it needs no basis.
       // It must still not be claimed by a POSTED opening draft (the integrity check A/P applies to every
       // payable): one read of the drafts serves all native rows.
-      try {
-        openingReferences ??= await openingRecoveryReferenceCounts(ctx, orgId);
-      } catch {
-        return unavailable("OPENING_SOURCE_UNAVAILABLE");
-      }
       if (openingReferences.has(row._id)) return unavailable("OPENING_SOURCE_UNAVAILABLE");
     }
     if (row.origin === "OPENING") {
       // An opening recovery needs its basis verified (a bounded draft scan each).
       let basis;
       try {
-        basis = await openingRecoveryBasis(ctx, orgId, row);
+        basis = await openingRecoveryBasis(ctx, orgId, row, openingReader);
       } catch {
         return unavailable("OPENING_SOURCE_UNAVAILABLE");
       }
@@ -1481,6 +1509,7 @@ export async function computeSupplierReceivablesReconciliation(
   const combined = combineGlAndSubledger(glByCurrency, subByCurrency);
   return {
     ...combined,
+    glBalanceLabel: SUPPLIER_RECEIVABLES_GL_LABEL,
     byCurrency: Object.fromEntries(
       combined.currencies.map((currency) => [
         currency,
@@ -1501,10 +1530,34 @@ export async function computeSupplierReceivablesReconciliation(
 
 export const supplierReceivablesReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  returns: v.object({
+    glBalanceLabel: v.object({ en: v.string(), ar: v.string() }),
+    currencies: v.array(v.string()),
+    byCurrency: v.record(v.string(), v.object({
+      glBalanceMinor: v.number(), subledgerBalanceMinor: v.number(), discrepancyMinor: v.number(), isReconciled: v.boolean(),
+      marginMinor: v.number(), recoveryMinor: v.number(), linkedMinor: v.number(), unlinkedMinor: v.number(),
+    })),
+    isReconciled: v.boolean(),
+    status: v.union(v.literal("AVAILABLE"), v.literal("UNAVAILABLE")),
+    unavailableReason: v.optional(v.union(
+      v.literal("OVER_LIMIT"), v.literal("PENDING_POSTINGS"), v.literal("OPENING_SOURCE_UNAVAILABLE"),
+      v.literal("AS_OF_DATE_UNSUPPORTED"), v.literal("INVALID_AS_OF_DATE"), v.literal("ACTIVITY_AFTER_CUTOFF"),
+    )),
+    complete: v.boolean(),
+    rowsRead: v.optional(v.object({ receivables: v.number(), recoveries: v.number() })),
+  }),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    await requireFeature(ctx, args.orgId, "accounting");
-    return computeSupplierReceivablesReconciliation(ctx, args.orgId, args.toDate);
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireFeature(ctx, args.orgId, "accounting");
+      return await computeSupplierReceivablesReconciliation(ctx, args.orgId, args.toDate);
+    } catch (error) {
+      // Deliberate application refusals have structured codes. Conversion errors can also be
+      // ConvexErrors, but their free-text payloads contain internal data and must not escape.
+      if (error instanceof ConvexError && typeof error.data === "object" && error.data !== null && "code" in error.data) throw error;
+      console.error("Supplier receivables reconciliation failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
   },
 });
 /**
