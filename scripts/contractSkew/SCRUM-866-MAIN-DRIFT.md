@@ -1047,3 +1047,66 @@ host-contamination finding is VALIDATED; the proposed per-function fix is
 REJECTED under the explicit soundness fallback. These passes are not independent
 certification seats. Formal simplify, new-head cloud Sonar/CI, screen audit,
 explorer swarm, merge, deployment and production verification remain unverified.
+
+## Linux CI follow-up at 846a491b
+
+CI uses Node **22.21.1**, while the earlier Windows checks used Node 26.4.0.
+Two independent failures were reproduced without changing the assertions:
+
+- The workflow's `node --test --test-concurrency=1 scripts/contractSkew/*.test.mjs`
+  omitted the VM flag. Its direct renderer calls failed with
+  `Native ESM metadata evaluation requires --experimental-vm-modules`.
+- Under WSL Ubuntu 24.04 with Node 22.21.1 and the flag enabled, the five existing
+  library capability cases produced **1 failed / 4 passed**. The failing case was
+  `("navigator" in globalThis) ? {} : { label: v.string() }`. A minimal VM probe
+  showed that returning the contextified sandbox as `globalThis` bypasses the
+  Proxy's `has` trap and returns false even in the navigator-present world.
+  Node 26.4.0 returns true in that world, explaining the earlier local pass.
+  The same minimal probe on Windows Node 22.21.1 also returns false before the
+  fix and reaches `has` afterward, isolating the runtime-version difference.
+
+The VM now exposes a separate Proxy over the same backing object and traps as
+`globalThis`. Membership reaches the recording `has` trap on both versions;
+same-realm intrinsics, denial latching and global completeness remain intact.
+The existing assertion still expects `["capability:read"]` for the unstable
+validator. Cleanup warnings also occur in the passing unwritable-output test;
+they were not the cause of the capability failure.
+
+Both the CI node-test step and the credential-free Contract skew renderer use
+step-local `NODE_OPTIONS` for `--experimental-vm-modules`. The renderer retains
+its 6144 MiB old-space limit. Vitest already supplies the flag through
+`test.execArgv`. The credential fingerprint first failed **1 / 15**, then was
+re-pinned for the reviewed flag relocation. No credential-bearing step changed.
+
+Official references checked for this decision:
+
+- [Node 22.21.1 SourceTextModule](https://nodejs.org/download/release/v22.21.1/docs/api/vm.html#class-vmsourcetextmodule)
+  explicitly requires the flag.
+- [Node 22.21.1 VM flag](https://nodejs.org/download/release/v22.21.1/docs/api/cli.html#--experimental-vm-modules)
+  enables ESM support in `node:vm`.
+- [Node contextification](https://nodejs.org/download/release/v22.21.1/docs/api/vm.html#what-does-it-mean-to-contextify-an-object)
+  documents the wrapper and its global-object quirks. The precise membership
+  difference above is executed evidence, not a guarantee inferred from the docs.
+
+WSL validation uses a disposable copy and minimal pinned test dependencies,
+not a full frozen-lockfile installation. All **88 renderer tests pass**, including
+all five capability cases. Its node suite passes **24/24**, using exactly the
+workflow's `NODE_OPTIONS=--experimental-vm-modules` and single-concurrency command.
+Windows Node 26.4.0 also passes that node command **24/24** and the credential
+boundary **15/15**. The full one-worker contract-skew Vitest sweep passes all
+**27 files, 1,367 tests, one existing skip**. The initial broad Windows batch
+encountered the documented CRLF shebang import problem and was stopped. The
+file-by-file rerun temporarily normalized the same three shebang files already
+listed above and restored their original bytes in `finally`; they have no diff.
+The WSL credential-boundary run also passes **15/15**.
+Detector checkJs and root typechecks pass; the root excludes
+`convex/`. Lint exits zero with 4,350 existing warnings and zero errors.
+
+The follow-up full native render still produces **1,017 exports / 1,949
+evaluations**, with the same five unavailable Node modules. The 43feaa4f product
+source diff is empty. The saved-spec replay exits 7 with **6 FIXED, zero
+still-failing, zero UNPROVEN**, 11 proven breaks, zero evidence drift and zero
+coverage-incomplete entries. The saved deployed spec remains SUPPLIED_FILE
+evidence. This change does not claim production
+runtime parity, independent seat certification, or pilot readiness. New-head
+Linux CI is checked after pushing; no merge or deployment is authorized here.

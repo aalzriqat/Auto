@@ -249,7 +249,10 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // grant, checkout, environment, credential step or output path changed.
     // SCRUM-866 follow-up adds only a 6144 MiB old-space limit to that same
     // credential-free Node invocation, below the public runner's 16 GB RAM.
-    "b23935857d1a98a0a7ec13f25c9c357afe22c63c3a4e48fbcde5b061956a9121",
+    // SCRUM-866 Linux CI fix moves those same two Node flags into step-local
+    // NODE_OPTIONS, matching test.yml. No credential, grant, checkout, command
+    // body beyond the flags, timeout, cleanup or output path changed.
+    "5091acaf0dd9b3a330dfdd53ea61b67b61e267f06b84fab25afecd308b4f9136",
   "deal-scenarios-e2e.yml":
     // SCRUM-616/617: the reviewed change opts into the cross-screen oracle.
     // SCRUM-760 G8: job timeout 120 -> 180 minutes for the larger deals/sales

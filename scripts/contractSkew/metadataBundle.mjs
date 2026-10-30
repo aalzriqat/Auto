@@ -360,7 +360,9 @@ function environmentContext(deny, globals, runtimeReads) {
   Object.defineProperties(backing, intrinsics);
   // Convex functions are server modules; the SDK checks this exact absent global
   // in assertNotBrowser during registration. No other missing global is assumed.
-  Object.assign(backing, globals, { globalThis: globalProxy, window: undefined });
+  // A separate Proxy avoids Node 22's contextified-global membership quirks:
+  // `"navigator" in globalThis` must reach our has trap in every world.
+  Object.assign(backing, globals, { globalThis: new Proxy(backing, traps), window: undefined });
   return { context, protect() {
     const capability = (key) => typeof key === "string" && ["navigator", "Function", "eval", "__zod_globalConfig", "__zod_globalRegistry"].includes(key);
     traps.get = (target, key) => {

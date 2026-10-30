@@ -258,6 +258,10 @@ jobs:
     # No backend spec or production credentials: catch stranded review identities
     # in the same candidate checkout used above (the PR merge ref on pull_request).
     - name: Contract-skew baseline identity regression tests
+      env:
+        # Node 22 still gates vm.SourceTextModule behind this flag, as does
+        # the credential-free renderer in contract-skew.yml.
+        NODE_OPTIONS: --experimental-vm-modules
       run: node --test --test-concurrency=1 scripts/contractSkew/*.test.mjs
 
     - name: Contract-skew baseline call identities
