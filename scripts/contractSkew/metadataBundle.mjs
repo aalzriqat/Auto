@@ -178,7 +178,8 @@ function staticRefusal(bundles, file) {
  * with an emitted-chunk-only linker, never host package resolution.
  * vm is an evaluator for trusted main, not a security sandbox.
  * @returns {Promise<{functions: FunctionMetadata[], reason: string, evaluations: number,
- * staticRefused?: boolean, differentialRefused?: string[], environmentKeys?: string[], enumerations?: number}>}
+ * staticRefused?: boolean, differentialRefused?: string[], environmentKeys?: string[], enumerations?: number,
+ * capabilityProbes?: string[]}>}
  */
 export async function evaluateBundle(bundles, file, metadata) {
   if (typeof vm.SourceTextModule !== "function") throw new Error("Native ESM metadata evaluation requires --experimental-vm-modules");
@@ -187,7 +188,7 @@ export async function evaluateBundle(bundles, file, metadata) {
   const entry = path.resolve("out", file.replace(/\.[^.]+$/, ".js"));
   const options = { entry, file, metadata };
   const baseline = await evaluatePass({ ...options, modules: bundles.probe });
-  if (baseline.reason) return { ...baseline, environmentKeys: [...baseline.keys], evaluations: 1 };
+  if (baseline.reason) return { ...baseline, environmentKeys: [...baseline.keys], capabilityProbes: [...baseline.capabilityProbes], evaluations: 1 };
   return differentialEvaluation(bundles, options, baseline);
 }
 
@@ -197,19 +198,27 @@ async function differentialEvaluation(bundles, options, baseline) {
   if (baseline.enumerations && !keys.length) keys.push("__AUTOFLOW_ENV_PROBE__");
   if (keys.length > 32) return { functions: [], reason: "environment key budget exceeded", evaluations: 1 };
   const values = ["production", "development", "test", "true", "false", "1", "0", "", randomUUID()];
-  const worlds = keys.length || baseline.enumerations ? values.map((value) => Object.fromEntries(keys.map((key) => [key, value]))) : [];
+  /** @type {Array<{env: Record<string, string | undefined>, runtime?: {userAgent?: string, evalThrows?: boolean}, zodConfig?: boolean}>} */
+  const worlds = keys.length || baseline.enumerations ? values.map((value) => ({ env: Object.fromEntries(keys.map((key) => [key, value])) })) : [];
   // Enumerated keys are present even when their values are undefined.
-  if (keys.length || baseline.enumerations) worlds.push(Object.fromEntries(keys.map((key) => [key, undefined])));
+  if (keys.length || baseline.enumerations) worlds.push({ env: Object.fromEntries(keys.map((key) => [key, undefined])) });
+  // Exercise the browser-like capability probes independently of env values.
+  // The empty-navigator world is also the baseline and deployment world.
+  worlds.push({ env: {}, runtime: { userAgent: undefined, evalThrows: true } });
+  worlds.push({ env: {}, runtime: { userAgent: "Cloudflare-Workers", evalThrows: false } });
+  worlds.push({ env: {}, runtime: { userAgent: "Mozilla/5.0", evalThrows: false } });
   // Supported Zod globals own fresh realm state. Probe preinitialized
   // configuration as well as Zod's own initialization path.
-  worlds.push({});
+  worlds.push({ env: {}, zodConfig: true });
   const refused = new Set();
   let evaluations = 1;
   let enumerations = baseline.enumerations;
-  for (const [index, world] of worlds.entries()) {
-    const result = await evaluatePass({ ...options, modules: bundles.probe, world, zodConfig: index === worlds.length - 1 });
+  const capabilityProbes = new Set(baseline.capabilityProbes);
+  for (const world of worlds) {
+    const result = await evaluatePass({ ...options, modules: bundles.probe, world: world.env, runtime: world.runtime, zodConfig: world.zodConfig });
     evaluations++;
     enumerations += result.enumerations;
+    for (const probe of result.capabilityProbes) capabilityProbes.add(probe);
     if (result.reason) return { functions: [], reason: result.reason, evaluations, environmentKeys: keys, enumerations };
     if ([...result.keys].some((key) => !keys.includes(key))) {
       return { functions: [], reason: "environment keys changed across worlds", evaluations, environmentKeys: [...new Set([...keys, ...result.keys])], enumerations };
@@ -219,10 +228,12 @@ async function differentialEvaluation(bundles, options, baseline) {
   const deployed = await evaluatePass({ ...options, modules: bundles.deployment });
   evaluations++;
   enumerations += deployed.enumerations;
+  for (const probe of deployed.capabilityProbes) capabilityProbes.add(probe);
   if (deployed.reason) return { functions: [], reason: deployed.reason, evaluations, environmentKeys: keys, enumerations };
   compareFunctions(baseline.functions, deployed.functions, refused);
   return { functions: deployed.functions.filter((fn) => !refused.has(fn.identifier)), reason: "",
-    differentialRefused: [...refused], evaluations, environmentKeys: keys, enumerations };
+    differentialRefused: [...refused], evaluations, environmentKeys: keys, enumerations,
+    capabilityProbes: [...capabilityProbes].sort() };
 }
 
 /** Compare full registration records, including exportArgs JSON and presence. */
@@ -235,14 +246,14 @@ function compareFunctions(baseline, current, refused) {
 }
 
 /** Any denial, even caught by module code, invalidates this entire entry. */
-async function evaluatePass({ modules, entry, file, metadata, world = {}, zodConfig = false }) {
+async function evaluatePass({ modules, entry, file, metadata, world = {}, runtime = {}, zodConfig = false }) {
   const state = { reason: "" };
-  const reads = { keys: new Set(), enumerations: 0 };
+  const reads = { keys: new Set(), enumerations: 0, capabilityProbes: new Set() };
   const deny = (reason) => {
     state.reason ||= reason;
     throw new Error("Deployment-dependent module evaluation");
   };
-  const context = metadataContext(deny, world, reads, zodConfig);
+  const context = metadataContext(deny, world, reads, zodConfig, runtime);
   try {
     const namespace = await evaluateEntry(modules, context, deny, entry);
     const functions = metadata({ file, exports: namespace });
@@ -276,7 +287,7 @@ async function evaluateEntry(modules, context, deny, entry) {
 }
 
 /** Read nothing from the calling process; permit handlers to remain uncalled. */
-function metadataContext(deny, world, reads, zodConfig) {
+function metadataContext(deny, world, reads, zodConfig, runtime) {
     const record = (key) => {
       if (typeof key !== "string") return deny("unsupported environment key");
       reads.keys.add(key);
@@ -290,6 +301,7 @@ function metadataContext(deny, world, reads, zodConfig) {
       defineProperty: () => deny("environment write"), deleteProperty: () => deny("environment write"),
       setPrototypeOf: () => deny("environment write"), preventExtensions: () => deny("environment write"),
     });
+    const runtimeReads = reads.capabilityProbes;
     const { context, protect } = environmentContext(deny, {
       process: new Proxy({ env }, {
         get: (_target, key) => key === "env" ? env : deny("process input"),
@@ -305,7 +317,12 @@ function metadataContext(deny, world, reads, zodConfig) {
       atob, btoa,
       // Even a caught access taints the whole entry's evidence.
       __denyInput: deny,
-    });
+      ...(runtime.userAgent === undefined ? {} : { navigator: new Proxy({ userAgent: runtime.userAgent }, {
+        get: (target, key) => key === "userAgent" ? (runtimeReads.add("navigator.userAgent"), target.userAgent) : deny("unsupported navigator probe"),
+        has: (target, key) => key === "userAgent" ? (runtimeReads.add("navigator.userAgent"), true) : deny("unsupported navigator probe"),
+        getOwnPropertyDescriptor: (target, key) => key === "userAgent" ? (runtimeReads.add("navigator.userAgent"), Reflect.getOwnPropertyDescriptor(target, key)) : deny("unsupported navigator probe"),
+      }) }),
+    }, runtimeReads);
     vm.runInContext(`
       globalThis.__zod_globalConfig = ${zodConfig ? "{}" : "undefined"};
       globalThis.__zod_globalRegistry = undefined;
@@ -315,6 +332,11 @@ function metadataContext(deny, world, reads, zodConfig) {
       crypto = new Proxy({}, { get() { __denyInput("crypto input"); } });
       performance = new Proxy({}, { get() { __denyInput("clock"); } });
       Intl = new Proxy({}, { get() { __denyInput("locale input"); } });
+      ${runtime.evalThrows ? `Function = new Proxy(Function, {
+        apply() { throw new EvalError("Code generation unavailable"); },
+        construct() { throw new EvalError("Code generation unavailable"); }
+      });
+      eval = () => { throw new EvalError("Code generation unavailable"); };` : ""}
     `, context);
     protect();
     return context;
@@ -325,12 +347,12 @@ function metadataContext(deny, world, reads, zodConfig) {
  * Once initialized, even typeof a missing host/runtime global taints evidence.
  * V8 can mask a global Proxy exception as undefined, hence the latched denial.
  */
-function environmentContext(deny, globals) {
+function environmentContext(deny, globals, runtimeReads) {
   const backing = {};
   /** @type {ProxyHandler<Record<string | symbol, unknown>>} */
   const traps = {};
   const globalProxy = new Proxy(backing, traps);
-  const context = vm.createContext(globalProxy, { codeGeneration: { strings: false, wasm: false } });
+  const context = vm.createContext(globalProxy, { codeGeneration: { strings: true, wasm: false } });
   const intrinsics = vm.runInContext("Object.getOwnPropertyDescriptors(globalThis)", context);
   delete intrinsics.globalThis;
   Object.defineProperties(backing, intrinsics);
@@ -338,9 +360,14 @@ function environmentContext(deny, globals) {
   // in assertNotBrowser during registration. No other missing global is assumed.
   Object.assign(backing, globals, { globalThis: globalProxy, window: undefined });
   return { context, protect() {
-    traps.get = (target, key) => Reflect.has(target, key) ? Reflect.get(target, key) : deny(`unavailable global ${String(key)}`);
-    traps.has = () => deny("global membership");
+    const capability = (key) => typeof key === "string" && ["navigator", "Function", "eval", "__zod_globalConfig", "__zod_globalRegistry"].includes(key);
+    traps.get = (target, key) => {
+      if (capability(key)) runtimeReads.add(key);
+      if (key === "navigator" && !Reflect.has(target, key)) return undefined;
+      return Reflect.has(target, key) ? Reflect.get(target, key) : deny(`unavailable global ${String(key)}`);
+    };
+    traps.has = (target, key) => capability(key) ? (runtimeReads.add(key), Reflect.has(target, key)) : deny("global membership");
     traps.ownKeys = () => deny("global enumeration");
-    traps.getOwnPropertyDescriptor = (target, key) => typeof key === "string" && ["__zod_globalConfig", "__zod_globalRegistry"].includes(key) ? Reflect.getOwnPropertyDescriptor(target, key) : deny("global descriptor");
+    traps.getOwnPropertyDescriptor = (target, key) => capability(key) ? (runtimeReads.add(key), Reflect.getOwnPropertyDescriptor(target, key)) : deny("global descriptor");
   } };
 }

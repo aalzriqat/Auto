@@ -23,7 +23,7 @@ export async function renderCurrentSpec(root) {
   const bundles = await bundleForMetadata({ root, dir, files, convexPackage, require });
   const functions = [];
   const unavailableModules = [];
-  /** @type {Array<{file: string, evaluations: number, environmentKeys: string[], enumerations: number, differentialRefused: string[]}>} */
+  /** @type {Array<{file: string, evaluations: number, environmentKeys: string[], enumerations: number, differentialRefused: string[], capabilityProbes: string[]}>} */
   const evaluatedModules = [];
   const evaluation = { staticallyRefusedModules: 0, differentialRefusedFunctions: 0, evaluations: 0, modules: evaluatedModules };
   for (const file of files) {
@@ -34,7 +34,7 @@ export async function renderCurrentSpec(root) {
     evaluation.evaluations += result.evaluations;
     evaluation.modules.push({ file: relative, evaluations: result.evaluations,
       environmentKeys: result.environmentKeys ?? [], enumerations: result.enumerations ?? 0,
-      differentialRefused: result.differentialRefused ?? [] });
+      differentialRefused: result.differentialRefused ?? [], capabilityProbes: result.capabilityProbes ?? [] });
     if (result.reason) unavailableModules.push({ file: relative, reason: result.reason });
     else functions.push(...result.functions);
   }

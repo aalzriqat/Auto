@@ -135,6 +135,45 @@ export const read = queryGeneric({ args: {}, handler: () => label.parse("ok") })
 });
 
 test.each([
+  ['navigator?.userAgent?.includes("Cloudflare") ? {} : { label: v.string() }', false],
+  ['("navigator" in globalThis) ? {} : { label: v.string() }', false],
+  ['(typeof navigator !== "undefined", (() => { try { new Function(""); } catch {} })(), { label: v.string() })', true],
+  ['(() => { try { new Function(""); return {}; } catch { return { label: v.string() }; } })()', false],
+  ['(globalThis.eval, { label: v.string() })', true],
+])("library capability probe is compared per function: %s", async (args, stable) => {
+  const { root } = fixture();
+  const pkg = path.join(root, "node_modules/capability-args");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ main: "index.js" }));
+  fs.writeFileSync(path.join(pkg, "index.js"), `import { v } from "convex/values"; export const args = ${args};`);
+  fs.writeFileSync(path.join(root, "convex/capability.ts"), `import { queryGeneric } from "convex/server";
+import { args } from "capability-args";
+export const read = queryGeneric({ args, handler: () => null });
+export const unaffected = queryGeneric({ args: {}, handler: () => null });`);
+  const spec = await renderCurrentSpec(root);
+  expect(missingCurrentFunctions(spec, [{ identifier: "capability:read" }])).toEqual(stable ? [] : ["capability:read"]);
+  expect(missingCurrentFunctions(spec, [{ identifier: "capability:unaffected" }])).toEqual([]);
+  expect(spec.evaluation.differentialRefusedFunctions).toBe(stable ? 0 : 1);
+  const probes = spec.evaluation.modules.find((module) => module.file === "capability.ts")?.capabilityProbes ?? [];
+  if (args.includes("navigator")) expect(probes).toContain("navigator");
+  if (args.includes("userAgent")) expect(probes).toContain("navigator.userAgent");
+  if (args.includes("Function")) expect(probes).toContain("Function");
+  if (args.includes("eval")) expect(probes).toContain("eval");
+});
+
+test("a capability world that throws with a library discards the render", async () => {
+  const { root } = fixture();
+  const pkg = path.join(root, "node_modules/capability-error");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ main: "index.js" }));
+  fs.writeFileSync(path.join(pkg, "index.js"), `if (navigator?.userAgent?.includes("Cloudflare")) throw Error("world failed"); export const args = {};`);
+  fs.writeFileSync(path.join(root, "convex/capability.ts"), `import { queryGeneric } from "convex/server";
+import { args } from "capability-error";
+export const read = queryGeneric({ args, handler: () => null });`);
+  await expect(renderCurrentSpec(root)).rejects.toThrow("world failed");
+});
+
+test.each([
   'process.env.NODE_ENV === "production" ? {} : { label: v.string() }',
   'Object.keys(process.env).length ? {} : { label: v.string() }',
   'Date.now() > 0 ? { label: v.string() } : {}',

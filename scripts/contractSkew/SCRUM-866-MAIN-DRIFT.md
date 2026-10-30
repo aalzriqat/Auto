@@ -1,11 +1,9 @@
 # SCRUM-866: main evidence drift at 56e4f858
 
-**Current result, 2026-10-30 differential follow-up:** all six calls remain
-**UNPROVEN**. Environment reads are now recorded and compared, and app inputs
-receive static refusal. Zod actually first reads a global configuration object,
-not `process.env`. After its initialization succeeds, its `navigator` capability
-probe still meets the unchanged unknown-global refusal. See the final section
-for the measured counts, source locations and residual sampling limits.
+**Current result, 2026-10-30 capability follow-up:** all six calls remain
+**UNPROVEN**. The six target exports now render, but the unchanged global
+completeness check finds six other called functions absent and discards the
+entire current spec. See the final section for the measured refusals and limits.
 
 The original baseline PR cleared 12 differences and incorporated #726.
 The final baseline contains **928 entries**. A native comparison proves the six
@@ -774,3 +772,73 @@ gaps. Their fixes were inspected for closure; this is not a reviewer seat or a
 formal simplify run. New-head cloud CI/Sonar and independent certification are
 pending. Product code, credential policy and workflow files are unchanged in
 this follow-up. The pilot, screen audit and explorer swarm were not certified.
+
+## Runtime capability follow-up at 92c6d0d3 (2026-10-30)
+
+The evaluator now records `navigator`, `navigator.userAgent`, `Function`,
+`eval`, and Zod global-configuration reads. It compares native `exportArgs()`
+records in fresh realms with `navigator` absent, a `Cloudflare-Workers` user
+agent, a `Mozilla/5.0` user agent, and an `EvalError` from `new Function` (and
+`eval`). An unchanged registration retains evidence; a changed registration
+loses it. A throwing module evaluation still stops publication of a partial
+render. The existing process/environment static audit, native Convex bundler,
+SDK pin and patch refusal, and global completeness check were not relaxed.
+
+[Convex's runtime documentation](https://docs.convex.dev/functions/runtimes)
+describes the default V8 runtime and its supported web APIs, but does not
+explicitly specify `navigator` or string code generation. The installed
+Convex 1.42.1 SDK source (`node_modules/convex/src/bundler/debugBundle.ts`)
+defines the native bundle construction but does not contain the hosted V8
+runtime. The [open-source runtime setup](https://github.com/get-convex/convex-backend/blob/main/npm-packages/udf-runtime/src/setup.ts)
+and [miscellaneous globals setup](https://github.com/get-convex/convex-backend/blob/main/npm-packages/udf-runtime/src/00_misc.ts)
+do not install `navigator` or remove the V8 `Function` intrinsic. Those backend
+links are current main, not a pinned hosted-runtime revision; the exact
+production global set remains unverified. Both absent-navigator Function
+outcomes are sampled, so the evidence comparison does not depend on choosing
+one code-generation policy. The Node [VM documentation](https://nodejs.org/api/vm.html)
+defines the local context's code-generation setting; that setting is not a
+claim about Convex production.
+
+The full render required `--max-old-space-size=6144`: the first run at Node's
+4 GB default crashed after repeated contexts. With the bounded worlds it
+completed **1,944 VM evaluations**, retained **1,008 registered exports** and
+left **6 modules unavailable**:
+
+| Module | Exact refusal |
+| --- | --- |
+| `changelog.ts` | `clock` |
+| `collectionReminderActions.ts`, `pushSend.ts`, `socialPosting.ts`, `whatsappSend.ts` | `unavailable global require` |
+| `email.ts` | `external module` |
+
+All six target exports are present in that rendered JSON. The unchanged
+completeness check nevertheless reports **6 called functions absent** (among
+the remaining unavailable modules) and discards the whole current spec. The
+saved deployed-spec replay exits **7** with 11 unclassified breaks, 928 matched
+baseline entries, zero drift, and
+`{ fixed: 0, stillFails: 0, unproven: 6 }`. This is the `SUPPLIED_FILE`
+diagnostic path, not a production-credential read or release authorization. Product
+sources remain byte-identical to `43feaa4f` under
+`git diff --name-only 43feaa4f -- convex app components packages lib apps/mobile`.
+The six target calls are still **UNPROVEN**, so no further refusal or
+completeness gate was changed to obtain a FIXED classification.
+
+Regressions established that a library branching args on
+`navigator.userAgent` or `new Function` loses function evidence, while probes
+unrelated to its args keep evidence; an error in a capability world stops the
+render. The new controls failed on the previous throwing navigator guard.
+The focused Vitest plus credential-boundary run passed **100/100** with
+`--maxWorkers=1`; V8 coverage measured **24/26 = 92.31%** of added executable
+source lines against `92c6d0d3`. The Node suite passed **22/22** with
+`--test-concurrency=1`. Detector and root TypeScript checks passed; the root
+check excludes `convex/`. `pnpm lint` exited 0 with 0 errors and 4,350 existing
+warnings. The full contract-skew Vitest sweep passed 26 files and 1,305 tests,
+with one existing skip, but exited 1 because `authorToolsCli.test.ts` failed
+to import on the documented Windows CRLF shebang issue (zero tests collected
+from that file). That failure was not attributed to this change or suppressed.
+
+Residual risks: sampling cannot rule out branches on other user-agent strings,
+mixed runtime/environment conditions, or a preinitialized long-lived global.
+The local VM is not a hosted Convex runtime certification. The 4 GB crash also
+means the default Node heap is insufficient for this full local render; this
+follow-up did not change the runner's memory policy. The six unavailable
+modules and the whole-spec completeness refusal still block the pilot proof.
