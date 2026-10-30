@@ -70,7 +70,7 @@ function fixture(t: TestContext) {
 test.for([
   ["empty", ""],
   ["whitespace", " \t "],
-])("PR mode refuses an explicitly %s --pr-base", ([_label, value], t) => {
+])("PR mode refuses an explicitly %s --pr-base", ([, value], t) => {
   const f = fixture(t);
   const result = f.check(["--pr-base", value]);
   assert.equal(result.status, 3, result.output);

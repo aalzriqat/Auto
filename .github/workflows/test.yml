@@ -267,6 +267,10 @@ jobs:
       env:
         PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
       run: |
+        if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ -z "$PR_BASE_SHA" ]; then
+          echo "PR_BASE_REFUSED: pull_request requires a non-empty PR_BASE_SHA" >&2
+          exit 1
+        fi
         args=()
         if [ -n "$PR_BASE_SHA" ]; then args+=(--pr-base "$PR_BASE_SHA"); fi
         node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence "${args[@]}"

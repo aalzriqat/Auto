@@ -46,8 +46,9 @@
  * a JSON array of unique path/40-hex git blob pairs, ending the renewal text.
  * Both required files must have records matching HEAD. This form needs no
  * evidence commit or ancestry, so a squash/rebase cannot invalidate it.
- * --blob-evidence appends this form to mechanically verified renewals. In PR
- * mode (--pr-base), NEW/CHANGED renewal text using a commit must cite an
+ * --blob-evidence appends this form to mechanically verified renewals. PR
+ * events require --pr-base; an explicitly blank base always refuses. In PR
+ * mode, NEW/CHANGED renewal text using a commit must cite an
  * ancestor of that base; unchanged legacy text keeps its existing checks.
  * Wrapper hooks, shared validators, handler helpers, custom registration factory
  * bodies, re-export wiring, resolution/config/dependency changes and runtime
@@ -352,7 +353,8 @@ export function main(argv, io = { log: console.log, error: console.error }, root
   try {
     return run(argv, io, root);
   } catch (error) {
-    io.error(`renewBaselineReviewed: ${error instanceof Error ? error.message : String(error)}`);
+    const code = error instanceof TypeError && "code" in error ? `${error.code}: ` : "";
+    io.error(`renewBaselineReviewed: ${code}${error instanceof Error ? error.message : String(error)}`);
     return EXIT_UNAVAILABLE;
   }
 }
@@ -373,6 +375,12 @@ function run(argv, io, root) {
       write: { type: "boolean" },
     },
   });
+  if (args["pr-base"] !== undefined && !args["pr-base"].trim()) {
+    throw new Error("PR_BASE_REFUSED: --pr-base requires a non-empty revision; empty or whitespace values cannot disable PR mode");
+  }
+  if (process.env.GITHUB_EVENT_NAME === "pull_request" && args["pr-base"] === undefined) {
+    throw new Error("PR_BASE_REFUSED: pull_request requires --pr-base <revision> to enforce PR renewal evidence");
+  }
   if (!args.reviewed) throw new Error("--reviewed <rev> is required");
   if (!args["check-evidence"] && !args.expires) throw new Error("--expires <YYYY-MM-DD> is required: the new expiry is a decision, never defaulted");
   if (!args["check-evidence"] && !args.renewal) throw new Error('--renewal "<reason>" is required: a renewal records why, it is never defaulted');
