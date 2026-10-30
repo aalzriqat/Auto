@@ -1183,3 +1183,39 @@ Design references:
   The documentation pages were blocked by robots rules. Live official rule
   metadata was retrieved with the SonarCloud rules API and the local rule
   implementations were executed; unavailable prose is not claimed as checked.
+
+
+### Cloud analysis follow-up
+
+At `23b2db62c1ed5a65edd24107e13caa15d45bf116`, Tests run
+[41047893526](https://github.com/aalzriqat/Auto/actions/runs/41047893526)
+passed every job. Its completed Linux type-check log records 24 Node tests passed,
+zero failed. Sonar run
+[41050580841](https://github.com/aalzriqat/Auto/actions/runs/41050580841)
+closed all 14 original findings but refused the gate: S8707 on the child's argv
+input path, two S5906 matcher findings, and combined new-code coverage 79.0%.
+The cloud measured line coverage 82.92% and branch coverage 73.67%; the combined
+metric is a separate condition and was not replaced by the local line metric.
+
+The child now reads only `world.json` from its parent's exclusive cwd. Its argv
+cannot choose an input path; the parent passes no variable input argument.
+Executed old/new controls prove both directions: an extra path cannot override a
+present fixed file, and cannot supply a fallback when the fixed file is missing.
+Both controls fail with the old implementation and pass with the correction.
+Two permanent regressions exercise the real child process.
+
+Dedicated instance matchers replace the generic assertions. Direct tests use the
+actual pinned Convex SDK registrations to verify kind, visibility, validators,
+ordinary-export exclusion and refusal of malformed registrations without calling
+handlers. This measures native metadata extraction in the existing CI collector,
+with no Sonar configuration change. The combined focused coverage run passes
+114 tests before the two input-path cases were added; the four scoped native/path
+cases then pass. CI-like PR new-line coverage is now 340/395 = 86.08%. The direct
+setup suite passes 15 cases with 93.33% line coverage. Both typechecks, full lint
+and the exact Node 22 command pass again; the saved proof remains 6 FIXED.
+S5906's local implementation also reports zero; S8707's cloud taint engine is
+not available locally, so its closure still requires the next cloud analysis.
+
+References: [Node execFile cwd/args](https://nodejs.org/docs/latest-v22.x/api/child_process.html#child_processexecfilefile-args-options-callback),
+[Sonar S8707](https://sonarsource.github.io/rspec/#/rspec/S8707/javascript),
+[Sonar S5906](https://sonarsource.github.io/rspec/#/rspec/S5906/typescript).

@@ -21,8 +21,8 @@ test("world setup preserves the host, same-realm intrinsics and pure UTC convers
   const { target } = runtime();
   expect(Math.random).toBe(hostRandom);
   expect(process).toBe(hostProcess);
-  expect({} instanceof target.Object).toBe(true);
-  expect([] instanceof target.Array).toBe(true);
+  expect({}).toBeInstanceOf(target.Object);
+  expect([]).toBeInstanceOf(target.Array);
   expect(target.globalThis.Object).toBe(Object);
   expect(target.Date.UTC(2020, 0, 1)).toBe(1577836800000);
   expect(() => target.Date.now()).toThrow("clock");

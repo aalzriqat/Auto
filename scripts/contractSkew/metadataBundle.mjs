@@ -250,7 +250,7 @@ async function runWorld({ directory, modules, entries, world, coverage }) {
   // output path for measurement; never inherit the host env.
   const env = coverage ? { NODE_V8_COVERAGE: coverage } : {};
   const { stdout } = await promisify(execFile)(process.execPath,
-    ["--max-old-space-size=1024", fileURLToPath(new URL("./metadataWorld.mjs", import.meta.url)), input],
+    ["--max-old-space-size=1024", fileURLToPath(new URL("./metadataWorld.mjs", import.meta.url))],
     { cwd: directory, env, shell: false, windowsHide: true, timeout: 30_000, maxBuffer: 32 * 1024 * 1024 });
   const result = /** @type {WorldEntry[]} */ (JSON.parse(stdout));
   if (!Array.isArray(result) || result.length !== entries.length) throw new Error("Incomplete metadata world");

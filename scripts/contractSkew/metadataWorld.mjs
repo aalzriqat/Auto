@@ -6,7 +6,9 @@ import { pathToFileURL } from "node:url";
 import { functionMetadata } from "./currentSpec.mjs";
 import { installGlobals } from "./metadataGlobals.mjs";
 
-const input = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+// The parent fixes cwd to its exclusive world directory. No CLI-supplied path
+// can select a different input file, even when this helper is invoked directly.
+const input = JSON.parse(fs.readFileSync(path.join(process.cwd(), "world.json"), "utf8"));
 const write = process.stdout.write.bind(process.stdout);
 const finish = process.exit.bind(process);
 const state = { reason: "" };

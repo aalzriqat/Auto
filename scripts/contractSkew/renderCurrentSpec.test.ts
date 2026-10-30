@@ -4,12 +4,50 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { afterEach, expect, test, vi } from "vitest";
-import { discoverModules, missingCurrentFunctions, renderCurrentSpec } from "./currentSpec.mjs";
+import { queryGeneric, internalMutationGeneric, actionGeneric } from "convex/server";
+import { v } from "convex/values";
+import { discoverModules, functionMetadata, missingCurrentFunctions, renderCurrentSpec } from "./currentSpec.mjs";
 import { runRenderCurrentSpec } from "./renderCurrentSpec.mjs";
 import { specProblems } from "./specIndex.mjs";
 import { bundleForMetadata } from "./metadataBundle.mjs";
 
 const sandboxes: string[] = [];
+
+test("native SDK argument exports retain callable kinds, visibility and validators without handlers", () => {
+  const handler = () => { throw new Error("HANDLER MUST NOT RUN"); };
+  expect(functionMetadata({ file: "native.ts", exports: {
+    query: queryGeneric({ args: { label: v.string() }, handler }),
+    mutation: internalMutationGeneric({ args: {}, handler }),
+    action: actionGeneric({ args: {}, handler }),
+    ordinaryHelper: () => null,
+  } })).toEqual([
+    { identifier: "native.js:query", functionType: "Query", visibility: { kind: "public" },
+      args: { type: "object", value: { label: { fieldType: { type: "string" }, optional: false } } } },
+    { identifier: "native.js:mutation", functionType: "Mutation", visibility: { kind: "internal" }, args: { type: "object", value: {} } },
+    { identifier: "native.js:action", functionType: "Action", visibility: { kind: "public" }, args: { type: "object", value: {} } },
+  ]);
+});
+
+test("a malformed registered export refuses metadata instead of publishing a partial record", () => {
+  const malformed = Object.assign(() => null, { isQuery: true });
+  expect(() => functionMetadata({ file: "invalid.ts", exports: { malformed } })).toThrow("Unrecognized registered export");
+});
+
+test.each([true, false])("world input stays fixed to cwd despite an extra CLI path, fixed file exists=%s", (exists) => {
+  const { root, sandbox } = fixture();
+  const outside = path.join(sandbox, "outside-world.json");
+  const emptyWorld = JSON.stringify({ modules: { paths: [], forbidden: {}, root }, entries: [], world: {} });
+  fs.writeFileSync(outside, exists ? "not a world" : emptyWorld);
+  if (exists) fs.writeFileSync(path.join(root, "world.json"), emptyWorld);
+  const child = spawnSync(process.execPath, [path.resolve("scripts/contractSkew/metadataWorld.mjs"), outside], {
+    cwd: root, encoding: "utf8", timeout: 30_000,
+  });
+  expect(child.error).toBeUndefined();
+  expect(child.status, child.stderr).toBe(exists ? 0 : 1);
+  if (exists) expect(JSON.parse(child.stdout)).toEqual([]);
+  else expect(child.stderr).toContain("world.json");
+  expect(fs.readFileSync(outside, "utf8")).toBe(exists ? "not a world" : emptyWorld);
+});
 
 function fixture() {
   const cache = path.resolve("node_modules/.cache");
