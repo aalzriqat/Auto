@@ -43,3 +43,6 @@ jobs:
           pnpm exec vitest run
           scripts/accountingPreviewRehearsal.test.ts
           scripts/accountingRehearsalCases.test.ts
+          scripts/accountingRehearsalPathGate.test.ts
+          scripts/accountingRehearsalPathGateCli.test.ts
+          --maxWorkers=1
