@@ -13,9 +13,8 @@ import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
  */
 import { v, ConvexError } from "convex/values";
 import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
-import { query } from "./_generated/server";
+import { query, type QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
@@ -1288,6 +1287,38 @@ async function hasQueuedPosting(ctx: QueryCtx, orgId: Id<"organizations">): Prom
   return false;
 }
 
+async function openingJournalAccountTotals(
+  ctx: QueryCtx, orgId: Id<"organizations">, journal: Doc<"journalEntries">,
+): Promise<Map<Id<"chartOfAccounts">, number> | null> {
+  const lines = await ctx.db.query("journalLines")
+    .withIndex("by_journal_entry", q => q.eq("journalEntryId", journal._id)).take(101);
+  if (lines.length === 0 || lines.length > 100) return null;
+  const totals = new Map<Id<"chartOfAccounts">, number>();
+  for (const line of lines) {
+    if (line.orgId !== orgId || line.currency !== journal.currency || line.accountingDate !== journal.accountingDate ||
+      !Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) return null;
+    totals.set(line.accountId, (totals.get(line.accountId) ?? 0) + line.debitMinor - line.creditMinor);
+  }
+  return totals;
+}
+
+function openingControlCoverage(
+  account: Doc<"chartOfAccounts">,
+  openingAllocations: NonNullable<Doc<"openingBalanceDrafts">["allocations"]>,
+  kinds: ReadonlySet<string>, netMinor: number,
+): "INCLUDED" | "OUTSIDE" | null {
+  // Custom equity remains potential capital when its allocation declaration is lost.
+  const policy = openingPolicyForAccount(account, !account.systemKey && account.type === "EQUITY");
+  const ambiguousLiability = policy === "DECLARED_LIABILITY" && kinds.has("SUPPLIER_PAYABLE");
+  if (!policy || (!kinds.has(policy) && !ambiguousLiability)) return "OUTSIDE";
+  const allocations = openingAllocations.filter(row => row.accountId === account._id);
+  const allocatedMinor = allocations.reduce((sum, row) => sum + row.amountMinor, 0);
+  const expectedMinor = account.normalBalance === "DEBIT" ? netMinor : -netMinor;
+  if (allocations.length === 0 || allocations.some(row => !Number.isSafeInteger(row.amountMinor) || row.amountMinor <= 0) ||
+    !Number.isSafeInteger(allocatedMinor) || allocatedMinor !== expectedMinor) return null;
+  return allocations.some(row => kinds.has(row.kind)) ? "INCLUDED" : "OUTSIDE";
+}
+
 /**
  * Discover controls from actual opening journal lines, then prove allocation coverage. Header
  * allocations alone cannot establish completeness: losing an allocation and its materialized row
@@ -1304,29 +1335,15 @@ async function openingAllocationAccounts(
   const source = await loadOpeningSourceIdentity(ctx, orgId);
   if (source.status === "UNAVAILABLE" || (source.status === "ABSENT" && source.headers.length > 0)) return null;
   const accounts = new Set<Id<"chartOfAccounts">>();
-  if (source.status === "AVAILABLE") {
-    const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", source.journal._id)).take(101);
-    if (lines.length === 0 || lines.length > 100) return null;
-    const totals = new Map<Id<"chartOfAccounts">, number>();
-    for (const line of lines) {
-      if (line.orgId !== orgId || line.currency !== source.journal.currency || line.accountingDate !== source.journal.accountingDate ||
-        !Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) return null;
-      totals.set(line.accountId, (totals.get(line.accountId) ?? 0) + line.debitMinor - line.creditMinor);
-    }
-    for (const [accountId, netMinor] of totals) {
-      const account = await ctx.db.get(accountId);
-      if (!account || account.orgId !== orgId) return null;
-      // Custom equity is potentially allocated capital even if its declaration was lost.
-      const policy = openingPolicyForAccount(account, !account.systemKey && account.type === "EQUITY");
-      const ambiguousLiability = policy === "DECLARED_LIABILITY" && kinds.has("SUPPLIER_PAYABLE");
-      if (!policy || (!kinds.has(policy) && !ambiguousLiability)) continue;
-      const allocations = (source.parent.allocations ?? []).filter(row => row.accountId === accountId);
-      const allocatedMinor = allocations.reduce((sum, row) => sum + row.amountMinor, 0);
-      const expectedMinor = account.normalBalance === "DEBIT" ? netMinor : -netMinor;
-      if (allocations.length === 0 || allocations.some(row => !Number.isSafeInteger(row.amountMinor) || row.amountMinor <= 0) ||
-        !Number.isSafeInteger(allocatedMinor) || allocatedMinor !== expectedMinor) return null;
-      if (allocations.some(row => kinds.has(row.kind))) accounts.add(accountId);
-    }
+  if (source.status !== "AVAILABLE") return accounts;
+  const totals = await openingJournalAccountTotals(ctx, orgId, source.journal);
+  if (!totals) return null;
+  for (const [accountId, netMinor] of totals) {
+    const account = await ctx.db.get(accountId);
+    if (!account || account.orgId !== orgId) return null;
+    const coverage = openingControlCoverage(account, source.parent.allocations ?? [], kinds, netMinor);
+    if (coverage === null) return null;
+    if (coverage === "INCLUDED") accounts.add(accountId);
   }
   return accounts;
 }
@@ -1337,6 +1354,23 @@ async function openingAllocationAccounts(
 async function reconciliationDateUnsupported(ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number, now: number): Promise<boolean> {
   if (!Number.isFinite(cutoff) || cutoff < now) return true;
   return (await ctx.db.query("journalEntries").withIndex("by_org_date", q => q.eq("orgId", orgId).gt("accountingDate", cutoff)).first()) !== null;
+}
+
+async function supplierRecoveryJournalSupported(
+  ctx: QueryCtx, orgId: Id<"organizations">, journalId: Id<"journalEntries">,
+): Promise<boolean> {
+  const journal = await ctx.db.get(journalId);
+  if (!journal || journal.orgId !== orgId) return false;
+  if (journal.status !== "POSTED" && journal.status !== "REVERSED") return true;
+  const original = journal.reversalOfJournalEntryId ? await ctx.db.get(journal.reversalOfJournalEntryId) : journal;
+  if (!original || original.orgId !== orgId) return false;
+  if (original.category === "OPENING_BALANCE" && original.sourceType === "cutover" && original.sourceId === String(orgId)) return true;
+  if (!original.accountingEventId) return false;
+  const event = await ctx.db.get(original.accountingEventId);
+  return event?.orgId === orgId && event.journalEntryId === original._id &&
+    event.sourceType === original.sourceType && event.sourceId === original.sourceId &&
+    ((event.eventType === "EXPENSE_POSTED" && event.sourceType === "expenses") ||
+      (event.eventType === "SUPPLIER_COST_RECOVERY_RECEIVED" && event.sourceType === "supplierCostRecoveryReceipts"));
 }
 
 /** Prove family coverage independently of surviving supplier rows. All cumulative lines count,
@@ -1353,20 +1387,7 @@ async function supplierRecoveryFamilyRefusal(
     remaining -= lines.length;
     for (const line of lines) {
       if (!checked.has(line.journalEntryId)) {
-        const journal = await ctx.db.get(line.journalEntryId);
-        if (!journal || journal.orgId !== orgId) return "SOURCE_FAMILY_UNSUPPORTED";
-        if (journal.status !== "POSTED" && journal.status !== "REVERSED") continue;
-        const original = journal.reversalOfJournalEntryId ? await ctx.db.get(journal.reversalOfJournalEntryId) : journal;
-        if (!original || original.orgId !== orgId) return "SOURCE_FAMILY_UNSUPPORTED";
-        let supported = original.category === "OPENING_BALANCE" && original.sourceType === "cutover" && original.sourceId === String(orgId);
-        if (!supported && original.accountingEventId) {
-          const event = await ctx.db.get(original.accountingEventId);
-          supported = event?.orgId === orgId && event.journalEntryId === original._id &&
-            event.sourceType === original.sourceType && event.sourceId === original.sourceId &&
-            ((event.eventType === "EXPENSE_POSTED" && event.sourceType === "expenses") ||
-              (event.eventType === "SUPPLIER_COST_RECOVERY_RECEIVED" && event.sourceType === "supplierCostRecoveryReceipts"));
-        }
-        checked.set(line.journalEntryId, supported);
+        checked.set(line.journalEntryId, await supplierRecoveryJournalSupported(ctx, orgId, line.journalEntryId));
       }
       if (checked.get(line.journalEntryId) === false) return "SOURCE_FAMILY_UNSUPPORTED";
     }
@@ -1507,6 +1528,17 @@ export const supplierRecoverablesReconciliation = query({
   },
 });
 
+function addDatedPartnerMovements(
+  balances: Map<string, number>, movements: readonly Doc<"partnerEquityTransactions">[], cutoff: number,
+): boolean {
+  for (const movement of movements) {
+    if (movement.occurredAt > cutoff) return false;
+    const amountMinor = movement.type === "DRAW" ? -movement.amountMinor : movement.amountMinor;
+    balances.set(movement.currency, (balances.get(movement.currency) ?? 0) + amountMinor);
+  }
+  return true;
+}
+
 /**
  * Partner equity (GL: capital and declared capital controls, net of drawings) vs the sum of the live
  * partners' balances. The subledger side is read raw — opening base plus signed movements — and is
@@ -1538,10 +1570,7 @@ export async function computePartnerCapitalReconciliation(
       .withIndex("by_org_partner_time", (q) => q.eq("orgId", orgId).eq("partnerId", partner._id))
       .take(SUPPLIER_PAYABLES_RECON_READ_LIMIT + 1);
     if (movements.length > SUPPLIER_PAYABLES_RECON_READ_LIMIT) return unavailableFamilyResult("OVER_LIMIT");
-    for (const movement of movements) {
-      if (movement.occurredAt > cutoff) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
-      add(movement.currency, movement.type === "DRAW" ? -movement.amountMinor : movement.amountMinor);
-    }
+    if (!addDatedPartnerMovements(subByCurrency, movements, cutoff)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
   }
   const controls = await openingAllocationAccounts(ctx, orgId, new Set(["PARTNER_CAPITAL"]));
   if (!controls) return unavailableFamilyResult("OPENING_SOURCE_UNAVAILABLE");
