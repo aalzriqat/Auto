@@ -1,0 +1,50 @@
+{
+  "id": "supplier-alert-skipped-due-date-sent-next-run",
+  "fingerprint": "61a6c71c2489ce7fb5e9c677e8cd3b7c36980e002ed7a7108960e901a2172b34",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "sweepDays": "-3_skip0_1_1_2"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alertsAfterDay-3",
+      "value": 3
+    },
+    {
+      "observable": "alertsAfterDay1",
+      "value": 6
+    },
+    {
+      "observable": "alertsAfterRerunAndDay2",
+      "value": 6
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a cron that skipped the due date sends the due alert on the next run"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

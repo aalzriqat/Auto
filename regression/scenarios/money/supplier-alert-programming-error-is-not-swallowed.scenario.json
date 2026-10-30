@@ -1,0 +1,47 @@
+{
+  "id": "supplier-alert-programming-error-is-not-swallowed",
+  "fingerprint": "0ac93f71df4a50fad8c7383320227aa1a6f1e57d39af2169f08fe3dd7ae1a6bf",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "payables": 1,
+        "fault": "ordinary-programming-error-on-the-first-notification-read"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "call.rejected",
+      "value": true
+    },
+    {
+      "observable": "call.error",
+      "value": "injected-fault"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "an ordinary programming error is still not swallowed"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

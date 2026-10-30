@@ -1,0 +1,65 @@
+{
+  "id": "supplier-alert-replayed-worker-reports-no-new-sends",
+  "fingerprint": "312d861ec9f89cfafc95c190c5e9dfb914fb158ed597ce950a011ea6234f45bb",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "0d"
+      }
+    },
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "0d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "first.alerted",
+      "value": 3
+    },
+    {
+      "observable": "replay.alerted",
+      "value": 0
+    },
+    {
+      "observable": "alerts",
+      "value": 3
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "alerted counts only new sends: a replay reports zero"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "123faba2c8338cd7cdf34b623f32aa39d2717bf7"
+  }
+}

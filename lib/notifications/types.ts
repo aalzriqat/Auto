@@ -115,6 +115,10 @@ export const NOTIFICATION_TYPES = {
   "accounting.prepaidAmortizationFailed": { category: "finance", priority: "urgent", criticalDefault: true },
   "accounting.prepaidCorrectionRequested": { category: "finance", priority: "urgent", criticalDefault: true },
   "accounting.prepaidCorrectionDecided": { category: "finance", priority: "urgent", criticalDefault: true },
+  // SCRUM-869 S8: in-app only. The sweep inserts these rows itself and never fans out to email,
+  // WhatsApp or push, so `criticalDefault` (which only drives the email default) is false.
+  "accounting.supplierObligationDue": { category: "finance", priority: "normal", criticalDefault: false },
+  "accounting.supplierObligationOverdue": { category: "finance", priority: "urgent", criticalDefault: false },
   "partnerEquity.changed": { category: "finance", priority: "normal", criticalDefault: false },
   "approval.requested": { category: "finance", priority: "urgent", criticalDefault: true },
   "approval.responded": { category: "finance", priority: "urgent", criticalDefault: true },

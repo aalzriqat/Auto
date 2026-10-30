@@ -1,0 +1,42 @@
+{
+  "id": "supplier-alert-receivable-and-recovery-follow-the-schedule",
+  "fingerprint": "0423818b1979b4d2a82f0d41361d6514bba46ec054bd757cffae1a8eb590ec1f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "RECEIVABLE_AND_RECOVERY",
+        "agreedDue": "0d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerts",
+      "value": 6
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a receivable with recorded delivery and a cost recovery with an agreed date alert on their schedule"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}
