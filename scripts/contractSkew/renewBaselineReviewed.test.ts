@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { resolveGit } from "./gitExecutable.mjs";
 import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
 import { createImportClosure } from "./importClosure.mjs";
@@ -15,6 +15,10 @@ import {
 } from "./renewBaselineReviewed.mjs";
 
 type Compare = (file: string) => "identical" | "changed" | "missing";
+
+// The CLI fixtures model local runs independently of the runner's GitHub event.
+beforeAll(() => vi.stubEnv("GITHUB_EVENT_NAME", undefined));
+afterAll(() => vi.unstubAllEnvs());
 
 const RENEWED_EXPIRES = "2026-12-01";
 const RENEWAL = "SCRUM-866: client and backend unchanged since reviewed revision c82890bd; fingerprint and cause matched in production run 40647249580";

@@ -4,13 +4,16 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test, vi, type TestContext } from "vitest";
+import { afterEach, beforeEach, test, vi, type TestContext } from "vitest";
 import { main } from "./renewBaselineReviewed.mjs";
 import { resolveGit } from "./gitExecutable.mjs";
 
 // Each test builds a real git fixture and runs the checker, which takes over 5s under CI coverage.
 // The same budget as the in-process CLI suites in authorToolsCli.test.ts.
 vi.setConfig({ testTimeout: 60_000 });
+// Fixtures model local runs unless a test explicitly selects a GitHub event.
+beforeEach(() => vi.stubEnv("GITHUB_EVENT_NAME", undefined));
+afterEach(() => vi.unstubAllEnvs());
 
 const baseline = "scripts/contractSkew/needs-evidence-baseline.json";
 const client = "app/page.tsx";
@@ -62,6 +65,52 @@ function fixture(t: TestContext) {
   };
   return { root, run, write, save, commit, base, blob, reference, check };
 }
+
+// SCRUM-866 / PR #721: an absent PR base must not silently disable PR enforcement.
+test.for([
+  ["empty", ""],
+  ["whitespace", " \t "],
+])("PR mode refuses an explicitly %s --pr-base", ([_label, value], t) => {
+  const f = fixture(t);
+  const result = f.check(["--pr-base", value]);
+  assert.equal(result.status, 3, result.output);
+  assert.match(result.output, /PR_BASE_REFUSED:.*--pr-base/);
+});
+
+test("PR mode reports a coded refusal for --pr-base without a value", (t) => {
+  const f = fixture(t);
+  const result = f.check(["--pr-base"]);
+  assert.equal(result.status, 3, result.output);
+  assert.match(result.output, /ERR_PARSE_ARGS_INVALID_OPTION_VALUE:.*--pr-base/);
+});
+
+test("pull_request refuses a missing --pr-base", (t) => {
+  vi.stubEnv("GITHUB_EVENT_NAME", "pull_request");
+  const f = fixture(t);
+  const result = f.check();
+  assert.equal(result.status, 3, result.output);
+  assert.match(result.output, /PR_BASE_REFUSED:.*pull_request.*--pr-base/);
+});
+
+test.for([undefined, "push", "workflow_dispatch"])("%s event keeps non-PR evidence checking available", (eventName, t) => {
+  vi.stubEnv("GITHUB_EVENT_NAME", eventName);
+  const f = fixture(t);
+  f.save(f.reference());
+  f.commit("test(SCRUM-866): local renewal");
+  const result = f.check();
+  assert.equal(result.status, 0, result.output);
+  assert.match(result.output, /1 renewed entries checked.*0 stale/);
+});
+
+test("pull_request accepts a verified --pr-base", (t) => {
+  vi.stubEnv("GITHUB_EVENT_NAME", "pull_request");
+  const f = fixture(t);
+  f.save(f.reference());
+  f.commit("test(SCRUM-866): PR renewal");
+  const result = f.check(["--pr-base", f.base]);
+  assert.equal(result.status, 0, result.output);
+  assert.match(result.output, /1 renewed entries checked.*0 stale/);
+});
 
 test("blob evidence survives a real squash with its original commits absent from history", (t) => {
   const f = fixture(t);
