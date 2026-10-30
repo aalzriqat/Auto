@@ -260,6 +260,9 @@ import type * as utils_openingAdvanceBasis from "../utils/openingAdvanceBasis.js
 import type * as utils_openingAllocationValidators from "../utils/openingAllocationValidators.js";
 import type * as utils_openingCommissionBasis from "../utils/openingCommissionBasis.js";
 import type * as utils_openingCommissionLiabilities from "../utils/openingCommissionLiabilities.js";
+import type * as utils_openingDepositApplication from "../utils/openingDepositApplication.js";
+import type * as utils_openingDepositContainment from "../utils/openingDepositContainment.js";
+import type * as utils_openingDepositSelection from "../utils/openingDepositSelection.js";
 import type * as utils_openingManagementBasis from "../utils/openingManagementBasis.js";
 import type * as utils_openingManagementSchedule from "../utils/openingManagementSchedule.js";
 import type * as utils_openingPartnerBasis from "../utils/openingPartnerBasis.js";
@@ -602,6 +605,9 @@ declare const fullApi: ApiFromModules<{
   "utils/openingAllocationValidators": typeof utils_openingAllocationValidators;
   "utils/openingCommissionBasis": typeof utils_openingCommissionBasis;
   "utils/openingCommissionLiabilities": typeof utils_openingCommissionLiabilities;
+  "utils/openingDepositApplication": typeof utils_openingDepositApplication;
+  "utils/openingDepositContainment": typeof utils_openingDepositContainment;
+  "utils/openingDepositSelection": typeof utils_openingDepositSelection;
   "utils/openingManagementBasis": typeof utils_openingManagementBasis;
   "utils/openingManagementSchedule": typeof utils_openingManagementSchedule;
   "utils/openingPartnerBasis": typeof utils_openingPartnerBasis;

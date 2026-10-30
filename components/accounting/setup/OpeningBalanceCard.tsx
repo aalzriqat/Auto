@@ -96,6 +96,11 @@ function allocationConfirmationLine(row: OpeningAllocationDraft, currency: strin
     const purposeLabel = t(`OpeningAllocationPurpose_${row.purpose}`);
     return `  ${t("OpeningAllocationKind_UNALLOCATED_LIABILITY")} · ${purposeLabel} · ${row.title} · ${row.amount} ${currency}`;
   }
+  if (row.kind === "CUSTOMER_DEPOSIT") {
+    const typeLabel = t(row.depositKind === "RESERVATION" ? "OpeningDepositType_RESERVATION" : "OpeningDepositType_SECURITY");
+    const vehicle = row.depositVehicleId ? ` · ${row.depositVehicleLabel || row.depositVehicleId}` : "";
+    return `  ${row.partyLabel} (${row.partyId}) · ${typeLabel}${vehicle} · ${row.title} · ${row.amount} ${currency}`;
+  }
   if (row.kind === "SUPPLIER_RECOVERABLE" || row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE") {
     const kindLabel = t(`OpeningAllocationKind_${row.kind}`);
     return `  ${kindLabel} · ${row.counterpartyName} · ${row.title} · ${row.amount} ${currency}`;
@@ -274,6 +279,12 @@ export function OpeningBalanceCard() {
     !currencyChanged &&
     !submitting;
 
+  // SCRUM-858 c23884: named customer deposits post only after an accountant approves them, so the owner
+  // route is never offered for a draft that carries one (the server refuses it as well). One decision
+  // drives the note, the button label and the click, so the screen cannot say "post" while saving a draft.
+  const namesCustomerDeposit = allocations.some((row) => row.kind === "CUSTOMER_DEPOSIT");
+  const postsDirectly = Boolean(status?.canPostDirectly) && !namesCustomerDeposit;
+
   function updateLine(index: number, patch: Partial<DraftLine>) {
     setLines((current) => current.map((line, i) => (i === index ? { ...line, ...patch } : line)));
   }
@@ -307,7 +318,7 @@ export function OpeningBalanceCard() {
     if (asOfMs === null) return;
     const allocationPayload = buildOpeningAllocationPayload(allocations, currency);
     if (!allocationPayload || !openingAllocationTotalsMatch(allocations, allocationGroups, currency)) return;
-    if (status?.canPostDirectly && allocations.length > 0) {
+    if (postsDirectly && allocations.length > 0) {
       const summary = allocationGroups.map((group) => {
         const members = allocations.filter((row) => row.accountId === group.accountId)
           .map((row) => allocationConfirmationLine(row, currency, t));
@@ -339,7 +350,7 @@ export function OpeningBalanceCard() {
         expectedCurrency: currency,
       };
 
-      if (status?.canPostDirectly) {
+      if (postsDirectly) {
         await postDirect(payload);
         toast.success(t("OpeningBalancePostedToast"));
       } else {
@@ -406,9 +417,9 @@ export function OpeningBalanceCard() {
               <DialogHeader>
                 <DialogTitle>{t("OpeningBalance")}</DialogTitle>
                 <DialogDescription>
-                  {status.canPostDirectly
-                    ? t("OpeningBalanceOwnerNote")
-                    : t("OpeningBalanceApprovalNote")}
+                  {postsDirectly && t("OpeningBalanceOwnerNote")}
+                  {!postsDirectly && !namesCustomerDeposit && t("OpeningBalanceApprovalNote")}
+                  {!postsDirectly && namesCustomerDeposit && t("OpeningBalanceNamedDepositNote")}
                 </DialogDescription>
               </DialogHeader>
 
@@ -560,6 +571,7 @@ export function OpeningBalanceCard() {
                     canSelectCustomers={status.canSelectCustomers}
                     canSelectEmployees={status.canSelectEmployees}
                     canSelectPartners={status.canSelectPartners}
+                    canSelectVehicles={status.canSelectVehicles}
                   />
                 )}
 
@@ -584,7 +596,7 @@ export function OpeningBalanceCard() {
 
               <DialogFooter>
                 <Button onClick={() => void submit()} disabled={!canSubmit}>
-                  {status.canPostDirectly
+                  {postsDirectly
                     ? t("OpeningBalancePost")
                     : t("OpeningBalanceSubmitForApproval")}
                 </Button>

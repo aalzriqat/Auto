@@ -79,6 +79,9 @@ export type PendingOpeningBalanceDraft = {
     partyAvailable: boolean;
     allocationStatus?: "AVAILABLE" | "UNALLOCATED" | "UNAVAILABLE";
     purpose?: "CLAIM" | "REFUNDABLE_DEPOSIT" | "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT";
+    /** CUSTOMER_DEPOSIT rows (SCRUM-858 S1). The label is null when the named car is not this org's. */
+    depositKind?: "SECURITY" | "RESERVATION";
+    depositVehicleLabel?: string | null;
     amountMinor: number;
     title?: string;
     dueDate?: number;
@@ -463,6 +466,9 @@ export function OpeningBalanceApprovalView({
                   {row.partyDetail ? <> · <bdi>{row.partyDetail}</bdi></> : null}</p>
                 <PendingAllocationSource row={row} />
                 {row.purpose && <p className="text-xs text-muted-foreground">{t("OpeningAllocationPurpose")}: {t(`OpeningAllocationPurpose_${row.purpose}`)}</p>}
+                {row.depositKind && <p className="text-xs text-muted-foreground">{t("OpeningDepositType")}: {t(`OpeningDepositType_${row.depositKind}`)}</p>}
+                {row.kind === "CUSTOMER_DEPOSIT" && row.depositKind === "RESERVATION" && <p className="text-xs text-muted-foreground" dir="ltr">
+                  {row.depositVehicleLabel === undefined ? t("OpeningDepositNoVehicle") : <bdi>{row.depositVehicleLabel ?? t("OpeningAllocationPartyUnavailable")}</bdi>}</p>}
                 {row.allocationStatus === "UNALLOCATED" && <p className="text-xs text-amber-700">{t("OpeningAllocationUnallocatedNotice")}</p>}
                 <p className="tabular-nums">{formatMinor(row.amountMinor, draft.currency, draft.denominationKnown)}
                   {draft.denominationKnown ? <> <bdi>{draft.currency}</bdi></> : null}</p>

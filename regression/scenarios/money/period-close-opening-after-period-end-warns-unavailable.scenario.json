@@ -1,0 +1,53 @@
+{
+  "id": "period-close-opening-after-period-end-warns-unavailable",
+  "fingerprint": "5056e5de12040bcbc9ad68fe761e8a724e5e44f9175823b93eb71a8c61a0ed19",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r3-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "asOfDate": "after-period-end"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.getCloseChecklist",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "warning.unavailable",
+      "value": true
+    },
+    {
+      "observable": "warning.differenceInvented",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "period close: an opening dated after the period end is an UNAVAILABLE warning, never an invented difference"
+  },
+  "matrixRow": "OB-B16"
+}

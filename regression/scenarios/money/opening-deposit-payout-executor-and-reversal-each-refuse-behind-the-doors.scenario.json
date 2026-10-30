@@ -1,0 +1,94 @@
+{
+  "id": "opening-deposit-payout-executor-and-reversal-each-refuse-behind-the-doors",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s1-named-deposits",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 100000,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "harness.payOutDepositSlice",
+      "input": {
+        "amountMinor": 50000,
+        "resolution": "REFUNDED"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 100,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "harness.reverseDepositApplicationsForSale",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payoutExecutor.errorCode",
+      "value": "OPENING_DEPOSIT_PAYOUT_REFUSED"
+    },
+    {
+      "observable": "reversal.errorCode",
+      "value": "OPENING_DEPOSIT_REVERSAL_REFUSED"
+    },
+    {
+      "observable": "afterRefusals.writes",
+      "value": 0
+    },
+    {
+      "observable": "application.status",
+      "value": "APPLIED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "the payout executor and the application reversal each refuse an opening deposit by themselves, behind the doors"
+  },
+  "matrixRow": "OB-B7",
+  "fingerprint": "f8cf43678ebe7f339a032ebb13af2a1c127a02a0bc2a3e85166dbf5e434713c7"
+}

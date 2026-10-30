@@ -1,0 +1,78 @@
+{
+  "id": "opening-named-deposit-keeps-an-exact-fils-amount-end-to-end",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r2-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "SECURITY",
+        "amountMinor": 123457
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "depositRow.amountMinor",
+      "value": 123457
+    },
+    {
+      "observable": "depositRow.amount",
+      "value": 123.457
+    },
+    {
+      "observable": "journalLines.debitMinor",
+      "value": 123457
+    },
+    {
+      "observable": "journalLines.creditMinor",
+      "value": 123457
+    },
+    {
+      "observable": "reconciliation.discrepancyMinor",
+      "value": 0
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "a named opening deposit keeps an exact fils amount at JOD scale 3 end to end (123.457 JOD)"
+  },
+  "matrixRow": "OB-B11",
+  "fingerprint": "e33f158e2e33a01831529ff9711baa3992414178f004e01b43e706c62a1c5a26"
+}

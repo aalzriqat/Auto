@@ -1,0 +1,81 @@
+{
+  "id": "opening-deposit-dated-after-cutoff-is-unavailable",
+  "fingerprint": "06a5749cc25ce721ac12782cd81a71473f914122012f19b8d75879ecb5475c94",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r3-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 100000,
+        "asOfDate": "tomorrow"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {
+        "toDate": "now-plus-1h"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    },
+    {
+      "observable": "currencies",
+      "value": "EMPTY"
+    },
+    {
+      "observable": "journalWrites",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "an opening deposit whose opening date is AFTER the cutoff is UNAVAILABLE, never GL 0 against deposits 100 (round-2 repro a)"
+  },
+  "matrixRow": "OB-B13",
+  "bugRef": {
+    "key": "SCRUM-858",
+    "failingFirst": "d14de86285de8dc2a40a4181705377b0f3245901"
+  }
+}

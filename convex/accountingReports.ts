@@ -1,6 +1,8 @@
 import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
+import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
 /**
  * Phase 5 — Ledger-backed financial reports
@@ -764,6 +766,11 @@ export const subledgerReconciliation = query({
 // unspecified toDate, defaulting to now) both sides line up exactly. These
 // are informational reports for the accountant to check manually — not
 // period-close blockers.
+//
+// Customer Deposits is the exception since SCRUM-858 (round-1 review F2): it
+// refuses to compare when any deposit-side activity is dated after `toDate`
+// and reports UNAVAILABLE instead of a difference (see
+// hasDepositActivityAfter). The A/P case is tracked as SCRUM-876.
 
 export type GlVsSubledgerResult = {
   attributionStatus?: "ATTRIBUTED" | "UNALLOCATED" | "UNAVAILABLE";
@@ -1635,47 +1642,246 @@ async function outstandingDepositMinor(
   return outstanding;
 }
 
-export async function computeCustomerDepositsReconciliation(
+/**
+ * SCRUM-858 S1 (owner ruling 2026-10-28, c23884): a deposit-liability difference in an organization
+ * that has an opening balance is REPORTED under the owner's label. Nothing here writes: no journal,
+ * plug, clearing line or equity entry is ever created to force the two sides to agree.
+ */
+export type CustomerDepositsReconciliationResult = GlVsSubledgerResult & {
+  /**
+   * AVAILABLE: `byCurrency` / `isReconciled` are the real comparison.
+   * UNAVAILABLE: nothing is claimed. `isReconciled` is false, `currencies` / `byCurrency` are empty and
+   * no difference is invented, so a consumer reading only `isReconciled` can never take "could not
+   * check" for "reconciled". `unavailableReason` says why.
+   */
+  status: "AVAILABLE" | "UNAVAILABLE";
+  unavailableReason?: "POST_CUTOFF_ACTIVITY" | "INVALID_DATE" | "OPENING_SOURCE_UNAVAILABLE";
+  unexplainedOpeningDifference: {
+    label: { en: string; ar: string };
+    /** Currencies whose GL and subledger sides disagree. */
+    currencies: string[];
+  } | null;
+};
+
+async function labelDepositsOpeningDifference(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  toDate: number | undefined
-): Promise<GlVsSubledgerResult> {
-  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
-  // Every row that could still owe something. A HELD row usually does; an
-  // APPLIED, REFUNDED or FORFEITED one can too, when only part of it went.
-  // VOIDED rows never received money in the first place.
-  const candidates = (
-    await ctx.db
-      .query("deposits")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .collect()
-  ).filter((d) => d.isDeleted !== true && d.status !== "VOIDED");
+  result: GlVsSubledgerResult
+): Promise<CustomerDepositsReconciliationResult> {
+  const currencies = result.currencies.filter((currency) => result.byCurrency[currency].discrepancyMinor !== 0);
+  if (currencies.length === 0) return { ...result, status: "AVAILABLE", unexplainedOpeningDifference: null };
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  const hasOpeningHistory = source.headers.length > 0 || source.status !== "ABSENT";
+  return {
+    ...result,
+    status: "AVAILABLE",
+    unexplainedOpeningDifference: hasOpeningHistory
+      ? { label: { ...UNEXPLAINED_OPENING_DIFFERENCE_LABEL }, currencies }
+      : null,
+  };
+}
 
-  const subByCurrency = new Map<string, number>();
+function unavailableDepositsReconciliation(
+  unavailableReason: NonNullable<CustomerDepositsReconciliationResult["unavailableReason"]>
+): CustomerDepositsReconciliationResult {
+  return {
+    currencies: [],
+    byCurrency: {},
+    isReconciled: false,
+    attributionStatus: "UNAVAILABLE",
+    status: "UNAVAILABLE",
+    unavailableReason,
+    unexplainedOpeningDifference: null,
+  };
+}
+
+/** True when any stamp is strictly after the cutoff. A stamp equal to the cutoff is ON it, and the GL read includes it. */
+function isAfterCutoff(cutoff: number, ...stamps: Array<number | undefined>): boolean {
+  return stamps.some((stamp) => stamp !== undefined && stamp > cutoff);
+}
+
+/** The deposit row's own lifecycle stamps: received, resolved (refunded, applied, forfeited, voided) or deleted. */
+function depositRowMovedAfter(deposit: Doc<"deposits">, cutoff: number): boolean {
+  return isAfterCutoff(cutoff, deposit.createdAt, deposit.resolvedAt, deposit.deletedAt);
+}
+
+function applicationMovedAfter(application: Doc<"depositApplications">, cutoff: number): boolean {
+  return isAfterCutoff(cutoff, application.appliedAt, application.reversalStartedAt, application.reversedAt);
+}
+
+function holdMovedAfter(hold: Doc<"depositVehicleHolds">, cutoff: number): boolean {
+  return isAfterCutoff(cutoff, hold.createdAt, hold.allocatedAt, hold.resolvedAt);
+}
+
+type DepositActivityScan = "CLEAR" | "POST_CUTOFF_ACTIVITY" | "OPENING_SOURCE_UNAVAILABLE";
+
+/**
+ * The accounting date an OPENING deposit carries in the GL: the opening journal is dated at the draft's
+ * `asOfDate` (SCRUM-858 S1, openingAllocations posts `date: plan.asOfDate`), while the row's own
+ * `createdAt` is the approval time. A row approved today for an opening dated tomorrow therefore exists
+ * on the subledger side while the GL has not yet recorded its credit.
+ *
+ * UNREADABLE when the draft the row points at is gone or is not POSTED: the row cannot be dated, so
+ * nothing about it can be compared.
+ */
+async function openingDatesVerdict(
+  ctx: QueryCtx,
+  deposits: ReadonlyArray<Doc<"deposits">>,
+  cutoff: number
+): Promise<"CLEAR" | "LATER" | "UNREADABLE"> {
+  const draftIds = new Set<Id<"openingBalanceDrafts">>();
+  for (const deposit of deposits) {
+    if (deposit.openingBalanceDraftId !== undefined) draftIds.add(deposit.openingBalanceDraftId);
+  }
+  let verdict: "CLEAR" | "LATER" | "UNREADABLE" = "CLEAR";
+  for (const draftId of draftIds) {
+    const draft = await ctx.db.get(draftId);
+    if (draft === null || draft.status !== "POSTED") return "UNREADABLE";
+    if (isAfterCutoff(cutoff, draft.asOfDate)) verdict = "LATER";
+  }
+  return verdict;
+}
+
+async function depositChildrenMovedAfter(
+  ctx: QueryCtx,
+  deposit: Doc<"deposits">,
+  cutoff: number
+): Promise<boolean> {
+  const applications = await ctx.db
+    .query("depositApplications")
+    .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+    .collect();
+  if (applications.some((application) => applicationMovedAfter(application, cutoff))) return true;
+  const holds = await ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+    .collect();
+  return holds.some((hold) => holdMovedAfter(hold, cutoff));
+}
+
+/**
+ * Whether anything on the deposit side is dated AFTER `cutoff`: a row created, resolved or deleted, an
+ * opening row whose opening date is later, an application made or reversed, or a hold allocated or
+ * resolved. The caller resolves ONE cutoff (an omitted `toDate` is "now") and uses the same value for
+ * the GL read, so the guard and the ledger can never disagree about which instant is being compared.
+ *
+ * Why this is a refusal and not a reconstruction. The GL side is read as of the cutoff; the subledger
+ * side is the CURRENT state of the deposit rows. The two agree only when nothing on the deposit side
+ * has moved since. The deposit side cannot be restated to an earlier date from what is recorded:
+ * `releasedAmountMinor` is one cumulative figure with no per-release date, `resolvedAt` is overwritten
+ * by whichever event came last, and an opening row is created when it is approved but dated at the
+ * opening date in the GL. Any restated figure would be a guess presented as a balance, so the
+ * comparison is declared UNAVAILABLE instead (the AP-Suppliers control does the same when it cannot
+ * see everything). Applications carry their own dates (`appliedAt` equals the journal's accounting
+ * date), so this scan is exact about what is "later".
+ */
+async function scanDepositActivityAfter(
+  ctx: QueryCtx,
+  deposits: ReadonlyArray<Doc<"deposits">>,
+  cutoff: number
+): Promise<DepositActivityScan> {
+  if (deposits.some((deposit) => depositRowMovedAfter(deposit, cutoff))) return "POST_CUTOFF_ACTIVITY";
+  const opening = await openingDatesVerdict(ctx, deposits, cutoff);
+  if (opening === "UNREADABLE") return "OPENING_SOURCE_UNAVAILABLE";
+  if (opening === "LATER") return "POST_CUTOFF_ACTIVITY";
+  for (const deposit of deposits) {
+    if (await depositChildrenMovedAfter(ctx, deposit, cutoff)) return "POST_CUTOFF_ACTIVITY";
+  }
+  return "CLEAR";
+}
+
+/** Outstanding subledger liability per currency for every row that could still owe something. */
+async function outstandingDepositsByCurrency(
+  ctx: QueryCtx,
+  allRows: ReadonlyArray<Doc<"deposits">>,
+  orgCurrency: string
+): Promise<Map<string, number>> {
+  // A HELD row usually owes; an APPLIED, REFUNDED or FORFEITED one can too, when only part of it went.
+  // VOIDED rows never received money in the first place.
+  const candidates = allRows.filter((d) => d.isDeleted !== true && d.status !== "VOIDED");
+  const byCurrency = new Map<string, number>();
   for (const d of candidates) {
     const currency = d.currency ?? orgCurrency;
     const outstanding = await outstandingDepositMinor(ctx, d, currency);
     if (outstanding === 0) continue;
-    subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + outstanding);
+    byCurrency.set(currency, (byCurrency.get(currency) ?? 0) + outstanding);
   }
+  return byCurrency;
+}
 
-  const held=await readOpeningUnallocatedLiabilities(ctx,orgId,toDate??Date.now());
-  if(held.status === "UNAVAILABLE")return {currencies:[],byCurrency:{},isReconciled:false,attributionStatus:"UNAVAILABLE"};
-  const controls=new Set<Id<"chartOfAccounts">>();
-  const native=await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY)).unique();
-  if(native)controls.add(native._id);
-  const heldOpeningMinor:Record<string,number>={};
-  for(const row of held.rows){
-    if(row.purpose!=="CUSTOMER_DEPOSIT")continue;
+/**
+ * The control accounts the deposit liability lives on (the native Customer Deposits account plus the
+ * account of every held opening deposit pool) and the held opening pools' amounts per currency.
+ */
+async function depositControlsAndHeldOpening(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  heldRows: ReadonlyArray<{ purpose: string; accountId: Id<"chartOfAccounts">; currency: string; amountMinor: number }>
+): Promise<{ controls: Set<Id<"chartOfAccounts">>; heldOpeningMinor: Record<string, number> }> {
+  const controls = new Set<Id<"chartOfAccounts">>();
+  const native = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY))
+    .unique();
+  if (native) controls.add(native._id);
+  const heldOpeningMinor: Record<string, number> = {};
+  for (const row of heldRows) {
+    if (row.purpose !== "CUSTOMER_DEPOSIT") continue;
     controls.add(row.accountId);
-    heldOpeningMinor[row.currency]=(heldOpeningMinor[row.currency]??0)+row.amountMinor;
-    subByCurrency.set(row.currency,(subByCurrency.get(row.currency)??0)+row.amountMinor);
+    heldOpeningMinor[row.currency] = (heldOpeningMinor[row.currency] ?? 0) + row.amountMinor;
   }
-  const glByCurrency=new Map<string,number>();
-  for(const balance of await getCumulativeBalancesAsOf(ctx,orgId,toDate??Date.now())){
-    if(controls.has(balance.accountId))glByCurrency.set(balance.currency,(glByCurrency.get(balance.currency)??0)+balance.creditMinor-balance.debitMinor);
+  return { controls, heldOpeningMinor };
+}
+
+/** GL credit minus debit on the customer-deposit control accounts, per currency, as of the cutoff. */
+async function depositControlGlByCurrency(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  controls: ReadonlySet<Id<"chartOfAccounts">>,
+  cutoff: number
+): Promise<Map<string, number>> {
+  const byCurrency = new Map<string, number>();
+  for (const balance of await getCumulativeBalancesAsOf(ctx, orgId, cutoff)) {
+    if (!controls.has(balance.accountId)) continue;
+    byCurrency.set(balance.currency, (byCurrency.get(balance.currency) ?? 0) + balance.creditMinor - balance.debitMinor);
   }
-  return {...combineGlAndSubledger(glByCurrency,subByCurrency),heldOpeningMinor,attributionStatus:Object.keys(heldOpeningMinor).length?"UNALLOCATED":"ATTRIBUTED"};
+  return byCurrency;
+}
+
+export async function computeCustomerDepositsReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<CustomerDepositsReconciliationResult> {
+  // ONE effective cutoff for the guard, the opening-pool read and the ledger read. An omitted `toDate`
+  // is "now", and "now" gets the same activity guard as an explicit date: a sale dated tomorrow, or an
+  // opening dated tomorrow, is later than now exactly as it is later than any earlier cutoff.
+  // NaN and +/-Infinity pass `v.number()`, and every comparison against NaN is false, so an unchecked
+  // value would read as "nothing is later" and be handed to the ledger read as a cutoff.
+  const cutoff = toDate ?? Date.now();
+  if (!Number.isFinite(cutoff)) return unavailableDepositsReconciliation("INVALID_DATE");
+  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const allRows = await ctx.db
+    .query("deposits")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const scan = await scanDepositActivityAfter(ctx, allRows, cutoff);
+  if (scan !== "CLEAR") return unavailableDepositsReconciliation(scan);
+
+  const subByCurrency = await outstandingDepositsByCurrency(ctx, allRows, orgCurrency);
+
+  const held = await readOpeningUnallocatedLiabilities(ctx, orgId, cutoff);
+  if (held.status === "UNAVAILABLE") return unavailableDepositsReconciliation("OPENING_SOURCE_UNAVAILABLE");
+  const { controls, heldOpeningMinor } = await depositControlsAndHeldOpening(ctx, orgId, held.rows);
+  for (const [currency, amountMinor] of Object.entries(heldOpeningMinor)) {
+    subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + amountMinor);
+  }
+  const glByCurrency = await depositControlGlByCurrency(ctx, orgId, controls, cutoff);
+  return labelDepositsOpeningDifference(ctx, orgId, {
+    ...combineGlAndSubledger(glByCurrency, subByCurrency),
+    heldOpeningMinor,
+    attributionStatus: Object.keys(heldOpeningMinor).length ? "UNALLOCATED" : "ATTRIBUTED",
+  });
 }
 
 export const customerDepositsReconciliation = query({

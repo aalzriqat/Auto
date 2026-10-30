@@ -1,0 +1,120 @@
+{
+  "id": "opening-deposit-reconciliation-labels-unexplained-difference-without-posting",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s1-named-deposits",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "SECURITY",
+        "amountMinor": 100000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 50000,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "harness.driftSubledgerAmount",
+      "input": {
+        "amountMinor": 90000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "clean.isReconciled",
+      "value": true
+    },
+    {
+      "observable": "clean.glBalanceMinor",
+      "value": 150000
+    },
+    {
+      "observable": "clean.subledgerBalanceMinor",
+      "value": 150000
+    },
+    {
+      "observable": "clean.attributionStatus",
+      "value": "ATTRIBUTED"
+    },
+    {
+      "observable": "clean.unexplainedOpeningDifference",
+      "value": null
+    },
+    {
+      "observable": "drift.isReconciled",
+      "value": false
+    },
+    {
+      "observable": "drift.discrepancyMinor",
+      "value": 10000
+    },
+    {
+      "observable": "drift.unexplainedOpeningDifference",
+      "value": "LABELLED_EN_AR"
+    },
+    {
+      "observable": "afterReports.journalsPosted",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "the deposits reconciliation matches the control to the opening rows and labels any difference without posting"
+  },
+  "matrixRow": "OB-B5",
+  "fingerprint": "7a539c954acbc1ea942ccf493b06760e36828972c0507de8822b46ac6b0cacb5"
+}

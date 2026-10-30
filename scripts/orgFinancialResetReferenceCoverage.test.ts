@@ -270,6 +270,12 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: opening drafts survive reset while their materialized receivable is deleted; collections and readback must refuse unavailable basis.",
   "openingBalanceDrafts.allocationResults[].canonicalReceivableDocumentId->receivableDocuments":
     "OPEN DECISION: opening drafts survive reset while their canonical document is deleted; collections and readback must refuse unavailable basis.",
+  // SCRUM-858 S1: a named opening deposit is recorded in its row's result. The draft survives the
+  // reset while the deposit is deleted with the rest of the deposits. Posted readback treats a
+  // missing, deleted or mismatched deposit as record-unavailable (`accountingCutover.ts`,
+  // CUSTOMER_DEPOSIT branch), so the survivor is reported UNAVAILABLE, never read as a balance.
+  "openingBalanceDrafts.allocationResults[].depositId->deposits":
+    "OPEN DECISION: opening drafts survive reset while their materialized named deposit is deleted; posted readback must report the record unavailable.",
   "partnerEquityTransactions.accountingEventId->accountingEvents":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "paymentIntents.canonicalPaymentId->canonicalPayments":
