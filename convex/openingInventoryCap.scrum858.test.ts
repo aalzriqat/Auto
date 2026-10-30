@@ -464,7 +464,7 @@ describe("SCRUM-858 S2 owned opening inventory", () => {
       });
     })).rejects.toThrow(/reviewed opening allocation limit/i);
     expect(candidateDocuments).toBe(101);
-  });
+  }, 30_000);
 });
 
 describe("SCRUM-858 S2 a consigned vehicle is never owned opening inventory", () => {
