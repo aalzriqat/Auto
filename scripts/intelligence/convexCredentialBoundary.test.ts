@@ -261,8 +261,9 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // SCRUM-883: PR-only trusted Git path gate before provisioning, neutral
   // NOT_APPLICABLE check and gate evidence. Credential commands, provenance,
   // staged deployment and exact-SHA release verdict remain unchanged.
+  // Round 3 adds only TESTED_SHA (the provenance merge) to the path-gate step env, with no secret.
   "trusted-accounting-rehearsal.yml":
-    "3b96db15e642f4015fc1f7f4f53ed1458c32e472ab3a97acac91b9fe23b8ad51",
+    "5fa1ebee0748d69075852feb2c10b15490eef5bed1e9d7925d07d86412b7ce84",
   // SCRUM-860: reviewed addition of the role frame census before preview
   // provisioning, with no step secrets. All credential steps, preview targeting,
   // cleanup and canonical-command/tamper controls remain pinned unchanged.
