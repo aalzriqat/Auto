@@ -1,14 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { accountingRehearsalPathGate } from "./accountingRehearsalPathGate.mjs";
 import { resolveGit } from "./contractSkew/gitExecutable.mjs";
 
 /** Fetched commits are data. No checkout, candidate imports, hooks or diff drivers.
  * Git plumbing avoids the compare API's 300-file and PR-files API's 3000-file caps.
- * @param {{baseSha: string, headSha: string, cwd?: string}} input
+ * @param {{baseSha: string, headSha: string, cwd?: string, findGit?: () => string | undefined}} input
  */
-export function readBackendChangeDecision({ baseSha, headSha, cwd }) {
+export function readBackendChangeDecision({ baseSha, headSha, cwd, findGit = resolveGit }) {
   let paths;
   let complete = false;
   try {
@@ -16,7 +17,7 @@ export function readBackendChangeDecision({ baseSha, headSha, cwd }) {
       throw new Error("Exact commits unavailable");
     }
     // An absolute git path, never a PATH lookup (Sonar S4036). Not found RUNS.
-    const git = resolveGit();
+    const git = findGit();
     if (!git) throw new Error("Git unavailable");
     const output = execFileSync(git, [
       "diff", "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z",
@@ -33,12 +34,19 @@ export function readBackendChangeDecision({ baseSha, headSha, cwd }) {
   return { ...accountingRehearsalPathGate({ paths, complete }), baseSha, headSha };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const decision = readBackendChangeDecision({
-    baseSha: process.env.BASE_SHA ?? "", headSha: process.env.HEAD_SHA ?? "",
-  });
-  writeFileSync("backend-input-evidence.json", JSON.stringify(decision, null, 2) + "\n");
-  appendFileSync(process.env.GITHUB_OUTPUT, `run_rehearsal=${decision.run}\n`);
-  appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+/**
+ * The workflow step: decide, then write the evidence file, the step output and the summary.
+ * @param {{env?: Record<string, string | undefined>, cwd?: string}} [options]
+ */
+export function runPathGateStep({ env = process.env, cwd = process.cwd() } = {}) {
+  const decision = readBackendChangeDecision({ baseSha: env.BASE_SHA ?? "", headSha: env.HEAD_SHA ?? "", cwd });
+  writeFileSync(path.join(cwd, "backend-input-evidence.json"), JSON.stringify(decision, null, 2) + "\n");
+  appendFileSync(env.GITHUB_OUTPUT, `run_rehearsal=${decision.run}\n`);
+  appendFileSync(env.GITHUB_STEP_SUMMARY,
     `${decision.reason}. Base: ${decision.baseSha}. Head: ${decision.headSha}.\n`);
+  return decision;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runPathGateStep();
 }

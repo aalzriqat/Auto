@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, expect, test } from "vitest";
 import { parse } from "yaml";
-import { readBackendChangeDecision } from "./accountingRehearsalPathGateCli.mjs";
+import { readBackendChangeDecision, runPathGateStep } from "./accountingRehearsalPathGateCli.mjs";
 
 const directory = mkdtempSync(path.join(tmpdir(), "scrum883-path-gate-"));
 afterAll(() => {
@@ -37,6 +37,25 @@ test("fetched Git objects give a complete PR diff, detect renamed backend files 
   expect(readBackendChangeDecision({ baseSha, headSha: git("rev-parse", "HEAD"), cwd: directory }).run).toBe(true);
   expect(readBackendChangeDecision({ baseSha, headSha: "f".repeat(40), cwd: directory }).run).toBe(true);
   expect(readBackendChangeDecision({ baseSha, headSha: baseSha, cwd: directory }).run).toBe(true);
+});
+
+test("an unlocatable git binary fails closed: the rehearsal RUNS", () => {
+  const sha = "a".repeat(40);
+  expect(readBackendChangeDecision({ baseSha: sha, headSha: "b".repeat(40), cwd: directory, findGit: () => undefined }).run).toBe(true);
+  expect(readBackendChangeDecision({ baseSha: "", headSha: sha, cwd: directory }).run).toBe(true);
+});
+
+test("the workflow step writes the evidence file, the step output and a summary naming both SHAs", () => {
+  const out = mkdtempSync(path.join(directory, "step-"));
+  const output = path.join(out, "output.txt");
+  const summary = path.join(out, "summary.md");
+  const baseSha = git("rev-list", "--max-parents=0", "HEAD");
+  const headSha = git("rev-parse", "HEAD");
+  const decision = runPathGateStep({ cwd: directory, env: { BASE_SHA: baseSha, HEAD_SHA: headSha, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary } });
+  expect(decision.run).toBe(true);
+  expect(readFileSync(output, "utf8")).toBe("run_rehearsal=true\n");
+  expect(readFileSync(summary, "utf8")).toContain(`Base: ${baseSha}. Head: ${headSha}.`);
+  expect(JSON.parse(readFileSync(path.join(directory, "backend-input-evidence.json"), "utf8"))).toMatchObject({ run: true, baseSha, headSha });
 });
 
 type Step = { id?: string; name?: string; if?: string; run?: string; env?: Record<string, string> };
