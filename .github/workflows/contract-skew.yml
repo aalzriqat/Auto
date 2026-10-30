@@ -108,7 +108,7 @@ jobs:
       # A failed/timed-out render must not hand partial or stale evidence to --current.
       - name: Render the current commit's native argument spec
         run: |
-          if ! timeout 180s node --experimental-vm-modules scripts/contractSkew/renderCurrentSpec.mjs current-spec.json; then
+          if ! timeout 180s node --max-old-space-size=6144 --experimental-vm-modules scripts/contractSkew/renderCurrentSpec.mjs current-spec.json; then
             rm -f current-spec.json current-spec.json.tmp
             echo "::warning::Current spec unavailable; retaining UNPROVEN deploy-fix classification."
           fi

@@ -104,6 +104,45 @@ a({ label: "new" }); b({}); }`);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("SCRUM-866 host-object contamination makes per-function independence unsound; the global rule refuses", async () => {
+  const root = fixture();
+  const flag = "__scrum866HostIsolationProbe";
+  assert.equal(Object.hasOwn(TextEncoder, flag), false);
+  try {
+    fs.writeFileSync(path.join(root, "convex/good.ts"), `import { queryGeneric } from "convex/server";
+import { v } from "convex/values";
+export const read = queryGeneric({ args: { label: TextEncoder.${flag} ? v.string() : v.number() }, handler: () => null });`);
+    const alone = await renderCurrentSpec(root);
+    const argsOf = (spec) => spec.functions.find((fn) => fn.identifier === "good.js:read")?.args;
+    assert.equal(argsOf(alone)?.value.label.fieldType.type, "number");
+    fs.writeFileSync(path.join(root, "convex/aaBad.ts"), `import { queryGeneric } from "convex/server";
+TextEncoder.${flag} = true; Date.now();
+export const read = queryGeneric({ args: {}, handler: () => null });`);
+    const together = await renderCurrentSpec(root);
+    assert.deepEqual(together.unavailableModules, [{ file: "aaBad.ts", reason: "clock" }]);
+    // A fresh VM and chunk cache did not undo the failed module's host write.
+    assert.equal(argsOf(together)?.value.label.fieldType.type, "string");
+    fs.mkdirSync(path.join(root, "app"));
+    fs.writeFileSync(path.join(root, "app/client.ts"), `import { useQuery } from "convex/react";
+declare const api: { good: { read: unknown }, aaBad: { read: unknown } };
+export function useRead() { useQuery(api.good.read, { label: "new" }); useQuery(api.aaBad.read, {}); }`);
+    fs.writeFileSync(path.join(root, "current.json"), JSON.stringify(together));
+    fs.writeFileSync(path.join(root, "deployed.json"), '{"functions":[]}');
+    fs.writeFileSync(path.join(root, "baseline.json"), '{"version":1,"entries":[]}');
+    const run = spawnSync(process.execPath, [cli, "--mode", "production", "--spec", "deployed.json", "--current", "current.json",
+      "--baseline", "baseline.json", "--json", "report.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
+    assert.ifError(run.error);
+    assert.equal(run.status, 7, run.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, "report.json"), "utf8")).classification.callOutcomes,
+      { fixed: 0, stillFails: 0, unproven: 2 });
+    assert.match(run.stderr, /aaBad\.ts/);
+    assert.match(run.stderr, /discarding all current evidence/);
+  } finally {
+    Reflect.deleteProperty(TextEncoder, flag);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("an unreviewed Convex SDK version refuses before module evaluation", async () => {
   const root = fixture();
   try {
@@ -152,15 +191,30 @@ export function useRead() { return useQuery(api.unstable.read, { label: "new" })
   });
 }
 
-test("an import failure publishes no partial spec and removes stale output", () => {
+for (const [scenario, source] of [["import failure", 'throw Error("IMPORT FAILED");\nexport {};'],
+  ["systemic bundler failure", 'import "missing-build-dependency"; export {};']]) {
+test(`${scenario} publishes no partial spec, removes stale output, and leaves every call UNPROVEN`, () => {
   const root = fixture();
   try {
-    fs.writeFileSync(path.join(root, "convex/broken.ts"), 'throw Error("IMPORT FAILED");\nexport {};');
+    fs.writeFileSync(path.join(root, "convex/broken.ts"), source);
     fs.writeFileSync(path.join(root, "current.json"), '{"functions":[]}');
     const run = spawnSync(process.execPath, ["--experimental-vm-modules", renderer, "current.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
     assert.ifError(run.error);
     assert.equal(run.status, 1);
     assert.match(run.stderr, /Current spec unavailable/);
     assert.equal(fs.existsSync(path.join(root, "current.json")), false);
+    fs.mkdirSync(path.join(root, "app"));
+    fs.writeFileSync(path.join(root, "app/client.ts"), `import { useQuery } from "convex/react";
+declare const api: { alias: { renamed: unknown }, broken: { read: unknown } };
+export function useRead() { useQuery(api.alias.renamed, { label: "new" }); useQuery(api.broken.read, {}); }`);
+    fs.writeFileSync(path.join(root, "deployed.json"), '{"functions":[]}');
+    fs.writeFileSync(path.join(root, "baseline.json"), '{"version":1,"entries":[]}');
+    const comparison = spawnSync(process.execPath, [cli, "--mode", "production", "--spec", "deployed.json",
+      "--baseline", "baseline.json", "--json", "report.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
+    assert.ifError(comparison.error);
+    assert.equal(comparison.status, 7, comparison.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, "report.json"), "utf8")).classification.callOutcomes,
+      { fixed: 0, stillFails: 0, unproven: 2 });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+}

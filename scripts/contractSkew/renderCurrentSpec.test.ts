@@ -2,10 +2,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { afterEach, expect, test, vi } from "vitest";
 import { discoverModules, missingCurrentFunctions, renderCurrentSpec } from "./currentSpec.mjs";
 import { runRenderCurrentSpec } from "./renderCurrentSpec.mjs";
 import { specProblems } from "./specIndex.mjs";
+import { bundleForMetadata } from "./metadataBundle.mjs";
 
 const sandboxes: string[] = [];
 
@@ -36,6 +38,41 @@ export const constant = 42;
 afterEach(() => {
   vi.restoreAllMocks();
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
+});
+
+test("Date.UTC computes a fixed timestamp without observing deployment time", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/timestamp.ts"), `import { queryGeneric } from "convex/server";
+import { v } from "convex/values";
+const timestamp = Date.UTC(2020, 0, 1);
+export const read = queryGeneric({ args: { timestamp: v.literal(timestamp) }, handler: () => null });`);
+  const spec = await renderCurrentSpec(root);
+  expect(spec.unavailableModules).toEqual([]);
+  expect(spec.functions.find((fn) => fn.identifier === "timestamp.js:read")?.args).toEqual({ type: "object",
+    value: { timestamp: { fieldType: { type: "literal", value: 1577836800000 }, optional: false } } });
+});
+
+test("a failing entry cannot mutate another entry's validators through shared emitted chunks", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/sharedArgs.ts"), `import { v } from "convex/values";
+export const args = { label: v.string() };
+export function corrupt() { args.label = v.number(); }`);
+  fs.writeFileSync(path.join(root, "convex/aaBroken.ts"), `import { args, corrupt } from "./sharedArgs";
+corrupt(); Date.now(); export { args };`);
+  fs.writeFileSync(path.join(root, "convex/good.ts"), `import { queryGeneric } from "convex/server";
+import { args } from "./sharedArgs";
+export const read = queryGeneric({ args, handler: () => null });`);
+  const require = createRequire(path.join(root, "package.json"));
+  const bundles = await bundleForMetadata({ root, dir: path.join(root, "convex"),
+    files: discoverModules(path.join(root, "convex")), convexPackage: require.resolve("convex/package.json"), require });
+  // This is an emitted shared chunk, not two independently inlined copies.
+  const imports = (file: string) => [...(bundles.deployment.get(path.resolve("out", file)) ?? "").matchAll(/from "(\.[^"]+)"/g)].map((match) => match[1]);
+  const common = imports("aaBroken.js").filter((chunk) => imports("good.js").includes(chunk));
+  expect(common.some((chunk) => bundles.deployment.get(path.resolve("out", chunk))?.includes("label:"))).toBe(true);
+  const spec = await renderCurrentSpec(root);
+  expect(spec.unavailableModules).toEqual([{ file: "aaBroken.ts", reason: "clock" }]);
+  expect(spec.functions.find((fn) => fn.identifier === "good.js:read")?.args).toEqual({ type: "object",
+    value: { label: { fieldType: { type: "string" }, optional: false } } });
 });
 
 test.each([
@@ -389,6 +426,7 @@ test("a temporary file appearing at write time refuses publication", async () =>
 
 test.each([
   ["import failure", 'export {}; throw Error("IMPORT FAILED");'],
+  ["bundler failure", 'import "missing-build-dependency"; export {};'],
   ["unrecognized registration", 'export function broken() {} broken.isQuery = true;'],
   ["invalid validator JSON", 'export function broken() {} broken.isQuery = true; broken.isPublic = true; broken.exportArgs = () => "not json";'],
   ["invalid argument spec", 'export function broken() {} broken.isQuery = true; broken.isPublic = true; broken.exportArgs = () => "{}";'],

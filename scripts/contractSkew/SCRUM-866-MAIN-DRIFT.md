@@ -1,15 +1,16 @@
 # SCRUM-866: main evidence drift at 56e4f858
 
-**Current result, 2026-10-30 capability follow-up:** all six calls remain
-**UNPROVEN**. The six target exports now render, but the unchanged global
-completeness check finds six other called functions absent and discards the
-entire current spec. See the final section for the measured refusals and limits.
+**Current result, 2026-10-30 completeness investigation:** `changelog.ts` was
+incorrectly refused for pure `Date.UTC` conversion. Its correction renders the
+six previously absent called functions. The global completeness rule remains:
+per-function independence failed a host-object contamination reproduction.
+See the final section for the current proof, exact refusals and limitations.
 
 The original baseline PR cleared 12 differences and incorporated #726.
 The final baseline contains **928 entries**. A native comparison proves the six
 reported calls fixed against three current modules; it is not a full current
-spec or release authorization. CI supplies no `--current` spec and may still
-print these calls as unproven in its deploy-fixes-it line.
+spec or release authorization. The PR now adds current-spec rendering to CI;
+the earlier results below remain historical evidence for their named revisions.
 
 ## Evidence boundary
 
@@ -842,3 +843,207 @@ The local VM is not a hosted Convex runtime certification. The 4 GB crash also
 means the default Node heap is insufficient for this full local render; this
 follow-up did not change the runner's memory policy. The six unavailable
 modules and the whole-spec completeness refusal still block the pilot proof.
+
+## Completeness investigation after d347da9b, 2026-10-30
+
+This section supersedes the preceding capability follow-up's current-result
+claims. The implementation started at
+`d347da9b7fac440521aa29ecb2e8229b454ef6c7`, on
+`claude/scrum866-skew-current-spec` in `C:/tmp/auto-curspec`. No product code,
+classifier, exit code, baseline, ALSO PRESENT logic or deployment changed.
+
+### Six-module diagnosis and native Node bundling
+
+| Module | Runtime directive | Exact initial refusal and source |
+| --- | --- | --- |
+| `convex/changelog.ts` | No `use node`; default runtime | `clock`, from `releaseAt` at line 295 calling `Date.UTC(year, month - 1, day, 12, sequence, 0)` while constructing historical entries. |
+| `convex/collectionReminderActions.ts` | `"use node"` | `unavailable global require`, at the native Node shared chunk's esbuild helper `typeof require < "u" ? require : ...`, before library initialization. |
+| `convex/pushSend.ts` | `"use node"` | The same `unavailable global require` probe in the native Node shared chunk. |
+| `convex/socialPosting.ts` | `"use node"` | The same `unavailable global require` probe in the native Node shared chunk. |
+| `convex/whatsappSend.ts` | `"use node"` | The same `unavailable global require` probe in the native Node shared chunk. |
+| `convex/email.ts` | `"use node"` | `external module` during linking. Line 6 imports `createHash` from `node:crypto`, which Node bundling preserves as an external builtin import. |
+
+The Node modules were **already bundled for Node**, not the default runtime.
+`bundleForMetadata` calls the installed Convex 1.42.1 `innerEsbuild` with
+`platform: "node"`, `chunksFolder: "_deps/node"`, native server-only and WASM
+plugins, and the SDK's production define, conditions and splitting defaults.
+This matches `node_modules/convex/src/cli/lib/components/definition/bundle.ts:700-712`
+and `src/bundler/debugBundle.ts:16-97`. The SDK's outer `bundle` also installs
+`createExternalPlugin`; inspection of `src/bundler/external.ts:70-110` establishes
+that with this project's empty external-package allowlist it returns no resolver
+override. Importing that published private outer helper directly fails on its
+unshipped CLI dependency `fetch-retry`; the existing native inner path remains.
+No replacement bundler, browser rebundling or host package loading was added.
+
+These five Node modules use supported Convex features, but the conservative
+metadata evaluator cannot supply their Node capabilities without expanding its
+evidence boundary. They retain their refusals. No `require`, builtin import,
+environment, clock, locale or randomness denial was removed to load them.
+[Convex's runtime documentation](https://docs.convex.dev/functions/runtimes#nodejs-runtime)
+defines `use node` and the runtime split. Bundling compatibility and the ability
+to evaluate a bundle without host inputs are separate properties.
+
+`Date.UTC` was a renderer false refusal. The
+[ECMAScript algorithm](https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-date.utc)
+converts supplied numeric arguments to a timestamp without reading the clock
+or host timezone. The evaluator now supplies its same-realm native `Date.UTC`.
+`Date.now`, `Date.parse`, Date calls and Date construction remain denied.
+The failing-first fixture uses `Date.UTC(2020, 0, 1)` as a literal validator and
+requires `1577836800000`; it failed with `clock` before the correction. The
+existing clock, parsing and constructor refusal controls still pass. The native
+module is now evaluated unchanged; its historical dates were not replaced.
+
+### Per-function independence failed; retain the global rule
+
+The requested soundness condition was tested, not assumed. Native esbuild
+bundles the runtime's entries together and emits shared chunks. Each entry and
+world gets its own VM context, `SourceTextModule` instances and linker cache.
+Shared output is stored as immutable source strings. A permanent fixture proves
+that a failed entry can mutate a shared validator before refusal without
+changing the independently evaluated good entry. The fixture asserts that the
+two entries actually import the same emitted chunk. This agrees with
+[esbuild's splitting model](https://esbuild.github.io/api/#splitting).
+
+However, `metadataContext` injects host constructors including `TextEncoder`
+by reference. Contextification does not clone supplied objects, as described
+in the [Node VM documentation](https://nodejs.org/api/vm.html#vmcreatecontextcontextobject-options).
+The permanent Node regression demonstrates:
+
+```text
+good.ts alone:
+  args.label = TextEncoder.__scrum866HostIsolationProbe ? string : number
+  renders number
+aaBad.ts, evaluated first:
+  TextEncoder.__scrum866HostIsolationProbe = true
+  Date.now() -> clock refusal; no aaBad metadata
+good.ts afterward:
+  renders string, identically in every sampled world
+```
+
+The fixture cleans the host property in `finally`. An advisory read-only agent
+also independently reproduced contamination with an ordinary thrown import
+error while the proposed per-module catch was present. This is an ordinary
+property write, with no VM escape. Fresh chunks alone do not establish isolation.
+
+Under the owner's explicit instruction, **the global completeness rule remains
+unchanged**. The per-function implementation and per-module exception catch were
+removed. An unavailable called function discards all current evidence. Unknown
+module errors, bundler failure, SDK/patch refusal, invalid metadata and zero
+registered functions still refuse publication of the whole spec. CLI diagnostics
+now list unavailable module paths and the number of called functions without
+current evidence, including zero.
+
+The contamination fixture calls both modules and requires
+`{ fixed: 0, stillFails: 0, unproven: 2 }`. Mutation-checking the actual proposed
+per-function rule makes it report `{ fixed: 1, stillFails: 0, unproven: 1 }`,
+which fails the regression. A second killed mutant substitutes zero for native
+`Date.UTC`, and the timestamp fixture rejects it. Mutation source bytes were
+restored from saved copies, not git checkout. Import-failure and systemic
+bundler-failure fixtures also prove stale-output deletion and two UNPROVEN calls
+when the workflow has no current file to supply.
+
+**Residual limitation:** the retained called-function completeness check is
+not a general host-isolation fix. A failed **uncalled** helper, or another
+successfully evaluated module, could mutate shared host objects while every
+called export remains present. The new fixture proves the guard's behavior for
+its called failed module, not containment of every possible host mutation.
+Per-function certification needs real per-world host-state isolation and its
+own reviewed change. The measured FIXED outcomes below do not certify isolation,
+the hosted runtime, or pilot readiness. Finite environment/capability sampling,
+mixed conditions and long-lived global state remain limitations too.
+
+### Runner memory
+
+The starting workflow did not set `--max-old-space-size`. This change adds
+`--max-old-space-size=6144` to the credential-free renderer invocation and updates
+the credential-boundary fingerprint for that one-token addition. Triggers,
+permissions, credential steps, timeout and cleanup stay unchanged. The
+[GitHub public-runner specification](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)
+lists 16 GB RAM for `ubuntu-latest`. A 6144 MiB V8 old-space limit is below that
+capacity; it is not a limit on total process RSS. No CI peak-RSS measurement is
+claimed. Local execution uses Node 26.4.0; the workflow pins Node 22.21.1.
+
+### Final execution record
+
+Product source identity was rechecked with
+`git diff --name-only 43feaa4f -- convex app components packages lib apps/mobile`:
+empty. The native render reports **329 discovered modules, 1,949 evaluations,
+1,017 registered exports, five unavailable Node modules**, zero static refusals
+and zero differential function refusals. The CLI reports **zero called functions
+without evidence**. The five remaining modules are the Node rows above.
+
+Reproduction on this worktree:
+
+```powershell
+node --max-old-space-size=6144 --experimental-vm-modules scripts/contractSkew/renderCurrentSpec.mjs node_modules/.cache/scrum866-proof/current-global-final.json
+# exit 0
+node scripts/contractSkew/cli.mjs --mode production --spec node_modules/.cache/scrum866-proof/deployed.json --current node_modules/.cache/scrum866-proof/current-global-final.json --json node_modules/.cache/scrum866-proof/report-global-final.json --deployed-sha 6c71a7654bc8fc11b37b4b57ac52dbb71ecae592
+# exit 7
+```
+
+This is **SUPPLIED_FILE evidence**, using the saved deployed-spec file, not a
+fresh authenticated production read. The existing global completeness check
+now passes because the changelog exports render. All six target calls are
+FIXED by the detector: `financingEconomics:supplierConcessionBasis`,
+`financingEconomics:resolveAppraisalGap`, `vehicles:update`, `vehicles:create`,
+`vehicleEdits:requestUpdate`, and `vehicleEdits:requestCreate`.
+
+```text
+callOutcomes: { fixed: 6, stillFails: 0, unproven: 0 }
+11 proven deployed-spec breaks, 0 unclassified, 0 current-spec breaks
+1065 client sites found and resolved, 0 unresolved
+928 baseline matches, 0 drift, no ALSO PRESENT cause
+```
+
+Validation on the follow-up source:
+
+```text
+pnpm exec vitest run scripts/contractSkew/<each test file> --maxWorkers=1
+27 files passed; 1367 passed; 1 existing skip; zero failed files
+
+pnpm exec vitest run scripts/contractSkew/renderCurrentSpec.test.ts scripts/intelligence/convexCredentialBoundary.test.ts --maxWorkers=1 --coverage --coverage.include=scripts/contractSkew/currentSpec.mjs --coverage.include=scripts/contractSkew/renderCurrentSpec.mjs --coverage.include=scripts/contractSkew/metadataBundle.mjs --coverage.reportsDirectory=node_modules/.cache/scrum866-global-coverage
+103 passed (88 renderer, 15 credential boundary), zero failed/skipped
+Source lines 284/292 = 97.26%; functions 67/77 = 87.01%
+
+node --experimental-vm-modules --test --test-concurrency=1 scripts/contractSkew/*.test.mjs
+24 passed; zero failed/skipped
+
+pnpm typecheck:contract-skew
+exit 0; dedicated detector checkJs project, including .mjs
+pnpm typecheck
+exit 0; root project excludes convex/
+pnpm lint
+exit 0; zero errors, 4350 existing warnings
+Changed-source/test ESLint: exit 0, zero warnings
+git diff --check: exit 0
+```
+
+The full sweep temporarily normalized three shebang files to LF for the known
+Windows import issue, then restored their exact bytes in `finally`. The two
+unchanged author-tool files have no diff. The initial lint run found the newly
+introduced reserved local name `module` in two diagnostic loops. Renaming those
+locals to `unavailable` made the rerun pass. The credential fingerprint test
+first failed after the old-space option changed and passed after the reviewed
+one-token workflow change was pinned.
+
+Added instrumentable production lines versus `d347da9b` measure **5/5 = 100%**:
+four CLI diagnostic lines and one renderer diagnostic line. Renderer LCOV was
+combined with native `NODE_V8_COVERAGE` from the Node fixture's child CLI
+processes, converted with installed `v8-to-istanbul` 9.3.0, then intersected with
+zero-context diff hunks. The `Date.UTC` trap is code inside a VM source string
+and has no source-file LCOV DA record; its behavioral proof is the failing-first
+literal assertion and killed wrong-value mutant. It is not included silently
+in the instrumentable-line denominator. These are local measurements, not a
+cloud Sonar verdict.
+
+One full render during concurrent validation reported a transient module
+evaluation failure for `validations/vehicles.ts`; isolated diagnosis succeeded.
+After restoring the original unexpected-error boundary, the final full render
+completed with only the five Node refusals above. No timeout or error guard was
+relaxed. CI runtime, memory and timing still need the workflow's own evidence.
+
+Advisory Standards and Spec passes inspected the fallback and its scope. The
+host-contamination finding is VALIDATED; the proposed per-function fix is
+REJECTED under the explicit soundness fallback. These passes are not independent
+certification seats. Formal simplify, new-head cloud Sonar/CI, screen audit,
+explorer swarm, merge, deployment and production verification remain unverified.

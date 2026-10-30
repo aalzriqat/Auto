@@ -327,7 +327,9 @@ function metadataContext(deny, world, reads, zodConfig, runtime) {
       globalThis.__zod_globalConfig = ${zodConfig ? "{}" : "undefined"};
       globalThis.__zod_globalRegistry = undefined;
       Date = new Proxy(Date, { apply() { __denyInput("clock"); }, construct() { __denyInput("clock"); },
-        get() { return () => __denyInput("clock"); } });
+        // UTC is a pure conversion of its supplied arguments, with no clock or
+        // host timezone input. Keep now, parse, construction and calls refused.
+        get(target, key) { return key === "UTC" ? target.UTC : () => __denyInput("clock"); } });
       Math.random = () => __denyInput("randomness");
       crypto = new Proxy({}, { get() { __denyInput("crypto input"); } });
       performance = new Proxy({}, { get() { __denyInput("clock"); } });

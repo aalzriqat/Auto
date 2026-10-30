@@ -247,7 +247,9 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // that credential-free render invocation. Native ESM avoids introducing
     // CJS module/exports/require bindings into argument evaluation. No trigger,
     // grant, checkout, environment, credential step or output path changed.
-    "9e8ce003287905e3623650fc4a2502871451686b317874f291eb4a390403c52d",
+    // SCRUM-866 follow-up adds only a 6144 MiB old-space limit to that same
+    // credential-free Node invocation, below the public runner's 16 GB RAM.
+    "b23935857d1a98a0a7ec13f25c9c357afe22c63c3a4e48fbcde5b061956a9121",
   "deal-scenarios-e2e.yml":
     // SCRUM-616/617: the reviewed change opts into the cross-screen oracle.
     // SCRUM-760 G8: job timeout 120 -> 180 minutes for the larger deals/sales

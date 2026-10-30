@@ -397,6 +397,10 @@ const candidateResult = candidateSpec ? compareContracts(calls, candidateSpec) :
 // compared against the SAME calls too, so each deployed break is classified by its
 // identity against it (classify.mjs), and the current spec's own gaps count.
 const missingCurrent = mode !== "release" && currentSpec ? missingCurrentFunctions(currentSpec, calls) : [];
+if (mode !== "release" && currentSpec) {
+  console.error(`Current spec: ${missingCurrent.length} called function(s) without current evidence.`);
+  for (const unavailable of currentSpec.unavailableModules ?? []) console.error(`Current spec UNPROVEN module: ${unavailable.file}`);
+}
 if (missingCurrent.length) {
   console.error(`::warning::Current spec unavailable: ${missingCurrent.length} called function(s) absent from the render; discarding all current evidence (no FIXED claims from it).`);
 }

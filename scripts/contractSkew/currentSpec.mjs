@@ -39,6 +39,7 @@ export async function renderCurrentSpec(root) {
     else functions.push(...result.functions);
   }
   console.warn(`Current spec: ${unavailableModules.length} module(s) UNPROVEN under environment-blind evaluation (no evidence from those modules).`);
+  for (const unavailable of unavailableModules) console.warn(`Current spec UNPROVEN: ${unavailable.file}: ${unavailable.reason}`);
   console.warn(`Current spec: ${evaluation.staticallyRefusedModules} statically refused modules; ${evaluation.differentialRefusedFunctions} differential function refusals; ${evaluation.evaluations} evaluations.`);
   const spec = { functions, unavailableModules, evaluation };
   if (!functions.length || specProblems(spec).length) throw new Error("Incomplete or invalid native argument spec");
