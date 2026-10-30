@@ -99,6 +99,7 @@ import { fetchDeployedSpec, isDeploymentName, readSpecFile, redact } from "./fet
 import { changedContractPaths, summarizeChanges } from "./specDiff.mjs";
 import { classifyBreaking, alertsFor, distinctCallCount } from "./classify.mjs";
 import { resolveGit } from "./gitExecutable.mjs";
+import { missingCurrentFunctions } from "./currentSpec.mjs";
 
 const DEFAULT_BASELINE = fileURLToPath(new URL("./needs-evidence-baseline.json", import.meta.url));
 
@@ -395,7 +396,15 @@ const candidateResult = candidateSpec ? compareContracts(calls, candidateSpec) :
 // ⚠️ F-2 (batch 4): in the monitor, a supplied and validated current spec is
 // compared against the SAME calls too, so each deployed break is classified by its
 // identity against it (classify.mjs), and the current spec's own gaps count.
-const currentResult = mode !== "release" && currentSpec ? compareContracts(calls, currentSpec) : undefined;
+const missingCurrent = mode !== "release" && currentSpec ? missingCurrentFunctions(currentSpec, calls) : [];
+if (mode !== "release" && currentSpec) {
+  console.error(`Current spec: ${missingCurrent.length} called function(s) without current evidence.`);
+  for (const unavailable of currentSpec.unavailableModules ?? []) console.error(`Current spec UNPROVEN module: ${unavailable.file}`);
+}
+if (missingCurrent.length) {
+  console.error(`::warning::Current spec unavailable: ${missingCurrent.length} called function(s) absent from the render; discarding all current evidence (no FIXED claims from it).`);
+}
+const currentResult = mode !== "release" && currentSpec && missingCurrent.length === 0 ? compareContracts(calls, currentSpec) : undefined;
 const unproven = unprovenFrom(result.needsEvidence, deployed.spec);
 
 // ⚠️ THE MONITOR READS THIS FILE AND NEVER WRITES IT. See baseline.mjs.
@@ -581,7 +590,7 @@ function backendUnchangedSince(sha) {
 const changedByCandidate = candidateSpec ? changedContractPaths(deployed.spec, candidateSpec) : [];
 
 const backendEvidence = { deployedSha };
-if (currentSpec) {
+if (currentSpec && (mode === "release" || currentResult)) {
   backendEvidence.changedPaths =
     currentSpec === candidateSpec ? changedByCandidate : changedContractPaths(deployed.spec, currentSpec);
 } else if (deployedSha) {
