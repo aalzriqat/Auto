@@ -1364,9 +1364,10 @@ async function discoverSupplierReceivableGlAccounts(
     documents += count;
     if (documents > SUPPLIER_GL_DISCOVERY_LIMITS.documents) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
   };
-  const readRows = async <T>(query: { take: (count: number) => Promise<T[]> }): Promise<T[]> => {
+  const readRows = async <T>(query: { take: (count: number) => Promise<T[]> }, maxRows?: number): Promise<T[]> => {
     chargeRange();
-    const rows = await query.take(SUPPLIER_GL_DISCOVERY_LIMITS.documents - documents + 1);
+    const remaining = SUPPLIER_GL_DISCOVERY_LIMITS.documents - documents + 1;
+    const rows = await query.take(maxRows === undefined ? remaining : Math.min(maxRows, remaining));
     chargeDocuments(rows.length);
     return rows;
   };
@@ -1413,7 +1414,16 @@ async function discoverSupplierReceivableGlAccounts(
     // below. They declare no journal/account authority to retire. A formerly linked header with
     // erased account evidence cannot establish retirement.
     if (references.size === 0 && header.journalEntryId) refuse();
-    for (const id of references) if (await readAccount(id)) refuse();
+    for (const id of references) {
+      if (await readAccount(id)) refuse();
+      // Account/journal metadata loss is not proof that reset removed the GL. Probe both
+      // consumers' evidence, including closed-period snapshots and zero-net orphan rows.
+      const lines = await readRows(ctx.db.query("journalLines")
+        .withIndex("by_org_account", q => q.eq("orgId", orgId).eq("accountId", id)), 1);
+      const snapshots = await readRows(ctx.db.query("accountBalanceSnapshots")
+        .withIndex("by_org_account_currency_period_shard", q => q.eq("orgId", orgId).eq("accountId", id)), 1);
+      if (lines.length > 0 || snapshots.length > 0) refuse();
+    }
   }
 
   if (source.status === "AVAILABLE") {

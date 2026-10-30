@@ -985,6 +985,45 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
     expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", complete: false, isReconciled: false, currencies: [] });
   });
 
+  async function orphanOpeningGl(s: Seed, keep: "lines" | "snapshots") {
+    const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
+    const cutoff = (await periodOf(s)).endDate + 1;
+    await s.t.run(async (ctx) => {
+      const header = (await ctx.db.get(row.openingBalanceDraftId))!;
+      const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", header.journalEntryId!)).collect();
+      for (const id of new Set(lines.map(line => line.accountId))) {
+        await ctx.db.delete(id);
+        if (keep !== "snapshots") {
+          const snapshots = await ctx.db.query("accountBalanceSnapshots")
+            .withIndex("by_org_account_currency_period_shard", q => q.eq("orgId", s.orgId).eq("accountId", id)).collect();
+          for (const snapshot of snapshots) await ctx.db.delete(snapshot._id);
+        }
+      }
+      if (keep !== "lines") for (const line of lines) await ctx.db.delete(line._id);
+      await ctx.db.delete(header.journalEntryId!);
+      await ctx.db.delete(row._id);
+    });
+    return { accountId, cutoff };
+  }
+
+  test("retained opening GL lines cannot be mistaken for a completed reset", async () => {
+    const s = await seed("retainedlines");
+    const { accountId } = await orphanOpeningGl(s, "lines");
+    const lines = await s.t.run(ctx => ctx.db.query("journalLines")
+      .withIndex("by_org_account", q => q.eq("orgId", s.orgId).eq("accountId", accountId)).collect());
+    expect(lines).toMatchObject([{ debitMinor: 100_000, creditMinor: 0 }]);
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", complete: false, isReconciled: false, currencies: [] });
+  });
+
+  test("retained opening GL snapshots cannot be mistaken for a completed reset", async () => {
+    const s = await seed("retainedsnapshots");
+    const { accountId, cutoff } = await orphanOpeningGl(s, "snapshots");
+    const gl = await s.t.run(ctx => getControlAccountBalancesAsOf(ctx, s.orgId, [accountId], cutoff, 4000));
+    expect(gl).toMatchObject({ status: "OK", balances: [{ debitMinor: 100_000, creditMinor: 0 }] });
+    expect(await s.asUser.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId, toDate: cutoff }))
+      .toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", complete: false, isReconciled: false, currencies: [] });
+  });
+
   test("a reversed opening with a lost recovery refuses instead of disappearing", async () => {
     const s = await seed("reversedopening");
     const { row } = await openingRecovery(s, Date.now() - 1_000);
