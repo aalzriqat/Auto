@@ -273,7 +273,7 @@ function scan(source, ownerOf) {
   const isCallee = (node) => {
     let current = node;
     while (current.parent && isTransparent(current.parent) && current.parent.expression === current) current = current.parent;
-    return current.parent !== undefined && ts.isCallExpression(current.parent) && current.parent.expression === current;
+    return current.parent && ts.isCallExpression(current.parent) && current.parent.expression === current;
   };
 
   /** The outermost transparent wrapper around `node` (the node itself when it is not wrapped). @param {import("typescript").Node} node */
@@ -287,7 +287,7 @@ function scan(source, ownerOf) {
   const isInertRequire = (node) => {
     const outer = outermost(node);
     const parent = outer.parent;
-    if (parent === undefined) return false;
+    if (!parent) return false;
     if (ts.isTypeOfExpression(parent)) return true;
     return ts.isPropertyAccessExpression(parent) && parent.expression === outer && parent.name.text === "resolve" && isCallee(parent);
   };
@@ -345,13 +345,13 @@ function scan(source, ownerOf) {
   const isModuleExports = (node) => {
     const outer = outermost(node);
     const parent = outer.parent;
-    return parent !== undefined && ts.isPropertyAccessExpression(parent) && parent.expression === outer && parent.name.text === "exports";
+    return parent && ts.isPropertyAccessExpression(parent) && parent.expression === outer && parent.name.text === "exports";
   };
   /** The shipped client uses Web Crypto through this exact built-in property. @param {import("typescript").Identifier} node */
   const isGlobalCrypto = (node) => {
     const outer = outermost(node);
     const parent = outer.parent;
-    return parent !== undefined && ts.isPropertyAccessExpression(parent) && parent.expression === outer && parent.name.text === "crypto";
+    return parent && ts.isPropertyAccessExpression(parent) && parent.expression === outer && parent.name.text === "crypto";
   };
 
   /** The call `makeFunctionReference(...)` or `ns.makeFunctionReference(...)`, wrappers skipped. @param {import("typescript").Expression} expression */
