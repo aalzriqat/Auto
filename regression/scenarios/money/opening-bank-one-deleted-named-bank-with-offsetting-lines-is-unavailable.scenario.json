@@ -1,0 +1,89 @@
+{
+  "id": "opening-bank-one-deleted-named-bank-with-offsetting-lines-is-unavailable",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-unnamed-lines-p2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 3000000
+          },
+          {
+            "bank": "B",
+            "creditMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.historicalLine",
+      "input": {
+        "assignAllLinesToBank": "A",
+        "hardDeleteBank": "A_B"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.status",
+      "value": "OPENING_PROOF_UNAVAILABLE"
+    },
+    {
+      "observable": "controlOpeningMinor",
+      "value": "null"
+    },
+    {
+      "observable": "unattributedOpeningMinor",
+      "value": "null"
+    },
+    {
+      "observable": "writeCounts.changed",
+      "value": false
+    },
+    {
+      "observable": "unexplainedOpeningDifference",
+      "value": "null"
+    },
+    {
+      "observable": "report.banks",
+      "value": []
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "one deleted named bank with two opening lines that net to zero makes the opening unavailable"
+  },
+  "matrixRow": "OB-G9",
+  "fingerprint": "f1daad594ce7a381b5bdda5ebb0a6c8c972e17b7639caf5497633fd51e911d94"
+}

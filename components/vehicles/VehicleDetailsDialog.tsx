@@ -60,6 +60,7 @@ import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { DepositReceiptBankPicker, useDepositReceiptBankOptions } from "@/components/deposits/DepositReceiptBankPicker";
+import { OpeningCostBadge, hasOpeningCost } from "@/components/vehicles/OpeningCostBadge";
 
 interface VehicleDetailsDialogProps {
   vehicle: Doc<"vehicles"> | null;
@@ -412,6 +413,7 @@ export function VehicleDetailsDialog({
               {t("VehicleDetailsDesc" as any) || "Detailed information and related records for this vehicle."}
             </DialogDescription>
           </DialogHeader>
+          {hasOpeningCost(vehicle) && <OpeningCostBadge />}
           {vehicle.status === "SOLD" && canCreateVehicles && (
             <Button
               size="sm"
