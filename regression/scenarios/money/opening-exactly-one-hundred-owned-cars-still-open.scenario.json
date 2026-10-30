@@ -1,0 +1,62 @@
+{
+  "id": "opening-exactly-one-hundred-owned-cars-still-open",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "acquisitionPosting": "OPENING_STOCK",
+        "ownedCars": 100
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "consignedCars": 30
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 100
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "openingJournals.count",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "exactly one hundred owned cars still open, the reviewed limit"
+  },
+  "matrixRow": "OB-C3",
+  "fingerprint": "43bba93edb4b805be3ab5974eb067e5939bef0f0c68269f932fbc35627fbeb73"
+}

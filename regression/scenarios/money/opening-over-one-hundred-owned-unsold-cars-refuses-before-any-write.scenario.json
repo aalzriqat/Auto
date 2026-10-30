@@ -1,0 +1,56 @@
+{
+  "id": "opening-over-one-hundred-owned-unsold-cars-refuses-before-any-write",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "ownedUnsoldCars": 101,
+        "status": "AVAILABLE"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "REFUSED-reviewed-opening-allocation-limit"
+    },
+    {
+      "observable": "writes.journalsLinesDraftsEventsMarkers",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "more than one hundred owned unsold cars refuse with the limit message before any write"
+  },
+  "matrixRow": "OB-C3",
+  "fingerprint": "c722428ccd8012f4bbbb967acdd5c43106a0b0e2953999ed1986fb4db90b2204"
+}

@@ -1,0 +1,48 @@
+{
+  "id": "opening-inventory-candidate-read-has-shared-101-document-bound",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-30"
+  },
+  "expected": [
+    {
+      "observable": "result",
+      "value": "REFUSED-reviewed-opening-allocation-limit"
+    },
+    {
+      "observable": "inventory.candidateDocuments",
+      "value": 101
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "the inventory candidate reader returns at most 101 live documents across all buckets"
+  },
+  "matrixRow": "OB-C3",
+  "fingerprint": "0267f813ddbe1d1dd055bb9c28756949db8be9b4d3d406152c1d1bd0a5fe6ee6",
+  "kind": "rule",
+  "subject": "prepareOpeningAllocations",
+  "inputs": {
+    "deletedCars": 1000,
+    "liveCars": 120,
+    "sourceTypes": [
+      "STOCK",
+      "unset"
+    ],
+    "unsoldStatuses": 6,
+    "deletionFields": [
+      "false",
+      "unset"
+    ]
+  }
+}

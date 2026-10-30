@@ -1,0 +1,52 @@
+{
+  "id": "bank-book-balance-in-usd-shows-dollars-and-cents-en",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-round3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {
+        "locale": "en",
+        "currency": "USD",
+        "balanceMinor": 12345,
+        "organizationCurrency": "JOD"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bookBalance.fractionDigits",
+      "value": 2
+    },
+    {
+      "observable": "bookBalance.shownAs",
+      "value": "123.45"
+    },
+    {
+      "observable": "bookBalance.mentionsJod",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/BankAccountsTab.test.tsx",
+    "testName": "English: a USD bank of 123.45 shows dollars with cents, never the organization's JOD at zero decimals"
+  },
+  "matrixRow": "OB-G10",
+  "fingerprint": "563c5dc85a2961408123c58a4420f5c41e80989e39c7fb64534bd9bb2de76789"
+}

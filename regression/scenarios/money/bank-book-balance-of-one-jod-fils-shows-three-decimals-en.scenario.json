@@ -1,0 +1,48 @@
+{
+  "id": "bank-book-balance-of-one-jod-fils-shows-three-decimals-en",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-round3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {
+        "locale": "en",
+        "currency": "JOD",
+        "balanceMinor": 1,
+        "organizationCurrency": "JOD"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bookBalance.fractionDigits",
+      "value": 3
+    },
+    {
+      "observable": "bookBalance.shownAs",
+      "value": "0.001"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/BankAccountsTab.test.tsx",
+    "testName": "English: a JOD bank holding one fils shows three decimals, not JOD 0"
+  },
+  "matrixRow": "OB-G10",
+  "fingerprint": "0cf848e24e6458d1294c65c158a04d6eb427706ce5f5b77448417b48d55341f8"
+}
