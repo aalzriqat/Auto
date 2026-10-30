@@ -168,6 +168,7 @@ jobs:
         working-directory: trusted
         env:
           BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
+          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
         run: node scripts/accountingRehearsalPathGateCli.mjs
 
       - name: Mark trusted accounting rehearsal pending
