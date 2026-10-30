@@ -1,0 +1,46 @@
+{
+  "id": "supplier-alert-in-app-only-no-outbound-channel",
+  "fingerprint": "9cba708e442ecd85c761c6bbc213d474a12e15ac2ca56783f5d7eb2e88cd2fb4",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "0d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "scheduledOutsideSweep",
+      "value": 0
+    },
+    {
+      "observable": "emailWhatsappPush",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "the sweep schedules no email, WhatsApp or push delivery"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

@@ -1,0 +1,68 @@
+{
+  "id": "supplier-alert-fact-read-error-propagates",
+  "fingerprint": "8a741f97a7ea2e397e09a913963a270f1425a2e5e2c267f848bf158099b6bfbf",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r4",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.runOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "payables": 2,
+        "secondPayableSaleId": 42,
+        "fault": "non-ConvexError-from-fact-read-db-get"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "call.rejected",
+      "value": true
+    },
+    {
+      "observable": "call.error",
+      "value": "invalid-db-get-id-number-42"
+    },
+    {
+      "observable": "notifications",
+      "value": 0
+    },
+    {
+      "observable": "idempotency",
+      "value": 0
+    },
+    {
+      "observable": "failureHeartbeats",
+      "value": 1
+    },
+    {
+      "observable": "failureHeartbeat.success",
+      "value": false
+    },
+    {
+      "observable": "failureDetail.names",
+      "value": "organisation-id-and-fact-read-error"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a non-ConvexError during a fact read propagates, rolls back the worker and records a failure heartbeat"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

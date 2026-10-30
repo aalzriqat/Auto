@@ -1,0 +1,54 @@
+{
+  "id": "supplier-due-payable-agreed-date-ages-in-amman-days",
+  "fingerprint": "7bee4aed216a0b79e3991452e57623f5eba66bc773a6f49689387d01a9f2b409",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "-10d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "AGREED_DATE"
+    },
+    {
+      "observable": "row.daysOverdue",
+      "value": 10
+    },
+    {
+      "observable": "row.bucket",
+      "value": "DAYS_1_30"
+    },
+    {
+      "observable": "row.outstandingMinor",
+      "value": 9500000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "an agreed paymentDueDate wins and ages by Amman calendar days"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

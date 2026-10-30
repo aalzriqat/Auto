@@ -1,0 +1,55 @@
+{
+  "id": "supplier-due-pagination-complete-only-on-last-page",
+  "fingerprint": "3335406fdd96cb73462c19f5e98a53704ad1057b49a8ef36111d0fb42a00c19f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "rows": 5,
+        "limit": 2
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "page1.complete",
+      "value": "false"
+    },
+    {
+      "observable": "page2.complete",
+      "value": "false"
+    },
+    {
+      "observable": "page3.rows",
+      "value": 1
+    },
+    {
+      "observable": "page3.complete",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "pagination is bounded and `complete` is only true on the last page"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

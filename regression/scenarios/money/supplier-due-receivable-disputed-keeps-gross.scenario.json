@@ -1,0 +1,52 @@
+{
+  "id": "supplier-due-receivable-disputed-keeps-gross",
+  "fingerprint": "6e33844e32e544b7519b33373e2ba36dbf35e526d04999067250378b5c0226f4",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECEIVABLE",
+        "status": "DISPUTED",
+        "received": 1000,
+        "agreedDue": "-100d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.outstandingMinor",
+      "value": 2000000
+    },
+    {
+      "observable": "row.disputedMinor",
+      "value": 2000000
+    },
+    {
+      "observable": "row.bucket",
+      "value": "DAYS_90_PLUS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a disputed receivable keeps its outstanding in gross and reports it as disputed"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

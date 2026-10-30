@@ -66,6 +66,11 @@ status: v.union(
     ),
 reversedAt: v.optional(v.number()),
 reversedBy: v.optional(v.id("users")),
+/**
+ * SCRUM-869 S3a (widen-only): the due date agreed with the supplier, epoch ms. Optional in
+ * storage forever. No door writes it in S3a; absent means "no agreed date" (SCRUM-869#c23883).
+ */
+agreedDueDate: v.optional(v.number()),
 createdBy: v.id("users"),
 createdAt: v.number(),
 updatedAt: v.number(),
@@ -1751,6 +1756,13 @@ export default defineSchema({
     disputeReason: v.optional(v.string()),
     disputedAt: v.optional(v.number()),
     disputedBy: v.optional(v.id("users")),
+    /**
+     * SCRUM-869 S3a (widen-only): the due date agreed with the supplier, epoch ms. Optional in
+     * storage forever (rows written before it stay valid). No door writes it in S3a; the due-date
+     * reader treats an absent value as "no agreed date" and falls to the ownership-model trigger
+     * (owner ruling SCRUM-869#c23883).
+     */
+    agreedDueDate: v.optional(v.number()),
     cancelledAt: v.optional(v.number()),
     cancelledBy: v.optional(v.id("users")),
     createdBy: v.id("users"),
