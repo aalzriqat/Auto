@@ -196,6 +196,44 @@ async function proveDisjoint(read, oldBase, newBase, paths) {
   return touched.size;
 }
 
+function proveUnchangedFiles(oldFiles, newFiles) {
+  requireProof(sameSet(new Set(oldFiles.map((f) => f.filename)), new Set(newFiles.map((f) => f.filename))),
+    "PR file set changed after certification.");
+  const oldByName = new Map(oldFiles.map((f) => [f.filename, f]));
+  for (const file of newFiles) {
+    const prior = oldByName.get(file.filename);
+    requireProof(prior.status === file.status && prior.previous_filename === file.previous_filename,
+      `PR file status or rename changed for ${file.filename}.`);
+    requireProof(contributedLines(prior) === contributedLines(file), `PR contributed lines changed for ${file.filename}.`);
+  }
+}
+
+function proveFileIdentity(newFiles, trees) {
+  for (const file of newFiles) {
+    const path = file.previous_filename ?? file.filename;
+    requireProof(trees[0].get(path)?.mode === trees[2].get(path)?.mode &&
+      trees[1].get(file.filename)?.mode === trees[3].get(file.filename)?.mode, `PR file mode changed for ${file.filename}.`);
+    requireProof(trees[0].get(path)?.sha === trees[2].get(path)?.sha &&
+      trees[0].get(path)?.type === trees[2].get(path)?.type,
+    `PR base blob changed for ${path}.`);
+    requireProof(trees[1].get(file.filename)?.sha === trees[3].get(file.filename)?.sha &&
+      trees[1].get(file.filename)?.type === trees[3].get(file.filename)?.type,
+    `PR reviewed blob changed for ${file.filename}.`);
+  }
+}
+
+async function proveUpdateContent(update, { read, main, before, oldFiles, baselineTrees }) {
+  const after = await compare(read, main, update);
+  const newFiles = completeFiles(after.files);
+  proveUnchangedFiles(oldFiles, newFiles);
+  const baseTree = await readTree(read, after.merge_base_commit.sha);
+  const updateTree = await readTree(read, update);
+  proveCompleteDiff(newFiles, baseTree, updateTree);
+  proveFileIdentity(newFiles, [...baselineTrees, baseTree, updateTree]);
+  const mainFiles = await proveDisjoint(read, before.merge_base_commit.sha, after.merge_base_commit.sha, filePaths(newFiles));
+  return { newFiles, mergeBase: after.merge_base_commit.sha, mainFiles };
+}
+
 async function carryCertificate(certified, { pr, commits, fileRows, read, repo, prNumber }) {
   requireProof(commits.some((c) => c.sha === certified), "Certified SHA must be a commit of this PR.");
   requireProof(Number.isSafeInteger(pr.commits) && pr.commits < 250 && pr.commits === commits.length &&
@@ -206,35 +244,24 @@ async function carryCertificate(certified, { pr, commits, fileRows, read, repo, 
   const main = pr.base.sha, head = pr.head.sha;
   const updates = await proveUpdateMerges(read, certified, head, main, new Set(commits.map((c) => c.sha)));
   const before = await compare(read, main, certified);
-  const after = await compare(read, main, head);
-  const oldFiles = completeFiles(before.files), newFiles = completeFiles(after.files);
-  requireProof(sameSet(new Set(oldFiles.map((f) => f.filename)), new Set(newFiles.map((f) => f.filename))),
-    "PR file set changed after certification.");
-  const oldByName = new Map(oldFiles.map((f) => [f.filename, f]));
-  for (const file of newFiles) {
-    const prior = oldByName.get(file.filename);
-    requireProof(prior.status === file.status && prior.previous_filename === file.previous_filename,
-      `PR file status or rename changed for ${file.filename}.`);
-    requireProof(contributedLines(prior) === contributedLines(file), `PR contributed lines changed for ${file.filename}.`);
+  const oldFiles = completeFiles(before.files);
+  const baselineTrees = [await readTree(read, before.merge_base_commit.sha), await readTree(read, certified)];
+  proveCompleteDiff(oldFiles, ...baselineTrees);
+  let proof;
+  // Final equality alone permits a changed-then-restored intermediate merge.
+  // Complete diffs plus disjoint main paths make blob identity a pure-merge proof
+  // at each update, without checking out or executing the candidate's code.
+  for (const update of updates) {
+    proof = await proveUpdateContent(update, { read, main, before, oldFiles, baselineTrees });
   }
-  requireProof(pr.changed_files === newFiles.length && sameSet(filePaths(newFiles), filePaths(fileRows)),
+  requireProof(proof && pr.changed_files === proof.newFiles.length && sameSet(filePaths(proof.newFiles), filePaths(fileRows)),
     "Current PR file set is incomplete or changed during the check.");
-  const trees = [];
-  for (const sha of [before.merge_base_commit.sha, certified, after.merge_base_commit.sha, head]) trees.push(await readTree(read, sha));
-  proveCompleteDiff(oldFiles, trees[0], trees[1]);
-  proveCompleteDiff(newFiles, trees[2], trees[3]);
-  for (const file of newFiles) {
-    const path = file.previous_filename ?? file.filename;
-    requireProof(trees[0].get(path)?.mode === trees[2].get(path)?.mode &&
-      trees[1].get(file.filename)?.mode === trees[3].get(file.filename)?.mode, `PR file mode changed for ${file.filename}.`);
-  }
-  const mainFiles = await proveDisjoint(read, before.merge_base_commit.sha, after.merge_base_commit.sha, filePaths(newFiles));
   const current = await read(`/pulls/${encodeURIComponent(prNumber)}`);
   requireProof(current?.head?.sha === head && current?.base?.sha === main && current.body === pr.body,
     "PR head, main or evidence body changed during the carry proof.");
   return [`Seat 1 local certificate carried from ${certified} to ${head}.`,
-    `Proof: update-from-main merge commits ${updates.join(", ")}; ${newFiles.length} files with identical statuses, modes and contributed lines.`,
-    `Proof: disjointness verified across merge bases ${before.merge_base_commit.sha} to ${after.merge_base_commit.sha}; ${mainFiles} main files checked.`,
+    `Proof: update-from-main merge commits ${updates.join(", ")}; ${proof.newFiles.length} files with identical statuses, modes, blobs and contributed lines at every update.`,
+    `Proof: disjointness verified at every update across merge bases ${before.merge_base_commit.sha} to ${proof.mergeBase}; ${proof.mainFiles} main files checked at the final update.`,
     "Required CI must still pass at the current head; this check does not evaluate other checks."];
 }
 

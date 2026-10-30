@@ -1,4 +1,9 @@
 import { describe, expect, test } from "vitest";
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { check, getJson, safeLogLine } from "./checkPrSkillEvidence.mjs";
 import { refresh } from "./refreshPrSkillEvidence.mjs";
 
@@ -88,7 +93,108 @@ function fixture(exactHead = false) {
     run: () => check(env, fetchImpl) };
 }
 
+// Seat 2's SCRUM-874 reproduction: identical +/- lines in different functions.
+function relocatedEdit() {
+  const base = ["export function canReadPublic() {", "  return false;", "}",
+    ...Array.from({ length: 10 }, (_, i) => `// separate function ${i}`),
+    "export function canSendPayment() {", "  return false;", "}", ""].join("\n");
+  const reviewed = base.replace("  return false;", "  return true;");
+  const at = base.lastIndexOf("  return false;");
+  const relocated = base.slice(0, at) + base.slice(at).replace("  return false;", "  return true;");
+  const directory = mkdtempSync(join(tmpdir(), "auto874-relocation-"));
+  const paths = ["base", "reviewed", "relocated"].map((name) => join(directory, name));
+  try {
+    [base, reviewed, relocated].forEach((content, i) => writeFileSync(paths[i], content));
+    const patches = paths.slice(1).map((path) => {
+      const diff = spawnSync("git", ["diff", "--no-index", "--no-ext-diff", "--unified=3", paths[0], path], { encoding: "utf8" });
+      expect(diff.status).toBe(1);
+      return diff.stdout.slice(diff.stdout.indexOf("@@")).trimEnd();
+    });
+    const blobs = [base, reviewed, relocated].map((content) => createHash("sha1")
+      .update(`blob ${Buffer.byteLength(content)}\0`).update(content).digest("hex"));
+    expect(blobs[1]).not.toBe(blobs[2]);
+    return { patches, blobs };
+  } finally {
+    paths.forEach((path) => unlinkSync(path));
+    rmdirSync(directory);
+  }
+}
+
+function addMiddleUpdate(f: ReturnType<typeof fixture>) {
+  const middle = "6".repeat(40);
+  f.pr.commits = 3;
+  f.routes.set("/pulls/7/commits?per_page=100&page=1", [{ sha: certified }, { sha: middle }, { sha: head }]);
+  f.merge.parents[0].sha = middle;
+  f.routes.set(`/git/commits/${middle}`, { sha: middle, tree: { sha: middle }, parents: [{ sha: certified }, { sha: main }] });
+  const tree = { ...structuredClone(f.trees.get(head)!), sha: middle };
+  f.trees.set(middle, tree);
+  f.routes.set(`/git/trees/${middle}?recursive=1`, tree);
+  f.routes.set(`/compare/${main}...${middle}?per_page=100&page=1`, comparison(main, middle));
+  return middle;
+}
+
 describe("certificate carry across update-from-main (SCRUM-874)", () => {
+  test("refuses a merge that relocates the reviewed edit", async () => {
+    const f = fixture();
+    const { patches, blobs } = relocatedEdit();
+    f.before.files[0].patch = patches[0];
+    f.after.files[0].patch = patches[1];
+    for (const [sha, blob] of [[oldBase, blobs[0]], [main, blobs[0]], [certified, blobs[1]], [head, blobs[2]]]) {
+      f.trees.get(sha)!.tree[0].sha = blob;
+    }
+    expect((await f.run()).exitCode).toBe(1);
+  });
+
+  test.each([source, "other.txt"])("refuses an impure intermediate update merge changing %s even when H restores it", async (path) => {
+    const f = fixture();
+    const middle = addMiddleUpdate(f);
+    f.trees.get(middle)!.tree.find((entry) => entry.path === path)!.sha = foreign;
+    expect((await f.run()).exitCode).toBe(1);
+  });
+
+  test.each(["reviewed", "base"])("refuses different %s blobs despite identical patch lines and modes", async (side) => {
+    const f = fixture();
+    f.trees.get(side === "reviewed" ? head : main)!.tree[0].sha = foreign;
+    const result = await f.run();
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).toContain(`PR ${side} blob changed`);
+  });
+
+  test("a rename carries only while the blob at its old base path is unchanged", async () => {
+    const f = fixture();
+    const renamed = { ...file("renamed.mjs"), status: "renamed", previous_filename: source };
+    f.before.files[0] = renamed;
+    f.after.files[0] = renamed;
+    f.routes.set("/pulls/7/files?per_page=100&page=1", [renamed, file(testFile)]);
+    for (const sha of [certified, head]) f.trees.get(sha)!.tree[0].path = renamed.filename;
+    expect((await f.run()).exitCode).toBe(0);
+    f.trees.get(main)!.tree[0].sha = foreign;
+    const result = await f.run();
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).toContain(`PR base blob changed for ${source}`);
+  });
+
+  test.each(["added", "removed"])("a clean %s file carries with matching absence and blob evidence", async (status) => {
+    const f = fixture();
+    const changed = status === "added"
+      ? { ...file(source), status, additions: 1, deletions: 0, changes: 1, patch: "@@ -0,0 +1 @@\n+after" }
+      : { ...file(source), status, additions: 0, deletions: 1, changes: 1, patch: "@@ -1 +0,0 @@\n-before" };
+    f.before.files[0] = changed;
+    f.after.files[0] = changed;
+    for (const sha of status === "added" ? [oldBase, main] : [certified, head]) f.trees.get(sha)!.tree.shift();
+    expect((await f.run()).exitCode).toBe(0);
+  });
+
+  test.each(["missing", "truncated"])("refuses %s intermediate tree evidence", async (condition) => {
+    const f = fixture();
+    const middle = addMiddleUpdate(f);
+    if (condition === "missing") f.errors.set(`/git/trees/${middle}?recursive=1`, 403);
+    else f.trees.get(middle)!.truncated = true;
+    const result = await f.run();
+    expect(result.exitCode).toBe(1);
+    expect(result.lines.join("\n")).not.toContain("carried from");
+  });
+
   test("a clean merge carries the original report and states the proof without certifying H", async () => {
     const f = fixture();
     f.after.files[0].patch = "@@ -80 +80 @@\n-before\n+after";
@@ -151,11 +257,7 @@ describe("certificate carry across update-from-main (SCRUM-874)", () => {
 
   test("a second update merge carries across the entire first-parent path", async () => {
     const f = fixture();
-    const middle = "6".repeat(40);
-    f.pr.commits = 3;
-    f.routes.set("/pulls/7/commits?per_page=100&page=1", [{ sha: certified }, { sha: middle }, { sha: head }]);
-    f.merge.parents[0].sha = middle;
-    f.routes.set(`/git/commits/${middle}`, { sha: middle, parents: [{ sha: certified }, { sha: main }] });
+    const middle = addMiddleUpdate(f);
     const result = await f.run();
     expect(result.exitCode).toBe(0);
     expect(result.lines.join("\n")).toContain(`merge commits ${middle}, ${head}`);
