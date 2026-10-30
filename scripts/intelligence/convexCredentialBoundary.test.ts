@@ -237,7 +237,18 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // new: 121298 bytes (LF), pin below.
     "4532ddcf64ae4f37e24dd73dca6efe6e3190bbb843b85ba96acba1a35f108181",
   "contract-skew.yml":
-    "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
+    // SCRUM-866: reviewed native-render step executes checked-out main before
+    // the secret-bearing comparison, without a credential env. Triggers,
+    // environment policy, checkout and credential-through-env remain unchanged.
+    // Both comparison branches pass --current only when the complete render
+    // exists; failed/timed-out output is deleted. Artifact also retains it.
+    // Advisory Standards review inspected this boundary; no seat is claimed.
+    // SCRUM-866 Sonar remediation removes only --experimental-vm-modules
+    // from the credential-free render step's NODE_OPTIONS. Each runtime world
+    // now imports emitted ESM in a child process with an empty environment and
+    // a fixed 256 MiB heap. The parent retains its 6144 MiB cap. No trigger,
+    // grant, checkout, credential step, timeout or output path changed.
+    "3b6e9a8bf7312b16213dd855a792b33791be877c7dc9121b95c3ff42b26f2b03",
   "deal-scenarios-e2e.yml":
     // SCRUM-616/617: the reviewed change opts into the cross-screen oracle.
     // SCRUM-760 G8: job timeout 120 -> 180 minutes for the larger deals/sales
@@ -258,8 +269,12 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":
     "61789e5b96d2a5e5e9b41be44fcf2afccf9bd372865e3c39a1154cb3788edde2",
+  // SCRUM-883: PR-only trusted Git path gate before provisioning, neutral
+  // NOT_APPLICABLE check and gate evidence. Credential commands, provenance,
+  // staged deployment and exact-SHA release verdict remain unchanged.
+  // Round 3 adds only TESTED_SHA (the provenance merge) to the path-gate step env, with no secret.
   "trusted-accounting-rehearsal.yml":
-    "da8ee3225cb7a94f92593a2f18d336eb5284446fe06cd1c81846bbec780d72d8",
+    "5fa1ebee0748d69075852feb2c10b15490eef5bed1e9d7925d07d86412b7ce84",
   // SCRUM-860: reviewed addition of the role frame census before preview
   // provisioning, with no step secrets. All credential steps, preview targeting,
   // cleanup and canonical-command/tamper controls remain pinned unchanged.
