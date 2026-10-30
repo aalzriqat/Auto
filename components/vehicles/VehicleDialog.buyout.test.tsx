@@ -5,6 +5,9 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { Id } from "@/convex/_generated/dataModel";
+import type { SupplierSelectProps } from "@/components/suppliers/SupplierSelect";
+import type { VehicleFormValues } from "./vehicle.schema";
 
 const mutationSpies = vi.hoisted(() => new Map<string, ReturnType<typeof import("vitest").vi.fn>>());
 
@@ -47,8 +50,22 @@ vi.mock("@/components/custom-fields/CustomFieldsSection", () => ({
   CustomFieldsSection: () => null,
   useSaveCustomFieldValues: () => async () => undefined,
 }));
+vi.mock("@/components/suppliers/SupplierSelect", async () => {
+  const { useFormContext } = await import("react-hook-form");
+  return {
+    SupplierSelect: ({ dataTestId, onChange }: Pick<SupplierSelectProps, "dataTestId" | "onChange">) => {
+      const form = useFormContext<VehicleFormValues>();
+      const field = dataTestId === "vehicle-sourced-supplier" ? "sourcedSupplierId" : "purchaseSupplierId";
+      return <>
+        <button type="button" onClick={() => onChange({ id: "sup_picked" as Id<"suppliers">, displayName: "Picked supplier" })}>Pick supplier</button>
+        <button type="button" onClick={() => form.setValue(field, "unparsed-supplier")}>Tamper supplier ID</button>
+      </>;
+    },
+  };
+});
 
 import { VehicleDialog } from "./VehicleDialog";
+import { toast } from "@/components/ui/sonner";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 
 vi.stubGlobal(
@@ -98,10 +115,47 @@ const save = () => fireEvent.click(screen.getByRole("button", { name: "SaveChang
 
 beforeEach(() => {
   mutationSpies.clear();
+  vi.mocked(toast.error).mockClear();
 });
 afterEach(cleanup);
 
 describe("buying out a saved consignment car", () => {
+  test("an unparsed form supplier ID never reaches the mutation", async () => {
+    renderEdit();
+    fireEvent.click(screen.getByRole("button", { name: "Tamper supplier ID" }));
+    save();
+    await waitFor(() => expect(vi.mocked(toast.error).mock.calls.length + updateSpy().mock.calls.length).toBeGreaterThan(0));
+    expect(updateSpy()).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith("SourceDealerRequired");
+  });
+
+  test("a newly picked supplier replaces the stored ID without sending its name", async () => {
+    renderEdit();
+    fireEvent.click(screen.getByRole("button", { name: "Pick supplier" }));
+    save();
+    await waitFor(() => expect(updateSpy()).toHaveBeenCalledTimes(1));
+    expect(updateSpy().mock.calls[0][0]).toMatchObject({ sourcedSupplierId: "sup_picked" });
+    expect(updateSpy().mock.calls[0][0]).not.toHaveProperty("sourcedFromName");
+  });
+
+  test.each([false, true])("ON_ACCOUNT uses the picked creditor and refuses an unparsed ID (tampered: %s)", async (tampered) => {
+    renderEdit();
+    fireEvent.click(owned());
+    fireEvent.click(screen.getByTestId("item-ON_ACCOUNT"));
+    fireEvent.change(priceInput(), { target: { value: "8200" } });
+    fireEvent.click(screen.getByRole("button", { name: "Pick supplier" }));
+    if (tampered) fireEvent.click(screen.getByRole("button", { name: "Tamper supplier ID" }));
+    save();
+    await waitFor(() => expect(vi.mocked(toast.error).mock.calls.length + updateSpy().mock.calls.length).toBeGreaterThan(0));
+    if (tampered) {
+      expect(updateSpy()).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalledWith("PurchaseSupplierNameRequired");
+    } else {
+      expect(updateSpy().mock.calls[0][0]).toMatchObject({ purchaseSupplierId: "sup_picked", purchasePrice: 8200 });
+      expect(updateSpy().mock.calls[0][0]).not.toHaveProperty("purchaseSupplierName");
+    }
+  });
+
   test("Owned + a method, without typing a price, is refused client-side and does not call vehicles.update", async () => {
     renderEdit();
     fireEvent.click(owned());
