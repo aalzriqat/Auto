@@ -1,0 +1,56 @@
+{
+  "id": "supplier-receivable-fresh-opening-after-reset",
+  "fingerprint": "5798517e78561f57a281b43fb4751cf2f7a1abff378407b2e4acb15ab041af85",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-both-seat-remediation",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "openingAccount": 1999,
+        "openingMinor": 100000,
+        "resetToCompletion": true,
+        "freshOpeningMinor": 100000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "reconciliation.glBalanceMinor",
+      "value": 100000
+    },
+    {
+      "observable": "reconciliation.subledgerBalanceMinor",
+      "value": 100000
+    },
+    {
+      "observable": "reconciliation.discrepancyMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "fresh opening after financial reset ignores the retired header"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

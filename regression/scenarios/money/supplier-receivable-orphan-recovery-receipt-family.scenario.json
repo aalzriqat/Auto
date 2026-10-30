@@ -1,0 +1,49 @@
+{
+  "id": "supplier-receivable-orphan-recovery-receipt-family",
+  "fingerprint": "2cc79f4f9529f20cc529c16bdd6504df126dbf7af9a78199a910d34d2118a1ed",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-both-seat-remediation",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "openingAccount": 1999,
+        "openingMinor": 100000,
+        "orphanSourceType": "supplierCostRecoveryReceipts",
+        "deleteHeader": true,
+        "deleteRecovery": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "OPENING_SOURCE_UNAVAILABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "orphan supplierCostRecoveryReceipts family GL on an unclassified custom account refuses"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

@@ -2,6 +2,7 @@ import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { openingPolicyForAccount } from "./utils/openingAccountPolicy";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
 /**
@@ -1283,6 +1284,7 @@ export const SUPPLIER_RECEIVABLES_RECON_LIMITS = { rows: 4000, inFlight: 400, gl
 // reader shares parent drafts and journal lines; the additional journal-provenance scan is bounded.
 const OPENING_ROW_DOCUMENT_ALLOWANCE = 700;
 const OPENING_ROW_RANGE_ALLOWANCE = 24;
+const SUPPLIER_GL_DISCOVERY_LIMITS = { documents: 1000, ranges: 100 } as const;
 export const CONVEX_DOCUMENTS_SCANNED_LIMIT = 32_000;
 export const CONVEX_INDEX_RANGES_LIMIT = 4_096;
 
@@ -1297,11 +1299,15 @@ export function supplierReceivablesReconWorstCase(limits: {
   const opening = limits.openingRecoveries * OPENING_ROW_DOCUMENT_ALLOWANCE;
   const openingAccounts = 1 + limits.openingRecoveries;
   const glDocuments = limits.gl + 1 + openingAccounts;
-  const documents = outbox + originals + drafts + rows + 1 + referenceDrafts + opening + glDocuments;
+  // Source identity adds a 101-journal probe to the existing 101-header inventory.
+  // All further discovery queries/gets share hard document and range budgets.
+  const documents = outbox + originals + drafts + rows + 1 + referenceDrafts + opening + glDocuments +
+    101 + SUPPLIER_GL_DISCOVERY_LIMITS.documents + 1;
   const ranges =
     2 /* outbox */ + originals + 3 /* drafts */ + 4 + 3 /* statuses of both subledgers */ + 1 /* control account */ +
     1 /* opening references */ + limits.openingRecoveries * OPENING_ROW_RANGE_ALLOWANCE +
-    2 /* periods, future-entry probe */ + 3 * openingAccounts /* snapshots, later-line probe, lines */ + limits.gl /* parent entries */;
+    2 /* periods, future-entry probe */ + 3 * openingAccounts /* snapshots, later-line probe, lines */ + limits.gl /* parent entries */ +
+    1 /* source identity journals */ + SUPPLIER_GL_DISCOVERY_LIMITS.ranges;
   return { documents, ranges };
 }
 
@@ -1332,6 +1338,121 @@ const SUPPLIER_RECEIVABLE_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
 export function isUnlinkedSupplierName(name: string | undefined): boolean {
   const normalized = (name ?? "").trim().toLowerCase();
   return normalized === "" || normalized === "unknown supplier";
+}
+
+class SupplierGlDiscoveryRefusal extends Error {
+  constructor(readonly reason: "OVER_LIMIT" | "OPENING_SOURCE_UNAVAILABLE") {
+    super(reason);
+  }
+}
+
+/** Discover the comparison from durable GL sources, never from surviving subledger/allocation rows.
+ * Source-family history is bounded even when it has no remaining domain row. Balances still come
+ * from the snapshot-aware GL reader; these lines establish account identity, not a second balance. */
+async function discoverSupplierReceivableGlAccounts(
+  ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number, maxAccounts: number,
+) {
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  const refuse = () => { throw new SupplierGlDiscoveryRefusal("OPENING_SOURCE_UNAVAILABLE"); };
+  if (source.status === "UNAVAILABLE") refuse();
+  let documents = 0;
+  let ranges = 0;
+  const chargeRange = () => {
+    if (++ranges > SUPPLIER_GL_DISCOVERY_LIMITS.ranges) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  };
+  const chargeDocuments = (count: number) => {
+    documents += count;
+    if (documents > SUPPLIER_GL_DISCOVERY_LIMITS.documents) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  };
+  const readRows = async <T>(query: { take: (count: number) => Promise<T[]> }): Promise<T[]> => {
+    chargeRange();
+    const rows = await query.take(SUPPLIER_GL_DISCOVERY_LIMITS.documents - documents + 1);
+    chargeDocuments(rows.length);
+    return rows;
+  };
+  const accounts = new Map<Id<"chartOfAccounts">, Doc<"chartOfAccounts"> | null>();
+  const readAccount = async (id: Id<"chartOfAccounts">) => {
+    if (!accounts.has(id)) {
+      chargeRange();
+      const account = await ctx.db.get(id);
+      chargeDocuments(1);
+      accounts.set(id, account);
+    }
+    return accounts.get(id) ?? null;
+  };
+  const controlAccounts = new Set<Id<"chartOfAccounts">>();
+  const subledgerAccounts = new Set<Id<"chartOfAccounts">>();
+  const addControl = (id: Id<"chartOfAccounts">, effectiveDate: number) => {
+    controlAccounts.add(id);
+    if (controlAccounts.size > maxAccounts) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+    if (effectiveDate <= cutoff) subledgerAccounts.add(id);
+  };
+  const canonical = await ctx.db.query("chartOfAccounts")
+    .withIndex("by_org_systemKey", q => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS)).unique();
+  if (canonical) addControl(canonical._id, Number.NEGATIVE_INFINITY);
+
+  // Reversed or malformed cutover journals cannot disappear behind ABSENT, even if their rows were lost.
+  const cutovers = await readRows(ctx.db.query("journalEntries")
+    .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", "cutover")));
+  if (cutovers.some(journal => (journal.status === "POSTED" || journal.status === "REVERSED") &&
+    journal._id !== source.journal?._id)) refuse();
+
+  // Reset retains headers but deletes chart and journal authority. Prove retirement from those
+  // identities; ABSENT alone would also accept a current journal that was accidentally deleted.
+  for (const header of source.headers) {
+    if (header._id === source.parent?._id) continue;
+    if (header.journalEntryId) {
+      chargeRange();
+      const journal = await ctx.db.get(header.journalEntryId);
+      chargeDocuments(1);
+      if (journal) refuse();
+    }
+    const references = new Set([...header.lines.map(line => line.accountId),
+      ...(header.allocations ?? []).map(allocation => allocation.accountId)]);
+    // Reference-only legacy headers still participate in the recovery-id contradiction check
+    // below. They declare no journal/account authority to retire. A formerly linked header with
+    // erased account evidence cannot establish retirement.
+    if (references.size === 0 && header.journalEntryId) refuse();
+    for (const id of references) if (await readAccount(id)) refuse();
+  }
+
+  if (source.status === "AVAILABLE") {
+    const lines = await readRows(ctx.db.query("journalLines")
+      .withIndex("by_journal_entry", q => q.eq("journalEntryId", source.journal._id)));
+    if (lines.length === 0) refuse();
+    for (const line of lines) {
+      const account = await readAccount(line.accountId);
+      if (line.orgId !== orgId || !account || account.orgId !== orgId) refuse();
+      // This classifies posted identities, not permission to post: recognize custom partner
+      // equity as outside A/R even if its allocation metadata is lost. Supplier controls still
+      // come from the actual asset-account lines, independently of all allocations.
+      const policy = account ? openingPolicyForAccount(account, true) : undefined;
+      if (!policy || policy === "UNSUPPORTED") refuse();
+      if (account && policy === "SUPPLIER_RECOVERABLE") {
+        addControl(account._id, source.journal.accountingDate);
+      }
+    }
+  }
+
+  // Native recognition uses expenses and canonical 1240. These two recovery source prefixes
+  // also carry receipt/reversal history; unknown custom legs cannot be silently omitted.
+  for (const sourceType of ["supplierCostRecoveries", "supplierCostRecoveryReceipts"]) {
+    const journals = await readRows(ctx.db.query("journalEntries")
+      .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", sourceType)));
+    for (const journal of journals) {
+      if (journal.status !== "POSTED" && journal.status !== "REVERSED") continue;
+      const lines = await readRows(ctx.db.query("journalLines")
+        .withIndex("by_journal_entry", q => q.eq("journalEntryId", journal._id)));
+      if (lines.length === 0) refuse();
+      for (const line of lines) {
+        const account = await readAccount(line.accountId);
+        if (line.orgId !== orgId || !account || account.orgId !== orgId) refuse();
+        if (!controlAccounts.has(line.accountId) && account?.systemKey !== SYSTEM_KEYS.CASH_ON_HAND &&
+          account?.systemKey !== SYSTEM_KEYS.BANK_ACCOUNT) refuse();
+      }
+    }
+  }
+  return { controlAccounts, subledgerAccounts, source };
 }
 
 export async function computeSupplierReceivablesReconciliation(
@@ -1414,41 +1535,30 @@ export async function computeSupplierReceivablesReconciliation(
   const unlinked = new Map<string, number>();
   const add = (map: Map<string, number>, currency: string, minor: number) =>
     map.set(currency, (map.get(currency) ?? 0) + minor);
-  const controlAccounts = new Set<Id<"chartOfAccounts">>();
   // The accounts whose later-dated postings would make the comparison mixed: 1240 and declared opening
   // accounts in force by the cutoff, including those whose recovery row was lost. An opening dated after the cutoff is on
   // neither side, so its own account may hold lines dated after the cutoff without any mismatch.
-  const subledgerAccounts = new Set<Id<"chartOfAccounts">>();
-  const canonical = await ctx.db
-    .query("chartOfAccounts")
-    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS))
-    .unique();
-  if (canonical) {
-    controlAccounts.add(canonical._id);
-    subledgerAccounts.add(canonical._id);
-  }
   const cutoff = toDate ?? now;
-
-  // Discover the GL account set from POSTED opening batches independently of surviving recovery
-  // rows. Verify each declaration against its journal even when its subledger result was lost.
-  const openingDrafts = await ctx.db.query("openingBalanceDrafts")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "POSTED"))
-    .take(101);
-  if (openingDrafts.length > 100) return unavailable("OPENING_SOURCE_UNAVAILABLE");
-  const declarations = openingDrafts.flatMap((draft) =>
-    (draft.allocations ?? []).filter((allocation) => allocation.kind === "SUPPLIER_RECOVERABLE")
-      .map((allocation) => ({ draftId: draft._id, rowKey: allocation.rowKey })),
-  );
+  let discovered;
+  try {
+    discovered = await discoverSupplierReceivableGlAccounts(ctx, orgId, cutoff, 1 + limits.openingRecoveries);
+  } catch (error) {
+    if (error instanceof SupplierGlDiscoveryRefusal) return unavailable(error.reason);
+    throw error;
+  }
+  const { controlAccounts, subledgerAccounts, source } = discovered;
+  const declarations = (source.parent?.allocations ?? [])
+    .filter(allocation => allocation.kind === "SUPPLIER_RECOVERABLE")
+    .map(allocation => ({ draftId: source.parent!._id, rowKey: allocation.rowKey }));
   if (declarations.length > limits.openingRecoveries) return unavailable("OVER_LIMIT");
   const openingReader = createOpeningSettlementReader(ctx, orgId);
-  const openingReferences = new Set(openingDrafts.flatMap((draft) =>
+  const openingReferences = new Set(source.headers.flatMap((draft) =>
     (draft.allocationResults ?? []).flatMap((result) => "recoveryId" in result ? [result.recoveryId] : []),
   ));
   for (const ref of declarations) {
     try {
       const basis = await requireOpeningSettlementBasis(ctx, orgId, ref, "SUPPLIER_RECOVERABLE", openingReader);
-      controlAccounts.add(basis.accountId);
-      if (basis.asOfDate <= cutoff) subledgerAccounts.add(basis.accountId);
+      if (!controlAccounts.has(basis.accountId)) return unavailable("OPENING_SOURCE_UNAVAILABLE");
     } catch {
       return unavailable("OPENING_SOURCE_UNAVAILABLE");
     }
@@ -1478,7 +1588,7 @@ export async function computeSupplierReceivablesReconciliation(
         return unavailable("OPENING_SOURCE_UNAVAILABLE");
       }
       if (!basis) return unavailable("OPENING_SOURCE_UNAVAILABLE");
-      controlAccounts.add(basis.accountId);
+      if (!controlAccounts.has(basis.accountId)) return unavailable("OPENING_SOURCE_UNAVAILABLE");
       if (basis.asOfDate > cutoff) continue;
       subledgerAccounts.add(basis.accountId);
     }

@@ -32,6 +32,7 @@ import {
 } from "./accountingReports";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
+import { resetOrgToCompletion } from "../test-utils/orgResetFixtures";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -815,7 +816,7 @@ describe("SCRUM-858 F3 - every balance-carrying status is in the subledger", () 
 describe("SCRUM-858 F3 - opening cost recoveries", () => {
   const OPENING_MINOR = 100_000; // 100 JOD
 
-  async function openingRecovery(s: Seed, asOfDate: number) {
+  async function openingRecovery(s: Seed, asOfDate: number, customCapital = false) {
     const owner = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "OWNER")!;
     await s.t.run(async (ctx) => {
       const membership = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).first();
@@ -826,20 +827,29 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
       currencyRestriction: "JOD", isControlAccount: true, allowManualPosting: false,
     });
     const retained = (await s.asUser.query(api.chartOfAccounts.list, { orgId: s.orgId })).find((a) => a.systemKey === "RETAINED_EARNINGS")!;
+    const capitalAccountId = customCapital ? await s.asUser.mutation(api.chartOfAccounts.create, {
+      orgId: s.orgId, code: "3999", name: "Custom partner capital", type: "EQUITY", normalBalance: "CREDIT",
+      currencyRestriction: "JOD", isControlAccount: true, allowManualPosting: false,
+    }) : retained._id;
+    const partnerId = customCapital ? await s.t.run(ctx => ctx.db.insert("partnerEquity", {
+      orgId: s.orgId, partnerName: "Opening partner",
+    })) : null;
     await s.asUser.mutation(api.accountingCutover.postOpeningBalanceDirect, {
       orgId: s.orgId, expectedCurrency: "JOD", asOfDate,
       lines: [
         { accountId, debitMinor: OPENING_MINOR, creditMinor: 0 },
-        { accountId: retained._id, debitMinor: 0, creditMinor: OPENING_MINOR },
+        { accountId: capitalAccountId, debitMinor: 0, creditMinor: OPENING_MINOR },
       ],
       allocations: [
         { kind: "SUPPLIER_RECOVERABLE", counterpartyName: "Synthetic supplier", title: "Synthetic opening claim", purpose: "CLAIM",
           rowKey: "open-1", accountId, amountMinor: OPENING_MINOR },
+        ...(partnerId ? [{ kind: "PARTNER_CAPITAL" as const, partnerId, accountId: capitalAccountId, rowKey: "capital-1", amountMinor: OPENING_MINOR }] : []),
       ],
     });
     const row = (await s.t.run((ctx) =>
       ctx.db.query("supplierCostRecoveries").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).filter((q) => q.eq(q.field("origin"), "OPENING")).unique()
     ))!;
+    if (row.origin !== "OPENING") throw new Error("Opening fixture did not create an opening recovery");
     return { accountId, row };
   }
   const at = (s: Seed, toDate: number) =>
@@ -858,6 +868,15 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
     expect(r.glBalanceLabel.ar).toBe("حساب الأستاذ العام 1240 وحسابات الرقابة المعلنة لمبالغ الموردين القابلة للاسترداد الافتتاحية");
   });
 
+  test("a valid custom partner-capital counterpart does not block supplier reconciliation", async () => {
+    const s = await seed("customcapital");
+    await openingRecovery(s, Date.now() - 1_000, true);
+    expect(await recon(s)).toMatchObject({
+      status: "AVAILABLE", complete: true, isReconciled: true,
+      byCurrency: { JOD: { glBalanceMinor: 100_000, subledgerBalanceMinor: 100_000, discrepancyMinor: 0 } },
+    });
+  });
+
   test("a lost opening recovery leaves a difference on its independently discovered GL account", async () => {
     const s = await seed("lostopening");
     const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
@@ -868,6 +887,125 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
     expect(r.status).toBe("AVAILABLE");
     expect(r.byCurrency.JOD).toMatchObject({ glBalanceMinor: 100_000, subledgerBalanceMinor: 0, discrepancyMinor: 100_000 });
     expect(r.isReconciled).toBe(false);
+  });
+
+  test("lost opening allocations and recovery cannot hide retained custom-account GL", async () => {
+    const s = await seed("lostallocations");
+    const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(row.openingBalanceDraftId!, { allocations: [], allocationResults: [] });
+      await ctx.db.delete(row._id);
+    });
+    const gl = await s.t.run((ctx) => getControlAccountBalancesAsOf(ctx, s.orgId, [accountId], Date.now(), 4000));
+    expect(gl).toMatchObject({ status: "OK", balances: [{ debitMinor: 100_000, creditMinor: 0 }] });
+    const r = await recon(s);
+    expect(r.isReconciled).toBe(false);
+    if (r.status === "AVAILABLE") {
+      expect(r.byCurrency.JOD).toMatchObject({ glBalanceMinor: 100_000, subledgerBalanceMinor: 0, discrepancyMinor: 100_000 });
+    } else {
+      expect(r).toMatchObject({ complete: false, unavailableReason: "OPENING_SOURCE_UNAVAILABLE", currencies: [] });
+    }
+  });
+
+  test("lost opening header and recovery cannot hide retained custom-account GL", async () => {
+    const s = await seed("lostheader");
+    const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      await ctx.db.delete(row.openingBalanceDraftId!);
+      await ctx.db.delete(row._id);
+    });
+    const gl = await s.t.run((ctx) => getControlAccountBalancesAsOf(ctx, s.orgId, [accountId], Date.now(), 4000));
+    expect(gl).toMatchObject({ status: "OK", balances: [{ debitMinor: 100_000, creditMinor: 0 }] });
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", complete: false, isReconciled: false, currencies: [] });
+  });
+
+  async function orphanRecoveryFamily(sourceType: "supplierCostRecoveries" | "supplierCostRecoveryReceipts") {
+      const s = await seed(`orphan${sourceType}`);
+      const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
+      await s.t.run(async (ctx) => {
+        const header = (await ctx.db.get(row.openingBalanceDraftId!))!;
+        await ctx.db.patch(header.journalEntryId!, { sourceType, sourceId: "lost-recovery", category: "SYSTEM" });
+        await ctx.db.delete(header._id);
+        await ctx.db.delete(row._id);
+      });
+      const gl = await s.t.run((ctx) => getControlAccountBalancesAsOf(ctx, s.orgId, [accountId], Date.now(), 4000));
+      expect(gl).toMatchObject({ status: "OK", balances: [{ debitMinor: 100_000, creditMinor: 0 }] });
+      return recon(s);
+  }
+
+  // Literal registrations bind each source-family scenario in the permanent library.
+  test("orphan supplierCostRecoveries family GL on an unclassified custom account refuses", async () => {
+    expect(await orphanRecoveryFamily("supplierCostRecoveries")).toMatchObject({
+      status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", complete: false, isReconciled: false, currencies: [],
+    });
+  });
+
+  test("orphan supplierCostRecoveryReceipts family GL on an unclassified custom account refuses", async () => {
+    expect(await orphanRecoveryFamily("supplierCostRecoveryReceipts")).toMatchObject({
+      status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", complete: false, isReconciled: false, currencies: [],
+    });
+  });
+
+  async function resetOpening(s: Seed) {
+    const { row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.finishAllScheduledFunctions(vi.runAllTimers);
+    await s.t.run((ctx) => ctx.db.patch(s.orgId, { suspended: true }));
+    await resetOrgToCompletion(s.t, s.orgId, 50);
+    await s.t.run((ctx) => ctx.db.patch(s.orgId, { suspended: false }));
+    expect(await s.t.run((ctx) => ctx.db.get(row.openingBalanceDraftId!))).toMatchObject({ status: "POSTED" });
+    expect(await s.t.run((ctx) => ctx.db.query("journalEntries").withIndex("by_org", q => q.eq("orgId", s.orgId)).collect())).toEqual([]);
+    return row;
+  }
+
+  test("completed financial reset retires retained opening headers", async () => {
+    const s = await seed("resetopening");
+    await resetOpening(s);
+    expect(await recon(s)).toMatchObject({ status: "AVAILABLE", complete: true, isReconciled: true, currencies: [] });
+  });
+
+  test("fresh opening after financial reset ignores the retired header", async () => {
+    const s = await seed("freshopening");
+    await resetOpening(s);
+    await s.asUser.mutation(api.chartOfAccounts.initialize, { orgId: s.orgId });
+    await openingRecovery(s, Date.now() - 500);
+    expect(await recon(s)).toMatchObject({
+      status: "AVAILABLE", complete: true, isReconciled: true,
+      byCurrency: { JOD: { glBalanceMinor: 100_000, subledgerBalanceMinor: 100_000, discrepancyMinor: 0 } },
+    });
+  });
+
+  test("a missing current opening journal is not treated as completed reset history", async () => {
+    const s = await seed("missingjournal");
+    const { row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      const header = (await ctx.db.get(row.openingBalanceDraftId!))!;
+      await ctx.db.delete(header.journalEntryId!);
+      await ctx.db.delete(row._id);
+    });
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", complete: false, isReconciled: false, currencies: [] });
+  });
+
+  test("a reversed opening with a lost recovery refuses instead of disappearing", async () => {
+    const s = await seed("reversedopening");
+    const { row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      const header = (await ctx.db.get(row.openingBalanceDraftId!))!;
+      await ctx.db.patch(header.journalEntryId!, { status: "REVERSED" });
+      await ctx.db.delete(row._id);
+    });
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", complete: false, isReconciled: false, currencies: [] });
+  });
+
+  test("duplicate live opening journals refuse even with no surviving recovery", async () => {
+    const s = await seed("duplicateopening");
+    const { row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      const header = (await ctx.db.get(row.openingBalanceDraftId!))!;
+      const { _id: _id, _creationTime: _creationTime, ...journal } = (await ctx.db.get(header.journalEntryId!))!;
+      await ctx.db.insert("journalEntries", { ...journal, journalNumber: "DUPLICATE" });
+      await ctx.db.delete(row._id);
+    });
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", complete: false, isReconciled: false, currencies: [] });
   });
 
   async function withPendingOpeningControlDraft(table: "manualJournalDrafts" | "openingBalanceDrafts") {
