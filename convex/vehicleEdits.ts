@@ -35,6 +35,15 @@ import {
   requestedVehicleSourceTypeChange,
   throwVehicleSourceShape,
 } from "./utils/vehicleSourceShape";
+import type { SupplierSnapshot } from "./utils/supplierRegistry";
+import {
+  assertSupplierLinkChangeAllowed,
+  refuseUnusedCreditorId,
+  resolveCreditorForPosting,
+  resolveIntakeSuppliers,
+  resolveUpdateSourcedSupplier,
+  withServerSupplierNames,
+} from "./utils/vehicleSupplierIdentity";
 
 /**
  * SCRUM-717 (D-45): the ownership decision an approver makes when approving a
@@ -50,6 +59,9 @@ const ownershipDecisionValidator = v.object({
   purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
   bankAccountId: v.optional(v.id("bankAccounts")),
   purchaseSupplierName: v.optional(v.string()),
+  /** SCRUM-868 P2: the supplier master ids; a name without its id is refused. */
+  sourcedSupplierId: v.optional(v.id("suppliers")),
+  purchaseSupplierId: v.optional(v.id("suppliers")),
 });
 
 function stripOwnershipFields(payload: VehicleEditPayload): VehicleEditPayload {
@@ -73,11 +85,15 @@ type VehicleEditPayload = {
   bankAccountId?: Id<"bankAccounts">;
   /** SCRUM-717: the creditor of an owned car bought ON_ACCOUNT; never `sourcedFromName`. */
   purchaseSupplierName?: string;
+  /** SCRUM-868 P2: the creditor's supplier master id (the name above is the server snapshot). */
+  purchaseSupplierId?: Id<"suppliers">;
   minimumProfit?: number;
   sellingPrice?: number;
   status?: string;
   sourceType?: "STOCK" | "SOURCED";
   sourcedFromName?: string;
+  /** SCRUM-868 P2: the consignment supplier's master id (the name above is the server snapshot). */
+  sourcedSupplierId?: Id<"suppliers">;
   sourceCost?: number;
   notes?: string;
   imageIds?: Id<"_storage">[];
@@ -146,11 +162,13 @@ export const requestCreate = mutation({
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
       bankAccountId: v.optional(v.id("bankAccounts")),
       purchaseSupplierName: v.optional(v.string()),
+      purchaseSupplierId: v.optional(v.id("suppliers")),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
       sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
       sourcedFromName: v.optional(v.string()),
+      sourcedSupplierId: v.optional(v.id("suppliers")),
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
@@ -159,7 +177,7 @@ export const requestCreate = mutation({
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const payload = normalizeVehicleEditPayload(args.payload);
+    const submittedPayload = normalizeVehicleEditPayload(args.payload);
     if (
       !isSystemOwnerRole(role) &&
       !role.permissions.includes(PERMISSIONS.CREATE_VEHICLES) &&
@@ -169,6 +187,12 @@ export const requestCreate = mutation({
         `Forbidden: Missing required permissions: ${PERMISSIONS.CREATE_VEHICLES_REQUEST}`
       );
     }
+    // SCRUM-868 P2: the request stores the supplier master ids and the names the SERVER read from the
+    // master, so the manager approves what will be recorded, not text the requester typed.
+    const payload = withServerSupplierNames(
+      submittedPayload,
+      await resolveIntakeSuppliers(ctx, args.orgId, submittedPayload),
+    );
     assertDirectVehicleCreateStatus(payload.status);
     await assertVehicleImagesAllowed(ctx, payload.imageIds);
     assertValidOwnerCount(payload.ownerCount);
@@ -221,11 +245,13 @@ export const requestUpdate = mutation({
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
       bankAccountId: v.optional(v.id("bankAccounts")),
       purchaseSupplierName: v.optional(v.string()),
+      purchaseSupplierId: v.optional(v.id("suppliers")),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
       sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
       sourcedFromName: v.optional(v.string()),
+      sourcedSupplierId: v.optional(v.id("suppliers")),
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
@@ -285,8 +311,15 @@ export const requestUpdate = mutation({
     if (requestedVehicleSourceTypeChange(vehicle, payload)) {
       throwVehicleSourceShape("VEHICLE_OWNERSHIP_CHANGE_NOT_REQUESTABLE");
     }
+    // SCRUM-868 P2: the consignment supplier this request sets, resolved from the master; the link cannot
+    // be swapped once money exists (N11). Both are refused here so they never become an approval request.
+    const sourcedSnapshot = await resolveUpdateSourcedSupplier(ctx, args.orgId, vehicle, payload);
+    await assertSupplierLinkChangeAllowed(ctx, args.orgId, vehicle, sourcedSnapshot);
     // A supplier/cost edit must still leave the stored type coherent.
-    assertVehicleSourceShapeOnUpdate(vehicle, payload);
+    assertVehicleSourceShapeOnUpdate(
+      vehicle,
+      sourcedSnapshot ? { ...payload, sourcedFromName: sourcedSnapshot.name } : payload,
+    );
 
     // Mirrors vehicles.update's acquisition-posting guard: a SOURCED→STOCK
     // flip (or a purchase price set for the first time) requested here must
@@ -301,24 +334,32 @@ export const requestUpdate = mutation({
       const openingBasis = await assertOpeningVehicleBasis(ctx, args.orgId, args.vehicleId);
       if (openingBasis === "POSTED") throw new ConvexError("Opening stock cost and ownership need a separately reviewed correction.");
     }
-    if (
+    const requestPostsAcquisition =
       mayRequestAffectAcquisition &&
       effectiveSourceTypeForRequest !== "SOURCED" &&
       effectivePurchasePriceForRequest != null && effectivePurchasePriceForRequest > 0 &&
-      !(await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId)) &&
-      !payload.purchasePaymentMethod
-    ) {
+      !(await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId));
+    if (requestPostsAcquisition && !payload.purchasePaymentMethod) {
       throw new ConvexError("Payment method is required to post this vehicle's acquisition cost to accounting.");
     }
-    assertOnAccountHasCreditor(payload.purchasePaymentMethod, payload.purchaseSupplierName);
-    if (mayRequestAffectAcquisition && effectiveSourceTypeForRequest !== "SOURCED" &&
-      effectivePurchasePriceForRequest != null && effectivePurchasePriceForRequest > 0 &&
-      !(await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId))) {
+    // SCRUM-868 P2: an on-account creditor is the master row's snapshot; an id sent where no acquisition
+    // would post is refused rather than dropped.
+    let requestCreditor: SupplierSnapshot | undefined;
+    if (requestPostsAcquisition) {
+      requestCreditor = await resolveCreditorForPosting(ctx, args.orgId, payload);
+    } else {
+      refuseUnusedCreditorId(payload);
+    }
+    assertOnAccountHasCreditor(payload.purchasePaymentMethod, requestCreditor?.name ?? payload.purchaseSupplierName);
+    if (requestPostsAcquisition) {
       await validateRequestedAcquisitionBank(ctx, args.orgId, payload);
     }
 
     const filteredPayload: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(payload)) {
+      // A typed supplier name or id is never copied: the link is written below from the snapshot only.
+      // A typed creditor name would otherwise be stored with no id beside it (SCRUM-868 P2).
+      if (key === "sourcedFromName" || key === "sourcedSupplierId" || key === "purchaseSupplierName") continue;
       if (key === "imageIds") {
         const oldImages = JSON.stringify(vehicle.imageIds || []);
         const newImages = JSON.stringify(value || []);
@@ -330,16 +371,15 @@ export const requestUpdate = mutation({
         const normNew = newValue === "" ? undefined : newValue;
         const normOld = oldValue === "" ? undefined : oldValue;
         
-        if (normNew !== normOld) {
-          if (key === "sourcedFromName") {
-            // Same rule as vehicles.update: store the trimmed name, never a blank one.
-            if (typeof newValue === "string" && newValue !== "") filteredPayload[key] = newValue;
-          } else {
-            filteredPayload[key] = value;
-          }
-        }
+        if (normNew !== normOld) filteredPayload[key] = value;
       }
     }
+
+    if (sourcedSnapshot) {
+      filteredPayload.sourcedSupplierId = sourcedSnapshot.supplierId;
+      filteredPayload.sourcedFromName = sourcedSnapshot.name;
+    }
+    if (requestCreditor) filteredPayload.purchaseSupplierName = requestCreditor.name;
 
     if (Object.keys(filteredPayload).length === 0) {
       throw new ConvexError("No changes detected.");
@@ -444,9 +484,24 @@ export const resolve = mutation({
         // is judged by the same intake guard `vehicles.create` applies — a CREATE
         // that names no coherent ownership is refused, never defaulted to STOCK.
         const baseCreatePayload = normalizeVehicleEditPayload(request.payload);
-        const payload: VehicleEditPayload = args.ownership
+        const submittedPayload: VehicleEditPayload = args.ownership
           ? { ...stripOwnershipFields(baseCreatePayload), ...args.ownership }
           : baseCreatePayload;
+        // SCRUM-868 P2: re-resolved AT APPROVAL, in the approver's org. The supplier may have been
+        // deactivated or renamed since the request was written, and a request written before this rule
+        // (or forged through the table) carries a name with no id: that cannot be approved.
+        const resolvedSuppliers = await resolveIntakeSuppliers(ctx, args.orgId, submittedPayload);
+        const payload: VehicleEditPayload = withServerSupplierNames(submittedPayload, resolvedSuppliers);
+        if (args.ownership) {
+          // The approval record states the ownership that was applied, with the server names.
+          const applied: Record<string, unknown> = {};
+          for (const key of VEHICLE_OWNERSHIP_FIELD_KEYS) {
+            if (payload[key] !== undefined) applied[key] = payload[key];
+          }
+          await ctx.db.patch(request._id, {
+            payload: { ...stripOwnershipFields(request.payload as VehicleEditPayload), ...applied },
+          });
+        }
         assertDirectVehicleCreateStatus(payload.status);
         await assertVehicleImagesAllowed(ctx, payload.imageIds);
 
@@ -460,7 +515,9 @@ export const resolve = mutation({
         const {
           purchasePaymentMethod,
           bankAccountId,
-          purchaseSupplierName: createPurchaseSupplierName,
+          purchaseSupplierName: _createPurchaseSupplierName,
+          purchaseSupplierId: _createPurchaseSupplierId,
+          sourcedSupplierId: _createSourcedSupplierId,
           sourcedFromName,
           sourceCost,
           ...vehicleFields
@@ -470,7 +527,9 @@ export const resolve = mutation({
           ...(vehicleFields as any),
           // Mirrors vehicles.create: an owned car never carries consignment fields
           // (a whitespace-only name passes the shape guard, so drop them here).
-          ...(isSourced ? { sourcedFromName, sourceCost } : {}),
+          ...(isSourced
+            ? { sourcedFromName, sourceCost, sourcedSupplierId: resolvedSuppliers.sourced?.supplierId }
+            : {}),
           purchasePrice: effectivePurchasePrice,
           orgId: args.orgId,
           addedBy: request.requestedBy,
@@ -485,7 +544,7 @@ export const resolve = mutation({
           purchasePrice: effectivePurchasePrice,
           purchasePaymentMethod,
           bankAccountId,
-          supplierName: createPurchaseSupplierName,
+          creditor: resolvedSuppliers.creditor,
           vehicleLabel: `${payload.year ?? ""} ${payload.make ?? ""} ${payload.model ?? ""}`.trim(),
           vin: payload.vin ?? vehicleId.toString(),
           actorId: user._id,
@@ -496,7 +555,14 @@ export const resolve = mutation({
           throw new ConvexError("Vehicle not found.");
         }
 
-        const payload = normalizeVehicleEditPayload(request.payload);
+        const requestedPayload = normalizeVehicleEditPayload(request.payload);
+        // SCRUM-868 P2: the consignment link is re-resolved at approval, and re-checked against money that
+        // can have appeared since the request was written (N11). A name with no id cannot be approved.
+        const resolvedSourced = await resolveUpdateSourcedSupplier(ctx, args.orgId, previousVehicle, requestedPayload);
+        await assertSupplierLinkChangeAllowed(ctx, args.orgId, previousVehicle, resolvedSourced);
+        const payload: NormalizedVehicleEditPayload = resolvedSourced
+          ? { ...requestedPayload, sourcedFromName: resolvedSourced.name, sourcedSupplierId: resolvedSourced.supplierId }
+          : requestedPayload;
         assertDirectVehicleStatusTransition(previousVehicle.status, payload.status);
         await assertNoPendingBeforeAvailable(ctx, {
           orgId: args.orgId,
@@ -510,8 +576,11 @@ export const resolve = mutation({
         // not a second door around the guard. Only a payload that CHANGES a supplier term counts.
         if (
           (payload.sourceCost !== undefined && payload.sourceCost !== previousVehicle.sourceCost) ||
-          (payload.sourcedFromName !== undefined &&
-            payload.sourcedFromName.trim() !== (previousVehicle.sourcedFromName ?? "").trim()) ||
+          // The link moving is the supplier-term change; a master rename seen through an unchanged id is not.
+          (resolvedSourced
+            ? resolvedSourced.supplierId !== previousVehicle.sourcedSupplierId
+            : payload.sourcedFromName !== undefined &&
+              payload.sourcedFromName.trim() !== (previousVehicle.sourcedFromName ?? "").trim()) ||
           (payload.sourceType !== undefined && payload.sourceType !== previousVehicle.sourceType)
         ) {
           await assertNoHeldSupplierConcession(ctx, args.orgId, request.vehicleId);
@@ -584,23 +653,28 @@ export const resolve = mutation({
           throwVehicleSourceShape("VEHICLE_OWNERSHIP_CHANGE_NOT_REQUESTABLE");
         }
         assertVehicleSourceShapeOnUpdate(previousVehicle, payload);
+        let resolveCreditor: SupplierSnapshot | undefined;
         if (resolveNeedsAcquisitionPosting) {
-          assertOnAccountHasCreditor(payload.purchasePaymentMethod, payload.purchaseSupplierName);
+          resolveCreditor = await resolveCreditorForPosting(ctx, args.orgId, payload);
+          assertOnAccountHasCreditor(payload.purchasePaymentMethod, resolveCreditor?.name);
+        } else {
+          refuseUnusedCreditorId(payload);
         }
 
         const {
           purchasePaymentMethod: resolvePurchasePaymentMethod,
           bankAccountId: resolveBankAccountId,
-          purchaseSupplierName: resolvePurchaseSupplierName,
+          purchaseSupplierName: _resolvePurchaseSupplierName,
+          purchaseSupplierId: _resolvePurchaseSupplierId,
+          // The consignment link is written from the re-resolved snapshot only, never from stored text.
+          sourcedFromName: _resolveTypedName,
+          sourcedSupplierId: _resolveTypedSupplierId,
           ...vehiclePatchFields
         } = payload;
-
-        // SCRUM-717: also covers requests written before requestUpdate trimmed — never
-        // persist a blank supplier name, and store the trimmed one.
-        if (typeof vehiclePatchFields.sourcedFromName === "string") {
-          const trimmedSourcedFromName = vehiclePatchFields.sourcedFromName.trim();
-          if (trimmedSourcedFromName === "") delete vehiclePatchFields.sourcedFromName;
-          else vehiclePatchFields.sourcedFromName = trimmedSourcedFromName;
+        // Written only when the link moves, so an echo of the stored supplier never rewrites its snapshot.
+        if (resolvedSourced && resolvedSourced.supplierId !== previousVehicle.sourcedSupplierId) {
+          (vehiclePatchFields as Record<string, unknown>).sourcedFromName = resolvedSourced.name;
+          (vehiclePatchFields as Record<string, unknown>).sourcedSupplierId = resolvedSourced.supplierId;
         }
 
         await ctx.db.patch(request.vehicleId, {
@@ -622,7 +696,7 @@ export const resolve = mutation({
             purchasePrice: resolveAcquisitionPurchasePrice,
             purchasePaymentMethod: resolvePurchasePaymentMethod,
             bankAccountId: resolveBankAccountId,
-            supplierName: resolvePurchaseSupplierName,
+            creditor: resolveCreditor,
             vehicleLabel: `${payload.year ?? previousVehicle.year} ${payload.make ?? previousVehicle.make} ${payload.model ?? previousVehicle.model}`,
             vin: payload.vin ?? previousVehicle.vin ?? "",
             actorId: user._id,

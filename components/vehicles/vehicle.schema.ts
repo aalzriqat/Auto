@@ -25,6 +25,11 @@ export const vehicleSchema = z.object({
   // SCRUM-717 (D-45): who is owed when an OWNED car is bought on account. Never
   // `sourcedFromName`, which is the consignment supplier and nothing else.
   purchaseSupplierName: z.string().optional(),
+  // SCRUM-868 P2: the supplier master ids are what the form submits. The names above are
+  // display text the supplier picker sets with the id; the server resolves the id and writes
+  // the stored snapshot, so a name is never sent.
+  purchaseSupplierId: z.string().optional(),
+  sourcedSupplierId: z.string().optional(),
   minimumProfit: z.coerce.number().min(0).optional(),
   sellingPrice: z.coerce.number().min(0),
   status: z.enum(["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED", "SOURCING"]).optional(),

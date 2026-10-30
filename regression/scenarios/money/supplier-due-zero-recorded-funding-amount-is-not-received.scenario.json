@@ -1,0 +1,48 @@
+{
+  "id": "supplier-due-zero-recorded-funding-amount-is-not-received",
+  "fingerprint": "9a21bbbd8a06983184289deaf11b02f43879f573d3becb1e03cb9f5bc5c1be1f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "FINANCE",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "route": "THROUGH_DEALERSHIP",
+        "financing": "FINANCED",
+        "disbursedAmountMinor": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rule",
+      "value": "FINANCIER_FUNDING_NOT_RECORDED"
+    },
+    {
+      "observable": "bucket",
+      "value": "NO_DUE_DATE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "an instant with a recorded amount of zero is not a received funding (kills the > 0 to >= 0 mutant)"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

@@ -1,0 +1,52 @@
+{
+  "id": "supplier-due-receivable-cash-delivery-due-on-handover",
+  "fingerprint": "bf076054c4bdf75e84dede2a8314a9127f847d843f9b6bdac247eed32a2ad0dc",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECEIVABLE",
+        "financingType": "CASH",
+        "handoverStatus": "HANDED_OVER",
+        "handedOver": "-70d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "DELIVERY_RECORDED"
+    },
+    {
+      "observable": "row.daysOverdue",
+      "value": 70
+    },
+    {
+      "observable": "row.bucket",
+      "value": "DAYS_61_90"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a CASH deal records the same handover and is due on it"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

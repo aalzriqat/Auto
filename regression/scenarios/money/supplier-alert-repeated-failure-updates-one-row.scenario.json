@@ -1,0 +1,79 @@
+{
+  "id": "supplier-alert-repeated-failure-updates-one-row",
+  "fingerprint": "7fb3184e4838e09577a87cf6bef3e7b89e67db9dc9f91f30da32fac5bdc9349a",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.runOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "fault": "first-send-of-first-worker-transaction",
+        "day": "D"
+      }
+    },
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.runOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "fault": "first-send-of-first-worker-transaction",
+        "day": "D+1"
+      }
+    },
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.runOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "fault": "first-send-of-first-worker-transaction",
+        "day": "D+2"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "failureHeartbeats",
+      "value": 1
+    },
+    {
+      "observable": "failureHeartbeat.success",
+      "value": false
+    },
+    {
+      "observable": "failureHeartbeat.ranAt",
+      "value": "the-third-day"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "repeated first-transaction failures update one failure row while no intervening transaction succeeds"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "bfe3f3f75022245a57a406f1870cd747580cb156"
+  }
+}

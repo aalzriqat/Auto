@@ -67,6 +67,8 @@ export const UNMODELLED_TYPES: string[] = [
   "accounting.prepaidAmortizationFailed",
   "accounting.prepaidCorrectionDecided",
   "accounting.prepaidCorrectionRequested",
+  "accounting.supplierObligationDue",
+  "accounting.supplierObligationOverdue",
   "admin.org_deleted",
   "admin.org_suspended",
   "admin.org_unsuspended",

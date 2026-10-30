@@ -9,6 +9,8 @@ import { DEFAULT_BASELINE, EXIT_IDENTITY_DRIFT, EXIT_UNAVAILABLE, readIdentityBa
   callKey, describeStranded } from "./baselineIdentity.mjs";
 import { isRunDirectly } from "./runDirectly.mjs";
 
+const DEFAULT_IO = Object.freeze({ log: console.log, error: console.error });
+
 // Fatal decoding prevents different invalid UTF-8 bytes comparing equal as replacement characters.
 const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
@@ -17,7 +19,7 @@ const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
  * @param {{ log: (line: string) => void, error: (line: string) => void }} [io]  output sinks; the repository root is the working directory
  * @returns {number} the process exit code
  */
-export function main(argv, io = { log: console.log, error: console.error }) {
+export function main(argv, io = DEFAULT_IO) {
   try {
     const { values } = parseArgs({ args: argv, options: {
       baseline: { type: "string", default: DEFAULT_BASELINE }, base: { type: "string" }, write: { type: "boolean" },

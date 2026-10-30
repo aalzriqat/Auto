@@ -11,6 +11,7 @@
  * Each case drives the real mutation and asserts nothing was written.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -94,7 +95,7 @@ describe("money entry points reject NaN", () => {
     await expect(
       ids.asOwner.mutation(api.vehicles.createSourced, {
         orgId: ids.orgId,
-        sourcedFromName: "العطيوي",
+        sourcedSupplierId: await supplierIdFor(t, ids.orgId, "العطيوي"),
         sourceCost: NaN,
         make: "Toyota",
         model: "Corolla",
@@ -191,7 +192,7 @@ describe("money entry points reject NaN", () => {
         sellingPrice: 21000,
         status: "SOURCING",
         sourceType: "SOURCED",
-        sourcedFromName: "العطيوي",
+        sourcedSupplierId: await supplierIdFor(t, ids.orgId, "العطيوي"),
         sourceCost: NaN,
       })
     ).rejects.toThrow(/sourceCost: Invalid input: expected number, received NaN/i);
