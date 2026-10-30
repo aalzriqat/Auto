@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { accountingRehearsalPathGate } from "./accountingRehearsalPathGate.mjs";
+import { resolveGit } from "./contractSkew/gitExecutable.mjs";
 
 /** Fetched commits are data. No checkout, candidate imports, hooks or diff drivers.
  * Git plumbing avoids the compare API's 300-file and PR-files API's 3000-file caps.
@@ -14,7 +15,10 @@ export function readBackendChangeDecision({ baseSha, headSha, cwd }) {
     if (!/^[0-9a-f]{40}$/i.test(baseSha) || !/^[0-9a-f]{40}$/i.test(headSha)) {
       throw new Error("Exact commits unavailable");
     }
-    const output = execFileSync("git", [
+    // An absolute git path, never a PATH lookup (Sonar S4036). Not found RUNS.
+    const git = resolveGit();
+    if (!git) throw new Error("Git unavailable");
+    const output = execFileSync(git, [
       "diff", "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z",
       `${baseSha}...${headSha}`, "--",
     ], { cwd, timeout: 30_000, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
