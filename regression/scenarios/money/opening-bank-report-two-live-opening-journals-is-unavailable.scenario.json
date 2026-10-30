@@ -1,0 +1,72 @@
+{
+  "id": "opening-bank-report-two-live-opening-journals-is-unavailable",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 4000000
+          },
+          {
+            "bank": "B",
+            "debitMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.openingJournal",
+      "input": {
+        "duplicateLiveJournal": "true"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.status",
+      "value": "OPENING_PROOF_UNAVAILABLE"
+    },
+    {
+      "observable": "bankA.openingLineMinor",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "two live opening journals make the opening unavailable, never a guess"
+  },
+  "matrixRow": "OB-G5",
+  "fingerprint": "5ce95ad0f7498d291388548371f72efc4e96766a6d03667d701e19a261173692"
+}

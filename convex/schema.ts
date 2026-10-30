@@ -1535,6 +1535,7 @@ export default defineSchema({
     // sourceType in the key it had to fetch every AVAILABLE vehicle — the whole
     // lot — and discard almost all of them.
     .index("by_org_sourceType_status", ["orgId", "sourceType", "status"])
+    .index("by_org_sourceType_status_isDeleted", ["orgId", "sourceType", "status", "isDeleted"])
     .index("by_org_vin", ["orgId", "vin"])
     // SCRUM-868 P1: a supplier's consignment cars. Unread until the identity slices land.
     .index("by_org_and_sourcedSupplierId", ["orgId", "sourcedSupplierId"])

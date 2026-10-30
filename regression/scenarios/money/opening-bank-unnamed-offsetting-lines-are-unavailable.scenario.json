@@ -1,0 +1,89 @@
+{
+  "id": "opening-bank-unnamed-offsetting-lines-are-unavailable",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-unnamed-lines-p2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 3000000
+          },
+          {
+            "bank": "B",
+            "creditMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.historicalLine",
+      "input": {
+        "dropAllBankIdentities": true,
+        "hardDeleteBank": "A_B"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.status",
+      "value": "OPENING_PROOF_UNAVAILABLE"
+    },
+    {
+      "observable": "controlOpeningMinor",
+      "value": "null"
+    },
+    {
+      "observable": "unattributedOpeningMinor",
+      "value": "null"
+    },
+    {
+      "observable": "writeCounts.changed",
+      "value": false
+    },
+    {
+      "observable": "unexplainedOpeningDifference",
+      "value": "null"
+    },
+    {
+      "observable": "report.banks",
+      "value": []
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "unnamed opening bank lines that net to zero with no surviving banks are unavailable, never silently OK"
+  },
+  "matrixRow": "OB-G11",
+  "fingerprint": "745064428a994cc7182293e1213611bb069023e2f95e5d7130b06d3854047d9c"
+}

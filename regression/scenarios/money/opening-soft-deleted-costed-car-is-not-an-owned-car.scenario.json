@@ -1,0 +1,53 @@
+{
+  "id": "opening-soft-deleted-costed-car-is-not-an-owned-car",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "ownedCars": 1,
+        "isDeleted": "true",
+        "purchasePriceJod": 9000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.trackedOpeningImportOrLimit",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "a soft-deleted costed owned car is not an owned car and does not block the cutover"
+  },
+  "matrixRow": "OB-C3",
+  "fingerprint": "67ef09547d9e1166db3bf47cef762dd182aad2ba20e18fccc0239a5e500bc1ee"
+}

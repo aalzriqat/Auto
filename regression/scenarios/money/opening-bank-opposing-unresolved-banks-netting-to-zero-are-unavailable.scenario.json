@@ -1,0 +1,84 @@
+{
+  "id": "opening-bank-opposing-unresolved-banks-netting-to-zero-are-unavailable",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-round3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 3000000
+          },
+          {
+            "bank": "B",
+            "creditMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.historicalLine",
+      "input": {
+        "hardDeleteBank": "A_B"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.status",
+      "value": "OPENING_PROOF_UNAVAILABLE"
+    },
+    {
+      "observable": "controlOpeningMinor",
+      "value": "null"
+    },
+    {
+      "observable": "unattributedOpeningMinor",
+      "value": "null"
+    },
+    {
+      "observable": "writeCounts.changed",
+      "value": false
+    },
+    {
+      "observable": "unexplainedOpeningDifference",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "two hard-deleted bank identities with opposing amounts that net to zero are unavailable, never OK with nothing disclosed"
+  },
+  "matrixRow": "OB-G9",
+  "fingerprint": "bb4c42e635e700019d355969569d1f0fcd46a7d6d028d49d6323f0c71bdfe1a0"
+}

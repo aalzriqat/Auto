@@ -1,0 +1,55 @@
+{
+  "id": "opening-bank-report-with-no-opening-claims-no-difference",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {
+        "onlyBankA": {
+          "statedMinor": 4000000
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.status",
+      "value": "NO_OPENING"
+    },
+    {
+      "observable": "bankA.openingLineMinor",
+      "value": "null"
+    },
+    {
+      "observable": "bankA.differenceMinor",
+      "value": "null"
+    },
+    {
+      "observable": "unexplainedOpeningDifference",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "with no opening posted the banks are listed with their reference balances and no difference is claimed"
+  },
+  "matrixRow": "OB-G5",
+  "fingerprint": "1ea0db46bab6bd50c718e750d9b5ca3df341f1813454b9a30ef114c15e82ed45"
+}

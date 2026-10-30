@@ -1,0 +1,52 @@
+{
+  "id": "opening-consigned-car-of-another-organization-stays-not-found",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "B"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "consignedCars": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 1,
+        "vehicle": "otherOrgConsigned"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "error.code",
+      "value": "not-OPENING_INVENTORY_SOURCED_REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "a consigned car of another organization stays a plain not-found, not a coded consignment answer"
+  },
+  "matrixRow": "OB-C6",
+  "fingerprint": "8b7e1ef47869bca87d49c5abe407091be6144c5b0e8f9951f651b376ded05eb8"
+}

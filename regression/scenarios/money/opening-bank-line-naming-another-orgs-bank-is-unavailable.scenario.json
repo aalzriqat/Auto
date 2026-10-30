@@ -1,0 +1,80 @@
+{
+  "id": "opening-bank-line-naming-another-orgs-bank-is-unavailable",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-round3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 4000000
+          },
+          {
+            "bank": "B",
+            "debitMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.historicalLine",
+      "input": {
+        "repointBankToOtherOrg": "B"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.status",
+      "value": "OPENING_PROOF_UNAVAILABLE"
+    },
+    {
+      "observable": "controlOpeningMinor",
+      "value": "null"
+    },
+    {
+      "observable": "unattributedOpeningMinor",
+      "value": "null"
+    },
+    {
+      "observable": "writeCounts.changed",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "an opening line naming another organization's bank makes the opening unavailable, never a partial or unattributed figure"
+  },
+  "matrixRow": "OB-G9",
+  "fingerprint": "c2450a627977a28f214129cc3b3d09570d44f80d7c9e35746f13b28069724066"
+}
