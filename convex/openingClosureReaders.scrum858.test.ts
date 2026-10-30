@@ -139,23 +139,28 @@ test("supplier recoverables refuses unsupported historical dates including befor
 test("partner capital refuses unsupported historical dates including before cutover and intraday", () => expectHistoricalDatesUnavailable(api.accountingReports.partnerCapitalReconciliation));
 
 test("a later native draw and equal opening tamper cannot produce a historical match", () => withFrozenScheduler(async () => {
-  const seed = await fixture();
-  const toDate = Date.UTC(new Date().getUTCFullYear(), 0, 2);
-  await seed.owner.mutation(api.partnerEquity.recordEquityMovement, {
-    orgId: seed.orgId, partnerId: seed.partnerA, type: "DRAW", amountMinor: 700,
-    paymentMethod: "CASH", idempotencyKey: "dated-reconciliation-draw", occurredAt: toDate + 86_400_000,
-  });
-  await settleScheduledOnly(seed.t, seed.orgId);
-  await seed.t.run(async (ctx) => {
-    await ctx.db.patch(seed.partnerA, { openingBalanceMinor: 50_700 });
-  });
-  const before = await ledger(seed);
-  const current = await seed.owner.query(api.accountingReports.partnerCapitalReconciliation, { orgId: seed.orgId });
-  expect(current.byCurrency.JOD?.discrepancyMinor).toBe(-700);
-  expect(current.unexplainedOpeningDifference?.label.en).toBe(LABEL_EN);
-  const historical = await seed.owner.query(api.accountingReports.partnerCapitalReconciliation, { orgId: seed.orgId, toDate });
-  expect(historical).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false, unexplainedOpeningDifference: null });
-  expect(await ledger(seed)).toEqual(before);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(new Date().getUTCFullYear(), 5, 15));
+  try {
+    const seed = await fixture();
+    const toDate = Date.UTC(new Date().getUTCFullYear(), 0, 2);
+    await seed.owner.mutation(api.partnerEquity.recordEquityMovement, {
+      orgId: seed.orgId, partnerId: seed.partnerA, type: "DRAW", amountMinor: 700,
+      paymentMethod: "CASH", idempotencyKey: "dated-reconciliation-draw", occurredAt: toDate + 86_400_000,
+    });
+    await settleScheduledOnly(seed.t, seed.orgId);
+    await seed.t.run(async (ctx) => {
+      await ctx.db.patch(seed.partnerA, { openingBalanceMinor: 50_700 });
+    });
+    const before = await ledger(seed);
+    const current = await seed.owner.query(api.accountingReports.partnerCapitalReconciliation, { orgId: seed.orgId });
+    expect(current.byCurrency.JOD?.discrepancyMinor).toBe(-700);
+    expect(current.unexplainedOpeningDifference?.label.en).toBe(LABEL_EN);
+    const historical = await seed.owner.query(api.accountingReports.partnerCapitalReconciliation, { orgId: seed.orgId, toDate });
+    expect(historical).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false, unexplainedOpeningDifference: null });
+    expect(await ledger(seed)).toEqual(before);
+  } finally {
+    clock.mockRestore();
+  }
 }));
 
 async function expectGenericBoundaryError(endpoint: ReconciliationEndpoint) {
