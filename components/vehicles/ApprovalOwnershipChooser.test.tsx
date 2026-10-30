@@ -24,6 +24,14 @@ vi.mock("@/components/ui/select", async () => {
   };
 });
 
+// The real picker is covered by SupplierSelect.test.tsx. Here it is a stand-in that picks a fixed supplier,
+// so this file pins what the chooser does with the id it is handed.
+vi.mock("@/components/suppliers/SupplierSelect", () => ({
+  SupplierSelect: ({ id, dataTestId, onChange }: { id?: string; dataTestId?: string; onChange: (s: { id: string; displayName: string }) => void }) => (
+    <button type="button" id={id} data-testid={dataTestId} onClick={() => onChange({ id: "sup_atiwi", displayName: "Atiwi" })} />
+  ),
+}));
+
 import {
   ApprovalOwnershipChooser,
   EMPTY_OWNERSHIP_DRAFT,
@@ -48,6 +56,7 @@ describe("needsOwnershipDecision", () => {
 
 describe("buildOwnershipDecision", () => {
   const draft = (patch: Partial<OwnershipDraft>): OwnershipDraft => ({ ...EMPTY_OWNERSHIP_DRAFT, ...patch });
+  const SUPPLIER = "sup_atiwi" as OwnershipDraft["sourcedSupplierId"];
 
   test("nothing chosen is no decision", () => {
     expect(buildOwnershipDecision(draft({}))).toBeNull();
@@ -55,14 +64,20 @@ describe("buildOwnershipDecision", () => {
   });
 
   test("consignment needs a supplier and a positive cost, and carries no purchase fields", () => {
-    expect(buildOwnershipDecision(draft({ sourceType: "SOURCED", sourcedFromName: "Atiwi" }))).toBeNull();
+    expect(buildOwnershipDecision(draft({ sourceType: "SOURCED", sourcedSupplierId: SUPPLIER, sourcedFromName: "Atiwi" }))).toBeNull();
     expect(buildOwnershipDecision(draft({ sourceType: "SOURCED", sourceCost: "9000" }))).toBeNull();
-    expect(buildOwnershipDecision(draft({ sourceType: "SOURCED", sourcedFromName: "Atiwi", sourceCost: "0" }))).toBeNull();
+    expect(buildOwnershipDecision(draft({ sourceType: "SOURCED", sourcedSupplierId: SUPPLIER, sourceCost: "0" }))).toBeNull();
     expect(
       buildOwnershipDecision(
-        draft({ sourceType: "SOURCED", sourcedFromName: " Atiwi ", sourceCost: "9000", purchasePrice: "1", purchasePaymentMethod: "CASH" }),
+        draft({ sourceType: "SOURCED", sourcedSupplierId: SUPPLIER, sourcedFromName: "Atiwi", sourceCost: "9000", purchasePrice: "1", purchasePaymentMethod: "CASH" }),
       ),
-    ).toEqual({ sourceType: "SOURCED", sourcedFromName: "Atiwi", sourceCost: 9000 });
+    ).toEqual({ sourceType: "SOURCED", sourcedSupplierId: SUPPLIER, sourceCost: 9000 });
+  });
+
+  test("a supplier NAME without a picked id is no decision, and no name is ever submitted", () => {
+    expect(buildOwnershipDecision(draft({ sourceType: "SOURCED", sourcedFromName: "Atiwi", sourceCost: "9000" }))).toBeNull();
+    const base = draft({ sourceType: "STOCK", purchasePrice: "10000", purchasePaymentMethod: "ON_ACCOUNT" });
+    expect(buildOwnershipDecision({ ...base, purchaseSupplierName: "Atiwi" })).toBeNull();
   });
 
   test("owned needs a price and a method, and carries no consignment fields", () => {
@@ -75,14 +90,14 @@ describe("buildOwnershipDecision", () => {
     ).toEqual({ sourceType: "STOCK", purchasePrice: 10000, purchasePaymentMethod: "CASH" });
   });
 
-  test("owned ON_ACCOUNT also needs the creditor, sent as purchaseSupplierName", () => {
+  test("owned ON_ACCOUNT also needs the creditor, sent as purchaseSupplierId", () => {
     const base = draft({ sourceType: "STOCK", purchasePrice: "10000", purchasePaymentMethod: "ON_ACCOUNT" });
     expect(buildOwnershipDecision(base)).toBeNull();
-    expect(buildOwnershipDecision({ ...base, purchaseSupplierName: " Atiwi " })).toEqual({
+    expect(buildOwnershipDecision({ ...base, purchaseSupplierId: SUPPLIER, purchaseSupplierName: " Atiwi " })).toEqual({
       sourceType: "STOCK",
       purchasePrice: 10000,
       purchasePaymentMethod: "ON_ACCOUNT",
-      purchaseSupplierName: "Atiwi",
+      purchaseSupplierId: SUPPLIER,
     });
   });
 
@@ -115,12 +130,24 @@ describe("ApprovalOwnershipChooser", () => {
     fireEvent.change(screen.getByLabelText(/PurchasePrice/), { target: { value: "12000" } });
     fireEvent.click(screen.getByTestId("item-ON_ACCOUNT"));
     expect(seen.at(-1)).toBeNull();
-    fireEvent.change(screen.getByLabelText(/PurchaseSupplierName/), { target: { value: "Atiwi" } });
+    fireEvent.click(screen.getByTestId("own-test-creditor"));
     expect(seen.at(-1)).toEqual({
       sourceType: "STOCK",
       purchasePrice: 12000,
       purchasePaymentMethod: "ON_ACCOUNT",
-      purchaseSupplierName: "Atiwi",
+      purchaseSupplierId: "sup_atiwi",
     });
+  });
+
+  test("each supplier label points at its picker, so the label names the control and a click on it focuses it", () => {
+    render(<Harness onDecision={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "VehicleOwnershipConsignment" }));
+    const consignmentLabel = screen.getByText(/SourceDealerName/) as HTMLLabelElement;
+    expect(consignmentLabel.control).toBe(screen.getByTestId("own-test-supplier"));
+
+    fireEvent.click(screen.getByRole("button", { name: "VehicleOwnershipOwned" }));
+    fireEvent.click(screen.getByTestId("item-ON_ACCOUNT"));
+    const creditorLabel = screen.getByText(/PurchaseSupplierName/) as HTMLLabelElement;
+    expect(creditorLabel.control).toBe(screen.getByTestId("own-test-creditor"));
   });
 });

@@ -1,0 +1,43 @@
+{
+  "id": "supplier-due-recovery-recovered-and-reversed-are-not-outstanding",
+  "fingerprint": "a77738f833c469cd7024b05ca6c8acf50f35ecd941f7a2b8b60078994855c296",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECOVERY",
+        "recovered": 1,
+        "reversed": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "recovered and reversed recoveries are not outstanding"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

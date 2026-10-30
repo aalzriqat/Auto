@@ -1,0 +1,43 @@
+{
+  "id": "supplier-alert-tenant-isolation-members",
+  "fingerprint": "15c5742b1ef66c11d0c4bff46f40c1376e496c3c9f0aa5d9534518a8ee6f4496",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "0d",
+        "orgs": "A-B"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alertsToOrgBMembers",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "an organisation's alerts reach only its own members"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

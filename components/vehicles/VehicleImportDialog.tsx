@@ -27,6 +27,12 @@ import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "@/convex/utils/v
 import { cn } from "@/lib/utils";
 import { SpreadsheetRows } from "@/lib/spreadsheet";
 import { downloadVehicleTemplate } from "@/components/vehicles/vehicleSheet";
+import { ImportSupplierMapping, type ImportSupplierMap } from "@/components/vehicles/ImportSupplierMapping";
+import {
+  importRowSupplierIds,
+  importSupplierNeeds,
+  unmappedImportSuppliers,
+} from "@/lib/vehicles/importSupplierMapping";
 
 const NEW_COMPANY_PREFIX = "valuation:new:";
 const EXISTING_COMPANY_PREFIX = "valuation:id:";
@@ -767,6 +773,9 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const [posting, setPosting] = useState<AcquisitionPosting | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<AcquisitionPaymentMethod | null>(null);
   const [bankAccountId, setBankAccountId] = useState<Id<"bankAccounts"> | undefined>();
+  // SCRUM-868 P2: supplier names in the file, each mapped by the dealer to a supplier in the master.
+  const [supplierMap, setSupplierMap] = useState<ImportSupplierMap>({});
+  const supplierContext = { posting, paymentMethod };
   const importBankMethod = paymentMethod === "BANK_TRANSFER" || paymentMethod === "CARD" || paymentMethod === "CHEQUE";
   const bankOptions = useQuery(api.vehicles.listAcquisitionBankOptions,
     open && activeOrgId && posting === "PURCHASE" && importBankMethod ? { orgId: activeOrgId, purpose: "CREATE" } : "skip");
@@ -774,6 +783,8 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
 
   const isBlocked = ({ validRows, invalidCount, totalCount }: ImportPreflightInfo) => {
     if (posting === null) return true;
+    // A consignment row names its supplier whatever the posting choice, so the mapping gates both.
+    if (unmappedImportSuppliers(importSupplierNeeds(validRows, supplierContext), supplierMap).length > 0) return true;
     if (posting !== "PURCHASE") return false;
     if (paymentMethod === null) return true;
     if (importBankMethod && (!selectedBank || bankOptions?.truncated)) return true;
@@ -792,6 +803,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
       setPosting(null);
       setPaymentMethod(null);
       setBankAccountId(undefined);
+      setSupplierMap({});
     }
     onOpenChange(next);
   };
@@ -834,6 +846,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
       }}
       isBlocked={isBlocked}
       renderPreflight={({ validRows, invalidCount, totalCount }) => (
+        <>
         <ImportAccountingChoice
           validRows={validRows}
           invalidCount={invalidCount}
@@ -846,6 +859,13 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
           bankAccountId={bankAccountId}
           setBankAccountId={setBankAccountId}
         />
+        <ImportSupplierMapping
+          orgId={activeOrgId}
+          needs={importSupplierNeeds(validRows, supplierContext)}
+          mapped={supplierMap}
+          onMap={(key, supplier) => setSupplierMap((prev) => ({ ...prev, [key]: supplier }))}
+        />
+        </>
       )}
       onImport={(vehicles, { importId, sourceRows }) => {
         if (!activeOrgId) {
@@ -904,9 +924,10 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
           sellingPrice: v.sellingPrice,
           purchasePrice: v.purchasePrice,
           sourceType: v.sourceType,
-          sourcedFromName: v.sourcedFromName,
+          // SCRUM-868 P2: ids only. The file's supplier names were mapped to the master above,
+          // and the server writes the stored snapshot from the master, never from a name sent.
+          ...importRowSupplierIds(v, supplierContext, supplierMap),
           sourceCost: v.sourceCost,
-          purchaseSupplierName: v.purchaseSupplierName,
           status: v.status,
           notes: v.notes,
           valuations: v.valuations,

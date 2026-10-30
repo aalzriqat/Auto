@@ -78,5 +78,5 @@ test.each([
   render(<OrgProvider><LanguageProvider><LeadsPage /></LanguageProvider></OrgProvider>);
   fireEvent.click(screen.getByRole("button", { name: "Add Lead" }));
   expect(screen.getByRole("dialog")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "No Access" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("combobox", { name: "No Access" }).hasAttribute("disabled")).toBe(true);
 });

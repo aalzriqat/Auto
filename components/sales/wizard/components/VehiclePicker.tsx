@@ -4,6 +4,9 @@ import { useMemo, useRef, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { ChevronDown, Search, Check, Truck, Loader2 } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useOrg } from "@/components/providers/OrgProvider";
+import type { Id } from "@/convex/_generated/dataModel";
+import { SupplierSelect } from "@/components/suppliers/SupplierSelect";
 import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { availabilityOf, type PickerAvailability } from "../hooks/usePickerAvailability";
 
@@ -16,7 +19,10 @@ export type SourceVehicleData = {
   mileage: number;
   fuelType: string;
   transmission: string;
+  /** Display text the supplier picker sets with the id. It is never submitted. */
   sourcedFromName: string;
+  /** SCRUM-868 P2: the supplier master id. The server resolves it and stores the snapshot. */
+  sourcedSupplierId?: Id<"suppliers">;
   sourceCost: number;
   sellingPrice: number;
   vin?: string;
@@ -109,6 +115,7 @@ export default function VehiclePicker({
   );
   const containerRef = useRef<HTMLDivElement>(null);
   const { t, isRtl } = useLanguage();
+  const { activeOrgId } = useOrg();
   const currency = useMoneyDisplay();
 
   // Jump straight into the pre-filled source form on mount rather than making
@@ -168,7 +175,7 @@ export default function VehiclePicker({
 
   const handleSourceSubmit = async () => {
     if (!onSourceVehicle) return;
-    if (!sourceData.make || !sourceData.model || !sourceData.sourcedFromName || !sourceData.sourceCost || !sourceData.sellingPrice) {
+    if (!sourceData.make || !sourceData.model || !sourceData.sourcedSupplierId || !sourceData.sourceCost || !sourceData.sellingPrice) {
       return;
     }
     setIsSourcing(true);
@@ -405,7 +412,14 @@ export default function VehiclePicker({
               <div className="border-t border-border pt-2 space-y-2">
                 <div>
                   <p className={labelCls}>{t("SourceDealerName" as any)} *</p>
-                  <input className={inputCls} value={sourceData.sourcedFromName} onChange={(e) => setSourceData((d) => ({ ...d, sourcedFromName: e.target.value }))} placeholder="Al-Safeer Motors" />
+                  <SupplierSelect
+                    orgId={activeOrgId}
+                    value={sourceData.sourcedSupplierId}
+                    valueLabel={sourceData.sourcedFromName}
+                    ariaLabel={t("SourceDealerName" as any)}
+                    dataTestId="vehicle-picker-source-supplier"
+                    onChange={(supplier) => setSourceData((d) => ({ ...d, sourcedSupplierId: supplier.id, sourcedFromName: supplier.displayName }))}
+                  />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
@@ -427,7 +441,7 @@ export default function VehiclePicker({
 
               <button
                 type="button"
-                disabled={isSourcing || !sourceData.make || !sourceData.model || !sourceData.sourcedFromName || !sourceData.sourceCost || !sourceData.sellingPrice || !sourceData.color}
+                disabled={isSourcing || !sourceData.make || !sourceData.model || !sourceData.sourcedSupplierId || !sourceData.sourceCost || !sourceData.sellingPrice || !sourceData.color}
                 onClick={handleSourceSubmit}
                 className="w-full flex items-center justify-center gap-2 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white py-2 text-sm font-medium transition-colors"
               >

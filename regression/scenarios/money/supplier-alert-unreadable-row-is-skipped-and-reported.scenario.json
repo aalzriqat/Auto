@@ -1,0 +1,54 @@
+{
+  "id": "supplier-alert-unreadable-row-is-skipped-and-reported",
+  "fingerprint": "13866f8ea48a8fa09aa79008e5c5c7351d0096187affdc99c53142b942277947",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "currency": "XXX"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result.alerted",
+      "value": 0
+    },
+    {
+      "observable": "result.skipped",
+      "value": 1
+    },
+    {
+      "observable": "alerts",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "an unreadable row is skipped and reported, not thrown"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "123faba2c8338cd7cdf34b623f32aa39d2717bf7"
+  }
+}

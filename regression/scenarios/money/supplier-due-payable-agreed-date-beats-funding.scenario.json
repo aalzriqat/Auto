@@ -1,0 +1,54 @@
+{
+  "id": "supplier-due-payable-agreed-date-beats-funding",
+  "fingerprint": "a9f517e9e96051a7f00ae8414057d183aae0ab60c247ddb1418507beaca9bd53",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "route": "THROUGH_DEALERSHIP",
+        "financingType": "FINANCED",
+        "fundedAt": "-20d",
+        "fundedAmountMinor": 9000000,
+        "agreedDueDate": "-3d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "AGREED_DATE"
+    },
+    {
+      "observable": "row.daysOverdue",
+      "value": 3
+    },
+    {
+      "observable": "row.bucket",
+      "value": "DAYS_1_30"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "an agreed paymentDueDate still wins over the funding instant"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

@@ -1,0 +1,54 @@
+{
+  "id": "supplier-alert-weekly-missed-by-two-days-sent-once",
+  "fingerprint": "aaf141f91c29133088c68f7e48d5023045ce3d3d495e19e09286972796b896e5",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "sweepDays": "7_16_16_17_21"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alertsAfterDay7",
+      "value": 3
+    },
+    {
+      "observable": "alertsAfterDay16",
+      "value": 6
+    },
+    {
+      "observable": "alertsAfterDay17",
+      "value": 6
+    },
+    {
+      "observable": "alertsAfterDay21",
+      "value": 9
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a weekly occurrence missed by two days is sent once, and the next one on time"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}
