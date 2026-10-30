@@ -23,7 +23,7 @@ async function verifyLocalReview({ url, session, sha }, { repo, pr, head, fetchI
   const id = url?.startsWith(prefix) ? url.slice(prefix.length) : "";
   if (!/^[1-9]\d*$/.test(id)) return ["Seat 1 review must link to an issue comment on this PR."];
   if (!/^[0-9a-f]{40}$/.test(sha ?? "")) return ["Local review must certify the full current PR head SHA."];
-  const comment = await getJson(fetchImpl, token, `/repos/${repo}/issues/comments/${id}`);
+  const comment = await getJson(fetchImpl, token, `${repositoryPrefix(repo)}/issues/comments/${encodeURIComponent(id)}`, repo);
   if (comment.html_url !== url || comment.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
     return ["Seat 1 review comment does not belong to this PR."];
   }
@@ -56,7 +56,8 @@ const requireProof = (condition, message) => { if (!condition) throw new Error(m
 // Compare responses expose at most 300 files, on page 1 only. A saturated
 // response cannot prove completeness. Commit pagination is separate from files.
 async function compare(read, base, head, page = 1) {
-  const result = await read(`/compare/${base}...${head}?per_page=100&page=${page}`);
+  requireProof(fullSha(base) && fullSha(head), "Invalid compare SHA.");
+  const result = await read(`/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=100&page=${encodeURIComponent(page)}`);
   requireProof(result?.base_commit?.sha === base && fullSha(result?.merge_base_commit?.sha) &&
     ["ahead", "behind", "diverged", "identical"].includes(result?.status) &&
     Number.isSafeInteger(result?.total_commits) && result.total_commits >= 0 &&
@@ -113,9 +114,10 @@ function contributedLines(file) {
 }
 
 async function readTree(read, sha) {
-  const commit = await read(`/git/commits/${sha}`);
+  requireProof(fullSha(sha), "Invalid commit SHA.");
+  const commit = await read(`/git/commits/${encodeURIComponent(sha)}`);
   requireProof(commit?.sha === sha && fullSha(commit?.tree?.sha), "Commit tree identity is unavailable.");
-  const tree = await read(`/git/trees/${commit.tree.sha}?recursive=1`);
+  const tree = await read(`/git/trees/${encodeURIComponent(commit.tree.sha)}?recursive=1`);
   requireProof(tree?.sha === commit.tree.sha && tree.truncated === false && Array.isArray(tree.tree),
     "Git tree is missing or truncated; file modes are unavailable.");
   const entries = new Map();
@@ -147,7 +149,8 @@ async function proveUpdateMerges(read, certified, head, main, own) {
   // naturally include ordinary commits; every imported parent must be on main.
   for (let step = 0; step < 250 && sha !== certified; step++) {
     requireProof(own.has(sha) && !updates.includes(sha), "Update commit is not in this PR's complete commit list.");
-    const commit = await read(`/git/commits/${sha}`);
+    requireProof(fullSha(sha), "Invalid update commit SHA.");
+    const commit = await read(`/git/commits/${encodeURIComponent(sha)}`);
     requireProof(commit?.sha === sha && Array.isArray(commit.parents) && commit.parents.length >= 2 &&
       commit.parents.every((p) => fullSha(p?.sha)), `Commit ${sha} is not an update-from-main merge commit.`);
     for (const parent of commit.parents.slice(1)) {
@@ -182,7 +185,7 @@ async function proveDisjoint(read, oldBase, newBase, paths) {
   const touched = filePaths(rows);
   // Net compare files alone miss a file touched and then reverted on main.
   for (const commit of commits) {
-    const detail = await read(`/commits/${commit.sha}?per_page=100&page=1`);
+    const detail = await read(`/commits/${encodeURIComponent(commit.sha)}?per_page=100&page=1`);
     requireProof(detail?.sha === commit.sha && Array.isArray(detail.files) && detail.files.length < 100,
       "Main commit file pagination is incomplete or unavailable.");
     const changed = completeFiles(detail.files);
@@ -226,7 +229,7 @@ async function carryCertificate(certified, { pr, commits, fileRows, read, repo, 
       trees[1].get(file.filename)?.mode === trees[3].get(file.filename)?.mode, `PR file mode changed for ${file.filename}.`);
   }
   const mainFiles = await proveDisjoint(read, before.merge_base_commit.sha, after.merge_base_commit.sha, filePaths(newFiles));
-  const current = await read(`/pulls/${prNumber}`);
+  const current = await read(`/pulls/${encodeURIComponent(prNumber)}`);
   requireProof(current?.head?.sha === head && current?.base?.sha === main && current.body === pr.body,
     "PR head, main or evidence body changed during the carry proof.");
   return [`Seat 1 local certificate carried from ${certified} to ${head}.`,
@@ -239,24 +242,51 @@ async function carryCertificate(certified, { pr, commits, fileRows, read, repo, 
 // plain absolute path of unreserved characters, so a crafted value cannot reach another endpoint (OWASP SSRF and
 // path traversal; Sonar S7044/S8476).
 const SAFE_API_PATH = /^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*(?:\?[A-Za-z0-9._~=&-]*)?$/;
+const SAFE_REPOSITORY = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/;
+const READ_ENDPOINTS = [
+  /^\/pulls\/[1-9]\d*(?:\/(?:files|commits))?$/,
+  /^\/issues\/comments\/[1-9]\d*$/,
+  /^\/git\/(?:commits|trees)\/[0-9a-f]{40}$/,
+  /^\/commits\/[0-9a-f]{40}$/,
+  /^\/compare\/[0-9a-f]{40}\.\.\.[0-9a-f]{40}$/,
+];
+export const positiveInteger = (value) => /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteger(Number(value));
 
-export async function getJson(fetchImpl, token, path) {
+export function repositoryPrefix(repo) {
+  requireProof(typeof repo === "string" && SAFE_REPOSITORY.test(repo) &&
+    !repo.split("/").some((part) => part === "." || part === ".."), "Invalid trusted repository.");
+  return `/repos/${repo.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+}
+
+export async function getJson(fetchImpl, token, path, repo) {
   const segments = path.split("?")[0].split("/");
   if (!SAFE_API_PATH.test(path) || segments.some((s) => s === "." || s === ".."))
     throw new Error("Unsafe GitHub API path refused.");
-  const res = await fetchImpl(`${API}${path}`, {
+  const prefix = repositoryPrefix(repo);
+  const url = new URL(path, API);
+  const endpoint = url.pathname.slice(prefix.length);
+  const id = endpoint.match(/^\/(?:pulls|issues\/comments)\/([^/]+)/)?.[1];
+  // Allowlist the parsed destination as well as its input syntax. Do not follow
+  // redirects out of this boundary (OWASP SSRF Prevention; Sonar S7044/S8476).
+  if (url.origin !== API || !url.pathname.startsWith(`${prefix}/`) ||
+      !READ_ENDPOINTS.some((pattern) => pattern.test(endpoint)) ||
+      (id !== undefined && !positiveInteger(id)) ||
+      (url.search !== "" && url.search !== "?recursive=1" && !/^\?per_page=100&page=[1-9]\d*$/.test(url.search)))
+    throw new Error("Unsafe GitHub API path refused.");
+  const res = await fetchImpl(url, {
+    redirect: "error",
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "skill-evidence" },
   });
   if (!res.ok) throw new Error(`GitHub API ${res.status} for ${path.split("?")[0]}`);
   return res.json();
 }
 
-async function getPages(fetchImpl, token, path) {
+async function getPages(fetchImpl, token, path, repo) {
   const all = [];
   // GitHub lists at most 3000 entries. Reading page 31 distinguishes exactly
   // 3000 (page 31 is empty) from more than 3000 (page 31 has rows).
   for (let page = 1; page <= 31; page++) {
-    const rows = await getJson(fetchImpl, token, `${path}?per_page=100&page=${page}`);
+    const rows = await getJson(fetchImpl, token, `${path}?per_page=100&page=${encodeURIComponent(page)}`, repo);
     requireProof(Array.isArray(rows) && rows.length <= 100, `Unexpected paginated response for ${path}.`);
     if (page === 31 && rows.length > 0) break;
     all.push(...rows);
@@ -267,16 +297,17 @@ async function getPages(fetchImpl, token, path) {
 
 /** Returns {exitCode, lines}. All I/O goes through the injected fetch. */
 export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
-  if (!/^[\w.-]+\/[\w.-]+$/.test(REPO ?? "") || !/^\d+$/.test(PR_NUMBER ?? "") || !GH_TOKEN) {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(REPO ?? "") || !/^\d+$/.test(PR_NUMBER ?? "") || !positiveInteger(PR_NUMBER) || !GH_TOKEN) {
     throw new Error("REPO, PR_NUMBER and GH_TOKEN are required");
   }
-  const base = `/repos/${REPO}/pulls/${PR_NUMBER}`;
-  const pr = await getJson(fetchImpl, GH_TOKEN, base);
-  const fileRows = await getPages(fetchImpl, GH_TOKEN, `${base}/files`);
+  const prefix = repositoryPrefix(REPO);
+  const base = `${prefix}/pulls/${encodeURIComponent(PR_NUMBER)}`;
+  const pr = await getJson(fetchImpl, GH_TOKEN, base, REPO);
+  const fileRows = await getPages(fetchImpl, GH_TOKEN, `${base}/files`, REPO);
   const files = fileRows.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean));
   // The PR's own range: head plus every commit GitHub lists for the PR.
   // A main commit from before the PR is not accepted as a certified SHA.
-  const commits = await getPages(fetchImpl, GH_TOKEN, `${base}/commits`);
+  const commits = await getPages(fetchImpl, GH_TOKEN, `${base}/commits`, REPO);
   const carryLines = [];
   const own = commits.map((c) => c.sha);
   const commitText = commits.map((c) => c.commit?.message ?? "").join("\n");
@@ -287,7 +318,7 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
       repo: REPO, pr: PR_NUMBER, head: pr.head.sha, fetchImpl, token: GH_TOKEN,
       carry: async (sha) => carryLines.push(...await carryCertificate(sha, { pr, commits, fileRows,
         repo: REPO, prNumber: PR_NUMBER,
-        read: (path) => getJson(fetchImpl, GH_TOKEN, `/repos/${REPO}${path}`) })),
+        read: (path) => getJson(fetchImpl, GH_TOKEN, `${prefix}${path}`, REPO) })),
     }),
   });
   if (!result.required) {

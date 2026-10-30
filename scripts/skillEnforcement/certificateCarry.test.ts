@@ -228,15 +228,51 @@ describe("getJson path and log hardening (Sonar S7044/S8476/S5145)", () => {
   ])("refuses an unsafe API path before any request: %j", async (path) => {
     let called = false;
     const spy = async () => { called = true; return ok(); };
-    await expect(getJson(spy as unknown as typeof fetch, "t", path)).rejects.toThrow("Unsafe GitHub API path");
+    await expect(getJson(spy as unknown as typeof fetch, "t", path, "aalzriqat/Auto")).rejects.toThrow("Unsafe GitHub API path");
     expect(called).toBe(false);
   });
   test.each([
-    "/repos/aalzriqat/Auto/compare/abc123...def456?per_page=100&page=1",
-    "/repos/aalzriqat/Auto/git/trees/abc123?recursive=1",
+    `/repos/aalzriqat/Auto/compare/${certified}...${head}?per_page=100&page=1`,
+    `/repos/aalzriqat/Auto/git/trees/${head}?recursive=1`,
     "/repos/aalzriqat/Auto/issues/comments/42",
   ])("allows the API paths the check uses: %s", async (path) => {
-    await expect(getJson(ok as unknown as typeof fetch, "t", path)).resolves.toEqual({});
+    await expect(getJson(ok as unknown as typeof fetch, "t", path, "aalzriqat/Auto")).resolves.toEqual({});
+  });
+  test.each([
+    "/user", "/repos/other/repo/pulls/7", "/repos/o/rogue/pulls/7",
+    "/repos/o/r-extra/pulls/7", "https://evil.example/repos/o/r/pulls/7",
+    ...["..", "%2e%2e", "/", "?", "#", "@", "https://evil.example", "0", "-1", "1.5", "9007199254740992"]
+      .map((part) => `/repos/o/r/pulls/${part}`),
+    ...["..", "%2e%2e", "/", "?", "#", "@", "https://evil.example", "abc123", "a".repeat(39), "A".repeat(40)]
+      .flatMap((part) => [`/repos/o/r/git/commits/${part}`, `/repos/o/r/compare/${certified}...${part}?per_page=100&page=1`]),
+    "/repos/o/r/pulls/7?per_page=100&page=1&redirect=evil",
+  ])("confines API reads to trusted repository endpoints before fetching: %j", async (path) => {
+    let called = false;
+    const noFetch = (async () => { called = true; throw new Error("Fetch must not be called"); }) as typeof fetch;
+    await expect(getJson(noFetch, "t", path, "o/r")).rejects.toThrow("Unsafe GitHub API path");
+    expect(called).toBe(false);
+  });
+  test.each(["0", "00", "01", "9007199254740992", "..", "%2e%2e", "7/../8", "7?x", "7#x", "7@evil", "https://evil.example"])(
+    "refuses malformed PR numbers before any fetch: %s", async (pr) => {
+      let called = false;
+      const noFetch = (async () => { called = true; throw new Error("Fetch must not be called"); }) as typeof fetch;
+      await expect(check({ ...env, PR_NUMBER: pr }, noFetch)).rejects.toThrow(/required|Invalid/);
+      expect(called).toBe(false);
+    });
+  test.each(["../r", "o/..", "%2e%2e/r", "o/r/other", "o/r?x", "o/r#x", "o/r@evil", "https://evil.example/r"])(
+    "refuses malformed trusted repositories before any fetch: %s", async (repo) => {
+      let called = false;
+      const noFetch = (async () => { called = true; throw new Error("Fetch must not be called"); }) as typeof fetch;
+      await expect(check({ ...env, REPO: repo }, noFetch)).rejects.toThrow(/required|Invalid|Unsafe/);
+      expect(called).toBe(false);
+    });
+  test("confines accepted requests to GitHub and disables redirects", async () => {
+    const fetchImpl = (async (url: URL | RequestInfo, options?: RequestInit) => {
+      expect(String(url)).toBe(`https://api.github.com/repos/o/r/git/commits/${head}`);
+      expect(options?.redirect).toBe("error");
+      return ok();
+    }) as typeof fetch;
+    await expect(getJson(fetchImpl, "t", `/repos/o/r/git/commits/${head}`, "o/r")).resolves.toEqual({});
   });
   test("strips control characters from a printed line", () => {
     expect(safeLogLine("a\r\nb\u001b[31mc")).toBe("a  b [31mc");
