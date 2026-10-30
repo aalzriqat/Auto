@@ -80,7 +80,7 @@ test("branch manager choices include qualified custom owners and exclude unquali
   ];
   render(<OrgProvider><LanguageProvider><BranchesClient /></LanguageProvider></OrgProvider>);
   fireEvent.click(screen.getByRole("button", { name: /add branch/i }));
-  fireEvent.click(screen.getByRole("button", { name: /select manager/i }));
+  fireEvent.click(screen.getByRole("combobox", { name: /select manager/i }));
   expect(screen.queryByText("Qualified principal")).not.toBeNull();
   expect(screen.queryByText("Template manager")).not.toBeNull();
   expect(screen.queryByText("Unqualified principal")).toBeNull();
