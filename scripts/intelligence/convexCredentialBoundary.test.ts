@@ -237,7 +237,13 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // new: 121298 bytes (LF), pin below.
     "4532ddcf64ae4f37e24dd73dca6efe6e3190bbb843b85ba96acba1a35f108181",
   "contract-skew.yml":
-    "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
+    // SCRUM-866: reviewed native-render step executes checked-out main before
+    // the secret-bearing comparison, without a credential env. Triggers,
+    // environment policy, checkout and credential-through-env remain unchanged.
+    // Both comparison branches pass --current only when the complete render
+    // exists; failed/timed-out output is deleted. Artifact also retains it.
+    // Advisory Standards review inspected this boundary; no seat is claimed.
+    "e0f0828c7b9dfcc25391f2178cb166898cfa29b85b9bf1f84c4c01611280e0ce",
   "deal-scenarios-e2e.yml":
     // SCRUM-616/617: the reviewed change opts into the cross-screen oracle.
     // SCRUM-760 G8: job timeout 120 -> 180 minutes for the larger deals/sales

@@ -276,3 +276,89 @@ test("inspect the six skew calls against native current validators", () => {
 ```
 
 Toast wording follows [W3C error identification guidance](https://www.w3.org/WAI/WCAG22/Understanding/error-identification): describe the problem and give a corrective action.
+
+## CI current-spec renderer follow-up, 2026-10-30
+
+Run [41005869681](https://github.com/aalzriqat/Auto/actions/runs/41005869681)
+at `43feaa4fe97018182a033c209f16a4a67cfa664a` still classified six calls as
+unproven because the workflow supplied no current spec. The follow-up renders
+the checked-out commit's callable argument metadata before the credential-bearing
+comparison and supplies the existing `--current` option.
+
+`renderCurrentSpec.mjs` discovers source modules using Convex 1.42.1's
+`src/bundler/index.ts` entry-point rules. It bundles their namespaces, including
+nested modules and re-exports, with the installed Convex dependency's esbuild.
+Workspace TypeScript packages are bundled; installed runtime packages remain
+external. It reads each registered Query, Mutation and Action's native
+`exportArgs()` without invoking handlers. HTTP request bodies remain outside
+this control's existing scope. There is no selected function/module list and
+no generated API declaration is used as the discovery authority.
+
+The [official function-spec CLI](https://docs.convex.dev/cli/reference/function-spec)
+reads deployment metadata, so it would require deploying a preview to inspect
+unreleased code. Native serialization avoids that deployment and preview I/O.
+The [official validation documentation](https://docs.convex.dev/functions/validation)
+describes validator JSON exports. Installed `registration_impl.ts` confirms
+`exportArgs()` serializes `asObjectValidator(args).json`; this hook is private,
+not a documented public API. Directly importing the published private bundler
+fails because its CLI-only dependencies are bundled. Discovery therefore mirrors
+the inspected rules and refuses SDK versions other than 1.42.1 pending review.
+The [esbuild API](https://esbuild.github.io/api/#packages) documents bundling,
+external packages and resolution plugins used here.
+
+Import, serialization, version or structural validation failures publish no
+spec and remove stale output. The workflow bounds rendering to 180 seconds and
+deletes output on failure or timeout. If any resolved called function is absent
+from a supplied current spec, the CLI discards all current evidence and prints
+`Current spec unavailable`. It cannot use a partial render to claim a call FIXED.
+The classifier, exit-code constants and ALSO PRESENT logic are unchanged. A
+current spec refusing the identical argument remains a STANDING_DEFECT; the
+existing `stillFails` outcome covers a skew call refused elsewhere by current.
+
+Local proof uses unchanged client/backend sources from `43feaa4f`. The complete
+render contains 1,032 callable exports and succeeds on Node 26.4.0 and CI's
+Node 22.21.1. The production-fetch CLI exits 7 and prints:
+
+```text
+PRODUCTION SKEW — 11 proven, 0 unclassified. Deploy the Convex backend at this commit.
+Basis: the same client calls compared against the supplied current spec (0 break(s) there)
+callOutcomes: { fixed: 6, stillFails: 0, unproven: 0 }
+```
+
+There is no ALSO PRESENT cause, and all 928 baseline entries match without drift.
+The downloaded artifact from run 41005869681 contains **only its report**, not
+the deployed spec. This is therefore a fresh identity-checked production metadata
+read using workstation account auth, plus an assertion that all 11 finding
+identities match the saved report, not a replay of an archived deployed spec.
+The identity comparison includes function, call site, path, dimension, severity
+and detail. No production handler or mutation was invoked.
+
+The node regression suite includes a partial-render control: removing the
+called-function guard makes its CLI test fail with `fixed: 1, unproven: 0`;
+restoring it yields `fixed: 0, unproven: 1`. Native discovery tests cover nested
+exports, aliases, all callable kinds, shared validators, excluded files and
+import-failure cleanup.
+
+Follow-up validation:
+
+```text
+node --test --test-concurrency=1 scripts/contractSkew/*.test.mjs
+17 passed, 0 failed, 0 skipped
+pnpm exec vitest run scripts/contractSkew/<each test file> --maxWorkers=1
+26 files passed; 1,279 tests passed, 1 existing skip, 0 failures
+pnpm exec vitest run scripts/intelligence/convexCredentialBoundary.test.ts --maxWorkers=1
+15 passed, 0 failures
+pnpm typecheck:contract-skew
+exit 0; dedicated detector checkJs project
+pnpm typecheck
+exit 0; root TypeScript project excludes convex/
+```
+
+The first whole-suite invocation hit the known CRLF-shebang import failure,
+then lost its worker and stalled. After stopping that invocation and locally
+normalizing the three shebang files to LF, each of the 26 files ran separately
+with one worker. Normalization changes no committed blob. The native renderer's
+Node 22.21.1 and Node 26.4.0 outputs have identical SHA-256 hashes. ESLint passes
+on the new renderer sources; an initial reserved `module` variable error was
+fixed by renaming the local variable to `namespace`. No backend deploy,
+production mutation, screen audit or explorer swarm was run.
