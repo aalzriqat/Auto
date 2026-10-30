@@ -1,0 +1,55 @@
+{
+  "id": "supplier-due-recovery-agreed-date-ages-outstanding",
+  "fingerprint": "242dd392207f554abb6060d290dd9aac11b04042f5d345fee99842413dcfa4f1",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECOVERY",
+        "agreedDue": "-95d",
+        "recoveredMinor": 50000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "AGREED_DATE"
+    },
+    {
+      "observable": "row.daysOverdue",
+      "value": 95
+    },
+    {
+      "observable": "row.bucket",
+      "value": "DAYS_90_PLUS"
+    },
+    {
+      "observable": "row.outstandingMinor",
+      "value": 150000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "an agreed date ages the outstanding minor units"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

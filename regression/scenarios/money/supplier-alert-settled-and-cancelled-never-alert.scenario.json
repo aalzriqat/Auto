@@ -1,0 +1,43 @@
+{
+  "id": "supplier-alert-settled-and-cancelled-never-alert",
+  "fingerprint": "b021b09323ee8b72ef2cc8d036341437337ab9b0a19a8be5dc47ffadc97913f0",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "status": "PAID_AND_CANCELLED",
+        "agreedDue": "0d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerts",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "settled and cancelled obligations are not alerted"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

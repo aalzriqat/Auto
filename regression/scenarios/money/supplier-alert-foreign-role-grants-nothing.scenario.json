@@ -1,0 +1,43 @@
+{
+  "id": "supplier-alert-foreign-role-grants-nothing",
+  "fingerprint": "5a6dea588bb40ad6cf138741a1aa6d237dd34959be7b4cc6fa6d5a14c4709118",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "0d",
+        "member": "role-of-org-B"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "strangerAlerts",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a role that belongs to another organisation grants nothing"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

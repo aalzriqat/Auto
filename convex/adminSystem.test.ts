@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
+import { supplierDueAlertJobName } from "./constants";
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -271,6 +272,31 @@ test("getCronStatus returns the newest heartbeat per job without scanning the ta
   expect(status).toHaveLength(1);
   expect(status[0].jobName).toBe("check-upcoming-tasks");
   expect(status[0].ranAt).toBe(now - 60_000);
+});
+
+test("listSupplierDueAlertFailures names the organisations whose newest supplier-due-alert heartbeat is a failure (SCRUM-869 round 3)", async () => {
+  const t = convexTestWithComponents(schema, MODULES);
+  const now = Date.now();
+  const orgs = await t.run(async (ctx) => ({
+    failing: await ctx.db.insert("organizations", { name: "Failing org", createdAt: now }),
+    recovered: await ctx.db.insert("organizations", { name: "Recovered org", createdAt: now }),
+    quiet: await ctx.db.insert("organizations", { name: "Quiet org", createdAt: now }),
+  }));
+  const beat = (orgId: (typeof orgs)["failing"], ranAt: number, success: boolean, detail: string) =>
+    t.run((ctx) => ctx.db.insert("cronHeartbeats", { jobName: supplierDueAlertJobName(orgId), ranAt, success, detail }));
+  await beat(orgs.failing, now - 2 * DAY_MS, true, "earlier success");
+  await beat(orgs.failing, now - DAY_MS, false, "org failing kind=PAYABLE cursor=abc");
+  await beat(orgs.recovered, now - 2 * DAY_MS, false, "old failure");
+  await beat(orgs.recovered, now - DAY_MS, true, "recovered");
+
+  const admin = await asSuperAdmin(t);
+  const result = await admin.query(api.supplierDueAlerts.listSupplierDueAlertFailures, { paginationOpts: { numItems: 50, cursor: null } });
+  expect(result.page.map((row) => String(row.orgId))).toEqual([String(orgs.failing)]);
+  expect(result.page[0]).toMatchObject({ ranAt: now - DAY_MS, detail: "org failing kind=PAYABLE cursor=abc" });
+  expect(result.isDone).toBe(true);
+
+  // Super admins only: an unauthenticated caller is refused.
+  await expect(t.query(api.supplierDueAlerts.listSupplierDueAlertFailures, { paginationOpts: { numItems: 50, cursor: null } })).rejects.toThrow();
 });
 
 test("the removed adminSystem.pruneOperationalLogs sweep is not exported again (SCRUM-807)", async () => {

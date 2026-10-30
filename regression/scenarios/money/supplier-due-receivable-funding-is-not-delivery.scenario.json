@@ -1,0 +1,48 @@
+{
+  "id": "supplier-due-receivable-funding-is-not-delivery",
+  "fingerprint": "177c4d17806c5137801acbf0e136d065d8a451729ba826a49820fa6e2a255418",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECEIVABLE",
+        "financingType": "FINANCED",
+        "handoverStatus": "none",
+        "fundedAt": "-30d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "DELIVERY_NOT_RECORDED"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "NO_DUE_DATE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a funded financed deal with no recorded handover is still not delivered"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

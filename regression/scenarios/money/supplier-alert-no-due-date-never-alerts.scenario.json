@@ -1,0 +1,43 @@
+{
+  "id": "supplier-alert-no-due-date-never-alerts",
+  "fingerprint": "acf8660380410ae9bddc052c7e4999a9d1474dd14a81f618d675553187a2ef99",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "ALL",
+        "agreedDue": "none",
+        "sweepDays": "0_7_14"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerts",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "no due date is never alerted, however old the sale"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}
