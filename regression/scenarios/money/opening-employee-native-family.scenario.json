@@ -1,0 +1,81 @@
+{
+  "id": "opening-employee-native-family",
+  "fingerprint": "1bfe2c544d0fbe4e488b58842c824633ff119a9ff2a3a2a20eed50c6bdc4aa29",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-writer-family-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "synthetic": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "payroll.issueRecoverAndPayRun",
+      "input": {
+        "native": true,
+        "openingMinor": 100000,
+        "issuedMinor": 25000,
+        "repaidMinor": 5000,
+        "payrollRecoveredMinor": 40000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.readClosureFamily",
+      "input": {
+        "family": "EMPLOYEE_ADVANCES"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": true
+    },
+    {
+      "observable": "reconciliation.glBalanceMinor",
+      "value": 80000
+    },
+    {
+      "observable": "reconciliation.subledgerBalanceMinor",
+      "value": 80000
+    },
+    {
+      "observable": "reconciliation.ledgerChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "native advance issuance, cash repayment and payroll deduction retain supported provenance"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

@@ -10,6 +10,7 @@ import { convexTestWithComponents, registerRateLimiter } from "../test-utils/con
 import { settleScheduledOnly, withFrozenScheduler } from "../test-utils/outboxWork";
 import { api } from "./_generated/api";
 import schema from "./schema";
+import type { Doc } from "./_generated/dataModel";
 import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
@@ -20,7 +21,7 @@ const LABEL_AR = "فرق أرصدة افتتاحية غير مفسر قيد ال
 
 // Synthetic balances. Debits 170_000 = advance 100_000 + recoverable 50_000 + custom recoverable 20_000;
 // credits 170_000 = capital 80_000 + custom payable 30_000 + retained-earnings offset 60_000.
-async function fixture(openingDate?: number) {
+async function fixture(openingDate?: number, unallocatedLiability = false) {
   await import("./accountingOutbox");
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
   registerRateLimiter(t);
@@ -66,6 +67,11 @@ async function fixture(openingDate?: number) {
   const customLiability = await owner.mutation(api.chartOfAccounts.create, { orgId, code: "1999",
     name: "Synthetic declared payable control", type: "LIABILITY", normalBalance: "CREDIT",
     currencyRestriction: "JOD", isControlAccount: true, allowManualPosting: false });
+  const liabilityAllocation = unallocatedLiability
+    ? { kind: "UNALLOCATED_LIABILITY" as const, rowKey: "pay-custom", accountId: customLiability, amountMinor: 30_000,
+      purpose: "UNIDENTIFIED_RECEIPT" as const, title: "Synthetic unidentified receipt" }
+    : { kind: "OTHER_PAYABLE" as const, rowKey: "pay-custom", accountId: customLiability, amountMinor: 30_000,
+      counterpartyName: "Synthetic creditor", title: "Synthetic custom-control obligation" };
   const payload = { orgId, expectedCurrency: "JOD", asOfDate: openingDate ?? asOfDate,
     lines: [
       { accountId: advances._id, debitMinor: 100_000, creditMinor: 0 },
@@ -85,15 +91,197 @@ async function fixture(openingDate?: number) {
         counterpartyName: "Synthetic supplier", title: "Synthetic custom-control claim", purpose: "CLAIM" as const },
       { kind: "PARTNER_CAPITAL" as const, rowKey: "cap-a", accountId: capital._id, partnerId: partnerA, amountMinor: 50_000 },
       { kind: "PARTNER_CAPITAL" as const, rowKey: "cap-b", accountId: customEquity, partnerId: partnerB, amountMinor: 30_000 },
-      { kind: "OTHER_PAYABLE" as const, rowKey: "pay-custom", accountId: customLiability, amountMinor: 30_000,
-        counterpartyName: "Synthetic creditor", title: "Synthetic custom-control obligation" },
+      liabilityAllocation,
     ] };
   await settleScheduledOnly(t, orgId);
   await owner.mutation(api.accountingCutover.postOpeningBalanceDirect, payload);
-  return { t, owner, orgId, partnerA, partnerB, periodId: period._id };
+  return { t, owner, orgId, employeeId, partnerA, partnerB, periodId: period._id };
 }
 
 type Seed = Awaited<ReturnType<typeof fixture>>;
+
+type Allocation = NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number];
+
+function expectRetaggedAllocationRefusal(family: "partners" | "recoverables" | "payables", retagResult = false) {
+  return withFrozenScheduler(async () => {
+  const seed = await fixture();
+  expect((await readers(seed))[family]).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  await seed.t.run(async ctx => {
+    const draft = await ctx.db.query("openingBalanceDrafts").first();
+    const employee = (await ctx.db.query("users").collect()).find(row => row.clerkId === "closure-employee");
+    if (!draft?.allocations || !employee) throw new Error("Missing retag fixture");
+    const rowKey = { partners: "cap-b", recoverables: "rec-custom", payables: "pay-custom" }[family];
+    await ctx.db.patch(draft._id, { allocations: draft.allocations.map((row): Allocation => {
+      if (row.rowKey !== rowKey) return row;
+      const base = { rowKey, accountId: row.accountId, amountMinor: row.amountMinor };
+      if (family === "partners") return { ...base, kind: "OTHER_PAYABLE", counterpartyName: "Synthetic", title: "Synthetic" };
+      if (family === "recoverables") return { ...base, kind: "EMPLOYEE_ADVANCE", userId: employee._id };
+      return { ...base, kind: "UNALLOCATED_LIABILITY", purpose: "UNIDENTIFIED_RECEIPT", title: "Synthetic" };
+    }) });
+    if (retagResult) {
+      const advance = await ctx.db.query("employeeAdvances").first();
+      const payable = await ctx.db.query("vehicleSupplierPayables").first();
+      if (!advance || !payable) throw new Error("Missing result retag targets");
+      await ctx.db.patch(draft._id, { allocationResults: draft.allocationResults?.map(result => {
+        if (result.rowKey !== rowKey) return result;
+        return family === "partners" ? { kind: "OTHER_PAYABLE" as const, rowKey, payableId: payable._id }
+          : { kind: "EMPLOYEE_ADVANCE" as const, rowKey, advanceId: advance._id };
+      }) });
+    }
+    if (family === "partners") await ctx.db.delete(seed.partnerB);
+    else if (family === "recoverables") {
+      const row = (await ctx.db.query("supplierCostRecoveries").collect()).find(row => row.origin === "OPENING" && row.openingRowKey === rowKey);
+      if (!row) throw new Error("Missing recovery");
+      await ctx.db.delete(row._id);
+    } else {
+      const row = await ctx.db.query("vehicleSupplierPayables").first();
+      if (!row) throw new Error("Missing payable");
+      await ctx.db.delete(row._id);
+    }
+  });
+  const before = await ledger(seed);
+  expect((await readers(seed))[family]).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", isReconciled: false, currencies: [], byCurrency: {} });
+  expect(await ledger(seed)).toEqual(before);
+  });
+}
+
+test("retagged capital allocation cannot hide a deleted partner", () => expectRetaggedAllocationRefusal("partners"));
+test("retagged recoverable allocation cannot hide a deleted recovery", () => expectRetaggedAllocationRefusal("recoverables"));
+test("retagged payable allocation contradicting its result refuses", () => expectRetaggedAllocationRefusal("payables"));
+test("retagged capital allocation and result still violate account policy", () => expectRetaggedAllocationRefusal("partners", true));
+test("retagged recoverable allocation and result still violate account policy", () => expectRetaggedAllocationRefusal("recoverables", true));
+
+test("a public unallocated custom liability is permitted and stays outside supplier payables", () => withFrozenScheduler(async () => {
+  const seed = await fixture(undefined, true);
+  const before = await ledger(seed);
+  const result = (await readers(seed)).payables;
+  expect(result).toMatchObject({ status: "AVAILABLE", isReconciled: true, currencies: [], byCurrency: {} });
+  expect(await ledger(seed)).toEqual(before);
+}));
+
+function expectMixedLiabilityRefusal(variant: "families" | "purposes") {
+  return withFrozenScheduler(async () => {
+  const seed = await fixture(undefined, variant === "purposes");
+  await seed.t.run(async ctx => {
+    const draft = await ctx.db.query("openingBalanceDrafts").first();
+    const row = draft?.allocations?.find(row => row.rowKey === "pay-custom");
+    if (!draft?.allocations || !row) throw new Error("Missing declared liability");
+    const extra: Allocation = { kind: "UNALLOCATED_LIABILITY", rowKey: "pool-extra", accountId: row.accountId,
+      amountMinor: 15_000, purpose: "CUSTOMER_DEPOSIT", title: "Synthetic second pool" };
+    await ctx.db.patch(draft._id, {
+      allocations: [...draft.allocations.map(row => row.rowKey === "pay-custom" ? { ...row, amountMinor: 15_000 } : row), extra],
+      allocationResults: [...(draft.allocationResults ?? []), { kind: "UNALLOCATED_LIABILITY", rowKey: "pool-extra", purpose: "CUSTOMER_DEPOSIT" }],
+    });
+  });
+  const before = await ledger(seed);
+  expect((await readers(seed)).payables).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", isReconciled: false });
+  expect(await ledger(seed)).toEqual(before);
+  });
+}
+test("mixed declared liability families cannot certify an opening control", () => expectMixedLiabilityRefusal("families"));
+test("mixed declared liability purposes cannot certify an opening control", () => expectMixedLiabilityRefusal("purposes"));
+
+test("an unallocated liability purpose retag contradicting its posted result refuses", () => withFrozenScheduler(async () => {
+  const seed = await fixture(undefined, true);
+  await seed.t.run(async ctx => {
+    const draft = await ctx.db.query("openingBalanceDrafts").first();
+    if (!draft?.allocations) throw new Error("Missing opening pool");
+    await ctx.db.patch(draft._id, { allocations: draft.allocations.map(row => row.kind === "UNALLOCATED_LIABILITY"
+      ? { ...row, purpose: "CUSTOMER_DEPOSIT" as const } : row) });
+  });
+  const before = await ledger(seed);
+  expect((await readers(seed)).payables).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", isReconciled: false });
+  expect(await ledger(seed)).toEqual(before);
+}));
+
+test("native advance issuance, cash repayment and payroll deduction retain supported provenance", () => withFrozenScheduler(async () => {
+  const year = new Date().getUTCFullYear();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(year, 0, 15));
+  try {
+  const seed = await fixture();
+  const { owner, orgId, employeeId } = seed;
+  await owner.mutation(api.payroll.recordAdvance, { orgId, userId: employeeId, amount: 25, method: "CASH", idempotencyKey: "supported-advance" });
+  await settleScheduledOnly(seed.t, orgId);
+  expect((await readers(seed)).advances).toMatchObject({ status: "AVAILABLE", isReconciled: true,
+    byCurrency: { JOD: { glBalanceMinor: 125_000, subledgerBalanceMinor: 125_000 } } });
+  const advance = await seed.t.run(ctx => ctx.db.query("employeeAdvances").first());
+  if (!advance) throw new Error("Missing opening advance");
+  await owner.mutation(api.payroll.recoverAdvance, { orgId, advanceId: advance._id, amount: 5, method: "CASH", idempotencyKey: "supported-recovery" });
+  await settleScheduledOnly(seed.t, orgId);
+  expect((await readers(seed)).advances).toMatchObject({ status: "AVAILABLE", isReconciled: true,
+    byCurrency: { JOD: { glBalanceMinor: 120_000, subledgerBalanceMinor: 120_000 } } });
+  await owner.mutation(api.payroll.setCompensation, { orgId, userId: employeeId, monthlySalary: 40 });
+  clock.mockReturnValue(Date.UTC(year, 5, 15));
+  const runId = await owner.mutation(api.payroll.createRun, { orgId, periodYear: year, periodMonth: 1 });
+  await owner.mutation(api.payroll.approveRun, { orgId, runId });
+  await owner.mutation(api.payroll.payRun, { orgId, runId, method: "CASH" });
+  await settleScheduledOnly(seed.t, orgId);
+  const before = await ledger(seed);
+  expect((await readers(seed)).advances).toMatchObject({ status: "AVAILABLE", isReconciled: true,
+    byCurrency: { JOD: { glBalanceMinor: 80_000, subledgerBalanceMinor: 80_000 } }, unexplainedOpeningDifference: null });
+  expect(await ledger(seed)).toEqual(before);
+  } finally { clock.mockRestore(); }
+}));
+
+async function postLegacyEmployeeFee(seed: Seed, currency: string) {
+  const { buildFinancedSalePostingPlan } = await import("./utils/financedSalePostingPlan");
+  const { postAccountingEvent } = await import("./accounting/postingEngine");
+  const built = buildFinancedSalePostingPlan({ currency, legalInvoiceConsiderationMinor: 10_000,
+    legalInvoiceIssuedTo: "FINANCE_COMPANY", financierIsConfiguredExternal: true, grossDealerSettlementMinor: 10_000,
+    storedExpectedDealerRemittanceMinor: 9_300, components: [{ sourceKind: "FEE", sourceId: "legacy-fee",
+      label: "Synthetic employee fee", amountMinor: 700, treatment: "EMPLOYEE_RECEIVABLE" }],
+    customerReceivableMinor: 0, depositLiabilityAppliedMinor: 0 });
+  if (!built.ok) throw new Error(built.refusal.code);
+  return seed.t.run(async ctx => {
+    const actor = await ctx.db.query("users").first();
+    if (!actor) throw new Error("Missing actor");
+    const customerId = await ctx.db.insert("customers", { orgId: seed.orgId, firstName: "Synthetic", lastName: "Buyer" });
+    const vehicleId = await ctx.db.insert("vehicles", { orgId: seed.orgId, vin: "LEGACYEMPLOYEE", make: "Toyota", model: "Camry",
+      year: 2024, mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 10, status: "AVAILABLE", sourceType: "STOCK" });
+    const posted = await postAccountingEvent(ctx, { orgId: seed.orgId, eventType: "SALE_COMPLETED", sourceType: "sales",
+      sourceId: "synthetic-legacy-financed-sale", eventVersion: 1, occurredAt: Date.now(), accountingDate: Date.now(), currency,
+      idempotencyKey: "legacy-employee-fee", actorId: actor._id,
+      payload: { saleId: "synthetic-legacy-financed-sale", saleAmountMinor: 10_000, costMinor: 0, currency, customerId, vehicleId,
+        isSourced: false, taxConventionExclusive: true, financedSalePlan: { ...built.plan, payerNameSnapshot: "Synthetic financier" } } });
+    if (!posted.eventId || !posted.journalEntryId) throw new Error("Legacy fee was not posted");
+    return { ...posted, eventId: posted.eventId, journalEntryId: posted.journalEntryId, actorId: actor._id };
+  });
+}
+
+function expectEmployeeFeeRefusal(state: "legitimate" | "offset" | "deleted" | "reversed" | "USD") {
+  return withFrozenScheduler(async () => {
+  const seed = await fixture();
+  expect((await readers(seed)).advances).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  const posted = await postLegacyEmployeeFee(seed, state === "USD" ? "USD" : "JOD");
+  if (state === "offset" || state === "deleted") await seed.t.run(async ctx => {
+    const advance = await ctx.db.query("employeeAdvances").first();
+    if (!advance) throw new Error("Missing advance");
+    if (state === "offset") await ctx.db.patch(advance._id, { amountMinor: 100_700 });
+    else await ctx.db.delete(advance._id);
+  });
+  if (state === "reversed") {
+    const { reverseAccountingEvent } = await import("./accounting/reversals");
+    await seed.t.run(ctx => reverseAccountingEvent(ctx, { orgId: seed.orgId, originalEventId: posted.eventId,
+      reversalDate: Date.now(), reason: "Synthetic legacy fee reversal", actorId: posted.actorId, idempotencyKey: "legacy-fee-reversal" }));
+  }
+  const before = await ledger(seed);
+  expect(await seed.owner.query(api.accountingReports.employeeAdvancesReconciliation, { orgId: seed.orgId })).toMatchObject({
+    status: "UNAVAILABLE", unavailableReason: "SOURCE_FAMILY_UNSUPPORTED", isReconciled: false,
+    currencies: [], byCurrency: {}, unexplainedOpeningDifference: null,
+  });
+  if (state === "legitimate") {
+    const checklist = await seed.owner.query(api.accountingPeriods.closeChecklist, { orgId: seed.orgId, periodId: seed.periodId });
+    expect(checklist.warnings).toContain("Employee advances reconciliation could not be completed: the control account includes source families outside payroll advances. Reconcile the whole control account manually.");
+    expect(checklist.warnings).not.toContain("Supplier recoverables reconciliation could not be completed: the control account includes source families outside supplier cost recoveries. Reconcile the whole control account manually.");
+  }
+  expect(await ledger(seed)).toEqual(before);
+  });
+}
+test("employee fee provenance refuses legitimate legacy fees without posting", () => expectEmployeeFeeRefusal("legitimate"));
+test("employee fee provenance refuses an offsetting advance tamper without posting", () => expectEmployeeFeeRefusal("offset"));
+test("employee fee provenance refuses a deleted advance without posting", () => expectEmployeeFeeRefusal("deleted"));
+test("employee fee provenance refuses reversed zero-net history without posting", () => expectEmployeeFeeRefusal("reversed"));
+test("employee fee provenance refuses a second currency without posting", () => expectEmployeeFeeRefusal("USD"));
 
 // PR #710 fix-round: classification metadata cannot select its own GL population.
 function expectLostAllocationUnavailable(family: "payables" | "recoverables" | "partners", rowKey: string) {

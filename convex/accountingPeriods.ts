@@ -11,6 +11,7 @@ import { requireFeature } from "./subscriptions";
 import {
   SUPPLIER_PAYABLES_RECON_DATE_WARNING,
   SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
+  EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
@@ -36,6 +37,12 @@ import {
   OpeningFamilyReconciliationResult,
   SupplierPayablesReconciliationResult,
 } from "./accountingReports";
+
+const OPENING_SOURCE_FAMILY_WARNINGS = {
+  EMPLOYEE_ADVANCES: EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
+  SUPPLIER_RECOVERABLES: SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
+  PARTNER_CAPITAL: OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.PARTNER_CAPITAL,
+} as const;
 
 const periodStatusValidator = v.union(
   v.literal("FUTURE"),
@@ -572,7 +579,7 @@ async function computeCloseChecklist(
     : false;
   for (const [family, recon] of openingFamilies) {
     if (recon.status === "UNAVAILABLE") {
-      if (recon.unavailableReason === "SOURCE_FAMILY_UNSUPPORTED") warnings.push(SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING);
+      if (recon.unavailableReason === "SOURCE_FAMILY_UNSUPPORTED") warnings.push(OPENING_SOURCE_FAMILY_WARNINGS[family]);
       else if (hasOpeningHistory) warnings.push(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
     } else if (recon.unexplainedOpeningDifference) warnings.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY[family]);
   }

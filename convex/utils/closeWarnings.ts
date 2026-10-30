@@ -19,6 +19,8 @@ export const SUPPLIER_PAYABLES_RECON_DATE_WARNING =
   "Supplier payables reconciliation could not be completed as of the requested date: the current subledger cannot be compared with the ledger at that date. Review supplier payables manually.";
 export const SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING =
   "Supplier recoverables reconciliation could not be completed: the control account includes source families outside supplier cost recoveries. Reconcile the whole control account manually.";
+export const EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING =
+  "Employee advances reconciliation could not be completed: the control account includes source families outside payroll advances. Reconcile the whole control account manually.";
 /**
  * SCRUM-858 (round-1 review F2): emitted when the customer-deposits comparison cannot be made as of
  * the period end because deposit activity is dated after it. Server text is the acknowledgement key,

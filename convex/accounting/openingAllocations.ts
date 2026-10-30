@@ -6,6 +6,7 @@ import {
   openingPolicyForAccount,
   openingAccountAllowsFamily,
   isRemainingOpeningKind,
+  openingDeclaredFamilyRefusal,
   type RemainingOpeningKind,
 } from "../utils/openingAccountPolicy";
 export { openingPolicyForAccount } from "../utils/openingAccountPolicy";
@@ -692,13 +693,8 @@ function validateDeclaredOpeningControl(
     (row) =>
       row.accountId === line.accountId && isRemainingOpeningKind(row.kind),
   );
-  if (
-    familyRows.length === 0 ||
-    new Set(familyRows.map((row) => row.kind)).size !== 1
-  )
-    throw new ConvexError(
-      "Every opening control needs one explicitly declared allocation family.",
-    );
+  const familyRefusal = openingDeclaredFamilyRefusal(familyRows);
+  if (familyRefusal) throw new ConvexError(familyRefusal);
   const total = familyRows.reduce((sum, row) => sum + row.amountMinor, 0);
   const asset = familyRows[0].kind === "SUPPLIER_RECOVERABLE";
   if (
@@ -709,15 +705,6 @@ function validateDeclaredOpeningControl(
   )
     throw new ConvexError(
       "Opening allocations must exactly match their declared control balance.",
-    );
-  if (
-    familyRows[0].kind === "UNALLOCATED_LIABILITY" &&
-    new Set(
-      familyRows.map((row) => ("purpose" in row ? row.purpose : undefined)),
-    ).size !== 1
-  )
-    throw new ConvexError(
-      "Unidentified opening pools need separate declared controls.",
     );
 }
 

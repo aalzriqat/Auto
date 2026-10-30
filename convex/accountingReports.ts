@@ -1,7 +1,7 @@
 import { createOpeningSettlementReader } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
-import { openingPolicyForAccount } from "./utils/openingAccountPolicy";
+import { openingPolicyForAccount, openingAccountAllowsFamily, isRemainingOpeningKind, openingDeclaredFamilyRefusal } from "./utils/openingAccountPolicy";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
 import { openingPayableBasis } from "./utils/openingSupplierBasis";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
@@ -1302,16 +1302,40 @@ async function openingJournalAccountTotals(
   return totals;
 }
 
-function openingControlCoverage(
-  account: Doc<"chartOfAccounts">,
-  openingAllocations: NonNullable<Doc<"openingBalanceDrafts">["allocations"]>,
-  kinds: ReadonlySet<string>, netMinor: number,
-): "INCLUDED" | "OUTSIDE" | null {
+type OpeningControlAllocationContext = {
+  orgId: Id<"organizations">;
+  currency: string;
+  account: Doc<"chartOfAccounts">;
+  allocations: NonNullable<Doc<"openingBalanceDrafts">["allocations"]>;
+  results: NonNullable<Doc<"openingBalanceDrafts">["allocationResults"]>;
+};
+
+async function openingAccountAllocationsSupported(ctx: QueryCtx, {
+  orgId, currency, account, allocations, results,
+}: OpeningControlAllocationContext): Promise<boolean> {
+  const policy = openingPolicyForAccount(account, true);
+  for (const row of allocations) {
+    const allowed = isRemainingOpeningKind(row.kind)
+      ? await openingAccountAllowsFamily(ctx, orgId, account, currency, row.kind, "purpose" in row ? row.purpose : undefined)
+      : row.kind === policy;
+    if (!allowed) return false;
+    const matches = results.filter(result => result.rowKey === row.rowKey);
+    if (matches.length !== 1 || matches[0].kind !== row.kind) return false;
+    if (row.kind === "UNALLOCATED_LIABILITY" &&
+      (matches[0].kind !== "UNALLOCATED_LIABILITY" || matches[0].purpose !== row.purpose)) return false;
+  }
+  return !allocations.some(row => isRemainingOpeningKind(row.kind)) || openingDeclaredFamilyRefusal(allocations) === null;
+}
+
+async function openingControlCoverage(ctx: QueryCtx, {
+  orgId, currency, account, allocations: openingAllocations, results, kinds, netMinor,
+}: OpeningControlAllocationContext & { kinds: ReadonlySet<string>; netMinor: number }): Promise<"INCLUDED" | "OUTSIDE" | null> {
   // Custom equity remains potential capital when its allocation declaration is lost.
   const policy = openingPolicyForAccount(account, !account.systemKey && account.type === "EQUITY");
+  const allocations = openingAllocations.filter(row => row.accountId === account._id);
+  if (!(await openingAccountAllocationsSupported(ctx, { orgId, currency, account, allocations, results }))) return null;
   const ambiguousLiability = policy === "DECLARED_LIABILITY" && kinds.has("SUPPLIER_PAYABLE");
   if (!policy || (!kinds.has(policy) && !ambiguousLiability)) return "OUTSIDE";
-  const allocations = openingAllocations.filter(row => row.accountId === account._id);
   const allocatedMinor = allocations.reduce((sum, row) => sum + row.amountMinor, 0);
   const expectedMinor = account.normalBalance === "DEBIT" ? netMinor : -netMinor;
   if (allocations.length === 0 || allocations.some(row => !Number.isSafeInteger(row.amountMinor) || row.amountMinor <= 0) ||
@@ -1336,12 +1360,14 @@ async function openingAllocationAccounts(
   if (source.status === "UNAVAILABLE" || (source.status === "ABSENT" && source.headers.length > 0)) return null;
   const accounts = new Set<Id<"chartOfAccounts">>();
   if (source.status !== "AVAILABLE") return accounts;
+  if (!source.journal.currency) return null;
   const totals = await openingJournalAccountTotals(ctx, orgId, source.journal);
   if (!totals) return null;
   for (const [accountId, netMinor] of totals) {
     const account = await ctx.db.get(accountId);
     if (!account || account.orgId !== orgId) return null;
-    const coverage = openingControlCoverage(account, source.parent.allocations ?? [], kinds, netMinor);
+    const coverage = await openingControlCoverage(ctx, { orgId, currency: source.journal.currency, account,
+      allocations: source.parent.allocations ?? [], results: source.parent.allocationResults ?? [], kinds, netMinor });
     if (coverage === null) return null;
     if (coverage === "INCLUDED") accounts.add(accountId);
   }
@@ -1356,8 +1382,19 @@ async function reconciliationDateUnsupported(ctx: QueryCtx, orgId: Id<"organizat
   return (await ctx.db.query("journalEntries").withIndex("by_org_date", q => q.eq("orgId", orgId).gt("accountingDate", cutoff)).first()) !== null;
 }
 
-async function supplierRecoveryJournalSupported(
+type ReconciliationControlFamily = "SUPPLIER_RECOVERABLE" | "EMPLOYEE_ADVANCE";
+
+function reconciliationEventFamilySupported(event: Doc<"accountingEvents">, family: ReconciliationControlFamily): boolean {
+  if (family === "EMPLOYEE_ADVANCE") return (
+    ((event.eventType === "EMPLOYEE_ADVANCE_PAID" || event.eventType === "EMPLOYEE_ADVANCE_RECOVERED") && event.sourceType === "employeeAdvances") ||
+    (event.eventType === "PAYROLL_PAID" && event.sourceType === "payrollItems"));
+  return (event.eventType === "EXPENSE_POSTED" && event.sourceType === "expenses") ||
+    (event.eventType === "SUPPLIER_COST_RECOVERY_RECEIVED" && event.sourceType === "supplierCostRecoveryReceipts");
+}
+
+async function reconciliationJournalSupported(
   ctx: QueryCtx, orgId: Id<"organizations">, journalId: Id<"journalEntries">,
+  family: ReconciliationControlFamily,
 ): Promise<boolean> {
   const journal = await ctx.db.get(journalId);
   if (!journal || journal.orgId !== orgId) return false;
@@ -1369,15 +1406,15 @@ async function supplierRecoveryJournalSupported(
   const event = await ctx.db.get(original.accountingEventId);
   return event?.orgId === orgId && event.journalEntryId === original._id &&
     event.sourceType === original.sourceType && event.sourceId === original.sourceId &&
-    ((event.eventType === "EXPENSE_POSTED" && event.sourceType === "expenses") ||
-      (event.eventType === "SUPPLIER_COST_RECOVERY_RECEIVED" && event.sourceType === "supplierCostRecoveryReceipts"));
+    reconciliationEventFamilySupported(event, family);
 }
 
-/** Prove family coverage independently of surviving supplier rows. All cumulative lines count,
+/** Prove family coverage independently of surviving subledger rows. All cumulative lines count,
  * including REVERSED originals; a net-zero foreign family still cannot certify this subledger.
  * The shared line budget bounds this additional scan, not the full report or close checklist. */
-async function supplierRecoveryFamilyRefusal(
+async function controlSourceFamilyRefusal(
   ctx: QueryCtx, orgId: Id<"organizations">, controls: ReadonlySet<Id<"chartOfAccounts">>,
+  family: ReconciliationControlFamily,
 ): Promise<"OVER_LIMIT" | "SOURCE_FAMILY_UNSUPPORTED" | null> {
   let remaining = SUPPLIER_PAYABLES_RECON_READ_LIMIT;
   const checked = new Map<Id<"journalEntries">, boolean>();
@@ -1387,7 +1424,7 @@ async function supplierRecoveryFamilyRefusal(
     remaining -= lines.length;
     for (const line of lines) {
       if (!checked.has(line.journalEntryId)) {
-        checked.set(line.journalEntryId, await supplierRecoveryJournalSupported(ctx, orgId, line.journalEntryId));
+        checked.set(line.journalEntryId, await reconciliationJournalSupported(ctx, orgId, line.journalEntryId, family));
       }
       if (checked.get(line.journalEntryId) === false) return "SOURCE_FAMILY_UNSUPPORTED";
     }
@@ -1451,6 +1488,8 @@ export async function computeEmployeeAdvancesReconciliation(
   // custom asset account is classified as a supplier recoverable), so that account is the whole control set.
   const controls = new Set<Id<"chartOfAccounts">>();
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.EMPLOYEE_ADVANCES);
+  const familyRefusal = await controlSourceFamilyRefusal(ctx, orgId, controls, "EMPLOYEE_ADVANCE");
+  if (familyRefusal) return unavailableFamilyResult(familyRefusal);
   const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT");
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
@@ -1503,7 +1542,7 @@ export async function computeSupplierRecoverablesReconciliation(
   const controls = await openingAllocationAccounts(ctx, orgId, new Set(["SUPPLIER_RECOVERABLE"]));
   if (!controls) return unavailableFamilyResult("OPENING_SOURCE_UNAVAILABLE");
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS);
-  const familyRefusal = await supplierRecoveryFamilyRefusal(ctx, orgId, controls);
+  const familyRefusal = await controlSourceFamilyRefusal(ctx, orgId, controls, "SUPPLIER_RECOVERABLE");
   if (familyRefusal) return unavailableFamilyResult(familyRefusal);
   const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT");
   return {
