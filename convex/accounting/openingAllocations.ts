@@ -24,6 +24,7 @@ import { insertOpeningDeposit } from "../utils/commitmentWriters";
 import { refuseOpeningDepositRow } from "../utils/openingDepositContainment";
 import { validateOpeningPartners } from "./openingPartnerAllocations";
 import { listOpeningStockEvidence } from "../utils/openingVehicleBasis";
+import { refuseSourcedOpeningInventory } from "../utils/openingInventoryContainment";
 import {
   hasVehicleAcquisitionAccountingExposure,
   hasVehicleLandedCostAccountingExposure,
@@ -92,6 +93,47 @@ type ControlTotals = {
 };
 type OpeningControls = Awaited<ReturnType<typeof prepareOpeningControls>>;
 
+const OPENING_OWNED_CAR_LIMIT = 100;
+const UNSOLD_VEHICLE_STATUSES = [
+  "AVAILABLE",
+  "RESERVED",
+  "IN_INSPECTION",
+  "IN_REPAIR",
+  "ARCHIVED",
+  "SOURCING",
+] as const;
+
+/**
+ * SCRUM-858 S2 (owner ruling c23884): the organization's OWNED, unsold vehicles. A legacy row with no
+ * `sourceType` is owned stock. Consigned (SOURCED) and sold vehicles are never read, so a showroom holding 60 owned
+ * and 45 consigned cars opens normally. The index excludes deleted rows before the cap. Missing optional deletion
+ * fields sort before false in Convex, so legacy live rows count too. Across all 12 buckets this reader returns at
+ * most 101 candidate documents; import-evidence reads have their own bounds.
+ */
+async function listOwnedUnsoldVehicles(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+): Promise<Doc<"vehicles">[]> {
+  const owned: Doc<"vehicles">[] = [];
+  for (const sourceType of ["STOCK", undefined] as const) {
+    for (const status of UNSOLD_VEHICLE_STATUSES) {
+      const rows = await ctx.db
+        .query("vehicles")
+        .withIndex("by_org_sourceType_status_isDeleted", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", sourceType).eq("status", status).lte("isDeleted", false),
+        )
+        .take(OPENING_OWNED_CAR_LIMIT + 1 - owned.length);
+      owned.push(...rows);
+      if (owned.length > OPENING_OWNED_CAR_LIMIT) {
+        throw new ConvexError(
+          "Existing vehicle stock exceeds the reviewed opening allocation limit.",
+        );
+      }
+    }
+  }
+  return owned;
+}
+
 async function prepareOpeningInventoryControls(
   ctx: QueryCtx | MutationCtx,
   args: OpeningAllocationArgs,
@@ -121,22 +163,9 @@ async function prepareOpeningInventoryControls(
   const evidencedVehicleIds = new Set(
     openingStockEvidence.map((item) => String(item.vehicleId)),
   );
-  const existingCars = await ctx.db
-    .query("vehicles")
-    .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-    .take(101);
-  if (existingCars.length > 100) {
-    throw new ConvexError(
-      "Existing vehicle stock exceeds the reviewed opening allocation limit.",
-    );
-  }
-  const costedOwnedCars = existingCars.filter(
-    (vehicle) =>
-      !vehicle.isDeleted &&
-      vehicle.status !== "SOLD" &&
-      vehicle.sourceType !== "SOURCED" &&
-      (vehicle.purchasePrice ?? 0) > 0,
-  );
+  const costedOwnedCars = (
+    await listOwnedUnsoldVehicles(ctx, args.orgId)
+  ).filter((vehicle) => (vehicle.purchasePrice ?? 0) > 0);
   if (
     costedOwnedCars.some(
       (vehicle) => !evidencedVehicleIds.has(String(vehicle._id)),
@@ -348,6 +377,11 @@ async function validateOpeningInventoryRow(
 ): Promise<void> {
   const { inventoryAccountId, openingStockEvidence, evidencedVehicleIds } =
     controls;
+  // SCRUM-858 S2: a consigned car is refused first, with its own coded error, whatever proof it appears to carry.
+  // A vehicle of another organization falls through to the generic not-found refusal below.
+  const named = await ctx.db.get(row.vehicleId);
+  if (named && named.orgId === args.orgId && named.sourceType === "SOURCED")
+    refuseSourcedOpeningInventory();
   totals.allocatedInventoryMinor += row.amountMinor;
   if (
     !Number.isSafeInteger(totals.allocatedInventoryMinor) ||

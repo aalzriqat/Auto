@@ -240,7 +240,7 @@ describe("guide-required opening stock, bank, and cash replay", () => {
       ],
       allocations: [{ kind: "VEHICLE_INVENTORY", rowKey: "stock-1",
         accountId: accountId("VEHICLE_INVENTORY"), vehicleId, amountMinor: 8_000_000 }],
-    })).rejects.toThrow(/cost, ownership or posting proof conflicts|imported opening car/i);
+    })).rejects.toThrow(/OPENING_INVENTORY_SOURCED_REFUSED/);
   });
 
   test("immutable import cost refuses a matching tampered allocation and journal", async () => {

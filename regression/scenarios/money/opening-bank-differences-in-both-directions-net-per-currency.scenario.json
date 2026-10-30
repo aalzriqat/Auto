@@ -1,0 +1,73 @@
+{
+  "id": "opening-bank-differences-in-both-directions-net-per-currency",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 4000000
+          },
+          {
+            "bank": "B",
+            "debitMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {
+        "statedA": 3900000,
+        "statedB": 3030000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bankA.differenceMinor",
+      "value": -100000
+    },
+    {
+      "observable": "bankB.differenceMinor",
+      "value": 30000
+    },
+    {
+      "observable": "unexplainedOpeningDifference.JOD.netMinor",
+      "value": -70000
+    },
+    {
+      "observable": "unexplainedOpeningDifference.JOD.absoluteMinor",
+      "value": 130000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "a difference in the other direction is reported with its sign, and differences of one currency net per currency"
+  },
+  "matrixRow": "OB-G3",
+  "fingerprint": "01d9ae20a1b315ffec0e1086f2aa8464082d383b6b1b697901c6b920f7165b33"
+}
